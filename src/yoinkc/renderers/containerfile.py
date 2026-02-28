@@ -31,9 +31,9 @@ def _dhcp_connection_paths(snapshot: InspectionSnapshot) -> set:
     """
     paths: set = set()
     if snapshot.network:
-        for c in (snapshot.network.connections or []):
-            if c.get("method") != "static" and c.get("path"):
-                paths.add(c["path"])
+        for c in snapshot.network.connections:
+            if c.method != "static" and c.path:
+                paths.add(c.path)
     return paths
 
 
@@ -59,64 +59,56 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
 
     # Firewalld zones and direct rules
     if snapshot.network:
-        for z in (snapshot.network.firewall_zones or []):
-            path = z.get("path", "")
-            content = z.get("content", "")
-            if path:
-                dest = config_dir / path
+        for z in snapshot.network.firewall_zones:
+            if z.path:
+                dest = config_dir / z.path
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(content)
+                dest.write_text(z.content)
         if snapshot.network.firewall_direct_rules:
             import xml.etree.ElementTree as ET
             direct_el = ET.Element("direct")
             for r in snapshot.network.firewall_direct_rules:
                 rule_el = ET.SubElement(direct_el, "rule")
-                rule_el.set("priority", r.get("priority", "0"))
-                rule_el.set("table", r.get("table", "filter"))
-                rule_el.set("ipv", r.get("ipv", "ipv4"))
-                rule_el.set("chain", r.get("chain", "INPUT"))
-                rule_el.text = r.get("args", "")
+                rule_el.set("priority", r.priority)
+                rule_el.set("table", r.table)
+                rule_el.set("ipv", r.ipv)
+                rule_el.set("chain", r.chain)
+                rule_el.text = r.args
             dest = config_dir / "etc/firewalld/direct.xml"
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text('<?xml version="1.0" encoding="utf-8"?>\n'
                             + ET.tostring(direct_el, encoding="unicode") + "\n")
 
         # Static NM connection profiles (baked into image)
-        for c in (snapshot.network.connections or []):
-            if c.get("method") == "static":
-                path = c.get("path", "")
-                if path:
-                    dest = config_dir / path
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    if not dest.exists():
-                        dest.write_text("")
+        for c in snapshot.network.connections:
+            if c.method == "static" and c.path:
+                dest = config_dir / c.path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                if not dest.exists():
+                    dest.write_text("")
 
     # Systemd timer units: cron-generated and existing local timers
     st = snapshot.scheduled_tasks
     if st and (st.generated_timer_units or st.systemd_timers):
         systemd_dir = config_dir / "etc/systemd/system"
         systemd_dir.mkdir(parents=True, exist_ok=True)
-        for u in (st.generated_timer_units or []):
-            name = u.get("name", "cron-timer")
-            (systemd_dir / f"{name}.timer").write_text(u.get("timer_content", ""))
-            (systemd_dir / f"{name}.service").write_text(u.get("service_content", ""))
-        for t in (st.systemd_timers or []):
-            if t.get("source") == "local":
-                name = t.get("name", "")
-                if name and t.get("timer_content"):
-                    (systemd_dir / f"{name}.timer").write_text(t["timer_content"])
-                if name and t.get("service_content"):
-                    (systemd_dir / f"{name}.service").write_text(t["service_content"])
+        for u in st.generated_timer_units:
+            (systemd_dir / f"{u.name}.timer").write_text(u.timer_content)
+            (systemd_dir / f"{u.name}.service").write_text(u.service_content)
+        for t in st.systemd_timers:
+            if t.source == "local":
+                if t.name and t.timer_content:
+                    (systemd_dir / f"{t.name}.timer").write_text(t.timer_content)
+                if t.name and t.service_content:
+                    (systemd_dir / f"{t.name}.service").write_text(t.service_content)
 
-    # Quadlet units (content from inspector; older snapshots may have path/name only)
+    # Quadlet units
     if snapshot.containers and snapshot.containers.quadlet_units:
         quadlet_dir = output_dir / "quadlet"
         quadlet_dir.mkdir(parents=True, exist_ok=True)
         for u in snapshot.containers.quadlet_units:
-            name = u.get("name", "")
-            content = u.get("content", "")
-            if name and content:
-                (quadlet_dir / name).write_text(content)
+            if u.name and u.content:
+                (quadlet_dir / u.name).write_text(u.content)
 
     # Non-RPM software files
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
@@ -301,7 +293,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
         lines.append("# === Firewall Configuration (bake into image) ===")
         lines.append("# Option A: COPY zone XML files (preserves all settings)")
         if net.firewall_zones:
-            total_rich = sum(len(z.get("rich_rules", [])) for z in net.firewall_zones)
+            total_rich = sum(len(z.rich_rules) for z in net.firewall_zones)
             lines.append(f"# Detected: {len(net.firewall_zones)} zone(s)"
                          + (f", {total_rich} rich rule(s)" if total_rich else ""))
             lines.append("COPY config/etc/firewalld/zones/ /etc/firewalld/zones/")
@@ -310,22 +302,16 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
             lines.append("COPY config/etc/firewalld/direct.xml /etc/firewalld/direct.xml")
         lines.append("")
         lines.append("# Option B: firewall-cmd equivalents (alternative to COPY above)")
-        for z in (net.firewall_zones or []):
-            zone_name = z.get("name", "public")
-            for svc in (z.get("services") or []):
-                lines.append(f"# RUN firewall-offline-cmd --zone={zone_name} --add-service={svc}")
-            for port in (z.get("ports") or []):
-                lines.append(f"# RUN firewall-offline-cmd --zone={zone_name} --add-port={port}")
-            for rr in (z.get("rich_rules") or []):
-                rule_text = rr if isinstance(rr, str) else rr.get("rule", "")
-                if rule_text:
-                    lines.append(f"# RUN firewall-offline-cmd --zone={zone_name} --add-rich-rule='{rule_text}'")
-        for dr in (net.firewall_direct_rules or []):
-            ipv = dr.get("ipv", "ipv4")
-            table = dr.get("table", "filter")
-            chain = dr.get("chain", "INPUT")
-            args = dr.get("args", "")
-            lines.append(f"# RUN firewall-offline-cmd --direct --add-rule {ipv} {table} {chain} 0 {args}")
+        for z in net.firewall_zones:
+            for svc in z.services:
+                lines.append(f"# RUN firewall-offline-cmd --zone={z.name} --add-service={svc}")
+            for port in z.ports:
+                lines.append(f"# RUN firewall-offline-cmd --zone={z.name} --add-port={port}")
+            for rr in z.rich_rules:
+                if rr:
+                    lines.append(f"# RUN firewall-offline-cmd --zone={z.name} --add-rich-rule='{rr}'")
+        for dr in net.firewall_direct_rules:
+            lines.append(f"# RUN firewall-offline-cmd --direct --add-rule {dr.ipv} {dr.table} {dr.chain} 0 {dr.args}")
         lines.append("")
 
     # 5. Scheduled Tasks
@@ -333,38 +319,34 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
     if st and (st.generated_timer_units or st.systemd_timers or st.cron_jobs or st.at_jobs):
         lines.append("# === Scheduled Tasks ===")
 
-        local_timers = [t for t in (st.systemd_timers or []) if t.get("source") == "local"]
-        vendor_timers = [t for t in (st.systemd_timers or []) if t.get("source") == "vendor"]
+        local_timers = [t for t in st.systemd_timers if t.source == "local"]
+        vendor_timers = [t for t in st.systemd_timers if t.source == "vendor"]
 
         if local_timers:
             lines.append(f"# Existing local timers ({len(local_timers)}): bake into image")
             for t in local_timers:
-                p = t.get("path", "")
-                name = t.get("name", "")
-                lines.append(f"COPY config/{p} /{p}")
-                if t.get("service_content"):
-                    svc_path = p.replace(".timer", ".service")
+                lines.append(f"COPY config/{t.path} /{t.path}")
+                if t.service_content:
+                    svc_path = t.path.replace(".timer", ".service")
                     lines.append(f"COPY config/{svc_path} /{svc_path}")
-                lines.append(f"RUN systemctl enable {name}.timer")
+                lines.append(f"RUN systemctl enable {t.name}.timer")
 
         if vendor_timers:
             lines.append(f"# Vendor timers ({len(vendor_timers)}): already in base image, no action needed")
             for t in vendor_timers:
-                lines.append(f"#   - {t.get('name', '')} ({t.get('on_calendar', '')})")
+                lines.append(f"#   - {t.name} ({t.on_calendar})")
 
         if st.generated_timer_units:
             lines.append(f"# Converted from cron: {len(st.generated_timer_units)} timer(s)")
             lines.append("COPY config/etc/systemd/system/ /etc/systemd/system/")
             for u in st.generated_timer_units:
-                name = u.get("name", "")
-                if name:
-                    lines.append(f"RUN systemctl enable {name}.timer")
+                if u.name:
+                    lines.append(f"RUN systemctl enable {u.name}.timer")
 
         if st.at_jobs:
             lines.append(f"# FIXME: {len(st.at_jobs)} at job(s) found — convert to systemd timers or cron")
             for a in st.at_jobs:
-                cmd = a.get("command", "")
-                lines.append(f"#   at job: {cmd}")
+                lines.append(f"#   at job: {a.command}")
 
         lines.append("")
 
@@ -609,14 +591,14 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
     # 12. Network / Kickstart
     lines.append("# === Network / Kickstart ===")
     if net and net.connections:
-        static_conns = [c for c in net.connections if c.get("method") == "static"]
-        dhcp_conns = [c for c in net.connections if c.get("method") == "dhcp"]
+        static_conns = [c for c in net.connections if c.method == "static"]
+        dhcp_conns = [c for c in net.connections if c.method == "dhcp"]
         if static_conns:
-            names = ", ".join(c.get("name", "") for c in static_conns)
+            names = ", ".join(c.name for c in static_conns)
             lines.append(f"# Static connections (baked into image): {names}")
             lines.append("COPY config/etc/NetworkManager/system-connections/ /etc/NetworkManager/system-connections/")
         if dhcp_conns:
-            names = ", ".join(c.get("name", "") for c in dhcp_conns)
+            names = ", ".join(c.name for c in dhcp_conns)
             lines.append(f"# DHCP connections (kickstart at deploy time): {names}")
             lines.append("# FIXME: configure these interfaces via kickstart — see kickstart-suggestion.ks")
     else:
@@ -642,9 +624,8 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
         lines.append("# Proxy settings detected — bake as environment defaults")
         env_lines = []
         for p in net.proxy:
-            var_line = p.get("line", "")
-            if "=" in var_line:
-                env_lines.append(var_line)
+            if "=" in p.line:
+                env_lines.append(p.line)
         if env_lines:
             lines.append("RUN mkdir -p /etc/environment.d && cat > /etc/environment.d/proxy.conf << 'PROXYEOF'")
             for el in env_lines:
@@ -655,9 +636,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
         lines.append(f"# {len(net.static_routes)} static route file(s) detected")
         lines.append("# FIXME: add static routes via NM connection or nmstatectl config")
         for r in net.static_routes[:10]:
-            path = r.get("path", "")
-            name = r.get("name", "")
-            lines.append(f"# Route file: {path} — review and translate to NM connection (+ipv4.routes)")
+            lines.append(f"# Route file: {r.path} — review and translate to NM connection (+ipv4.routes)")
     lines.append("")
 
     # 13. tmpfiles.d for /var structure

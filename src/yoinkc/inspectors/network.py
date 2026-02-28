@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..executor import Executor
-from ..schema import NetworkSection
+from ..schema import (
+    NetworkSection, NMConnection, FirewallZone, FirewallDirectRule,
+    StaticRouteFile, ProxyEntry,
+)
 
 
 def _safe_iterdir(d: Path) -> List[Path]:
@@ -175,12 +178,12 @@ def run(
             if f.is_file() and not f.name.startswith("."):
                 text = _safe_read(f)
                 cls = _classify_connection(text)
-                section.connections.append({
-                    "path": str(f.relative_to(host_root)),
-                    "name": f.stem,
-                    "method": cls["method"],
-                    "type": cls["type"],
-                })
+                section.connections.append(NMConnection(
+                    path=str(f.relative_to(host_root)),
+                    name=f.stem,
+                    method=cls["method"],
+                    type=cls["type"],
+                ))
 
     # --- Firewall zones ---
     fd = host_root / "etc/firewalld/zones"
@@ -189,19 +192,21 @@ def run(
             if f.is_file() and f.suffix == ".xml":
                 content = _safe_read(f)
                 parsed = _parse_zone_xml(content)
-                section.firewall_zones.append({
-                    "path": str(f.relative_to(host_root)),
-                    "name": f.stem,
-                    "content": content,
-                    "services": parsed["services"],
-                    "ports": parsed["ports"],
-                    "rich_rules": parsed["rich_rules"],
-                })
+                section.firewall_zones.append(FirewallZone(
+                    path=str(f.relative_to(host_root)),
+                    name=f.stem,
+                    content=content,
+                    services=parsed["services"],
+                    ports=parsed["ports"],
+                    rich_rules=parsed["rich_rules"],
+                ))
 
     # --- Firewall direct rules ---
     direct_xml = host_root / "etc/firewalld/direct.xml"
     if direct_xml.exists():
-        section.firewall_direct_rules = _parse_direct_xml(_safe_read(direct_xml))
+        section.firewall_direct_rules = [
+            FirewallDirectRule(**r) for r in _parse_direct_xml(_safe_read(direct_xml))
+        ]
 
     # --- resolv.conf provenance ---
     section.resolv_provenance = _detect_resolv_provenance(host_root)
@@ -224,12 +229,12 @@ def run(
             continue
         for f in _safe_iterdir(rd):
             if f.is_file() and f.name.startswith("route-"):
-                section.static_routes.append({"path": str(f.relative_to(host_root)), "name": f.name})
+                section.static_routes.append(StaticRouteFile(path=str(f.relative_to(host_root)), name=f.name))
     iproute_d = host_root / "etc/iproute2"
     if iproute_d.exists() and iproute_d.is_dir():
         for f in _safe_iterdir(iproute_d):
             if f.is_file():
-                section.static_routes.append({"path": str(f.relative_to(host_root)), "name": f.name})
+                section.static_routes.append(StaticRouteFile(path=str(f.relative_to(host_root)), name=f.name))
 
     # --- ip route / ip rule via executor ---
     if executor:
@@ -254,7 +259,7 @@ def run(
                 for line in pp.read_text().splitlines():
                     low = line.lower()
                     if any(k in low for k in ("http_proxy", "https_proxy", "no_proxy", "ftp_proxy")):
-                        section.proxy.append({"source": proxy_path, "line": line.strip()})
+                        section.proxy.append(ProxyEntry(source=proxy_path, line=line.strip()))
             elif pp.is_dir():
                 for f in _safe_iterdir(pp):
                     if f.is_file():
@@ -262,7 +267,7 @@ def run(
                             for line in f.read_text().splitlines():
                                 low = line.lower()
                                 if any(k in low for k in ("http_proxy", "https_proxy", "no_proxy", "ftp_proxy")):
-                                    section.proxy.append({"source": str(f.relative_to(host_root)), "line": line.strip()})
+                                    section.proxy.append(ProxyEntry(source=str(f.relative_to(host_root)), line=line.strip()))
                         except (PermissionError, OSError):
                             pass
         except (PermissionError, OSError):

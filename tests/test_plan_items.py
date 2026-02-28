@@ -18,17 +18,24 @@ from yoinkc.schema import (
     ConfigFileEntry,
     ConfigFileKind,
     ConfigSection,
+    CronJob,
+    FstabEntry,
+    FirewallZone,
+    GeneratedTimerUnit,
     InspectionSnapshot,
     KernelBootSection,
+    NMConnection,
     NetworkSection,
     NonRpmSoftwareSection,
     OsRelease,
     PackageEntry,
+    ProxyEntry,
     RpmSection,
     ScheduledTaskSection,
     SelinuxSection,
     ServiceSection,
     ServiceStateChange,
+    StaticRouteFile,
     StorageSection,
     UserGroupSection,
 )
@@ -119,7 +126,7 @@ class TestCronCommandExtraction:
         )
         section = ScheduledTaskSection()
         _scan_cron_file(section, tmp_path, cron_d / "logrotate", "cron.d")
-        assert section.generated_timer_units[0]["command"] == "/usr/sbin/logrotate /etc/logrotate.conf"
+        assert section.generated_timer_units[0].command == "/usr/sbin/logrotate /etc/logrotate.conf"
 
     def test_user_crontab_no_user_field(self, tmp_path):
         spool = tmp_path / "var/spool/cron"
@@ -128,7 +135,7 @@ class TestCronCommandExtraction:
         from yoinkc.inspectors.scheduled_tasks import _scan_cron_file
         section = ScheduledTaskSection()
         _scan_cron_file(section, tmp_path, spool / "mark", "spool/cron (mark)")
-        assert section.generated_timer_units[0]["command"] == "/home/mark/cleanup.sh"
+        assert section.generated_timer_units[0].command == "/home/mark/cleanup.sh"
 
 
 # ---------------------------------------------------------------------------
@@ -341,27 +348,27 @@ def test_all_features_render_together():
             enabled_units=["httpd.service"],
         ),
         network=NetworkSection(
-            connections=[{"name": "eth0", "method": "static", "path": "etc/NM/eth0.nmconnection"}],
-            firewall_zones=[{"name": "public", "path": "etc/firewalld/zones/public.xml",
-                             "content": "<zone/>", "services": ["ssh"], "ports": [], "rich_rules": []}],
-            static_routes=[{"to": "10.0.0.0/8", "via": "192.168.1.1", "dev": "eth0"}],
+            connections=[NMConnection(name="eth0", method="static", path="etc/NM/eth0.nmconnection")],
+            firewall_zones=[FirewallZone(name="public", path="etc/firewalld/zones/public.xml",
+                                        content="<zone/>", services=["ssh"], ports=[], rich_rules=[])],
+            static_routes=[StaticRouteFile(path="etc/sysconfig/network-scripts/route-eth0", name="route-eth0")],
             hosts_additions=["10.0.0.5 api-server"],
-            proxy=[{"line": "http_proxy=http://proxy:3128"}],
+            proxy=[ProxyEntry(source="etc/environment", line="http_proxy=http://proxy:3128")],
             resolv_provenance="networkmanager",
         ),
         storage=StorageSection(fstab_entries=[
-            {"device": "/dev/sda1", "mount_point": "/", "fstype": "xfs"},
-            {"device": "nas:/data", "mount_point": "/data", "fstype": "nfs"},
+            FstabEntry(device="/dev/sda1", mount_point="/", fstype="xfs"),
+            FstabEntry(device="nas:/data", mount_point="/data", fstype="nfs"),
         ]),
         scheduled_tasks=ScheduledTaskSection(
-            cron_jobs=[{"path": "etc/cron.d/backup", "source": "cron.d"}],
-            generated_timer_units=[{
-                "name": "cron-backup",
-                "timer_content": "[Timer]\nOnCalendar=*-*-* 02:00:00\n",
-                "service_content": "[Service]\nExecStart=/usr/local/bin/backup.sh\n",
-                "cron_expr": "0 2 * * *", "source_path": "etc/cron.d/backup",
-                "command": "/usr/local/bin/backup.sh",
-            }],
+            cron_jobs=[CronJob(path="etc/cron.d/backup", source="cron.d")],
+            generated_timer_units=[GeneratedTimerUnit(
+                name="cron-backup",
+                timer_content="[Timer]\nOnCalendar=*-*-* 02:00:00\n",
+                service_content="[Service]\nExecStart=/usr/local/bin/backup.sh\n",
+                cron_expr="0 2 * * *", source_path="etc/cron.d/backup",
+                command="/usr/local/bin/backup.sh",
+            )],
         ),
         non_rpm_software=NonRpmSoftwareSection(items=[
             {"name": "cryptography", "version": "41.0.0", "method": "pip dist-info",

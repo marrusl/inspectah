@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..executor import Executor
-from ..schema import StorageSection
+from ..schema import StorageSection, FstabEntry, MountPoint, LvmVolume
 
 
 def run(
@@ -26,7 +26,7 @@ def run(
                 parts = line.split()
                 if len(parts) >= 3:
                     section.fstab_entries.append(
-                        {"device": parts[0], "mount_point": parts[1], "fstype": parts[2]}
+                        FstabEntry(device=parts[0], mount_point=parts[1], fstype=parts[2])
                     )
 
     if executor:
@@ -36,12 +36,12 @@ def run(
                 import json
                 data = json.loads(r.stdout)
                 for fs in data.get("filesystems", []):
-                    section.mount_points.append({
-                        "target": fs.get("target", ""),
-                        "source": fs.get("source", ""),
-                        "fstype": fs.get("fstype", ""),
-                        "options": fs.get("options", ""),
-                    })
+                    section.mount_points.append(MountPoint(
+                        target=fs.get("target", ""),
+                        source=fs.get("source", ""),
+                        fstype=fs.get("fstype", ""),
+                        options=fs.get("options", ""),
+                    ))
             except Exception:
                 pass
 
@@ -51,25 +51,25 @@ def run(
                 import json
                 data = json.loads(r.stdout)
                 for lv in data.get("report", [{}])[0].get("lv", []):
-                    section.lvm_info.append({
-                        "lv_name": lv.get("lv_name", ""),
-                        "vg_name": lv.get("vg_name", ""),
-                        "lv_size": lv.get("lv_size", ""),
-                    })
+                    section.lvm_info.append(LvmVolume(
+                        lv_name=lv.get("lv_name", ""),
+                        vg_name=lv.get("vg_name", ""),
+                        lv_size=lv.get("lv_size", ""),
+                    ))
             except Exception:
                 pass
 
     try:
         iscsi_conf = host_root / "etc/iscsi/initiatorname.iscsi"
         if iscsi_conf.exists():
-            section.mount_points.append({"target": "iSCSI", "source": "etc/iscsi/initiatorname.iscsi", "fstype": "iscsi", "options": ""})
+            section.mount_points.append(MountPoint(target="iSCSI", source="etc/iscsi/initiatorname.iscsi", fstype="iscsi"))
     except (PermissionError, OSError):
         pass
 
     try:
         multipath = host_root / "etc/multipath.conf"
         if multipath.exists():
-            section.mount_points.append({"target": "multipath", "source": "etc/multipath.conf", "fstype": "dm-multipath", "options": ""})
+            section.mount_points.append(MountPoint(target="multipath", source="etc/multipath.conf", fstype="dm-multipath"))
     except (PermissionError, OSError):
         pass
 

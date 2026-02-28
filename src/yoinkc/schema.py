@@ -125,43 +125,174 @@ class ServiceSection(BaseModel):
 # --- Placeholders for remaining inspectors (added in later steps) ---
 
 
+# --- Network sub-models ---
+
+class NMConnection(BaseModel):
+    path: str
+    name: str
+    method: str = "unknown"  # "static", "dhcp", or ipv4 method value
+    type: str = ""           # NM connection type (ethernet, wifi, etc.)
+
+
+class FirewallZone(BaseModel):
+    path: str
+    name: str
+    content: str = ""
+    services: List[str] = Field(default_factory=list)
+    ports: List[str] = Field(default_factory=list)
+    rich_rules: List[str] = Field(default_factory=list)
+
+
+class FirewallDirectRule(BaseModel):
+    ipv: str = "ipv4"
+    table: str = "filter"
+    chain: str = "INPUT"
+    priority: str = "0"
+    args: str = ""
+
+
+class StaticRouteFile(BaseModel):
+    """A static route file detected on the host (route-* or iproute2 config)."""
+    path: str
+    name: str
+
+
+class ProxyEntry(BaseModel):
+    source: str
+    line: str
+
+
 class NetworkSection(BaseModel):
     """Output of the Network inspector."""
 
-    connections: List[dict] = Field(default_factory=list)  # {path, name, method, type}
-    firewall_zones: List[dict] = Field(default_factory=list)  # {path, name, content, services, ports, rich_rules}
-    firewall_direct_rules: List[dict] = Field(default_factory=list)  # {ipv, table, chain, rule}
-    static_routes: List[dict] = Field(default_factory=list)
-    ip_routes: List[str] = Field(default_factory=list)  # lines from ip route
-    ip_rules: List[str] = Field(default_factory=list)  # lines from ip rule (non-default only)
+    connections: List[NMConnection] = Field(default_factory=list)
+    firewall_zones: List[FirewallZone] = Field(default_factory=list)
+    firewall_direct_rules: List[FirewallDirectRule] = Field(default_factory=list)
+    static_routes: List[StaticRouteFile] = Field(default_factory=list)
+    ip_routes: List[str] = Field(default_factory=list)
+    ip_rules: List[str] = Field(default_factory=list)
     resolv_provenance: str = ""  # "systemd-resolved", "networkmanager", "hand-edited", or ""
     hosts_additions: List[str] = Field(default_factory=list)
-    proxy: List[dict] = Field(default_factory=list)
+    proxy: List[ProxyEntry] = Field(default_factory=list)
+
+
+# --- Storage sub-models ---
+
+class FstabEntry(BaseModel):
+    device: str
+    mount_point: str
+    fstype: str
+
+
+class MountPoint(BaseModel):
+    target: str
+    source: str
+    fstype: str
+    options: str = ""
+
+
+class LvmVolume(BaseModel):
+    lv_name: str
+    vg_name: str
+    lv_size: str = ""
 
 
 class StorageSection(BaseModel):
     """Output of the Storage inspector."""
 
-    fstab_entries: List[dict] = Field(default_factory=list)
-    mount_points: List[dict] = Field(default_factory=list)
-    lvm_info: List[dict] = Field(default_factory=list)
+    fstab_entries: List[FstabEntry] = Field(default_factory=list)
+    mount_points: List[MountPoint] = Field(default_factory=list)
+    lvm_info: List[LvmVolume] = Field(default_factory=list)
+
+
+# --- Scheduled task sub-models ---
+
+class CronJob(BaseModel):
+    path: str
+    source: str  # "cron.d", "crontab", "cron.daily", "spool/cron (user)", etc.
+
+
+class SystemdTimer(BaseModel):
+    name: str
+    on_calendar: str = ""
+    exec_start: str = ""
+    description: str = ""
+    source: str = ""      # "local" or "vendor"
+    path: str = ""
+    timer_content: str = ""
+    service_content: str = ""
+
+
+class AtJob(BaseModel):
+    file: str
+    command: str = ""
+    user: str = ""
+    working_dir: str = ""
+
+
+class GeneratedTimerUnit(BaseModel):
+    name: str
+    timer_content: str = ""
+    service_content: str = ""
+    cron_expr: str = ""
+    source_path: str = ""
+    command: str = ""
 
 
 class ScheduledTaskSection(BaseModel):
     """Output of the Scheduled Task inspector."""
 
-    cron_jobs: List[dict] = Field(default_factory=list)
-    systemd_timers: List[dict] = Field(default_factory=list)  # {name, on_calendar, exec_start, source, timer_content, service_content}
-    at_jobs: List[dict] = Field(default_factory=list)  # {file, command, user, working_dir}
-    generated_timer_units: List[dict] = Field(default_factory=list)  # name, timer_content, service_content, cron_expr
+    cron_jobs: List[CronJob] = Field(default_factory=list)
+    systemd_timers: List[SystemdTimer] = Field(default_factory=list)
+    at_jobs: List[AtJob] = Field(default_factory=list)
+    generated_timer_units: List[GeneratedTimerUnit] = Field(default_factory=list)
+
+
+# --- Container sub-models ---
+
+class ContainerMount(BaseModel):
+    type: str = ""
+    source: str = ""
+    destination: str = ""
+    mode: str = ""
+    rw: bool = True
+
+
+class QuadletUnit(BaseModel):
+    path: str
+    name: str
+    content: str = ""
+    image: str = ""
+
+
+class ComposeService(BaseModel):
+    service: str
+    image: str
+
+
+class ComposeFile(BaseModel):
+    path: str
+    images: List[ComposeService] = Field(default_factory=list)
+
+
+class RunningContainer(BaseModel):
+    id: str = ""
+    name: str = ""
+    image: str = ""
+    image_id: str = ""
+    status: str = ""
+    mounts: List[ContainerMount] = Field(default_factory=list)
+    networks: dict = Field(default_factory=dict)
+    ports: dict = Field(default_factory=dict)
+    env: List[str] = Field(default_factory=list)
 
 
 class ContainerSection(BaseModel):
     """Output of the Container inspector."""
 
-    quadlet_units: List[dict] = Field(default_factory=list)  # path, name, content, image_ref
-    compose_files: List[dict] = Field(default_factory=list)  # path, images: [{service, image}]
-    running_containers: List[dict] = Field(default_factory=list)  # id, names, image, status, mounts, networks, env
+    quadlet_units: List[QuadletUnit] = Field(default_factory=list)
+    compose_files: List[ComposeFile] = Field(default_factory=list)
+    running_containers: List[RunningContainer] = Field(default_factory=list)
 
 
 class NonRpmSoftwareSection(BaseModel):

@@ -167,36 +167,34 @@ def render(
         lines.append("")
 
         if net.connections:
-            static_conns = [c for c in net.connections if c.get("method") == "static"]
-            dhcp_conns = [c for c in net.connections if c.get("method") == "dhcp"]
-            other_conns = [c for c in net.connections if c.get("method") not in ("static", "dhcp")]
+            static_conns = [c for c in net.connections if c.method == "static"]
+            dhcp_conns = [c for c in net.connections if c.method == "dhcp"]
+            other_conns = [c for c in net.connections if c.method not in ("static", "dhcp")]
 
             lines.append("### Connections")
             lines.append("")
             if static_conns:
                 lines.append("**Static (bake into image):**")
                 for c in static_conns:
-                    lines.append(f"- `{c.get('name', '')}` — {c.get('type', '')} — `{c.get('path', '')}`")
+                    lines.append(f"- `{c.name}` — {c.type} — `{c.path}`")
             if dhcp_conns:
                 lines.append("**DHCP (kickstart at deploy time):**")
                 for c in dhcp_conns:
-                    lines.append(f"- `{c.get('name', '')}` — {c.get('type', '')} — `{c.get('path', '')}`")
+                    lines.append(f"- `{c.name}` — {c.type} — `{c.path}`")
             if other_conns:
                 lines.append("**Other:**")
                 for c in other_conns:
-                    lines.append(f"- `{c.get('name', '')}` — method={c.get('method', '?')} — `{c.get('path', '')}`")
+                    lines.append(f"- `{c.name}` — method={c.method} — `{c.path}`")
             lines.append("")
 
         if net.firewall_zones:
             lines.append("### Firewall zones (bake into image)")
             lines.append("")
             for z in net.firewall_zones:
-                name = z.get("name", "")
-                services = z.get("services", [])
-                ports = z.get("ports", [])
-                rich = z.get("rich_rules", [])
-                lines.append(f"**{name}:** services={', '.join(services) or '—'} | ports={', '.join(ports) or '—'} | rich rules={len(rich)}")
-                for r in rich[:10]:
+                svc_str = ', '.join(z.services) or '—'
+                port_str = ', '.join(z.ports) or '—'
+                lines.append(f"**{z.name}:** services={svc_str} | ports={port_str} | rich rules={len(z.rich_rules)}")
+                for r in z.rich_rules[:10]:
                     lines.append(f"  - `{r[:200]}`")
             lines.append("")
 
@@ -204,7 +202,7 @@ def render(
             lines.append("### Firewall direct rules (bake into image)")
             lines.append("")
             for r in net.firewall_direct_rules:
-                lines.append(f"- `{r.get('chain', '')}` {r.get('ipv', '')} table={r.get('table', '')}: `{r.get('args', '')}`")
+                lines.append(f"- `{r.chain}` {r.ipv} table={r.table}: `{r.args}`")
             lines.append("")
 
         if net.resolv_provenance:
@@ -236,7 +234,7 @@ def render(
         if net.proxy:
             lines.append("### Proxy configuration")
             for p in net.proxy:
-                lines.append(f"- {p.get('source') or ''}: `{p.get('line') or ''}`")
+                lines.append(f"- {p.source}: `{p.line}`")
             lines.append("")
 
     if snapshot.storage and (snapshot.storage.fstab_entries or snapshot.storage.mount_points or snapshot.storage.lvm_info):
@@ -250,17 +248,14 @@ def render(
         if snapshot.storage.fstab_entries:
             lines.append("| Device | Mount Point | FS Type | Recommendation |")
             lines.append("|--------|-------------|---------|----------------|")
-            for e in (snapshot.storage.fstab_entries or [])[:30]:
-                dev = e.get("device") or ""
-                mp = e.get("mount_point") or ""
-                fs = e.get("fstype") or ""
-                rec = _storage_recommendation(mp, fs, dev)
-                lines.append(f"| `{dev}` | `{mp}` | {fs} | {rec} |")
+            for e in snapshot.storage.fstab_entries[:30]:
+                rec = _storage_recommendation(e.mount_point, e.fstype, e.device)
+                lines.append(f"| `{e.device}` | `{e.mount_point}` | {e.fstype} | {rec} |")
             lines.append("")
         if snapshot.storage.lvm_info:
             lines.append("### LVM Layout")
-            for lv in (snapshot.storage.lvm_info or [])[:20]:
-                lines.append(f"- {lv}")
+            for lv in snapshot.storage.lvm_info[:20]:
+                lines.append(f"- {lv.lv_name} ({lv.vg_name}) {lv.lv_size}")
             lines.append("")
 
     st = snapshot.scheduled_tasks
@@ -269,15 +264,15 @@ def render(
         lines.append("")
 
         # Existing systemd timers (grouped by source)
-        local_timers = [t for t in (st.systemd_timers or []) if t.get("source") == "local"]
-        vendor_timers = [t for t in (st.systemd_timers or []) if t.get("source") == "vendor"]
+        local_timers = [t for t in st.systemd_timers if t.source == "local"]
+        vendor_timers = [t for t in st.systemd_timers if t.source == "vendor"]
         if local_timers:
             lines.append("### Existing systemd timers (local)")
             lines.append("")
             lines.append("| Timer | Schedule | ExecStart | Path |")
             lines.append("|-------|----------|-----------|------|")
             for t in local_timers:
-                lines.append(f"| {t.get('name', '')} | {t.get('on_calendar', '')} | `{t.get('exec_start', '')}` | `{t.get('path', '')}` |")
+                lines.append(f"| {t.name} | {t.on_calendar} | `{t.exec_start}` | `{t.path}` |")
             lines.append("")
         if vendor_timers:
             lines.append("### Existing systemd timers (vendor)")
@@ -285,23 +280,23 @@ def render(
             lines.append("| Timer | Schedule | ExecStart | Path |")
             lines.append("|-------|----------|-----------|------|")
             for t in vendor_timers:
-                lines.append(f"| {t.get('name', '')} | {t.get('on_calendar', '')} | `{t.get('exec_start', '')}` | `{t.get('path', '')}` |")
+                lines.append(f"| {t.name} | {t.on_calendar} | `{t.exec_start}` | `{t.path}` |")
             lines.append("")
 
         # Cron-converted timers
         if st.generated_timer_units:
             lines.append("### Cron-converted timers")
             lines.append("")
-            for u in (st.generated_timer_units or [])[:20]:
-                lines.append(f"- **{u.get('name', '')}** — converted from `{u.get('source_path', '')}` (cron: `{u.get('cron_expr', '')}`)")
+            for u in st.generated_timer_units[:20]:
+                lines.append(f"- **{u.name}** — converted from `{u.source_path}` (cron: `{u.cron_expr}`)")
             lines.append("")
 
         # Raw cron jobs
         if st.cron_jobs:
             lines.append("### Cron jobs")
             lines.append("")
-            for j in (st.cron_jobs or [])[:20]:
-                lines.append(f"- `{j.get('path', '')}` ({j.get('source', '')})")
+            for j in st.cron_jobs[:20]:
+                lines.append(f"- `{j.path}` ({j.source})")
             lines.append("")
 
         # At jobs
@@ -310,11 +305,9 @@ def render(
             lines.append("")
             lines.append("| File | User | Command |")
             lines.append("|------|------|---------|")
-            for a in (st.at_jobs or [])[:20]:
-                cmd = a.get("command", "")
-                if len(cmd) > 80:
-                    cmd = cmd[:77] + "..."
-                lines.append(f"| `{a.get('file', '')}` | {a.get('user', '')} | `{cmd}` |")
+            for a in st.at_jobs[:20]:
+                cmd = a.command[:77] + "..." if len(a.command) > 80 else a.command
+                lines.append(f"| `{a.file}` | {a.user} | `{cmd}` |")
             lines.append("")
 
     ct = snapshot.containers
@@ -328,22 +321,20 @@ def render(
             lines.append("| Unit | Image | Path |")
             lines.append("|------|-------|------|")
             for u in ct.quadlet_units:
-                img = u.get("image", "") or "*none*"
-                lines.append(f"| {u.get('name', '')} | `{img}` | `{u.get('path', '')}` |")
+                lines.append(f"| {u.name} | `{u.image or '*none*'}` | `{u.path}` |")
             lines.append("")
 
         if ct.compose_files:
             lines.append("### Compose files")
             lines.append("")
             for c in ct.compose_files:
-                lines.append(f"**`{c.get('path', '')}`**")
-                images = c.get("images", [])
-                if images:
+                lines.append(f"**`{c.path}`**")
+                if c.images:
                     lines.append("")
                     lines.append("| Service | Image |")
                     lines.append("|---------|-------|")
-                    for img in images:
-                        lines.append(f"| {img.get('service', '')} | `{img.get('image', '')}` |")
+                    for img in c.images:
+                        lines.append(f"| {img.service} | `{img.image}` |")
                 lines.append("")
 
         if ct.running_containers:
@@ -352,32 +343,29 @@ def render(
             lines.append("| Name | Image | Status |")
             lines.append("|------|-------|--------|")
             for r in ct.running_containers:
-                name = r.get("name", r.get("id", "")[:12])
-                lines.append(f"| {name} | `{r.get('image', '')}` | {r.get('status', '')} |")
+                name = r.name or r.id[:12]
+                lines.append(f"| {name} | `{r.image}` | {r.status} |")
             lines.append("")
 
             for r in ct.running_containers:
-                name = r.get("name", r.get("id", "")[:12])
-                mounts = r.get("mounts", [])
-                networks = r.get("networks", {})
-                env = r.get("env", [])
-                if mounts or networks or env:
+                name = r.name or r.id[:12]
+                if r.mounts or r.networks or r.env:
                     lines.append(f"<details><summary>{name} details</summary>")
                     lines.append("")
-                    if mounts:
+                    if r.mounts:
                         lines.append("**Mounts:**")
-                        for m in mounts:
-                            rw = "rw" if m.get("rw", True) else "ro"
-                            lines.append(f"- `{m.get('source', '')}` → `{m.get('destination', '')}` ({m.get('type', '')}, {rw})")
-                    if networks:
+                        for m in r.mounts:
+                            rw = "rw" if m.rw else "ro"
+                            lines.append(f"- `{m.source}` → `{m.destination}` ({m.type}, {rw})")
+                    if r.networks:
                         lines.append("")
                         lines.append("**Networks:**")
-                        for net_name, info in networks.items():
+                        for net_name, info in r.networks.items():
                             lines.append(f"- {net_name}: {info.get('ip', '')}")
-                    if env:
+                    if r.env:
                         lines.append("")
                         lines.append("**Environment:**")
-                        for e in env:
+                        for e in r.env:
                             if "=" in e and not e.startswith("PATH="):
                                 lines.append(f"- `{e}`")
                     lines.append("")

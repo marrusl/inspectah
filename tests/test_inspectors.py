@@ -191,30 +191,30 @@ def test_network_inspector_with_fixtures(host_root, fixture_executor):
 
     # --- Connection classification ---
     assert len(section.connections) >= 2
-    conn_map = {c["name"]: c for c in section.connections}
+    conn_map = {c.name: c for c in section.connections}
     assert "eth0" in conn_map
-    assert conn_map["eth0"]["method"] == "dhcp"
-    assert conn_map["eth0"]["type"] == "802-3-ethernet"
+    assert conn_map["eth0"].method == "dhcp"
+    assert conn_map["eth0"].type == "802-3-ethernet"
     assert "mgmt0" in conn_map
-    assert conn_map["mgmt0"]["method"] == "static"
+    assert conn_map["mgmt0"].method == "static"
 
     # --- Firewall zones with rich rules ---
     assert len(section.firewall_zones) >= 2
-    zone_map = {z["name"]: z for z in section.firewall_zones}
+    zone_map = {z.name: z for z in section.firewall_zones}
     pub = zone_map["public"]
-    assert "ssh" in pub["services"]
-    assert "8080/tcp" in pub["ports"]
-    assert len(pub["rich_rules"]) == 2
-    assert any("192.168.1.0/24" in r for r in pub["rich_rules"])
+    assert "ssh" in pub.services
+    assert "8080/tcp" in pub.ports
+    assert len(pub.rich_rules) == 2
+    assert any("192.168.1.0/24" in r for r in pub.rich_rules)
 
     internal = zone_map["internal"]
-    assert "mdns" in internal["services"]
-    assert len(internal["rich_rules"]) == 1
+    assert "mdns" in internal.services
+    assert len(internal.rich_rules) == 1
 
     # --- Firewall direct rules ---
     assert len(section.firewall_direct_rules) == 2
-    assert any("9090" in r["args"] for r in section.firewall_direct_rules)
-    assert section.firewall_direct_rules[0]["chain"] == "INPUT"
+    assert any("9090" in r.args for r in section.firewall_direct_rules)
+    assert section.firewall_direct_rules[0].chain == "INPUT"
 
     # --- resolv.conf provenance ---
     assert section.resolv_provenance == "networkmanager"
@@ -237,7 +237,7 @@ def test_storage_inspector_with_fixtures(host_root, fixture_executor):
     section = run_storage(host_root, fixture_executor)
     assert section is not None
     assert len(section.fstab_entries) >= 1
-    assert any(e["mount_point"] == "/" for e in section.fstab_entries)
+    assert any(e.mount_point == "/" for e in section.fstab_entries)
 
 
 def test_scheduled_tasks_inspector_with_fixtures(host_root, fixture_executor):
@@ -246,29 +246,29 @@ def test_scheduled_tasks_inspector_with_fixtures(host_root, fixture_executor):
     assert section is not None
 
     # Cron jobs still detected
-    assert any(j["path"].endswith("hourly-job") for j in section.cron_jobs)
+    assert any(j.path.endswith("hourly-job") for j in section.cron_jobs)
     assert len(section.generated_timer_units) >= 1
-    assert "OnCalendar" in section.generated_timer_units[0]["timer_content"]
+    assert "OnCalendar" in section.generated_timer_units[0].timer_content
 
     # Existing systemd timers scanned from /etc and /usr/lib
-    timer_names = [t["name"] for t in section.systemd_timers]
+    timer_names = [t.name for t in section.systemd_timers]
     assert "certbot-renew" in timer_names, f"expected certbot-renew, got {timer_names}"
     assert "fstrim" in timer_names, f"expected fstrim, got {timer_names}"
 
-    certbot = next(t for t in section.systemd_timers if t["name"] == "certbot-renew")
-    assert certbot["source"] == "local"
-    assert "00,12:00:00" in certbot["on_calendar"]
-    assert "/usr/bin/certbot" in certbot["exec_start"]
+    certbot = next(t for t in section.systemd_timers if t.name == "certbot-renew")
+    assert certbot.source == "local"
+    assert "00,12:00:00" in certbot.on_calendar
+    assert "/usr/bin/certbot" in certbot.exec_start
 
-    fstrim = next(t for t in section.systemd_timers if t["name"] == "fstrim")
-    assert fstrim["source"] == "vendor"
-    assert fstrim["on_calendar"] == "weekly"
+    fstrim = next(t for t in section.systemd_timers if t.name == "fstrim")
+    assert fstrim.source == "vendor"
+    assert fstrim.on_calendar == "weekly"
 
     # At jobs parsed with command and user
     assert len(section.at_jobs) >= 1
     at_job = section.at_jobs[0]
-    assert "cleanup-temp" in at_job["command"]
-    assert at_job["user"] == "root"
+    assert "cleanup-temp" in at_job.command
+    assert at_job.user == "root"
 
 
 def test_container_inspector_with_fixtures(host_root, fixture_executor):
@@ -280,23 +280,23 @@ def test_container_inspector_with_fixtures(host_root, fixture_executor):
 
     # Quadlet units with image references (system + user-level)
     assert len(section.quadlet_units) >= 3
-    unit_map = {u["name"]: u for u in section.quadlet_units}
+    unit_map = {u.name: u for u in section.quadlet_units}
     assert "nginx.container" in unit_map
-    assert unit_map["nginx.container"]["image"] == "docker.io/library/nginx:1.25-alpine"
+    assert unit_map["nginx.container"].image == "docker.io/library/nginx:1.25-alpine"
     assert "redis.container" in unit_map
-    assert unit_map["redis.container"]["image"] == "registry.redhat.io/rhel9/redis-6:latest"
-    assert unit_map["nginx.container"]["content"].strip().startswith("[Unit]")
+    assert unit_map["redis.container"].image == "registry.redhat.io/rhel9/redis-6:latest"
+    assert unit_map["nginx.container"].content.strip().startswith("[Unit]")
 
     # User-level quadlet from ~/.config/containers/systemd/
     assert "dev-postgres.container" in unit_map
-    assert unit_map["dev-postgres.container"]["image"] == "docker.io/library/postgres:16"
-    assert "home/jdoe" in unit_map["dev-postgres.container"]["path"]
+    assert unit_map["dev-postgres.container"].image == "docker.io/library/postgres:16"
+    assert "home/jdoe" in unit_map["dev-postgres.container"].path
 
     # Compose files with parsed image references
     assert len(section.compose_files) >= 1
     compose = section.compose_files[0]
-    assert "docker-compose" in compose["path"]
-    svc_images = {img["service"]: img["image"] for img in compose["images"]}
+    assert "docker-compose" in compose.path
+    svc_images = {img.service: img.image for img in compose.images}
     assert "web" in svc_images
     assert "python:3.11-slim" in svc_images["web"]
     assert "db" in svc_images
@@ -308,19 +308,19 @@ def test_container_inspector_with_fixtures(host_root, fixture_executor):
     # With podman query
     section2 = run_container(host_root, fixture_executor, query_podman=True)
     assert len(section2.running_containers) >= 2
-    rc_map = {c["name"]: c for c in section2.running_containers}
+    rc_map = {c.name: c for c in section2.running_containers}
     assert "nginx-proxy" in rc_map
     nginx = rc_map["nginx-proxy"]
-    assert nginx["image"] == "docker.io/library/nginx:1.25-alpine"
-    assert len(nginx["mounts"]) >= 1
-    assert nginx["mounts"][0]["destination"] == "/usr/share/nginx/html"
-    assert "podman" in nginx["networks"]
-    assert nginx["networks"]["podman"]["ip"] == "10.88.0.2"
-    assert len(nginx["env"]) >= 1
+    assert nginx.image == "docker.io/library/nginx:1.25-alpine"
+    assert len(nginx.mounts) >= 1
+    assert nginx.mounts[0].destination == "/usr/share/nginx/html"
+    assert "podman" in nginx.networks
+    assert nginx.networks["podman"]["ip"] == "10.88.0.2"
+    assert len(nginx.env) >= 1
 
     redis = rc_map["redis-cache"]
-    assert redis["image"] == "registry.redhat.io/rhel9/redis-6:latest"
-    assert any("REDIS_PASSWORD" in e for e in redis["env"])
+    assert redis.image == "registry.redhat.io/rhel9/redis-6:latest"
+    assert any("REDIS_PASSWORD" in e for e in redis.env)
 
 
 def test_non_rpm_software_inspector_with_fixtures(host_root, fixture_executor):

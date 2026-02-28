@@ -12,7 +12,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..executor import Executor
-from ..schema import ContainerSection
+from ..schema import (
+    ContainerSection, QuadletUnit, ComposeFile, ComposeService,
+    RunningContainer, ContainerMount,
+)
 from . import filtered_rglob
 
 _DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
@@ -111,19 +114,20 @@ def _extract_compose_images(content: str) -> List[Dict[str, str]]:
     return results
 
 
-def _parse_podman_inspect(data: List[dict]) -> List[dict]:
+def _parse_podman_inspect(data: List[dict]) -> List[RunningContainer]:
     """Normalize podman inspect JSON into our schema format."""
-    results: List[dict] = []
+    results: List[RunningContainer] = []
     for c in data:
-        mounts = []
-        for m in (c.get("Mounts") or []):
-            mounts.append({
-                "type": m.get("Type", ""),
-                "source": m.get("Source", ""),
-                "destination": m.get("Destination", ""),
-                "mode": m.get("Mode", ""),
-                "rw": m.get("RW", True),
-            })
+        mounts = [
+            ContainerMount(
+                type=m.get("Type", ""),
+                source=m.get("Source", ""),
+                destination=m.get("Destination", ""),
+                mode=m.get("Mode", ""),
+                rw=m.get("RW", True),
+            )
+            for m in (c.get("Mounts") or [])
+        ]
 
         net_settings = c.get("NetworkSettings") or {}
         networks = {}
@@ -133,23 +137,19 @@ def _parse_podman_inspect(data: List[dict]) -> List[dict]:
                 "gateway": net_info.get("Gateway", ""),
                 "mac": net_info.get("MacAddress", ""),
             }
-        ports = net_settings.get("Ports") or {}
-
-        env_list = (c.get("Config") or {}).get("Env") or []
 
         state = c.get("State") or {}
-
-        results.append({
-            "id": c.get("Id", ""),
-            "name": c.get("Name", ""),
-            "image": c.get("Image", ""),
-            "image_id": c.get("ImageID", ""),
-            "status": state.get("Status", ""),
-            "mounts": mounts,
-            "networks": networks,
-            "ports": ports,
-            "env": env_list,
-        })
+        results.append(RunningContainer(
+            id=c.get("Id", ""),
+            name=c.get("Name", ""),
+            image=c.get("Image", ""),
+            image_id=c.get("ImageID", ""),
+            status=state.get("Status", ""),
+            mounts=mounts,
+            networks=networks,
+            ports=net_settings.get("Ports") or {},
+            env=(c.get("Config") or {}).get("Env") or [],
+        ))
     return results
 
 
@@ -202,12 +202,12 @@ def run(
             _debug(f"quadlet: {f.name} Image={image_ref!r}")
             if not image_ref and content:
                 _debug(f"quadlet: no Image= found, first 5 lines: {content.splitlines()[:5]}")
-            section.quadlet_units.append({
-                "path": str(f.relative_to(host_root)),
-                "name": f.name,
-                "content": content,
-                "image": image_ref,
-            })
+            section.quadlet_units.append(QuadletUnit(
+                path=str(f.relative_to(host_root)),
+                name=f.name,
+                content=content,
+                image=image_ref,
+            ))
 
     # --- Compose files ---
     for search_dir in ("opt", "srv", "etc"):
@@ -220,11 +220,11 @@ def run(
                 if not f.is_file():
                     continue
                 content = _safe_read(f)
-                images = _extract_compose_images(content)
-                section.compose_files.append({
-                    "path": str(f.relative_to(host_root)),
-                    "images": images,
-                })
+                images = [ComposeService(**img) for img in _extract_compose_images(content)]
+                section.compose_files.append(ComposeFile(
+                    path=str(f.relative_to(host_root)),
+                    images=images,
+                ))
 
     # --- Podman query ---
     if query_podman and executor:
@@ -252,11 +252,11 @@ def run(
                 if not section.running_containers:
                     for c in ps_data:
                         if isinstance(c, dict):
-                            section.running_containers.append({
-                                "id": c.get("ID", ""),
-                                "name": c.get("Names", [""])[0] if isinstance(c.get("Names"), list) else str(c.get("Names", "")),
-                                "image": c.get("Image", ""),
-                                "status": c.get("Status", ""),
-                            })
+                            section.running_containers.append(RunningContainer(
+                                id=c.get("ID", ""),
+                                name=c.get("Names", [""])[0] if isinstance(c.get("Names"), list) else str(c.get("Names", "")),
+                                image=c.get("Image", ""),
+                                status=c.get("Status", ""),
+                            ))
 
     return section

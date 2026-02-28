@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..executor import Executor
-from ..schema import ScheduledTaskSection
+from ..schema import (
+    ScheduledTaskSection, CronJob, SystemdTimer, AtJob, GeneratedTimerUnit,
+)
 
 
 def _safe_iterdir(d: Path) -> List[Path]:
@@ -60,7 +62,7 @@ def _make_timer_service(name: str, cron_expr: str, path: str, command: str = "")
 
 def _scan_cron_file(section: ScheduledTaskSection, host_root: Path, f: Path, source: str) -> None:
     rel = str(f.relative_to(host_root))
-    section.cron_jobs.append({"path": rel, "source": source})
+    section.cron_jobs.append(CronJob(path=rel, source=source))
     try:
         text = f.read_text()
         for line in text.splitlines():
@@ -78,14 +80,14 @@ def _scan_cron_file(section: ScheduledTaskSection, host_root: Path, f: Path, sou
                     timer_content, service_content = _make_timer_service(
                         safe_name, cron_expr, rel, command=command,
                     )
-                    section.generated_timer_units.append({
-                        "name": safe_name,
-                        "timer_content": timer_content,
-                        "service_content": service_content,
-                        "cron_expr": cron_expr,
-                        "source_path": rel,
-                        "command": command,
-                    })
+                    section.generated_timer_units.append(GeneratedTimerUnit(
+                        name=safe_name,
+                        timer_content=timer_content,
+                        service_content=service_content,
+                        cron_expr=cron_expr,
+                        source_path=rel,
+                        command=command,
+                    ))
     except Exception:
         pass
 
@@ -127,16 +129,16 @@ def _scan_systemd_timers(
         service_text = _safe_read(service_file) if service_file.exists() else ""
         exec_start = _parse_unit_field(service_text, "ExecStart")
 
-        results.append({
-            "name": name,
-            "on_calendar": on_calendar,
-            "exec_start": exec_start,
-            "description": description,
-            "source": source_label,
-            "path": str(f.relative_to(host_root)),
-            "timer_content": timer_text,
-            "service_content": service_text,
-        })
+        results.append(SystemdTimer(
+            name=name,
+            on_calendar=on_calendar,
+            exec_start=exec_start,
+            description=description,
+            source=source_label,
+            path=str(f.relative_to(host_root)),
+            timer_content=timer_text,
+            service_content=service_text,
+        ))
     return results
 
 
@@ -187,12 +189,7 @@ def _parse_at_job(host_root: Path, f: Path) -> Dict[str, str]:
 
     command = "; ".join(command_lines) if command_lines else ""
 
-    return {
-        "file": rel,
-        "command": command,
-        "user": user,
-        "working_dir": working_dir,
-    }
+    return AtJob(file=rel, command=command, user=user, working_dir=working_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +223,7 @@ def run(
             for f in _safe_iterdir(d):
                 if f.is_file() and not f.name.startswith("."):
                     rel = str(f.relative_to(host_root))
-                    section.cron_jobs.append({"path": rel, "source": f"cron.{period}"})
+                    section.cron_jobs.append(CronJob(path=rel, source=f"cron.{period}"))
 
     spool = host_root / "var/spool/cron"
     if spool.exists():

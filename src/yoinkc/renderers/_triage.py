@@ -23,7 +23,7 @@ def compute_triage(snapshot: InspectionSnapshot, output_dir: Path) -> dict:
         automatic += len(snapshot.network.firewall_zones)
     if snapshot.scheduled_tasks:
         automatic += len(snapshot.scheduled_tasks.generated_timer_units or [])
-        automatic += len([t for t in (snapshot.scheduled_tasks.systemd_timers or []) if t.get("source") == "local"])
+        automatic += len([t for t in snapshot.scheduled_tasks.systemd_timers if t.source == "local"])
     if snapshot.users_groups:
         automatic += len(snapshot.users_groups.users or [])
         automatic += len(snapshot.users_groups.groups or [])

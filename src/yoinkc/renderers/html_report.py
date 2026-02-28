@@ -533,35 +533,28 @@ th { color: var(--muted); font-weight: 500; }
                               '<th>Name</th><th>Method</th><th>Type</th><th>Deployment</th>'
                               '</tr></thead><tbody>')
             for c in net.connections:
-                name = c.get("name", "")
-                method = c.get("method", "unknown")
-                ctype = c.get("type", "")
-                if method == "static":
+                if c.method == "static":
                     deploy = '<span style="color:#3fb950;font-weight:bold">Bake into image</span>'
-                elif method == "dhcp":
+                elif c.method == "dhcp":
                     deploy = '<span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>'
                 else:
                     deploy = '<span style="color:var(--muted)">Review</span>'
-                html_parts.append(f'<tr><td><code>{name}</code></td>'
-                                  f'<td>{method}</td><td>{ctype}</td><td>{deploy}</td></tr>')
+                html_parts.append(f'<tr><td><code>{c.name}</code></td>'
+                                  f'<td>{c.method}</td><td>{c.type}</td><td>{deploy}</td></tr>')
             html_parts.append("</tbody></table>")
 
         # --- Firewall zones ---
         if net.firewall_zones:
             html_parts.append('<h3>Firewall zones <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>')
             for z in net.firewall_zones:
-                zname = z.get("name", "")
-                services = z.get("services", [])
-                ports = z.get("ports", [])
-                rich = z.get("rich_rules", [])
-                html_parts.append(f"<h4>{zname}</h4>")
-                if services:
-                    html_parts.append(f"<p>Services: <code>{', '.join(services)}</code></p>")
-                if ports:
-                    html_parts.append(f"<p>Ports: <code>{', '.join(ports)}</code></p>")
-                if rich:
-                    html_parts.append(f"<p>Rich rules ({len(rich)}):</p><ul>")
-                    for r in rich:
+                html_parts.append(f"<h4>{z.name}</h4>")
+                if z.services:
+                    html_parts.append(f"<p>Services: <code>{', '.join(z.services)}</code></p>")
+                if z.ports:
+                    html_parts.append(f"<p>Ports: <code>{', '.join(z.ports)}</code></p>")
+                if z.rich_rules:
+                    html_parts.append(f"<p>Rich rules ({len(z.rich_rules)}):</p><ul>")
+                    for r in z.rich_rules:
                         escaped = r.replace("<", "&lt;").replace(">", "&gt;")
                         html_parts.append(f"<li><code>{escaped[:300]}</code></li>")
                     html_parts.append("</ul>")
@@ -571,7 +564,7 @@ th { color: var(--muted); font-weight: 500; }
             html_parts.append('<h3>Firewall direct rules <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>')
             html_parts.append("<ul>")
             for r in net.firewall_direct_rules:
-                html_parts.append(f"<li>{r.get('ipv','')} {r.get('chain','')}: <code>{r.get('args','')}</code></li>")
+                html_parts.append(f"<li>{r.ipv} {r.chain}: <code>{r.args}</code></li>")
             html_parts.append("</ul>")
 
         # --- resolv.conf ---
@@ -614,7 +607,7 @@ th { color: var(--muted); font-weight: 500; }
     if snapshot.storage and (snapshot.storage.fstab_entries or []):
         html_parts.append("<table><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>")
         for e in (snapshot.storage.fstab_entries or [])[:30]:
-            html_parts.append(f"<tr><td>{e.get('device') or ''}</td><td>{e.get('mount_point') or ''}</td><td>{e.get('fstype') or ''}</td></tr>")
+            html_parts.append(f"<tr><td>{e.device}</td><td>{e.mount_point}</td><td>{e.fstype}</td></tr>")
         html_parts.append("</tbody></table>")
     else:
         html_parts.append("<p>No fstab entries.</p>")
@@ -626,22 +619,22 @@ th { color: var(--muted); font-weight: 500; }
     has_tasks = st and (st.cron_jobs or st.systemd_timers or st.generated_timer_units or st.at_jobs)
     if has_tasks:
         # Existing systemd timers
-        local_timers = [t for t in (st.systemd_timers or []) if t.get("source") == "local"]
-        vendor_timers = [t for t in (st.systemd_timers or []) if t.get("source") == "vendor"]
+        local_timers = [t for t in st.systemd_timers if t.source == "local"]
+        vendor_timers = [t for t in st.systemd_timers if t.source == "vendor"]
         if local_timers or vendor_timers:
             html_parts.append("<h3>Existing systemd timers</h3>")
             html_parts.append('<table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th><th>Source</th></tr>')
             for t in local_timers:
                 html_parts.append(
-                    f'<tr style="background:#e8f5e9"><td>{t.get("name","")}</td>'
-                    f'<td>{t.get("on_calendar","")}</td>'
-                    f'<td><code>{t.get("exec_start","")}</code></td>'
+                    f'<tr style="background:#e8f5e9"><td>{t.name}</td>'
+                    f'<td>{t.on_calendar}</td>'
+                    f'<td><code>{t.exec_start}</code></td>'
                     f'<td><span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">local</span></td></tr>')
             for t in vendor_timers:
                 html_parts.append(
-                    f'<tr><td>{t.get("name","")}</td>'
-                    f'<td>{t.get("on_calendar","")}</td>'
-                    f'<td><code>{t.get("exec_start","")}</code></td>'
+                    f'<tr><td>{t.name}</td>'
+                    f'<td>{t.on_calendar}</td>'
+                    f'<td><code>{t.exec_start}</code></td>'
                     f'<td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px">vendor</span></td></tr>')
             html_parts.append("</table>")
 
@@ -649,32 +642,30 @@ th { color: var(--muted); font-weight: 500; }
         if st.generated_timer_units:
             html_parts.append("<h3>Cron-converted timers</h3>")
             html_parts.append('<table><tr><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>')
-            for u in (st.generated_timer_units or []):
+            for u in st.generated_timer_units:
                 html_parts.append(
-                    f'<tr style="background:#fff3e0"><td>{u.get("name","")}</td>'
-                    f'<td><code>{u.get("cron_expr","")}</code></td>'
-                    f'<td><code>{u.get("source_path","")}</code></td></tr>')
+                    f'<tr style="background:#fff3e0"><td>{u.name}</td>'
+                    f'<td><code>{u.cron_expr}</code></td>'
+                    f'<td><code>{u.source_path}</code></td></tr>')
             html_parts.append("</table>")
 
         # Cron jobs
         if st.cron_jobs:
             html_parts.append("<h3>Cron jobs</h3>")
             html_parts.append("<ul>")
-            for j in (st.cron_jobs or []):
-                html_parts.append(f'<li><code>{j.get("path","")}</code> ({j.get("source","")})</li>')
+            for j in st.cron_jobs:
+                html_parts.append(f'<li><code>{j.path}</code> ({j.source})</li>')
             html_parts.append("</ul>")
 
         # At jobs
         if st.at_jobs:
             html_parts.append("<h3>At jobs</h3>")
             html_parts.append('<table><tr><th>File</th><th>User</th><th>Command</th></tr>')
-            for a in (st.at_jobs or []):
-                cmd = a.get("command", "")
-                if len(cmd) > 120:
-                    cmd = cmd[:117] + "..."
+            for a in st.at_jobs:
+                cmd = a.command[:117] + "..." if len(a.command) > 120 else a.command
                 html_parts.append(
-                    f'<tr><td><code>{a.get("file","")}</code></td>'
-                    f'<td>{a.get("user","")}</td>'
+                    f'<tr><td><code>{a.file}</code></td>'
+                    f'<td>{a.user}</td>'
                     f'<td><code>{cmd}</code></td></tr>')
             html_parts.append("</table>")
     else:
@@ -690,25 +681,23 @@ th { color: var(--muted); font-weight: 500; }
             html_parts.append("<h3>Quadlet units</h3>")
             html_parts.append('<table><tr><th>Unit</th><th>Image</th><th>Path</th></tr>')
             for u in ct.quadlet_units:
-                img = u.get("image", "")
-                img_display = f'<code>{img}</code>' if img else '<em>none</em>'
+                img_display = f'<code>{u.image}</code>' if u.image else '<em>none</em>'
                 html_parts.append(
-                    f'<tr><td>{u.get("name","")}</td>'
+                    f'<tr><td>{u.name}</td>'
                     f'<td>{img_display}</td>'
-                    f'<td><code>{u.get("path","")}</code></td></tr>')
+                    f'<td><code>{u.path}</code></td></tr>')
             html_parts.append("</table>")
 
         if ct.compose_files:
             html_parts.append("<h3>Compose files</h3>")
             for c in ct.compose_files:
-                html_parts.append(f'<h4><code>{c.get("path","")}</code></h4>')
-                images = c.get("images", [])
-                if images:
+                html_parts.append(f'<h4><code>{c.path}</code></h4>')
+                if c.images:
                     html_parts.append('<table><tr><th>Service</th><th>Image</th></tr>')
-                    for img in images:
+                    for img in c.images:
                         html_parts.append(
-                            f'<tr><td>{img.get("service","")}</td>'
-                            f'<td><code>{img.get("image","")}</code></td></tr>')
+                            f'<tr><td>{img.service}</td>'
+                            f'<td><code>{img.image}</code></td></tr>')
                     html_parts.append("</table>")
                 else:
                     html_parts.append("<p>No image references found.</p>")
@@ -717,23 +706,20 @@ th { color: var(--muted); font-weight: 500; }
             html_parts.append("<h3>Running containers (podman)</h3>")
             html_parts.append('<table><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr>')
             for r in ct.running_containers:
-                name = r.get("name", r.get("id", "")[:12])
-                mounts = r.get("mounts", [])
+                name = r.name or r.id[:12]
                 mount_summary = ", ".join(
-                    f'{m.get("source","")}&rarr;{m.get("destination","")}'
-                    for m in mounts[:3]
+                    f'{m.source}&rarr;{m.destination}' for m in r.mounts[:3]
                 )
-                if len(mounts) > 3:
-                    mount_summary += f" +{len(mounts)-3} more"
-                networks = r.get("networks", {})
+                if len(r.mounts) > 3:
+                    mount_summary += f" +{len(r.mounts)-3} more"
                 net_summary = ", ".join(
                     f'{n}: {info.get("ip","")}'
-                    for n, info in networks.items()
+                    for n, info in r.networks.items()
                 )
                 html_parts.append(
                     f'<tr><td><strong>{name}</strong></td>'
-                    f'<td><code>{r.get("image","")}</code></td>'
-                    f'<td>{r.get("status","")}</td>'
+                    f'<td><code>{r.image}</code></td>'
+                    f'<td>{r.status}</td>'
                     f'<td style="font-size:0.85em">{mount_summary or "<em>none</em>"}</td>'
                     f'<td style="font-size:0.85em">{net_summary or "<em>none</em>"}</td></tr>')
             html_parts.append("</table>")
