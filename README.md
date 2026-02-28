@@ -1,6 +1,6 @@
 # yoinkc
 
-Inspect RHEL/CentOS hosts and produce bootc image artifacts (Containerfile, config tree, audit report, etc.).
+Yoink the essentials from package-based CentOS/RHEL hosts and produce bootc image artifacts (Containerfile, config tree, audit report, etc.).
 
 ## Architecture
 
