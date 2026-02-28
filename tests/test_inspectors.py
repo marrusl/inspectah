@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-import yoinkc.baseline as baseline_mod
+import yoinkc.preflight as preflight_mod
 from yoinkc.executor import Executor, RunResult
 from yoinkc.inspectors import run_all
 from yoinkc.inspectors.rpm import _parse_nevr, _parse_rpm_qa, _parse_rpm_va
@@ -20,7 +20,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 @pytest.fixture(autouse=True)
 def _mock_user_namespace():
     """Pretend we are NOT in a user namespace so nsenter probe runs."""
-    with patch.object(baseline_mod, "_in_user_namespace", return_value=False):
+    with patch.object(preflight_mod, "in_user_namespace", return_value=False):
         yield
 
 

@@ -169,8 +169,13 @@ def run_all(
         os_release=os_release,
     )
 
+    # Create one BaselineResolver per run — shares the nsenter probe cache
+    # across the package query (rpm inspector) and the presets query (service baseline).
+    from ..baseline import BaselineResolver
+    resolver = BaselineResolver(executor)
+
     w = snapshot.warnings
-    snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w), None, w)
+    snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w, resolver=resolver), None, w)
     if snapshot.rpm and snapshot.rpm.no_baseline:
         w.append({
             "source": "rpm",
@@ -185,11 +190,11 @@ def run_all(
         })
     snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=None, config_diffs=config_diffs, warnings=w), None, w)
 
-    # Query base image for systemd presets (service baseline)
+    # Query base image for systemd presets (service baseline) — reuses the same
+    # resolver so the nsenter probe is not repeated.
     base_image_preset_text = None
     if snapshot.rpm and snapshot.rpm.base_image and executor is not None:
-        from ..baseline import query_base_image_presets
-        base_image_preset_text = query_base_image_presets(executor, snapshot.rpm.base_image)
+        base_image_preset_text = resolver.query_presets(snapshot.rpm.base_image)
     snapshot.services = _safe_run("service", lambda: run_service(host_root, executor, base_image_preset_text=base_image_preset_text, warnings=w), None, w)
     snapshot.network = _safe_run("network", lambda: run_network(host_root, executor, warnings=w), None, w)
     snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor), None, w)

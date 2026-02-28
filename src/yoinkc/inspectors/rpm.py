@@ -17,7 +17,7 @@ def _debug(msg: str) -> None:
         print(f"[yoinkc] rpm: {msg}", file=sys.stderr)
 
 
-from ..baseline import get_baseline_packages
+from ..baseline import BaselineResolver
 from ..executor import Executor
 from ..schema import (
     PackageEntry,
@@ -199,6 +199,7 @@ def run(
     executor: Optional[Executor],
     baseline_packages_file: Optional[Path] = None,
     warnings: Optional[list] = None,
+    resolver: Optional[BaselineResolver] = None,
 ) -> RpmSection:
     """Run RPM inspection.
 
@@ -236,9 +237,10 @@ def run(
     section.no_baseline = False
 
     if id_val and version_id:
-        baseline_set, base_image, no_baseline = get_baseline_packages(
+        # Use the shared resolver if provided, else create a transient one
+        _resolver = resolver if resolver is not None else BaselineResolver(executor)
+        baseline_set, base_image, no_baseline = _resolver.get_baseline_packages(
             host_root, id_val, version_id,
-            executor=executor,
             baseline_packages_file=baseline_packages_file,
         )
         section.base_image = base_image

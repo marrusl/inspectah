@@ -1,11 +1,3 @@
-import pytest
-
-import yoinkc.baseline as baseline_mod
-
-
-@pytest.fixture(autouse=True)
-def _reset_nsenter_cache():
-    """Reset the global nsenter probe cache between every test."""
-    baseline_mod._nsenter_available = None
-    yield
-    baseline_mod._nsenter_available = None
+# conftest.py — shared pytest fixtures
+# The global _nsenter_available cache was removed when baseline.py was
+# refactored to use BaselineResolver; no autouse fixtures are needed here.
