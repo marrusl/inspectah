@@ -165,6 +165,7 @@ def _parse_ip_rules(text: str) -> List[str]:
 def run(
     host_root: Path,
     executor: Optional[Executor],
+    warnings: Optional[list] = None,
 ) -> NetworkSection:
     section = NetworkSection()
     host_root = Path(host_root)
@@ -188,6 +189,15 @@ def run(
     # --- Firewall zones ---
     fd = host_root / "etc/firewalld/zones"
     if fd.exists():
+        try:
+            fd.iterdir()  # probe readability
+        except (PermissionError, OSError) as exc:
+            if warnings is not None:
+                warnings.append({
+                    "source": "network",
+                    "message": f"Firewall zone directory unreadable ({exc}) — firewall configuration may be incomplete.",
+                    "severity": "warning",
+                })
         for f in _safe_iterdir(fd):
             if f.is_file() and f.suffix == ".xml":
                 content = _safe_read(f)
@@ -242,12 +252,24 @@ def run(
             out = executor(["ip", "route"])
             if out.returncode == 0 and out.stdout:
                 section.ip_routes = _parse_ip_routes(out.stdout)
+            elif out.returncode != 0 and warnings is not None:
+                warnings.append({
+                    "source": "network",
+                    "message": "ip route failed — static route information unavailable.",
+                    "severity": "warning",
+                })
         except Exception:
             pass
         try:
             out = executor(["ip", "rule"])
             if out.returncode == 0 and out.stdout:
                 section.ip_rules = _parse_ip_rules(out.stdout)
+            elif out.returncode != 0 and warnings is not None:
+                warnings.append({
+                    "source": "network",
+                    "message": "ip rule failed — policy routing rule information unavailable.",
+                    "severity": "warning",
+                })
         except Exception:
             pass
 

@@ -207,6 +207,7 @@ def _diff_sysctl(
 def run(
     host_root: Path,
     executor: Optional[Executor],
+    warnings: Optional[list] = None,
 ) -> KernelBootSection:
     section = KernelBootSection()
     host_root = Path(host_root)
@@ -216,8 +217,13 @@ def run(
         cmdline = host_root / "proc/cmdline"
         if cmdline.exists():
             section.cmdline = cmdline.read_text().strip()
-    except (PermissionError, OSError):
-        pass
+    except (PermissionError, OSError) as exc:
+        if warnings is not None:
+            warnings.append({
+                "source": "kernel_boot",
+                "message": f"/proc/cmdline unreadable ({exc}) — kernel command line unavailable.",
+                "severity": "warning",
+            })
 
     # --- GRUB ---
     try:
@@ -230,6 +236,13 @@ def run(
     # --- sysctl diff ---
     defaults = _collect_sysctl_defaults(host_root)
     overrides = _collect_sysctl_overrides(host_root)
+    sysctl_defaults_dir = host_root / "usr/lib/sysctl.d"
+    if not defaults and sysctl_defaults_dir.exists() and warnings is not None:
+        warnings.append({
+            "source": "kernel_boot",
+            "message": "sysctl shipped defaults could not be read from /usr/lib/sysctl.d — sysctl diff may be incomplete.",
+            "severity": "warning",
+        })
     section.sysctl_overrides = _diff_sysctl(host_root, defaults, overrides)
 
     # --- modules-load.d / modprobe.d / dracut ---

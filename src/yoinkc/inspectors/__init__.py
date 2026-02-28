@@ -170,7 +170,7 @@ def run_all(
     )
 
     w = snapshot.warnings
-    snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file), None, w)
+    snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w), None, w)
     if snapshot.rpm and snapshot.rpm.no_baseline:
         w.append({
             "source": "rpm",
@@ -183,21 +183,21 @@ def run_all(
             ),
             "severity": "warning",
         })
-    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=None, config_diffs=config_diffs), None, w)
+    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=None, config_diffs=config_diffs, warnings=w), None, w)
 
     # Query base image for systemd presets (service baseline)
     base_image_preset_text = None
     if snapshot.rpm and snapshot.rpm.base_image and executor is not None:
         from ..baseline import query_base_image_presets
         base_image_preset_text = query_base_image_presets(executor, snapshot.rpm.base_image)
-    snapshot.services = _safe_run("service", lambda: run_service(host_root, executor, base_image_preset_text=base_image_preset_text), None, w)
-    snapshot.network = _safe_run("network", lambda: run_network(host_root, executor), None, w)
+    snapshot.services = _safe_run("service", lambda: run_service(host_root, executor, base_image_preset_text=base_image_preset_text, warnings=w), None, w)
+    snapshot.network = _safe_run("network", lambda: run_network(host_root, executor, warnings=w), None, w)
     snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor), None, w)
     snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor), None, w)
-    snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman), None, w)
-    snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan), None, w)
-    snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor), None, w)
-    snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor), None, w)
+    snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman, warnings=w), None, w)
+    snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan, warnings=w), None, w)
+    snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor, warnings=w), None, w)
+    snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor, warnings=w), None, w)
     snapshot.users_groups = _safe_run("users_groups", lambda: run_users_groups(host_root, executor), None, w)
 
     return snapshot

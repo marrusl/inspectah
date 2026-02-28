@@ -73,7 +73,7 @@ def _parse_nevr(nevra: str) -> Optional[PackageEntry]:
     )
 
 
-def _parse_rpm_qa(stdout: str) -> List[PackageEntry]:
+def _parse_rpm_qa(stdout: str, warnings: Optional[list] = None) -> List[PackageEntry]:
     packages = []
     failed = []
     for line in stdout.strip().splitlines():
@@ -85,10 +85,19 @@ def _parse_rpm_qa(stdout: str) -> List[PackageEntry]:
             packages.append(pkg)
         else:
             failed.append(line)
-    if failed:
-        _debug(f"NEVRA parse failures: {len(failed)} lines")
+    total = len(packages) + len(failed)
+    if failed and total > 0:
+        pct = len(failed) / total * 100
+        _debug(f"NEVRA parse failures: {len(failed)} lines ({pct:.0f}%)")
         for f in failed[:10]:
             _debug(f"  failed to parse: {f!r}")
+        if warnings is not None:
+            severity = "warning" if pct >= 5 else "info"
+            warnings.append({
+                "source": "rpm",
+                "message": f"rpm -qa: {len(failed)} package line(s) could not be parsed ({pct:.0f}% of output) — package list may be incomplete.",
+                "severity": severity,
+            })
     _debug(f"parsed {len(packages)} packages from rpm -qa "
            f"(first 5 names: {[p.name for p in packages[:5]]})")
     return packages
@@ -150,10 +159,16 @@ def _collect_repo_files(host_root: Path) -> List[RepoFile]:
     return repo_files
 
 
-def _dnf_history_removed(executor: Executor, host_root: Path) -> List[str]:
+def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional[list] = None) -> List[str]:
     """Run dnf history and collect package names from Remove transactions."""
     result = executor(["dnf", "history", "list", "-q"], cwd=str(host_root))
     if result.returncode != 0:
+        if warnings is not None:
+            warnings.append({
+                "source": "rpm",
+                "message": "dnf history unavailable — orphaned config detection (packages removed after install) is incomplete.",
+                "severity": "warning",
+            })
         return []
     removed = []
     for line in result.stdout.splitlines():
@@ -183,6 +198,7 @@ def run(
     host_root: Path,
     executor: Optional[Executor],
     baseline_packages_file: Optional[Path] = None,
+    warnings: Optional[list] = None,
 ) -> RpmSection:
     """Run RPM inspection.
 
@@ -198,10 +214,18 @@ def run(
         dbpath = str(host_root / "var" / "lib" / "rpm")
         cmd_qa = ["rpm", "--dbpath", dbpath, "-qa", "--queryformat", RPM_QA_QUERYFORMAT + "\\n"]
         result_qa = executor(cmd_qa)
+        used_root_fallback = False
         if result_qa.returncode != 0:
             cmd_qa = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-qa", "--queryformat", RPM_QA_QUERYFORMAT + "\\n"]
             result_qa = executor(cmd_qa)
-        installed = [p for p in _parse_rpm_qa(result_qa.stdout)
+            used_root_fallback = True
+        if used_root_fallback and result_qa.returncode == 0 and warnings is not None:
+            warnings.append({
+                "source": "rpm",
+                "message": "rpm -qa used --root fallback (--dbpath query failed); results are correct but may be slower.",
+                "severity": "info",
+            })
+        installed = [p for p in _parse_rpm_qa(result_qa.stdout, warnings=warnings)
                      if p.name not in _VIRTUAL_PACKAGES]
     else:
         installed = []
@@ -269,7 +293,7 @@ def run(
 
     # 5) dnf history removed
     if executor is not None:
-        section.dnf_history_removed = _dnf_history_removed(executor, host_root)
+        section.dnf_history_removed = _dnf_history_removed(executor, host_root, warnings=warnings)
     else:
         section.dnf_history_removed = []
 

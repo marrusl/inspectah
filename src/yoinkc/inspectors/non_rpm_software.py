@@ -246,9 +246,11 @@ def _scan_venv_packages(
     section: NonRpmSoftwareSection,
     host_root: Path,
     executor: Optional[Executor],
+    warnings: Optional[List] = None,
 ) -> None:
     """Discover venvs, scan dist-info inside them, and run pip list --path if possible."""
     venvs = _find_venvs(host_root)
+    pip_fail_count = 0
 
     for venv_path, system_sp in venvs:
         rel = str(venv_path.relative_to(host_root))
@@ -276,6 +278,7 @@ def _scan_venv_packages(
         if executor:
             try:
                 sp_paths = list(venv_path.rglob("site-packages"))
+                pip_ok = False
                 for sp_path in sp_paths:
                     if sp_path.is_dir():
                         r = executor(["pip", "list", "--path", str(sp_path), "--format", "columns"])
@@ -283,6 +286,9 @@ def _scan_venv_packages(
                             pip_packages = _parse_pip_list(r.stdout)
                             if pip_packages:
                                 packages = pip_packages
+                                pip_ok = True
+                        elif r.returncode != 0:
+                            pip_fail_count += 1
                         break
             except Exception:
                 pass
@@ -294,6 +300,13 @@ def _scan_venv_packages(
             "confidence": "high",
             "system_site_packages": system_sp,
             "packages": packages,
+        })
+
+    if pip_fail_count > 0 and warnings is not None:
+        warnings.append({
+            "source": "non_rpm_software",
+            "message": f"pip list --path failed for {pip_fail_count} venv(s) — package inventory may be incomplete (dist-info scan used as fallback).",
+            "severity": "warning",
         })
 
 
@@ -599,12 +612,32 @@ def run(
     host_root: Path,
     executor: Optional[Executor],
     deep_binary_scan: bool = False,
+    warnings: Optional[list] = None,
 ) -> NonRpmSoftwareSection:
     section = NonRpmSoftwareSection()
     host_root = Path(host_root)
 
+    # Probe for binary analysis tool availability (warn once, not per file)
+    if executor:
+        probe = executor(["readelf", "--version"])
+        if probe.returncode == 127:
+            if warnings is not None:
+                warnings.append({
+                    "source": "non_rpm_software",
+                    "message": "readelf not available (rc=127) — ELF binary classification skipped. Install binutils in the yoinkc container image.",
+                    "severity": "warning",
+                })
+        else:
+            probe = executor(["file", "--version"])
+            if probe.returncode == 127 and warnings is not None:
+                warnings.append({
+                    "source": "non_rpm_software",
+                    "message": "file not available (rc=127) — binary type detection skipped. Install file in the yoinkc container image.",
+                    "severity": "warning",
+                })
+
     _scan_dirs(section, host_root, executor, deep_binary_scan)
-    _scan_venv_packages(section, host_root, executor)
+    _scan_venv_packages(section, host_root, executor, warnings=warnings)
     _scan_pip(section, host_root, executor)
     _scan_npm(section, host_root)
     _scan_gem(section, host_root)

@@ -192,6 +192,7 @@ def run(
     host_root: Path,
     executor: Optional[Executor],
     base_image_preset_text: Optional[str] = None,
+    warnings: Optional[list] = None,
 ) -> ServiceSection:
     host_root = Path(host_root)
     section = ServiceSection()
@@ -225,6 +226,16 @@ def run(
     default_enabled, default_disabled, has_disable_all = _parse_preset_files(
         host_root, base_image_preset_text=base_image_preset_text,
     )
+    if base_image_preset_text is None and warnings is not None:
+        warnings.append({
+            "source": "service",
+            "message": (
+                "No base image service presets available — service state changes are "
+                "reported without comparison to base image defaults. "
+                "All non-default-enabled units will appear as changes."
+            ),
+            "severity": "warning",
+        })
 
     for unit, state in current.items():
         if not unit.endswith(".service") and not unit.endswith(".timer"):

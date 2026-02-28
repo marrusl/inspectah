@@ -109,7 +109,7 @@ def _is_excluded_unowned(path: str) -> bool:
     return False
 
 
-def _rpm_owned_paths(executor: Optional[Executor], host_root: Path) -> Set[str]:
+def _rpm_owned_paths(executor: Optional[Executor], host_root: Path, warnings: Optional[list] = None) -> Set[str]:
     """Build set of all RPM-owned paths under /etc in a single bulk query.
 
     Uses `rpm -qa --queryformat '[%{FILENAMES}\\n]'` to list every file owned by every
@@ -125,6 +125,12 @@ def _rpm_owned_paths(executor: Optional[Executor], host_root: Path) -> Set[str]:
         cmd = ["rpm", "--root", str(host_root), "--define", "_rpmlock_path /var/tmp/.rpm.lock", "-qa", "--queryformat", "[%{FILENAMES}\n]"]
         result = executor(cmd)
     if result.returncode != 0:
+        if warnings is not None:
+            warnings.append({
+                "source": "config",
+                "message": "rpm -qla failed — unowned file detection is unavailable. Config files not owned by any RPM package will not be captured.",
+                "severity": "warning",
+            })
         return set()
     paths: Set[str] = set()
     for line in result.stdout.splitlines():
@@ -227,6 +233,7 @@ def run(
     rpm_section: Optional[RpmSection] = None,
     rpm_owned_paths_override: Optional[Set[str]] = None,
     config_diffs: bool = False,
+    warnings: Optional[list] = None,
 ) -> ConfigSection:
     """
     Run Config inspection. Requires rpm_section for rpm_va and dnf_history_removed.
@@ -248,6 +255,7 @@ def run(
         rpm_va_by_path = {}
 
     # 1) RPM-owned modified files (from rpm_va)
+    config_diff_failures = 0
     for path, entry in rpm_va_by_path.items():
         full = host_root / path.lstrip("/")
         if not full.exists():
@@ -278,6 +286,7 @@ def run(
                 diff_against_rpm = _unified_diff(original, content, path)
             else:
                 _debug(f"diff: could not retrieve RPM default for {path}")
+                config_diff_failures += 1
                 content = (content or "") + "\n# NOTE: could not retrieve RPM default for diff — full file included\n"
         section.files.append(
             ConfigFileEntry(
@@ -289,12 +298,18 @@ def run(
                 diff_against_rpm=diff_against_rpm,
             )
         )
+    if config_diffs and config_diff_failures > 0 and warnings is not None:
+        warnings.append({
+            "source": "config",
+            "message": f"--config-diffs: {config_diff_failures} file(s) could not be diffed against RPM defaults (RPM not found in cache or repos) — full file content included instead.",
+            "severity": "warning",
+        })
 
     # 2) Unowned files: in /etc but not in rpm_owned_paths
     if rpm_owned_paths_override is not None:
         rpm_owned = rpm_owned_paths_override
     else:
-        rpm_owned = _rpm_owned_paths(executor, host_root)
+        rpm_owned = _rpm_owned_paths(executor, host_root, warnings=warnings)
     all_etc_files = _list_etc_recursive(host_root, etc)
     for f in all_etc_files:
         try:

@@ -133,6 +133,7 @@ def _read_booleans_from_fs(host_root: Path) -> List[dict]:
 def run(
     host_root: Path,
     executor: Optional[Executor],
+    warnings: Optional[list] = None,
 ) -> SelinuxSection:
     section = SelinuxSection()
     host_root = Path(host_root)
@@ -165,7 +166,15 @@ def run(
         else:
             _debug(f"semanage failed (rc={out.returncode}): {out.stderr.strip()[:200]}")
             # Fallback: try reading /sys/fs/selinux/booleans/ from the host
-            section.boolean_overrides = _read_booleans_from_fs(host_root)
+            fallback = _read_booleans_from_fs(host_root)
+            section.boolean_overrides = fallback
+            booldir = host_root / "sys/fs/selinux/booleans"
+            if not booldir.is_dir() and warnings is not None:
+                warnings.append({
+                    "source": "selinux",
+                    "message": "SELinux boolean override detection unavailable — semanage failed and /sys/fs/selinux/booleans not accessible.",
+                    "severity": "warning",
+                })
 
     audit_d = host_root / "etc/audit/rules.d"
     if audit_d.exists():

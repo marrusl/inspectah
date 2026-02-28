@@ -157,6 +157,7 @@ def run(
     host_root: Path,
     executor: Optional[Executor],
     query_podman: bool = False,
+    warnings: Optional[list] = None,
 ) -> ContainerSection:
     section = ContainerSection()
     host_root = Path(host_root)
@@ -230,6 +231,12 @@ def run(
     if query_podman and executor:
         # podman ps for the container list
         r = executor(["podman", "ps", "-a", "--format", "json"])
+        if r.returncode != 0 and warnings is not None:
+            warnings.append({
+                "source": "containers",
+                "message": "--query-podman requested but podman ps failed — live container data unavailable.",
+                "severity": "warning",
+            })
         if r.returncode == 0 and r.stdout.strip():
             try:
                 ps_data = json.loads(r.stdout)
