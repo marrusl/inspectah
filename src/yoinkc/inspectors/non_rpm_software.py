@@ -427,7 +427,7 @@ def _scan_dirs(
 
             if executor:
                 try:
-                    for f in entry.rglob("*"):
+                    for f in filtered_rglob(entry, "*"):
                         if not f.is_file():
                             continue
                         binary_info = _classify_binary(executor, f)
