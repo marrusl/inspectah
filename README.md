@@ -47,13 +47,23 @@ Run it against a host. **Typically you run the container on the host you are ins
 ```bash
 sudo podman run --rm \
   --pid=host \
+  --privileged \
   --security-opt label=disable \
   -v /:/host:ro \
   -v ./output:/output:z \
   yoinkc --output-dir /output
 ```
 
-> **Note:** `--pid=host` allows the tool to reach the host's `podman` (via `nsenter`) for querying the bootc base image package list. Without it, baseline generation falls back to all-packages mode. `--security-opt label=disable` turns off SELinux label enforcement. The tool needs broad read access across the host filesystem — the container is a packaging convenience, not a security boundary.
+> **Required flags:** The container must run with **rootful podman** (`sudo`), `--pid=host`, `--privileged`, and `--security-opt label=disable`. The tool performs a preflight check on startup and will exit with a clear error if any of these are missing. Use `--skip-preflight` to bypass the check if needed.
+>
+> | Flag | Why |
+> |------|-----|
+> | `sudo` (rootful) | nsenter into host namespaces requires real `CAP_SYS_ADMIN` — rootless podman runs in a user namespace where this is impossible |
+> | `--pid=host` | Exposes the host PID namespace so the tool can reach PID 1 and run `podman` on the host via `nsenter` |
+> | `--privileged` | Grants the full capability set including `CAP_SYS_ADMIN` for `nsenter` and broad filesystem access |
+> | `--security-opt label=disable` | Disables SELinux label enforcement so the container can read all host paths |
+>
+> The tool needs broad read access across the host filesystem — the container is a packaging convenience, not a security boundary.
 
 After the run, `./output` on the host contains the Containerfile, config tree, reports, and snapshot. You can then copy that directory off the host or push it to GitHub with `--push-to-github`. The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
 
@@ -186,6 +196,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 | `--config-diffs` | Generate line-by-line diffs for modified configs via `rpm2cpio` (retrieves from local cache or downloads from repos) |
 | `--deep-binary-scan` | Full `strings` scan on unknown binaries with extended version pattern matching (slow) |
 | `--query-podman` | Connect to podman to enumerate running containers with full inspect data |
+| `--skip-preflight` | Skip container privilege checks (rootful, `--pid=host`, `--privileged`, SELinux) |
 
 ### Output Options
 
@@ -224,12 +235,12 @@ The generated Containerfile follows a deliberate layer order optimized for build
 
 The tool generates a package baseline by querying the target **bootc base image** directly. It detects the host OS from `/etc/os-release`, maps it to the corresponding base image (RHEL 9.x to `registry.redhat.io/rhel9/rhel-bootc:9.x`, CentOS Stream 9 to `quay.io/centos-bootc/centos-bootc:stream9`), and runs `podman run --rm <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete package list. The diff against host packages produces exactly the `dnf install` list the Containerfile needs.
 
-When running inside a container, the tool uses `nsenter` to execute `podman` in the host's namespaces. This requires `--pid=host` on the outer container (see the run command above). If `--pid=host` is not set, the tool falls back gracefully to all-packages mode.
+When running inside a container, the tool uses `nsenter` to execute `podman` in the host's namespaces. This requires `sudo`, `--pid=host`, and `--privileged` on the outer container (see the run command above). Before attempting `nsenter`, the tool runs a fast probe to detect rootless containers and missing capabilities, and provides specific guidance if the probe fails.
 
 **Fallback behavior:**
 
 - **Base image queryable** — accurate package diff, only truly operator-added packages appear in the Containerfile
-- **Base image not available** (no `--pid=host`, or base image not pulled) — enters "all-packages mode" where every installed package is treated as operator-added (no baseline subtraction), with a clear warning in the reports
+- **Base image not available** (base image not pulled, or `--skip-preflight` used without proper flags) — enters "all-packages mode" where every installed package is treated as operator-added (no baseline subtraction), with a clear warning in the reports
 - **Air-gapped environments** — use `--baseline-packages FILE` to provide a newline-separated list of package names, bypassing the podman query
 
 The resolved baseline (including the base image package list) is cached in the inspection snapshot, so `--from-snapshot` re-renders work without network access or podman.

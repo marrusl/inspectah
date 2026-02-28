@@ -10,7 +10,6 @@ from yoinkc.baseline import (
     select_base_image,
     load_baseline_packages_file,
     get_baseline_packages,
-    _in_user_namespace,
     _nsenter_probe,
 )
 from yoinkc.executor import RunResult
@@ -124,27 +123,6 @@ def test_nsenter_probe_eperm_falls_back(_mock_userns):
     )
     assert no_baseline is True
     assert base_image == "quay.io/centos-bootc/centos-bootc:stream9"
-
-
-def test_user_namespace_detection_rootless():
-    """Rootless uid_map (inner 0 → outer 1000) triggers user-namespace detection."""
-    with patch("yoinkc.baseline.Path") as MockPath:
-        MockPath.return_value.read_text.return_value = "         0       1000          1\n"
-        assert _in_user_namespace() is True
-
-
-def test_user_namespace_detection_rootful():
-    """Rootful uid_map (0 → 0) is not flagged as user namespace."""
-    with patch("yoinkc.baseline.Path") as MockPath:
-        MockPath.return_value.read_text.return_value = "         0          0 4294967295\n"
-        assert _in_user_namespace() is False
-
-
-def test_user_namespace_no_procfs():
-    """Missing /proc/self/uid_map (e.g. macOS) defaults to False."""
-    with patch("yoinkc.baseline.Path") as MockPath:
-        MockPath.return_value.read_text.side_effect = OSError("not found")
-        assert _in_user_namespace() is False
 
 
 @patch.object(baseline_mod, "_in_user_namespace", return_value=True)

@@ -33,6 +33,31 @@ def _run_renderers(snapshot: InspectionSnapshot, output_dir: Path) -> None:
 
 def main(argv: Optional[list] = None) -> int:
     args = parse_args(argv)
+
+    # Preflight: bail out early if container privileges are missing.
+    # Only applies when inspecting via a mounted host root (not --from-snapshot,
+    # not running directly on the host with --host-root /).
+    if (
+        args.from_snapshot is None
+        and str(args.host_root) != "/"
+        and not args.skip_preflight
+    ):
+        from .preflight import check_container_privileges
+        errors = check_container_privileges()
+        if errors:
+            print("ERROR: container privilege checks failed:\n", file=sys.stderr)
+            for err in errors:
+                print(f"  • {err}", file=sys.stderr)
+            print(
+                "\nRun with the required flags, e.g.:\n"
+                "  sudo podman run --rm --pid=host --privileged "
+                "--security-opt label=disable \\\n"
+                "    -v /:/host:ro -v ./output:/output:z yoinkc --output-dir /output\n"
+                "\nOr use --skip-preflight to bypass these checks.",
+                file=sys.stderr,
+            )
+            return 1
+
     try:
         def run_inspectors(host_root: Path):
             return _run_inspectors(host_root, args)

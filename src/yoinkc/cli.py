@@ -67,6 +67,12 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
     # Build validation
     parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        help="Skip container privilege checks (rootful, --pid=host, --privileged, SELinux)",
+    )
+
+    parser.add_argument(
         "--validate",
         action="store_true",
         help="After generating output, run podman build to verify Containerfile",

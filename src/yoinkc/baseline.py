@@ -17,6 +17,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from .preflight import in_user_namespace as _in_user_namespace
+
 _DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
 
 _nsenter_available: Optional[bool] = None
@@ -25,25 +27,6 @@ _nsenter_available: Optional[bool] = None
 def _debug(msg: str) -> None:
     if _DEBUG:
         print(f"[yoinkc] baseline: {msg}", file=sys.stderr)
-
-
-def _in_user_namespace() -> bool:
-    """Return True if we're running inside a non-root user namespace.
-
-    Rootless podman creates a user namespace where the inner uid 0 maps to an
-    unprivileged host uid.  In that case ``nsenter -t 1`` will always fail with
-    EPERM because ``setns()`` requires real ``CAP_SYS_ADMIN`` in the *target*
-    namespace.
-    """
-    try:
-        text = Path("/proc/self/uid_map").read_text()
-        for line in text.strip().splitlines():
-            parts = line.split()
-            if len(parts) >= 3 and parts[0] == "0" and parts[1] != "0":
-                return True
-    except (OSError, ValueError):
-        pass
-    return False
 
 
 def _nsenter_probe(executor) -> bool:
