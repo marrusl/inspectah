@@ -268,11 +268,17 @@ def test_append_files_written():
     )
     with tempfile.TemporaryDirectory() as tmp:
         render_containerfile(snapshot, _env(), Path(tmp))
-        etc = Path(tmp) / "config" / "etc"
+        # .append files are written to config/tmp/ so they are NOT swept up by
+        # COPY config/etc/ /etc/ — they need to go to /tmp/ via a separate COPY.
+        tmp_dir = Path(tmp) / "config" / "tmp"
         for f in ("passwd.append", "shadow.append", "group.append",
                   "gshadow.append", "subuid.append", "subgid.append"):
-            assert (etc / f).exists(), f"Missing {f}"
-        assert "mark:x:1000:1000" in (etc / "passwd.append").read_text()
+            assert (tmp_dir / f).exists(), f"Missing {f}"
+        assert "mark:x:1000:1000" in (tmp_dir / "passwd.append").read_text()
+        # Verify the Containerfile uses config/tmp/ as the COPY source
+        cf = (Path(tmp) / "Containerfile").read_text()
+        assert "COPY config/tmp/passwd.append /tmp/passwd.append" in cf
+        assert "COPY config/etc/passwd.append" not in cf
 
 
 # ---------------------------------------------------------------------------

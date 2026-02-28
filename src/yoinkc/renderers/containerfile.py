@@ -129,11 +129,13 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(item["content"])
 
-    # User/group account fragment files for append-based provisioning
+    # User/group account fragment files for append-based provisioning.
+    # Written to config/tmp/ so they are NOT swept up by COPY config/etc/ /etc/.
+    # The Containerfile COPYs them to /tmp/ explicitly and RUNs cat >> /etc/...
     ug = snapshot.users_groups
     if ug:
-        etc_dir = config_dir / "etc"
-        etc_dir.mkdir(parents=True, exist_ok=True)
+        tmp_dir = config_dir / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
         for attr, filename in (
             ("passwd_entries", "passwd.append"),
             ("shadow_entries", "shadow.append"),
@@ -144,7 +146,7 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
         ):
             entries = getattr(ug, attr, [])
             if entries:
-                (etc_dir / filename).write_text("\n".join(entries) + "\n")
+                (tmp_dir / filename).write_text("\n".join(entries) + "\n")
 
     # Kernel module / sysctl / dracut configs
     if snapshot.kernel_boot:
@@ -187,7 +189,118 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
     (tmpfiles_dir / "yoinkc-var.conf").write_text("\n".join(tmpfiles_lines) + "\n")
 
 
-def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
+def _config_copy_roots(config_dir: Path):
+    """Return sorted list of non-empty top-level subdirectory names under config_dir.
+
+    'tmp' is excluded — those files get individual COPY lines to /tmp/.
+    This is called after _write_config_tree so we copy exactly what was written.
+    """
+    roots = []
+    try:
+        for d in sorted(config_dir.iterdir()):
+            if not d.is_dir() or d.name == "tmp":
+                continue
+            # Only include if the directory is non-empty
+            if any(True for _ in d.rglob("*") if _.is_file()):
+                roots.append(d.name)
+    except (PermissionError, OSError):
+        pass
+    return roots
+
+
+def _config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> list:
+    """Build a block comment listing everything that will be in the consolidated COPY."""
+    lines = []
+
+    # Config files (modified, unowned, orphaned)
+    if snapshot.config and snapshot.config.files:
+        config_entries = [f for f in snapshot.config.files if f.path.lstrip("/") not in dhcp_paths]
+        modified = [f for f in config_entries if f.kind == ConfigFileKind.RPM_OWNED_MODIFIED]
+        unowned = [f for f in config_entries if f.kind == ConfigFileKind.UNOWNED]
+        orphaned = [f for f in config_entries if f.kind == ConfigFileKind.ORPHANED]
+        if modified:
+            lines.append(f"# Modified RPM-owned configs ({len(modified)}):")
+            for f in modified:
+                rel = f.path.lstrip("/")
+                if f.diff_against_rpm and f.diff_against_rpm.strip():
+                    pkg_label = f.package or "RPM"
+                    diff_lines = [l for l in f.diff_against_rpm.strip().splitlines()
+                                  if (l.startswith("+") or l.startswith("-"))
+                                  and not l.startswith("---") and not l.startswith("+++")]
+                    summary = diff_lines[:3]
+                    lines.append(f"#   {rel} (modified from {pkg_label}):")
+                    for sl in summary:
+                        lines.append(f"#     {sl}")
+                    if len(diff_lines) > 3:
+                        lines.append(f"#     ... and {len(diff_lines) - 3} more changes")
+                else:
+                    lines.append(f"#   {rel}")
+        if unowned:
+            lines.append(f"# Unowned configs ({len(unowned)}):")
+            for f in unowned[:10]:
+                lines.append(f"#   {f.path.lstrip('/')}")
+            if len(unowned) > 10:
+                lines.append(f"#   ... and {len(unowned) - 10} more")
+        if orphaned:
+            lines.append(f"# Orphaned configs from removed packages ({len(orphaned)}):")
+            for f in orphaned[:5]:
+                lines.append(f"#   {f.path.lstrip('/')}")
+
+    # Repo files
+    if snapshot.rpm and snapshot.rpm.repo_files:
+        lines.append(f"# Repo files ({len(snapshot.rpm.repo_files)}):")
+        for r in snapshot.rpm.repo_files[:5]:
+            lines.append(f"#   {r.path}")
+
+    # Firewall
+    net = snapshot.network
+    if net and net.firewall_zones:
+        lines.append(f"# Firewall zones ({len(net.firewall_zones)}): "
+                     + ", ".join(z.name for z in net.firewall_zones[:5]))
+    if net and net.firewall_direct_rules:
+        lines.append(f"# Firewall direct rules: etc/firewalld/direct.xml")
+
+    # Static NM connections
+    if net:
+        static_conns = [c for c in net.connections if c.method == "static"]
+        if static_conns:
+            lines.append(f"# Static NM connections ({len(static_conns)}): "
+                         + ", ".join(c.name for c in static_conns[:5]))
+
+    # Timers
+    st = snapshot.scheduled_tasks
+    if st:
+        local_timers = [t for t in st.systemd_timers if t.source == "local"]
+        if local_timers:
+            lines.append(f"# Local systemd timers ({len(local_timers)}): "
+                         + ", ".join(t.name for t in local_timers[:5]))
+        if st.generated_timer_units:
+            lines.append(f"# Cron-converted timers ({len(st.generated_timer_units)}): "
+                         + ", ".join(u.name for u in st.generated_timer_units[:5]))
+
+    # Kernel
+    kb = snapshot.kernel_boot
+    if kb:
+        if kb.modules_load_d:
+            lines.append(f"# modules-load.d: {len(kb.modules_load_d)} file(s)")
+        if kb.modprobe_d:
+            lines.append(f"# modprobe.d: {len(kb.modprobe_d)} file(s)")
+        if kb.dracut_conf:
+            lines.append(f"# dracut.conf.d: {len(kb.dracut_conf)} file(s)")
+        if kb.sysctl_overrides:
+            lines.append(f"# sysctl overrides: etc/sysctl.d/99-yoinkc.conf ({len(kb.sysctl_overrides)} value(s))")
+
+    # SELinux audit rules
+    if snapshot.selinux and snapshot.selinux.audit_rules:
+        lines.append(f"# Audit rules: {len(snapshot.selinux.audit_rules)} file(s)")
+
+    # tmpfiles.d (always written)
+    lines.append("# tmpfiles.d: etc/tmpfiles.d/yoinkc-var.conf")
+
+    return lines
+
+
+def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path) -> str:
     """Build Containerfile content from snapshot.
 
     Layer order matches the design doc for cache efficiency:
@@ -252,10 +365,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
     # 1. Repository Configuration
     if snapshot.rpm and snapshot.rpm.repo_files:
         lines.append("# === Repository Configuration ===")
-        lines.append(f"# Detected: {len(snapshot.rpm.repo_files)} repo file(s)")
-        lines.append("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/")
-        if any("dnf" in r.path for r in snapshot.rpm.repo_files):
-            lines.append("COPY config/etc/dnf/ /etc/dnf/")
+        lines.append(f"# Detected: {len(snapshot.rpm.repo_files)} repo file(s) — included in COPY config/etc/ below")
         lines.append("")
 
     # 2. Package Installation
@@ -291,17 +401,15 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
     has_fw = net and (net.firewall_zones or net.firewall_direct_rules)
     if has_fw:
         lines.append("# === Firewall Configuration (bake into image) ===")
-        lines.append("# Option A: COPY zone XML files (preserves all settings)")
         if net.firewall_zones:
             total_rich = sum(len(z.rich_rules) for z in net.firewall_zones)
             lines.append(f"# Detected: {len(net.firewall_zones)} zone(s)"
-                         + (f", {total_rich} rich rule(s)" if total_rich else ""))
-            lines.append("COPY config/etc/firewalld/zones/ /etc/firewalld/zones/")
+                         + (f", {total_rich} rich rule(s)" if total_rich else "")
+                         + " — included in COPY config/etc/ below")
         if net.firewall_direct_rules:
-            lines.append(f"# Detected: {len(net.firewall_direct_rules)} direct rule(s)")
-            lines.append("COPY config/etc/firewalld/direct.xml /etc/firewalld/direct.xml")
+            lines.append(f"# Detected: {len(net.firewall_direct_rules)} direct rule(s) — included in COPY config/etc/ below")
         lines.append("")
-        lines.append("# Option B: firewall-cmd equivalents (alternative to COPY above)")
+        lines.append("# firewall-cmd equivalents (alternative to the consolidated COPY below):")
         for z in net.firewall_zones:
             for svc in z.services:
                 lines.append(f"# RUN firewall-offline-cmd --zone={z.name} --add-service={svc}")
@@ -323,12 +431,8 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
         vendor_timers = [t for t in st.systemd_timers if t.source == "vendor"]
 
         if local_timers:
-            lines.append(f"# Existing local timers ({len(local_timers)}): bake into image")
+            lines.append(f"# Existing local timers ({len(local_timers)}): timer files included in COPY config/etc/ below")
             for t in local_timers:
-                lines.append(f"COPY config/{t.path} /{t.path}")
-                if t.service_content:
-                    svc_path = t.path.replace(".timer", ".service")
-                    lines.append(f"COPY config/{svc_path} /{svc_path}")
                 lines.append(f"RUN systemctl enable {t.name}.timer")
 
         if vendor_timers:
@@ -337,8 +441,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
                 lines.append(f"#   - {t.name} ({t.on_calendar})")
 
         if st.generated_timer_units:
-            lines.append(f"# Converted from cron: {len(st.generated_timer_units)} timer(s)")
-            lines.append("COPY config/etc/systemd/system/ /etc/systemd/system/")
+            lines.append(f"# Converted from cron: {len(st.generated_timer_units)} timer(s) — included in COPY config/etc/ below")
             for u in st.generated_timer_units:
                 if u.name:
                     lines.append(f"RUN systemctl enable {u.name}.timer")
@@ -350,32 +453,26 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
 
         lines.append("")
 
-    # 6. Configuration Files
+    # 6. Configuration Files — consolidated COPY
+    # All captured config files, repo files, firewall, timers, NM connections,
+    # kernel module configs, sysctl overrides, audit rules, and tmpfiles.d are
+    # written under config/ and copied to the image root in a single layer.
     dhcp_paths = _dhcp_connection_paths(snapshot)
-    if snapshot.config and snapshot.config.files:
-        config_entries = [f for f in snapshot.config.files if f.path.lstrip("/") not in dhcp_paths]
-        modified = [f for f in config_entries if f.kind == ConfigFileKind.RPM_OWNED_MODIFIED]
-        unowned = [f for f in config_entries if f.kind == ConfigFileKind.UNOWNED]
-        has_diffs = any(f.diff_against_rpm for f in config_entries)
-        lines.append("# === Configuration Files ===")
-        lines.append(f"# Detected: {len(modified)} modified RPM-owned configs, {len(unowned)} unowned configs")
-        if has_diffs:
-            lines.append("# Config diffs (--config-diffs): see audit-report.md and report.html for per-file diffs.")
-        for entry in config_entries:
-            rel = entry.path.lstrip("/")
-            if entry.diff_against_rpm and entry.diff_against_rpm.strip():
-                pkg_label = entry.package or "RPM"
-                diff_lines = [l for l in entry.diff_against_rpm.strip().splitlines() if l.startswith("+") or l.startswith("-")]
-                diff_lines = [l for l in diff_lines if not l.startswith("---") and not l.startswith("+++")]
-                summary = diff_lines[:5]
-                lines.append(f"# Modified from {pkg_label} default:")
-                for sl in summary:
-                    lines.append(f"#   {sl}")
-                if len(diff_lines) > 5:
-                    lines.append(f"#   ... and {len(diff_lines) - 5} more changes")
-                lines.append("# See audit-report.md or report.html for full diff")
-            lines.append(f"COPY config/{rel} /{rel}")
-        lines.append("")
+    lines.append("# === Configuration Files ===")
+    inventory_lines = _config_inventory_comment(snapshot, dhcp_paths)
+    lines.extend(inventory_lines)
+    if any(f.diff_against_rpm for f in (snapshot.config.files if snapshot.config else [])):
+        lines.append("# Config diffs (--config-diffs): see audit-report.md and report.html for per-file diffs.")
+    lines.append("")
+
+    # Emit one COPY per non-empty top-level dir under config/ (excluding tmp/).
+    config_dir = output_dir / "config"
+    roots = _config_copy_roots(config_dir)
+    for root in roots:
+        lines.append(f"COPY config/{root}/ /{root}/")
+    if not roots:
+        lines.append("# (no config files captured)")
+    lines.append("")
 
     # 7. Non-RPM Software
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
@@ -483,12 +580,12 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
             for name in append_files:
                 attr = f"{name}_entries"
                 if getattr(ug, attr, []):
-                    copy_lines.append(f"COPY config/etc/{name}.append /tmp/{name}.append")
+                    copy_lines.append(f"COPY config/tmp/{name}.append /tmp/{name}.append")
                     cat_parts.append(f"cat /tmp/{name}.append >> /etc/{name}")
             for sub in ("subuid", "subgid"):
                 attr = f"{sub}_entries"
                 if getattr(ug, attr, []):
-                    copy_lines.append(f"COPY config/etc/{sub}.append /tmp/{sub}.append")
+                    copy_lines.append(f"COPY config/tmp/{sub}.append /tmp/{sub}.append")
                     cat_parts.append(f"cat /tmp/{sub}.append >> /etc/{sub}")
             for cl in copy_lines:
                 lines.append(cl)
@@ -549,17 +646,13 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
             lines.append(f"# {len(kb.non_default_modules)} non-default kernel module(s) loaded at runtime: {names}")
             lines.append("# FIXME: if these modules are needed, add them to /etc/modules-load.d/ in the image")
         if kb.modules_load_d:
-            lines.append(f"# Detected: {len(kb.modules_load_d)} modules-load.d config(s)")
-            lines.append("COPY config/etc/modules-load.d/ /etc/modules-load.d/")
+            lines.append(f"# modules-load.d: {len(kb.modules_load_d)} file(s) — included in COPY config/etc/ above")
         if kb.modprobe_d:
-            lines.append(f"# Detected: {len(kb.modprobe_d)} modprobe.d config(s)")
-            lines.append("COPY config/etc/modprobe.d/ /etc/modprobe.d/")
+            lines.append(f"# modprobe.d: {len(kb.modprobe_d)} file(s) — included in COPY config/etc/ above")
         if kb.dracut_conf:
-            lines.append(f"# Detected: {len(kb.dracut_conf)} dracut.conf.d config(s)")
-            lines.append("COPY config/etc/dracut.conf.d/ /etc/dracut.conf.d/")
+            lines.append(f"# dracut.conf.d: {len(kb.dracut_conf)} file(s) — included in COPY config/etc/ above")
         if kb.sysctl_overrides:
-            lines.append(f"# Detected: {len(kb.sysctl_overrides)} non-default sysctl value(s)")
-            lines.append("COPY config/etc/sysctl.d/ /etc/sysctl.d/")
+            lines.append(f"# sysctl: {len(kb.sysctl_overrides)} non-default value(s) — included in COPY config/etc/ above")
         lines.append("")
 
     # 11. SELinux Customizations
@@ -582,8 +675,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
                 bval = b.get("current", "on")
                 lines.append(f"RUN setsebool -P {bname} {bval}")
         if snapshot.selinux.audit_rules:
-            lines.append(f"# {len(snapshot.selinux.audit_rules)} audit rule file(s) detected")
-            lines.append("COPY config/etc/audit/rules.d/ /etc/audit/rules.d/")
+            lines.append(f"# {len(snapshot.selinux.audit_rules)} audit rule file(s) — included in COPY config/etc/ above")
         if snapshot.selinux.fips_mode:
             lines.append("# FIXME: host has FIPS mode enabled — enable FIPS in the bootc image via fips-mode-setup")
         lines.append("")
@@ -595,8 +687,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
         dhcp_conns = [c for c in net.connections if c.method == "dhcp"]
         if static_conns:
             names = ", ".join(c.name for c in static_conns)
-            lines.append(f"# Static connections (baked into image): {names}")
-            lines.append("COPY config/etc/NetworkManager/system-connections/ /etc/NetworkManager/system-connections/")
+            lines.append(f"# Static connections (baked into image): {names} — included in COPY config/etc/ above")
         if dhcp_conns:
             names = ", ".join(c.name for c in dhcp_conns)
             lines.append(f"# DHCP connections (kickstart at deploy time): {names}")
@@ -639,10 +730,10 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
             lines.append(f"# Route file: {r.path} — review and translate to NM connection (+ipv4.routes)")
     lines.append("")
 
-    # 13. tmpfiles.d for /var structure
+    # 13. tmpfiles.d for /var structure — included in COPY config/etc/ above
     lines.append("# === tmpfiles.d for /var structure ===")
     lines.append("# Directories created on every boot; /var is not updated by bootc after bootstrap.")
-    lines.append("COPY config/etc/tmpfiles.d/ /etc/tmpfiles.d/")
+    lines.append("# tmpfiles.d/yoinkc-var.conf included in COPY config/etc/ above")
     lines.append("")
 
     return "\n".join(lines)
@@ -657,5 +748,5 @@ def render(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     _write_config_tree(snapshot, output_dir)
-    content = _render_containerfile_content(snapshot)
+    content = _render_containerfile_content(snapshot, output_dir)
     (output_dir / "Containerfile").write_text(content)
