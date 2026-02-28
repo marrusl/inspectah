@@ -2,12 +2,30 @@
 Containerfile renderer: produces Containerfile and config/ tree from snapshot.
 """
 
+import re
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from jinja2 import Environment
 
 from ..schema import ConfigFileKind, InspectionSnapshot
+
+# Characters that would change shell semantics if injected into a RUN command.
+# The data comes from RPM databases / systemd on an operator-controlled host,
+# so this is a safety net against corrupted snapshots, not a security boundary.
+_SHELL_UNSAFE_RE = re.compile(r'[\n\r;`|]|\$\(')
+
+
+def _sanitize_shell_value(value: str, context: str) -> Optional[str]:
+    """Return *value* if it is safe to embed in a shell RUN command, else None.
+
+    Rejects values containing newlines, semicolons, backticks, ``$(...)``, or
+    pipe characters — the characters that materially change shell semantics.
+    When None is returned the caller should emit a FIXME comment instead.
+    """
+    if _SHELL_UNSAFE_RE.search(value):
+        return None
+    return value
 
 
 def _base_image_from_snapshot(snapshot: InspectionSnapshot) -> str:
@@ -370,17 +388,24 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
 
     # 2. Package Installation
     if snapshot.rpm and snapshot.rpm.packages_added:
-        names = sorted(set(p.name for p in snapshot.rpm.packages_added))
+        raw_names = sorted(set(p.name for p in snapshot.rpm.packages_added))
+        safe_names: List[str] = []
+        for n in raw_names:
+            if _sanitize_shell_value(n, "dnf install") is not None:
+                safe_names.append(n)
+            else:
+                lines.append(f"# FIXME: package name contains unsafe characters, skipped: {n!r}")
         lines.append("# === Package Installation ===")
         if getattr(snapshot.rpm, "no_baseline", False):
             lines.append("# No baseline — including all installed packages")
         else:
-            lines.append(f"# Detected: {len(names)} packages added beyond base image")
-        lines.append("RUN dnf install -y \\")
-        for n in names[:-1]:
-            lines.append(f"    {n} \\")
-        lines.append(f"    {names[-1]} \\")
-        lines.append("    && dnf clean all")
+            lines.append(f"# Detected: {len(safe_names)} packages added beyond base image")
+        if safe_names:
+            lines.append("RUN dnf install -y \\")
+            for n in safe_names[:-1]:
+                lines.append(f"    {n} \\")
+            lines.append(f"    {safe_names[-1]} \\")
+            lines.append("    && dnf clean all")
         lines.append("")
 
     # 3. Service Enablement
@@ -389,11 +414,16 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         disabled = snapshot.services.disabled_units
         if enabled or disabled:
             lines.append("# === Service Enablement ===")
-            lines.append(f"# Detected: {len(enabled)} non-default enabled, {len(disabled)} disabled")
-            if enabled:
-                lines.append("RUN systemctl enable " + " ".join(enabled))
-            if disabled:
-                lines.append("RUN systemctl disable " + " ".join(disabled))
+            safe_enabled = [u for u in enabled if _sanitize_shell_value(u, "systemctl enable") is not None]
+            safe_disabled = [u for u in disabled if _sanitize_shell_value(u, "systemctl disable") is not None]
+            skipped = (len(enabled) - len(safe_enabled)) + (len(disabled) - len(safe_disabled))
+            if skipped:
+                lines.append(f"# FIXME: {skipped} unit name(s) contained unsafe characters and were skipped")
+            lines.append(f"# Detected: {len(safe_enabled)} non-default enabled, {len(safe_disabled)} disabled")
+            if safe_enabled:
+                lines.append("RUN systemctl enable " + " ".join(safe_enabled))
+            if safe_disabled:
+                lines.append("RUN systemctl disable " + " ".join(safe_disabled))
             lines.append("")
 
     # 4. Firewall Configuration (bake into image)
@@ -640,7 +670,21 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         lines.append("# === Kernel Configuration ===")
         if kb.cmdline:
             lines.append("# FIXME: review detected kernel args and add the ones needed for this image")
-            lines.append("# RUN rpm-ostree kargs --append=<key>=<value>")
+            # Emit per-karg FIXME lines for any cmdline args that look like key=value.
+            # Sanitize each value before embedding in the template comment.
+            for karg in kb.cmdline.split():
+                if "=" in karg:
+                    key, _, val = karg.partition("=")
+                    if (_sanitize_shell_value(key, "kargs key") is not None
+                            and _sanitize_shell_value(val, "kargs value") is not None):
+                        lines.append(f"# RUN rpm-ostree kargs --append={key}={val}")
+                    else:
+                        lines.append(f"# FIXME: karg contains unsafe characters, skipped: {karg!r}")
+                else:
+                    if _sanitize_shell_value(karg, "kargs flag") is not None:
+                        lines.append(f"# RUN rpm-ostree kargs --append={karg}")
+                    else:
+                        lines.append(f"# FIXME: karg contains unsafe characters, skipped: {karg!r}")
         if kb.non_default_modules:
             names = ", ".join(m.get("name", "?") for m in kb.non_default_modules[:10])
             lines.append(f"# {len(kb.non_default_modules)} non-default kernel module(s) loaded at runtime: {names}")
@@ -673,7 +717,11 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             for b in non_default[:20]:
                 bname = b.get("name", "unknown_bool")
                 bval = b.get("current", "on")
-                lines.append(f"RUN setsebool -P {bname} {bval}")
+                if (_sanitize_shell_value(bname, "setsebool name") is not None
+                        and _sanitize_shell_value(bval, "setsebool value") is not None):
+                    lines.append(f"RUN setsebool -P {bname} {bval}")
+                else:
+                    lines.append(f"# FIXME: boolean name/value contains unsafe characters, skipped: {bname!r}={bval!r}")
         if snapshot.selinux.audit_rules:
             lines.append(f"# {len(snapshot.selinux.audit_rules)} audit rule file(s) — included in COPY config/etc/ above")
         if snapshot.selinux.fips_mode:

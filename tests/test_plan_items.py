@@ -420,3 +420,99 @@ def test_all_features_render_together():
     assert "# === SELinux Customizations ===" in content
     assert "# === Network / Kickstart ===" in content
     assert "# === tmpfiles.d for /var structure ===" in content
+
+
+# ---------------------------------------------------------------------------
+# Shell value sanitizer
+# ---------------------------------------------------------------------------
+
+class TestSanitizeShellValue:
+
+    def _sanitize(self, value, context="test"):
+        from yoinkc.renderers.containerfile import _sanitize_shell_value
+        return _sanitize_shell_value(value, context)
+
+    def test_safe_package_name(self):
+        assert self._sanitize("httpd") == "httpd"
+
+    def test_safe_package_with_hyphen_and_dot(self):
+        assert self._sanitize("python3-pip") == "python3-pip"
+        assert self._sanitize("libssl3.0") == "libssl3.0"
+
+    def test_safe_unit_name(self):
+        assert self._sanitize("httpd.service") == "httpd.service"
+
+    def test_safe_boolean_name(self):
+        assert self._sanitize("httpd_can_network_connect") == "httpd_can_network_connect"
+
+    def test_rejects_newline(self):
+        assert self._sanitize("foo\nbar") is None
+
+    def test_rejects_carriage_return(self):
+        assert self._sanitize("foo\rbar") is None
+
+    def test_rejects_semicolon(self):
+        assert self._sanitize("foo;rm -rf /") is None
+
+    def test_rejects_backtick(self):
+        assert self._sanitize("foo`id`") is None
+
+    def test_rejects_dollar_paren(self):
+        assert self._sanitize("foo$(id)") is None
+
+    def test_rejects_pipe(self):
+        assert self._sanitize("foo|bar") is None
+
+    def test_dollar_without_paren_is_safe(self):
+        """$VAR without () is a variable reference — no shell execution risk here."""
+        assert self._sanitize("foo$BAR") == "foo$BAR"
+
+    def test_unsafe_package_name_produces_fixme(self):
+        """Packages with unsafe names should produce a FIXME line, not a dnf install line."""
+        import tempfile
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, RpmSection, PackageEntry, PackageState,
+        )
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="bad;pkg", epoch="0", version="1.0", release="1", arch="x86_64"),
+                ],
+                no_baseline=True,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            from yoinkc.renderers.containerfile import render
+            from jinja2 import Environment
+            render(snapshot, Environment(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "httpd" in cf
+        # The unsafe name must not appear in any RUN line
+        run_lines = [l for l in cf.splitlines() if l.startswith("RUN ")]
+        assert not any("bad;pkg" in l for l in run_lines), "Unsafe package name injected into RUN"
+        assert "FIXME" in cf
+        assert "unsafe characters" in cf
+
+    def test_unsafe_unit_name_produces_fixme(self):
+        """Units with unsafe names are skipped with a FIXME, not injected."""
+        import tempfile
+        from yoinkc.schema import InspectionSnapshot, OsRelease, ServiceSection
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            services=ServiceSection(
+                enabled_units=["httpd.service", "evil;cmd.service"],
+                disabled_units=[],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            from yoinkc.renderers.containerfile import render
+            from jinja2 import Environment
+            render(snapshot, Environment(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "httpd.service" in cf
+        assert "evil;cmd.service" not in cf.replace("FIXME", "")
+        assert "unsafe characters" in cf
