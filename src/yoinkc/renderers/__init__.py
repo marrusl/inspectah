@@ -21,14 +21,10 @@ def run_all(snapshot: InspectionSnapshot, output_dir: Path) -> None:
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     templates_dir = Path(__file__).resolve().parent.parent / "templates"
-    if not templates_dir.exists():
-        templates_dir = Path(__file__).resolve().parent.parent.parent.parent / "templates"
     env = Environment(
-        loader=FileSystemLoader(str(templates_dir)) if templates_dir.exists() else None,
+        loader=FileSystemLoader(str(templates_dir)),
         autoescape=True,
     )
-    if env.loader is None:
-        env = Environment(autoescape=True)
     render_containerfile(snapshot, env, output_dir)
     render_audit_report(snapshot, env, output_dir)
     render_html_report(snapshot, env, output_dir)

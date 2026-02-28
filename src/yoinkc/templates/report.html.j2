@@ -1,0 +1,802 @@
+{#
+  report.html.j2 — yoinkc self-contained inspection report.
+  Rendered by renderers/html_report.py via _build_context().
+  Context keys:
+    snapshot, counts, triage, os_desc, meta,
+    warnings, warnings_panel, warnings_overflow,
+    containerfile_html (Markup), containerfile_lines,
+    tree_html (Markup), file_content_snippets_html (Markup),
+    audit_html (Markup),
+    config_files_rendered (list of dicts),
+    non_rpm_data (dict of categorized items),
+    containers_data (dict),
+    network_data (dict),
+    summary_glance (list of (num, label)),
+#}
+
+{# ── Section wrapper macro ─────────────────────────────────────────────── #}
+{% macro section(id, title, visible=false) -%}
+<div id="section-{{ id }}" class="section{% if visible %} visible{% endif %}">
+  <h2>{{ title }}</h2>
+  {{- caller() }}
+</div>
+{%- endmacro %}
+
+{# ── Simple data table macro ────────────────────────────────────────────── #}
+{% macro data_table(headers) %}
+<table class="data-table"><thead><tr>
+  {%- for h in headers %}<th>{{ h }}</th>{% endfor -%}
+</tr></thead><tbody>
+{{ caller() }}
+</tbody></table>
+{% endmacro %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>yoinkc Report</title>
+<style>
+:root { --bg: #0f1419; --card: #1a2332; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --warn: #d29922; --error: #f85149; --ok: #3fb950; }
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 1rem; line-height: 1.5; }
+h1, h2, h3 { margin-top: 0; }
+a { color: var(--accent); }
+.banner { background: var(--card); border-radius: 8px; padding: 1rem 1.5rem; margin-bottom: 1rem; border-left: 4px solid var(--accent); }
+.warning-panel { background: #2d1f1f; border: 1px solid var(--warn); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+.warning-panel.collapsed { display: none; }
+.warning-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }
+.warning-panel h3 { color: var(--warn); margin: 0; flex: 1; }
+.warning-panel-dismiss { background: var(--card); border: 1px solid var(--warn); color: var(--warn); border-radius: 6px; padding: 0.35rem 0.75rem; cursor: pointer; font-size: 0.9rem; font-weight: 500; white-space: nowrap; }
+.warning-panel-dismiss:hover { background: var(--warn); color: var(--bg); border-color: var(--warn); }
+.warning-row { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid rgba(210,153,34,0.15); }
+.warning-row.dismissed { display: none; }
+.warning-row:last-child { border-bottom: none; }
+.warning-row .warning-msg { flex: 1; font-size: 0.9rem; }
+.warning-row-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0.15rem 0.35rem; border-radius: 4px; flex-shrink: 0; }
+.warning-row-dismiss:hover { color: var(--warn); background: rgba(210,153,34,0.15); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.card { background: var(--card); border-radius: 8px; padding: 1rem; cursor: pointer; border: 1px solid transparent; transition: border-color .15s; }
+.card:hover { border-color: var(--accent); }
+.card h4 { margin: 0 0 .5rem 0; font-size: .95rem; }
+.card .count { font-size: 1.5rem; font-weight: 600; }
+.card .status { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
+.section { display: none; background: var(--card); border-radius: 8px; padding: 1.5rem; margin-top: 1rem; }
+.section.visible { display: block; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #30363d; }
+th { color: var(--muted); font-weight: 500; }
+.tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.tabs button { background: var(--card); border: 1px solid #30363d; color: var(--text); padding: .5rem 1rem; border-radius: 6px; cursor: pointer; }
+.tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+#warnings-list { max-height: 400px; overflow-y: auto; }
+.search { margin-bottom: 1rem; }
+.search input { width: 100%; max-width: 400px; padding: .5rem; border-radius: 6px; border: 1px solid #30363d; background: var(--bg); color: var(--text); }
+.badge { display: inline-block; padding: .15rem .5rem; border-radius: 4px; font-size: .75rem; }
+.badge.ok { background: #238636; color: #fff; }
+.badge.warn { background: #9e6a03; color: #fff; }
+.badge.error { background: #da3633; color: #fff; }
+.badge.info { background: #1f6feb; color: #fff; }
+.containerfile-pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
+.file-browser-layout { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
+.file-tree-panel { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 0.75rem; }
+.file-tree-root { padding: 0; }
+.file-tree-root > details { margin-bottom: 0.25rem; }
+.file-tree-panel ul { list-style: none; padding-left: 1rem; margin: 0.25rem 0; }
+.file-tree-panel .tree-dir summary { cursor: pointer; padding: 0.2rem 0; }
+.file-tree-panel .file-entry { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0.2rem 0; text-align: left; font-size: 0.9rem; }
+.file-tree-panel .file-entry:hover { text-decoration: underline; }
+.file-viewer-panel { flex: 1 1 400px; min-height: 200px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow: auto; }
+.file-viewer-panel .file-path { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
+.file-viewer-panel .file-content-pre { max-height: 65vh; margin: 0; }
+.file-content-hidden { display: none; }
+.diff-view { max-height: 300px; overflow: auto; font-size: 0.85em; line-height: 1.5; background: #0d1117; padding: 0.5rem; border-radius: 4px; }
+.diff-add { color: #3fb950; background: rgba(46,160,67,0.15); display: block; }
+.diff-del { color: #f85149; background: rgba(248,81,73,0.15); display: block; }
+.diff-hdr { color: #8b949e; display: block; font-weight: bold; }
+.diff-hunk { color: #79c0ff; display: block; }
+.summary-hero { font-size: 1.1rem; margin-bottom: 1.5rem; color: var(--muted); }
+.summary-meta { display: grid; gap: 0.5rem; margin-bottom: 1.5rem; padding: 1rem; background: #0d1117; border-radius: 8px; border: 1px solid #30363d; }
+.summary-meta dt { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
+.summary-meta dt:first-child { margin-top: 0; }
+.summary-meta dd { margin: 0.15rem 0 0 0; }
+.summary-glance { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
+.summary-glance-item { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 0.75rem 1rem; }
+.summary-glance-item .num { font-size: 1.5rem; font-weight: 600; color: var(--accent); }
+.summary-glance-item .label { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+.summary-next { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid #30363d; }
+.audit-pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
+.audit-table { margin: 0.5rem 0; }
+.audit-section { max-height: 70vh; overflow-y: auto; }
+</style>
+</head>
+<body>
+
+<h1>yoinkc Inspection Report</h1>
+
+{# ── Banner ─────────────────────────────────────────────────────────────── #}
+<div class="banner">
+  <strong>Host:</strong> {{ os_desc }} &nbsp;|&nbsp;
+  <span style="color:#3fb950">&#10003; {{ triage.automatic }} automatic</span> &nbsp;|&nbsp;
+  <span style="color:#d29922">&#9888; {{ triage.fixme }} FIXME</span> &nbsp;|&nbsp;
+  <span style="color:#f85149">&#9679; {{ triage.manual }} manual</span> &nbsp;|&nbsp;
+  <strong>Warnings:</strong> <span id="banner-warning-count">{{ warnings|length }}</span>
+</div>
+
+{# ── Warning panel ──────────────────────────────────────────────────────── #}
+{% if warnings %}
+<div id="warning-banner" class="warning-panel" data-overflow-count="{{ warnings_overflow }}">
+  <div class="warning-panel-header">
+    <h3>Warnings &amp; items to review (<span id="warning-banner-count">{{ warnings|length }}</span>)</h3>
+    <button type="button" class="warning-panel-dismiss" id="warning-dismiss-all" aria-label="Dismiss All">Dismiss All</button>
+  </div>
+  <div id="warning-rows">
+    {%- for w in warnings_panel %}
+    <div class="warning-row" data-warning-idx="{{ loop.index0 }}">
+      <span class="badge {{ w.severity|default('warning') }}">{{ w.severity|default('warning') }}</span>
+      <span class="warning-msg">{{ (w.message or w.detail or '—') }}</span>
+      <button type="button" class="warning-row-dismiss" aria-label="Dismiss">&times;</button>
+    </div>
+    {%- endfor %}
+    {%- if warnings_overflow > 0 %}
+    <div class="warning-row" style="color:var(--muted);font-size:0.85rem;justify-content:center;">… and {{ warnings_overflow }} more in the Warnings tab</div>
+    {%- endif %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Summary cards ──────────────────────────────────────────────────────── #}
+<div class="cards">
+  <div class="card" data-section="packages"><h4>Packages</h4><div class="count">{{ counts.packages_added }} added</div><div class="status">{{ counts.packages_removed }} removed</div></div>
+  <div class="card" data-section="services"><h4>Services</h4><div class="count">{{ counts.services_enabled }} enabled</div><div class="status">{{ counts.services_disabled }} disabled</div></div>
+  <div class="card" data-section="config"><h4>Config</h4><div class="count">{{ counts.config_files }} files</div><div class="status">rpm_va: {{ counts.rpm_va }}</div></div>
+  <div class="card" data-section="network"><h4>Network</h4><div class="count">{{ counts.network }}</div><div class="status">connections / firewall</div></div>
+  <div class="card" data-section="storage"><h4>Storage</h4><div class="count">{{ counts.storage }}</div><div class="status">fstab entries</div></div>
+  <div class="card" data-section="scheduled_tasks"><h4>Scheduled</h4><div class="count">{{ counts.scheduled_tasks }}</div><div class="status">cron / timers</div></div>
+  <div class="card" data-section="containers"><h4>Containers</h4><div class="count">{{ counts.containers }}</div><div class="status">quadlet / compose</div></div>
+  <div class="card" data-section="non_rpm"><h4>Non-RPM</h4><div class="count">{{ counts.non_rpm }}</div><div class="status">items</div></div>
+  <div class="card" data-section="kernel_boot"><h4>Kernel/Boot</h4><div class="count">{{ counts.kernel_boot }}</div><div class="status">configs</div></div>
+  <div class="card" data-section="selinux"><h4>SELinux</h4><div class="count">{{ counts.selinux }}</div><div class="status">customizations</div></div>
+  <div class="card" data-section="users_groups"><h4>Users/Groups</h4><div class="count">{{ counts.users_groups }}</div><div class="status">non-system</div></div>
+  <div class="card" data-section="warnings"><h4>Warnings</h4><div class="count" id="warnings-card-count">{{ warnings|length }}</div><div class="status" id="warnings-card-status">Review required</div></div>
+  <div class="card" data-section="containerfile"><h4>Containerfile</h4><div class="count">{{ containerfile_lines }} lines</div><div class="status">Generated</div></div>
+  <div class="card" data-section="output_files"><h4>Output files</h4><div class="count">config / quadlet</div><div class="status">Browse</div></div>
+  <div class="card" data-section="audit"><h4>Audit report</h4><div class="count">Full report</div><div class="status">Markdown</div></div>
+</div>
+
+{# ── Tab navigation ─────────────────────────────────────────────────────── #}
+<div class="tabs">
+  <button class="active" data-tab="summary">Summary</button>
+  <button data-tab="packages">Packages</button>
+  <button data-tab="services">Services</button>
+  <button data-tab="config">Config</button>
+  <button data-tab="network">Network</button>
+  <button data-tab="storage">Storage</button>
+  <button data-tab="scheduled_tasks">Scheduled</button>
+  <button data-tab="containers">Containers</button>
+  <button data-tab="non_rpm">Non-RPM</button>
+  <button data-tab="kernel_boot">Kernel/Boot</button>
+  <button data-tab="selinux">SELinux</button>
+  <button data-tab="users_groups">Users/Groups</button>
+  <button data-tab="warnings">Warnings</button>
+  <button data-tab="containerfile">Containerfile</button>
+  <button data-tab="output_files">Output files</button>
+  <button data-tab="audit">Audit report</button>
+</div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   Sections
+   ══════════════════════════════════════════════════════════════════════════ #}
+
+{# ── Summary ────────────────────────────────────────────────────────────── #}
+{% call section("summary", "Summary", visible=true) %}
+<p class="summary-hero">Inspection overview and run metadata. Use the cards or tabs above to drill into any category.</p>
+<p class="summary-portable" style="font-size:0.9rem;color:var(--muted);">This report is self-contained and portable: all content (Containerfile, audit, config/ and quadlet/ file browser) is embedded. You can copy or share <code>report.html</code> alone.</p>
+<dl class="summary-meta">
+  <dt>Host root</dt><dd><code>{{ meta.host_root|default('') }}</code></dd>
+  <dt>Hostname</dt><dd>{{ meta.hostname|default('—') }}</dd>
+  <dt>Inspection time (UTC)</dt><dd>{{ meta.timestamp|default('—') }}</dd>
+  <dt>OS</dt><dd>{{ os_desc }}</dd>
+</dl>
+<h3>At a glance</h3>
+<div class="summary-glance">
+  {%- for num, label in summary_glance %}
+  <div class="summary-glance-item"><div class="num">{{ num }}</div><div class="label">{{ label }}</div></div>
+  {%- endfor %}
+</div>
+<div class="summary-next">
+  <p><strong>Next steps:</strong> Review the <strong>Audit report</strong> tab, fix any FIXMEs in the Containerfile, run <code>podman build -t my-image .</code>, then deploy with <code>bootc switch my-image:latest</code>.</p>
+</div>
+{% endcall %}
+
+{# ── Packages ────────────────────────────────────────────────────────────── #}
+{% call section("packages", "Packages") %}
+  {%- if snapshot.rpm and snapshot.rpm.no_baseline %}
+  <p><em>No baseline — showing all packages. Pull the base image or provide --baseline-packages.</em></p>
+  {%- endif %}
+  {%- if snapshot.rpm and snapshot.rpm.packages_added %}
+  <table><thead><tr><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
+    {%- for p in snapshot.rpm.packages_added[:100] %}
+    <tr><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- if snapshot.rpm.packages_added|length > 100 %}
+  <p>... and {{ snapshot.rpm.packages_added|length - 100 }} more.</p>
+  {%- endif %}
+  {%- else %}
+  <p>No added packages.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Services ────────────────────────────────────────────────────────────── #}
+{% call section("services", "Services") %}
+  {%- set service_rows = [] %}
+  {%- if snapshot.services %}
+    {%- for s in snapshot.services.state_changes %}
+      {%- if s.action != 'unchanged' %}{% set _ = service_rows.append(s) %}{% endif %}
+    {%- endfor %}
+  {%- endif %}
+  {%- if service_rows %}
+  <table><thead><tr><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
+    {%- for s in service_rows %}
+    <tr><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- else %}
+  <p>No service changes.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Config ──────────────────────────────────────────────────────────────── #}
+{% call section("config", "Configuration files") %}
+  {%- if snapshot.config and snapshot.config.files %}
+  <table><thead><tr><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
+    {%- for item in config_files_rendered %}
+    <tr>
+      <td><code>{{ item.path }}</code></td>
+      <td>{{ item.kind }}</td>
+      <td>{% if item.flags %}<code>{{ item.flags }}</code>{% endif %}</td>
+      <td>{{ item.diff_html|safe }}</td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- else %}
+  <p>No config files.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Network ─────────────────────────────────────────────────────────────── #}
+{% call section("network", "Network") %}
+  {%- set net = snapshot.network %}
+  {%- if net and (net.connections or net.firewall_zones or net.firewall_direct_rules or net.ip_routes or net.ip_rules or net.resolv_provenance) %}
+
+  {%- if net.connections %}
+  <h3>Connections</h3>
+  <table class="data-table"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
+    {%- for c in net.connections %}
+    <tr>
+      <td><code>{{ c.name }}</code></td>
+      <td>{{ c.method }}</td>
+      <td>{{ c.type }}</td>
+      <td>
+        {%- if c.method == 'static' -%}
+        <span style="color:#3fb950;font-weight:bold">Bake into image</span>
+        {%- elif c.method == 'dhcp' -%}
+        <span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>
+        {%- else -%}
+        <span style="color:var(--muted)">Review</span>
+        {%- endif -%}
+      </td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+
+  {%- if net.firewall_zones %}
+  <h3>Firewall zones <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
+  {%- for z in net.firewall_zones %}
+  <h4>{{ z.name }}</h4>
+  {%- if z.services %}<p>Services: <code>{{ z.services|join(', ') }}</code></p>{%- endif %}
+  {%- if z.ports %}<p>Ports: <code>{{ z.ports|join(', ') }}</code></p>{%- endif %}
+  {%- if z.rich_rules %}
+  <p>Rich rules ({{ z.rich_rules|length }}):</p><ul>
+    {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
+  </ul>
+  {%- endif %}
+  {%- endfor %}
+  {%- endif %}
+
+  {%- if net.firewall_direct_rules %}
+  <h3>Firewall direct rules <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
+  <ul>
+    {%- for r in net.firewall_direct_rules %}
+    <li>{{ r.ipv }} {{ r.chain }}: <code>{{ r.args }}</code></li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+
+  {%- if net.resolv_provenance %}
+  <h3>DNS</h3>
+  <p>resolv.conf provenance:
+    {%- if net.resolv_provenance == 'networkmanager' %}
+    <span style="color:#d29922;font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
+    {%- elif net.resolv_provenance == 'systemd-resolved' %}
+    <span style="color:#d29922;font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
+    {%- else %}
+    <span style="color:#3fb950;font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
+    {%- endif %}
+  </p>
+  {%- endif %}
+
+  {%- if net.ip_routes %}
+  {%- set static_rt = net.ip_routes|selectattr('proto static', 'in', []) | list %}
+  {%- set static_rt = [] %}
+  {%- for r in net.ip_routes %}{% if 'proto static' in r %}{% set _ = static_rt.append(r) %}{% endif %}{%- endfor %}
+  {%- if static_rt %}
+  <h3>Static routes ({{ static_rt|length }})</h3><ul>
+    {%- for r in static_rt %}<li><code>{{ r }}</code></li>{%- endfor %}
+  </ul>
+  {%- endif %}
+  {%- endif %}
+
+  {%- if net.ip_rules %}
+  <h3>Policy routing rules ({{ net.ip_rules|length }})</h3><ul>
+    {%- for r in net.ip_rules %}<li><code>{{ r }}</code></li>{%- endfor %}
+  </ul>
+  {%- endif %}
+
+  {%- else %}
+  <p>No network config captured.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Storage ─────────────────────────────────────────────────────────────── #}
+{% call section("storage", "Storage") %}
+  {%- if snapshot.storage and snapshot.storage.fstab_entries %}
+  <table><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
+    {%- for e in snapshot.storage.fstab_entries[:30] %}
+    <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- else %}
+  <p>No fstab entries.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Scheduled tasks ─────────────────────────────────────────────────────── #}
+{% call section("scheduled_tasks", "Scheduled tasks") %}
+  {%- set st = snapshot.scheduled_tasks %}
+  {%- if st and (st.cron_jobs or st.systemd_timers or st.generated_timer_units or st.at_jobs) %}
+
+  {%- set local_timers = [] %}{%- set vendor_timers = [] %}
+  {%- for t in st.systemd_timers %}
+    {%- if t.source == 'local' %}{% set _ = local_timers.append(t) %}
+    {%- elif t.source == 'vendor' %}{% set _ = vendor_timers.append(t) %}
+    {%- endif %}
+  {%- endfor %}
+
+  {%- if local_timers or vendor_timers %}
+  <h3>Existing systemd timers</h3>
+  <table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th><th>Source</th></tr>
+    {%- for t in local_timers %}
+    <tr style="background:#e8f5e9">
+      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
+      <td><code>{{ t.exec_start }}</code></td>
+      <td><span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">local</span></td>
+    </tr>
+    {%- endfor %}
+    {%- for t in vendor_timers %}
+    <tr>
+      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
+      <td><code>{{ t.exec_start }}</code></td>
+      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px">vendor</span></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if st.generated_timer_units %}
+  <h3>Cron-converted timers</h3>
+  <table><tr><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>
+    {%- for u in st.generated_timer_units %}
+    <tr style="background:#fff3e0">
+      <td>{{ u.name }}</td>
+      <td><code>{{ u.cron_expr }}</code></td>
+      <td><code>{{ u.source_path }}</code></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if st.cron_jobs %}
+  <h3>Cron jobs</h3>
+  <ul>
+    {%- for j in st.cron_jobs %}<li><code>{{ j.path }}</code> ({{ j.source }})</li>{%- endfor %}
+  </ul>
+  {%- endif %}
+
+  {%- if st.at_jobs %}
+  <h3>At jobs</h3>
+  <table><tr><th>File</th><th>User</th><th>Command</th></tr>
+    {%- for a in st.at_jobs %}
+    {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
+    <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- else %}
+  <p>No scheduled tasks.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Containers ──────────────────────────────────────────────────────────── #}
+{% call section("containers", "Containers") %}
+  {%- set ct = snapshot.containers %}
+  {%- if ct and (ct.quadlet_units or ct.compose_files or ct.running_containers) %}
+
+  {%- if ct.quadlet_units %}
+  <h3>Quadlet units</h3>
+  <table><tr><th>Unit</th><th>Image</th><th>Path</th></tr>
+    {%- for u in ct.quadlet_units %}
+    <tr>
+      <td>{{ u.name }}</td>
+      <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
+      <td><code>{{ u.path }}</code></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if ct.compose_files %}
+  <h3>Compose files</h3>
+  {%- for c in ct.compose_files %}
+  <h4><code>{{ c.path }}</code></h4>
+  {%- if c.images %}
+  <table><tr><th>Service</th><th>Image</th></tr>
+    {%- for img in c.images %}
+    <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
+    {%- endfor %}
+  </table>
+  {%- else %}
+  <p>No image references found.</p>
+  {%- endif %}
+  {%- endfor %}
+  {%- endif %}
+
+  {%- if ct.running_containers %}
+  <h3>Running containers (podman)</h3>
+  <table><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr>
+    {%- for item in containers_data.running %}
+    <tr>
+      <td><strong>{{ item.name }}</strong></td>
+      <td><code>{{ item.image }}</code></td>
+      <td>{{ item.status }}</td>
+      <td style="font-size:0.85em">{{ item.mount_summary|safe }}</td>
+      <td style="font-size:0.85em">{{ item.net_summary or '' }}</td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- else %}
+  <p>No container workloads.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Non-RPM software ────────────────────────────────────────────────────── #}
+{% call section("non_rpm", "Non-RPM software") %}
+  {%- set nr = snapshot.non_rpm_software %}
+  {%- if nr and nr.items %}
+  {%- set nd = non_rpm_data %}
+
+  {%- if nd.elf %}
+  <h3>Compiled binaries</h3>
+  <table><tr><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr>
+    {%- for i in nd.elf %}
+    {%- set lang = i.get('lang', '') %}
+    {%- set lang_colors = {'go': '#00ADD8', 'rust': '#DEA584', 'c/c++': '#555'} %}
+    {%- set color = lang_colors.get(lang, '#999') %}
+    {%- set linking = 'static' if i.get('static') else 'dynamic' %}
+    {%- set link_color = '#4caf50' if i.get('static') else '#ff9800' %}
+    <tr>
+      <td><code>{{ i.get('path', '') }}</code></td>
+      <td><span style="background:{{ color }};color:#fff;padding:2px 8px;border-radius:4px">{{ lang }}</span></td>
+      <td><span style="background:{{ link_color }};color:#fff;padding:2px 8px;border-radius:4px">{{ linking }}</span></td>
+      <td style="font-size:0.85em">{{ i.get('shared_libs', [])[:5]|join(', ') or '' }}</td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if nd.venv %}
+  <h3>Python virtual environments</h3>
+  {%- for v in nd.venv %}
+  {%- set ssp = v.get('system_site_packages', false) %}
+  <h4><code>{{ v.get('path', '') }}</code>
+    {%- if ssp %} <span style="background:#f44336;color:#fff;padding:2px 8px;border-radius:4px">system-site-packages</span>
+    {%- else %} <span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">isolated</span>
+    {%- endif %}
+  </h4>
+  {%- set pkgs = v.get('packages', []) %}
+  {%- if pkgs %}
+  <table><tr><th>Package</th><th>Version</th></tr>
+    {%- for p in pkgs[:20] %}
+    <tr><td>{{ p.get('name', '') }}</td><td>{{ p.get('version', '') }}</td></tr>
+    {%- endfor %}
+    {%- if pkgs|length > 20 %}
+    <tr><td colspan="2"><em>+{{ pkgs|length - 20 }} more</em></td></tr>
+    {%- endif %}
+  </table>
+  {%- else %}
+  <p>No packages found.</p>
+  {%- endif %}
+  {%- endfor %}
+  {%- endif %}
+
+  {%- if nd.git %}
+  <h3>Git-managed directories</h3>
+  <table><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr>
+    {%- for i in nd.git %}
+    <tr>
+      <td><code>{{ i.get('path', '') }}</code></td>
+      <td><code>{{ i.get('git_remote', '') }}</code></td>
+      <td>{{ i.get('git_branch', '') }}</td>
+      <td><code>{{ i.get('git_commit', '')[:12] }}</code></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if nd.pip %}
+  <h3>System pip packages</h3>
+  <table><tr><th>Package</th><th>Version</th><th>Path</th></tr>
+    {%- for i in nd.pip[:20] %}
+    <tr>
+      <td>{{ i.get('name', '') }}</td>
+      <td>{{ i.get('version', '') }}</td>
+      <td><code>{{ i.get('path', '') }}</code></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if nd.other %}
+  <h3>Other non-RPM items</h3>
+  <table><tr><th>Path</th><th>Confidence</th><th>Method</th></tr>
+    {%- for i in nd.other[:20] %}
+    <tr>
+      <td><code>{{ i.get('path', '') or i.get('name', '') }}</code></td>
+      <td>{{ i.get('confidence', '') }}</td>
+      <td>{{ i.get('method', '') }}</td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- else %}
+  <p>No non-RPM software.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Kernel / Boot ────────────────────────────────────────────────────────── #}
+{% call section("kernel_boot", "Kernel and boot") %}
+  {%- set kb = snapshot.kernel_boot %}
+  {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf) %}
+
+  {%- if kb.cmdline %}
+  <p><strong>cmdline:</strong> <code>{{ kb.cmdline[:300] }}</code></p>
+  {%- endif %}
+
+  {%- if kb.non_default_modules %}
+  {%- set total = (kb.loaded_modules or [])|length %}
+  {%- set default_count = total - (kb.non_default_modules|length) %}
+  <h3>Non-default loaded modules ({{ kb.non_default_modules|length }})</h3>
+  <table class="data-table"><thead><tr><th>Module</th><th>Size</th><th>Used by</th></tr></thead><tbody>
+    {%- for m in kb.non_default_modules %}
+    <tr><td><code>{{ m.get('name', '?') }}</code></td><td>{{ m.get('size', '') }}</td><td>{{ m.get('used_by', '') }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- if default_count > 0 %}<p>{{ default_count }} module(s) at expected defaults (not shown).</p>{%- endif %}
+  {%- endif %}
+
+  {%- if kb.sysctl_overrides %}
+  <h3>Non-default sysctl values ({{ kb.sysctl_overrides|length }})</h3>
+  <table class="data-table"><thead><tr><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
+    {%- for s in kb.sysctl_overrides %}
+    <tr>
+      <td><code>{{ s.get('key', '?') }}</code></td>
+      <td style="color:#d29922;font-weight:bold">{{ s.get('runtime', '?') }}</td>
+      <td>{{ s.get('default', '—') }}</td>
+      <td><code>{{ s.get('source', '') }}</code></td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+
+  {%- if kb.modules_load_d %}<p>modules-load.d: {{ kb.modules_load_d|length }} file(s)</p>{%- endif %}
+  {%- if kb.modprobe_d %}<p>modprobe.d: {{ kb.modprobe_d|length }} file(s)</p>{%- endif %}
+  {%- if kb.dracut_conf %}<p>dracut.conf.d: {{ kb.dracut_conf|length }} file(s)</p>{%- endif %}
+
+  {%- else %}
+  <p>No kernel/boot customizations detected.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── SELinux ──────────────────────────────────────────────────────────────── #}
+{% call section("selinux", "SELinux / Security") %}
+  {%- set se = snapshot.selinux %}
+  {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode) %}
+
+  {%- if se.mode %}<p><strong>Mode:</strong> {{ se.mode }}</p>{%- endif %}
+  {%- if se.fips_mode %}<p><strong>FIPS mode:</strong> enabled</p>{%- endif %}
+
+  {%- if se.custom_modules %}
+  <h3>Custom policy modules ({{ se.custom_modules|length }})</h3>
+  <ul>{%- for m in se.custom_modules %}<li><code>{{ m }}</code></li>{%- endfor %}</ul>
+  {%- endif %}
+
+  {%- set non_default = se.boolean_overrides|selectattr('non_default')|list %}
+  {%- set unchanged_count = (se.boolean_overrides|length) - (non_default|length) %}
+  {%- if non_default %}
+  <h3>Non-default booleans ({{ non_default|length }})</h3>
+  <table class="data-table"><thead><tr><th>Boolean</th><th>Current</th><th>Default</th><th>Description</th></tr></thead><tbody>
+    {%- for b in non_default %}
+    {%- set cur = b.get('current', '?') %}
+    <tr>
+      <td><code>{{ b.get('name', '?') }}</code></td>
+      <td style="{{ 'color:#3fb950' if cur == 'on' else 'color:#f85149' }};font-weight:bold">{{ cur }}</td>
+      <td>{{ b.get('default', '?') }}</td>
+      <td>{{ b.get('description', '') }}</td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- if unchanged_count > 0 %}<p>{{ unchanged_count }} boolean(s) at default values (not shown).</p>{%- endif %}
+  {%- endif %}
+
+  {%- if se.audit_rules %}<p>Audit rule files: {{ se.audit_rules|length }}</p>{%- endif %}
+  {%- if se.pam_configs %}<p>PAM configs: {{ se.pam_configs|length }}</p>{%- endif %}
+
+  {%- else %}
+  <p>No SELinux/security customizations detected.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Users / Groups ───────────────────────────────────────────────────────── #}
+{% call section("users_groups", "Users and groups") %}
+  {%- if snapshot.users_groups and (snapshot.users_groups.users or snapshot.users_groups.groups) %}
+  {%- for u in snapshot.users_groups.users %}
+  <p>User: {{ u.get('name') or '' }} (uid {{ u.get('uid') or '' }})</p>
+  {%- endfor %}
+  {%- for g in snapshot.users_groups.groups %}
+  <p>Group: {{ g.get('name') or '' }} (gid {{ g.get('gid') or '' }})</p>
+  {%- endfor %}
+  {%- else %}
+  <p>No non-system users/groups.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Warnings ─────────────────────────────────────────────────────────────── #}
+{% call section("warnings", "Warnings") %}
+<div class="search"><input type="text" id="warn-search" placeholder="Search warnings..."/></div>
+<ul id="warnings-list">
+  {%- for w in warnings %}
+  {%- set msg = w.message or w.detail or '—' %}
+  {%- set detail = w.detail or '' %}
+  <li><strong>{{ msg }}</strong><br/><small>{{ detail }}</small></li>
+  {%- endfor %}
+</ul>
+{% endcall %}
+
+{# ── Containerfile ────────────────────────────────────────────────────────── #}
+{% call section("containerfile", "Containerfile") %}
+<p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
+<pre class="containerfile-pre">{{ containerfile_html|safe }}</pre>
+{% endcall %}
+
+{# ── Output files browser ─────────────────────────────────────────────────── #}
+{% call section("output_files", "Output files") %}
+<p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
+<div class="file-browser-layout">
+  <div class="file-tree-panel"><div class="file-tree-root">{{ tree_html|safe }}</div></div>
+  <div class="file-viewer-panel">
+    <div class="file-path" id="file-viewer-path">Click a file</div>
+    <div id="file-viewer-content"></div>
+  </div>
+</div>
+{{ file_content_snippets_html|safe }}
+{% endcall %}
+
+{# ── Audit report ─────────────────────────────────────────────────────────── #}
+{% call section("audit", "Audit report") %}
+<p>Full audit findings (from <code>audit-report.md</code>).</p>
+<div class="audit-section">{{ audit_html|safe }}</div>
+{% endcall %}
+
+{# ══════════════════════════════════════════════════════════════════════════
+   JavaScript
+   ══════════════════════════════════════════════════════════════════════════ #}
+<script>
+(function(){
+  var sections = document.querySelectorAll('.section');
+  var cards = document.querySelectorAll('.card[data-section]');
+  var tabs = document.querySelectorAll('.tabs button[data-tab]');
+  function show(id) {
+    if (!id) return;
+    sections.forEach(function(s){ s.classList.remove('visible'); });
+    var el = document.getElementById('section-' + id);
+    if (el) el.classList.add('visible');
+    tabs.forEach(function(t){ t.classList.toggle('active', t.getAttribute('data-tab') === id); });
+  }
+  cards.forEach(function(c){
+    c.addEventListener('click', function(){ show(c.getAttribute('data-section')); });
+  });
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){ show(t.getAttribute('data-tab')); });
+  });
+  show('summary');
+  var warningBanner = document.getElementById('warning-banner');
+  var bannerCount = document.getElementById('banner-warning-count');
+  var panelCount = document.getElementById('warning-banner-count');
+
+  var overflowCount = parseInt(warningBanner ? warningBanner.getAttribute('data-overflow-count') : '0', 10) || 0;
+
+  function updateWarningCounts() {
+    if (!warningBanner) return;
+    var visibleRows = warningBanner.querySelectorAll('.warning-row[data-warning-idx]:not(.dismissed)');
+    var panelVisible = visibleRows.length;
+    var total = panelVisible + overflowCount;
+    if (bannerCount) bannerCount.textContent = total;
+    if (panelCount) panelCount.textContent = total;
+    var cardCount = document.getElementById('warnings-card-count');
+    if (cardCount) cardCount.textContent = total;
+    var statusEl = document.getElementById('warnings-card-status');
+    if (statusEl) statusEl.textContent = panelVisible > 0 ? 'Review required' : (overflowCount > 0 ? 'Panel cleared' : 'All dismissed');
+    if (panelVisible === 0) {
+      warningBanner.classList.add('collapsed');
+    }
+  }
+
+  if (warningBanner) {
+    warningBanner.querySelectorAll('.warning-row-dismiss').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        this.closest('.warning-row').classList.add('dismissed');
+        updateWarningCounts();
+      });
+    });
+    var dismissAll = document.getElementById('warning-dismiss-all');
+    if (dismissAll) {
+      dismissAll.addEventListener('click', function(){
+        warningBanner.querySelectorAll('.warning-row').forEach(function(row){
+          row.classList.add('dismissed');
+        });
+        updateWarningCounts();
+      });
+    }
+  }
+  var search = document.getElementById('warn-search');
+  if (search) {
+    search.addEventListener('input', function(){
+      var q = (this.value || '').toLowerCase();
+      var listItems = document.querySelectorAll('#warnings-list li');
+      listItems.forEach(function(li){
+        li.style.display = (q === '' || (li.textContent || '').toLowerCase().indexOf(q) >= 0) ? '' : 'none';
+      });
+    });
+  }
+  document.querySelectorAll('.file-entry').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = this.getAttribute('data-content-id');
+      var path = this.getAttribute('data-path');
+      var pathEl = document.getElementById('file-viewer-path');
+      var contentEl = document.getElementById('file-viewer-content');
+      var src = id ? document.getElementById(id) : null;
+      if (pathEl) pathEl.textContent = path || 'Click a file';
+      if (contentEl) contentEl.innerHTML = src ? src.innerHTML : '';
+    });
+  });
+})();
+</script>
+</body>
+</html>

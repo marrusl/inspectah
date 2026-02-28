@@ -31,6 +31,9 @@ yoinkc = "yoinkc.__main__:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+yoinkc = ["templates/*.j2"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
