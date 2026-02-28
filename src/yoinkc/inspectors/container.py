@@ -59,13 +59,15 @@ def _extract_quadlet_image(content: str) -> str:
 def _extract_compose_images(content: str) -> List[Dict[str, str]]:
     """Extract image: fields from a compose YAML without requiring PyYAML.
 
-    Returns a list of {service, image} dicts. Uses simple regex parsing
-    to avoid adding a dependency.
+    Returns a list of {service, image} dicts. Uses simple line-by-line
+    parsing to avoid adding a dependency.  Detects service-level indent
+    dynamically so 2-space, 4-space, and tab-indented files all work.
     """
     results: List[Dict[str, str]] = []
     lines = content.splitlines()
     current_service = ""
     in_services = False
+    service_indent: Optional[int] = None  # indent of the first service key seen
 
     for line in lines:
         stripped = line.strip()
@@ -76,20 +78,31 @@ def _extract_compose_images(content: str) -> List[Dict[str, str]]:
 
         if stripped == "services:" or stripped.startswith("services:"):
             in_services = True
+            service_indent = None
             continue
 
-        if in_services and indent == 2 and stripped.endswith(":") and not stripped.startswith("-"):
-            current_service = stripped.rstrip(":")
-            continue
-
-        # Top-level key that isn't services — stop looking
+        # Top-level key that isn't services — exit services block
         if indent == 0 and ":" in stripped and not stripped.startswith("-"):
             key = stripped.split(":")[0].strip()
             if key != "services":
                 in_services = False
+                service_indent = None
+                current_service = ""
                 continue
 
-        if in_services and current_service:
+        if not in_services:
+            continue
+
+        # Detect service-block indent from the first indented key
+        if service_indent is None and indent > 0:
+            service_indent = indent
+
+        if service_indent is not None:
+            if indent == service_indent and stripped.endswith(":") and not stripped.startswith("-"):
+                current_service = stripped.rstrip(":")
+                continue
+
+        if current_service:
             m = re.match(r"image:\s*(.+)", stripped)
             if m:
                 image_ref = m.group(1).strip().strip("'\"")

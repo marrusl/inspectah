@@ -86,6 +86,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Push output to GitHub repository (e.g. owner/repo)",
     )
     parser.add_argument(
+        "--github-token",
+        type=str,
+        metavar="TOKEN",
+        default=None,
+        help="GitHub personal access token for repo creation (falls back to GITHUB_TOKEN env var)",
+    )
+    parser.add_argument(
         "--public",
         action="store_true",
         help="When creating a new repo, make it public (default: private)",

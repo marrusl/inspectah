@@ -42,11 +42,12 @@ REDACT_PATTERNS: List[Tuple[str, str]] = [
 
 
 def _is_excluded_path(path: str) -> bool:
-    path = path.lstrip("/")
+    # Normalise to a leading-slash form so that anchored patterns like
+    # /etc/shadow match regardless of how the caller stored the path.
+    normalised = "/" + path.lstrip("/")
     for pat in EXCLUDED_PATHS:
-        # Convert simple glob-style to regex
-        regex = pat.replace("*", ".*").replace("/", r"\/")
-        if re.fullmatch(regex, path) or re.search(regex, path):
+        regex = pat.replace("*", ".*")
+        if re.fullmatch(regex, normalised) or re.search(regex, normalised):
             return True
     return False
 
@@ -128,16 +129,20 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
     if not snapshot.config or not snapshot.config.files:
         return snapshot.model_copy(update={"redactions": redactions})
 
+    _EXCLUDED_PLACEHOLDER = "# Content excluded (sensitive path). Handle manually.\n"
+
     new_files: List[ConfigFileEntry] = []
     for entry in snapshot.config.files:
         if _is_excluded_path(entry.path):
-            redactions.append({
-                "path": entry.path,
-                "pattern": "EXCLUDED_PATH",
-                "line": "entire file",
-                "remediation": "File not included; handle credentials manually (e.g. systemd credential, secret store).",
-            })
-            new_files.append(entry.model_copy(update={"content": "# Content excluded (sensitive path). Handle manually.\n"}))
+            # Already excluded on a previous redact pass — don't double-count.
+            if entry.content != _EXCLUDED_PLACEHOLDER:
+                redactions.append({
+                    "path": entry.path,
+                    "pattern": "EXCLUDED_PATH",
+                    "line": "entire file",
+                    "remediation": "File not included; handle credentials manually (e.g. systemd credential, secret store).",
+                })
+            new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER}))
             continue
         new_content = _redact_text(entry.content or "", entry.path, redactions)
         if new_content != (entry.content or ""):

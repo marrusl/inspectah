@@ -75,7 +75,7 @@ def _append_build_failure_to_reports(output_dir: Path, summary: str) -> None:
     html_path = output_dir / "report.html"
     if html_path.exists():
         html = html_path.read_text()
-        escaped = summary[:500].replace("<", "&lt;").replace(">", "&gt;").replace("&", "&amp;")
+        escaped = summary[:500].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         inject = f'<div class="warning-panel" style="border-color:var(--error);"><h3>Build validation failed</h3><p>See build-errors.log</p><pre style="font-size:0.85em">{escaped}</pre></div>'
         if "</body>" in html:
             html = html.replace("</body>", inject + "\n</body>")

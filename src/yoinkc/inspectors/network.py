@@ -3,6 +3,7 @@
 File-based scan under host_root, plus ``ip route`` / ``ip rule`` via executor.
 """
 
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -112,7 +113,10 @@ def _detect_resolv_provenance(host_root: Path) -> str:
         if not r.exists():
             return ""
         if r.is_symlink():
-            target = str(r.resolve())
+            # Use os.readlink to get the raw symlink target without following
+            # it through the container's filesystem (which would resolve inside
+            # the container, not on the host).
+            target = os.readlink(str(r))
             if "systemd" in target or "resolve" in target:
                 return "systemd-resolved"
         text = _safe_read(r)

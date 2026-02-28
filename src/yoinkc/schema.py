@@ -176,9 +176,9 @@ class KernelBootSection(BaseModel):
     cmdline: str = ""
     grub_defaults: str = ""
     sysctl_overrides: List[dict] = Field(default_factory=list)  # {key, runtime, default, source}
-    modules_load_d: List[str] = Field(default_factory=list)
-    modprobe_d: List[str] = Field(default_factory=list)
-    dracut_conf: List[str] = Field(default_factory=list)
+    modules_load_d: List[dict] = Field(default_factory=list)  # {path, content}
+    modprobe_d: List[dict] = Field(default_factory=list)  # {path, content}
+    dracut_conf: List[dict] = Field(default_factory=list)  # {path, content}
     loaded_modules: List[dict] = Field(default_factory=list)  # all from lsmod: {name, size, used_by}
     non_default_modules: List[dict] = Field(default_factory=list)  # not in modules-load.d or built-in deps
 

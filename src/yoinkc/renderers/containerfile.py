@@ -156,22 +156,20 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
 
     # Kernel module / sysctl / dracut configs
     if snapshot.kernel_boot:
-        for kpath in (snapshot.kernel_boot.modules_load_d or []):
-            dest = config_dir / kpath
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                dest.write_text("")
-        for kpath in (snapshot.kernel_boot.modprobe_d or []):
-            dest = config_dir / kpath
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                dest.write_text("")
-        for kpath in (snapshot.kernel_boot.dracut_conf or []):
-            dest = config_dir / kpath
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if not dest.exists():
-                dest.write_text("")
-        if snapshot.kernel_boot.sysctl_overrides:
+        for section_list in (
+            snapshot.kernel_boot.modules_load_d,
+            snapshot.kernel_boot.modprobe_d,
+            snapshot.kernel_boot.dracut_conf,
+        ):
+            for entry in (section_list or []):
+                kpath = entry.get("path", "")
+                content = entry.get("content", "")
+                if kpath:
+                    dest = config_dir / kpath
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_text(content)
+
+    if snapshot.kernel_boot and snapshot.kernel_boot.sysctl_overrides:
             sysctl_dir = config_dir / "etc/sysctl.d"
             sysctl_dir.mkdir(parents=True, exist_ok=True)
             sysctl_lines = ["# Non-default sysctl values detected by yoinkc"]
@@ -241,8 +239,22 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
 
     if needs_multistage:
         lines.append("# === Install pre-built pip packages with C extensions ===")
-        lines.append("COPY --from=builder /tmp/pip-build/lib/python3*/site-packages/ "
-                      "/usr/lib/python3*/site-packages/")
+        # Detect the Python minor version from the base image tag or os-release.
+        # Fall back to a FIXME placeholder rather than using a glob, which is
+        # invalid as a COPY destination in a Containerfile.
+        py_ver = ""
+        if snapshot.os_release:
+            vid = snapshot.os_release.version_id or ""
+            major = vid.split(".")[0]
+            if major == "9":
+                py_ver = "3.9"
+        if py_ver:
+            lines.append(f"COPY --from=builder /tmp/pip-build/lib/python{py_ver}/site-packages/ "
+                         f"/usr/lib/python{py_ver}/site-packages/")
+        else:
+            lines.append("# FIXME: replace python3.X with the actual Python version in the base image")
+            lines.append("COPY --from=builder /tmp/pip-build/lib/python3.X/site-packages/ "
+                         "/usr/lib/python3.X/site-packages/")
         lines.append("")
 
     # 1. Repository Configuration
@@ -330,8 +342,9 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
                 p = t.get("path", "")
                 name = t.get("name", "")
                 lines.append(f"COPY config/{p} /{p}")
-                svc_path = p.replace(".timer", ".service")
-                lines.append(f"COPY config/{svc_path} /{svc_path}")
+                if t.get("service_content"):
+                    svc_path = p.replace(".timer", ".service")
+                    lines.append(f"COPY config/{svc_path} /{svc_path}")
                 lines.append(f"RUN systemctl enable {name}.timer")
 
         if vendor_timers:
@@ -639,13 +652,12 @@ def _render_containerfile_content(snapshot: InspectionSnapshot) -> str:
             lines.append("PROXYEOF")
 
     if net and net.static_routes:
-        lines.append(f"# {len(net.static_routes)} static route(s) detected")
+        lines.append(f"# {len(net.static_routes)} static route file(s) detected")
         lines.append("# FIXME: add static routes via NM connection or nmstatectl config")
         for r in net.static_routes[:10]:
-            dest = r.get("to", "")
-            via = r.get("via", "")
-            dev = r.get("dev", "")
-            lines.append(f"# nmcli connection modify <conn> +ipv4.routes \"{dest} {via}\" # dev={dev}")
+            path = r.get("path", "")
+            name = r.get("name", "")
+            lines.append(f"# Route file: {path} — review and translate to NM connection (+ipv4.routes)")
     lines.append("")
 
     # 13. tmpfiles.d for /var structure

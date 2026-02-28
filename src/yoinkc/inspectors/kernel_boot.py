@@ -242,7 +242,10 @@ def run(
         if d.exists():
             for f in _safe_iterdir(d):
                 if f.is_file() and f.suffix == ".conf":
-                    target_list.append(str(f.relative_to(host_root)))
+                    target_list.append({
+                        "path": str(f.relative_to(host_root)),
+                        "content": _safe_read(f),
+                    })
 
     # --- lsmod + diff ---
     if executor:

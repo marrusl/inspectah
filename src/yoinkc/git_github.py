@@ -2,6 +2,7 @@
 Git output and GitHub push. Optional: requires GitPython and PyGithub when using --push-to-github.
 """
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,7 @@ def push_to_github(
     file_count: int = 0,
     fixme_count: int = 0,
     redaction_count: int = 0,
+    github_token: Optional[str] = None,
 ) -> Optional[str]:
     """
     Push output_dir to GitHub. repo_spec is 'owner/repo'.
@@ -86,10 +88,16 @@ def push_to_github(
         repo = git.Repo(output_dir)
         remotes = [r.name for r in repo.remotes]
         if "origin" not in remotes:
-            # Create GitHub repo if possible
+            # Create GitHub repo if possible — requires an authenticated token
+            token = github_token or os.environ.get("GITHUB_TOKEN", "")
             try:
                 from github import Github
-                g = Github()
+                if not token:
+                    return (
+                        "Cannot create GitHub repo: no token provided. "
+                        "Set GITHUB_TOKEN env var or pass --github-token."
+                    )
+                g = Github(token)
                 user = g.get_user()
                 name = repo_spec.split("/")[-1] if "/" in repo_spec else "yoinkc"
                 gh_repo = user.create_repo(name, private=create_private, auto_init=False)

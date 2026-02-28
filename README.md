@@ -106,7 +106,8 @@ Each inspector examines one aspect of the host and contributes a section to the 
 - `ip route` and `ip rule` capture with default rule filtering
 - `/etc/hosts` additions and proxy settings
 - Containerfile emits both COPY directives and `firewall-offline-cmd` equivalents for firewall rules
-- Static routes, proxy env vars, and `/etc/hosts` additions rendered in both Containerfile and kickstart
+- Static route file detection with FIXME guidance in both Containerfile and kickstart (translate to NM connection properties)
+- Proxy env vars and `/etc/hosts` additions rendered in both Containerfile and kickstart
 
 ### Storage
 
@@ -141,7 +142,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 - `/proc/cmdline` and GRUB defaults
 - `lsmod` parsing with module classification: default (from `modules-load.d`), configured, dependency, or non-default
 - Runtime sysctl values from `/proc/sys` diffed against shipped defaults in `/usr/lib/sysctl.d` with source attribution
-- `modules-load.d`, `modprobe.d`, and dracut configuration capture
+- `modules-load.d`, `modprobe.d`, and `dracut.conf.d` config capture and COPY into image
 
 ### SELinux
 
@@ -204,6 +205,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 |------|-------------|
 | `--validate` | After generating output, run `podman build` to verify the Containerfile |
 | `--push-to-github REPO` | Push output directory to a GitHub repository (e.g. `owner/repo`) |
+| `--github-token TOKEN` | GitHub personal access token for repo creation (falls back to `GITHUB_TOKEN` env var) |
 | `--public` | When creating a new GitHub repo, make it public (default: private) |
 | `--yes` | Skip interactive confirmation prompts |
 

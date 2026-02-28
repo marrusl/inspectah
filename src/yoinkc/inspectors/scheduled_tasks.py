@@ -86,7 +86,6 @@ def _scan_cron_file(section: ScheduledTaskSection, host_root: Path, f: Path, sou
                         "source_path": rel,
                         "command": command,
                     })
-                    break
     except Exception:
         pass
 
@@ -217,7 +216,7 @@ def run(
     crontab = host_root / "etc/crontab"
     try:
         if crontab.exists():
-            section.cron_jobs.append({"path": "etc/crontab", "source": "crontab"})
+            _scan_cron_file(section, host_root, crontab, "crontab")
     except (PermissionError, OSError):
         pass
 

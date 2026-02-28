@@ -88,6 +88,7 @@ def main(argv: Optional[list] = None) -> int:
                     file_count=file_count,
                     fixme_count=fixme_count,
                     redaction_count=len(snapshot.redactions),
+                    github_token=args.github_token,
                 )
                 if err:
                     print(f"GitHub push failed: {err}", file=sys.stderr)

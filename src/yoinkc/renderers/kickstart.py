@@ -61,16 +61,12 @@ def render(
 
     # Static routes and policy routing
     if snapshot.network and snapshot.network.static_routes:
-        lines.append("# --- Static routes detected ---")
-        lines.append("# These were active on the source host. Add to NM connection or kickstart.")
+        lines.append("# --- Static route files detected ---")
+        lines.append("# These files were present on the source host. Review each and translate")
+        lines.append("# to NM connection properties (+ipv4.routes) or kickstart route directives.")
         for r in snapshot.network.static_routes:
-            dest = r.get("to", "")
-            via = r.get("via", "")
-            dev = r.get("dev", "")
-            if dest and via:
-                lines.append(f"# route --device={dev or 'eth0'} --dest={dest} --gateway={via}")
-            elif dest:
-                lines.append(f"# route add {dest} dev {dev or 'eth0'}")
+            path = r.get("path", "")
+            lines.append(f"# FIXME: review {path} and add equivalent route to NM connection or kickstart")
         lines.append("")
 
     if snapshot.network and snapshot.network.ip_rules:
