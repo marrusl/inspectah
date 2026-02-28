@@ -4,7 +4,7 @@ Each inspector receives host_root and an executor; returns a section for the sna
 """
 
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, List, Optional, TypeVar
 
@@ -151,7 +151,7 @@ def run_all(
     if executor is None:
         executor = make_executor(str(host_root))
 
-    meta = {"host_root": str(host_root), "timestamp": datetime.utcnow().isoformat() + "Z"}
+    meta = {"host_root": str(host_root), "timestamp": datetime.now(timezone.utc).isoformat()}
     hostname_path = host_root / "etc" / "hostname"
     try:
         if hostname_path.exists():
