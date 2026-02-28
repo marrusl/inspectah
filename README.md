@@ -1,6 +1,6 @@
 # yoinkc
 
-Yoink the essentials from package-based CentOS/RHEL hosts and produce bootc image artifacts (Containerfile, config tree, audit report, etc.).
+Yoink package-based CentOS/RHEL hosts and produce bootc image artifacts (Containerfile, config tree, audit report, etc.).
 
 ## Architecture
 
