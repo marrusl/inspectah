@@ -197,12 +197,20 @@ class LvmVolume(BaseModel):
     lv_size: str = ""
 
 
+class VarDirectory(BaseModel):
+    """A non-empty directory under /var discovered for the data migration plan."""
+    path: str
+    size_estimate: str = ""  # human-readable estimate, e.g. "~15 MB"
+    recommendation: str = ""
+
+
 class StorageSection(BaseModel):
     """Output of the Storage inspector."""
 
     fstab_entries: List[FstabEntry] = Field(default_factory=list)
     mount_points: List[MountPoint] = Field(default_factory=list)
     lvm_info: List[LvmVolume] = Field(default_factory=list)
+    var_directories: List[VarDirectory] = Field(default_factory=list)
 
 
 # --- Scheduled task sub-models ---

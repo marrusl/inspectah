@@ -562,6 +562,15 @@ def render(
     lines.append("`tmpfiles.d` snippets ensure expected directories exist on every boot.")
     lines.append("Review application data under `/var/lib`, `/var/log`, `/var/data` for separate migration strategies.")
     lines.append("")
+    if snapshot.storage and snapshot.storage.var_directories:
+        lines.append("| Directory | Size | Recommendation |")
+        lines.append("|-----------|------|----------------|")
+        for vd in snapshot.storage.var_directories:
+            lines.append(f"| `/{vd.path}` | {vd.size_estimate} | {vd.recommendation} |")
+        lines.append("")
+    else:
+        lines.append("*No significant application data directories found under `/var`.*")
+        lines.append("")
 
     if snapshot.warnings:
         lines.append("## Items requiring manual intervention")
