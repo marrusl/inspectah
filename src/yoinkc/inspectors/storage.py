@@ -179,6 +179,30 @@ def run(
     except (PermissionError, OSError):
         pass
 
+    # Automount maps (/etc/auto.master, /etc/auto.*)
+    auto_master = host_root / "etc/auto.master"
+    try:
+        if auto_master.exists():
+            section.mount_points.append(MountPoint(
+                target="automount",
+                source="etc/auto.master",
+                fstype="autofs",
+                options=auto_master.read_text().strip()[:500],
+            ))
+    except (PermissionError, OSError):
+        pass
+    try:
+        auto_dir = host_root / "etc"
+        for f in _safe_iterdir(auto_dir):
+            if f.is_file() and f.name.startswith("auto.") and f.name != "auto.master":
+                section.mount_points.append(MountPoint(
+                    target=f"automount ({f.name})",
+                    source=f"etc/{f.name}",
+                    fstype="autofs",
+                ))
+    except (PermissionError, OSError):
+        pass
+
     # /var directory scan for data migration plan
     section.var_directories = _scan_var_directories(host_root)
 

@@ -702,7 +702,8 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     # 11. SELinux Customizations
     has_selinux = snapshot.selinux and (
         snapshot.selinux.custom_modules or snapshot.selinux.boolean_overrides
-        or snapshot.selinux.audit_rules or snapshot.selinux.fips_mode
+        or snapshot.selinux.fcontext_rules or snapshot.selinux.audit_rules
+        or snapshot.selinux.fips_mode
     )
     if has_selinux:
         lines.append("# === SELinux Customizations ===")
@@ -722,6 +723,14 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                     lines.append(f"RUN setsebool -P {bname} {bval}")
                 else:
                     lines.append(f"# FIXME: boolean name/value contains unsafe characters, skipped: {bname!r}={bval!r}")
+        if snapshot.selinux.fcontext_rules:
+            lines.append(f"# FIXME: {len(snapshot.selinux.fcontext_rules)} custom fcontext rule(s) detected — apply in image")
+            for fc in snapshot.selinux.fcontext_rules[:10]:
+                if _sanitize_shell_value(fc, "semanage fcontext") is not None:
+                    lines.append(f"# RUN semanage fcontext -a {fc}")
+                else:
+                    lines.append(f"# FIXME: fcontext rule contains unsafe characters: {fc!r}")
+            lines.append("# RUN restorecon -Rv /  # apply fcontext changes after all COPYs")
         if snapshot.selinux.audit_rules:
             lines.append(f"# {len(snapshot.selinux.audit_rules)} audit rule file(s) — included in COPY config/etc/ above")
         if snapshot.selinux.fips_mode:

@@ -320,6 +320,12 @@ def run(
     except (PermissionError, OSError):
         pass
 
+    _PERIOD_SCHEDULES = {
+        "hourly":  "*-*-* *:01:00",
+        "daily":   "*-*-* 03:00:00",
+        "weekly":  "Mon *-*-* 03:00:00",
+        "monthly": "*-*-01 03:00:00",
+    }
     for period in ("hourly", "daily", "weekly", "monthly"):
         d = host_root / f"etc/cron.{period}"
         if d.exists():
@@ -327,6 +333,27 @@ def run(
                 if f.is_file() and not f.name.startswith("."):
                     rel = str(f.relative_to(host_root))
                     section.cron_jobs.append(CronJob(path=rel, source=f"cron.{period}"))
+                    safe_name = f"cron-{period}-{f.name}".replace(".", "-")
+                    on_calendar = _PERIOD_SCHEDULES[period]
+                    command = f"/{rel}"
+                    timer_content = (
+                        f"[Unit]\nDescription=Generated from cron.{period}: {rel}\n"
+                        f"# Original: cron.{period} script\n\n"
+                        f"[Timer]\nOnCalendar={on_calendar}\nPersistent=true\n\n"
+                        "[Install]\nWantedBy=timers.target\n"
+                    )
+                    service_content = (
+                        f"[Unit]\nDescription=Timer from cron.{period} {rel}\n\n"
+                        f"[Service]\nType=oneshot\nExecStart={command}\n"
+                    )
+                    section.generated_timer_units.append(GeneratedTimerUnit(
+                        name=safe_name,
+                        timer_content=timer_content,
+                        service_content=service_content,
+                        cron_expr=f"@{period}",
+                        source_path=rel,
+                        command=command,
+                    ))
 
     spool = host_root / "var/spool/cron"
     if spool.exists():

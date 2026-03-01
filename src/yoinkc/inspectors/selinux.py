@@ -176,6 +176,31 @@ def run(
                     "severity": "warning",
                 })
 
+    # --- Custom fcontext rules -----------------------------------------------
+    # Try semanage fcontext -l -C (custom only) via chroot; fall back to
+    # reading file_contexts.local from the policy store.
+    if executor:
+        out = executor(["chroot", str(host_root), "semanage", "fcontext", "-l", "-C"])
+        if out.returncode == 0 and out.stdout.strip():
+            for line in out.stdout.strip().splitlines():
+                line = line.strip()
+                if line and not line.startswith("SELinux"):
+                    section.fcontext_rules.append(line)
+            _debug(f"fcontext: {len(section.fcontext_rules)} custom rules from semanage")
+        else:
+            _debug("semanage fcontext failed, trying file_contexts.local")
+    if not section.fcontext_rules:
+        fc_local = host_root / "etc/selinux" / ptype / "contexts/files/file_contexts.local"
+        try:
+            if fc_local.exists():
+                for line in fc_local.read_text().splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        section.fcontext_rules.append(line)
+                _debug(f"fcontext: {len(section.fcontext_rules)} rules from file_contexts.local")
+        except (PermissionError, OSError) as e:
+            _debug(f"fcontext: cannot read file_contexts.local: {e}")
+
     audit_d = host_root / "etc/audit/rules.d"
     if audit_d.exists():
         for f in _safe_iterdir(audit_d):

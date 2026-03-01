@@ -1,7 +1,15 @@
-"""Build validation: run podman build against generated Containerfile (--validate)."""
+"""Build validation: run podman build against generated Containerfile (--validate).
+
+When running inside the yoinkc container, podman is not available directly —
+it must be reached on the host via nsenter, same as the baseline queries.
+The function tries nsenter first, falling back to direct subprocess for the
+case where yoinkc runs directly on the host.
+"""
 
 import subprocess
 from pathlib import Path
+
+_NSENTER_PREFIX = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--"]
 
 
 def run_validate(output_dir: Path) -> bool:
@@ -14,9 +22,25 @@ def run_validate(output_dir: Path) -> bool:
     containerfile = output_dir / "Containerfile"
     if not containerfile.exists():
         return True
+
+    build_cmd = ["podman", "build", "--no-cache", "-f", str(containerfile), str(output_dir)]
+
+    # Try via nsenter first (when running in the tool container, podman is
+    # on the host, not inside the container).  Fall back to direct invocation
+    # for the case where yoinkc runs directly on the host.
+    try:
+        probe = subprocess.run(
+            _NSENTER_PREFIX + ["true"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if probe.returncode == 0:
+            build_cmd = _NSENTER_PREFIX + build_cmd
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
     try:
         result = subprocess.run(
-            ["podman", "build", "--no-cache", "-f", str(containerfile), str(output_dir)],
+            build_cmd,
             capture_output=True,
             text=True,
             timeout=600,

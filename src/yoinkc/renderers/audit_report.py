@@ -493,8 +493,9 @@ def render(
 
     has_selinux = snapshot.selinux and (
         snapshot.selinux.mode or snapshot.selinux.custom_modules
-        or snapshot.selinux.boolean_overrides or snapshot.selinux.audit_rules
-        or snapshot.selinux.fips_mode or snapshot.selinux.pam_configs
+        or snapshot.selinux.boolean_overrides or snapshot.selinux.fcontext_rules
+        or snapshot.selinux.audit_rules or snapshot.selinux.fips_mode
+        or snapshot.selinux.pam_configs
     )
     if has_selinux:
         lines.append("## SELinux / Security")
@@ -519,6 +520,10 @@ def render(
         unchanged_count = len(snapshot.selinux.boolean_overrides or []) - len(non_default_bools)
         if unchanged_count > 0:
             lines.append(f"- Unchanged booleans: {unchanged_count} (at default values)")
+        if snapshot.selinux.fcontext_rules:
+            lines.append(f"- **Custom fcontext rules** ({len(snapshot.selinux.fcontext_rules)}):")
+            for fc in snapshot.selinux.fcontext_rules:
+                lines.append(f"  - `{fc}`")
         if snapshot.selinux.audit_rules:
             lines.append(f"- Audit rule files: {len(snapshot.selinux.audit_rules)}")
             for a in snapshot.selinux.audit_rules:

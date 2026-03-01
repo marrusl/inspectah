@@ -328,6 +328,7 @@ class SelinuxSection(BaseModel):
     mode: str = ""
     custom_modules: List[str] = Field(default_factory=list)
     boolean_overrides: List[dict] = Field(default_factory=list)
+    fcontext_rules: List[str] = Field(default_factory=list)
     audit_rules: List[str] = Field(default_factory=list)
     fips_mode: bool = False
     pam_configs: List[str] = Field(default_factory=list)
