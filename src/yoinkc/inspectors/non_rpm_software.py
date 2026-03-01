@@ -411,7 +411,7 @@ def _scan_dirs(
         for entry in _safe_iterdir(d):
             if not entry.is_dir() or entry.name.startswith("."):
                 continue
-            if is_dev_artifact(entry):
+            if is_dev_artifact(entry, host_root):
                 continue
             if base == "usr/local" and entry.name in _FHS_DIRS and not _dir_has_content(entry):
                 continue

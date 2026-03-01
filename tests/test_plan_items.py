@@ -97,7 +97,108 @@ class TestServiceBaselinePresets:
 
 
 # ---------------------------------------------------------------------------
-# 2. Cron command extraction into ExecStart
+# 2a. Cron-to-OnCalendar conversion
+# ---------------------------------------------------------------------------
+
+class TestCronToOnCalendar:
+
+    def _convert(self, expr):
+        from yoinkc.inspectors.scheduled_tasks import _cron_to_on_calendar
+        return _cron_to_on_calendar(expr)
+
+    def test_simple_min_hour(self):
+        cal, ok = self._convert("0 2 * * *")
+        assert cal == "*-*-* 02:00:00"
+        assert ok is True
+
+    def test_specific_min_hour(self):
+        cal, ok = self._convert("30 14 * * *")
+        assert cal == "*-*-* 14:30:00"
+        assert ok is True
+
+    def test_step_minute(self):
+        cal, ok = self._convert("*/15 * * * *")
+        assert "*/15" in cal
+        assert ok is True
+
+    def test_step_hour(self):
+        cal, ok = self._convert("0 */2 * * *")
+        assert "00/2" in cal or "*/2" in cal
+        assert ok is True
+
+    def test_day_of_month(self):
+        cal, ok = self._convert("0 3 1 * *")
+        assert "*-*-01" in cal or "*-*-1" in cal
+        assert "03:00" in cal
+        assert ok is True
+
+    def test_specific_month(self):
+        cal, ok = self._convert("0 0 1 6 *")
+        assert "-6-" in cal or "-06-" in cal
+        assert ok is True
+
+    def test_day_of_week_numeric(self):
+        cal, ok = self._convert("0 5 * * 1")
+        assert "Mon" in cal
+        assert ok is True
+
+    def test_day_of_week_star(self):
+        cal, ok = self._convert("0 5 * * *")
+        assert "Mon" not in cal
+        assert ok is True
+
+    def test_range(self):
+        cal, ok = self._convert("0 9 * * 1-5")
+        assert "1..5" in cal
+        assert ok is True
+
+    def test_list(self):
+        cal, ok = self._convert("0 0 1,15 * *")
+        assert "1,15" in cal
+        assert ok is True
+
+    def test_at_daily(self):
+        cal, ok = self._convert("@daily")
+        assert cal == "*-*-* 00:00:00"
+        assert ok is True
+
+    def test_at_hourly(self):
+        cal, ok = self._convert("@hourly")
+        assert cal == "*-*-* *:00:00"
+        assert ok is True
+
+    def test_at_weekly(self):
+        cal, ok = self._convert("@weekly")
+        assert "Mon" in cal
+        assert ok is True
+
+    def test_at_monthly(self):
+        cal, ok = self._convert("@monthly")
+        assert "*-*-01" in cal
+        assert ok is True
+
+    def test_at_yearly(self):
+        cal, ok = self._convert("@yearly")
+        assert "*-01-01" in cal
+        assert ok is True
+
+    def test_at_reboot_not_converted(self):
+        cal, ok = self._convert("@reboot")
+        assert ok is False
+
+    def test_incomplete_expression(self):
+        cal, ok = self._convert("*/5")
+        assert ok is False
+
+    def test_all_stars(self):
+        """Every minute."""
+        cal, ok = self._convert("* * * * *")
+        assert ok is True
+        assert "*:*" in cal or "*-*-* *:*" in cal
+
+
+# ---------------------------------------------------------------------------
+# 2b. Cron command extraction into ExecStart
 # ---------------------------------------------------------------------------
 
 class TestCronCommandExtraction:

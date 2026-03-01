@@ -28,9 +28,23 @@ _SKIP_DIR_NAMES = frozenset({
 })
 
 
-def is_dev_artifact(path: Path) -> bool:
-    """Return True if any component of *path* sits inside a dev/build directory."""
-    for part in path.parts:
+def is_dev_artifact(path: Path, host_root: Optional[Path] = None) -> bool:
+    """Return True if any component of *path* sits inside a dev/build directory.
+
+    When *host_root* is provided, only the path components relative to
+    host_root are checked — this prevents false positives from the
+    workspace or container mount path (e.g. ``.cursor`` in a worktree
+    path like ``/home/user/.cursor/worktrees/...``).
+    """
+    if host_root is not None:
+        try:
+            rel = path.relative_to(host_root)
+            parts = rel.parts
+        except ValueError:
+            parts = path.parts
+    else:
+        parts = path.parts
+    for part in parts:
         if part in _SKIP_DIR_NAMES or part in _PRUNE_MARKERS:
             return True
     return False

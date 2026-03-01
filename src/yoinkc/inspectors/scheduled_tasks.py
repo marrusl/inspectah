@@ -32,20 +32,123 @@ def _safe_read(p: Path) -> str:
 # Cron helpers
 # ---------------------------------------------------------------------------
 
-def _cron_to_on_calendar(cron_expr: str) -> str:
-    """Convert simple cron (min hour * * *) to systemd OnCalendar."""
-    parts = cron_expr.strip().split()
-    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
-        m, h = int(parts[0]), int(parts[1])
-        return f"*-*-* {h:02d}:{m:02d}:00"
-    return "*-*-* 02:00:00"
+def _cron_field_to_calendar(field: str, kind: str) -> str:
+    """Convert a single cron field to its systemd OnCalendar equivalent.
+
+    *kind* is one of ``minute``, ``hour``, ``dom``, ``month``, ``dow``.
+    Returns the calendar fragment or the field unchanged if it already maps
+    cleanly (e.g. ``*`` stays ``*``).
+    """
+    if field == "*":
+        return "*"
+
+    # Step values: */5 → *:00/5 (for minute), */2 → 00/2 (for hour), etc.
+    if field.startswith("*/"):
+        step = field[2:]
+        if step.isdigit():
+            if kind == "minute":
+                return f"*/{step}"
+            if kind == "hour":
+                return f"00/{ step}"
+            # dom, month, dow: systemd doesn't support steps directly
+            return field
+        return field
+
+    # Ranges: 1-5 → 1..5
+    if "-" in field and "/" not in field:
+        parts = field.split("-")
+        if len(parts) == 2 and all(p.isdigit() for p in parts):
+            return f"{parts[0]}..{parts[1]}"
+
+    # Lists: 1,3,5 → 1,3,5 (same syntax)
+    if "," in field:
+        return field
+
+    # Numeric day of week: 0=Sun, 1=Mon, ... 7=Sun — convert to names
+    dow_names = {"0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed",
+                 "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun"}
+    if kind == "dow" and field in dow_names:
+        return dow_names[field]
+
+    # Plain digit
+    if field.isdigit():
+        if kind in ("minute", "hour"):
+            return f"{int(field):02d}"
+        return field
+
+    return field
+
+
+def _cron_to_on_calendar(cron_expr: str) -> tuple:
+    """Convert a 5-field cron expression to a systemd OnCalendar value.
+
+    Returns ``(on_calendar, converted)`` where *converted* is True if the
+    expression was fully handled, False if a fallback was used.
+
+    Handles: literal values, ``*``, step (``*/N``), ranges (``M-N``),
+    lists (``M,N``), and named shortcuts (``@daily``, ``@reboot``, etc.).
+    """
+    expr = cron_expr.strip()
+
+    # Named shortcuts
+    _SHORTCUTS = {
+        "@yearly":  ("*-01-01 00:00:00", True),
+        "@annually": ("*-01-01 00:00:00", True),
+        "@monthly": ("*-*-01 00:00:00", True),
+        "@weekly":  ("Mon *-*-* 00:00:00", True),
+        "@daily":   ("*-*-* 00:00:00", True),
+        "@midnight": ("*-*-* 00:00:00", True),
+        "@hourly":  ("*-*-* *:00:00", True),
+    }
+    if expr.lower() in _SHORTCUTS:
+        return _SHORTCUTS[expr.lower()]
+
+    # @reboot has no calendar equivalent
+    if expr.lower() == "@reboot":
+        return ("@reboot", False)
+
+    parts = expr.split()
+    if len(parts) < 5:
+        return ("*-*-* 02:00:00", False)
+
+    minute, hour, dom, month, dow = parts[:5]
+
+    cal_min = _cron_field_to_calendar(minute, "minute")
+    cal_hour = _cron_field_to_calendar(hour, "hour")
+    cal_dom = _cron_field_to_calendar(dom, "dom")
+    cal_month = _cron_field_to_calendar(month, "month")
+    cal_dow = _cron_field_to_calendar(dow, "dow")
+
+    # Build OnCalendar: [DOW] YYYY-MM-DD HH:MM:SS
+    date_part = f"*-{cal_month}-{cal_dom}"
+    time_part = f"{cal_hour}:{cal_min}:00"
+
+    if cal_dow != "*":
+        return (f"{cal_dow} {date_part} {time_part}", True)
+    return (f"{date_part} {time_part}", True)
 
 
 def _make_timer_service(name: str, cron_expr: str, path: str, command: str = "") -> tuple:
-    on_calendar = _cron_to_on_calendar(cron_expr)
+    on_calendar, converted = _cron_to_on_calendar(cron_expr)
+
+    fixme_lines = ""
+    if not converted:
+        if on_calendar == "@reboot":
+            fixme_lines = (
+                "# FIXME: @reboot has no OnCalendar equivalent.\n"
+                "# Use a oneshot service with WantedBy=multi-user.target instead.\n"
+            )
+            on_calendar = "*-*-* 02:00:00"
+        else:
+            fixme_lines = (
+                f"# FIXME: cron expression '{cron_expr}' could not be fully converted.\n"
+                "# Review and correct the OnCalendar value below.\n"
+            )
+
     timer_content = (
         f"[Unit]\nDescription=Generated from cron: {path}\n"
-        f"# Original cron: {cron_expr}\n\n"
+        f"# Original cron: {cron_expr}\n"
+        f"{fixme_lines}\n"
         f"[Timer]\nOnCalendar={on_calendar}\nPersistent=true\n\n"
         "[Install]\nWantedBy=timers.target\n"
     )
