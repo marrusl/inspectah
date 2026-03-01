@@ -92,10 +92,8 @@ def render(
             lines.append(f"Baseline: {len(snapshot.rpm.baseline_package_names)} packages from `{base_img}`.")
             lines.append("")
         lines.append("### Added")
-        for p in snapshot.rpm.packages_added[:50]:
+        for p in snapshot.rpm.packages_added:
             lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
-        if len(snapshot.rpm.packages_added) > 50:
-            lines.append(f"- ... and {len(snapshot.rpm.packages_added) - 50} more")
         lines.append("")
         if snapshot.rpm.packages_removed:
             lines.append("### Removed (from baseline)")
@@ -117,10 +115,8 @@ def render(
             lines.append("")
             lines.append("These packages were installed and later removed. They may have left behind config files or state.")
             lines.append("")
-            for name in snapshot.rpm.dnf_history_removed[:30]:
+            for name in snapshot.rpm.dnf_history_removed:
                 lines.append(f"- {name}")
-            if len(snapshot.rpm.dnf_history_removed) > 30:
-                lines.append(f"- ... and {len(snapshot.rpm.dnf_history_removed) - 30} more")
             lines.append("")
 
     if snapshot.services and snapshot.services.state_changes:
@@ -248,13 +244,13 @@ def render(
         if snapshot.storage.fstab_entries:
             lines.append("| Device | Mount Point | FS Type | Recommendation |")
             lines.append("|--------|-------------|---------|----------------|")
-            for e in snapshot.storage.fstab_entries[:30]:
+            for e in snapshot.storage.fstab_entries:
                 rec = _storage_recommendation(e.mount_point, e.fstype, e.device)
                 lines.append(f"| `{e.device}` | `{e.mount_point}` | {e.fstype} | {rec} |")
             lines.append("")
         if snapshot.storage.lvm_info:
             lines.append("### LVM Layout")
-            for lv in snapshot.storage.lvm_info[:20]:
+            for lv in snapshot.storage.lvm_info:
                 lines.append(f"- {lv.lv_name} ({lv.vg_name}) {lv.lv_size}")
             lines.append("")
 
@@ -287,7 +283,7 @@ def render(
         if st.generated_timer_units:
             lines.append("### Cron-converted timers")
             lines.append("")
-            for u in st.generated_timer_units[:20]:
+            for u in st.generated_timer_units:
                 lines.append(f"- **{u.name}** — converted from `{u.source_path}` (cron: `{u.cron_expr}`)")
             lines.append("")
 
@@ -295,7 +291,7 @@ def render(
         if st.cron_jobs:
             lines.append("### Cron jobs")
             lines.append("")
-            for j in st.cron_jobs[:20]:
+            for j in st.cron_jobs:
                 lines.append(f"- `{j.path}` ({j.source})")
             lines.append("")
 
@@ -305,7 +301,7 @@ def render(
             lines.append("")
             lines.append("| File | User | Command |")
             lines.append("|------|------|---------|")
-            for a in st.at_jobs[:20]:
+            for a in st.at_jobs:
                 cmd = a.command[:77] + "..." if len(a.command) > 80 else a.command
                 lines.append(f"| `{a.file}` | {a.user} | `{cmd}` |")
             lines.append("")
@@ -408,10 +404,8 @@ def render(
                 if pkgs:
                     lines.append("| Package | Version |")
                     lines.append("|---------|---------|")
-                    for p in pkgs[:20]:
+                    for p in pkgs:
                         lines.append(f"| {p.get('name','')} | {p.get('version','')} |")
-                    if len(pkgs) > 20:
-                        lines.append(f"| ... | +{len(pkgs)-20} more |")
                 lines.append("")
 
         if git_items:
@@ -429,7 +423,7 @@ def render(
             lines.append("")
             lines.append("| Package | Version | Path |")
             lines.append("|---------|---------|------|")
-            for i in pip_items[:20]:
+            for i in pip_items:
                 lines.append(f"| {i.get('name','')} | {i.get('version','')} | `{i.get('path','')}` |")
             lines.append("")
 
@@ -438,7 +432,7 @@ def render(
             lines.append("")
             lines.append("| Path / Name | Version | Confidence | Method |")
             lines.append("|-------------|---------|------------|--------|")
-            for i in other_items[:20]:
+            for i in other_items:
                 pn = i.get("path") or i.get("name") or ""
                 ver = i.get("version") or "—"
                 conf = i.get("confidence") or "unknown"
@@ -455,7 +449,7 @@ def render(
         lines.append("## Kernel and boot")
         lines.append("")
         if kb.cmdline:
-            lines.append(f"- cmdline: `{kb.cmdline[:200]}`")
+            lines.append(f"- cmdline: `{kb.cmdline}`")
         if kb.grub_defaults:
             lines.append("- GRUB defaults present")
 
@@ -465,7 +459,7 @@ def render(
             lines.append("")
             lines.append("| Module | Size | Used by |")
             lines.append("|--------|------|---------|")
-            for m in kb.non_default_modules[:30]:
+            for m in kb.non_default_modules:
                 name = m.get("name", "?")
                 size = m.get("size", "")
                 used = m.get("used_by", "")
@@ -482,18 +476,18 @@ def render(
             lines.append("")
             lines.append("| Key | Runtime | Default | Source |")
             lines.append("|-----|---------|---------|--------|")
-            for s in kb.sysctl_overrides[:30]:
+            for s in kb.sysctl_overrides:
                 key = s.get("key", "?")
                 runtime = s.get("runtime", "?")
                 default = s.get("default", "—")
                 source = s.get("source", "")
                 lines.append(f"| `{key}` | **{runtime}** | {default} | `{source}` |")
 
-        for m in (kb.modules_load_d or [])[:20]:
+        for m in (kb.modules_load_d or []):
             lines.append(f"- modules-load.d: `{m}`")
-        for m in (kb.modprobe_d or [])[:20]:
+        for m in (kb.modprobe_d or []):
             lines.append(f"- modprobe.d: `{m}`")
-        for d in (kb.dracut_conf or [])[:20]:
+        for d in (kb.dracut_conf or []):
             lines.append(f"- dracut: `{d}`")
         lines.append("")
 
@@ -511,12 +505,12 @@ def render(
             lines.append("- FIPS mode: **enabled**")
         if snapshot.selinux.custom_modules:
             lines.append(f"- **Custom policy modules** ({len(snapshot.selinux.custom_modules)}):")
-            for m in snapshot.selinux.custom_modules[:20]:
+            for m in snapshot.selinux.custom_modules:
                 lines.append(f"  - `{m}`")
         non_default_bools = [b for b in (snapshot.selinux.boolean_overrides or []) if b.get("non_default")]
         if non_default_bools:
             lines.append(f"- **Non-default booleans** ({len(non_default_bools)}):")
-            for b in non_default_bools[:30]:
+            for b in non_default_bools:
                 name = b.get("name", "?")
                 cur = b.get("current", "?")
                 dflt = b.get("default", "?")
@@ -527,11 +521,11 @@ def render(
             lines.append(f"- Unchanged booleans: {unchanged_count} (at default values)")
         if snapshot.selinux.audit_rules:
             lines.append(f"- Audit rule files: {len(snapshot.selinux.audit_rules)}")
-            for a in snapshot.selinux.audit_rules[:10]:
+            for a in snapshot.selinux.audit_rules:
                 lines.append(f"  - `{a}`")
         if snapshot.selinux.pam_configs:
             lines.append(f"- PAM config files: {len(snapshot.selinux.pam_configs)}")
-            for p in snapshot.selinux.pam_configs[:10]:
+            for p in snapshot.selinux.pam_configs:
                 lines.append(f"  - `{p}`")
         lines.append("")
 
@@ -542,23 +536,23 @@ def render(
     if has_users:
         lines.append("## Users and groups")
         lines.append("")
-        for u in (snapshot.users_groups.users or [])[:30]:
+        for u in (snapshot.users_groups.users or []):
             shell = u.get("shell") or ""
             home = u.get("home") or ""
             lines.append(f"- User: **{u.get('name') or ''}** (uid {u.get('uid') or ''}, home `{home}`, shell `{shell}`)")
-        for g in (snapshot.users_groups.groups or [])[:30]:
+        for g in (snapshot.users_groups.groups or []):
             members = g.get("members") or []
             mem_str = f", members: {', '.join(members)}" if members else ""
             lines.append(f"- Group: **{g.get('name') or ''}** (gid {g.get('gid') or ''}{mem_str})")
         if snapshot.users_groups.sudoers_rules:
             lines.append("")
             lines.append("### Sudoers rules")
-            for r in snapshot.users_groups.sudoers_rules[:20]:
+            for r in snapshot.users_groups.sudoers_rules:
                 lines.append(f"- `{r}`")
         if snapshot.users_groups.ssh_authorized_keys_refs:
             lines.append("")
             lines.append("### SSH authorized_keys (flagged for manual handling)")
-            for ref in snapshot.users_groups.ssh_authorized_keys_refs[:20]:
+            for ref in snapshot.users_groups.ssh_authorized_keys_refs:
                 lines.append(f"- User **{ref.get('user') or ''}**: `{ref.get('path') or ''}`")
         lines.append("")
 
