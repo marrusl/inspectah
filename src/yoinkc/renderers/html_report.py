@@ -354,12 +354,12 @@ def _prepare_non_rpm(snapshot: InspectionSnapshot) -> dict:
         return {"elf": [], "venv": [], "git": [], "pip": [], "other": []}
     items = snapshot.non_rpm_software.items
     return {
-        "elf": [i for i in items if i.get("lang")],
-        "venv": [i for i in items if i.get("method") == "python venv"],
-        "git": [i for i in items if i.get("method") == "git repository"],
-        "pip": [i for i in items if i.get("method") == "pip dist-info"],
+        "elf": [i for i in items if i.lang],
+        "venv": [i for i in items if i.method == "python venv"],
+        "git": [i for i in items if i.method == "git repository"],
+        "pip": [i for i in items if i.method == "pip dist-info"],
         "other": [i for i in items
-                  if not i.get("lang") and i.get("method") not in
+                  if not i.lang and i.method not in
                   ("python venv", "git repository", "pip dist-info")],
     }
 

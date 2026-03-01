@@ -373,12 +373,12 @@ def render(
         lines.append("")
 
         # Group items by method category
-        elf_items = [i for i in snapshot.non_rpm_software.items if i.get("lang")]
-        venv_items = [i for i in snapshot.non_rpm_software.items if i.get("method") == "python venv"]
-        git_items = [i for i in snapshot.non_rpm_software.items if i.get("method") == "git repository"]
-        pip_items = [i for i in snapshot.non_rpm_software.items if i.get("method") == "pip dist-info"]
+        elf_items = [i for i in snapshot.non_rpm_software.items if i.lang]
+        venv_items = [i for i in snapshot.non_rpm_software.items if i.method == "python venv"]
+        git_items = [i for i in snapshot.non_rpm_software.items if i.method == "git repository"]
+        pip_items = [i for i in snapshot.non_rpm_software.items if i.method == "pip dist-info"]
         other_items = [i for i in snapshot.non_rpm_software.items
-                       if not i.get("lang") and i.get("method") not in ("python venv", "git repository", "pip dist-info")]
+                       if not i.lang and i.method not in ("python venv", "git repository", "pip dist-info")]
 
         if elf_items:
             lines.append("### Compiled binaries")
@@ -386,26 +386,25 @@ def render(
             lines.append("| Path | Language | Linking | Shared Libraries |")
             lines.append("|------|----------|---------|------------------|")
             for i in elf_items:
-                linking = "static" if i.get("static") else "dynamic"
-                libs = ", ".join(i.get("shared_libs", [])[:5])
-                if len(i.get("shared_libs", [])) > 5:
+                linking = "static" if i.static else "dynamic"
+                libs = ", ".join(i.shared_libs[:5])
+                if len(i.shared_libs) > 5:
                     libs += " ..."
-                lines.append(f"| `{i.get('path','')}` | {i.get('lang','')} | {linking} | {libs or '—'} |")
+                lines.append(f"| `{i.path}` | {i.lang} | {linking} | {libs or '—'} |")
             lines.append("")
 
         if venv_items:
             lines.append("### Python virtual environments")
             lines.append("")
             for v in venv_items:
-                ssp_label = "**system-site-packages**" if v.get("system_site_packages") else "isolated"
-                lines.append(f"#### `{v.get('path','')}` ({ssp_label})")
+                ssp_label = "**system-site-packages**" if v.system_site_packages else "isolated"
+                lines.append(f"#### `{v.path}` ({ssp_label})")
                 lines.append("")
-                pkgs = v.get("packages", [])
-                if pkgs:
+                if v.packages:
                     lines.append("| Package | Version |")
                     lines.append("|---------|---------|")
-                    for p in pkgs:
-                        lines.append(f"| {p.get('name','')} | {p.get('version','')} |")
+                    for p in v.packages:
+                        lines.append(f"| {p.name} | {p.version} |")
                 lines.append("")
 
         if git_items:
@@ -414,8 +413,7 @@ def render(
             lines.append("| Path | Remote | Branch | Commit |")
             lines.append("|------|--------|--------|--------|")
             for i in git_items:
-                commit = i.get("git_commit", "")[:12]
-                lines.append(f"| `{i.get('path','')}` | {i.get('git_remote','')} | {i.get('git_branch','')} | `{commit}` |")
+                lines.append(f"| `{i.path}` | {i.git_remote} | {i.git_branch} | `{i.git_commit[:12]}` |")
             lines.append("")
 
         if pip_items:
@@ -424,7 +422,7 @@ def render(
             lines.append("| Package | Version | Path |")
             lines.append("|---------|---------|------|")
             for i in pip_items:
-                lines.append(f"| {i.get('name','')} | {i.get('version','')} | `{i.get('path','')}` |")
+                lines.append(f"| {i.name} | {i.version} | `{i.path}` |")
             lines.append("")
 
         if other_items:
@@ -433,10 +431,10 @@ def render(
             lines.append("| Path / Name | Version | Confidence | Method |")
             lines.append("|-------------|---------|------------|--------|")
             for i in other_items:
-                pn = i.get("path") or i.get("name") or ""
-                ver = i.get("version") or "—"
-                conf = i.get("confidence") or "unknown"
-                method = i.get("method") or "—"
+                pn = i.path or i.name
+                ver = i.version or "—"
+                conf = i.confidence or "unknown"
+                method = i.method or "—"
                 lines.append(f"| `{pn}` | {ver} | {conf} | {method} |")
             lines.append("")
 
@@ -460,10 +458,7 @@ def render(
             lines.append("| Module | Size | Used by |")
             lines.append("|--------|------|---------|")
             for m in kb.non_default_modules:
-                name = m.get("name", "?")
-                size = m.get("size", "")
-                used = m.get("used_by", "")
-                lines.append(f"| `{name}` | {size} | {used} |")
+                lines.append(f"| `{m.name}` | {m.size} | {m.used_by} |")
             total = len(kb.loaded_modules or [])
             default_count = total - len(kb.non_default_modules)
             if default_count > 0:
@@ -477,18 +472,14 @@ def render(
             lines.append("| Key | Runtime | Default | Source |")
             lines.append("|-----|---------|---------|--------|")
             for s in kb.sysctl_overrides:
-                key = s.get("key", "?")
-                runtime = s.get("runtime", "?")
-                default = s.get("default", "—")
-                source = s.get("source", "")
-                lines.append(f"| `{key}` | **{runtime}** | {default} | `{source}` |")
+                lines.append(f"| `{s.key}` | **{s.runtime}** | {s.default or '—'} | `{s.source}` |")
 
         for m in (kb.modules_load_d or []):
-            lines.append(f"- modules-load.d: `{m}`")
+            lines.append(f"- modules-load.d: `{m.path}`")
         for m in (kb.modprobe_d or []):
-            lines.append(f"- modprobe.d: `{m}`")
+            lines.append(f"- modprobe.d: `{m.path}`")
         for d in (kb.dracut_conf or []):
-            lines.append(f"- dracut: `{d}`")
+            lines.append(f"- dracut: `{d.path}`")
         lines.append("")
 
     has_selinux = snapshot.selinux and (

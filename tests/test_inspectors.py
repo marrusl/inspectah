@@ -328,66 +328,66 @@ def test_non_rpm_software_inspector_with_fixtures(host_root, fixture_executor):
     section = run_non_rpm_software(host_root, fixture_executor, deep_binary_scan=False)
     assert section is not None
 
-    item_map = {i.get("path", ""): i for i in section.items}
-    methods = {i.get("method") for i in section.items}
+    item_map = {i.path: i for i in section.items}
+    methods = {i.method for i in section.items}
 
     # Unknown provenance (directory scan)
-    assert any(i.get("name") == "dummy" for i in section.items)
+    assert any(i.name == "dummy" for i in section.items)
 
     # pip dist-info with version (system-level)
-    pip_items = [i for i in section.items if i.get("method") == "pip dist-info"]
+    pip_items = [i for i in section.items if i.method == "pip dist-info"]
     assert len(pip_items) >= 2
-    flask = next((i for i in pip_items if i["name"] == "flask"), None)
-    assert flask is not None and flask["version"] == "2.3.2"
-    requests_ = next((i for i in pip_items if i["name"] == "requests"), None)
-    assert requests_ is not None and requests_["version"] == "2.31.0"
+    flask = next((i for i in pip_items if i.name == "flask"), None)
+    assert flask is not None and flask.version == "2.3.2"
+    requests_ = next((i for i in pip_items if i.name == "requests"), None)
+    assert requests_ is not None and requests_.version == "2.31.0"
 
     # npm with lockfile content
-    npm_items = [i for i in section.items if i.get("method") == "npm package-lock.json"]
+    npm_items = [i for i in section.items if i.method == "npm package-lock.json"]
     assert len(npm_items) >= 1
-    assert npm_items[0]["name"] == "myapp"
-    assert "package-lock.json" in npm_items[0].get("files", {})
+    assert npm_items[0].name == "myapp"
+    assert npm_items[0].files and "package-lock.json" in npm_items[0].files
 
     # readelf: Go binary
-    go_items = [i for i in section.items if i.get("lang") == "go"]
+    go_items = [i for i in section.items if i.lang == "go"]
     assert len(go_items) >= 1, f"Expected Go binary, methods: {methods}"
     go_item = go_items[0]
-    assert go_item["method"] == "readelf (go)"
-    assert go_item["confidence"] == "high"
-    assert go_item["static"] is True
+    assert go_item.method == "readelf (go)"
+    assert go_item.confidence == "high"
+    assert go_item.static is True
 
     # readelf: Rust binary
-    rust_items = [i for i in section.items if i.get("lang") == "rust"]
+    rust_items = [i for i in section.items if i.lang == "rust"]
     assert len(rust_items) >= 1, f"Expected Rust binary, methods: {methods}"
     rust_item = rust_items[0]
-    assert rust_item["method"] == "readelf (rust)"
-    assert rust_item["static"] is False
-    assert any("libc" in lib for lib in rust_item.get("shared_libs", []))
+    assert rust_item.method == "readelf (rust)"
+    assert rust_item.static is False
+    assert any("libc" in lib for lib in rust_item.shared_libs)
 
     # Venv without system-site-packages
-    venv_items = [i for i in section.items if i.get("method") == "python venv"]
+    venv_items = [i for i in section.items if i.method == "python venv"]
     assert len(venv_items) >= 2, f"Expected 2 venvs, got {len(venv_items)}"
-    webapp_venv = next((i for i in venv_items if "webapp" in i["path"]), None)
+    webapp_venv = next((i for i in venv_items if "webapp" in i.path), None)
     assert webapp_venv is not None
-    assert webapp_venv["system_site_packages"] is False
-    assert len(webapp_venv["packages"]) >= 2
-    pkg_names = {p["name"] for p in webapp_venv["packages"]}
+    assert webapp_venv.system_site_packages is False
+    assert len(webapp_venv.packages) >= 2
+    pkg_names = {p.name for p in webapp_venv.packages}
     assert "Django" in pkg_names or "django" in pkg_names.union({n.lower() for n in pkg_names})
 
     # Venv with system-site-packages
-    analytics_venv = next((i for i in venv_items if "analytics" in i["path"]), None)
+    analytics_venv = next((i for i in venv_items if "analytics" in i.path), None)
     assert analytics_venv is not None
-    assert analytics_venv["system_site_packages"] is True
-    assert len(analytics_venv["packages"]) >= 1
+    assert analytics_venv.system_site_packages is True
+    assert len(analytics_venv.packages) >= 1
 
     # Git-managed directory
-    git_items = [i for i in section.items if i.get("method") == "git repository"]
+    git_items = [i for i in section.items if i.method == "git repository"]
     assert len(git_items) >= 1, f"Expected git repo, methods: {methods}"
     git_item = git_items[0]
-    assert "custom-tool" in git_item["name"]
-    assert git_item["git_remote"] == "https://github.com/example/custom-tool.git"
-    assert len(git_item["git_commit"]) >= 10
-    assert git_item["git_branch"] == "main"
+    assert "custom-tool" in git_item.name
+    assert git_item.git_remote == "https://github.com/example/custom-tool.git"
+    assert len(git_item.git_commit) >= 10
+    assert git_item.git_branch == "main"
 
 
 def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
@@ -401,7 +401,7 @@ def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
 
     # --- lsmod ---
     assert len(section.loaded_modules) > 0
-    loaded_names = {m["name"] for m in section.loaded_modules}
+    loaded_names = {m.name for m in section.loaded_modules}
     assert "br_netfilter" in loaded_names
     assert "virtio_net" in loaded_names
     assert "wireguard" in loaded_names
@@ -411,7 +411,7 @@ def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
     # bonding: in etc/modules-load.d/bonding.conf → explicitly configured
     # bridge/stp/llc/nf_conntrack/nf_defrag_*/fat/mbcache/jbd2: have used_by → dependencies
     # br_netfilter, overlay, ip_tables, vfat, ext4, wireguard: non-default
-    nd_names = {m["name"] for m in section.non_default_modules}
+    nd_names = {m.name for m in section.non_default_modules}
     assert "virtio_net" not in nd_names, "virtio_net is in modules-load.d defaults"
     assert "virtio_blk" not in nd_names, "virtio_blk is in modules-load.d defaults"
     assert "bonding" not in nd_names, "bonding is explicitly configured"
@@ -427,7 +427,7 @@ def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
     assert "vfat" in nd_names, "vfat: not configured, no dependents"
 
     # --- sysctl overrides (only non-default) ---
-    sysctl_keys = {s["key"] for s in section.sysctl_overrides}
+    sysctl_keys = {s.key for s in section.sysctl_overrides}
     assert "net.ipv4.ip_forward" in sysctl_keys, "ip_forward differs from default"
     assert "vm.swappiness" in sysctl_keys, "swappiness differs from default"
     # kernel.panic is 0 in both default and runtime → should NOT appear
@@ -436,12 +436,12 @@ def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
     assert "net.ipv6.conf.all.forwarding" not in sysctl_keys
 
     # Check values
-    ip_fwd = next(s for s in section.sysctl_overrides if s["key"] == "net.ipv4.ip_forward")
-    assert ip_fwd["runtime"] == "1"
-    assert ip_fwd["default"] == "0"
-    swap = next(s for s in section.sysctl_overrides if s["key"] == "vm.swappiness")
-    assert swap["runtime"] == "10"
-    assert swap["default"] == "30"
+    ip_fwd = next(s for s in section.sysctl_overrides if s.key == "net.ipv4.ip_forward")
+    assert ip_fwd.runtime == "1"
+    assert ip_fwd.default == "0"
+    swap = next(s for s in section.sysctl_overrides if s.key == "vm.swappiness")
+    assert swap.runtime == "10"
+    assert swap.default == "30"
 
 
 def test_selinux_inspector_with_fixtures(host_root, fixture_executor):

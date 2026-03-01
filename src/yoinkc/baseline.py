@@ -11,30 +11,20 @@ directly. The tool uses ``nsenter -t 1 -m -u -i -n`` to execute podman in
 the host's namespaces.  This requires ``--pid=host`` on the outer container.
 """
 
-import os
-import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import List, Optional, Set, Tuple
 
 from .preflight import in_user_namespace
-
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+from ._util import debug as _debug_fn
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] baseline: {msg}", file=sys.stderr)
+    _debug_fn("baseline", msg)
 
 
 # ---------------------------------------------------------------------------
 # OS → base image mapping  (pure functions — no state)
 # ---------------------------------------------------------------------------
-
-_IMAGE_MAP: Dict[str, str] = {
-    "rhel-9": "registry.redhat.io/rhel9/rhel-bootc",
-    "centos-9": "quay.io/centos-bootc/centos-bootc",
-}
-
 
 def select_base_image(os_id: str, version_id: str) -> Optional[str]:
     """Map host OS identity to the bootc base image reference.
@@ -51,6 +41,25 @@ def select_base_image(os_id: str, version_id: str) -> Optional[str]:
 
     _debug(f"no base image mapping for os_id={os_id} version_id={version_id}")
     return None
+
+
+_DEFAULT_FALLBACK_IMAGE = "registry.redhat.io/rhel9/rhel-bootc:9.6"
+
+
+def base_image_for_snapshot(snapshot: "InspectionSnapshot") -> str:
+    """Determine the base image for a snapshot, with safe fallback.
+
+    Prefers the value already resolved during inspection; falls back to
+    ``select_base_image`` from os_release; ultimately returns a RHEL 9
+    default so renderers always have a usable FROM line.
+    """
+    if snapshot.rpm and snapshot.rpm.base_image:
+        return snapshot.rpm.base_image
+    if snapshot.os_release:
+        result = select_base_image(snapshot.os_release.id, snapshot.os_release.version_id)
+        if result:
+            return result
+    return _DEFAULT_FALLBACK_IMAGE
 
 
 def load_baseline_packages_file(path: Path) -> Optional[Set[str]]:

@@ -1,26 +1,15 @@
 """User/Group inspector: non-system users and groups, sudoers, SSH key refs. Parses passwd/group under host_root."""
 
-import os
-import sys
 from pathlib import Path
 from typing import List, Optional
 
 from ..executor import Executor
 from ..schema import UserGroupSection
-
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] users: {msg}", file=sys.stderr)
-
-
-def _safe_iterdir(d: Path) -> List[Path]:
-    try:
-        return sorted(d.iterdir())
-    except (PermissionError, OSError):
-        return []
+    _debug_fn("users", msg)
 
 
 def _safe_read_file(p: Path) -> Optional[str]:

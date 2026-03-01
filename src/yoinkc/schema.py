@@ -303,10 +303,67 @@ class ContainerSection(BaseModel):
     running_containers: List[RunningContainer] = Field(default_factory=list)
 
 
+class PipPackage(BaseModel):
+    """A single pip package (name + version)."""
+
+    name: str = ""
+    version: str = ""
+
+
+class NonRpmItem(BaseModel):
+    """A single item found by the Non-RPM Software inspector."""
+
+    path: str = ""
+    name: str = ""
+    method: str = ""
+    confidence: str = "low"
+    # Binary classification (readelf / file / strings)
+    lang: str = ""
+    static: bool = False
+    version: str = ""
+    shared_libs: List[str] = Field(default_factory=list)
+    # Python venv
+    system_site_packages: bool = False
+    packages: List[PipPackage] = Field(default_factory=list)
+    has_c_extensions: bool = False
+    # Git-managed directories
+    git_remote: str = ""
+    git_commit: str = ""
+    git_branch: str = ""
+    # Lockfile-based (npm, yarn, gem)
+    files: Optional[dict] = None
+    # pip requirements.txt / raw content
+    content: str = ""
+
+
 class NonRpmSoftwareSection(BaseModel):
     """Output of the Non-RPM Software inspector."""
 
-    items: List[dict] = Field(default_factory=list)
+    items: List[NonRpmItem] = Field(default_factory=list)
+
+
+class ConfigSnippet(BaseModel):
+    """A config file snippet (path + content), used for modules-load.d, modprobe.d, dracut."""
+
+    path: str = ""
+    content: str = ""
+
+
+class SysctlOverride(BaseModel):
+    """A sysctl value that differs from the shipped default."""
+
+    key: str
+    runtime: str = ""
+    default: str = ""
+    source: str = ""
+
+
+class KernelModule(BaseModel):
+    """A loaded kernel module from lsmod output."""
+
+    name: str
+    size: str = "0"
+    used_by: str = ""
 
 
 class KernelBootSection(BaseModel):
@@ -314,12 +371,12 @@ class KernelBootSection(BaseModel):
 
     cmdline: str = ""
     grub_defaults: str = ""
-    sysctl_overrides: List[dict] = Field(default_factory=list)  # {key, runtime, default, source}
-    modules_load_d: List[dict] = Field(default_factory=list)  # {path, content}
-    modprobe_d: List[dict] = Field(default_factory=list)  # {path, content}
-    dracut_conf: List[dict] = Field(default_factory=list)  # {path, content}
-    loaded_modules: List[dict] = Field(default_factory=list)  # all from lsmod: {name, size, used_by}
-    non_default_modules: List[dict] = Field(default_factory=list)  # not in modules-load.d or built-in deps
+    sysctl_overrides: List[SysctlOverride] = Field(default_factory=list)
+    modules_load_d: List[ConfigSnippet] = Field(default_factory=list)
+    modprobe_d: List[ConfigSnippet] = Field(default_factory=list)
+    dracut_conf: List[ConfigSnippet] = Field(default_factory=list)
+    loaded_modules: List[KernelModule] = Field(default_factory=list)
+    non_default_modules: List[KernelModule] = Field(default_factory=list)
 
 
 class SelinuxSection(BaseModel):

@@ -495,16 +495,16 @@ th { color: var(--muted); font-weight: 500; }
   <h3>Compiled binaries</h3>
   <table><tr><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr>
     {%- for i in nd.elf %}
-    {%- set lang = i.get('lang', '') %}
+    {%- set lang = i.lang %}
     {%- set lang_colors = {'go': '#00ADD8', 'rust': '#DEA584', 'c/c++': '#555'} %}
     {%- set color = lang_colors.get(lang, '#999') %}
-    {%- set linking = 'static' if i.get('static') else 'dynamic' %}
-    {%- set link_color = '#4caf50' if i.get('static') else '#ff9800' %}
+    {%- set linking = 'static' if i.static else 'dynamic' %}
+    {%- set link_color = '#4caf50' if i.static else '#ff9800' %}
     <tr>
-      <td><code>{{ i.get('path', '') }}</code></td>
+      <td><code>{{ i.path }}</code></td>
       <td><span style="background:{{ color }};color:#fff;padding:2px 8px;border-radius:4px">{{ lang }}</span></td>
       <td><span style="background:{{ link_color }};color:#fff;padding:2px 8px;border-radius:4px">{{ linking }}</span></td>
-      <td style="font-size:0.85em">{{ i.get('shared_libs', [])[:5]|join(', ') or '' }}</td>
+      <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
     </tr>
     {%- endfor %}
   </table>
@@ -513,17 +513,17 @@ th { color: var(--muted); font-weight: 500; }
   {%- if nd.venv %}
   <h3>Python virtual environments</h3>
   {%- for v in nd.venv %}
-  {%- set ssp = v.get('system_site_packages', false) %}
-  <h4><code>{{ v.get('path', '') }}</code>
+  {%- set ssp = v.system_site_packages %}
+  <h4><code>{{ v.path }}</code>
     {%- if ssp %} <span style="background:#f44336;color:#fff;padding:2px 8px;border-radius:4px">system-site-packages</span>
     {%- else %} <span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">isolated</span>
     {%- endif %}
   </h4>
-  {%- set pkgs = v.get('packages', []) %}
+  {%- set pkgs = v.packages %}
   {%- if pkgs %}
   <table><tr><th>Package</th><th>Version</th></tr>
     {%- for p in pkgs[:20] %}
-    <tr><td>{{ p.get('name', '') }}</td><td>{{ p.get('version', '') }}</td></tr>
+    <tr><td>{{ p.name }}</td><td>{{ p.version }}</td></tr>
     {%- endfor %}
     {%- if pkgs|length > 20 %}
     <tr><td colspan="2"><em>+{{ pkgs|length - 20 }} more</em></td></tr>
@@ -540,10 +540,10 @@ th { color: var(--muted); font-weight: 500; }
   <table><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr>
     {%- for i in nd.git %}
     <tr>
-      <td><code>{{ i.get('path', '') }}</code></td>
-      <td><code>{{ i.get('git_remote', '') }}</code></td>
-      <td>{{ i.get('git_branch', '') }}</td>
-      <td><code>{{ i.get('git_commit', '')[:12] }}</code></td>
+      <td><code>{{ i.path }}</code></td>
+      <td><code>{{ i.git_remote }}</code></td>
+      <td>{{ i.git_branch }}</td>
+      <td><code>{{ i.git_commit[:12] }}</code></td>
     </tr>
     {%- endfor %}
   </table>
@@ -554,9 +554,9 @@ th { color: var(--muted); font-weight: 500; }
   <table><tr><th>Package</th><th>Version</th><th>Path</th></tr>
     {%- for i in nd.pip[:20] %}
     <tr>
-      <td>{{ i.get('name', '') }}</td>
-      <td>{{ i.get('version', '') }}</td>
-      <td><code>{{ i.get('path', '') }}</code></td>
+      <td>{{ i.name }}</td>
+      <td>{{ i.version }}</td>
+      <td><code>{{ i.path }}</code></td>
     </tr>
     {%- endfor %}
   </table>
@@ -567,9 +567,9 @@ th { color: var(--muted); font-weight: 500; }
   <table><tr><th>Path</th><th>Confidence</th><th>Method</th></tr>
     {%- for i in nd.other[:20] %}
     <tr>
-      <td><code>{{ i.get('path', '') or i.get('name', '') }}</code></td>
-      <td>{{ i.get('confidence', '') }}</td>
-      <td>{{ i.get('method', '') }}</td>
+      <td><code>{{ i.path or i.name }}</code></td>
+      <td>{{ i.confidence }}</td>
+      <td>{{ i.method }}</td>
     </tr>
     {%- endfor %}
   </table>
@@ -595,7 +595,7 @@ th { color: var(--muted); font-weight: 500; }
   <h3>Non-default loaded modules ({{ kb.non_default_modules|length }})</h3>
   <table class="data-table"><thead><tr><th>Module</th><th>Size</th><th>Used by</th></tr></thead><tbody>
     {%- for m in kb.non_default_modules %}
-    <tr><td><code>{{ m.get('name', '?') }}</code></td><td>{{ m.get('size', '') }}</td><td>{{ m.get('used_by', '') }}</td></tr>
+    <tr><td><code>{{ m.name }}</code></td><td>{{ m.size }}</td><td>{{ m.used_by }}</td></tr>
     {%- endfor %}
   </tbody></table>
   {%- if default_count > 0 %}<p>{{ default_count }} module(s) at expected defaults (not shown).</p>{%- endif %}
@@ -606,10 +606,10 @@ th { color: var(--muted); font-weight: 500; }
   <table class="data-table"><thead><tr><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
     {%- for s in kb.sysctl_overrides %}
     <tr>
-      <td><code>{{ s.get('key', '?') }}</code></td>
-      <td style="color:#d29922;font-weight:bold">{{ s.get('runtime', '?') }}</td>
-      <td>{{ s.get('default', '—') }}</td>
-      <td><code>{{ s.get('source', '') }}</code></td>
+      <td><code>{{ s.key }}</code></td>
+      <td style="color:#d29922;font-weight:bold">{{ s.runtime }}</td>
+      <td>{{ s.default or '—' }}</td>
+      <td><code>{{ s.source }}</code></td>
     </tr>
     {%- endfor %}
   </tbody></table>

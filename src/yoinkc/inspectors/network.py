@@ -3,7 +3,6 @@
 File-based scan under host_root, plus ``ip route`` / ``ip rule`` via executor.
 """
 
-import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -13,20 +12,7 @@ from ..schema import (
     NetworkSection, NMConnection, FirewallZone, FirewallDirectRule,
     StaticRouteFile, ProxyEntry,
 )
-
-
-def _safe_iterdir(d: Path) -> List[Path]:
-    try:
-        return list(d.iterdir())
-    except (PermissionError, OSError):
-        return []
-
-
-def _safe_read(p: Path) -> str:
-    try:
-        return p.read_text()
-    except (PermissionError, OSError):
-        return ""
+from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read
 
 
 # ---------------------------------------------------------------------------

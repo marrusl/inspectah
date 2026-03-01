@@ -12,23 +12,18 @@ User home directories (/home) are intentionally excluded — artifacts found
 there are overwhelmingly development checkouts, not deployed services.
 """
 
-import configparser
-import os
 import re
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..executor import Executor
-from ..schema import NonRpmSoftwareSection
+from ..schema import NonRpmSoftwareSection, NonRpmItem, PipPackage
+from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, safe_read as _safe_read
 from . import is_dev_artifact, filtered_rglob
-
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] non-rpm: {msg}", file=sys.stderr)
+    _debug_fn("non-rpm", msg)
 
 
 # Quick patterns for the default (4KB head) scan
@@ -61,20 +56,6 @@ DEEP_VERSION_PATTERNS = VERSION_PATTERNS + [
     # Python embedded version
     re.compile(rb"Python\s+([0-9]+\.[0-9]+\.[0-9]+)"),
 ]
-
-
-def _safe_iterdir(d: Path) -> List[Path]:
-    try:
-        return list(d.iterdir())
-    except (PermissionError, OSError):
-        return []
-
-
-def _safe_read(p: Path) -> str:
-    try:
-        return p.read_text()
-    except (PermissionError, OSError):
-        return ""
 
 
 _FHS_DIRS = frozenset({
@@ -168,7 +149,7 @@ def _strings_version(executor: Optional[Executor], path: Path, limit_kb: Optiona
 # Git repository detection
 # ---------------------------------------------------------------------------
 
-def _scan_git_repo(host_root: Path, d: Path) -> Optional[dict]:
+def _scan_git_repo(host_root: Path, d: Path) -> Optional[NonRpmItem]:
     """Check if a directory has .git and extract remote URL + commit hash."""
     git_dir = d / ".git"
     if not git_dir.is_dir():
@@ -202,15 +183,15 @@ def _scan_git_repo(host_root: Path, d: Path) -> Optional[dict]:
         if ref.startswith("refs/heads/"):
             branch = ref[len("refs/heads/"):]
 
-    return {
-        "path": str(d.relative_to(host_root)),
-        "name": d.name,
-        "method": "git repository",
-        "confidence": "high",
-        "git_remote": remote_url,
-        "git_commit": commit_hash,
-        "git_branch": branch,
-    }
+    return NonRpmItem(
+        path=str(d.relative_to(host_root)),
+        name=d.name,
+        method="git repository",
+        confidence="high",
+        git_remote=remote_url,
+        git_commit=commit_hash,
+        git_branch=branch,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +235,7 @@ def _scan_venv_packages(
 
     for venv_path, system_sp in venvs:
         rel = str(venv_path.relative_to(host_root))
-        packages: List[dict] = []
+        packages: List[PipPackage] = []
 
         # Scan dist-info inside the venv
         try:
@@ -270,7 +251,7 @@ def _scan_venv_packages(
                             name = "-".join(parts[:idx])
                             version = "-".join(parts[idx:])
                             break
-                    packages.append({"name": name, "version": version})
+                    packages.append(PipPackage(name=name, version=version))
         except (PermissionError, OSError):
             pass
 
@@ -293,14 +274,14 @@ def _scan_venv_packages(
             except Exception:
                 pass
 
-        section.items.append({
-            "path": rel,
-            "name": venv_path.name,
-            "method": "python venv",
-            "confidence": "high",
-            "system_site_packages": system_sp,
-            "packages": packages,
-        })
+        section.items.append(NonRpmItem(
+            path=rel,
+            name=venv_path.name,
+            method="python venv",
+            confidence="high",
+            system_site_packages=system_sp,
+            packages=packages,
+        ))
 
     if pip_fail_count > 0 and warnings is not None:
         warnings.append({
@@ -310,16 +291,16 @@ def _scan_venv_packages(
         })
 
 
-def _parse_pip_list(output: str) -> List[dict]:
-    """Parse `pip list` columnar output into [{name, version}]."""
-    results: List[dict] = []
+def _parse_pip_list(output: str) -> List[PipPackage]:
+    """Parse `pip list` columnar output into PipPackage list."""
+    results: List[PipPackage] = []
     lines = output.strip().splitlines()
     for line in lines:
         if line.startswith("---") or line.startswith("Package"):
             continue
         parts = line.split()
         if len(parts) >= 2:
-            results.append({"name": parts[0], "version": parts[1]})
+            results.append(PipPackage(name=parts[0], version=parts[1]))
     return results
 
 
@@ -337,36 +318,36 @@ def _classify_file(
     f: Path,
     executor: Optional[Executor],
     deep: bool,
-) -> dict:
-    """Classify a single file and return an item dict."""
-    item: dict = {
-        "path": str(f.relative_to(host_root)),
-        "name": f.name,
-        "confidence": "low",
-        "method": "file scan",
-    }
+) -> NonRpmItem:
+    """Classify a single file and return a NonRpmItem."""
+    item = NonRpmItem(
+        path=str(f.relative_to(host_root)),
+        name=f.name,
+        confidence="low",
+        method="file scan",
+    )
     if not executor:
         _debug(f"classify {f.name}: no executor, returning low confidence")
         return item
 
     binary_info = _classify_binary(executor, f)
     if binary_info:
-        item["lang"] = binary_info["lang"]
-        item["static"] = binary_info["static"]
-        item["shared_libs"] = binary_info["shared_libs"]
-        item["confidence"] = "high"
-        item["method"] = f"readelf ({binary_info['lang']})"
+        item.lang = binary_info["lang"]
+        item.static = binary_info["static"]
+        item.shared_libs = binary_info["shared_libs"]
+        item.confidence = "high"
+        item.method = f"readelf ({binary_info['lang']})"
         return item
 
     if _is_binary(executor, host_root, f):
         limit = None if deep else 4
         ver = _strings_version(executor, f, limit_kb=limit, deep=deep)
         if ver:
-            item["version"] = ver
-            item["method"] = "strings" if deep else "strings (first 4KB)"
-            item["confidence"] = "medium"
+            item.version = ver
+            item.method = "strings" if deep else "strings (first 4KB)"
+            item.confidence = "medium"
 
-    _debug(f"classify {f.name}: confidence={item['confidence']} method={item['method']}")
+    _debug(f"classify {f.name}: confidence={item.confidence} method={item.method}")
     return item
 
 
@@ -431,12 +412,12 @@ def _scan_dirs(
             if (entry / "pyvenv.cfg").exists():
                 continue
 
-            item: dict = {
-                "path": str(entry.relative_to(host_root)),
-                "name": entry.name,
-                "confidence": "low",
-                "method": "directory scan",
-            }
+            item = NonRpmItem(
+                path=str(entry.relative_to(host_root)),
+                name=entry.name,
+                confidence="low",
+                method="directory scan",
+            )
 
             if executor:
                 try:
@@ -445,19 +426,19 @@ def _scan_dirs(
                             continue
                         binary_info = _classify_binary(executor, f)
                         if binary_info:
-                            item["lang"] = binary_info["lang"]
-                            item["static"] = binary_info["static"]
-                            item["shared_libs"] = binary_info["shared_libs"]
-                            item["confidence"] = "high"
-                            item["method"] = f"readelf ({binary_info['lang']})"
+                            item.lang = binary_info["lang"]
+                            item.static = binary_info["static"]
+                            item.shared_libs = binary_info["shared_libs"]
+                            item.confidence = "high"
+                            item.method = f"readelf ({binary_info['lang']})"
                             break
                         if _is_binary(executor, host_root, f):
                             limit = None if deep else 4
                             ver = _strings_version(executor, f, limit_kb=limit, deep=deep)
                             if ver:
-                                item["version"] = ver
-                                item["method"] = "strings" if deep else "strings (first 4KB)"
-                                item["confidence"] = "medium"
+                                item.version = ver
+                                item.method = "strings" if deep else "strings (first 4KB)"
+                                item.confidence = "medium"
                                 break
                 except Exception:
                     pass
@@ -497,16 +478,14 @@ def _scan_pip(section: NonRpmSoftwareSection, host_root: Path, executor: Optiona
                                     break
                     except (PermissionError, OSError):
                         pass
-                    item_dict: dict = {
-                        "path": str(dist_info.relative_to(host_root)),
-                        "name": name,
-                        "version": version,
-                        "confidence": "high",
-                        "method": "pip dist-info",
-                    }
-                    if has_c_ext:
-                        item_dict["has_c_extensions"] = True
-                    section.items.append(item_dict)
+                    section.items.append(NonRpmItem(
+                        path=str(dist_info.relative_to(host_root)),
+                        name=name,
+                        version=version,
+                        confidence="high",
+                        method="pip dist-info",
+                        has_c_extensions=has_c_ext,
+                    ))
         except Exception:
             continue
 
@@ -522,13 +501,13 @@ def _scan_pip(section: NonRpmSoftwareSection, host_root: Path, executor: Optiona
                     content = req.read_text()
                 except (PermissionError, OSError):
                     content = ""
-                section.items.append({
-                        "path": str(req.relative_to(host_root)),
-                        "name": "requirements.txt",
-                        "confidence": "high",
-                        "method": "pip requirements.txt",
-                        "content": content,
-                    })
+                section.items.append(NonRpmItem(
+                    path=str(req.relative_to(host_root)),
+                    name="requirements.txt",
+                    confidence="high",
+                    method="pip requirements.txt",
+                    content=content,
+                ))
         except Exception:
             continue
 
@@ -561,24 +540,24 @@ def _scan_npm(section: NonRpmSoftwareSection, host_root: Path) -> None:
                 if not lock.is_file():
                     continue
                 files = _read_lockfile_dir(lock.parent)
-                section.items.append({
-                    "path": str(lock.parent.relative_to(host_root)),
-                    "name": lock.parent.name,
-                    "confidence": "high",
-                    "method": "npm package-lock.json",
-                    "files": files,
-                })
+                section.items.append(NonRpmItem(
+                    path=str(lock.parent.relative_to(host_root)),
+                    name=lock.parent.name,
+                    confidence="high",
+                    method="npm package-lock.json",
+                    files=files,
+                ))
             for lock in filtered_rglob(d, "yarn.lock"):
                 if not lock.is_file():
                     continue
                 files = _read_lockfile_dir(lock.parent)
-                section.items.append({
-                    "path": str(lock.parent.relative_to(host_root)),
-                    "name": lock.parent.name,
-                    "confidence": "high",
-                    "method": "yarn.lock",
-                    "files": files,
-                })
+                section.items.append(NonRpmItem(
+                    path=str(lock.parent.relative_to(host_root)),
+                    name=lock.parent.name,
+                    confidence="high",
+                    method="yarn.lock",
+                    files=files,
+                ))
         except Exception:
             continue
 
@@ -593,13 +572,13 @@ def _scan_gem(section: NonRpmSoftwareSection, host_root: Path) -> None:
                 if not lock.is_file():
                     continue
                 files = _read_lockfile_dir(lock.parent)
-                section.items.append({
-                    "path": str(lock.parent.relative_to(host_root)),
-                    "name": lock.parent.name,
-                    "confidence": "high",
-                    "method": "gem Gemfile.lock",
-                    "files": files,
-                })
+                section.items.append(NonRpmItem(
+                    path=str(lock.parent.relative_to(host_root)),
+                    name=lock.parent.name,
+                    confidence="high",
+                    method="gem Gemfile.lock",
+                    files=files,
+                ))
         except Exception:
             continue
 
@@ -645,10 +624,9 @@ def run(
     _CONFIDENCE_RANK = {"high": 2, "medium": 1, "low": 0}
     seen: dict = {}
     for item in section.items:
-        path = item.get("path", "")
-        rank = _CONFIDENCE_RANK.get(item.get("confidence", "low"), 0)
-        if path not in seen or rank > seen[path][1]:
-            seen[path] = (item, rank)
+        rank = _CONFIDENCE_RANK.get(item.confidence, 0)
+        if item.path not in seen or rank > seen[item.path][1]:
+            seen[item.path] = (item, rank)
     section.items = [v[0] for v in seen.values()]
 
     return section

@@ -6,20 +6,16 @@ When config_diffs=True, extracts original from RPM (dnf cache or host) and sets 
 
 import difflib
 import fnmatch
-import os
-import sys
 from pathlib import Path
 from typing import List, Optional, Set
 
 from ..executor import Executor
 from ..schema import ConfigFileEntry, ConfigFileKind, ConfigSection, RpmSection
-
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+from .._util import debug as _debug_fn
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] config: {msg}", file=sys.stderr)
+    _debug_fn("config", msg)
 
 # ---------------------------------------------------------------------------
 # System-generated files to exclude from the "unowned" list.

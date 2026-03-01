@@ -157,8 +157,16 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                 new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER}))
                 continue
             new_content = _redact_text(entry.content or "", entry.path, redactions)
+            new_diff = _redact_text(
+                entry.diff_against_rpm or "", f"{entry.path}:diff", redactions
+            ) if entry.diff_against_rpm else None
+            file_updates: dict = {}
             if new_content != (entry.content or ""):
-                new_files.append(entry.model_copy(update={"content": new_content}))
+                file_updates["content"] = new_content
+            if new_diff is not None and new_diff != entry.diff_against_rpm:
+                file_updates["diff_against_rpm"] = new_diff
+            if file_updates:
+                new_files.append(entry.model_copy(update=file_updates))
             else:
                 new_files.append(entry)
         updates["config"] = snapshot.config.model_copy(update={"files": new_files})
@@ -298,11 +306,9 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             new_entries = []
             changed = False
             for entry in entries:
-                path = entry.get("path", "")
-                content = entry.get("content", "")
-                new_content = _redact_text(content, f"kernel:{label}/{path}", redactions)
-                if new_content != content:
-                    new_entries.append({"path": path, "content": new_content})
+                new_content = _redact_text(entry.content, f"kernel:{label}/{entry.path}", redactions)
+                if new_content != entry.content:
+                    new_entries.append(entry.model_copy(update={"content": new_content}))
                     changed = True
                 else:
                     new_entries.append(entry)

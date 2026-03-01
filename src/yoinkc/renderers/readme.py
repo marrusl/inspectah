@@ -8,16 +8,8 @@ from ..schema import ConfigFileKind, InspectionSnapshot
 
 
 def _base_image(snapshot: InspectionSnapshot) -> str:
-    if snapshot.rpm and snapshot.rpm.base_image:
-        return snapshot.rpm.base_image
-    if not snapshot.os_release:
-        return "registry.redhat.io/rhel9/rhel-bootc:9.6"
-    osr = snapshot.os_release
-    if osr.id == "rhel" and osr.version_id:
-        return f"registry.redhat.io/rhel9/rhel-bootc:{osr.version_id}"
-    if "centos" in osr.id.lower():
-        return "quay.io/centos-bootc/centos-bootc:stream9"
-    return "registry.redhat.io/rhel9/rhel-bootc:9.6"
+    from ..baseline import base_image_for_snapshot
+    return base_image_for_snapshot(snapshot)
 
 
 def render(

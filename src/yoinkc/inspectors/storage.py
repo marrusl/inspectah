@@ -5,6 +5,7 @@ from typing import List, Optional
 
 from ..executor import Executor
 from ..schema import StorageSection, FstabEntry, MountPoint, LvmVolume, VarDirectory
+from .._util import safe_iterdir as _safe_iterdir
 
 
 # Directories under /var to scan for application data.
@@ -104,13 +105,6 @@ def _var_recommendation(path: str, category: str) -> str:
     if "spool" in p:
         return "PVC / volume mount — spool data (mail, print, at jobs)"
     return f"PVC / volume mount — {category}, review application needs"
-
-
-def _safe_iterdir(d: Path):
-    try:
-        return list(d.iterdir())
-    except (PermissionError, OSError):
-        return []
 
 
 def run(

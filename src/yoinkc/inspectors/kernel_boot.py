@@ -7,38 +7,28 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..executor import Executor
-from ..schema import KernelBootSection
-
-
-def _safe_iterdir(d: Path) -> List[Path]:
-    try:
-        return list(d.iterdir())
-    except (PermissionError, OSError):
-        return []
-
-
-def _safe_read(p: Path) -> str:
-    try:
-        return p.read_text()
-    except (PermissionError, OSError):
-        return ""
+from ..schema import (
+    KernelBootSection, ConfigSnippet, SysctlOverride, KernelModule,
+)
+from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read
 
 
 # ---------------------------------------------------------------------------
 # Module helpers
 # ---------------------------------------------------------------------------
 
-def _parse_lsmod(text: str) -> List[dict]:
-    """Parse ``lsmod`` output into a list of {name, size, used_by}."""
-    results: List[dict] = []
+def _parse_lsmod(text: str) -> List[KernelModule]:
+    """Parse ``lsmod`` output into a list of KernelModule."""
+    results: List[KernelModule] = []
     for line in text.splitlines()[1:]:  # skip header
         parts = line.split()
         if len(parts) < 2:
             continue
-        name = parts[0]
-        size = parts[1] if len(parts) > 1 else "0"
-        used_by = parts[3] if len(parts) > 3 else ""
-        results.append({"name": name, "size": size, "used_by": used_by})
+        results.append(KernelModule(
+            name=parts[0],
+            size=parts[1] if len(parts) > 1 else "0",
+            used_by=parts[3] if len(parts) > 3 else "",
+        ))
     return results
 
 
@@ -61,7 +51,7 @@ def _collect_expected_modules(host_root: Path) -> Set[str]:
     return expected
 
 
-def _collect_dependency_modules(loaded: List[dict]) -> Set[str]:
+def _collect_dependency_modules(loaded: List[KernelModule]) -> Set[str]:
     """Build the set of modules that were loaded as dependencies of other modules.
 
     A module with a non-empty ``used_by`` column was pulled in because
@@ -69,25 +59,22 @@ def _collect_dependency_modules(loaded: List[dict]) -> Set[str]:
     """
     deps: Set[str] = set()
     for mod in loaded:
-        if mod.get("used_by", "").strip():
-            deps.add(mod["name"])
+        if mod.used_by.strip():
+            deps.add(mod.name)
     return deps
 
 
 def _diff_modules(
-    loaded: List[dict], expected: Set[str],
-) -> List[dict]:
+    loaded: List[KernelModule], expected: Set[str],
+) -> List[KernelModule]:
     """Return loaded modules that are neither explicitly configured nor a dependency."""
     dep_names = _collect_dependency_modules(loaded)
-    loaded_names = {m["name"] for m in loaded}
 
-    # Modules referenced in used_by of OTHER modules are built-in deps
-    non_default: List[dict] = []
+    non_default: List[KernelModule] = []
     for mod in loaded:
-        name = mod["name"]
-        if name in expected:
+        if mod.name in expected:
             continue
-        if name in dep_names:
+        if mod.name in dep_names:
             continue
         non_default.append(mod)
     return non_default
@@ -171,7 +158,7 @@ def _diff_sysctl(
     host_root: Path,
     defaults: Dict[str, Tuple[str, str]],
     overrides: Dict[str, Tuple[str, str]],
-) -> List[dict]:
+) -> List[SysctlOverride]:
     """Compare runtime sysctl values against shipped defaults.
 
     For every key found in both defaults and overrides, or only in overrides,
@@ -179,7 +166,7 @@ def _diff_sysctl(
     where runtime differs from the shipped default.
     """
     all_keys = set(defaults) | set(overrides)
-    results: List[dict] = []
+    results: List[SysctlOverride] = []
     for key in sorted(all_keys):
         default_val, default_src = defaults.get(key, (None, ""))
         override_val, override_src = overrides.get(key, (None, ""))
@@ -191,12 +178,12 @@ def _diff_sysctl(
         if default_val is not None and runtime == default_val:
             continue
 
-        results.append({
-            "key": key,
-            "runtime": runtime,
-            "default": default_val or "",
-            "source": override_src or default_src,
-        })
+        results.append(SysctlOverride(
+            key=key,
+            runtime=runtime or "",
+            default=default_val or "",
+            source=override_src or default_src,
+        ))
     return results
 
 
@@ -255,10 +242,10 @@ def run(
         if d.exists():
             for f in _safe_iterdir(d):
                 if f.is_file() and f.suffix == ".conf":
-                    target_list.append({
-                        "path": str(f.relative_to(host_root)),
-                        "content": _safe_read(f),
-                    })
+                    target_list.append(ConfigSnippet(
+                        path=str(f.relative_to(host_root)),
+                        content=_safe_read(f),
+                    ))
 
     # --- lsmod + diff ---
     if executor:

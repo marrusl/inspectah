@@ -11,16 +11,14 @@ These checks only apply when running inside a container (host_root != "/").
 """
 
 import os
-import sys
 from pathlib import Path
 from typing import List, Optional
 
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+from ._util import debug as _debug_fn
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] preflight: {msg}", file=sys.stderr)
+    _debug_fn("preflight", msg)
 
 
 # ---------------------------------------------------------------------------

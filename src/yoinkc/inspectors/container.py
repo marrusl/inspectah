@@ -5,9 +5,7 @@ and optionally runs podman inspect for live container details.
 """
 
 import json
-import os
 import re
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,14 +14,12 @@ from ..schema import (
     ContainerSection, QuadletUnit, ComposeFile, ComposeService,
     RunningContainer, ContainerMount,
 )
+from .._util import debug as _debug_fn, safe_read as _safe_read_raw
 from . import filtered_rglob
-
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] container: {msg}", file=sys.stderr)
+    _debug_fn("container", msg)
 
 
 def _safe_glob(d: Path, pattern: str) -> List[Path]:
@@ -33,19 +29,8 @@ def _safe_glob(d: Path, pattern: str) -> List[Path]:
         return []
 
 
-def _safe_rglob(d: Path, pattern: str) -> List[Path]:
-    try:
-        return list(d.rglob(pattern))
-    except (PermissionError, OSError):
-        return []
-
-
 def _safe_read(p: Path) -> str:
-    try:
-        return p.read_text()
-    except (PermissionError, OSError) as exc:
-        _debug(f"cannot read {p}: {exc}")
-        return ""
+    return _safe_read_raw(p, label="container")
 
 
 def _extract_quadlet_image(content: str) -> str:

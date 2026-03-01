@@ -12,25 +12,40 @@ from ..executor import Executor
 from ..schema import (
     ScheduledTaskSection, CronJob, SystemdTimer, AtJob, GeneratedTimerUnit,
 )
-
-
-def _safe_iterdir(d: Path) -> List[Path]:
-    try:
-        return sorted(d.iterdir())
-    except (PermissionError, OSError):
-        return []
-
-
-def _safe_read(p: Path) -> str:
-    try:
-        return p.read_text()
-    except (PermissionError, OSError):
-        return ""
+from .._util import debug as _debug_util, is_debug, safe_iterdir as _safe_iterdir, safe_read as _safe_read
 
 
 # ---------------------------------------------------------------------------
 # Cron helpers
 # ---------------------------------------------------------------------------
+
+_MONTH_NAMES = {
+    "jan": "1", "feb": "2", "mar": "3", "apr": "4",
+    "may": "5", "jun": "6", "jul": "7", "aug": "8",
+    "sep": "9", "oct": "10", "nov": "11", "dec": "12",
+}
+_DOW_NAMES_TO_SYSTEMD = {
+    "sun": "Sun", "mon": "Mon", "tue": "Tue", "wed": "Wed",
+    "thu": "Thu", "fri": "Fri", "sat": "Sat",
+}
+_DOW_NUMERIC = {
+    "0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed",
+    "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun",
+}
+
+
+def _normalise_cron_token(token: str, kind: str) -> str:
+    """Map a single cron name/number to its canonical form for OnCalendar."""
+    low = token.lower()
+    if kind == "month" and low in _MONTH_NAMES:
+        return _MONTH_NAMES[low]
+    if kind == "dow":
+        if low in _DOW_NAMES_TO_SYSTEMD:
+            return _DOW_NAMES_TO_SYSTEMD[low]
+        if token in _DOW_NUMERIC:
+            return _DOW_NUMERIC[token]
+    return token
+
 
 def _cron_field_to_calendar(field: str, kind: str) -> str:
     """Convert a single cron field to its systemd OnCalendar equivalent.
@@ -49,26 +64,35 @@ def _cron_field_to_calendar(field: str, kind: str) -> str:
             if kind == "minute":
                 return f"*/{step}"
             if kind == "hour":
-                return f"00/{ step}"
-            # dom, month, dow: systemd doesn't support steps directly
+                return f"00/{step}"
             return field
         return field
 
+    # Range+step: 1-10/2 → 1..10/2
+    if "-" in field and "/" in field:
+        range_part, step = field.split("/", 1)
+        parts = range_part.split("-")
+        if len(parts) == 2:
+            lo = _normalise_cron_token(parts[0].strip(), kind)
+            hi = _normalise_cron_token(parts[1].strip(), kind)
+            return f"{lo}..{hi}/{step}"
+
     # Ranges: 1-5 → 1..5
-    if "-" in field and "/" not in field:
+    if "-" in field:
         parts = field.split("-")
-        if len(parts) == 2 and all(p.isdigit() for p in parts):
-            return f"{parts[0]}..{parts[1]}"
+        if len(parts) == 2:
+            lo = _normalise_cron_token(parts[0].strip(), kind)
+            hi = _normalise_cron_token(parts[1].strip(), kind)
+            return f"{lo}..{hi}"
 
-    # Lists: 1,3,5 → 1,3,5 (same syntax)
+    # Lists: 1,3,5 → normalise each element
     if "," in field:
-        return field
+        return ",".join(_normalise_cron_token(t.strip(), kind) for t in field.split(","))
 
-    # Numeric day of week: 0=Sun, 1=Mon, ... 7=Sun — convert to names
-    dow_names = {"0": "Sun", "1": "Mon", "2": "Tue", "3": "Wed",
-                 "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun"}
-    if kind == "dow" and field in dow_names:
-        return dow_names[field]
+    # Named or numeric tokens
+    normalised = _normalise_cron_token(field, kind)
+    if normalised != field:
+        return normalised
 
     # Plain digit
     if field.isdigit():
@@ -191,8 +215,11 @@ def _scan_cron_file(section: ScheduledTaskSection, host_root: Path, f: Path, sou
                         source_path=rel,
                         command=command,
                     ))
-    except Exception:
+    except (PermissionError, OSError):
         pass
+    except Exception as exc:
+        if is_debug():
+            _debug_util("scheduled_tasks", f"error parsing {f}: {exc}")
 
 
 # ---------------------------------------------------------------------------

@@ -24,8 +24,11 @@ from yoinkc.schema import (
     GeneratedTimerUnit,
     InspectionSnapshot,
     KernelBootSection,
+    KernelModule,
+    SysctlOverride,
     NMConnection,
     NetworkSection,
+    NonRpmItem,
     NonRpmSoftwareSection,
     OsRelease,
     PackageEntry,
@@ -149,7 +152,7 @@ class TestCronToOnCalendar:
 
     def test_range(self):
         cal, ok = self._convert("0 9 * * 1-5")
-        assert "1..5" in cal
+        assert "Mon..Fri" in cal
         assert ok is True
 
     def test_list(self):
@@ -247,12 +250,12 @@ class TestMultiStageContainerfile:
 
     def _pip_snapshot(self, c_ext=True):
         items = [
-            {"name": "cryptography", "version": "41.0.0", "method": "pip dist-info",
-             "has_c_extensions": c_ext, "confidence": "high",
-             "path": "usr/lib/python3.9/site-packages/cryptography-41.0.0.dist-info"},
-            {"name": "requests", "version": "2.31.0", "method": "pip dist-info",
-             "confidence": "high",
-             "path": "usr/lib/python3.9/site-packages/requests-2.31.0.dist-info"},
+            NonRpmItem(name="cryptography", version="41.0.0", method="pip dist-info",
+                       has_c_extensions=c_ext, confidence="high",
+                       path="usr/lib/python3.9/site-packages/cryptography-41.0.0.dist-info"),
+            NonRpmItem(name="requests", version="2.31.0", method="pip dist-info",
+                       confidence="high",
+                       path="usr/lib/python3.9/site-packages/requests-2.31.0.dist-info"),
         ]
         return InspectionSnapshot(
             meta={}, os_release=OsRelease(name="CentOS Stream", version_id="9", id="centos"),
@@ -478,12 +481,12 @@ def test_all_features_render_together():
             )],
         ),
         non_rpm_software=NonRpmSoftwareSection(items=[
-            {"name": "cryptography", "version": "41.0.0", "method": "pip dist-info",
-             "has_c_extensions": True, "confidence": "high",
-             "path": "usr/lib/python3.9/site-packages/cryptography-41.0.0.dist-info"},
-            {"name": "requests", "version": "2.31.0", "method": "pip dist-info",
-             "confidence": "high",
-             "path": "usr/lib/python3.9/site-packages/requests-2.31.0.dist-info"},
+            NonRpmItem(name="cryptography", version="41.0.0", method="pip dist-info",
+                       has_c_extensions=True, confidence="high",
+                       path="usr/lib/python3.9/site-packages/cryptography-41.0.0.dist-info"),
+            NonRpmItem(name="requests", version="2.31.0", method="pip dist-info",
+                       confidence="high",
+                       path="usr/lib/python3.9/site-packages/requests-2.31.0.dist-info"),
         ]),
         users_groups=UserGroupSection(
             users=[{"name": "mark", "uid": "1000", "gid": "1000",
@@ -496,8 +499,8 @@ def test_all_features_render_together():
             ssh_authorized_keys_refs=[{"user": "mark", "path": "/home/mark/.ssh/authorized_keys"}],
         ),
         kernel_boot=KernelBootSection(
-            sysctl_overrides=[{"key": "net.ipv4.ip_forward", "runtime": "1", "default": "0", "source": "operator"}],
-            non_default_modules=[{"name": "br_netfilter", "size": "32768", "used_by": []}],
+            sysctl_overrides=[SysctlOverride(key="net.ipv4.ip_forward", runtime="1", default="0", source="operator")],
+            non_default_modules=[KernelModule(name="br_netfilter", size="32768", used_by="")],
         ),
         selinux=SelinuxSection(
             mode="enforcing", custom_modules=["mypolicy"],

@@ -1,27 +1,16 @@
 """SELinux/Security inspector: mode, modules, booleans, audit rules, FIPS, PAM. File-based + executor."""
 
-import os
 import re
-import sys
 from pathlib import Path
 from typing import List, Optional
 
 from ..executor import Executor
 from ..schema import SelinuxSection
-
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] selinux: {msg}", file=sys.stderr)
-
-
-def _safe_iterdir(d: Path) -> List[Path]:
-    try:
-        return list(d.iterdir())
-    except (PermissionError, OSError):
-        return []
+    _debug_fn("selinux", msg)
 
 
 def _policy_type(host_root: Path) -> str:

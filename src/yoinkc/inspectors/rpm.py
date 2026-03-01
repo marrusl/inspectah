@@ -3,18 +3,15 @@ RPM inspector: package list, rpm -Va, repo files, dnf history removed.
 Baseline is the target bootc base image package list (or --baseline-packages file).
 """
 
-import os
 import re
-import sys
 from pathlib import Path
 from typing import List, Optional, Set
 
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+from .._util import debug as _debug_fn
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] rpm: {msg}", file=sys.stderr)
+    _debug_fn("rpm", msg)
 
 
 from ..baseline import BaselineResolver

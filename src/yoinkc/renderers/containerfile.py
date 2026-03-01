@@ -30,16 +30,8 @@ def _sanitize_shell_value(value: str, context: str) -> Optional[str]:
 
 def _base_image_from_snapshot(snapshot: InspectionSnapshot) -> str:
     """Return FROM line base image, preferring the one stored in the snapshot."""
-    if snapshot.rpm and snapshot.rpm.base_image:
-        return snapshot.rpm.base_image
-    if not snapshot.os_release:
-        return "registry.redhat.io/rhel9/rhel-bootc:9.6"
-    osr = snapshot.os_release
-    if osr.id == "rhel" and osr.version_id:
-        return f"registry.redhat.io/rhel9/rhel-bootc:{osr.version_id}"
-    if "centos" in osr.id.lower():
-        return "quay.io/centos-bootc/centos-bootc:stream9"
-    return "registry.redhat.io/rhel9/rhel-bootc:9.6"
+    from ..baseline import base_image_for_snapshot
+    return base_image_for_snapshot(snapshot)
 
 
 def _dhcp_connection_paths(snapshot: InspectionSnapshot) -> set:
@@ -131,21 +123,19 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
     # Non-RPM software files
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
         for item in snapshot.non_rpm_software.items:
-            path = item.get("path", "")
             # Items with a "files" dict (npm/yarn/gem lockfile dirs)
-            files = item.get("files")
-            if path and files and isinstance(files, dict):
-                rel = path.lstrip("/")
+            if item.path and item.files and isinstance(item.files, dict):
+                rel = item.path.lstrip("/")
                 dest = config_dir / rel
                 dest.mkdir(parents=True, exist_ok=True)
-                for fname, fcontent in files.items():
+                for fname, fcontent in item.files.items():
                     (dest / fname).write_text(fcontent)
             # Items with simple "content" (requirements.txt, single files)
-            elif path and item.get("content", ""):
-                rel = path.lstrip("/")
+            elif item.path and item.content:
+                rel = item.path.lstrip("/")
                 dest = config_dir / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(item["content"])
+                dest.write_text(item.content)
 
     # User/group account fragment files for append-based provisioning.
     # Written to config/tmp/ so they are NOT swept up by COPY config/etc/ /etc/.
@@ -174,8 +164,8 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             snapshot.kernel_boot.dracut_conf,
         ):
             for entry in (section_list or []):
-                kpath = entry.get("path", "")
-                content = entry.get("content", "")
+                kpath = entry.path
+                content = entry.content
                 if kpath:
                     dest = config_dir / kpath
                     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -186,7 +176,7 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             sysctl_dir.mkdir(parents=True, exist_ok=True)
             sysctl_lines = ["# Non-default sysctl values detected by yoinkc"]
             for s in snapshot.kernel_boot.sysctl_overrides:
-                sysctl_lines.append(f"{s['key']} = {s['runtime']}")
+                sysctl_lines.append(f"{s.key} = {s.runtime}")
             (sysctl_dir / "99-yoinkc.conf").write_text("\n".join(sysctl_lines) + "\n")
 
     # tmpfiles.d for /var (and home) directory structure
@@ -334,11 +324,11 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     pure_pip: list = []
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
         for item in snapshot.non_rpm_software.items:
-            if item.get("method") == "pip dist-info" and item.get("version"):
-                if item.get("has_c_extensions"):
-                    c_ext_pip.append((item["name"], item["version"]))
+            if item.method == "pip dist-info" and item.version:
+                if item.has_c_extensions:
+                    c_ext_pip.append((item.name, item.version))
                 else:
-                    pure_pip.append((item["name"], item["version"]))
+                    pure_pip.append((item.name, item.version))
 
     needs_multistage = bool(c_ext_pip)
 
@@ -512,49 +502,45 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         remaining: list = []
 
         for item in snapshot.non_rpm_software.items:
-            method = item.get("method", "")
-            lang = item.get("lang", "")
-            path = item.get("path", item.get("name", ""))
+            method = item.method
+            lang = item.lang
+            path = item.path or item.name
 
             if lang in ("go", "rust"):
-                linking = "statically linked" if item.get("static") else "dynamically linked"
+                linking = "statically linked" if item.static else "dynamically linked"
                 lines.append(f"# FIXME: {lang.capitalize()} binary at /{path} ({linking})")
                 lines.append(f"# Obtain source and rebuild for the target image, or COPY the binary directly")
                 lines.append(f"# COPY config/{path} /{path}")
             elif lang == "c/c++":
-                if item.get("static"):
+                if item.static:
                     lines.append(f"# FIXME: static C/C++ binary at /{path} — COPY or rebuild from source")
                     lines.append(f"# COPY config/{path} /{path}")
                 else:
-                    libs = ", ".join(item.get("shared_libs", [])[:5])
+                    libs = ", ".join(item.shared_libs[:5])
                     lines.append(f"# FIXME: dynamic C/C++ binary at /{path} — needs: {libs}")
                     lines.append(f"# COPY config/{path} /{path}")
             elif method == "python venv":
-                pkgs = item.get("packages", [])
-                ssp = item.get("system_site_packages", False)
-                if ssp:
+                pkgs = item.packages
+                if item.system_site_packages:
                     lines.append(f"# FIXME: venv at /{path} uses --system-site-packages — verify RPM deps are in base image")
                 if pkgs:
                     lines.append(f"# Python venv at /{path}: {len(pkgs)} package(s)")
                     lines.append(f"RUN python3 -m venv /{path}")
-                    pkg_specs = " ".join(f'{p["name"]}=={p["version"]}' for p in pkgs if p.get("version"))
+                    pkg_specs = " ".join(f"{p.name}=={p.version}" for p in pkgs if p.version)
                     if pkg_specs:
                         lines.append(f"RUN /{path}/bin/pip install {pkg_specs}")
                 else:
                     lines.append(f"# FIXME: venv at /{path} — no packages detected, verify manually")
             elif method == "git repository":
-                remote = item.get("git_remote", "")
-                commit = item.get("git_commit", "")
-                branch = item.get("git_branch", "")
                 lines.append(f"# Git-managed: /{path}")
-                if remote:
-                    lines.append(f"# FIXME: clone from {remote} (branch: {branch}, commit: {commit[:12]})")
-                    lines.append(f"# RUN git clone {remote} /{path} && cd /{path} && git checkout {commit[:12]}")
+                if item.git_remote:
+                    lines.append(f"# FIXME: clone from {item.git_remote} (branch: {item.git_branch}, commit: {item.git_commit[:12]})")
+                    lines.append(f"# RUN git clone {item.git_remote} /{path} && cd /{path} && git checkout {item.git_commit[:12]}")
                 else:
                     lines.append(f"# FIXME: git repo at /{path} has no remote — COPY or reconstruct")
-            elif method == "pip dist-info" and item.get("version"):
-                if not item.get("has_c_extensions"):
-                    pip_packages.append((item["name"], item["version"]))
+            elif method == "pip dist-info" and item.version:
+                if not item.has_c_extensions:
+                    pip_packages.append((item.name, item.version))
             elif method == "pip requirements.txt":
                 lines.append(f"# FIXME: verify pip packages in /{path} install correctly from PyPI")
                 lines.append(f"COPY config/{path} /{path}")
@@ -585,7 +571,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             lines.append(f"    {name}=={ver}")
 
         for item in remaining[:20]:
-            path = item.get("path", item.get("name", ""))
+            path = item.path or item.name
             lines.append(f"# FIXME: unknown provenance — determine upstream source and installation method for /{path}")
             lines.append(f"# COPY config/{path} /{path}")
 
@@ -686,7 +672,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                     else:
                         lines.append(f"# FIXME: karg contains unsafe characters, skipped: {karg!r}")
         if kb.non_default_modules:
-            names = ", ".join(m.get("name", "?") for m in kb.non_default_modules[:10])
+            names = ", ".join(m.name for m in kb.non_default_modules[:10])
             lines.append(f"# {len(kb.non_default_modules)} non-default kernel module(s) loaded at runtime: {names}")
             lines.append("# FIXME: if these modules are needed, add them to /etc/modules-load.d/ in the image")
         if kb.modules_load_d:

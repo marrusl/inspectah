@@ -6,7 +6,7 @@ from yoinkc.schema import (
     NetworkSection, FirewallZone,
     ContainerSection, QuadletUnit, RunningContainer,
     ScheduledTaskSection, GeneratedTimerUnit, SystemdTimer,
-    KernelBootSection,
+    KernelBootSection, ConfigSnippet,
     UserGroupSection,
 )
 
@@ -230,14 +230,14 @@ def test_grub_no_secrets():
 def test_redact_modprobe_d_content():
     snapshot = _base_snapshot(
         kernel_boot=KernelBootSection(
-            modprobe_d=[{
-                "path": "etc/modprobe.d/vpn.conf",
-                "content": "options tun password=vpnsecret99",
-            }]
+            modprobe_d=[ConfigSnippet(
+                path="etc/modprobe.d/vpn.conf",
+                content="options tun password=vpnsecret99",
+            )]
         )
     )
     result = redact_snapshot(snapshot)
-    assert "vpnsecret99" not in result.kernel_boot.modprobe_d[0]["content"]
+    assert "vpnsecret99" not in result.kernel_boot.modprobe_d[0].content
     assert any("kernel:modprobe_d" in r["path"] for r in result.redactions)
 
 

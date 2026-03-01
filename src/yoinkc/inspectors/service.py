@@ -3,21 +3,16 @@ Service inspector: systemd unit state vs baseline (enabled/disabled/masked).
 Baseline is derived from systemd preset files on the host, not static manifests.
 """
 
-import fnmatch
-import os
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..executor import Executor
 from ..schema import ServiceSection, ServiceStateChange
-
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+from .._util import debug as _debug_fn, is_debug as _DEBUG_check
 
 
 def _debug(msg: str) -> None:
-    if _DEBUG:
-        print(f"[yoinkc] service: {msg}", file=sys.stderr)
+    _debug_fn("service", msg)
 
 
 def _parse_preset_lines(lines: List[str]) -> Tuple[Set[str], Set[str], bool]:
@@ -216,7 +211,7 @@ def run(
         current = _scan_unit_files_from_fs(host_root)
         _debug(f"fs scan found {len(current)} unit files")
 
-    if _DEBUG and current:
+    if _DEBUG_check() and current:
         sample = list(current.items())[:5]
         _debug(f"sample: {sample}")
 
