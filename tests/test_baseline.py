@@ -32,24 +32,67 @@ def _make_executor(podman_result=None, probe_ok=True):
 # select_base_image / load_baseline_packages_file (pure functions)
 # ---------------------------------------------------------------------------
 
-def test_select_base_image_rhel9():
-    assert select_base_image("rhel", "9.4") == "registry.redhat.io/rhel9/rhel-bootc:9.4"
+def test_select_base_image_rhel9_clamped():
+    image, ver = select_base_image("rhel", "9.4")
+    assert image == "registry.redhat.io/rhel9/rhel-bootc:9.6"
+    assert ver == "9.6"
+
+
+def test_select_base_image_rhel9_at_minimum():
+    image, ver = select_base_image("rhel", "9.6")
+    assert image == "registry.redhat.io/rhel9/rhel-bootc:9.6"
+    assert ver == "9.6"
+
+
+def test_select_base_image_rhel9_above_minimum():
+    image, ver = select_base_image("rhel", "9.8")
+    assert image == "registry.redhat.io/rhel9/rhel-bootc:9.8"
+    assert ver == "9.8"
+
+
+def test_select_base_image_rhel9_target_override():
+    image, ver = select_base_image("rhel", "9.4", target_version="9.8")
+    assert image == "registry.redhat.io/rhel9/rhel-bootc:9.8"
+    assert ver == "9.8"
+
+
+def test_select_base_image_rhel9_target_below_minimum():
+    image, ver = select_base_image("rhel", "9.4", target_version="9.2")
+    assert image == "registry.redhat.io/rhel9/rhel-bootc:9.6"
+    assert ver == "9.6"
 
 
 def test_select_base_image_rhel10():
-    assert select_base_image("rhel", "10.0") == "registry.redhat.io/rhel10/rhel-bootc:10.0"
+    image, ver = select_base_image("rhel", "10.0")
+    assert image == "registry.redhat.io/rhel10/rhel-bootc:10.0"
+    assert ver == "10.0"
+
+
+def test_select_base_image_rhel10_target_override():
+    image, ver = select_base_image("rhel", "10.0", target_version="10.2")
+    assert image == "registry.redhat.io/rhel10/rhel-bootc:10.2"
+    assert ver == "10.2"
 
 
 def test_select_base_image_centos_stream9():
-    assert select_base_image("centos", "9") == "quay.io/centos-bootc/centos-bootc:stream9"
+    image, ver = select_base_image("centos", "9")
+    assert image == "quay.io/centos-bootc/centos-bootc:stream9"
+
+
+def test_select_base_image_centos_stream10():
+    image, ver = select_base_image("centos", "10")
+    assert image == "quay.io/centos-bootc/centos-bootc:stream10"
 
 
 def test_select_base_image_fedora():
-    assert select_base_image("fedora", "41") == "quay.io/fedora/fedora-bootc:41"
+    image, ver = select_base_image("fedora", "41")
+    assert image == "quay.io/fedora/fedora-bootc:41"
 
 
 def test_select_base_image_unknown():
-    assert select_base_image("ubuntu", "24.04") is None
+    image, ver = select_base_image("ubuntu", "24.04")
+    assert image is None
+    assert ver is None
 
 
 def test_load_baseline_packages_file():

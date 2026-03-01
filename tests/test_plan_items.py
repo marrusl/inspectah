@@ -620,3 +620,67 @@ class TestSanitizeShellValue:
         assert "httpd.service" in cf
         assert "evil;cmd.service" not in cf.replace("FIXME", "")
         assert "unsafe characters" in cf
+
+
+class TestCrossMajorWarning:
+
+    def test_cross_major_warning_in_containerfile(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.4", id="rhel"),
+            rpm=RpmSection(base_image="registry.redhat.io/rhel10/rhel-bootc:10.0"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "CROSS-MAJOR-VERSION MIGRATION" in cf
+        assert "heavier manual review" in cf
+
+    def test_no_warning_same_major(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.4", id="rhel"),
+            rpm=RpmSection(base_image="registry.redhat.io/rhel9/rhel-bootc:9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "CROSS-MAJOR-VERSION" not in cf
+
+
+class TestPythonVersionMap:
+
+    def test_rhel10_uses_python312(self):
+        items = [
+            NonRpmItem(name="cryptography", version="41.0.0", method="pip dist-info",
+                       has_c_extensions=True, confidence="high",
+                       path="usr/lib/python3.12/site-packages/cryptography-41.0.0.dist-info"),
+        ]
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="10.0", id="rhel"),
+            rpm=RpmSection(base_image="registry.redhat.io/rhel10/rhel-bootc:10.0"),
+            non_rpm_software=NonRpmSoftwareSection(items=items),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "python3.12" in cf
+        assert "python3.X" not in cf
+
+    def test_fedora_uses_python312(self):
+        items = [
+            NonRpmItem(name="numpy", version="1.26.0", method="pip dist-info",
+                       has_c_extensions=True, confidence="high",
+                       path="usr/lib/python3.12/site-packages/numpy-1.26.0.dist-info"),
+        ]
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="Fedora", version_id="41", id="fedora"),
+            rpm=RpmSection(base_image="quay.io/fedora/fedora-bootc:41"),
+            non_rpm_software=NonRpmSoftwareSection(items=items),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "python3.12" in cf

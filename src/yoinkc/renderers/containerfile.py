@@ -394,19 +394,34 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         os_desc = snapshot.os_release.pretty_name or snapshot.os_release.name or os_desc
     lines.append(f"# Detected: {os_desc}")
     lines.append(f"FROM {base}")
+
+    # Cross-major-version migration warning
+    if snapshot.os_release and snapshot.os_release.version_id and snapshot.rpm and snapshot.rpm.base_image:
+        source_major = snapshot.os_release.version_id.split(".")[0]
+        target_tag = snapshot.rpm.base_image.rsplit(":", 1)[-1] if ":" in snapshot.rpm.base_image else ""
+        target_major = target_tag.split(".")[0] if target_tag else ""
+        if source_major and target_major and source_major != target_major:
+            lines.append("")
+            lines.append("# !! CROSS-MAJOR-VERSION MIGRATION !!")
+            lines.append(f"# Source: {os_desc} ({snapshot.os_release.version_id})")
+            lines.append(f"# Target: {snapshot.rpm.base_image}")
+            lines.append("# Package names, service names, and config formats may have changed.")
+            lines.append("# This Containerfile requires heavier manual review than a same-version migration.")
+
     lines.append("")
+
+    _PYTHON_VERSION_MAP = {"9": "3.9", "10": "3.12"}
 
     if needs_multistage:
         lines.append("# === Install pre-built pip packages with C extensions ===")
-        # Detect the Python minor version from the base image tag or os-release.
-        # Fall back to a FIXME placeholder rather than using a glob, which is
-        # invalid as a COPY destination in a Containerfile.
         py_ver = ""
         if snapshot.os_release:
             vid = snapshot.os_release.version_id or ""
             major = vid.split(".")[0]
-            if major == "9":
-                py_ver = "3.9"
+            os_id = snapshot.os_release.id.lower()
+            py_ver = _PYTHON_VERSION_MAP.get(major, "")
+            if not py_ver and os_id == "fedora":
+                py_ver = "3.12"
         if py_ver:
             lines.append(f"COPY --from=builder /tmp/pip-build/lib/python{py_ver}/site-packages/ "
                          f"/usr/lib/python{py_ver}/site-packages/")

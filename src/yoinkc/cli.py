@@ -40,6 +40,23 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Run inspectors and save snapshot to output; do not run renderers",
     )
 
+    # Target image
+    parser.add_argument(
+        "--target-version",
+        type=str,
+        metavar="VERSION",
+        help="Target bootc image version (e.g. 9.6, 10.2). "
+             "Default: source host version, clamped to minimum bootc-supported release.",
+    )
+    parser.add_argument(
+        "--target-image",
+        type=str,
+        metavar="IMAGE",
+        help="Full target bootc base image reference "
+             "(e.g. registry.redhat.io/rhel10/rhel-bootc:10.2). "
+             "Overrides --target-version and all automatic mapping.",
+    )
+
     # Baseline
     parser.add_argument(
         "--baseline-packages",

@@ -14,7 +14,7 @@ def _debug(msg: str) -> None:
     _debug_fn("rpm", msg)
 
 
-from ..baseline import BaselineResolver
+from ..baseline import BaselineResolver, load_baseline_packages_file
 from ..executor import Executor
 from ..schema import (
     PackageEntry,
@@ -197,6 +197,8 @@ def run(
     baseline_packages_file: Optional[Path] = None,
     warnings: Optional[list] = None,
     resolver: Optional[BaselineResolver] = None,
+    target_version: Optional[str] = None,
+    target_image: Optional[str] = None,
 ) -> RpmSection:
     """Run RPM inspection.
 
@@ -234,13 +236,24 @@ def run(
     section.no_baseline = False
 
     if id_val and version_id:
-        # Use the shared resolver if provided, else create a transient one
         _resolver = resolver if resolver is not None else BaselineResolver(executor)
-        baseline_set, base_image, no_baseline = _resolver.get_baseline_packages(
-            host_root, id_val, version_id,
-            baseline_packages_file=baseline_packages_file,
-        )
-        section.base_image = base_image
+        if target_image:
+            section.base_image = target_image
+            if baseline_packages_file:
+                baseline_set = load_baseline_packages_file(baseline_packages_file)
+                no_baseline = not baseline_set
+            elif _resolver._executor is not None:
+                baseline_set = _resolver.query_packages(target_image)
+                no_baseline = baseline_set is None
+            else:
+                baseline_set, no_baseline = None, True
+        else:
+            baseline_set, base_image, no_baseline = _resolver.get_baseline_packages(
+                host_root, id_val, version_id,
+                baseline_packages_file=baseline_packages_file,
+                target_version=target_version,
+            )
+            section.base_image = base_image
         if no_baseline:
             section.no_baseline = True
             baseline_names = set()

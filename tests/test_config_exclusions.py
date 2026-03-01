@@ -33,7 +33,8 @@ _EXCLUDED = [
     "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
     "/etc/pki/java/cacerts", "/etc/pki/tls/cert.pem",
     "/etc/pki/tls/certs/ca-bundle.crt", "/etc/pki/tls/certs/ca-bundle.trust.crt",
-    "/etc/pki/product-default/69.pem",
+    "/etc/pki/product-default/69.pem",   # RHEL 9
+    "/etc/pki/product-default/479.pem",  # RHEL 10
     # Installer artifacts
     "/etc/sysconfig/anaconda", "/etc/sysconfig/kernel",
     "/etc/sysconfig/network-scripts/readme-ifcfg-rh.txt",

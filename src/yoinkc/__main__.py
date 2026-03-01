@@ -21,6 +21,8 @@ def _run_inspectors(host_root: Path, args) -> InspectionSnapshot:
         deep_binary_scan=args.deep_binary_scan,
         query_podman=args.query_podman,
         baseline_packages_file=args.baseline_packages,
+        target_version=args.target_version,
+        target_image=args.target_image,
     )
 
 

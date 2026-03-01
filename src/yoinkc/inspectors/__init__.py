@@ -129,6 +129,7 @@ def _read_os_release(host_root: Path) -> Optional[OsRelease]:
 
 
 _SUPPORTED_RHEL_MAJORS = {"9", "10"}
+_SUPPORTED_CENTOS_MAJORS = {"9", "10"}
 
 
 def _validate_supported_host(os_release: Optional[OsRelease]) -> Optional[str]:
@@ -138,18 +139,23 @@ def _validate_supported_host(os_release: Optional[OsRelease]) -> Optional[str]:
     vid = os_release.version_id
     major = vid.split(".")[0]
     os_id = os_release.id.lower()
+    supported_list = (
+        ", ".join(f"RHEL {m}.x" for m in sorted(_SUPPORTED_RHEL_MAJORS))
+        + ", "
+        + ", ".join(f"CentOS Stream {m}" for m in sorted(_SUPPORTED_CENTOS_MAJORS))
+        + ", and Fedora"
+    )
     if os_id == "rhel":
         if major not in _SUPPORTED_RHEL_MAJORS:
-            supported = ", ".join(f"RHEL {m}.x" for m in sorted(_SUPPORTED_RHEL_MAJORS))
             return (
                 f"Host is running RHEL {vid}. This version of yoinkc supports "
-                f"{supported}, CentOS Stream 9, and Fedora."
+                f"{supported_list}."
             )
     elif "centos" in os_id:
-        if vid != "9":
+        if major not in _SUPPORTED_CENTOS_MAJORS:
             return (
-                f"Host is running CentOS {vid}. This version of yoinkc only supports "
-                "CentOS Stream 9."
+                f"Host is running CentOS {vid}. This version of yoinkc supports "
+                f"{supported_list}."
             )
     return None
 
@@ -163,6 +169,8 @@ def run_all(
     deep_binary_scan: bool = False,
     query_podman: bool = False,
     baseline_packages_file: Optional[Path] = None,
+    target_version: Optional[str] = None,
+    target_image: Optional[str] = None,
 ) -> InspectionSnapshot:
     """Run all inspectors and return a merged snapshot."""
     host_root = Path(host_root)
@@ -187,13 +195,28 @@ def run_all(
         os_release=os_release,
     )
 
+    w = snapshot.warnings
+
+    # Cross-major-version warning
+    if target_version and os_release and os_release.version_id:
+        source_major = os_release.version_id.split(".")[0]
+        target_major = target_version.split(".")[0]
+        if source_major != target_major:
+            msg = (
+                f"Source host is {os_release.id.upper()} {os_release.version_id} "
+                f"but target image is version {target_version}. "
+                "Cross-major-version migration may require significant manual adjustment. "
+                "Package names, service names, and config formats may have changed."
+            )
+            print(f"WARNING: {msg}", file=sys.stderr)
+            w.append({"source": "pipeline", "message": msg, "severity": "error"})
+
     # Create one BaselineResolver per run — shares the nsenter probe cache
     # across the package query (rpm inspector) and the presets query (service baseline).
     from ..baseline import BaselineResolver
     resolver = BaselineResolver(executor)
 
-    w = snapshot.warnings
-    snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w, resolver=resolver), None, w)
+    snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w, resolver=resolver, target_version=target_version, target_image=target_image), None, w)
     if snapshot.rpm and snapshot.rpm.no_baseline:
         w.append({
             "source": "rpm",

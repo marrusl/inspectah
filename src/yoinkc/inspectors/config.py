@@ -64,8 +64,6 @@ _UNOWNED_EXCLUDE_EXACT: Set[str] = {
     # ── Package manager state ────────────────────────────────────────────────
     "/etc/dnf/dnf.conf",
     "/etc/yum.conf",
-    # RHEL subscription manager auto-generated cert
-    "/etc/pki/product-default/69.pem",
 
     # ── Anaconda / installer artifacts ──────────────────────────────────────
     # Written once at install time; machine-specific, not operator config.
@@ -82,6 +80,9 @@ _UNOWNED_EXCLUDE_EXACT: Set[str] = {
 }
 
 _UNOWNED_EXCLUDE_GLOBS: List[str] = [
+    # ── RHEL subscription manager certs (product ID varies by version) ───────
+    "/etc/pki/product-default/*.pem",
+
     # ── SSH host keys (machine-specific; content excluded by redaction too) ──
     "/etc/ssh/ssh_host_*",
 

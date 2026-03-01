@@ -26,29 +26,58 @@ def _debug(msg: str) -> None:
 # OS → base image mapping  (pure functions — no state)
 # ---------------------------------------------------------------------------
 
-def select_base_image(os_id: str, version_id: str) -> Optional[str]:
+_RHEL_BOOTC_MIN: dict = {"9": "9.6", "10": "10.0"}
+
+_CENTOS_STREAM_IMAGES: dict = {
+    "9": "quay.io/centos-bootc/centos-bootc:stream9",
+    "10": "quay.io/centos-bootc/centos-bootc:stream10",
+}
+
+_DEFAULT_FALLBACK_IMAGE = "registry.redhat.io/rhel9/rhel-bootc:9.6"
+
+
+def _clamp_version(version_id: str, minimum: str) -> str:
+    """Return *version_id* if it is >= *minimum*, else return *minimum*."""
+    try:
+        v_parts = [int(x) for x in version_id.split(".")]
+        m_parts = [int(x) for x in minimum.split(".")]
+        if v_parts < m_parts:
+            return minimum
+    except (ValueError, AttributeError):
+        return minimum
+    return version_id
+
+
+def select_base_image(
+    os_id: str,
+    version_id: str,
+    target_version: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     """Map host OS identity to the bootc base image reference.
 
-    Returns a fully-qualified image:tag string, or None if unmapped.
+    *target_version* overrides the auto-detected *version_id* (e.g. the
+    user wants to target 9.6 from a 9.4 source host).
+
+    Returns ``(image_ref, effective_version)`` or ``(None, None)`` if
+    the OS is unmapped.  For RHEL, the effective version is clamped up
+    to the minimum bootc-supported release.
     """
     os_id = os_id.lower()
     major = version_id.split(".")[0] if version_id else ""
 
-    if os_id == "rhel":
-        if major == "9":
-            return f"registry.redhat.io/rhel9/rhel-bootc:{version_id}"
-        if major == "10":
-            return f"registry.redhat.io/rhel10/rhel-bootc:{version_id}"
-    if "centos" in os_id and major == "9":
-        return "quay.io/centos-bootc/centos-bootc:stream9"
+    if os_id == "rhel" and major in _RHEL_BOOTC_MIN:
+        effective = target_version or version_id
+        effective = _clamp_version(effective, _RHEL_BOOTC_MIN[major])
+        return (f"registry.redhat.io/rhel{major}/rhel-bootc:{effective}", effective)
+
+    if "centos" in os_id and major in _CENTOS_STREAM_IMAGES:
+        return (_CENTOS_STREAM_IMAGES[major], major)
+
     if os_id == "fedora" and major:
-        return f"quay.io/fedora/fedora-bootc:{major}"
+        return (f"quay.io/fedora/fedora-bootc:{major}", version_id)
 
     _debug(f"no base image mapping for os_id={os_id} version_id={version_id}")
-    return None
-
-
-_DEFAULT_FALLBACK_IMAGE = "registry.redhat.io/rhel9/rhel-bootc:9.6"
+    return (None, None)
 
 
 def base_image_for_snapshot(snapshot: "InspectionSnapshot") -> str:
@@ -61,9 +90,9 @@ def base_image_for_snapshot(snapshot: "InspectionSnapshot") -> str:
     if snapshot.rpm and snapshot.rpm.base_image:
         return snapshot.rpm.base_image
     if snapshot.os_release:
-        result = select_base_image(snapshot.os_release.id, snapshot.os_release.version_id)
-        if result:
-            return result
+        image, _ = select_base_image(snapshot.os_release.id, snapshot.os_release.version_id)
+        if image:
+            return image
     return _DEFAULT_FALLBACK_IMAGE
 
 
@@ -225,6 +254,7 @@ class BaselineResolver:
         os_id: str,
         version_id: str,
         baseline_packages_file: Optional[Path] = None,
+        target_version: Optional[str] = None,
     ) -> Tuple[Optional[Set[str]], Optional[str], bool]:
         """Resolve the baseline package set.
 
@@ -239,12 +269,12 @@ class BaselineResolver:
         if baseline_packages_file:
             names = load_baseline_packages_file(baseline_packages_file)
             if names:
-                base_image = select_base_image(os_id, version_id)
+                base_image, _ = select_base_image(os_id, version_id, target_version)
                 return (names, base_image, False)
             _debug("baseline packages file provided but empty/unreadable")
 
         # 2. Query the base image
-        base_image = select_base_image(os_id, version_id)
+        base_image, _ = select_base_image(os_id, version_id, target_version)
         if base_image and self._executor is not None:
             names = self.query_packages(base_image)
             if names:
