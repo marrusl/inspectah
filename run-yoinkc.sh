@@ -1,20 +1,29 @@
 #!/bin/bash
 set -euo pipefail
 
-REPO_DIR="/home/mark/yoinkc"
+IMAGE="ghcr.io/marrusl/yoinkc:latest"
 OUTPUT_DIR="/home/mark/output"
-IMAGE_NAME="yoinkc"
-REPO_URL="https://github.com/marrusl/yoinkc.git"
 
-echo "=== Cleaning up ==="
-rm -rf "$REPO_DIR"
+echo "=== Preflight checks ==="
+if ! command -v podman &>/dev/null; then
+    echo "podman not found — installing..."
+    if command -v dnf &>/dev/null; then
+        dnf install -y podman
+    elif command -v yum &>/dev/null; then
+        yum install -y podman
+    else
+        echo "ERROR: podman is not installed and no supported package manager found." >&2
+        exit 1
+    fi
+fi
+
+mkdir -p "$OUTPUT_DIR"
+
+echo "=== Pulling yoinkc image ==="
+podman pull "$IMAGE"
+
+echo "=== Cleaning output directory ==="
 rm -rf "${OUTPUT_DIR:?}"/*
-
-echo "=== Cloning yoinkc (main) ==="
-git clone -b main "$REPO_URL" "$REPO_DIR"
-
-echo "=== Building container image ==="
-podman build -t "${IMAGE_NAME}:latest" "$REPO_DIR"
 
 echo "=== Running yoinkc ==="
 podman run --rm \
@@ -24,7 +33,7 @@ podman run --rm \
   -e YOINKC_DEBUG=1 \
   -v /:/host:ro \
   -v "${OUTPUT_DIR}:/output:z" \
-  "$IMAGE_NAME:latest" --output-dir /output
+  "$IMAGE" --output-dir /output
 
 echo "=== Packaging results ==="
 STAMP="yoinkc-output-$(date +%Y%m%d-%H%M%S)"
