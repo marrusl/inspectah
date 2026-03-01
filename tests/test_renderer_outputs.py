@@ -388,3 +388,179 @@ class TestSecretsReview:
         snapshot = outputs_with_baseline["snapshot"]
         if snapshot.redactions:
             assert "secret store" in sr.lower() or "deploy time" in sr.lower() or "manually" in sr.lower()
+
+
+# ===========================================================================
+# Containerfile quality checks (moved from test_renderers.py)
+# ===========================================================================
+
+class TestContainerfileQuality:
+
+    def test_copy_targets_exist(self, outputs_with_baseline):
+        """Every COPY source in the Containerfile must exist on disk."""
+        output_dir = outputs_with_baseline["dir"]
+        cf = (output_dir / "Containerfile").read_text()
+        for i, line in enumerate(cf.splitlines(), 1):
+            if line.startswith("#"):
+                continue
+            m = re.match(r"^COPY\s+(config/\S+|quadlet/\S*)", line)
+            if m:
+                src = m.group(1)
+                src_path = output_dir / src
+                assert src_path.exists(), f"COPY source missing at line {i}: {src}"
+
+    def test_fixme_comments_are_actionable(self, outputs_with_baseline):
+        """Every FIXME comment must explain what the operator needs to do."""
+        cf = (outputs_with_baseline["dir"] / "Containerfile").read_text()
+        for i, line in enumerate(cf.splitlines(), 1):
+            if "FIXME" in line:
+                after = line.split("FIXME", 1)[1].strip().lstrip(":").strip()
+                assert len(after) > 10, (
+                    f"FIXME at line {i} is not actionable (too short): {line.strip()!r}"
+                )
+
+    def test_syntax_valid(self, outputs_with_baseline):
+        """Containerfile uses only valid Dockerfile instructions."""
+        cf = (outputs_with_baseline["dir"] / "Containerfile").read_text()
+        VALID = {"FROM", "RUN", "COPY", "ADD", "ENV", "ARG", "LABEL", "EXPOSE",
+                 "ENTRYPOINT", "CMD", "VOLUME", "USER", "WORKDIR", "ONBUILD",
+                 "STOPSIGNAL", "HEALTHCHECK", "SHELL"}
+        in_continuation = False
+        had_from = False
+        for i, line in enumerate(cf.splitlines(), 1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                in_continuation = False
+                continue
+            if in_continuation:
+                in_continuation = stripped.endswith("\\")
+                continue
+            m = re.match(r"^([A-Z]+)\s", stripped)
+            if m:
+                instr = m.group(1)
+                assert instr in VALID, f"Unknown instruction at line {i}: {instr}"
+                if instr == "FROM":
+                    had_from = True
+                in_continuation = stripped.endswith("\\")
+            else:
+                assert line[0] in (" ", "\t"), (
+                    f"Line {i} is not a valid instruction or continuation: {stripped[:80]!r}"
+                )
+                in_continuation = stripped.endswith("\\")
+        assert had_from, "Containerfile is missing a FROM instruction"
+
+    def test_non_rpm_provenance(self, outputs_with_baseline):
+        """Known-provenance items get real directives; unknown get commented stubs."""
+        cf = (outputs_with_baseline["dir"] / "Containerfile").read_text()
+        output_dir = outputs_with_baseline["dir"]
+
+        # pip packages produce real RUN pip install
+        assert re.search(r"^RUN pip install", cf, re.MULTILINE)
+        assert "flask==2.3.2" in cf
+        assert "requests==2.31.0" in cf
+
+        # npm lockfiles produce real COPY + RUN
+        assert re.search(r"^COPY config/opt/myapp/", cf, re.MULTILINE)
+        assert re.search(r"^RUN cd /opt/myapp && npm ci", cf, re.MULTILINE)
+        assert (output_dir / "config" / "opt" / "myapp" / "package-lock.json").exists()
+
+
+# ===========================================================================
+# Baseline mode variations (moved from test_renderers.py)
+# ===========================================================================
+
+class TestBaselineModes:
+
+    def test_baseline_available_wording(self, outputs_with_baseline):
+        """With baseline, audit and Containerfile use 'beyond base image' wording."""
+        cf = (outputs_with_baseline["dir"] / "Containerfile").read_text()
+        audit = (outputs_with_baseline["dir"] / "audit-report.md").read_text()
+        assert "added beyond base image" in cf
+        assert "No baseline" not in cf
+        assert "beyond base image" in audit or "Baseline:" in audit
+
+
+# ===========================================================================
+# Edge cases and minimal snapshots (moved from test_renderers.py)
+# ===========================================================================
+
+class TestEdgeCases:
+
+    def test_minimal_snapshot_no_crash(self):
+        """Renderers must not crash when all sections are None."""
+        from yoinkc.schema import InspectionSnapshot, OsRelease
+        minimal = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            run_all_renderers(minimal, output_dir)
+            assert (output_dir / "Containerfile").exists()
+            assert (output_dir / "audit-report.md").exists()
+            assert (output_dir / "report.html").exists()
+            assert (output_dir / "README.md").exists()
+            assert (output_dir / "secrets-review.md").exists()
+            assert (output_dir / "kickstart-suggestion.ks").exists()
+
+    def test_none_and_empty_values_no_literal_none(self):
+        """No literal 'None' string in any rendered output."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, ServiceSection, ServiceStateChange,
+        )
+        services = ServiceSection(
+            state_changes=[
+                ServiceStateChange(unit="foo.service", current_state="enabled",
+                                   default_state="enabled", action="unchanged"),
+            ],
+        )
+        edge = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            services=services,
+            warnings=[{"message": None}, {"message": ""}, {}, {"message": "Real warning"}],
+            redactions=[
+                {"path": None, "pattern": None, "remediation": None},
+                {"path": "", "pattern": "PASSWORD", "remediation": "use secret"},
+            ],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            run_all_renderers(edge, output_dir)
+            for name in ("audit-report.md", "report.html", "README.md", "secrets-review.md"):
+                content = (output_dir / name).read_text()
+                assert "None" not in content, f"{name} must not contain literal None"
+
+
+# ===========================================================================
+# HTML report structural integrity (moved from test_renderers.py)
+# ===========================================================================
+
+class TestHtmlStructure:
+
+    def test_section_ids_match_template(self, outputs_with_baseline):
+        """Every card data-section and tab data-tab has a matching section element.
+
+        Instead of hardcoding a list, extract card/tab references from the HTML
+        itself and verify each has a corresponding section div.
+        """
+        html = (outputs_with_baseline["dir"] / "report.html").read_text()
+        card_sections = re.findall(r'data-section="([^"]+)"', html)
+        tab_sections = re.findall(r'data-tab="([^"]+)"', html)
+        all_refs = set(card_sections) | set(tab_sections)
+        for ref in all_refs:
+            assert f'id="section-{ref}"' in html, f"No section for data-section/data-tab={ref}"
+
+    def test_summary_is_default_visible(self, outputs_with_baseline):
+        html = (outputs_with_baseline["dir"] / "report.html").read_text()
+        assert 'id="section-summary"' in html
+        assert 'class="section visible"' in html
+
+    def test_readme_detailed(self, outputs_with_baseline):
+        """README includes build command, deploy, findings summary, artifacts, FIXMEs."""
+        readme = (outputs_with_baseline["dir"] / "README.md").read_text()
+        assert "Findings summary" in readme
+        assert "podman build" in readme
+        assert "bootc switch" in readme
+        assert "audit-report.md" in readme
+        assert "FIXME" in readme
