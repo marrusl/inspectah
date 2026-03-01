@@ -380,7 +380,7 @@ th { color: var(--muted); font-weight: 500; }
   <h3>Existing systemd timers</h3>
   <table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th><th>Source</th></tr>
     {%- for t in local_timers %}
-    <tr style="background:#e8f5e9">
+    <tr style="background:rgba(63,185,80,0.1)">
       <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
       <td><code>{{ t.exec_start }}</code></td>
       <td><span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">local</span></td>
@@ -400,7 +400,7 @@ th { color: var(--muted); font-weight: 500; }
   <h3>Cron-converted timers</h3>
   <table><tr><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>
     {%- for u in st.generated_timer_units %}
-    <tr style="background:#fff3e0">
+    <tr style="background:rgba(210,153,34,0.1)">
       <td>{{ u.name }}</td>
       <td><code>{{ u.cron_expr }}</code></td>
       <td><code>{{ u.source_path }}</code></td>

@@ -636,22 +636,13 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     if ug and (ug.passwd_entries or ug.users):
         lines.append("# === Users and Groups ===")
         if ug.passwd_entries:
-            append_files = ["group", "passwd", "shadow", "gshadow"]
-            copy_lines = []
             cat_parts = []
-            for name in append_files:
+            for name in ("group", "passwd", "shadow", "gshadow", "subuid", "subgid"):
                 attr = f"{name}_entries"
                 if getattr(ug, attr, []):
-                    copy_lines.append(f"COPY config/tmp/{name}.append /tmp/{name}.append")
                     cat_parts.append(f"cat /tmp/{name}.append >> /etc/{name}")
-            for sub in ("subuid", "subgid"):
-                attr = f"{sub}_entries"
-                if getattr(ug, attr, []):
-                    copy_lines.append(f"COPY config/tmp/{sub}.append /tmp/{sub}.append")
-                    cat_parts.append(f"cat /tmp/{sub}.append >> /etc/{sub}")
-            for cl in copy_lines:
-                lines.append(cl)
             if cat_parts:
+                lines.append("COPY config/tmp/ /tmp/")
                 cat_parts.append("rm -f /tmp/*.append")
                 lines.append("RUN " + " && \\\n    ".join(cat_parts))
             # Create home directories

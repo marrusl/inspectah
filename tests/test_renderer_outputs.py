@@ -148,12 +148,12 @@ class TestContainerfile:
         assert "COPY config/etc/ /etc/" in cf
 
     def test_append_files_use_config_tmp(self, outputs_with_baseline):
-        """User .append files must be COPYd from config/tmp/, not config/etc/."""
+        """User .append files must be COPYd from config/tmp/ in a single layer."""
         cf = self._cf(outputs_with_baseline)
         snapshot = outputs_with_baseline["snapshot"]
         ug = snapshot.users_groups
         if ug and ug.passwd_entries:
-            assert "COPY config/tmp/passwd.append /tmp/passwd.append" in cf
+            assert "COPY config/tmp/ /tmp/" in cf
             assert "COPY config/etc/passwd.append" not in cf
 
     def test_append_files_on_disk_in_tmp(self, outputs_with_baseline):

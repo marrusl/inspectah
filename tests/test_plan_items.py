@@ -379,9 +379,9 @@ def test_append_files_written():
                   "gshadow.append", "subuid.append", "subgid.append"):
             assert (tmp_dir / f).exists(), f"Missing {f}"
         assert "mark:x:1000:1000" in (tmp_dir / "passwd.append").read_text()
-        # Verify the Containerfile uses config/tmp/ as the COPY source
+        # Verify the Containerfile uses a single consolidated COPY from config/tmp/
         cf = (Path(tmp) / "Containerfile").read_text()
-        assert "COPY config/tmp/passwd.append /tmp/passwd.append" in cf
+        assert "COPY config/tmp/ /tmp/" in cf
         assert "COPY config/etc/passwd.append" not in cf
 
 
