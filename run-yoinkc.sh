@@ -17,7 +17,7 @@ echo "=== Building container image ==="
 podman build -t "${IMAGE_NAME}:latest" "$REPO_DIR"
 
 echo "=== Running yoinkc ==="
-sudo podman run --rm \
+podman run --rm \
   --pid=host \
   --privileged \
   --security-opt label=disable \
