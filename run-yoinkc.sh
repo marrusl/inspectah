@@ -27,6 +27,7 @@ podman run --rm \
   "$IMAGE_NAME:latest" --output-dir /output
 
 echo "=== Packaging results ==="
-TARBALL="/home/mark/yoinkc-output-$(date +%Y%m%d-%H%M%S).tar.gz"
-tar -czf "$TARBALL" -C "$OUTPUT_DIR" .
+STAMP="yoinkc-output-$(date +%Y%m%d-%H%M%S)"
+TARBALL="/home/mark/${STAMP}.tar.gz"
+tar -czf "$TARBALL" -C "$OUTPUT_DIR" --transform "s,^\.,$STAMP," .
 echo "=== Done. Output in ${OUTPUT_DIR}, tarball at ${TARBALL} ==="
