@@ -34,15 +34,32 @@ yoinkc --help
 pytest
 ```
 
-## Container
+## Quick start
 
-Build the tool image:
+The fastest way to run yoinkc on a host. Downloads the run script and pulls the pre-built image from GHCR:
 
 ```bash
-podman build -t yoinkc .
+curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
 ```
 
-Run it against a host. **Typically you run the container on the host you are inspecting**, so both the host root and the output directory are bind-mounted from that same host. The tool reads the host via `/host` and writes artifacts to `--output-dir`; with the mount below, those artifacts end up on the host at `./output`.
+Output goes to `./yoinkc-output` by default, plus a hostname-stamped tarball for easy collection. To specify a different output directory:
+
+```bash
+curl -fsSL -o run-yoinkc.sh https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh
+sudo sh run-yoinkc.sh /path/to/output
+```
+
+> **Important:** `sudo` must wrap `sh`, not `curl`. The container requires rootful podman — if `sudo` only applies to the download, podman runs rootless and nsenter into host namespaces will fail.
+
+## Container
+
+The pre-built image is published to GHCR on every push to `main`:
+
+```
+ghcr.io/marrusl/yoinkc:latest
+```
+
+Multi-arch (amd64 + arm64). To run it directly:
 
 ```bash
 sudo podman run --rm \
@@ -51,7 +68,13 @@ sudo podman run --rm \
   --security-opt label=disable \
   -v /:/host:ro \
   -v ./output:/output:z \
-  yoinkc --output-dir /output
+  ghcr.io/marrusl/yoinkc:latest --output-dir /output
+```
+
+To build locally instead:
+
+```bash
+podman build -t yoinkc .
 ```
 
 > **Required flags:** The container must run with **rootful podman** (`sudo`), `--pid=host`, `--privileged`, and `--security-opt label=disable`. The tool performs a preflight check on startup and will exit with a clear error if any of these are missing. Use `--skip-preflight` to bypass the check if needed.
@@ -65,7 +88,7 @@ sudo podman run --rm \
 >
 > The tool needs broad read access across the host filesystem — the container is a packaging convenience, not a security boundary.
 
-After the run, `./output` on the host contains the Containerfile, config tree, reports, and snapshot. You can then copy that directory off the host or push it to GitHub with `--push-to-github`. The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
+After the run, the output directory contains the Containerfile, config tree, reports, and snapshot. You can then copy that directory off the host or push it to GitHub with `--push-to-github`. The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
 
 ---
 

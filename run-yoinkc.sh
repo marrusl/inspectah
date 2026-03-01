@@ -6,14 +6,20 @@ IMAGE="${YOINKC_IMAGE:-ghcr.io/marrusl/yoinkc:latest}"
 OUTPUT_DIR="${1:-${YOINKC_OUTPUT:-./yoinkc-output}}"
 shift 2>/dev/null || true
 
-if ! command -v podman >/dev/null 2>&1; then
-    echo "podman not found — installing..." >&2
+_need_install=""
+for cmd in podman tar; do
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        _need_install="${_need_install} ${cmd}"
+    fi
+done
+if [ -n "$_need_install" ]; then
+    echo "Installing missing tools:${_need_install}" >&2
     if command -v dnf >/dev/null 2>&1; then
-        dnf install -y podman
+        dnf install -y $_need_install
     elif command -v yum >/dev/null 2>&1; then
-        yum install -y podman
+        yum install -y $_need_install
     else
-        echo "ERROR: podman is not installed and no supported package manager found." >&2
+        echo "ERROR: missing${_need_install} and no supported package manager found." >&2
         exit 1
     fi
 fi
