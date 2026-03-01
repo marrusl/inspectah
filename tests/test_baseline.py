@@ -36,12 +36,20 @@ def test_select_base_image_rhel9():
     assert select_base_image("rhel", "9.4") == "registry.redhat.io/rhel9/rhel-bootc:9.4"
 
 
+def test_select_base_image_rhel10():
+    assert select_base_image("rhel", "10.0") == "registry.redhat.io/rhel10/rhel-bootc:10.0"
+
+
 def test_select_base_image_centos_stream9():
     assert select_base_image("centos", "9") == "quay.io/centos-bootc/centos-bootc:stream9"
 
 
+def test_select_base_image_fedora():
+    assert select_base_image("fedora", "41") == "quay.io/fedora/fedora-bootc:41"
+
+
 def test_select_base_image_unknown():
-    assert select_base_image("fedora", "40") is None
+    assert select_base_image("ubuntu", "24.04") is None
 
 
 def test_load_baseline_packages_file():

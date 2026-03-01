@@ -231,13 +231,26 @@ def test_network_inspector_with_fixtures(host_root, fixture_executor):
     assert not any("lookup local" in r for r in section.ip_rules)
     assert not any("lookup main" in r for r in section.ip_rules)
 
+    # --- DNF proxy ---
+    dnf_proxy = [p for p in section.proxy if "dnf" in p.source]
+    assert len(dnf_proxy) >= 1, "Expected DNF proxy entries from etc/dnf/dnf.conf"
+    assert any("proxy.corp.example.com" in p.line for p in dnf_proxy)
+
 
 def test_storage_inspector_with_fixtures(host_root, fixture_executor):
     from yoinkc.inspectors.storage import run as run_storage
     section = run_storage(host_root, fixture_executor)
     assert section is not None
-    assert len(section.fstab_entries) >= 1
+    assert len(section.fstab_entries) >= 3
     assert any(e.mount_point == "/" for e in section.fstab_entries)
+    assert any(e.fstype == "cifs" for e in section.fstab_entries)
+    assert any(e.fstype == "nfs" for e in section.fstab_entries)
+
+    # CIFS credential reference extraction
+    assert len(section.credential_refs) >= 1
+    cifs_cred = next((c for c in section.credential_refs if c.mount_point == "/mnt/nas"), None)
+    assert cifs_cred is not None
+    assert cifs_cred.credential_path == "/etc/samba/creds"
 
 
 def test_scheduled_tasks_inspector_with_fixtures(host_root, fixture_executor):

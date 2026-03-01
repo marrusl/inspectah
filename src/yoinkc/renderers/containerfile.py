@@ -10,6 +10,52 @@ from jinja2 import Environment
 
 from ..schema import ConfigFileKind, InspectionSnapshot
 
+
+def _summarise_diff(diff_text: str) -> List[str]:
+    """Produce human-readable change summaries from a unified diff.
+
+    For simple key=value changes, produces "key: old → new".
+    Falls back to raw +/- lines for complex changes.
+    """
+    additions: dict = {}
+    removals: dict = {}
+    other: List[str] = []
+
+    for line in diff_text.strip().splitlines():
+        if line.startswith("---") or line.startswith("+++") or line.startswith("@@"):
+            continue
+        stripped = line[1:].strip() if len(line) > 1 else ""
+        if not stripped or stripped.startswith("#"):
+            continue
+        if line.startswith("-"):
+            if "=" in stripped or ":" in stripped:
+                sep = "=" if "=" in stripped else ":"
+                key = stripped.split(sep, 1)[0].strip()
+                removals[key] = stripped.split(sep, 1)[1].strip()
+            else:
+                other.append(f"removed: {stripped}")
+        elif line.startswith("+"):
+            if "=" in stripped or ":" in stripped:
+                sep = "=" if "=" in stripped else ":"
+                key = stripped.split(sep, 1)[0].strip()
+                additions[key] = stripped.split(sep, 1)[1].strip()
+            else:
+                other.append(f"added: {stripped}")
+
+    results: List[str] = []
+    matched_keys = set()
+    for key in additions:
+        if key in removals:
+            results.append(f"{key}: {removals[key]} → {additions[key]}")
+            matched_keys.add(key)
+        else:
+            results.append(f"{key}: added ({additions[key]})")
+    for key in removals:
+        if key not in matched_keys:
+            results.append(f"{key}: removed")
+    results.extend(other)
+    return results or ["(diff available — see audit report)"]
+
 # Characters that would change shell semantics if injected into a RUN command.
 # The data comes from RPM databases / systemd on an operator-controlled host,
 # so this is a safety net against corrupted snapshots, not a security boundary.
@@ -232,17 +278,17 @@ def _config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> 
                 rel = f.path.lstrip("/")
                 if f.diff_against_rpm and f.diff_against_rpm.strip():
                     pkg_label = f.package or "RPM"
-                    diff_lines = [l for l in f.diff_against_rpm.strip().splitlines()
-                                  if (l.startswith("+") or l.startswith("-"))
-                                  and not l.startswith("---") and not l.startswith("+++")]
-                    summary = diff_lines[:3]
-                    lines.append(f"#   {rel} (modified from {pkg_label}):")
-                    for sl in summary:
-                        lines.append(f"#     {sl}")
-                    if len(diff_lines) > 3:
-                        lines.append(f"#     ... and {len(diff_lines) - 3} more changes")
+                    lines.append(f"#   {rel} (modified from {pkg_label} default):")
+                    changes = _summarise_diff(f.diff_against_rpm)
+                    for ch in changes[:5]:
+                        lines.append(f"#     - {ch}")
+                    remaining = len(changes) - 5
+                    if remaining > 0:
+                        lines.append(f"#     ... and {remaining} more change(s)")
+                    lines.append(f"#     See audit-report.md or report.html for full diff")
                 else:
-                    lines.append(f"#   {rel}")
+                    flags = f" (rpm -Va: {f.rpm_va_flags})" if f.rpm_va_flags else ""
+                    lines.append(f"#   {rel}{flags}")
         if unowned:
             lines.append(f"# Unowned configs ({len(unowned)}):")
             for f in unowned[:10]:
@@ -754,17 +800,22 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             lines.append(h)
         lines.append("HOSTSEOF")
 
+    _DNF_PROXY_SOURCES = ("etc/dnf/dnf.conf", "etc/yum.conf")
     if net and net.proxy:
-        lines.append("# Proxy settings detected — bake as environment defaults")
-        env_lines = []
-        for p in net.proxy:
-            if "=" in p.line:
-                env_lines.append(p.line)
-        if env_lines:
-            lines.append("RUN mkdir -p /etc/environment.d && cat > /etc/environment.d/proxy.conf << 'PROXYEOF'")
-            for el in env_lines:
-                lines.append(el)
-            lines.append("PROXYEOF")
+        env_entries = [p for p in net.proxy if p.source not in _DNF_PROXY_SOURCES]
+        dnf_entries = [p for p in net.proxy if p.source in _DNF_PROXY_SOURCES]
+        if env_entries:
+            lines.append("# Proxy settings detected — bake as environment defaults")
+            env_lines = [p.line for p in env_entries if "=" in p.line]
+            if env_lines:
+                lines.append("RUN mkdir -p /etc/environment.d && cat > /etc/environment.d/proxy.conf << 'PROXYEOF'")
+                for el in env_lines:
+                    lines.append(el)
+                lines.append("PROXYEOF")
+        if dnf_entries:
+            lines.append("# DNF proxy configured — preserved in etc/dnf/dnf.conf (included in COPY config/etc/)")
+            for p in dnf_entries:
+                lines.append(f"#   {p.line}")
 
     if net and net.static_routes:
         lines.append(f"# {len(net.static_routes)} static route file(s) detected")

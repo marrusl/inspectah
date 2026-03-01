@@ -34,10 +34,15 @@ def select_base_image(os_id: str, version_id: str) -> Optional[str]:
     os_id = os_id.lower()
     major = version_id.split(".")[0] if version_id else ""
 
-    if os_id == "rhel" and major == "9":
-        return f"registry.redhat.io/rhel9/rhel-bootc:{version_id}"
+    if os_id == "rhel":
+        if major == "9":
+            return f"registry.redhat.io/rhel9/rhel-bootc:{version_id}"
+        if major == "10":
+            return f"registry.redhat.io/rhel10/rhel-bootc:{version_id}"
     if "centos" in os_id and major == "9":
         return "quay.io/centos-bootc/centos-bootc:stream9"
+    if os_id == "fedora" and major:
+        return f"quay.io/fedora/fedora-bootc:{major}"
 
     _debug(f"no base image mapping for os_id={os_id} version_id={version_id}")
     return None

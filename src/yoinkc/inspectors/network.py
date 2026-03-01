@@ -3,6 +3,7 @@
 File-based scan under host_root, plus ``ip route`` / ``ip rule`` via executor.
 """
 
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -278,6 +279,23 @@ def run(
                                     section.proxy.append(ProxyEntry(source=str(f.relative_to(host_root)), line=line.strip()))
                         except (PermissionError, OSError):
                             pass
+        except (PermissionError, OSError):
+            pass
+
+    # --- DNF proxy config ---
+    _DNF_PROXY_KEYS = ("proxy", "proxy_username", "proxy_password", "proxy_auth_method")
+    for dnf_conf_path in ("etc/dnf/dnf.conf", "etc/yum.conf"):
+        dnf_conf = host_root / dnf_conf_path
+        if not dnf_conf.is_file():
+            continue
+        try:
+            for line in dnf_conf.read_text().splitlines():
+                stripped = line.strip()
+                if stripped.startswith("#") or "=" not in stripped:
+                    continue
+                key = stripped.split("=", 1)[0].strip().lower()
+                if key in _DNF_PROXY_KEYS:
+                    section.proxy.append(ProxyEntry(source=dnf_conf_path, line=stripped))
         except (PermissionError, OSError):
             pass
 

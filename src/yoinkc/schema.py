@@ -182,6 +182,15 @@ class FstabEntry(BaseModel):
     device: str
     mount_point: str
     fstype: str
+    options: str = ""
+
+
+class CredentialRef(BaseModel):
+    """A reference to a credential file discovered in mount options or config."""
+
+    mount_point: str
+    credential_path: str
+    source: str = "fstab"
 
 
 class MountPoint(BaseModel):
@@ -211,6 +220,7 @@ class StorageSection(BaseModel):
     mount_points: List[MountPoint] = Field(default_factory=list)
     lvm_info: List[LvmVolume] = Field(default_factory=list)
     var_directories: List[VarDirectory] = Field(default_factory=list)
+    credential_refs: List[CredentialRef] = Field(default_factory=list)
 
 
 # --- Scheduled task sub-models ---
@@ -409,12 +419,16 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
+SCHEMA_VERSION = 2
+
+
 class InspectionSnapshot(BaseModel):
     """
     Full inspection snapshot. Serialized as inspection-snapshot.json.
     All sections are optional so we can run a subset of inspectors.
     """
 
+    schema_version: int = SCHEMA_VERSION
     meta: dict = Field(default_factory=dict)  # hostname, timestamp, profile, etc.
     os_release: Optional[OsRelease] = None
 
@@ -435,4 +449,4 @@ class InspectionSnapshot(BaseModel):
     warnings: List[dict] = Field(default_factory=list)
     redactions: List[dict] = Field(default_factory=list)
 
-    model_config = {"extra": "forbid"}
+    model_config = {"extra": "ignore"}

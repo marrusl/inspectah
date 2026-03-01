@@ -128,25 +128,29 @@ def _read_os_release(host_root: Path) -> Optional[OsRelease]:
     )
 
 
+_SUPPORTED_RHEL_MAJORS = {"9", "10"}
+
+
 def _validate_supported_host(os_release: Optional[OsRelease]) -> Optional[str]:
     """Return error message if host is not supported, else None."""
     if not os_release or not os_release.version_id:
         return None
     vid = os_release.version_id
-    if os_release.id == "rhel":
-        if not vid.startswith("9."):
+    major = vid.split(".")[0]
+    os_id = os_release.id.lower()
+    if os_id == "rhel":
+        if major not in _SUPPORTED_RHEL_MAJORS:
+            supported = ", ".join(f"RHEL {m}.x" for m in sorted(_SUPPORTED_RHEL_MAJORS))
             return (
-                f"Host is running RHEL {vid}. This version of yoinkc only supports "
-                "RHEL 9.x and CentOS Stream 9."
+                f"Host is running RHEL {vid}. This version of yoinkc supports "
+                f"{supported}, CentOS Stream 9, and Fedora."
             )
-    elif "centos" in os_release.id.lower():
+    elif "centos" in os_id:
         if vid != "9":
             return (
                 f"Host is running CentOS {vid}. This version of yoinkc only supports "
                 "CentOS Stream 9."
             )
-    else:
-        return None
     return None
 
 

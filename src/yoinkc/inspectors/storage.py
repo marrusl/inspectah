@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..executor import Executor
-from ..schema import StorageSection, FstabEntry, MountPoint, LvmVolume, VarDirectory
+from ..schema import StorageSection, FstabEntry, MountPoint, LvmVolume, VarDirectory, CredentialRef
 from .._util import safe_iterdir as _safe_iterdir
 
 
@@ -119,15 +119,25 @@ def run(
         fstab_lines = fstab.read_text().splitlines() if fstab.exists() else []
     except (PermissionError, OSError):
         fstab_lines = []
+    _CRED_OPTION_KEYS = ("credentials", "credential", "password_file", "secretfile")
     if fstab_lines:
         for line in fstab_lines:
             line = line.strip()
             if line and not line.startswith("#"):
                 parts = line.split()
                 if len(parts) >= 3:
+                    opts = parts[3] if len(parts) >= 4 else ""
                     section.fstab_entries.append(
-                        FstabEntry(device=parts[0], mount_point=parts[1], fstype=parts[2])
+                        FstabEntry(device=parts[0], mount_point=parts[1], fstype=parts[2], options=opts)
                     )
+                    for opt in opts.split(","):
+                        for cred_key in _CRED_OPTION_KEYS:
+                            if opt.strip().startswith(cred_key + "="):
+                                cred_path = opt.strip().split("=", 1)[1]
+                                section.credential_refs.append(CredentialRef(
+                                    mount_point=parts[1],
+                                    credential_path=cred_path,
+                                ))
 
     if executor:
         r = executor(["findmnt", "--json", "--real"])
@@ -172,6 +182,46 @@ def run(
             section.mount_points.append(MountPoint(target="multipath", source="etc/multipath.conf", fstype="dm-multipath"))
     except (PermissionError, OSError):
         pass
+
+    # LVM configuration customizations
+    try:
+        lvm_conf = host_root / "etc/lvm/lvm.conf"
+        if lvm_conf.exists():
+            section.mount_points.append(MountPoint(
+                target="lvm-config",
+                source="etc/lvm/lvm.conf",
+                fstype="lvm",
+            ))
+    except (PermissionError, OSError):
+        pass
+    for lvm_profile_dir in (host_root / "etc/lvm/profile",):
+        try:
+            if lvm_profile_dir.exists():
+                for f in _safe_iterdir(lvm_profile_dir):
+                    if f.is_file() and f.suffix == ".profile":
+                        section.mount_points.append(MountPoint(
+                            target=f"lvm-profile ({f.name})",
+                            source=str(f.relative_to(host_root)),
+                            fstype="lvm",
+                        ))
+        except (PermissionError, OSError):
+            pass
+
+    # Device-mapper: capture non-LVM DM devices via dmsetup
+    if executor:
+        try:
+            r = executor(["dmsetup", "table", "--target", "crypt"])
+            if r.returncode == 0 and r.stdout.strip() and "No devices found" not in r.stdout:
+                for line in r.stdout.strip().splitlines():
+                    name = line.split(":")[0].strip() if ":" in line else line.strip()
+                    if name:
+                        section.mount_points.append(MountPoint(
+                            target=f"dm-crypt ({name})",
+                            source="dmsetup",
+                            fstype="dm-crypt",
+                        ))
+        except Exception:
+            pass
 
     # Automount maps (/etc/auto.master, /etc/auto.*)
     auto_master = host_root / "etc/auto.master"

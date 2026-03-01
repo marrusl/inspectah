@@ -253,6 +253,16 @@ def render(
             for lv in snapshot.storage.lvm_info:
                 lines.append(f"- {lv.lv_name} ({lv.vg_name}) {lv.lv_size}")
             lines.append("")
+        if snapshot.storage.credential_refs:
+            lines.append("### Mount Credential References")
+            lines.append("")
+            lines.append("These mounts reference credential files that need a secret injection strategy at deploy time.")
+            lines.append("")
+            lines.append("| Mount Point | Credential Path | Action |")
+            lines.append("|-------------|-----------------|--------|")
+            for cr in snapshot.storage.credential_refs:
+                lines.append(f"| `{cr.mount_point}` | `{cr.credential_path}` | Inject via secret store or kickstart |")
+            lines.append("")
 
     st = snapshot.scheduled_tasks
     if st and (st.cron_jobs or st.systemd_timers or st.generated_timer_units or st.at_jobs):

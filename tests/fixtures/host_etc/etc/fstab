@@ -1,2 +1,4 @@
 # /etc/fstab - fixture for storage inspector
 /dev/vda1 / xfs defaults 0 1
+//nas.corp/share /mnt/nas cifs credentials=/etc/samba/creds,uid=1000 0 0
+nas:/data /data nfs defaults 0 0
