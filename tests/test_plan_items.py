@@ -647,6 +647,17 @@ class TestCrossMajorWarning:
             cf = (Path(tmp) / "Containerfile").read_text()
         assert "CROSS-MAJOR-VERSION" not in cf
 
+    def test_no_warning_centos_stream_tag(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="CentOS Stream", version_id="10", id="centos"),
+            rpm=RpmSection(base_image="quay.io/centos-bootc/centos-bootc:stream10"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "CROSS-MAJOR-VERSION" not in cf
+
 
 class TestPythonVersionMap:
 

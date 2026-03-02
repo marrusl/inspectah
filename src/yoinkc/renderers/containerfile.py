@@ -399,7 +399,8 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     if snapshot.os_release and snapshot.os_release.version_id and snapshot.rpm and snapshot.rpm.base_image:
         source_major = snapshot.os_release.version_id.split(".")[0]
         target_tag = snapshot.rpm.base_image.rsplit(":", 1)[-1] if ":" in snapshot.rpm.base_image else ""
-        target_major = target_tag.split(".")[0] if target_tag else ""
+        # Strip "stream" prefix from CentOS tags (e.g. "stream10" -> "10")
+        target_major = re.sub(r"^stream", "", target_tag).split(".")[0] if target_tag else ""
         if source_major and target_major and source_major != target_major:
             lines.append("")
             lines.append("# !! CROSS-MAJOR-VERSION MIGRATION !!")
