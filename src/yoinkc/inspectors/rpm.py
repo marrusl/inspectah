@@ -298,8 +298,7 @@ def run(
         if str(host_root) == "/":
             cmd_va = ["rpm", "-Va", "--nodeps", "--noscripts"]
         else:
-            dbpath = str(host_root / "var" / "lib" / "rpm")
-            cmd_va = ["rpm", "--root", str(host_root), "--dbpath", dbpath] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
+            cmd_va = ["rpm", "--root", str(host_root), "--dbpath", "/var/lib/rpm"] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
         _debug(f"running: {' '.join(cmd_va)}")
         result_va = executor(cmd_va)
         if result_va.stderr and "cannot open Packages database" in result_va.stderr:
