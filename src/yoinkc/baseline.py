@@ -28,6 +28,7 @@ def _debug(msg: str) -> None:
 # ---------------------------------------------------------------------------
 
 _RHEL_BOOTC_MIN: dict = {"9": "9.6", "10": "10.0"}
+_FEDORA_BOOTC_MIN = "41"
 
 _CENTOS_STREAM_IMAGES: dict = {
     "9": "quay.io/centos-bootc/centos-bootc:stream9",
@@ -75,7 +76,9 @@ def select_base_image(
         return (_CENTOS_STREAM_IMAGES[major], major)
 
     if os_id == "fedora" and major:
-        return (f"quay.io/fedora/fedora-bootc:{major}", version_id)
+        effective = target_version or major
+        effective = _clamp_version(effective, _FEDORA_BOOTC_MIN)
+        return (f"quay.io/fedora/fedora-bootc:{effective}", effective)
 
     _debug(f"no base image mapping for os_id={os_id} version_id={version_id}")
     return (None, None)

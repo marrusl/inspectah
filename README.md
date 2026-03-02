@@ -287,7 +287,7 @@ The tool generates a package baseline by querying the target **bootc base image*
 | RHEL 10.x | `registry.redhat.io/rhel10/rhel-bootc:{version}` | |
 | CentOS Stream 9 | `quay.io/centos-bootc/centos-bootc:stream9` | |
 | CentOS Stream 10 | `quay.io/centos-bootc/centos-bootc:stream10` | |
-| Fedora | `quay.io/fedora/fedora-bootc:{major}` | Any Fedora version |
+| Fedora | `quay.io/fedora/fedora-bootc:{major}` | Version clamped to 41 minimum |
 
 **Source/target version separation:** The source host (what you're inspecting) and the target image (your Containerfile's FROM line) can differ. A RHEL 9.4 host auto-targets `rhel-bootc:9.6` (the minimum bootc release). Override with `--target-version 9.8` or `--target-image` for full control. Cross-major-version migrations (e.g. RHEL 9 → 10) produce a prominent warning since package names, services, and config formats may differ.
 

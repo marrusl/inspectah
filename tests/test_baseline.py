@@ -87,6 +87,19 @@ def test_select_base_image_centos_stream10():
 def test_select_base_image_fedora():
     image, ver = select_base_image("fedora", "41")
     assert image == "quay.io/fedora/fedora-bootc:41"
+    assert ver == "41"
+
+
+def test_select_base_image_fedora_clamped():
+    image, ver = select_base_image("fedora", "40")
+    assert image == "quay.io/fedora/fedora-bootc:41"
+    assert ver == "41"
+
+
+def test_select_base_image_fedora_above_minimum():
+    image, ver = select_base_image("fedora", "42")
+    assert image == "quay.io/fedora/fedora-bootc:42"
+    assert ver == "42"
 
 
 def test_select_base_image_unknown():
