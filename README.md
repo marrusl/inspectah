@@ -1,6 +1,6 @@
 # yoinkc
 
-Yoink package-based CentOS/RHEL hosts and produce bootc image artifacts (Containerfile, config tree, audit report, etc.).
+Inspect package-based RHEL, CentOS Stream, and Fedora hosts and produce bootc image artifacts (Containerfile, config tree, audit report, etc.).
 
 ## Architecture
 
@@ -212,6 +212,13 @@ Each inspector examines one aspect of the host and contributes a section to the 
 | `--from-snapshot PATH` | Skip inspection; load snapshot from file and run renderers only |
 | `--inspect-only` | Run inspectors and save snapshot; do not run renderers |
 
+### Target Image
+
+| Flag | Description |
+|------|-------------|
+| `--target-version VERSION` | Target bootc image version (e.g. `9.6`, `10.2`). Default: source host version, clamped to minimum bootc-supported release (9.6 for RHEL 9) |
+| `--target-image IMAGE` | Full target bootc base image reference (e.g. `registry.redhat.io/rhel10/rhel-bootc:10.2`). Overrides `--target-version` and all automatic mapping |
+
 ### Inspection Options
 
 | Flag | Description |
@@ -258,14 +265,28 @@ The generated Containerfile follows a deliberate layer order optimized for build
 
 ## Baseline Generation
 
-The tool generates a package baseline by querying the target **bootc base image** directly. It detects the host OS from `/etc/os-release`, maps it to the corresponding base image (RHEL 9.x to `registry.redhat.io/rhel9/rhel-bootc:9.x`, CentOS Stream 9 to `quay.io/centos-bootc/centos-bootc:stream9`), and runs `podman run --rm <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete package list. The diff against host packages produces exactly the `dnf install` list the Containerfile needs.
+The tool generates a package baseline by querying the target **bootc base image** directly. It detects the host OS from `/etc/os-release`, maps it to the corresponding base image, and runs `podman run --rm <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete package list. The diff against host packages produces exactly the `dnf install` list the Containerfile needs.
+
+**Supported OS → base image mappings:**
+
+| Source Host | Target Base Image | Notes |
+|-------------|-------------------|-------|
+| RHEL 9.x | `registry.redhat.io/rhel9/rhel-bootc:{version}` | Version clamped to 9.6 minimum (first bootc release) |
+| RHEL 10.x | `registry.redhat.io/rhel10/rhel-bootc:{version}` | |
+| CentOS Stream 9 | `quay.io/centos-bootc/centos-bootc:stream9` | |
+| CentOS Stream 10 | `quay.io/centos-bootc/centos-bootc:stream10` | |
+| Fedora | `quay.io/fedora/fedora-bootc:{major}` | Any Fedora version |
+
+**Source/target version separation:** The source host (what you're inspecting) and the target image (your Containerfile's FROM line) can differ. A RHEL 9.4 host auto-targets `rhel-bootc:9.6` (the minimum bootc release). Override with `--target-version 9.8` or `--target-image` for full control. Cross-major-version migrations (e.g. RHEL 9 → 10) produce a prominent warning since package names, services, and config formats may differ.
+
+**RHEL registry authentication:** RHEL base images on `registry.redhat.io` require authentication. The tool checks for credentials before attempting to pull and will exit with instructions if credentials are missing. Run `sudo podman login registry.redhat.io` on the host before running yoinkc, or use `--baseline-packages FILE` as an alternative. CentOS Stream and Fedora images are on public registries and need no authentication.
 
 When running inside a container, the tool uses `nsenter` to execute `podman` in the host's namespaces. This requires `sudo`, `--pid=host`, and `--privileged` on the outer container (see the run command above). Before attempting `nsenter`, the tool runs a fast probe to detect rootless containers and missing capabilities, and provides specific guidance if the probe fails.
 
 **Fallback behavior:**
 
 - **Base image queryable** — accurate package diff, only truly operator-added packages appear in the Containerfile
-- **Base image not available** (base image not pulled, or `--skip-preflight` used without proper flags) — enters "all-packages mode" where every installed package is treated as operator-added (no baseline subtraction), with a clear warning in the reports
+- **Base image not available** (not pulled, auth failure, or `--skip-preflight` used without proper flags) — enters "all-packages mode" where every installed package is treated as operator-added (no baseline subtraction), with a clear warning in the reports
 - **Air-gapped environments** — use `--baseline-packages FILE` to provide a newline-separated list of package names, bypassing the podman query
 
 The resolved baseline (including the base image package list) is cached in the inspection snapshot, so `--from-snapshot` re-renders work without network access or podman.

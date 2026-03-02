@@ -29,6 +29,8 @@ def _fixture_executor(cmd, cwd=None):
     if cmd[-1] == "true" and "nsenter" in cmd:
         return RunResult(stdout="", stderr="", returncode=0)
     cmd_str = " ".join(cmd)
+    if "podman" in cmd and "login" in cmd and "--get-login" in cmd:
+        return RunResult(stdout="testuser\n", stderr="", returncode=0)
     if "podman" in cmd and "rpm" in cmd and "-qa" in cmd:
         return RunResult(stdout=(FIXTURES / "base_image_packages.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-qa" in cmd:

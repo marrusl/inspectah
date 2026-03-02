@@ -11,6 +11,7 @@ directly. The tool uses ``nsenter -t 1 -m -u -i -n`` to execute podman in
 the host's namespaces.  This requires ``--pid=host`` on the outer container.
 """
 
+import sys
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
 
@@ -194,11 +195,40 @@ class BaselineResolver:
     # Podman queries
     # ------------------------------------------------------------------
 
+    def _check_registry_auth(self, image: str) -> bool:
+        """Check if podman has credentials for the image's registry.
+
+        Returns True if auth is available or not needed, False if missing.
+        Only checks registry.redhat.io (public registries don't need auth).
+        """
+        if "registry.redhat.io" not in image:
+            return True
+        result = self._run_on_host(["podman", "login", "--get-login", "registry.redhat.io"])
+        if result is None:
+            return False
+        if result.returncode != 0:
+            _debug(
+                "registry.redhat.io auth check failed: "
+                + (result.stderr.strip()[:200] if result.stderr else "no credentials")
+            )
+            print(
+                "ERROR: No credentials for registry.redhat.io. "
+                "The base image cannot be pulled without authentication.\n"
+                "Fix: run 'sudo podman login registry.redhat.io' on the host first.\n"
+                "Alternative: provide a pre-exported package list via --baseline-packages FILE.",
+                file=sys.stderr,
+            )
+            return False
+        _debug(f"registry.redhat.io auth OK (logged in as {result.stdout.strip()})")
+        return True
+
     def query_packages(self, base_image: str) -> Optional[Set[str]]:
         """Run ``podman run --rm <base_image> rpm -qa`` via nsenter.
 
         Returns the set of package names in the base image, or None on failure.
         """
+        if not self._check_registry_auth(base_image):
+            return None
         cmd = [
             "podman", "run", "--rm", "--cgroups=disabled", base_image,
             "rpm", "-qa", "--queryformat", r"%{NAME}\n",

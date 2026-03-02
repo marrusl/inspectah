@@ -43,6 +43,8 @@ def _make_executor(pkg_list: Optional[str] = None):
         if cmd[-1] == "true" and "nsenter" in cmd:
             return RunResult(stdout="", stderr="", returncode=0)
         c = " ".join(cmd)
+        if "podman" in c and "login" in c and "--get-login" in c:
+            return RunResult(stdout="testuser\n", stderr="", returncode=0)
         if "podman" in c and "rpm" in c:
             if pkg_list is not None:
                 return RunResult(stdout=pkg_list, stderr="", returncode=0)
