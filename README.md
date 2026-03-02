@@ -29,6 +29,7 @@ Environment variables for customization:
 |----------|--------|
 | `YOINKC_OUTPUT` | Default output directory (overridden by positional arg) |
 | `YOINKC_IMAGE` | Override the container image (e.g. a local build or pinned tag) |
+| `YOINKC_DEBUG` | Set to `1` to enable debug logging to stderr |
 
 > **Important:** `sudo` must wrap `sh`, not `curl`. The container requires rootful podman — if `sudo` only applies to the download, podman runs rootless and nsenter into host namespaces will fail.
 
