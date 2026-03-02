@@ -289,12 +289,14 @@ def run(
                 p.state = PackageState.ADDED
                 section.packages_added.append(p)
 
-    # 3) rpm -Va
+    # 3) rpm -Va (rc != 0 is normal — it means files were modified)
     if executor is not None:
         cmd_va = ["rpm", "-Va", "--nodeps", "--noscripts"]
         if str(host_root) != "/":
             cmd_va = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
+        _debug(f"running: {' '.join(cmd_va)}")
         result_va = executor(cmd_va)
+        _debug(f"rpm -Va: rc={result_va.returncode}, stdout={len(result_va.stdout)} bytes, stderr={result_va.stderr[:200] if result_va.stderr else ''}")
         section.rpm_va = _parse_rpm_va(result_va.stdout)
     else:
         section.rpm_va = []
