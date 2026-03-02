@@ -38,6 +38,7 @@ podman run --rm \
   --pid=host \
   --privileged \
   --security-opt label=disable \
+  ${YOINKC_DEBUG:+-e YOINKC_DEBUG=1} \
   -v "${HOST_ROOT}:/host:ro" \
   -v "${OUTPUT_DIR}:/output:z" \
   "$IMAGE" --output-dir /output "$@"
