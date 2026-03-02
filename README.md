@@ -2,56 +2,48 @@
 
 Inspect package-based RHEL, CentOS Stream, and Fedora hosts and produce bootc image artifacts (Containerfile, config tree, audit report, etc.).
 
-## Architecture
-
-- **Inspectors** run against a host root (default `/host`) and produce structured JSON (the inspection snapshot).
-- **Renderers** consume the snapshot and produce output artifacts (Containerfile, markdown report, HTML report, etc.).
-
-## Usage
-
-All renderers write to the **output directory**, which is created if it does not exist. Default: `./output`.
-
-```bash
-# Inspect host mounted at /host, write to default ./output
-yoinkc
-
-# Specify output directory
-yoinkc --output-dir ./my-output
-# or: yoinkc -o ./my-output
-
-# Save snapshot only (no render)
-yoinkc --inspect-only -o ./out
-
-# Render from existing snapshot
-yoinkc --from-snapshot ./out/inspection-snapshot.json -o ./rendered
-```
-
-## Development
-
-```bash
-pip install -e .
-yoinkc --help
-pytest
-```
-
 ## Quick start
 
-The fastest way to run yoinkc on a host. Downloads the run script and pulls the pre-built image from GHCR:
+Run yoinkc on any supported host. The script installs podman if needed, pulls the pre-built image, runs the inspection, and packages the output into a hostname-stamped tarball:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
 ```
 
-Output goes to `./yoinkc-output` by default, plus a hostname-stamped tarball for easy collection. To specify a different output directory:
+Output goes to `./yoinkc-output` by default. To specify a different directory:
 
 ```bash
 curl -fsSL -o run-yoinkc.sh https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh
 sudo sh run-yoinkc.sh /path/to/output
 ```
 
+Pass extra flags through to yoinkc after the output directory:
+
+```bash
+sudo sh run-yoinkc.sh /path/to/output --config-diffs --validate
+```
+
+Environment variables for customization:
+
+| Variable | Effect |
+|----------|--------|
+| `YOINKC_OUTPUT` | Default output directory (overridden by positional arg) |
+| `YOINKC_IMAGE` | Override the container image (e.g. a local build or pinned tag) |
+
 > **Important:** `sudo` must wrap `sh`, not `curl`. The container requires rootful podman — if `sudo` only applies to the download, podman runs rootless and nsenter into host namespaces will fail.
 
-## Container
+> **RHEL hosts:** The base image on `registry.redhat.io` requires authentication. Run `sudo podman login registry.redhat.io` on the host before running yoinkc, or use `--baseline-packages FILE` as an alternative. CentOS Stream and Fedora images are on public registries and need no authentication.
+
+---
+
+## Architecture
+
+- **Inspectors** run against a host root (default `/host`) and produce structured JSON (the inspection snapshot).
+- **Renderers** consume the snapshot and produce output artifacts (Containerfile, markdown report, HTML report, etc.).
+
+---
+
+## Running directly (advanced)
 
 The pre-built image is published to GHCR on every push to `main`:
 
@@ -59,7 +51,7 @@ The pre-built image is published to GHCR on every push to `main`:
 ghcr.io/marrusl/yoinkc:latest
 ```
 
-Multi-arch (amd64 + arm64). To run it directly:
+Multi-arch (amd64 + arm64). To run it directly without the wrapper script:
 
 ```bash
 sudo podman run --rm \
@@ -89,6 +81,32 @@ podman build -t yoinkc .
 > The tool needs broad read access across the host filesystem — the container is a packaging convenience, not a security boundary.
 
 After the run, the output directory contains the Containerfile, config tree, reports, and snapshot. You can then copy that directory off the host or push it to GitHub with `--push-to-github`. The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
+
+---
+
+## Development
+
+```bash
+pip install -e .
+yoinkc --help
+pytest
+```
+
+### Usage (when installed directly)
+
+```bash
+# Inspect host mounted at /host, write to default ./output
+yoinkc
+
+# Specify output directory
+yoinkc --output-dir ./my-output
+
+# Save snapshot only (no render)
+yoinkc --inspect-only -o ./out
+
+# Render from existing snapshot
+yoinkc --from-snapshot ./out/inspection-snapshot.json -o ./rendered
+```
 
 ---
 
