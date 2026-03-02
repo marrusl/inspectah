@@ -187,17 +187,29 @@ Each inspector examines one aspect of the host and contributes a section to the 
 
 ## Output Artifacts
 
-| File | Description |
-|------|-------------|
-| `Containerfile` | Layered image definition with correct ordering for cache efficiency |
-| `config/` | Config file tree preserving original paths, ready for `COPY` |
-| `quadlet/` | Quadlet unit files for container workloads |
-| `audit-report.md` | Detailed markdown report with triage breakdown and storage migration plan |
-| `report.html` | Self-contained interactive HTML dashboard with syntax-highlighted config diffs |
-| `README.md` | Build instructions, `podman build` command, `bootc switch` command, FIXME checklist |
-| `kickstart-suggestion.ks` | Kickstart fragment for deploy-time config (DHCP, static routes, NFS credentials, proxy) |
-| `secrets-review.md` | List of redacted sensitive content for operator review |
-| `inspection-snapshot.json` | Full structured snapshot (re-renderable with `--from-snapshot`) |
+```
+output/
+├── Containerfile                 # Layered image definition (cache-optimized layer order)
+├── README.md                     # Build/deploy commands, FIXME checklist
+├── audit-report.md               # Detailed findings with storage migration plan
+├── report.html                   # Self-contained interactive HTML dashboard
+├── secrets-review.md             # Redacted sensitive content for operator review
+├── kickstart-suggestion.ks       # Deploy-time config (DHCP, DNS, credentials)
+├── inspection-snapshot.json      # Raw structured data (re-renderable via --from-snapshot)
+├── config/                       # Files to COPY into the image
+│   ├── etc/                      # Mirrors /etc — modified configs, repos, firewall, timers
+│   │   ├── httpd/conf/           # Modified RPM-owned configs
+│   │   ├── firewalld/zones/      # Firewall zone definitions
+│   │   ├── systemd/system/       # Local timer units (cron-converted + operator)
+│   │   ├── sysctl.d/             # Non-default sysctl values
+│   │   ├── modules-load.d/       # Kernel module configs
+│   │   ├── tmpfiles.d/           # /var directory structure for bootc bootstrap
+│   │   └── ...
+│   ├── opt/                      # Non-RPM software (venvs, npm apps, binaries)
+│   ├── usr/                      # Files under /usr/local
+│   └── tmp/                      # User/group .append fragments (separate from etc/)
+└── quadlet/                      # Container workload unit files
+```
 
 ---
 
