@@ -11,7 +11,7 @@ from typing import List, Optional, Set
 
 from ..executor import Executor
 from ..schema import ConfigFileEntry, ConfigFileKind, ConfigSection, RpmSection
-from .._util import debug as _debug_fn
+from .._util import debug as _debug_fn, make_warning
 
 
 def _debug(msg: str) -> None:
@@ -168,11 +168,10 @@ def _rpm_owned_paths(executor: Optional[Executor], host_root: Path, warnings: Op
         result = executor(cmd)
     if result.returncode != 0:
         if warnings is not None:
-            warnings.append({
-                "source": "config",
-                "message": "rpm -qla failed — unowned file detection is unavailable. Config files not owned by any RPM package will not be captured.",
-                "severity": "warning",
-            })
+            warnings.append(make_warning(
+                "config",
+                "rpm -qla failed — unowned file detection is unavailable. Config files not owned by any RPM package will not be captured.",
+            ))
         return set()
     paths: Set[str] = set()
     for line in result.stdout.splitlines():
@@ -341,11 +340,10 @@ def run(
             )
         )
     if config_diffs and config_diff_failures > 0 and warnings is not None:
-        warnings.append({
-            "source": "config",
-            "message": f"--config-diffs: {config_diff_failures} file(s) could not be diffed against RPM defaults (RPM not found in cache or repos) — full file content included instead.",
-            "severity": "warning",
-        })
+        warnings.append(make_warning(
+            "config",
+            f"--config-diffs: {config_diff_failures} file(s) could not be diffed against RPM defaults (RPM not found in cache or repos) — full file content included instead.",
+        ))
 
     # 2) Unowned files: in /etc but not in rpm_owned_paths
     if rpm_owned_paths_override is not None:

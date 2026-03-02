@@ -172,6 +172,25 @@ def test_service_inspector_with_fixtures(host_root, fixture_executor):
     assert "httpd.service" in section.enabled_units
 
 
+def test_scan_unit_files_from_fs(host_root):
+    """Test the filesystem fallback for unit file state detection."""
+    from yoinkc.inspectors.service import _scan_unit_files_from_fs
+    units = _scan_unit_files_from_fs(host_root)
+
+    assert units.get("test-installable.service") == "enabled", (
+        "Unit in .wants/ should be enabled"
+    )
+    assert units.get("test-masked.service") == "masked", (
+        "Symlink to /dev/null should be masked"
+    )
+    assert units.get("test-static.service") == "static", (
+        "Vendor unit without [Install] should be static"
+    )
+    # fstrim.service has [Install] but is not in .wants/ -> disabled
+    if "fstrim.service" in units:
+        assert units["fstrim.service"] in ("disabled", "static")
+
+
 def test_config_inspector_with_fixtures(host_root, fixture_executor):
     from yoinkc.inspectors.config import run as run_config
     from yoinkc.inspectors.rpm import run as run_rpm
@@ -566,6 +585,37 @@ def test_run_all_no_baseline_warning(host_root):
     assert snapshot.rpm.no_baseline is True
     rpm_warnings = [w for w in snapshot.warnings if w.get("source") == "rpm"]
     assert any("base image" in w.get("message", "").lower() for w in rpm_warnings)
+
+
+def test_cross_major_warning_in_snapshot(host_root, fixture_executor):
+    """Cross-major-version warning appears in snapshot.warnings."""
+    snapshot = run_all(
+        host_root,
+        executor=fixture_executor,
+        target_version="10.0",
+    )
+    cross_warnings = [
+        w for w in snapshot.warnings
+        if "Cross-major-version" in w.get("message", "")
+    ]
+    assert len(cross_warnings) == 1, (
+        f"Expected exactly one cross-major warning, got {len(cross_warnings)}"
+    )
+    assert cross_warnings[0]["severity"] == "error"
+
+
+def test_no_cross_major_warning_same_version(host_root, fixture_executor):
+    """No cross-major warning when source and target are same major."""
+    snapshot = run_all(
+        host_root,
+        executor=fixture_executor,
+        target_version="9.8",
+    )
+    cross_warnings = [
+        w for w in snapshot.warnings
+        if "Cross-major-version" in w.get("message", "")
+    ]
+    assert len(cross_warnings) == 0
 
 
 def test_snapshot_roundtrip_with_baseline(host_root, fixture_executor):

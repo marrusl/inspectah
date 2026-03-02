@@ -10,6 +10,7 @@ from typing import Callable, List, Optional, TypeVar
 
 from ..executor import Executor, make_executor
 from ..schema import InspectionSnapshot, OsRelease
+from .._util import make_warning
 
 T = TypeVar("T")
 
@@ -88,11 +89,7 @@ def _safe_run(name: str, fn: Callable[[], T], default: T, warnings: list) -> T:
     try:
         return fn()
     except (PermissionError, OSError) as exc:
-        warnings.append({
-            "source": name,
-            "message": f"{name} inspector: {exc}",
-            "severity": "warning",
-        })
+        warnings.append(make_warning(name, f"{name} inspector: {exc}"))
         print(f"WARNING: {name} inspector skipped: {exc}", file=sys.stderr)
         return default
 
@@ -209,41 +206,53 @@ def run_all(
                 "Package names, service names, and config formats may have changed."
             )
             print(f"WARNING: {msg}", file=sys.stderr)
-            w.append({"source": "pipeline", "message": msg, "severity": "error"})
+            w.append(make_warning("pipeline", msg, "error"))
 
     # Create one BaselineResolver per run — shares the nsenter probe cache
     # across the package query (rpm inspector) and the presets query (service baseline).
     from ..baseline import BaselineResolver
     resolver = BaselineResolver(executor)
 
+    _tty = sys.stderr.isatty()
+    def _status(msg: str) -> None:
+        if _tty:
+            print(msg, file=sys.stderr)
+
+    _status("Inspecting packages...")
     snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w, resolver=resolver, target_version=target_version, target_image=target_image), None, w)
     if snapshot.rpm and snapshot.rpm.no_baseline:
-        w.append({
-            "source": "rpm",
-            "message": (
-                "Could not query base image package list. "
-                "No baseline available — all installed packages will be included in the Containerfile. "
-                "Common fixes: (1) run with 'sudo podman run …' (rootless containers cannot "
-                "nsenter the host), (2) ensure --pid=host is set, or (3) provide a package "
-                "list via --baseline-packages FILE."
-            ),
-            "severity": "warning",
-        })
+        w.append(make_warning(
+            "rpm",
+            "Could not query base image package list. "
+            "No baseline available — all installed packages will be included in the Containerfile. "
+            "Common fixes: (1) run with 'sudo podman run …' (rootless containers cannot "
+            "nsenter the host), (2) ensure --pid=host is set, or (3) provide a package "
+            "list via --baseline-packages FILE.",
+        ))
+    _status("Inspecting config files...")
     snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=None, config_diffs=config_diffs, warnings=w), None, w)
 
-    # Query base image for systemd presets (service baseline) — reuses the same
-    # resolver so the nsenter probe is not repeated.
+    _status("Inspecting services...")
     base_image_preset_text = None
     if snapshot.rpm and snapshot.rpm.base_image and executor is not None:
         base_image_preset_text = resolver.query_presets(snapshot.rpm.base_image)
     snapshot.services = _safe_run("service", lambda: run_service(host_root, executor, base_image_preset_text=base_image_preset_text, warnings=w), None, w)
+    _status("Inspecting network...")
     snapshot.network = _safe_run("network", lambda: run_network(host_root, executor, warnings=w), None, w)
+    _status("Inspecting storage...")
     snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor), None, w)
+    _status("Inspecting scheduled tasks...")
     snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor), None, w)
+    _status("Inspecting containers...")
     snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman, warnings=w), None, w)
+    _status("Inspecting non-RPM software...")
     snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan, warnings=w), None, w)
+    _status("Inspecting kernel/boot config...")
     snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor, warnings=w), None, w)
+    _status("Inspecting SELinux/security...")
     snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor, warnings=w), None, w)
+    _status("Inspecting users/groups...")
     snapshot.users_groups = _safe_run("users_groups", lambda: run_users_groups(host_root, executor), None, w)
+    _status("Inspection complete.")
 
     return snapshot

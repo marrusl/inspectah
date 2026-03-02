@@ -14,7 +14,7 @@ from ..schema import (
     ContainerSection, QuadletUnit, ComposeFile, ComposeService,
     RunningContainer, ContainerMount,
 )
-from .._util import debug as _debug_fn, safe_read as _safe_read_raw
+from .._util import debug as _debug_fn, safe_read as _safe_read_raw, make_warning
 from . import filtered_rglob
 
 
@@ -217,11 +217,10 @@ def run(
         # podman ps for the container list
         r = executor(["podman", "ps", "-a", "--format", "json"])
         if r.returncode != 0 and warnings is not None:
-            warnings.append({
-                "source": "containers",
-                "message": "--query-podman requested but podman ps failed — live container data unavailable.",
-                "severity": "warning",
-            })
+            warnings.append(make_warning(
+                "containers",
+                "--query-podman requested but podman ps failed — live container data unavailable.",
+            ))
         if r.returncode == 0 and r.stdout.strip():
             try:
                 ps_data = json.loads(r.stdout)

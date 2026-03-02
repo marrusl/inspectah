@@ -1,0 +1,8 @@
+[Unit]
+Description=Test service that will be masked
+
+[Service]
+ExecStart=/bin/true
+
+[Install]
+WantedBy=multi-user.target

@@ -13,7 +13,7 @@ from ..schema import (
     NetworkSection, NMConnection, FirewallZone, FirewallDirectRule,
     StaticRouteFile, ProxyEntry,
 )
-from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read
+from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning
 
 
 # ---------------------------------------------------------------------------
@@ -180,11 +180,10 @@ def run(
             fd.iterdir()  # probe readability
         except (PermissionError, OSError) as exc:
             if warnings is not None:
-                warnings.append({
-                    "source": "network",
-                    "message": f"Firewall zone directory unreadable ({exc}) — firewall configuration may be incomplete.",
-                    "severity": "warning",
-                })
+                warnings.append(make_warning(
+                    "network",
+                    f"Firewall zone directory unreadable ({exc}) — firewall configuration may be incomplete.",
+                ))
         for f in _safe_iterdir(fd):
             if f.is_file() and f.suffix == ".xml":
                 content = _safe_read(f)
@@ -240,11 +239,10 @@ def run(
             if out.returncode == 0 and out.stdout:
                 section.ip_routes = _parse_ip_routes(out.stdout)
             elif out.returncode != 0 and warnings is not None:
-                warnings.append({
-                    "source": "network",
-                    "message": "ip route failed — static route information unavailable.",
-                    "severity": "warning",
-                })
+                warnings.append(make_warning(
+                    "network",
+                    "ip route failed — static route information unavailable.",
+                ))
         except Exception:
             pass
         try:
@@ -252,11 +250,10 @@ def run(
             if out.returncode == 0 and out.stdout:
                 section.ip_rules = _parse_ip_rules(out.stdout)
             elif out.returncode != 0 and warnings is not None:
-                warnings.append({
-                    "source": "network",
-                    "message": "ip rule failed — policy routing rule information unavailable.",
-                    "severity": "warning",
-                })
+                warnings.append(make_warning(
+                    "network",
+                    "ip rule failed — policy routing rule information unavailable.",
+                ))
         except Exception:
             pass
 

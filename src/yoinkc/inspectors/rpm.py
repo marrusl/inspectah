@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Set
 
-from .._util import debug as _debug_fn
+from .._util import debug as _debug_fn, make_warning
 
 
 def _debug(msg: str) -> None:
@@ -90,11 +90,11 @@ def _parse_rpm_qa(stdout: str, warnings: Optional[list] = None) -> List[PackageE
             _debug(f"  failed to parse: {f!r}")
         if warnings is not None:
             severity = "warning" if pct >= 5 else "info"
-            warnings.append({
-                "source": "rpm",
-                "message": f"rpm -qa: {len(failed)} package line(s) could not be parsed ({pct:.0f}% of output) — package list may be incomplete.",
-                "severity": severity,
-            })
+            warnings.append(make_warning(
+                "rpm",
+                f"rpm -qa: {len(failed)} package line(s) could not be parsed ({pct:.0f}% of output) — package list may be incomplete.",
+                severity,
+            ))
     _debug(f"parsed {len(packages)} packages from rpm -qa "
            f"(first 5 names: {[p.name for p in packages[:5]]})")
     return packages
@@ -161,11 +161,10 @@ def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional
     result = executor(["dnf", "history", "list", "-q"], cwd=str(host_root))
     if result.returncode != 0:
         if warnings is not None:
-            warnings.append({
-                "source": "rpm",
-                "message": "dnf history unavailable — orphaned config detection (packages removed after install) is incomplete.",
-                "severity": "warning",
-            })
+            warnings.append(make_warning(
+                "rpm",
+                "dnf history unavailable — orphaned config detection (packages removed after install) is incomplete.",
+            ))
         return []
     removed = []
     for line in result.stdout.splitlines():
@@ -220,11 +219,11 @@ def run(
             result_qa = executor(cmd_qa)
             used_root_fallback = True
         if used_root_fallback and result_qa.returncode == 0 and warnings is not None:
-            warnings.append({
-                "source": "rpm",
-                "message": "rpm -qa used --root fallback (--dbpath query failed); results are correct but may be slower.",
-                "severity": "info",
-            })
+            warnings.append(make_warning(
+                "rpm",
+                "rpm -qa used --root fallback (--dbpath query failed); results are correct but may be slower.",
+                "info",
+            ))
         installed = [p for p in _parse_rpm_qa(result_qa.stdout, warnings=warnings)
                      if p.name not in _VIRTUAL_PACKAGES]
     else:

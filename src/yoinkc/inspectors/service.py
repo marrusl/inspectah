@@ -3,12 +3,13 @@ Service inspector: systemd unit state vs baseline (enabled/disabled/masked).
 Baseline is derived from systemd preset files on the host, not static manifests.
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..executor import Executor
 from ..schema import ServiceSection, ServiceStateChange
-from .._util import debug as _debug_fn, is_debug as _DEBUG_check
+from .._util import debug as _debug_fn, is_debug as _DEBUG_check, make_warning
 
 
 def _debug(msg: str) -> None:
@@ -222,15 +223,12 @@ def run(
         host_root, base_image_preset_text=base_image_preset_text,
     )
     if base_image_preset_text is None and warnings is not None:
-        warnings.append({
-            "source": "service",
-            "message": (
-                "No base image service presets available — service state changes are "
-                "reported without comparison to base image defaults. "
-                "All non-default-enabled units will appear as changes."
-            ),
-            "severity": "warning",
-        })
+        warnings.append(make_warning(
+            "service",
+            "No base image service presets available — service state changes are "
+            "reported without comparison to base image defaults. "
+            "All non-default-enabled units will appear as changes.",
+        ))
 
     for unit, state in current.items():
         if not unit.endswith(".service") and not unit.endswith(".timer"):

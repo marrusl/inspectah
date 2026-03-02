@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..executor import Executor
 from ..schema import NonRpmSoftwareSection, NonRpmItem, PipPackage
-from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, safe_read as _safe_read
+from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning
 from . import is_dev_artifact, filtered_rglob
 
 
@@ -284,11 +284,10 @@ def _scan_venv_packages(
         ))
 
     if pip_fail_count > 0 and warnings is not None:
-        warnings.append({
-            "source": "non_rpm_software",
-            "message": f"pip list --path failed for {pip_fail_count} venv(s) — package inventory may be incomplete (dist-info scan used as fallback).",
-            "severity": "warning",
-        })
+        warnings.append(make_warning(
+            "non_rpm_software",
+            f"pip list --path failed for {pip_fail_count} venv(s) — package inventory may be incomplete (dist-info scan used as fallback).",
+        ))
 
 
 def _parse_pip_list(output: str) -> List[PipPackage]:
@@ -601,19 +600,17 @@ def run(
         probe = executor(["readelf", "--version"])
         if probe.returncode == 127:
             if warnings is not None:
-                warnings.append({
-                    "source": "non_rpm_software",
-                    "message": "readelf not available (rc=127) — ELF binary classification skipped. Install binutils in the yoinkc container image.",
-                    "severity": "warning",
-                })
+                warnings.append(make_warning(
+                    "non_rpm_software",
+                    "readelf not available (rc=127) — ELF binary classification skipped. Install binutils in the yoinkc container image.",
+                ))
         else:
             probe = executor(["file", "--version"])
             if probe.returncode == 127 and warnings is not None:
-                warnings.append({
-                    "source": "non_rpm_software",
-                    "message": "file not available (rc=127) — binary type detection skipped. Install file in the yoinkc container image.",
-                    "severity": "warning",
-                })
+                warnings.append(make_warning(
+                    "non_rpm_software",
+                    "file not available (rc=127) — binary type detection skipped. Install file in the yoinkc container image.",
+                ))
 
     _scan_dirs(section, host_root, executor, deep_binary_scan)
     _scan_venv_packages(section, host_root, executor, warnings=warnings)

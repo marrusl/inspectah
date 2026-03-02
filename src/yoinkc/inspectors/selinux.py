@@ -6,7 +6,7 @@ from typing import List, Optional
 
 from ..executor import Executor
 from ..schema import SelinuxSection
-from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir
+from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, make_warning
 
 
 def _debug(msg: str) -> None:
@@ -159,11 +159,10 @@ def run(
             section.boolean_overrides = fallback
             booldir = host_root / "sys/fs/selinux/booleans"
             if not booldir.is_dir() and warnings is not None:
-                warnings.append({
-                    "source": "selinux",
-                    "message": "SELinux boolean override detection unavailable — semanage failed and /sys/fs/selinux/booleans not accessible.",
-                    "severity": "warning",
-                })
+                warnings.append(make_warning(
+                    "selinux",
+                    "SELinux boolean override detection unavailable — semanage failed and /sys/fs/selinux/booleans not accessible.",
+                ))
 
     # --- Custom fcontext rules -----------------------------------------------
     # Try semanage fcontext -l -C (custom only) via chroot; fall back to

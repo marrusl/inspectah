@@ -10,7 +10,7 @@ from ..executor import Executor
 from ..schema import (
     KernelBootSection, ConfigSnippet, SysctlOverride, KernelModule,
 )
-from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read
+from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning
 
 
 # ---------------------------------------------------------------------------
@@ -206,11 +206,10 @@ def run(
             section.cmdline = cmdline.read_text().strip()
     except (PermissionError, OSError) as exc:
         if warnings is not None:
-            warnings.append({
-                "source": "kernel_boot",
-                "message": f"/proc/cmdline unreadable ({exc}) — kernel command line unavailable.",
-                "severity": "warning",
-            })
+            warnings.append(make_warning(
+                "kernel_boot",
+                f"/proc/cmdline unreadable ({exc}) — kernel command line unavailable.",
+            ))
 
     # --- GRUB ---
     try:
@@ -225,11 +224,10 @@ def run(
     overrides = _collect_sysctl_overrides(host_root)
     sysctl_defaults_dir = host_root / "usr/lib/sysctl.d"
     if not defaults and sysctl_defaults_dir.exists() and warnings is not None:
-        warnings.append({
-            "source": "kernel_boot",
-            "message": "sysctl shipped defaults could not be read from /usr/lib/sysctl.d — sysctl diff may be incomplete.",
-            "severity": "warning",
-        })
+        warnings.append(make_warning(
+            "kernel_boot",
+            "sysctl shipped defaults could not be read from /usr/lib/sysctl.d — sysctl diff may be incomplete.",
+        ))
     section.sysctl_overrides = _diff_sysctl(host_root, defaults, overrides)
 
     # --- modules-load.d / modprobe.d / dracut ---

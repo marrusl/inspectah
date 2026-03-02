@@ -26,6 +26,11 @@ def safe_iterdir(d: Path) -> List[Path]:
         return []
 
 
+def make_warning(source: str, message: str, severity: str = "warning") -> dict:
+    """Build a structured warning dict with consistent keys."""
+    return {"source": source, "message": message, "severity": severity}
+
+
 def safe_read(p: Path, label: str = "") -> str:
     """Read a text file, returning '' on permission/OS errors."""
     try:

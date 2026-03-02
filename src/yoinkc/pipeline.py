@@ -4,7 +4,6 @@ All renderers write to output_dir (created if it does not exist).
 """
 
 import json
-import sys
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -16,11 +15,11 @@ def load_snapshot(path: Path) -> InspectionSnapshot:
     """Load and deserialize an inspection snapshot from JSON."""
     data = json.loads(path.read_text())
     file_version = data.get("schema_version", 1)
-    if file_version > SCHEMA_VERSION:
-        print(
-            f"WARNING: snapshot was created by a newer yoinkc (schema v{file_version}, "
-            f"this tool supports v{SCHEMA_VERSION}). Some fields may be dropped.",
-            file=sys.stderr,
+    if file_version != SCHEMA_VERSION:
+        raise ValueError(
+            f"Snapshot was created by a different version of yoinkc "
+            f"(schema v{file_version}, expected v{SCHEMA_VERSION}). "
+            f"Re-run the inspection to generate a new snapshot."
         )
     return InspectionSnapshot.model_validate(data)
 

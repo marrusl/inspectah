@@ -12,6 +12,7 @@ from jinja2 import Environment
 from markupsafe import Markup
 
 from ..schema import ConfigFileKind, InspectionSnapshot
+from .._util import make_warning
 
 # Max size per file to embed in the report (bytes); larger files show a truncation note
 _MAX_FILE_CONTENT = 100 * 1024
@@ -399,12 +400,9 @@ def _build_context(
     warnings: List[dict] = list(snapshot.warnings) if snapshot.warnings else []
     if snapshot.redactions:
         for r in snapshot.redactions:
-            warnings.append({
-                "severity": "warning",
-                "source": "redaction",
-                "message": f"Redacted: {r.get('path') or ''}",
-                "detail": r.get("remediation") or "",
-            })
+            w = make_warning("redaction", f"Redacted: {r.get('path') or ''}")
+            w["detail"] = r.get("remediation") or ""
+            warnings.append(w)
 
     output_tree = _build_output_tree(output_dir)
     file_content_snippets: List[str] = []
