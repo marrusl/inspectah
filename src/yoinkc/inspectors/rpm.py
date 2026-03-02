@@ -290,16 +290,20 @@ def run(
                 section.packages_added.append(p)
 
     # 3) rpm -Va (rc != 0 is normal — it means files were modified)
+    #    --root tells rpm where to verify files; --dbpath tells it where the
+    #    database lives.  Both are needed when the container's rpm binary uses
+    #    a different default dbpath than the host (Fedora uses
+    #    /usr/lib/sysimage/rpm, RHEL 9 uses /var/lib/rpm).
     if executor is not None:
         if str(host_root) == "/":
             cmd_va = ["rpm", "-Va", "--nodeps", "--noscripts"]
         else:
             dbpath = str(host_root / "var" / "lib" / "rpm")
-            cmd_va = ["rpm", "--dbpath", dbpath, "-Va", "--nodeps", "--noscripts"]
+            cmd_va = ["rpm", "--root", str(host_root), "--dbpath", dbpath] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
         _debug(f"running: {' '.join(cmd_va)}")
         result_va = executor(cmd_va)
         if result_va.stderr and "cannot open Packages database" in result_va.stderr:
-            _debug("rpm -Va --dbpath failed, retrying with --root")
+            _debug("rpm -Va --dbpath failed, retrying with --root only")
             cmd_va = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
             result_va = executor(cmd_va)
         _debug(f"rpm -Va: rc={result_va.returncode}, stdout={len(result_va.stdout)} bytes, stderr={result_va.stderr[:200] if result_va.stderr else ''}")
