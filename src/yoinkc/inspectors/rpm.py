@@ -115,7 +115,7 @@ def _parse_rpm_va(stdout: str) -> List[RpmVaEntry]:
             path = rest[2:].strip()
         else:
             path = rest.strip()
-        if path:
+        if path and not path.startswith("/boot/"):
             entries.append(RpmVaEntry(path=path, flags=flags, package=None))
     return entries
 
