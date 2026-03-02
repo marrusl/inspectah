@@ -321,3 +321,9 @@ When running inside a container, the tool uses `nsenter` to execute `podman` in 
 - **Air-gapped environments** — use `--baseline-packages FILE` to provide a newline-separated list of package names, bypassing the podman query
 
 The resolved baseline (including the base image package list) is cached in the inspection snapshot, so `--from-snapshot` re-renders work without network access or podman.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
