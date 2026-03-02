@@ -291,11 +291,17 @@ def run(
 
     # 3) rpm -Va (rc != 0 is normal — it means files were modified)
     if executor is not None:
-        cmd_va = ["rpm", "-Va", "--nodeps", "--noscripts"]
-        if str(host_root) != "/":
-            cmd_va = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
+        if str(host_root) == "/":
+            cmd_va = ["rpm", "-Va", "--nodeps", "--noscripts"]
+        else:
+            dbpath = str(host_root / "var" / "lib" / "rpm")
+            cmd_va = ["rpm", "--dbpath", dbpath, "-Va", "--nodeps", "--noscripts"]
         _debug(f"running: {' '.join(cmd_va)}")
         result_va = executor(cmd_va)
+        if result_va.stderr and "cannot open Packages database" in result_va.stderr:
+            _debug("rpm -Va --dbpath failed, retrying with --root")
+            cmd_va = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
+            result_va = executor(cmd_va)
         _debug(f"rpm -Va: rc={result_va.returncode}, stdout={len(result_va.stdout)} bytes, stderr={result_va.stderr[:200] if result_va.stderr else ''}")
         section.rpm_va = _parse_rpm_va(result_va.stdout)
     else:
