@@ -695,3 +695,78 @@ class TestPythonVersionMap:
             render_containerfile(snapshot, _env(), Path(tmp))
             cf = (Path(tmp) / "Containerfile").read_text()
         assert "python3.12" in cf
+
+
+class TestLeafAutoSlimming:
+
+    def test_only_leaf_packages_in_dnf_install(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="httpd-core", epoch="0", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="httpd-filesystem", epoch="0", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="apr", epoch="0", version="1.7", release="1", arch="x86_64"),
+                    PackageEntry(name="apr-util", epoch="0", version="1.6", release="1", arch="x86_64"),
+                    PackageEntry(name="nginx", epoch="0", version="1.24", release="1", arch="x86_64"),
+                ],
+                leaf_packages=["httpd", "nginx"],
+                auto_packages=["apr", "apr-util", "httpd-core", "httpd-filesystem"],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        install_block = cf.split("dnf install")[1].split("dnf clean")[0]
+        assert "httpd" in install_block
+        assert "nginx" in install_block
+        assert "apr" not in install_block
+        assert "httpd-core" not in install_block
+        assert "4 additional package" in cf
+
+    def test_fallback_when_no_leaf_data(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="apr", epoch="0", version="1.7", release="1", arch="x86_64"),
+                ],
+                leaf_packages=None,
+                auto_packages=None,
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "httpd" in cf
+        assert "apr" in cf
+        assert "additional package" not in cf
+
+    def test_audit_report_shows_both_groups(self):
+        from yoinkc.renderers.audit_report import render as render_audit
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="apr", epoch="0", version="1.7", release="1", arch="x86_64"),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=["apr"],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit(snapshot, _env(), Path(tmp))
+            report = (Path(tmp) / "audit-report.md").read_text()
+        assert "Explicitly installed" in report
+        assert "Dependencies" in report
+        assert "httpd" in report
+        assert "apr" in report

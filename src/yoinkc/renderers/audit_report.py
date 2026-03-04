@@ -91,10 +91,33 @@ def render(
             base_img = snapshot.rpm.base_image or "target base image"
             lines.append(f"Baseline: {len(snapshot.rpm.baseline_package_names)} packages from `{base_img}`.")
             lines.append("")
-        lines.append("### Added")
-        for p in snapshot.rpm.packages_added:
-            lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
-        lines.append("")
+        if snapshot.rpm.leaf_packages is not None:
+            leaf_set = set(snapshot.rpm.leaf_packages)
+            auto_set = set(snapshot.rpm.auto_packages or [])
+            leaf_pkgs = [p for p in snapshot.rpm.packages_added if p.name in leaf_set]
+            auto_pkgs = [p for p in snapshot.rpm.packages_added if p.name in auto_set]
+            lines.append(f"### Explicitly installed ({len(leaf_pkgs)})")
+            lines.append("")
+            lines.append("These packages appear in the Containerfile `dnf install` line.")
+            lines.append("")
+            for p in leaf_pkgs:
+                lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
+            lines.append("")
+            if auto_pkgs:
+                lines.append(f"### Dependencies ({len(auto_pkgs)})")
+                lines.append("")
+                lines.append("These packages are pulled in automatically by dnf. If the target image "
+                             "produces a different dependency set, promote packages from this list to "
+                             "the `dnf install` line.")
+                lines.append("")
+                for p in auto_pkgs:
+                    lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
+                lines.append("")
+        else:
+            lines.append("### Added")
+            for p in snapshot.rpm.packages_added:
+                lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
+            lines.append("")
         if snapshot.rpm.packages_removed:
             lines.append("### Removed (from baseline)")
             for p in snapshot.rpm.packages_removed:

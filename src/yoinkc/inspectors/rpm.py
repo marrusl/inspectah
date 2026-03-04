@@ -190,6 +190,85 @@ def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional
     return removed
 
 
+def _rpm_cmd_prefix(host_root: Path) -> List[str]:
+    """Return the rpm command prefix for querying the host's RPM database."""
+    if str(host_root) == "/":
+        return ["rpm"]
+    dbpath = str(host_root / "var" / "lib" / "rpm")
+    return ["rpm", "--dbpath", dbpath]
+
+
+def _classify_leaf_auto(
+    executor: Executor,
+    host_root: Path,
+    packages_added: List["PackageEntry"],
+) -> tuple:
+    """Split added packages into leaf (explicitly needed) and auto (dependencies).
+
+    A package is "auto" if at least one other added package depends on it.
+    A package is "leaf" if no other added package depends on it.
+    """
+    added_names = {p.name for p in packages_added}
+    depended_on: Set[str] = set()
+
+    rpm_prefix = _rpm_cmd_prefix(host_root)
+
+    # Batch rpm -qR in groups to reduce subprocess overhead
+    name_list = sorted(added_names)
+    batch_size = 50
+    for i in range(0, len(name_list), batch_size):
+        batch = name_list[i:i + batch_size]
+        cmd = rpm_prefix + ["-qR"] + batch
+        result = executor(cmd)
+        if result.returncode != 0:
+            # If --dbpath fails, try --root fallback
+            if str(host_root) != "/":
+                cmd = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-qR"] + batch
+                result = executor(cmd)
+            if result.returncode != 0:
+                _debug(f"rpm -qR failed for batch starting at {batch[0]}, treating all as leaf")
+                continue
+
+        # Collect all capabilities required by this batch
+        capabilities = set()
+        for line in result.stdout.splitlines():
+            cap = line.strip()
+            if cap and not cap.startswith("rpmlib(") and not cap.startswith("/"):
+                capabilities.add(cap.split()[0])
+
+        # Resolve capabilities to providing packages in a single batch
+        if capabilities:
+            cap_list = sorted(capabilities)
+            for j in range(0, len(cap_list), batch_size):
+                cap_batch = cap_list[j:j + batch_size]
+                wp_cmd = rpm_prefix + ["-q", "--whatprovides"] + cap_batch
+                wp_result = executor(wp_cmd)
+                if wp_result.returncode != 0 and str(host_root) != "/":
+                    wp_cmd = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-q", "--whatprovides"] + cap_batch
+                    wp_result = executor(wp_cmd)
+                if wp_result.returncode == 0:
+                    for pline in wp_result.stdout.splitlines():
+                        pline = pline.strip()
+                        if not pline or "no package provides" in pline:
+                            continue
+                        # Parse NEVRA to get name
+                        match = re.match(r"^(.+?)-\d", pline)
+                        provider_name = match.group(1) if match else pline.split("-")[0]
+                        if provider_name in added_names:
+                            depended_on.add(provider_name)
+
+    # For each package that depends on something: the dependEES are marked auto.
+    # But we also need to check: if package A is in depended_on but ALL packages
+    # that depend on A are ALSO in depended_on, A is still auto. The classification
+    # is simply: depended_on = auto, everything else = leaf.
+    # Exception: don't mark a package as auto if it's the ONLY package that
+    # depends on itself (circular self-dependency).
+
+    leaf = sorted(added_names - depended_on)
+    auto = sorted(depended_on)
+    return leaf, auto
+
+
 def run(
     host_root: Path,
     executor: Optional[Executor],
@@ -310,10 +389,17 @@ def run(
     else:
         section.rpm_va = []
 
-    # 4) Repo files
+    # 4) Leaf/auto package classification
+    if executor is not None and section.packages_added and not section.no_baseline:
+        leaf, auto = _classify_leaf_auto(executor, host_root, section.packages_added)
+        section.leaf_packages = leaf
+        section.auto_packages = auto
+        _debug(f"leaf/auto split: {len(leaf)} leaf, {len(auto)} auto")
+
+    # 5) Repo files
     section.repo_files = _collect_repo_files(host_root)
 
-    # 5) dnf history removed
+    # 6) dnf history removed
     if executor is not None:
         section.dnf_history_removed = _dnf_history_removed(executor, host_root, warnings=warnings)
     else:

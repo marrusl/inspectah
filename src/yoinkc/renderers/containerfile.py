@@ -447,17 +447,33 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                 safe_names.append(n)
             else:
                 lines.append(f"# FIXME: package name contains unsafe characters, skipped: {n!r}")
+
+        # Use leaf/auto split if available
+        leaf_set = set(snapshot.rpm.leaf_packages) if snapshot.rpm.leaf_packages is not None else None
+        auto_count = len(snapshot.rpm.auto_packages) if snapshot.rpm.auto_packages else 0
+        if leaf_set is not None and not getattr(snapshot.rpm, "no_baseline", False):
+            install_names = [n for n in safe_names if n in leaf_set]
+        else:
+            install_names = safe_names
+            auto_count = 0
+
         lines.append("# === Package Installation ===")
         if getattr(snapshot.rpm, "no_baseline", False):
             lines.append("# No baseline — including all installed packages")
+        elif auto_count:
+            lines.append(f"# Detected: {len(install_names)} explicitly installed packages "
+                         f"(+{auto_count} dependencies pulled in automatically)")
         else:
-            lines.append(f"# Detected: {len(safe_names)} packages added beyond base image")
-        if safe_names:
+            lines.append(f"# Detected: {len(install_names)} packages added beyond base image")
+        if install_names:
             lines.append("RUN dnf install -y \\")
-            for n in safe_names[:-1]:
+            for n in install_names[:-1]:
                 lines.append(f"    {n} \\")
-            lines.append(f"    {safe_names[-1]} \\")
+            lines.append(f"    {install_names[-1]} \\")
             lines.append("    && dnf clean all")
+        if auto_count:
+            lines.append(f"# {auto_count} additional package(s) will be pulled in as dependencies")
+            lines.append("# See audit-report.md for full package list")
         lines.append("")
 
     # 3. Service Enablement
