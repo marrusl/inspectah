@@ -69,6 +69,7 @@ class RpmSection(BaseModel):
     rpm_va: List[RpmVaEntry] = Field(default_factory=list)
     repo_files: List[RepoFile] = Field(default_factory=list)
     dnf_history_removed: List[str] = Field(default_factory=list)  # package names
+    user_installed_packages: Optional[List[str]] = None  # from dnf history userinstalled
 
     # Baseline from target bootc base image (cached for --from-snapshot)
     base_image: Optional[str] = None  # e.g. "quay.io/centos-bootc/centos-bootc:stream9"
@@ -419,7 +420,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class InspectionSnapshot(BaseModel):
