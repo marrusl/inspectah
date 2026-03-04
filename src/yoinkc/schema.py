@@ -71,6 +71,7 @@ class RpmSection(BaseModel):
     dnf_history_removed: List[str] = Field(default_factory=list)  # package names
     leaf_packages: Optional[List[str]] = None
     auto_packages: Optional[List[str]] = None
+    leaf_dep_tree: Optional[dict] = None  # {leaf_name: [auto_names_it_pulls_in]}
 
     # Baseline from target bootc base image (cached for --from-snapshot)
     base_image: Optional[str] = None  # e.g. "quay.io/centos-bootc/centos-bootc:stream9"

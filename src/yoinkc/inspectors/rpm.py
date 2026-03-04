@@ -198,75 +198,90 @@ def _rpm_cmd_prefix(host_root: Path) -> List[str]:
     return ["rpm", "--dbpath", dbpath]
 
 
+def _run_rpm_query(executor: Executor, host_root: Path, args: List[str]):
+    """Run an rpm query with --dbpath fallback to --root."""
+    rpm_prefix = _rpm_cmd_prefix(host_root)
+    result = executor(rpm_prefix + args)
+    if result.returncode != 0 and str(host_root) != "/":
+        result = executor(["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + args)
+    return result
+
+
 def _classify_leaf_auto(
     executor: Executor,
     host_root: Path,
     packages_added: List["PackageEntry"],
 ) -> tuple:
-    """Split added packages into leaf (explicitly needed) and auto (dependencies).
+    """Split added packages into leaf vs auto with per-leaf dependency tree.
 
-    A package is "auto" if at least one other added package depends on it.
-    A package is "leaf" if no other added package depends on it.
+    Returns ``(leaf_list, auto_list, leaf_dep_tree)`` where *leaf_dep_tree*
+    maps each leaf package name to the sorted list of auto packages it
+    pulls in (transitively, within the added set).
     """
     added_names = {p.name for p in packages_added}
-    depended_on: Set[str] = set()
 
-    rpm_prefix = _rpm_cmd_prefix(host_root)
+    # Build direct dependency graph: depends_on[A] = {B, C} means A requires B and C
+    depends_on: dict = {name: set() for name in added_names}
 
-    # Batch rpm -qR in groups to reduce subprocess overhead
     name_list = sorted(added_names)
     batch_size = 50
+
+    # Query requirements per package individually to track which package needs what
     for i in range(0, len(name_list), batch_size):
         batch = name_list[i:i + batch_size]
-        cmd = rpm_prefix + ["-qR"] + batch
-        result = executor(cmd)
-        if result.returncode != 0:
-            # If --dbpath fails, try --root fallback
-            if str(host_root) != "/":
-                cmd = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-qR"] + batch
-                result = executor(cmd)
+
+        for pkg_name in batch:
+            result = _run_rpm_query(executor, host_root, ["-qR", pkg_name])
             if result.returncode != 0:
-                _debug(f"rpm -qR failed for batch starting at {batch[0]}, treating all as leaf")
                 continue
 
-        # Collect all capabilities required by this batch
-        capabilities = set()
-        for line in result.stdout.splitlines():
-            cap = line.strip()
-            if cap and not cap.startswith("rpmlib(") and not cap.startswith("/"):
-                capabilities.add(cap.split()[0])
+            caps = set()
+            for line in result.stdout.splitlines():
+                cap = line.strip()
+                if cap and not cap.startswith("rpmlib(") and not cap.startswith("/"):
+                    caps.add(cap.split()[0])
 
-        # Resolve capabilities to providing packages in a single batch
-        if capabilities:
-            cap_list = sorted(capabilities)
+            if not caps:
+                continue
+
+            cap_list = sorted(caps)
             for j in range(0, len(cap_list), batch_size):
                 cap_batch = cap_list[j:j + batch_size]
-                wp_cmd = rpm_prefix + ["-q", "--whatprovides"] + cap_batch
-                wp_result = executor(wp_cmd)
-                if wp_result.returncode != 0 and str(host_root) != "/":
-                    wp_cmd = ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + ["-q", "--whatprovides"] + cap_batch
-                    wp_result = executor(wp_cmd)
-                if wp_result.returncode == 0:
-                    for pline in wp_result.stdout.splitlines():
-                        pline = pline.strip()
-                        if not pline or "no package provides" in pline:
-                            continue
-                        # Parse NEVRA to get name
-                        match = re.match(r"^(.+?)-\d", pline)
-                        provider_name = match.group(1) if match else pline.split("-")[0]
-                        if provider_name in added_names:
-                            depended_on.add(provider_name)
+                wp_result = _run_rpm_query(executor, host_root, ["-q", "--whatprovides"] + cap_batch)
+                if wp_result.returncode != 0:
+                    continue
+                for pline in wp_result.stdout.splitlines():
+                    pline = pline.strip()
+                    if not pline or "no package provides" in pline:
+                        continue
+                    match = re.match(r"^(.+?)-\d", pline)
+                    provider = match.group(1) if match else pline.split("-")[0]
+                    if provider in added_names and provider != pkg_name:
+                        depends_on[pkg_name].add(provider)
 
-    # For each package that depends on something: the dependEES are marked auto.
-    # But we also need to check: if package A is in depended_on but ALL packages
-    # that depend on A are ALSO in depended_on, A is still auto. The classification
-    # is simply: depended_on = auto, everything else = leaf.
-    # Exception: don't mark a package as auto if it's the ONLY package that
-    # depends on itself (circular self-dependency).
+    # Identify depended-on packages (auto)
+    depended_on: Set[str] = set()
+    for pkg, deps in depends_on.items():
+        depended_on.update(deps)
 
     leaf = sorted(added_names - depended_on)
     auto = sorted(depended_on)
-    return leaf, auto
+
+    # Build per-leaf transitive dependency tree
+    leaf_dep_tree: dict = {}
+    for lf in leaf:
+        reachable: Set[str] = set()
+        stack = list(depends_on.get(lf, set()))
+        while stack:
+            dep = stack.pop()
+            if dep in reachable:
+                continue
+            reachable.add(dep)
+            stack.extend(depends_on.get(dep, set()) - reachable)
+        # Only include deps that are in the auto set
+        leaf_dep_tree[lf] = sorted(reachable & set(auto))
+
+    return leaf, auto, leaf_dep_tree
 
 
 def run(
@@ -391,9 +406,10 @@ def run(
 
     # 4) Leaf/auto package classification
     if executor is not None and section.packages_added and not section.no_baseline:
-        leaf, auto = _classify_leaf_auto(executor, host_root, section.packages_added)
+        leaf, auto, dep_tree = _classify_leaf_auto(executor, host_root, section.packages_added)
         section.leaf_packages = leaf
         section.auto_packages = auto
+        section.leaf_dep_tree = dep_tree
         _debug(f"leaf/auto split: {len(leaf)} leaf, {len(auto)} auto")
 
     # 5) Repo files

@@ -94,6 +94,7 @@ def render(
         if snapshot.rpm.leaf_packages is not None:
             leaf_set = set(snapshot.rpm.leaf_packages)
             auto_set = set(snapshot.rpm.auto_packages or [])
+            dep_tree = snapshot.rpm.leaf_dep_tree or {}
             leaf_pkgs = [p for p in snapshot.rpm.packages_added if p.name in leaf_set]
             auto_pkgs = [p for p in snapshot.rpm.packages_added if p.name in auto_set]
             lines.append(f"### Explicitly installed ({len(leaf_pkgs)})")
@@ -113,6 +114,29 @@ def render(
                 for p in auto_pkgs:
                     lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
                 lines.append("")
+
+            # Dependency tree view
+            if dep_tree:
+                total = len(leaf_pkgs) + len(auto_pkgs)
+                lines.append(f"### Package Dependency Tree ({total} packages beyond base image)")
+                lines.append("")
+                lines.append(f"**{len(leaf_pkgs)} leaf packages** → {len(auto_pkgs)} dependencies")
+                lines.append("")
+
+                sorted_leaves = sorted(dep_tree.keys(), key=lambda k: -len(dep_tree.get(k, [])))
+                for lf in sorted_leaves:
+                    deps = dep_tree.get(lf, [])
+                    if deps:
+                        lines.append(f"**{lf}** ({len(deps)} deps)")
+                        for i, d in enumerate(deps[:10]):
+                            connector = "└──" if i == min(len(deps), 10) - 1 else "├──"
+                            lines.append(f"  {connector} {d}")
+                        if len(deps) > 10:
+                            lines.append(f"  └── ... and {len(deps) - 10} more")
+                        lines.append("")
+                    else:
+                        lines.append(f"**{lf}** (0 deps — installed independently)")
+                        lines.append("")
         else:
             lines.append("### Added")
             for p in snapshot.rpm.packages_added:

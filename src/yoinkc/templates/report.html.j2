@@ -216,6 +216,46 @@ th { color: var(--muted); font-weight: 500; }
   <p><em>No baseline — showing all packages. Pull the base image or provide --baseline-packages.</em></p>
   {%- endif %}
   {%- if snapshot.rpm and snapshot.rpm.packages_added %}
+
+  {%- if snapshot.rpm.leaf_packages is not none and snapshot.rpm.leaf_dep_tree is not none %}
+  {%- set auto_set = snapshot.rpm.auto_packages or [] %}
+  {%- set dep_tree = snapshot.rpm.leaf_dep_tree or {} %}
+
+  <div class="banner" style="margin-bottom:1rem">
+    <strong>{{ leaf_packages_sorted|length }} leaf packages</strong> pull in <strong>{{ auto_set|length }} dependencies</strong>
+    — only leaf packages appear in the Containerfile's <code>dnf install</code> line.
+  </div>
+
+  <h3>Dependency Tree</h3>
+  <table class="data-table">
+    <thead><tr><th>Leaf Package</th><th>Dependencies</th><th></th></tr></thead>
+    <tbody>
+    {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
+    {%- set deps = dep_tree.get(lf, []) %}
+    <tr>
+      <td><strong>{{ lf }}</strong></td>
+      <td>{{ deps|length }}</td>
+      <td>
+        {%- if deps %}
+        <details><summary>show</summary>
+          <ul style="margin:0.25rem 0;padding-left:1.5rem">
+          {%- for d in deps %}
+            <li style="font-size:0.85em">{{ d }}</li>
+          {%- endfor %}
+          </ul>
+        </details>
+        {%- else %}
+        <em style="color:var(--muted)">independent</em>
+        {%- endif %}
+      </td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+
+  <h3>All Added Packages ({{ snapshot.rpm.packages_added|length }})</h3>
+  {%- endif %}
+
   <table><thead><tr><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
     <tr><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>

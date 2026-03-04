@@ -425,6 +425,12 @@ def _build_context(
         (counts["users_groups"], "Users/groups"),
     ]
 
+    # Sort leaf packages by dependency count descending for the HTML tree view
+    leaf_sorted: List[str] = []
+    if snapshot.rpm and snapshot.rpm.leaf_packages and snapshot.rpm.leaf_dep_tree:
+        dep_tree = snapshot.rpm.leaf_dep_tree
+        leaf_sorted = sorted(snapshot.rpm.leaf_packages, key=lambda k: -len(dep_tree.get(k, [])))
+
     return {
         "snapshot": snapshot,
         "counts": counts,
@@ -443,6 +449,7 @@ def _build_context(
         "containers_data": _prepare_containers(snapshot),
         "non_rpm_data": _prepare_non_rpm(snapshot),
         "summary_glance": summary_glance,
+        "leaf_packages_sorted": leaf_sorted,
     }
 
 
