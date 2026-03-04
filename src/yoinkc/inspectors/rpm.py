@@ -319,25 +319,4 @@ def run(
     else:
         section.dnf_history_removed = []
 
-    # 6) User-installed packages (for Containerfile slimming)
-    if executor is not None:
-        result_ui = executor(["dnf", "history", "userinstalled", "-q"], cwd=str(host_root))
-        if result_ui.returncode == 0 and result_ui.stdout.strip():
-            names = set()
-            for line in result_ui.stdout.strip().splitlines():
-                line = line.strip()
-                if not line or line.startswith("Packages"):
-                    continue
-                # Output may be name only or NEVRA; extract name by splitting
-                # on the pattern -<digit> which starts version numbers
-                match = re.match(r"^([a-zA-Z0-9_.+-]+?)(?:-\d|$)", line)
-                if match:
-                    names.add(match.group(1))
-                else:
-                    names.add(line)
-            section.user_installed_packages = sorted(names)
-            _debug(f"dnf history userinstalled: {len(section.user_installed_packages)} packages")
-        else:
-            _debug(f"dnf history userinstalled failed (rc={result_ui.returncode}), slimming unavailable")
-
     return section

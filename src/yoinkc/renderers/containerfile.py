@@ -447,33 +447,17 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                 safe_names.append(n)
             else:
                 lines.append(f"# FIXME: package name contains unsafe characters, skipped: {n!r}")
-
-        # Split into explicit (user-installed) vs dependency if data is available
-        user_installed = set(snapshot.rpm.user_installed_packages) if snapshot.rpm.user_installed_packages else None
-        if user_installed is not None and not getattr(snapshot.rpm, "no_baseline", False):
-            explicit = [n for n in safe_names if n in user_installed]
-            dep_only = [n for n in safe_names if n not in user_installed]
-        else:
-            explicit = safe_names
-            dep_only = []
-
         lines.append("# === Package Installation ===")
         if getattr(snapshot.rpm, "no_baseline", False):
             lines.append("# No baseline — including all installed packages")
-        elif dep_only:
-            lines.append(f"# Detected: {len(explicit)} explicitly installed packages "
-                         f"(+{len(dep_only)} dependencies pulled in automatically)")
         else:
-            lines.append(f"# Detected: {len(explicit)} packages added beyond base image")
-        if explicit:
+            lines.append(f"# Detected: {len(safe_names)} packages added beyond base image")
+        if safe_names:
             lines.append("RUN dnf install -y \\")
-            for n in explicit[:-1]:
+            for n in safe_names[:-1]:
                 lines.append(f"    {n} \\")
-            lines.append(f"    {explicit[-1]} \\")
+            lines.append(f"    {safe_names[-1]} \\")
             lines.append("    && dnf clean all")
-        if dep_only:
-            lines.append(f"# {len(dep_only)} dependency package(s) omitted from dnf install")
-            lines.append("# (will be pulled in automatically — see audit-report.md for full list)")
         lines.append("")
 
     # 3. Service Enablement
