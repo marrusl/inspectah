@@ -8,6 +8,8 @@ A container run with `--pid=host --privileged --security-opt label=disable -v /:
 
 This is clean — no contamination of the source system, no installation required, and it naturally separates the tool from the thing being inspected.
 
+During inspection, the tool emits TTY-gated progress messages to stderr (e.g., `Inspecting packages...`, `Inspecting services...`) so the operator knows what's happening. These are suppressed when stderr is not a terminal.
+
 Output goes to a mounted volume that becomes either local files, a local git repo, or gets pushed to GitHub via the API.
 
 The tool itself ships as a container: `ghcr.io/marrusl/yoinkc:latest`.
@@ -25,6 +27,8 @@ The tool is structured as a pipeline of **inspectors** that each produce structu
 Also captures repo definitions from `/host/etc/yum.repos.d/` and `/host/etc/dnf/`.
 
 Additionally checks `dnf history` for packages that were installed and later removed, since these may have left behind config files or state that still affects the system.
+
+After computing the added-packages list, the tool runs a dependency resolution pass using `rpm -qR` (to list requirements of each added package) and `rpm --whatprovides` (to map capabilities back to packages) against the host's RPM database. Packages are classified as "leaf" (no other added package depends on them) or "auto" (transitively depended on by a leaf). Only leaf packages appear in the Containerfile `dnf install` line; auto packages are noted in a comment above the install directive. The audit report shows both groups plus a dependency tree view so operators can verify the classification. If dependency resolution fails for a package (e.g., a capability provided by a package not in the RPM database), it is treated as a leaf — over-include rather than under-include. This typically reduces the `dnf install` list by 60–80%, producing a cleaner Containerfile that expresses intent rather than transitive closure.
 
 #### Service Inspector
 
@@ -191,7 +195,29 @@ Non-system users and groups (1000 <= UID < 60000) from `/host/etc/passwd` and `/
 
 Captures: shell assignments, group memberships, sudoers rules, SSH authorized_keys references (flagged for manual handling, not copied).
 
-For the Containerfile, generates `.append` fragment files (e.g., `config/tmp/passwd.append`) containing only non-system entries. These are written to `config/tmp/` rather than `config/etc/` so they are not swept up by the consolidated `COPY config/etc/ /etc/` — they need separate `COPY` + `cat >>` handling. The fragments are appended to the base image's files via `cat >> /etc/passwd` etc., preserving exact UIDs, encrypted passwords, and account flags. Home directories are created with correct ownership. Falls back to `useradd`/`groupadd` commands for snapshots without raw entries.
+##### User Provisioning Strategies
+
+Discovered users are classified into three categories:
+
+- **Service accounts**: nologin or `/bin/false` shell, home under `/var`, UID < 1000. These are daemon/application accounts.
+- **Human users**: real shell (`/bin/bash`, `/bin/zsh`, etc.), home under `/home`, UID >= 1000. These are operator/developer accounts.
+- **Ambiguous**: everything else — accounts that don't cleanly fit either pattern.
+
+Each user is assigned a provisioning strategy:
+
+| Strategy | Mechanism | When |
+|---|---|---|
+| `sysusers` | `systemd-sysusers` drop-in file under `/usr/lib/sysusers.d/`, applied at boot | Service accounts |
+| `blueprint` | `bootc-image-builder` TOML user definition (`yoinkc-users.toml`) | Optional alternative for service accounts |
+| `useradd` | Explicit `RUN useradd ...` in the Containerfile | Ambiguous accounts |
+| `kickstart` | Deploy-time provisioning via kickstart `user --name=...` directives | Human users |
+| `exact-copy` | Raw `cat >>` append of passwd/group/shadow entries | Fallback for snapshots without clean entries |
+
+Default assignment: service → `sysusers`, human → `kickstart`, ambiguous → `useradd`. The `--user-strategy STRATEGY` flag overrides the strategy for all users (e.g., `--user-strategy exact-copy` to force raw append for everything).
+
+SSH authorized keys are never embedded in the image — they always appear as a `# FIXME: provision SSH keys via cloud-init, kickstart, or identity provider` comment. Baking SSH keys into an image is an anti-pattern for fleet management.
+
+The generated README includes an opinionated strategy guide explaining the trade-offs between provisioning approaches.
 
 ### Baseline Generation
 
@@ -206,9 +232,10 @@ The tool generates its package baseline by querying the target bootc base image 
    - CentOS Stream 9 → `quay.io/centos-bootc/centos-bootc:stream9`
    - CentOS Stream 10 → `quay.io/centos-bootc/centos-bootc:stream10`
    - Fedora → `quay.io/fedora/fedora-bootc:{major}` (clamped to 41 minimum)
-3. **Query the base image package list.** Run `podman run --rm --cgroups=disabled <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete set of packages in the base image. Since the tool runs inside a container, it uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces (this is why `--pid=host` and `--privileged` are required on the outer container). `--cgroups=disabled` avoids cgroup permission issues in the nsenter context. This is the authoritative baseline — it's the actual content of the image the Containerfile's `FROM` line references.
-4. **Diff against host.** Compare the host's installed package names against the base image's package list. Packages on the host but not in the base image are "added" (go into `dnf install`). Packages in the base image but not on the host are "removed" (rare, noted in the audit report).
-5. **Cache in the snapshot.** The base image package list is stored in `inspection-snapshot.json` so re-renders via `--from-snapshot` don't need to pull the image again.
+3. **Verify registry credentials.** For `registry.redhat.io` images, run `podman login --get-login` via nsenter to verify the host has valid credentials before attempting the pull. On failure, emit an actionable error instructing the operator to run `sudo podman login registry.redhat.io` or provide `--baseline-packages FILE`. This prevents cryptic pull failures and gives a clear fix.
+4. **Query the base image package list.** Run `podman run --rm --cgroups=disabled <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete set of packages in the base image. Since the tool runs inside a container, it uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces (this is why `--pid=host` and `--privileged` are required on the outer container). `--cgroups=disabled` avoids cgroup permission issues in the nsenter context. This is the authoritative baseline — it's the actual content of the image the Containerfile's `FROM` line references.
+5. **Diff against host.** Compare the host's installed package names against the base image's package list. Packages on the host but not in the base image are "added" (go into `dnf install`). Packages in the base image but not on the host are "removed" (rare, noted in the audit report).
+6. **Cache in the snapshot.** The base image package list is stored in `inspection-snapshot.json` so re-renders via `--from-snapshot` don't need to pull the image again.
 
 **Source/target version separation:** The source host version can differ from the target image version. `--target-version` overrides the auto-detected version (e.g., migrating a RHEL 9.4 host to a 9.6 image), and `--target-image` overrides the base image reference entirely (useful for custom base images or testing). Cross-major migrations (e.g., RHEL 9 host → RHEL 10 image) produce a warning since package sets may differ significantly. RHEL images require `podman login registry.redhat.io` on the host before running the tool.
 
@@ -286,8 +313,8 @@ FROM quay.io/centos-bootc/centos-bootc:stream9
 # === Repos ===
 COPY config/etc/yum.repos.d/ /etc/yum.repos.d/
 
-# === Packages ===
-RUN dnf install -y httpd postgresql-server ... && dnf clean all
+# === Packages (4 leaf, 23 auto-dependencies) ===
+RUN dnf install -y httpd postgresql-server mod_ssl certbot && dnf clean all
 
 # === Services ===
 RUN systemctl enable httpd && systemctl disable kdump
@@ -300,6 +327,8 @@ COPY config/etc/systemd/system/backup-daily.timer /etc/systemd/system/
 RUN systemctl enable backup-daily.timer
 
 # === Config Files (consolidated) ===
+# Modified: httpd.conf (MaxClients, SSLProtocol), sshd_config (PermitRoot)
+# Added: logrotate.d/myapp, rsyslog.d/remote.conf
 COPY config/etc/ /etc/
 
 # === Non-RPM Software ===
@@ -310,12 +339,9 @@ COPY config/usr/local/bin/mytool /usr/local/bin/mytool
 # === Containers (Quadlet) ===
 COPY quadlet/ /etc/containers/systemd/
 
-# === Users/Groups (from config/tmp/, not config/etc/) ===
-COPY config/tmp/ /tmp/
-RUN cat /tmp/passwd.append >> /etc/passwd && \
-    cat /tmp/group.append >> /etc/group && \
-    rm -f /tmp/*.append
-RUN mkdir -p /home/appuser && chown 1001:1001 /home/appuser
+# === Users (sysusers for service accounts) ===
+COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/
+# FIXME: human user 'appuser' (uid 1001) — provision via kickstart or identity provider
 
 # === Kernel ===
 RUN rpm-ostree kargs --append=hugepagesz=2M
@@ -351,6 +377,8 @@ Each section has comments explaining what was detected and why it was included. 
 │   │   └── ...
 │   ├── opt/                   # non-RPM software (where COPYed)
 │   └── usr/
+│       └── lib/sysusers.d/    # systemd-sysusers drop-ins (sysusers strategy)
+├── yoinkc-users.toml           # bootc-image-builder user definitions (blueprint strategy)
 ├── quadlet/                   # container unit files
 ├── kickstart-suggestion.ks     # suggested kickstart snippet for deploy-time settings
 ├── report.html                # interactive HTML report (open in browser)
@@ -427,6 +455,7 @@ A `kickstart-suggestion.ks` file containing suggested kickstart snippets for set
 - Hostname (`network --hostname=...`)
 - Site-specific DNS
 - NFS mount credentials
+- User provisioning directives for kickstart-strategy users (`user --name=...`)
 - Any deployment-specific environment variables referenced in configs
 
 This file is clearly marked as a **suggestion** — it needs to be reviewed and adapted for the target environment.
@@ -462,6 +491,7 @@ The default run is optimized for speed — it covers the vast majority of system
 | `--push-to-github REPO` | off | Push output to a GitHub repository. Requires confirmation (or `--yes`). Shows total data size before push. |
 | `--public` | off | When creating a new GitHub repo, make it public instead of private. |
 | `--yes` | off | Skip interactive confirmation prompts (for automation). |
+| `--user-strategy STRATEGY` | off | Override user creation strategy for all users. Valid: sysusers, blueprint, useradd, kickstart, exact-copy. Default: auto-assigned per classification. |
 | `--host-root PATH` | `/host` | Root path for host inspection. |
 | `--from-snapshot PATH` | off | Skip inspection, load a previously saved snapshot and render only. |
 | `--inspect-only` | off | Run inspectors only, save snapshot, skip renderers. |
@@ -506,3 +536,5 @@ The following are out of scope for the POC and v1 but represent the natural evol
 **Enhanced cron-to-timer conversion.** Deeper semantic analysis of cron jobs to handle edge cases: `MAILTO` conversion to systemd journal notifications, `@reboot` entries mapped to oneshot services, `%` character handling, and environment variable inheritance differences.
 
 **Config file semantic diffing.** Beyond line-level diffs (via `--config-diffs`), understanding the *meaning* of config changes — e.g., recognizing that a change to `MaxClients` in `httpd.conf` is a performance tuning decision vs. a change to `DocumentRoot` which is a structural decision. This would improve the audit report's guidance on which changes to keep vs. reconsider.
+
+**Interactive report re-rendering.** The HTML report embeds the full inspection snapshot. A natural extension is a JavaScript-based renderer that lets operators change strategy assignments, toggle packages between leaf and auto, and preview a re-rendered Containerfile directly in the browser — or generate a new output directory with modified artifacts. This would eliminate the re-run cycle for what-if exploration.
