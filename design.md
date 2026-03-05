@@ -8,7 +8,7 @@ A container run with `--pid=host --privileged --security-opt label=disable -v /:
 
 This is clean — no contamination of the source system, no installation required, and it naturally separates the tool from the thing being inspected.
 
-During inspection, the tool emits TTY-gated progress messages to stderr (e.g., `Inspecting packages...`, `Inspecting services...`) so the operator knows what's happening. These are suppressed when stderr is not a terminal.
+During inspection, the tool emits progress messages to stderr (e.g., `Inspecting packages...`, `Inspecting services...`) so the operator knows what's happening.
 
 Output goes to a mounted volume that becomes either local files, a local git repo, or gets pushed to GitHub via the API.
 

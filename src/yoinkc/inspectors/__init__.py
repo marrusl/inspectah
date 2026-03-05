@@ -214,10 +214,8 @@ def run_all(
     from ..baseline import BaselineResolver
     resolver = BaselineResolver(executor)
 
-    _tty = sys.stderr.isatty()
     def _status(msg: str) -> None:
-        if _tty:
-            print(msg, file=sys.stderr)
+        print(msg, file=sys.stderr)
 
     _status("Inspecting packages...")
     snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w, resolver=resolver, target_version=target_version, target_image=target_image), None, w)
