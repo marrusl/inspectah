@@ -149,23 +149,13 @@ class TestContainerfile:
         cf = self._cf(outputs_with_baseline)
         assert "COPY config/etc/ /etc/" in cf
 
-    def test_append_files_use_config_tmp(self, outputs_with_baseline):
-        """User .append files must be COPYd from config/tmp/ in a single layer."""
+    def test_user_strategy_in_containerfile(self, outputs_with_baseline):
+        """Users must be rendered according to their strategy."""
         cf = self._cf(outputs_with_baseline)
         snapshot = outputs_with_baseline["snapshot"]
         ug = snapshot.users_groups
-        if ug and ug.passwd_entries:
-            assert "COPY config/tmp/ /tmp/" in cf
-            assert "COPY config/etc/passwd.append" not in cf
-
-    def test_append_files_on_disk_in_tmp(self, outputs_with_baseline):
-        """Append files must be written to config/tmp/, not config/etc/."""
-        output_dir = outputs_with_baseline["dir"]
-        snapshot = outputs_with_baseline["snapshot"]
-        ug = snapshot.users_groups
-        if ug and ug.passwd_entries:
-            assert (output_dir / "config/tmp/passwd.append").exists()
-            assert not (output_dir / "config/etc/passwd.append").exists()
+        if ug and ug.users:
+            assert "Users and Groups" in cf
 
     def test_no_baseline_mode_comment(self, outputs_no_baseline):
         """No-baseline mode should include a comment about all packages."""

@@ -87,6 +87,26 @@ def render(
         lines.append("%end")
         lines.append("")
 
+    # Users deferred to kickstart
+    ug = snapshot.users_groups
+    if ug and ug.users:
+        ks_users = [u for u in ug.users if u.get("strategy") == "kickstart"]
+        if ks_users:
+            lines.append("# --- Human users (deploy-time provisioning) ---")
+            for u in ks_users:
+                uname = u.get("name", "")
+                uid = u.get("uid", "")
+                shell = u.get("shell", "")
+                home = u.get("home", "")
+                gid = u.get("gid", "")
+                uid_opt = f" --uid={uid}" if uid else ""
+                gid_opt = f" --gid={gid}" if gid else ""
+                shell_opt = f" --shell={shell}" if shell else ""
+                home_opt = f" --homedir={home}" if home else ""
+                lines.append(f"user --name={uname}{uid_opt}{gid_opt}{shell_opt}{home_opt}")
+            lines.append("# Set passwords interactively or via --password/--iscrypted")
+            lines.append("")
+
     lines.append("# --- Examples ---")
     lines.append("# network --bootproto=dhcp --device=eth0")
     lines.append("# network --hostname=myhost.example.com")

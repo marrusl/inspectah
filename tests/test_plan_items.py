@@ -356,33 +356,183 @@ def test_storage_recommendation_mapping():
 # 9. User append files written to config tree
 # ---------------------------------------------------------------------------
 
-def test_append_files_written():
-    snapshot = InspectionSnapshot(
-        meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
-        users_groups=UserGroupSection(
-            users=[{"name": "mark", "uid": "1000", "gid": "1000",
-                    "home": "/home/mark", "shell": "/bin/bash"}],
-            passwd_entries=["mark:x:1000:1000::/home/mark:/bin/bash"],
-            shadow_entries=["mark:!!:19700:0:99999:7:::"],
-            group_entries=["mark:x:1000:"],
-            gshadow_entries=["mark:!::"],
-            subuid_entries=["mark:100000:65536"],
-            subgid_entries=["mark:100000:65536"],
-        ),
-    )
-    with tempfile.TemporaryDirectory() as tmp:
-        render_containerfile(snapshot, _env(), Path(tmp))
-        # .append files are written to config/tmp/ so they are NOT swept up by
-        # COPY config/etc/ /etc/ — they need to go to /tmp/ via a separate COPY.
-        tmp_dir = Path(tmp) / "config" / "tmp"
-        for f in ("passwd.append", "shadow.append", "group.append",
-                  "gshadow.append", "subuid.append", "subgid.append"):
-            assert (tmp_dir / f).exists(), f"Missing {f}"
-        assert "mark:x:1000:1000" in (tmp_dir / "passwd.append").read_text()
-        # Verify the Containerfile uses a single consolidated COPY from config/tmp/
-        cf = (Path(tmp) / "Containerfile").read_text()
-        assert "COPY config/tmp/ /tmp/" in cf
-        assert "COPY config/etc/passwd.append" not in cf
+class TestUserStrategies:
+
+    def test_exact_copy_writes_append_files(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "mark", "uid": 1000, "gid": 1000,
+                        "home": "/home/mark", "shell": "/bin/bash",
+                        "classification": "human", "strategy": "exact-copy"}],
+                groups=[{"name": "mark", "gid": 1000, "members": [], "strategy": "exact-copy"}],
+                passwd_entries=["mark:x:1000:1000::/home/mark:/bin/bash"],
+                shadow_entries=["mark:!!:19700:0:99999:7:::"],
+                group_entries=["mark:x:1000:"],
+                gshadow_entries=["mark:!::"],
+                subuid_entries=["mark:100000:65536"],
+                subgid_entries=["mark:100000:65536"],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            tmp_dir = Path(tmp) / "config" / "tmp"
+            assert (tmp_dir / "passwd.append").exists()
+            assert "mark:x:1000:1000" in (tmp_dir / "passwd.append").read_text()
+            cf = (Path(tmp) / "Containerfile").read_text()
+            assert "COPY config/tmp/ /tmp/" in cf
+            assert "byte-level replica" in cf
+
+    def test_sysusers_writes_conf(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "appuser", "uid": 1001, "gid": 1001,
+                        "home": "/opt/myapp", "shell": "/sbin/nologin",
+                        "classification": "service", "strategy": "sysusers"}],
+                groups=[{"name": "appuser", "gid": 1001, "members": [], "strategy": "sysusers"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            sysusers_path = Path(tmp) / "config/usr/lib/sysusers.d/yoinkc-users.conf"
+            assert sysusers_path.exists()
+            content = sysusers_path.read_text()
+            assert "u appuser 1001" in content
+            assert "g appuser 1001" in content
+            cf = (Path(tmp) / "Containerfile").read_text()
+            assert "systemd-sysusers" in cf
+            assert "COPY config/usr/lib/sysusers.d" in cf
+
+    def test_useradd_renders_commands(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "deploy", "uid": 1003, "gid": 1003,
+                        "home": "/var/lib/deploy", "shell": "/bin/bash",
+                        "classification": "ambiguous", "strategy": "useradd"}],
+                groups=[{"name": "deploy", "gid": 1003, "members": [], "strategy": "useradd"}],
+                shadow_entries=["deploy:$6$saltsalt$hashhashhash:19700:0:99999:7:::"],
+                sudoers_rules=["deploy ALL=(ALL) NOPASSWD: /usr/bin/systemctl"],
+                ssh_authorized_keys_refs=[{"user": "deploy", "path": "/var/lib/deploy/.ssh/authorized_keys"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+            assert "RUN groupadd -g 1003 deploy" in cf
+            assert "RUN useradd -m -u 1003" in cf
+            assert "chpasswd -e" in cf
+            assert "FIXME: SSH keys for 'deploy'" in cf
+            assert "sudoers" in cf.lower()
+
+    def test_useradd_no_ssh_keys(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "deploy", "uid": 1003, "gid": 1003,
+                        "home": "/var/lib/deploy", "shell": "/bin/bash",
+                        "classification": "ambiguous", "strategy": "useradd"}],
+                ssh_authorized_keys_refs=[{"user": "deploy", "path": "/var/lib/deploy/.ssh/authorized_keys"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+            assert "authorized_keys" not in cf or "FIXME" in cf
+
+    def test_kickstart_defers_user(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "mark", "uid": 1000, "gid": 1000,
+                        "home": "/home/mark", "shell": "/bin/bash",
+                        "classification": "human", "strategy": "kickstart"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+            assert "FIXME: human user 'mark' deferred" in cf
+            assert "kickstart" in cf.lower()
+
+    def test_kickstart_adds_user_directive(self):
+        from yoinkc.renderers.kickstart import render as render_kickstart
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "mark", "uid": 1000, "gid": 1000,
+                        "home": "/home/mark", "shell": "/bin/bash",
+                        "classification": "human", "strategy": "kickstart"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_kickstart(snapshot, _env(), Path(tmp))
+            ks = (Path(tmp) / "kickstart-suggestion.ks").read_text()
+            assert "user --name=mark" in ks
+            assert "--uid=1000" in ks
+
+    def test_blueprint_generates_toml(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "admin", "uid": 1000, "gid": 1000,
+                        "home": "/home/admin", "shell": "/bin/bash",
+                        "classification": "human", "strategy": "blueprint"}],
+                groups=[{"name": "admin", "gid": 1000, "members": [], "strategy": "blueprint"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            toml_path = Path(tmp) / "yoinkc-users.toml"
+            assert toml_path.exists()
+            content = toml_path.read_text()
+            assert "[[customizations.user]]" in content
+            assert 'name = "admin"' in content
+            cf = (Path(tmp) / "Containerfile").read_text()
+            assert "blueprint" in cf.lower()
+
+    def test_no_blueprint_toml_without_blueprint_users(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "appuser", "uid": 1001, "gid": 1001,
+                        "home": "/opt/myapp", "shell": "/sbin/nologin",
+                        "classification": "service", "strategy": "sysusers"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            assert not (Path(tmp) / "yoinkc-users.toml").exists()
+
+    def test_mixed_strategies(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[
+                    {"name": "redis", "uid": 1001, "gid": 1001,
+                     "home": "/var/lib/redis", "shell": "/sbin/nologin",
+                     "classification": "service", "strategy": "sysusers"},
+                    {"name": "appuser", "uid": 1002, "gid": 1002,
+                     "home": "/var/lib/myapp", "shell": "/bin/bash",
+                     "classification": "ambiguous", "strategy": "useradd"},
+                    {"name": "mark", "uid": 1000, "gid": 1000,
+                     "home": "/home/mark", "shell": "/bin/bash",
+                     "classification": "human", "strategy": "kickstart"},
+                ],
+                groups=[
+                    {"name": "redis", "gid": 1001, "members": [], "strategy": "sysusers"},
+                    {"name": "appuser", "gid": 1002, "members": [], "strategy": "useradd"},
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+            assert "systemd-sysusers" in cf
+            assert "RUN useradd" in cf
+            assert "FIXME: human user 'mark' deferred" in cf
 
 
 # ---------------------------------------------------------------------------
