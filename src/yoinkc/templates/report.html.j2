@@ -57,8 +57,11 @@ a { color: var(--accent); }
 .warning-row-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0.15rem 0.35rem; border-radius: 4px; flex-shrink: 0; }
 .warning-row-dismiss:hover { color: var(--warn); background: rgba(210,153,34,0.15); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.card { background: var(--card); border-radius: 8px; padding: 1rem; cursor: pointer; border: 1px solid transparent; transition: border-color .15s; }
+.card { background: var(--card); border-radius: 8px; padding: 1rem; cursor: pointer; border: 1px solid transparent; border-left: 4px solid transparent; transition: border-color .15s; }
 .card:hover { border-color: var(--accent); }
+.card.status-green { border-left-color: var(--ok); }
+.card.status-amber { border-left-color: var(--warn); }
+.card.status-red { border-left-color: var(--error); }
 .card h4 { margin: 0 0 .5rem 0; font-size: .95rem; }
 .card .count { font-size: 1.5rem; font-weight: 600; }
 .card .status { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
@@ -148,17 +151,17 @@ th { color: var(--muted); font-weight: 500; }
 
 {# ── Summary cards ──────────────────────────────────────────────────────── #}
 <div class="cards">
-  <div class="card" data-section="packages"><h4>Packages</h4><div class="count">{{ counts.packages_added }} added</div><div class="status">{{ counts.packages_removed }} removed</div></div>
-  <div class="card" data-section="services"><h4>Services</h4><div class="count">{{ counts.services_enabled }} enabled</div><div class="status">{{ counts.services_disabled }} disabled</div></div>
-  <div class="card" data-section="config"><h4>Config</h4><div class="count">{{ counts.config_files }} files</div><div class="status">rpm_va: {{ counts.rpm_va }}</div></div>
-  <div class="card" data-section="network"><h4>Network</h4><div class="count">{{ counts.network }}</div><div class="status">connections / firewall</div></div>
-  <div class="card" data-section="storage"><h4>Storage</h4><div class="count">{{ counts.storage }}</div><div class="status">fstab entries</div></div>
-  <div class="card" data-section="scheduled_tasks"><h4>Scheduled</h4><div class="count">{{ counts.scheduled_tasks }}</div><div class="status">cron / timers</div></div>
-  <div class="card" data-section="containers"><h4>Containers</h4><div class="count">{{ counts.containers }}</div><div class="status">quadlet / compose</div></div>
-  <div class="card" data-section="non_rpm"><h4>Non-RPM</h4><div class="count">{{ counts.non_rpm }}</div><div class="status">items</div></div>
-  <div class="card" data-section="kernel_boot"><h4>Kernel/Boot</h4><div class="count">{{ counts.kernel_boot }}</div><div class="status">configs</div></div>
-  <div class="card" data-section="selinux"><h4>SELinux</h4><div class="count">{{ counts.selinux }}</div><div class="status">customizations</div></div>
-  <div class="card" data-section="users_groups"><h4>Users/Groups</h4><div class="count">{{ counts.users_groups }}</div><div class="status">non-system</div></div>
+  <div class="card status-{{ card_status.packages }}" data-section="packages"><h4>Packages</h4><div class="count">{{ counts.packages_added }} added</div><div class="status">{{ counts.packages_removed }} removed</div></div>
+  <div class="card status-{{ card_status.services }}" data-section="services"><h4>Services</h4><div class="count">{{ counts.services_enabled }} enabled</div><div class="status">{{ counts.services_disabled }} disabled</div></div>
+  <div class="card status-{{ card_status.config }}" data-section="config"><h4>Config</h4><div class="count">{{ counts.config_files }} files</div><div class="status">rpm_va: {{ counts.rpm_va }}</div></div>
+  <div class="card status-{{ card_status.network }}" data-section="network"><h4>Network</h4><div class="count">{{ counts.network }}</div><div class="status">connections / firewall</div></div>
+  <div class="card status-{{ card_status.storage }}" data-section="storage"><h4>Storage</h4><div class="count">{{ counts.storage }}</div><div class="status">fstab entries</div></div>
+  <div class="card status-{{ card_status.scheduled_tasks }}" data-section="scheduled_tasks"><h4>Scheduled</h4><div class="count">{{ counts.scheduled_tasks }}</div><div class="status">cron / timers</div></div>
+  <div class="card status-{{ card_status.containers }}" data-section="containers"><h4>Containers</h4><div class="count">{{ counts.containers }}</div><div class="status">quadlet / compose</div></div>
+  <div class="card status-{{ card_status.non_rpm }}" data-section="non_rpm"><h4>Non-RPM</h4><div class="count">{{ counts.non_rpm }}</div><div class="status">items</div></div>
+  <div class="card status-{{ card_status.kernel_boot }}" data-section="kernel_boot"><h4>Kernel/Boot</h4><div class="count">{{ counts.kernel_boot }}</div><div class="status">configs</div></div>
+  <div class="card status-{{ card_status.selinux }}" data-section="selinux"><h4>SELinux</h4><div class="count">{{ counts.selinux }}</div><div class="status">customizations</div></div>
+  <div class="card status-{{ card_status.users_groups }}" data-section="users_groups"><h4>Users/Groups</h4><div class="count">{{ counts.users_groups }}</div><div class="status">non-system</div></div>
   <div class="card" data-section="warnings"><h4>Warnings</h4><div class="count" id="warnings-card-count">{{ warnings|length }}</div><div class="status" id="warnings-card-status">Review required</div></div>
   <div class="card" data-section="containerfile"><h4>Containerfile</h4><div class="count">{{ containerfile_lines }} lines</div><div class="status">Generated</div></div>
   <div class="card" data-section="output_files"><h4>Output files</h4><div class="count">config / quadlet</div><div class="status">Browse</div></div>
@@ -179,6 +182,7 @@ th { color: var(--muted); font-weight: 500; }
   <button data-tab="kernel_boot">Kernel/Boot</button>
   <button data-tab="selinux">SELinux</button>
   <button data-tab="users_groups">Users/Groups</button>
+  <button data-tab="secrets">Secrets</button>
   <button data-tab="warnings">Warnings</button>
   <button data-tab="containerfile">Containerfile</button>
   <button data-tab="output_files">Output files</button>
@@ -736,7 +740,7 @@ th { color: var(--muted); font-weight: 500; }
         {%- set notes = [] %}
         {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
           {%- set _ = notes.append('SSH keys') %}
-          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="SSH keys not included in image">SSH</span>
+          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="authorized_keys found on source but not included in image">SSH KEYS</span>
         {%- endif %}
         {%- if cls == 'ambiguous' %}
           <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="Classification uncertain — verify intent">ambiguous</span>
@@ -766,6 +770,28 @@ th { color: var(--muted); font-weight: 500; }
 
   {%- else %}
   <p>No non-system users/groups.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Secrets ──────────────────────────────────────────────────────────────── #}
+{% call section("secrets", "Secrets") %}
+  {%- if secrets_data %}
+  <p><strong>{{ secrets_data|length }} value(s) redacted</strong> across <strong>{{ secrets_file_count }} file(s)</strong>.</p>
+  <table class="data-table">
+    <thead><tr><th>File Path</th><th>Pattern</th><th>Line</th><th>Remediation</th></tr></thead>
+    <tbody>
+    {%- for r in secrets_data %}
+    <tr>
+      <td><code>{{ r.path or '?' }}</code></td>
+      <td>{{ r.pattern or '?' }}</td>
+      <td>{{ r.line or '?' }}</td>
+      <td style="font-size:0.85em">{{ r.remediation or '' }}</td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  {%- else %}
+  <p style="color:var(--ok)">No secrets detected.</p>
   {%- endif %}
 {% endcall %}
 
