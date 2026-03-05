@@ -129,7 +129,7 @@ Discovers container workloads through a fast file-based scan:
 
 When enabled, runs `podman ps -a --format json` to enumerate containers, then `podman inspect` on each to capture mounts, network settings, ports, and environment variables. This captures runtime state that may not be reflected in the unit files (e.g., containers started manually, containers with runtime overrides). Without this flag, the inspector relies entirely on the file-based scan, which is faster and covers the vast majority of cases since production workloads should be defined in unit files.
 
-Translates to quadlet in the output since that's the bootc-blessed pattern. Docker-compose files get a `# FIXME: converted from docker-compose, verify quadlet translation` comment.
+Existing quadlet units are copied directly into the image. Compose files are noted in the Containerfile and audit report with a suggestion to convert to quadlet using `podlet` or manually — the tool does not attempt automatic conversion.
 
 #### Non-RPM Software Inspector
 

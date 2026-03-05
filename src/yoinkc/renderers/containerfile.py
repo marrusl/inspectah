@@ -715,10 +715,15 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
 
     # 8. Container Workloads (Quadlet)
     if snapshot.containers and (snapshot.containers.quadlet_units or snapshot.containers.compose_files):
-        lines.append("# === Container Workloads (Quadlet) ===")
+        lines.append("# === Container Workloads ===")
+        if snapshot.containers.quadlet_units:
+            lines.append("COPY quadlet/ /etc/containers/systemd/")
         if snapshot.containers.compose_files:
-            lines.append("# FIXME: converted from docker-compose, verify quadlet translation")
-        lines.append("COPY quadlet/ /etc/containers/systemd/")
+            for cf in snapshot.containers.compose_files:
+                lines.append(f"# Compose file included: {cf.path}")
+            lines.append("# Compose file(s) included as-is. For native systemd integration,")
+            lines.append("# consider converting to Quadlet units — see https://github.com/containers/podlet")
+            lines.append("# or https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html")
         lines.append("")
 
     # 9. Users and Groups — strategy-aware rendering
