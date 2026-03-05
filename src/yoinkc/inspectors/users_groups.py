@@ -12,6 +12,35 @@ def _debug(msg: str) -> None:
     _debug_fn("users", msg)
 
 
+_NOLOGIN_SHELLS = frozenset({"/sbin/nologin", "/bin/false", "/usr/sbin/nologin"})
+_REAL_SHELLS = frozenset({"/bin/bash", "/bin/zsh", "/bin/sh", "/bin/fish", "/bin/tcsh", "/bin/csh", "/usr/bin/bash", "/usr/bin/zsh", "/usr/bin/fish"})
+
+_STRATEGY_MAP = {
+    "service": "sysusers",
+    "human": "kickstart",
+    "ambiguous": "useradd",
+}
+
+
+def _classify_user(user: dict) -> str:
+    """Classify a user as service, human, or ambiguous."""
+    shell = user.get("shell", "")
+    home = user.get("home", "")
+    uid = user.get("uid", 0)
+
+    if shell in _NOLOGIN_SHELLS:
+        return "service"
+    if home in ("/dev/null", ""):
+        return "service"
+    if home.startswith("/var/") or home.startswith("/opt/") or home.startswith("/srv/"):
+        if shell in _REAL_SHELLS:
+            return "ambiguous"
+        return "service"
+    if shell in _REAL_SHELLS and home.startswith("/home/") and uid >= 1000:
+        return "human"
+    return "ambiguous"
+
+
 def _safe_read_file(p: Path) -> Optional[str]:
     """Read a file, returning its content or None on any error."""
     try:
@@ -63,6 +92,11 @@ def run(
 
     _debug(f"found {len(section.users)} non-system users (uid >= 1000)")
 
+    # Classify each user and assign default strategy
+    for u in section.users:
+        u["classification"] = _classify_user(u)
+        u["strategy"] = _STRATEGY_MAP[u["classification"]]
+
     # /etc/shadow — match by username from passwd
     shadow_path = host_root / "etc/shadow"
     shadow_text = _safe_read_file(shadow_path)
@@ -97,6 +131,15 @@ def run(
                         pass
 
     _debug(f"found {len(section.groups)} non-system groups (gid >= 1000)")
+
+    # Assign strategy to groups: follow primary user, default to sysusers
+    user_by_gid = {u.get("gid"): u for u in section.users}
+    for g in section.groups:
+        primary_user = user_by_gid.get(g.get("gid"))
+        if primary_user:
+            g["strategy"] = primary_user.get("strategy", "sysusers")
+        else:
+            g["strategy"] = "sysusers"
 
     # /etc/gshadow — match by group name
     gshadow_path = host_root / "etc/gshadow"

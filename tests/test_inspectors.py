@@ -509,6 +509,65 @@ def test_selinux_inspector_with_fixtures(host_root, fixture_executor):
     assert httpd_cgi["non_default"] is False
 
 
+def test_user_classification():
+    from yoinkc.inspectors.users_groups import _classify_user, _STRATEGY_MAP
+
+    # Service: nologin shell
+    assert _classify_user({"shell": "/sbin/nologin", "home": "/var/lib/redis", "uid": 1001}) == "service"
+    assert _STRATEGY_MAP["service"] == "sysusers"
+
+    # Service: /bin/false
+    assert _classify_user({"shell": "/bin/false", "home": "/home/nobody", "uid": 1002}) == "service"
+
+    # Service: home under /var with nologin
+    assert _classify_user({"shell": "/sbin/nologin", "home": "/var/lib/myapp", "uid": 1003}) == "service"
+
+    # Human: real shell, /home, uid >= 1000
+    assert _classify_user({"shell": "/bin/bash", "home": "/home/alice", "uid": 1000}) == "human"
+    assert _STRATEGY_MAP["human"] == "kickstart"
+
+    # Human: zsh
+    assert _classify_user({"shell": "/bin/zsh", "home": "/home/bob", "uid": 1001}) == "human"
+
+    # Ambiguous: real shell but home under /var
+    assert _classify_user({"shell": "/bin/bash", "home": "/var/lib/myapp", "uid": 1004}) == "ambiguous"
+    assert _STRATEGY_MAP["ambiguous"] == "useradd"
+
+    # Ambiguous: unusual shell
+    assert _classify_user({"shell": "/usr/local/bin/custom-shell", "home": "/home/custom", "uid": 1005}) == "ambiguous"
+
+
+def test_user_classification_in_fixture(host_root, fixture_executor):
+    from yoinkc.inspectors.users_groups import run as run_users_groups
+    section = run_users_groups(host_root, fixture_executor)
+    jdoe = next(u for u in section.users if u["name"] == "jdoe")
+    assert jdoe["classification"] == "human"
+    assert jdoe["strategy"] == "kickstart"
+
+    # Group follows primary user
+    jdoe_group = next(g for g in section.groups if g["name"] == "jdoe")
+    assert jdoe_group["strategy"] == "kickstart"
+
+
+def test_group_strategy_no_user():
+    """Groups with no associated user default to sysusers."""
+    from yoinkc.inspectors.users_groups import run as run_users_groups
+    from yoinkc.schema import UserGroupSection
+
+    section = UserGroupSection()
+    section.groups.append({"name": "mygroup", "gid": 2000, "members": []})
+
+    user_by_gid = {}
+    for g in section.groups:
+        primary_user = user_by_gid.get(g.get("gid"))
+        if primary_user:
+            g["strategy"] = primary_user.get("strategy", "sysusers")
+        else:
+            g["strategy"] = "sysusers"
+
+    assert section.groups[0]["strategy"] == "sysusers"
+
+
 def test_users_groups_inspector_with_fixtures(host_root, fixture_executor):
     from yoinkc.inspectors.users_groups import run as run_users_groups
     section = run_users_groups(host_root, fixture_executor)

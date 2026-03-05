@@ -422,7 +422,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class InspectionSnapshot(BaseModel):
