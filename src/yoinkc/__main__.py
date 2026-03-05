@@ -23,6 +23,7 @@ def _run_inspectors(host_root: Path, args) -> InspectionSnapshot:
         baseline_packages_file=args.baseline_packages,
         target_version=args.target_version,
         target_image=args.target_image,
+        user_strategy=args.user_strategy,
     )
 
 

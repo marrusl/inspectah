@@ -151,6 +151,32 @@ def render(
             lines.append(f"- {prefix}{msg}")
         lines.append("")
 
+    # --- User Creation Strategies ---
+    if snapshot.users_groups and snapshot.users_groups.users:
+        lines.append("## User Creation Strategies")
+        lines.append("")
+        lines.append("bootc performs a three-way merge on `/etc` during image updates. "
+                      "Users baked into `/etc/passwd` in the image can conflict with runtime changes. "
+                      "Declarative and deploy-time approaches avoid this.")
+        lines.append("")
+        lines.append("| Strategy | What it does | When to use | Risk |")
+        lines.append("|----------|-------------|-------------|------|")
+        lines.append("| **sysusers** | systemd-sysusers drop-in creates users at boot | Service accounts (nologin shell) | "
+                      "Users not visible until first boot |")
+        lines.append("| **useradd** | Explicit `RUN useradd` in Containerfile | Accounts needing precise control in the image | "
+                      "Conflicts with bootc `/etc` merge on updates |")
+        lines.append("| **kickstart** | User directives in kickstart at deploy time | Human users, site-specific accounts | "
+                      "Users missing if kickstart not applied |")
+        lines.append("| **blueprint** | bootc-image-builder TOML customization | When using image-builder as build pipeline | "
+                      "Only works with bootc-image-builder |")
+        lines.append("| **exact-copy** | Raw `cat >> /etc/passwd` append | Byte-level replication of source entries | "
+                      "Highest merge conflict risk |")
+        lines.append("")
+        lines.append("**Recommendation:** Use **sysusers** for service accounts and **kickstart** or identity management "
+                      "(FreeIPA, SSSD) for human users. Use `--user-strategy` to override the per-classification defaults "
+                      "if you want a single strategy for all users.")
+        lines.append("")
+
     lines.append("See [`audit-report.md`](audit-report.md) or [`report.html`](report.html) for full details.")
     lines.append("")
     (output_dir / "README.md").write_text("\n".join(lines))

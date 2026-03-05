@@ -587,27 +587,69 @@ def render(
         or snapshot.users_groups.sudoers_rules or snapshot.users_groups.ssh_authorized_keys_refs
     )
     if has_users:
+        ug = snapshot.users_groups
         lines.append("## Users and groups")
         lines.append("")
-        for u in (snapshot.users_groups.users or []):
+        for u in (ug.users or []):
             shell = u.get("shell") or ""
             home = u.get("home") or ""
             lines.append(f"- User: **{u.get('name') or ''}** (uid {u.get('uid') or ''}, home `{home}`, shell `{shell}`)")
-        for g in (snapshot.users_groups.groups or []):
+        for g in (ug.groups or []):
             members = g.get("members") or []
             mem_str = f", members: {', '.join(members)}" if members else ""
             lines.append(f"- Group: **{g.get('name') or ''}** (gid {g.get('gid') or ''}{mem_str})")
-        if snapshot.users_groups.sudoers_rules:
+        if ug.sudoers_rules:
             lines.append("")
             lines.append("### Sudoers rules")
-            for r in snapshot.users_groups.sudoers_rules:
+            for r in ug.sudoers_rules:
                 lines.append(f"- `{r}`")
-        if snapshot.users_groups.ssh_authorized_keys_refs:
+        if ug.ssh_authorized_keys_refs:
             lines.append("")
             lines.append("### SSH authorized_keys (flagged for manual handling)")
-            for ref in snapshot.users_groups.ssh_authorized_keys_refs:
+            for ref in ug.ssh_authorized_keys_refs:
                 lines.append(f"- User **{ref.get('user') or ''}**: `{ref.get('path') or ''}`")
         lines.append("")
+
+        # User Migration Strategy table
+        if ug.users:
+            ssh_users = {ref.get("user") for ref in (ug.ssh_authorized_keys_refs or [])}
+            sudo_users = set()
+            for rule in (ug.sudoers_rules or []):
+                for u in ug.users:
+                    if u.get("name", "") in rule:
+                        sudo_users.add(u["name"])
+
+            lines.append("### User Migration Strategy")
+            lines.append("")
+            lines.append("| User | UID | Type | Strategy | Notes |")
+            lines.append("|------|-----|------|----------|-------|")
+            for u in ug.users:
+                name = u.get("name", "")
+                uid = u.get("uid", "")
+                cls = u.get("classification", "?")
+                strategy = u.get("strategy", "?")
+                notes = []
+                shell = u.get("shell", "")
+                if shell and shell != "/bin/bash":
+                    notes.append(f"shell: {shell}")
+                if name in sudo_users:
+                    notes.append("has sudo")
+                if name in ssh_users:
+                    notes.append("SSH keys")
+                shadow_entry = next((s for s in (ug.shadow_entries or []) if s.split(":")[0] == name), None)
+                if shadow_entry:
+                    pw = shadow_entry.split(":")[1] if ":" in shadow_entry else ""
+                    if pw and pw not in ("!", "!!", "*"):
+                        notes.append("has password")
+                lines.append(f"| {name} | {uid} | {cls} | {strategy} | {', '.join(notes) if notes else ''} |")
+            lines.append("")
+            lines.append("**Strategies:** "
+                         "sysusers = systemd-sysusers drop-in (boot-time), "
+                         "useradd = explicit RUN in Containerfile, "
+                         "kickstart = deferred to deploy-time provisioning, "
+                         "blueprint = bootc-image-builder TOML, "
+                         "exact-copy = raw /etc/passwd append")
+            lines.append("")
 
     lines.append("## Data Migration Plan (/var)")
     lines.append("")

@@ -534,6 +534,90 @@ class TestUserStrategies:
             assert "RUN useradd" in cf
             assert "FIXME: human user 'mark' deferred" in cf
 
+    def test_user_strategy_override_all_sysusers(self):
+        from yoinkc.inspectors.users_groups import run as run_ug
+        import tempfile as _tf
+        host_root = Path(__file__).parent / "fixtures" / "host_etc"
+        section = run_ug(host_root, None, user_strategy_override="sysusers")
+        for u in section.users:
+            assert u["strategy"] == "sysusers", f"{u['name']} should be sysusers"
+        for g in section.groups:
+            assert g["strategy"] == "sysusers", f"{g['name']} should be sysusers"
+
+    def test_user_strategy_override_blueprint_generates_toml(self):
+        snapshot = InspectionSnapshot(
+            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "mark", "uid": 1000, "gid": 1000,
+                        "home": "/home/mark", "shell": "/bin/bash",
+                        "classification": "human", "strategy": "blueprint"}],
+                groups=[{"name": "mark", "gid": 1000, "members": [], "strategy": "blueprint"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            assert (Path(tmp) / "yoinkc-users.toml").exists()
+            toml = (Path(tmp) / "yoinkc-users.toml").read_text()
+            assert "[[customizations.user]]" in toml
+            assert 'name = "mark"' in toml
+
+    def test_audit_report_strategy_table(self):
+        from yoinkc.renderers.audit_report import render as render_audit
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6"),
+            users_groups=UserGroupSection(
+                users=[
+                    {"name": "appuser", "uid": 1001, "gid": 1001,
+                     "home": "/opt/myapp", "shell": "/sbin/nologin",
+                     "classification": "service", "strategy": "sysusers"},
+                    {"name": "mark", "uid": 1000, "gid": 1000,
+                     "home": "/home/mark", "shell": "/bin/bash",
+                     "classification": "human", "strategy": "kickstart"},
+                ],
+                sudoers_rules=["mark ALL=(ALL) NOPASSWD: ALL"],
+                ssh_authorized_keys_refs=[{"user": "mark", "path": "/home/mark/.ssh/authorized_keys"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit(snapshot, _env(), Path(tmp))
+            report = (Path(tmp) / "audit-report.md").read_text()
+            assert "User Migration Strategy" in report
+            assert "| appuser" in report
+            assert "sysusers" in report
+            assert "kickstart" in report
+            assert "has sudo" in report
+
+    def test_readme_user_strategies_section(self):
+        from yoinkc.renderers.readme import render as render_readme
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(base_image="registry.redhat.io/rhel9/rhel-bootc:9.6"),
+            users_groups=UserGroupSection(
+                users=[{"name": "mark", "uid": 1000, "gid": 1000,
+                        "home": "/home/mark", "shell": "/bin/bash",
+                        "classification": "human", "strategy": "kickstart"}],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            # Need a Containerfile for _extract_fixmes
+            (Path(tmp) / "Containerfile").write_text("FROM base\n")
+            render_readme(snapshot, _env(), Path(tmp))
+            readme = (Path(tmp) / "README.md").read_text()
+            assert "User Creation Strategies" in readme
+            assert "sysusers" in readme
+            assert "bootc" in readme.lower()
+
+    def test_cli_user_strategy_invalid(self):
+        from yoinkc.cli import parse_args
+        import sys
+        try:
+            parse_args(["--user-strategy", "invalid"])
+            assert False, "Should have raised SystemExit"
+        except SystemExit:
+            pass
+
 
 # ---------------------------------------------------------------------------
 # 11. Deep binary scan expanded patterns

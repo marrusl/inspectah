@@ -57,6 +57,7 @@ def _safe_read_file(p: Path) -> Optional[str]:
 def run(
     host_root: Path,
     executor: Optional[Executor],
+    user_strategy_override: Optional[str] = None,
 ) -> UserGroupSection:
     section = UserGroupSection()
     host_root = Path(host_root)
@@ -92,10 +93,10 @@ def run(
 
     _debug(f"found {len(section.users)} non-system users (uid >= 1000)")
 
-    # Classify each user and assign default strategy
+    # Classify each user and assign strategy (override or classification default)
     for u in section.users:
         u["classification"] = _classify_user(u)
-        u["strategy"] = _STRATEGY_MAP[u["classification"]]
+        u["strategy"] = user_strategy_override or _STRATEGY_MAP[u["classification"]]
 
     # /etc/shadow — match by username from passwd
     shadow_path = host_root / "etc/shadow"
@@ -132,14 +133,14 @@ def run(
 
     _debug(f"found {len(section.groups)} non-system groups (gid >= 1000)")
 
-    # Assign strategy to groups: follow primary user, default to sysusers
+    # Assign strategy to groups: override, follow primary user, or default to sysusers
     user_by_gid = {u.get("gid"): u for u in section.users}
     for g in section.groups:
-        primary_user = user_by_gid.get(g.get("gid"))
-        if primary_user:
-            g["strategy"] = primary_user.get("strategy", "sysusers")
+        if user_strategy_override:
+            g["strategy"] = user_strategy_override
         else:
-            g["strategy"] = "sysusers"
+            primary_user = user_by_gid.get(g.get("gid"))
+            g["strategy"] = primary_user.get("strategy", "sysusers") if primary_user else "sysusers"
 
     # /etc/gshadow — match by group name
     gshadow_path = host_root / "etc/gshadow"

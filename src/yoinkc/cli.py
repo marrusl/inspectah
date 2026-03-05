@@ -82,6 +82,17 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Connect to podman socket to enumerate running containers",
     )
 
+    _VALID_STRATEGIES = ("sysusers", "blueprint", "useradd", "kickstart", "exact-copy")
+    parser.add_argument(
+        "--user-strategy",
+        type=str,
+        metavar="STRATEGY",
+        choices=_VALID_STRATEGIES,
+        help="Override user creation strategy for all users. "
+             f"Valid: {', '.join(_VALID_STRATEGIES)}. "
+             "Default: auto-assigned per classification (service→sysusers, human→kickstart, ambiguous→useradd).",
+    )
+
     # Build validation
     parser.add_argument(
         "--skip-preflight",

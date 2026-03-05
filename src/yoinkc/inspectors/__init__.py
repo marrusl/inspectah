@@ -168,6 +168,7 @@ def run_all(
     baseline_packages_file: Optional[Path] = None,
     target_version: Optional[str] = None,
     target_image: Optional[str] = None,
+    user_strategy: Optional[str] = None,
 ) -> InspectionSnapshot:
     """Run all inspectors and return a merged snapshot."""
     host_root = Path(host_root)
@@ -252,7 +253,7 @@ def run_all(
     _status("Inspecting SELinux/security...")
     snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor, warnings=w), None, w)
     _status("Inspecting users/groups...")
-    snapshot.users_groups = _safe_run("users_groups", lambda: run_users_groups(host_root, executor), None, w)
+    snapshot.users_groups = _safe_run("users_groups", lambda: run_users_groups(host_root, executor, user_strategy_override=user_strategy), None, w)
     _status("Inspection complete.")
 
     return snapshot

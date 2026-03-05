@@ -226,8 +226,10 @@ output/
 │   │   └── ...
 │   ├── opt/                      # Non-RPM software (venvs, npm apps, binaries)
 │   ├── usr/                      # Files under /usr/local
-│   └── tmp/                      # User/group .append fragments (separate from etc/)
-└── quadlet/                      # Container workload unit files
+│   ├── tmp/                      # User/group .append fragments (exact-copy strategy)
+│   └── usr/lib/sysusers.d/      # systemd-sysusers conf (sysusers strategy)
+├── quadlet/                      # Container workload unit files
+└── yoinkc-users.toml             # bootc-image-builder user config (blueprint strategy, when active)
 ```
 
 ---
@@ -258,6 +260,7 @@ output/
 | `--config-diffs` | Generate line-by-line diffs for modified configs via `rpm2cpio` (retrieves from local cache or downloads from repos) |
 | `--deep-binary-scan` | Full `strings` scan on unknown binaries with extended version pattern matching (slow) |
 | `--query-podman` | Connect to podman to enumerate running containers with full inspect data |
+| `--user-strategy STRATEGY` | Override user creation strategy for all users. Valid: `sysusers`, `blueprint`, `useradd`, `kickstart`, `exact-copy` |
 | `--skip-preflight` | Skip container privilege checks (rootful, `--pid=host`, `--privileged`, SELinux) |
 
 ### Output Options

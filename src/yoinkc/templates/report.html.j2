@@ -705,13 +705,65 @@ th { color: var(--muted); font-weight: 500; }
 
 {# ── Users / Groups ───────────────────────────────────────────────────────── #}
 {% call section("users_groups", "Users and groups") %}
-  {%- if snapshot.users_groups and (snapshot.users_groups.users or snapshot.users_groups.groups) %}
-  {%- for u in snapshot.users_groups.users %}
-  <p>User: {{ u.get('name') or '' }} (uid {{ u.get('uid') or '' }})</p>
-  {%- endfor %}
-  {%- for g in snapshot.users_groups.groups %}
-  <p>Group: {{ g.get('name') or '' }} (gid {{ g.get('gid') or '' }})</p>
-  {%- endfor %}
+  {%- if snapshot.users_groups and snapshot.users_groups.users %}
+  {%- set ug = snapshot.users_groups %}
+  {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart", "exact-copy"] %}
+
+  <p style="color:var(--muted);font-size:0.9em">
+    To change strategies, re-run with <code>--user-strategy</code> or edit the Containerfile directly.
+  </p>
+
+  <table class="data-table">
+    <thead><tr><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
+    <tbody>
+    {%- for u in ug.users %}
+    {%- set cls = u.classification or '?' %}
+    {%- set cls_color = '#4caf50' if cls == 'service' else '#2196f3' if cls == 'human' else '#ff9800' %}
+    <tr>
+      <td><strong>{{ u.name }}</strong></td>
+      <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
+      <td><code>{{ u.shell }}</code></td>
+      <td><code>{{ u.home }}</code></td>
+      <td><span style="background:{{ cls_color }};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">{{ cls }}</span></td>
+      <td>
+        <select disabled style="background:var(--card);color:var(--text);border:1px solid #30363d;border-radius:4px;padding:2px 4px;font-size:0.85em" data-user="{{ u.name }}">
+          {%- for s in strategies %}
+          <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
+          {%- endfor %}
+        </select>
+      </td>
+      <td style="font-size:0.85em">
+        {%- set notes = [] %}
+        {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
+          {%- set _ = notes.append('SSH keys') %}
+          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="SSH keys not included in image">SSH</span>
+        {%- endif %}
+        {%- if cls == 'ambiguous' %}
+          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="Classification uncertain — verify intent">ambiguous</span>
+        {%- endif %}
+      </td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+
+  {%- if ug.groups %}
+  <h3>Groups</h3>
+  <table class="data-table">
+    <thead><tr><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
+    <tbody>
+    {%- for g in ug.groups %}
+    <tr>
+      <td>{{ g.name }}</td>
+      <td>{{ g.gid }}</td>
+      <td>{{ g.strategy }}</td>
+      <td>{{ (g.members or [])|join(', ') or '—' }}</td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+
   {%- else %}
   <p>No non-system users/groups.</p>
   {%- endif %}
