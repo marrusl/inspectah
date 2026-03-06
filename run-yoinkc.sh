@@ -38,7 +38,7 @@ _check_rh_login() {
     echo "" >&2
     echo "ERROR: You are not logged in to registry.redhat.io." >&2
     echo "" >&2
-    echo "  Run:  podman login registry.redhat.io" >&2
+    echo "  Run:  sudo podman login registry.redhat.io" >&2
     echo "" >&2
     echo "  Use your Red Hat account (https://access.redhat.com)." >&2
     echo "  Free developer account: https://developers.redhat.com" >&2
