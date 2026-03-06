@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+"""
+yoinkc-refine — local helper that serves a yoinkc output tarball and enables
+live re-rendering from the HTML report's interactive UI.
+
+Usage:
+    ./yoinkc-refine output-tarball.tar.gz
+    python3 yoinkc-refine output-tarball.tar.gz
+
+No pip dependencies — stdlib only (Python 3.9+).
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import os
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PORT = 8642
+_IMAGE = "ghcr.io/marrusl/yoinkc:latest"
+_REQUIRED_FILES = ("report.html", "inspection-snapshot.json")
+_SCRIPT_NAME = "yoinkc-refine"
+
+
+# ---------------------------------------------------------------------------
+# Logging helpers
+# ---------------------------------------------------------------------------
+
+def _log(msg: str) -> None:
+    print(f"{_SCRIPT_NAME}: {msg}", flush=True)
+
+
+def _err(msg: str) -> None:
+    print(f"{_SCRIPT_NAME}: error: {msg}", file=sys.stderr, flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Port finding
+# ---------------------------------------------------------------------------
+
+def _find_free_port(start: int = _DEFAULT_PORT, max_attempts: int = 20) -> int:
+    """Return the first free TCP port at or above *start*."""
+    for port in range(start, start + max_attempts):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise RuntimeError(f"No free port found in range {start}–{start + max_attempts - 1}")
+
+
+# ---------------------------------------------------------------------------
+# Tarball helpers
+# ---------------------------------------------------------------------------
+
+def _extract_tarball(tarball_path: Path, dest: Path) -> None:
+    """Extract *tarball_path* into *dest*."""
+    with tarfile.open(tarball_path, "r:gz") as tf:
+        # Security: strip any leading path components that escape dest.
+        members = []
+        for m in tf.getmembers():
+            # Normalize: strip leading slashes and ".." components
+            safe_name = "/".join(
+                part for part in m.name.replace("\\", "/").split("/")
+                if part and part != ".."
+            )
+            if not safe_name:
+                continue
+            m.name = safe_name
+            members.append(m)
+        tf.extractall(dest, members=members)  # noqa: S202
+
+
+def _validate_output_dir(d: Path) -> None:
+    """Raise SystemExit if required files are missing from *d*."""
+    missing = [f for f in _REQUIRED_FILES if not (d / f).exists()]
+    if missing:
+        # Try one level deeper (tarballs sometimes wrap in a single directory)
+        subdirs = [p for p in d.iterdir() if p.is_dir()]
+        if len(subdirs) == 1:
+            inner = subdirs[0]
+            missing = [f for f in _REQUIRED_FILES if not (inner / f).exists()]
+            if not missing:
+                # Move contents up
+                for item in inner.iterdir():
+                    shutil.move(str(item), str(d / item.name))
+                inner.rmdir()
+                return
+        _err(f"tarball is missing required file(s): {', '.join(missing)}")
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Container runner
+# ---------------------------------------------------------------------------
+
+def _find_runtime() -> str | None:
+    """Return 'podman', 'docker', or None."""
+    for rt in ("podman", "docker"):
+        if shutil.which(rt):
+            return rt
+    return None
+
+
+def _count_excluded(snapshot: dict) -> int:
+    """Count items where include==False across the snapshot."""
+    count = 0
+    for section_val in snapshot.values():
+        if not isinstance(section_val, dict):
+            continue
+        for list_val in section_val.values():
+            if isinstance(list_val, list):
+                for item in list_val:
+                    if isinstance(item, dict) and item.get("include") is False:
+                        count += 1
+    return count
+
+
+def _re_render(snapshot_data: bytes, output_dir: Path) -> tuple[bool, str]:
+    """
+    Run yoinkc in a container to re-render from the modified snapshot.
+
+    Returns (success: bool, message_or_html: str).
+    If successful, message_or_html is the new report.html content.
+    On failure, it is the error/log text.
+    """
+    runtime = _find_runtime()
+    if runtime is None:
+        return False, (
+            "Neither podman nor docker was found on PATH. "
+            "Install one to enable live re-render."
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        snap_file = tmp_path / "snapshot.json"
+        snap_file.write_bytes(snapshot_data)
+        new_output = tmp_path / "output"
+        new_output.mkdir()
+
+        cmd = [
+            runtime, "run", "--rm",
+            "-v", f"{snap_file}:/input/snapshot.json:ro",
+            "-v", f"{new_output}:/output",
+            _IMAGE,
+            "--from-snapshot", "/input/snapshot.json",
+            "--output-dir", "/output",
+        ]
+        _log(f"running: {' '.join(cmd)}")
+        t0 = time.monotonic()
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except FileNotFoundError as exc:
+            return False, f"Container runtime not found: {exc}"
+        except subprocess.TimeoutExpired:
+            return False, "Container timed out after 300 seconds."
+
+        elapsed = time.monotonic() - t0
+
+        if result.returncode != 0:
+            log = (result.stdout or "") + (result.stderr or "")
+            return False, f"Container exited {result.returncode}:\n{log}"
+
+        new_html = new_output / "report.html"
+        if not new_html.exists():
+            return False, "Container ran but did not produce report.html"
+
+        # Replace output_dir contents with new output
+        for item in list(output_dir.iterdir()):
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+        for item in new_output.iterdir():
+            dest = output_dir / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest)
+            else:
+                shutil.copy2(item, dest)
+
+        _log(f"done in {elapsed:.1f}s, serving updated report")
+        return True, (output_dir / "report.html").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Tarball builder
+# ---------------------------------------------------------------------------
+
+def _build_tarball(output_dir: Path) -> bytes:
+    """Return a tar.gz of *output_dir* as bytes."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for item in sorted(output_dir.rglob("*")):
+            arcname = item.relative_to(output_dir)
+            tf.add(item, arcname=str(arcname))
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# HTTP request handler
+# ---------------------------------------------------------------------------
+
+class _Handler(BaseHTTPRequestHandler):
+    """Minimal HTTP handler for yoinkc-refine routes."""
+
+    # Injected at server creation time
+    output_dir: Path
+
+    # ------------------------------------------------------------------
+    # Low-level helpers
+    # ------------------------------------------------------------------
+
+    def log_message(self, fmt: str, *args: object) -> None:  # noqa: N802
+        pass  # suppress default access log noise
+
+    def _send(
+        self,
+        code: int,
+        body: bytes | str,
+        content_type: str = "text/plain; charset=utf-8",
+    ) -> None:
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_file(self, path: Path, content_type: str = "application/octet-stream") -> None:
+        try:
+            data = path.read_bytes()
+        except OSError as exc:
+            self._send(404, f"File not found: {exc}")
+            return
+        self._send(200, data, content_type)
+
+    def _read_body(self) -> bytes:
+        length = int(self.headers.get("Content-Length", 0))
+        if length:
+            return self.rfile.read(length)
+        return b""
+
+    # ------------------------------------------------------------------
+    # Routing
+    # ------------------------------------------------------------------
+
+    def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?")[0]
+        output_dir = self.__class__.output_dir
+
+        if path in ("/", "/index.html"):
+            self._send_file(output_dir / "report.html", "text/html; charset=utf-8")
+
+        elif path == "/api/health":
+            self._send(200, json.dumps({"status": "ok"}), "application/json")
+
+        elif path == "/snapshot":
+            self._send_file(
+                output_dir / "inspection-snapshot.json",
+                "application/json",
+            )
+
+        elif path == "/api/tarball":
+            _log("tarball downloaded")
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            filename = f"yoinkc-refined-{timestamp}.tar.gz"
+            data = _build_tarball(output_dir)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(data)
+
+        else:
+            # Serve any other file from the output directory
+            rel = path.lstrip("/")
+            candidate = output_dir / rel
+            if candidate.is_file():
+                self._send_file(candidate)
+            else:
+                self._send(404, f"Not found: {path}")
+
+    def do_POST(self) -> None:  # noqa: N802
+        path = self.path.split("?")[0]
+        output_dir = self.__class__.output_dir
+
+        if path == "/api/re-render":
+            body = self._read_body()
+            if not body:
+                self._send(400, "Empty request body")
+                return
+            try:
+                snapshot = json.loads(body)
+            except json.JSONDecodeError as exc:
+                self._send(400, f"Invalid JSON: {exc}")
+                return
+
+            excluded = _count_excluded(snapshot)
+            _log(f"re-rendering... ({excluded} item{'s' if excluded != 1 else ''} excluded)")
+
+            ok, result = _re_render(body, output_dir)
+            if ok:
+                self._send(200, result, "text/html; charset=utf-8")
+            else:
+                self._send(500, result)
+        else:
+            self._send(404, f"Not found: {path}")
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
+
+# ---------------------------------------------------------------------------
+# Browser opener
+# ---------------------------------------------------------------------------
+
+def _open_browser(url: str) -> None:
+    """Open *url* in the default browser, platform-appropriately."""
+    try:
+        if sys.platform == "darwin":
+            subprocess.run(["open", url], check=False)
+        elif sys.platform == "win32":
+            subprocess.run(["start", url], shell=True, check=False)
+        else:
+            subprocess.run(["xdg-open", url], check=False)
+    except Exception:
+        pass  # Non-fatal — user can open manually
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    if not argv or argv[0] in ("-h", "--help"):
+        print(
+            f"Usage: {_SCRIPT_NAME} output-tarball.tar.gz\n\n"
+            "Extracts the tarball, serves the report at http://localhost:8642,\n"
+            "and enables live re-rendering from the browser UI.",
+            file=sys.stderr,
+        )
+        sys.exit(0 if argv and argv[0] in ("-h", "--help") else 1)
+
+    tarball = Path(argv[0])
+    if not tarball.exists():
+        _err(f"file not found: {tarball}")
+        sys.exit(1)
+    if not tarfile.is_tarfile(tarball):
+        _err(f"not a valid tar.gz file: {tarball}")
+        sys.exit(1)
+
+    tmpdir = tempfile.mkdtemp(prefix="yoinkc-refine-")
+    output_dir = Path(tmpdir)
+
+    def _cleanup(*_: object) -> None:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, _cleanup)
+    signal.signal(signal.SIGTERM, _cleanup)
+
+    _log(f"extracting {tarball} …")
+    try:
+        _extract_tarball(tarball, output_dir)
+    except Exception as exc:
+        _err(f"failed to extract tarball: {exc}")
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        sys.exit(1)
+
+    _validate_output_dir(output_dir)  # exits on failure
+
+    if _find_runtime() is None:
+        _log("warning: podman and docker not found — re-render will not be available")
+
+    try:
+        port = _find_free_port()
+    except RuntimeError as exc:
+        _err(str(exc))
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        sys.exit(1)
+
+    # Inject output_dir into the handler class
+    _Handler.output_dir = output_dir  # type: ignore[attr-defined]
+
+    server = HTTPServer(("127.0.0.1", port), _Handler)
+    url = f"http://localhost:{port}"
+
+    _log(f"serving report at {url}")
+    _log("edit items in the browser, then click Re-render")
+    _log("Ctrl+C to stop")
+
+    _open_browser(url)
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    main()

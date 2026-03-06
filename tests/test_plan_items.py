@@ -15,9 +15,11 @@ import pytest
 from jinja2 import Environment
 
 from yoinkc.schema import (
+    ComposeFile,
     ConfigFileEntry,
     ConfigFileKind,
     ConfigSection,
+    ContainerSection,
     CronJob,
     FstabEntry,
     FirewallZone,
@@ -25,6 +27,7 @@ from yoinkc.schema import (
     InspectionSnapshot,
     KernelBootSection,
     KernelModule,
+    QuadletUnit,
     SysctlOverride,
     NMConnection,
     NetworkSection,
@@ -43,6 +46,7 @@ from yoinkc.schema import (
     UserGroupSection,
 )
 from yoinkc.renderers.containerfile import render as render_containerfile
+from yoinkc.renderers.audit_report import render as render_audit
 from yoinkc.renderers.html_report import render as render_html_report
 
 
@@ -1112,3 +1116,255 @@ class TestLeafAutoSlimming:
         assert "Dependencies" in report
         assert "httpd" in report
         assert "apr" in report
+
+
+class TestIncludeFieldDefaults:
+    """Every toggleable model defaults include=True."""
+
+    def test_package_entry_defaults_true(self):
+        p = PackageEntry(name="x", version="1", release="1", arch="x86_64")
+        assert p.include is True
+
+    def test_config_file_entry_defaults_true(self):
+        c = ConfigFileEntry(path="/etc/foo", kind=ConfigFileKind.UNOWNED)
+        assert c.include is True
+
+    def test_service_state_change_defaults_true(self):
+        s = ServiceStateChange(unit="x.service", current_state="enabled", default_state="disabled", action="enable")
+        assert s.include is True
+
+    def test_cron_job_defaults_true(self):
+        assert CronJob(path="etc/cron.d/x", source="cron.d").include is True
+
+    def test_generated_timer_unit_defaults_true(self):
+        assert GeneratedTimerUnit(name="x").include is True
+
+    def test_non_rpm_item_defaults_true(self):
+        assert NonRpmItem(path="/opt/x").include is True
+
+    def test_sysctl_override_defaults_true(self):
+        assert SysctlOverride(key="net.ipv4.ip_forward").include is True
+
+    def test_kernel_module_defaults_true(self):
+        assert KernelModule(name="vfat").include is True
+
+    def test_quadlet_unit_defaults_true(self):
+        assert QuadletUnit(path="/etc/containers/systemd/x.container", name="x.container").include is True
+
+    def test_compose_file_defaults_true(self):
+        assert ComposeFile(path="/opt/app/docker-compose.yml").include is True
+
+
+class TestContainerfileExclusion:
+    """Excluded items are omitted from Containerfile output."""
+
+    def _base_snapshot(self):
+        return InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="nginx", version="1.24", release="1", arch="x86_64", include=False),
+                ],
+                leaf_packages=["httpd", "nginx"],
+                auto_packages=[],
+            ),
+        )
+
+    def test_excluded_package_omitted_from_dnf_install(self):
+        snapshot = self._base_snapshot()
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "httpd" in cf
+        assert "nginx" not in cf
+
+    def test_excluded_leaf_removes_auto_deps(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="nginx", version="1.24", release="1", arch="x86_64", include=False),
+                    PackageEntry(name="apr", version="1.7", release="1", arch="x86_64"),
+                    PackageEntry(name="apr-util", version="1.6", release="1", arch="x86_64"),
+                    PackageEntry(name="nginx-core", version="1.24", release="1", arch="x86_64"),
+                ],
+                leaf_packages=["httpd", "nginx"],
+                auto_packages=["apr", "apr-util", "nginx-core"],
+                leaf_dep_tree={
+                    "httpd": ["apr", "apr-util"],
+                    "nginx": ["nginx-core"],
+                },
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "httpd" in cf
+        assert "nginx" not in cf
+        # nginx-core should not be counted since nginx (its only puller) is excluded
+        assert "2 additional" in cf  # apr + apr-util from httpd
+
+    def test_excluded_config_file_not_written(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(path="/etc/foo.conf", kind=ConfigFileKind.UNOWNED, content="hello"),
+                ConfigFileEntry(path="/etc/bar.conf", kind=ConfigFileKind.UNOWNED, content="world", include=False),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            assert (Path(tmp) / "config" / "etc" / "foo.conf").exists()
+            assert not (Path(tmp) / "config" / "etc" / "bar.conf").exists()
+
+    def test_excluded_timer_not_enabled(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            scheduled_tasks=ScheduledTaskSection(
+                generated_timer_units=[
+                    GeneratedTimerUnit(name="cron-foo", timer_content="[Timer]", service_content="[Service]"),
+                    GeneratedTimerUnit(name="cron-bar", timer_content="[Timer]", service_content="[Service]", include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "cron-foo" in cf
+        assert "cron-bar" not in cf
+
+    def test_excluded_quadlet_not_written(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            containers=ContainerSection(
+                quadlet_units=[
+                    QuadletUnit(path="/etc/containers/systemd/a.container", name="a.container", content="[Container]"),
+                    QuadletUnit(path="/etc/containers/systemd/b.container", name="b.container", content="[Container]", include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            assert (Path(tmp) / "quadlet" / "a.container").exists()
+            assert not (Path(tmp) / "quadlet" / "b.container").exists()
+
+
+class TestAuditReportExcluded:
+    """Excluded items still appear in the audit report with [EXCLUDED] prefix."""
+
+    def test_excluded_package_shows_excluded(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
+                    PackageEntry(name="nginx", version="1.24", release="1", arch="x86_64", include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit(snapshot, _env(), Path(tmp))
+            report = (Path(tmp) / "audit-report.md").read_text()
+        assert "[EXCLUDED] nginx" in report
+        assert "httpd" in report
+        assert "[EXCLUDED] httpd" not in report
+
+    def test_excluded_service_shows_excluded(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            services=ServiceSection(
+                state_changes=[
+                    ServiceStateChange(unit="foo.service", current_state="enabled",
+                                       default_state="disabled", action="enable"),
+                    ServiceStateChange(unit="bar.service", current_state="enabled",
+                                       default_state="disabled", action="enable", include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit(snapshot, _env(), Path(tmp))
+            report = (Path(tmp) / "audit-report.md").read_text()
+        assert "[EXCLUDED] bar.service" in report
+        assert "foo.service" in report
+        assert "[EXCLUDED] foo.service" not in report
+
+    def test_excluded_user_shows_excluded(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            users_groups=UserGroupSection(
+                users=[
+                    {"name": "alice", "uid": 1000, "shell": "/bin/bash", "home": "/home/alice", "include": True},
+                    {"name": "bob", "uid": 1001, "shell": "/bin/bash", "home": "/home/bob", "include": False},
+                ],
+                groups=[
+                    {"name": "alice", "gid": 1000, "include": True},
+                    {"name": "bob", "gid": 1001, "include": False},
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit(snapshot, _env(), Path(tmp))
+            report = (Path(tmp) / "audit-report.md").read_text()
+        assert "[EXCLUDED] User: **bob**" in report
+        assert "[EXCLUDED] Group: **bob**" in report
+        assert "[EXCLUDED] User: **alice**" not in report
+        assert "[EXCLUDED] Group: **alice**" not in report
+
+
+class TestUserGroupIncludeKey:
+    """User and group dicts respect the include key in renderers."""
+
+    def test_excluded_user_omitted_from_containerfile(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            users_groups=UserGroupSection(
+                users=[
+                    {"name": "alice", "uid": 1000, "gid": 1000, "shell": "/bin/bash",
+                     "home": "/home/alice", "include": True, "classification": "human",
+                     "strategy": "useradd"},
+                    {"name": "bob", "uid": 1001, "gid": 1001, "shell": "/bin/bash",
+                     "home": "/home/bob", "include": False, "classification": "human",
+                     "strategy": "useradd"},
+                ],
+                groups=[],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "useradd" in cf
+        assert "alice" in cf
+        assert "bob" not in cf
+
+    def test_user_include_defaults_true(self):
+        """Dicts without explicit include key are treated as included."""
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            users_groups=UserGroupSection(
+                users=[
+                    {"name": "carol", "uid": 1002, "gid": 1002, "shell": "/bin/bash",
+                     "home": "/home/carol", "classification": "human",
+                     "strategy": "useradd"},
+                ],
+                groups=[],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "carol" in cf

@@ -43,6 +43,7 @@ class PackageEntry(BaseModel):
     release: str
     arch: str
     state: PackageState = PackageState.ADDED
+    include: bool = True
 
 
 class RpmVaEntry(BaseModel):
@@ -97,6 +98,7 @@ class ConfigFileEntry(BaseModel):
     rpm_va_flags: Optional[str] = None  # if rpm-owned modified
     package: Optional[str] = None
     diff_against_rpm: Optional[str] = None  # unified diff when --config-diffs
+    include: bool = True
 
 
 class ConfigSection(BaseModel):
@@ -115,6 +117,7 @@ class ServiceStateChange(BaseModel):
     current_state: str  # enabled, disabled, masked, etc.
     default_state: str
     action: str  # "enable", "disable", "mask", or "unchanged"
+    include: bool = True
 
 
 class ServiceSection(BaseModel):
@@ -232,6 +235,7 @@ class CronJob(BaseModel):
     path: str
     source: str  # "cron.d", "crontab", "cron.daily", "spool/cron (user)", etc.
     rpm_owned: bool = False
+    include: bool = True
 
 
 class SystemdTimer(BaseModel):
@@ -259,6 +263,7 @@ class GeneratedTimerUnit(BaseModel):
     cron_expr: str = ""
     source_path: str = ""
     command: str = ""
+    include: bool = True
 
 
 class ScheduledTaskSection(BaseModel):
@@ -285,6 +290,7 @@ class QuadletUnit(BaseModel):
     name: str
     content: str = ""
     image: str = ""
+    include: bool = True
 
 
 class ComposeService(BaseModel):
@@ -295,6 +301,7 @@ class ComposeService(BaseModel):
 class ComposeFile(BaseModel):
     path: str
     images: List[ComposeService] = Field(default_factory=list)
+    include: bool = True
 
 
 class RunningContainer(BaseModel):
@@ -331,6 +338,7 @@ class NonRpmItem(BaseModel):
     name: str = ""
     method: str = ""
     confidence: str = "low"
+    include: bool = True
     # Binary classification (readelf / file / strings)
     lang: str = ""
     static: bool = False
@@ -370,6 +378,7 @@ class SysctlOverride(BaseModel):
     runtime: str = ""
     default: str = ""
     source: str = ""
+    include: bool = True
 
 
 class KernelModule(BaseModel):
@@ -378,6 +387,7 @@ class KernelModule(BaseModel):
     name: str
     size: str = "0"
     used_by: str = ""
+    include: bool = True
 
 
 class KernelBootSection(BaseModel):
@@ -423,7 +433,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class InspectionSnapshot(BaseModel):

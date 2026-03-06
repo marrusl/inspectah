@@ -102,7 +102,8 @@ def render(
             lines.append("These packages appear in the Containerfile `dnf install` line.")
             lines.append("")
             for p in leaf_pkgs:
-                lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
+                prefix = "[EXCLUDED] " if not p.include else ""
+                lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
             lines.append("")
             if auto_pkgs:
                 lines.append(f"### Dependencies ({len(auto_pkgs)})")
@@ -112,7 +113,8 @@ def render(
                              "the `dnf install` line.")
                 lines.append("")
                 for p in auto_pkgs:
-                    lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
+                    prefix = "[EXCLUDED] " if not p.include else ""
+                    lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
                 lines.append("")
 
             # Dependency tree view
@@ -140,7 +142,8 @@ def render(
         else:
             lines.append("### Added")
             for p in snapshot.rpm.packages_added:
-                lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
+                prefix = "[EXCLUDED] " if not p.include else ""
+                lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
             lines.append("")
         if snapshot.rpm.packages_removed:
             lines.append("### Removed (from baseline)")
@@ -174,7 +177,8 @@ def render(
             lines.append("| Unit | Current | Default | Action |")
             lines.append("|------|---------|---------|--------|")
             for s in service_rows:
-                lines.append(f"| {s.unit} | {s.current_state} | {s.default_state} | {s.action} |")
+                prefix = "[EXCLUDED] " if not s.include else ""
+                lines.append(f"| {prefix}{s.unit} | {s.current_state} | {s.default_state} | {s.action} |")
             lines.append("")
 
     if snapshot.config and snapshot.config.files:
@@ -188,9 +192,10 @@ def render(
         if orphaned:
             lines.append(f"- Orphaned (from removed packages): {len(orphaned)}")
         for f in snapshot.config.files:
+            prefix = "[EXCLUDED] " if not f.include else ""
             flags_note = f" — rpm -Va flags: `{f.rpm_va_flags}`" if f.rpm_va_flags else ""
             pkg_note = f" (package: {f.package})" if f.package else ""
-            lines.append(f"- `{f.path}` ({f.kind.value}{flags_note}{pkg_note})")
+            lines.append(f"- {prefix}`{f.path}` ({f.kind.value}{flags_note}{pkg_note})")
             if f.diff_against_rpm and f.diff_against_rpm.strip():
                 lines.append("  Diff against RPM default:")
                 lines.append("```diff")
@@ -341,7 +346,8 @@ def render(
             lines.append("### Cron-converted timers")
             lines.append("")
             for u in st.generated_timer_units:
-                lines.append(f"- **{u.name}** — converted from `{u.source_path}` (cron: `{u.cron_expr}`)")
+                prefix = "[EXCLUDED] " if not u.include else ""
+                lines.append(f"- {prefix}**{u.name}** — converted from `{u.source_path}` (cron: `{u.cron_expr}`)")
             lines.append("")
 
         # Raw cron jobs
@@ -351,13 +357,14 @@ def render(
             lines.append("| Path | Source | Package-owned | Action |")
             lines.append("|------|--------|:-------------:|--------|")
             for j in st.cron_jobs:
+                prefix = "[EXCLUDED] " if not j.include else ""
                 if j.rpm_owned:
                     action = "Handled by package install"
                     owned_str = "Yes"
                 else:
                     action = "Convert to systemd timer"
                     owned_str = "No"
-                lines.append(f"| `{j.path}` | {j.source} | {owned_str} | {action} |")
+                lines.append(f"| {prefix}`{j.path}` | {j.source} | {owned_str} | {action} |")
             lines.append("")
 
         # At jobs
@@ -382,14 +389,16 @@ def render(
             lines.append("| Unit | Image | Path |")
             lines.append("|------|-------|------|")
             for u in ct.quadlet_units:
-                lines.append(f"| {u.name} | `{u.image or '*none*'}` | `{u.path}` |")
+                prefix = "[EXCLUDED] " if not u.include else ""
+                lines.append(f"| {prefix}{u.name} | `{u.image or '*none*'}` | `{u.path}` |")
             lines.append("")
 
         if ct.compose_files:
             lines.append("### Compose files")
             lines.append("")
             for c in ct.compose_files:
-                lines.append(f"**`{c.path}`**")
+                prefix = "[EXCLUDED] " if not c.include else ""
+                lines.append(f"{prefix}**`{c.path}`**")
                 if c.images:
                     lines.append("")
                     lines.append("| Service | Image |")
@@ -451,11 +460,12 @@ def render(
             lines.append("| Path | Language | Linking | Shared Libraries |")
             lines.append("|------|----------|---------|------------------|")
             for i in elf_items:
+                prefix = "[EXCLUDED] " if not i.include else ""
                 linking = "static" if i.static else "dynamic"
                 libs = ", ".join(i.shared_libs[:5])
                 if len(i.shared_libs) > 5:
                     libs += " ..."
-                lines.append(f"| `{i.path}` | {i.lang} | {linking} | {libs or '—'} |")
+                lines.append(f"| {prefix}`{i.path}` | {i.lang} | {linking} | {libs or '—'} |")
             lines.append("")
 
         if venv_items:
@@ -523,7 +533,8 @@ def render(
             lines.append("| Module | Size | Used by |")
             lines.append("|--------|------|---------|")
             for m in kb.non_default_modules:
-                lines.append(f"| `{m.name}` | {m.size} | {m.used_by} |")
+                prefix = "[EXCLUDED] " if not m.include else ""
+                lines.append(f"| {prefix}`{m.name}` | {m.size} | {m.used_by} |")
             total = len(kb.loaded_modules or [])
             default_count = total - len(kb.non_default_modules)
             if default_count > 0:
@@ -537,7 +548,8 @@ def render(
             lines.append("| Key | Runtime | Default | Source |")
             lines.append("|-----|---------|---------|--------|")
             for s in kb.sysctl_overrides:
-                lines.append(f"| `{s.key}` | **{s.runtime}** | {s.default or '—'} | `{s.source}` |")
+                prefix = "[EXCLUDED] " if not s.include else ""
+                lines.append(f"| {prefix}`{s.key}` | **{s.runtime}** | {s.default or '—'} | `{s.source}` |")
 
         for m in (kb.modules_load_d or []):
             lines.append(f"- modules-load.d: `{m.path}`")
@@ -599,13 +611,15 @@ def render(
         lines.append("## Users and groups")
         lines.append("")
         for u in (ug.users or []):
+            prefix = "[EXCLUDED] " if not u.get("include", True) else ""
             shell = u.get("shell") or ""
             home = u.get("home") or ""
-            lines.append(f"- User: **{u.get('name') or ''}** (uid {u.get('uid') or ''}, home `{home}`, shell `{shell}`)")
+            lines.append(f"- {prefix}User: **{u.get('name') or ''}** (uid {u.get('uid') or ''}, home `{home}`, shell `{shell}`)")
         for g in (ug.groups or []):
+            prefix = "[EXCLUDED] " if not g.get("include", True) else ""
             members = g.get("members") or []
             mem_str = f", members: {', '.join(members)}" if members else ""
-            lines.append(f"- Group: **{g.get('name') or ''}** (gid {g.get('gid') or ''}{mem_str})")
+            lines.append(f"- {prefix}Group: **{g.get('name') or ''}** (gid {g.get('gid') or ''}{mem_str})")
         if ug.sudoers_rules:
             lines.append("")
             lines.append("### Sudoers rules")

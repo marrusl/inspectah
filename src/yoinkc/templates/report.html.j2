@@ -112,6 +112,22 @@ th { color: var(--muted); font-weight: 500; }
 .audit-pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
 .audit-table { margin: 0.5rem 0; }
 .audit-section { max-height: 70vh; overflow-y: auto; }
+tr.excluded td { text-decoration: line-through; opacity: 0.45; }
+tr.excluded td:first-child { text-decoration: none; opacity: 1; }
+.include-cb { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 2px solid var(--accent); padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
+#exclude-toolbar.visible { display: flex; }
+#exclude-toolbar .exclude-count { font-weight: 600; color: var(--warn); flex: 1; }
+#exclude-toolbar button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #30363d; cursor: pointer; font-size: 0.9rem; font-weight: 500; }
+#btn-download-snapshot { background: var(--accent); color: #fff; border-color: var(--accent); }
+#btn-rerender { background: var(--card); color: var(--text); }
+#btn-rerender.disabled { opacity: 0.4; cursor: not-allowed; }
+#btn-tarball { background: var(--card); color: var(--text); }
+#btn-tarball.disabled { opacity: 0.4; cursor: not-allowed; }
+.toast { position: fixed; top: 1rem; right: 1rem; background: #da3633; color: #fff; padding: 0.75rem 1.5rem; border-radius: 8px; z-index: 2000; display: none; }
+.toast.visible { display: block; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -260,9 +276,9 @@ th { color: var(--muted); font-weight: 500; }
   <h3>All Added Packages ({{ snapshot.rpm.packages_added|length }})</h3>
   {%- endif %}
 
-  <table><thead><tr><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
+  <table><thead><tr><th></th><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
-    <tr><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
+    <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if p.include else '' }}/></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
     {%- endfor %}
   </tbody></table>
   {%- if snapshot.rpm.packages_added|length > 100 %}
@@ -282,9 +298,9 @@ th { color: var(--muted); font-weight: 500; }
     {%- endfor %}
   {%- endif %}
   {%- if service_rows %}
-  <table><thead><tr><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
+  <table><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
     {%- for s in service_rows %}
-    <tr><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
+    <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if s.include else '' }}/></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
     {%- endfor %}
   </tbody></table>
   {%- else %}
@@ -295,9 +311,10 @@ th { color: var(--muted); font-weight: 500; }
 {# ── Config ──────────────────────────────────────────────────────────────── #}
 {% call section("config", "Configuration files") %}
   {%- if snapshot.config and snapshot.config.files %}
-  <table><thead><tr><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
+  <table><thead><tr><th></th><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
     {%- for item in config_files_rendered %}
-    <tr>
+    <tr{% if not snapshot.config.files[loop.index0].include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if snapshot.config.files[loop.index0].include else '' }}/></td>
       <td><code>{{ item.path }}</code></td>
       <td>{{ item.kind }}</td>
       <td>{% if item.flags %}<code>{{ item.flags }}</code>{% endif %}</td>
@@ -442,9 +459,10 @@ th { color: var(--muted); font-weight: 500; }
 
   {%- if st.generated_timer_units %}
   <h3>Cron-converted timers</h3>
-  <table><tr><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>
+  <table><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>
     {%- for u in st.generated_timer_units %}
-    <tr style="background:rgba(210,153,34,0.1)">
+    <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
       <td>{{ u.name }}</td>
       <td><code>{{ u.cron_expr }}</code></td>
       <td><code>{{ u.source_path }}</code></td>
@@ -456,17 +474,19 @@ th { color: var(--muted); font-weight: 500; }
   {%- if st.cron_jobs %}
   <h3>Cron jobs</h3>
   <table>
-    <tr><th>Path</th><th>Source</th><th>Ownership</th><th>Action</th></tr>
+    <tr><th></th><th>Path</th><th>Source</th><th>Ownership</th><th>Action</th></tr>
     {%- for j in st.cron_jobs %}
     {%- if j.rpm_owned %}
-    <tr style="opacity:0.55">
+    <tr{% if not j.include %} class="excluded"{% endif %} style="opacity:0.55" data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
       <td><code>{{ j.path }}</code></td>
       <td>{{ j.source }}</td>
       <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">package</span></td>
       <td style="color:#777">Handled by package install</td>
     </tr>
     {%- else %}
-    <tr>
+    <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
       <td><code>{{ j.path }}</code></td>
       <td>{{ j.source }}</td>
       <td><span style="background:#d2991a;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">operator</span></td>
@@ -499,9 +519,10 @@ th { color: var(--muted); font-weight: 500; }
 
   {%- if ct.quadlet_units %}
   <h3>Quadlet units</h3>
-  <table><tr><th>Unit</th><th>Image</th><th>Path</th></tr>
+  <table><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr>
     {%- for u in ct.quadlet_units %}
-    <tr>
+    <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
       <td>{{ u.name }}</td>
       <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
       <td><code>{{ u.path }}</code></td>
@@ -513,7 +534,9 @@ th { color: var(--muted); font-weight: 500; }
   {%- if ct.compose_files %}
   <h3>Compose files</h3>
   {%- for c in ct.compose_files %}
-  <h4><code>{{ c.path }}</code></h4>
+  <div{% if not c.include %} style="opacity:0.45;text-decoration:line-through"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
+  <label><input type="checkbox" class="include-cb" {{ 'checked' if c.include else '' }}/></label>
+  <h4 style="display:inline"><code>{{ c.path }}</code></h4>
   {%- if c.images %}
   <table><tr><th>Service</th><th>Image</th></tr>
     {%- for img in c.images %}
@@ -523,6 +546,7 @@ th { color: var(--muted); font-weight: 500; }
   {%- else %}
   <p>No image references found.</p>
   {%- endif %}
+  </div>
   {%- endfor %}
   {%- endif %}
 
@@ -554,14 +578,17 @@ th { color: var(--muted); font-weight: 500; }
 
   {%- if nd.elf %}
   <h3>Compiled binaries</h3>
-  <table><tr><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr>
+  <table><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr>
     {%- for i in nd.elf %}
     {%- set lang = i.lang %}
     {%- set lang_colors = {'go': '#00ADD8', 'rust': '#DEA584', 'c/c++': '#555'} %}
     {%- set color = lang_colors.get(lang, '#999') %}
     {%- set linking = 'static' if i.static else 'dynamic' %}
     {%- set link_color = '#4caf50' if i.static else '#ff9800' %}
-    <tr>
+    {%- set nr_idx = namespace(val=-1) %}
+    {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
+    <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if i.include else '' }}/></td>
       <td><code>{{ i.path }}</code></td>
       <td><span style="background:{{ color }};color:#fff;padding:2px 8px;border-radius:4px">{{ lang }}</span></td>
       <td><span style="background:{{ link_color }};color:#fff;padding:2px 8px;border-radius:4px">{{ linking }}</span></td>
@@ -612,9 +639,12 @@ th { color: var(--muted); font-weight: 500; }
 
   {%- if nd.pip %}
   <h3>System pip packages</h3>
-  <table><tr><th>Package</th><th>Version</th><th>Path</th></tr>
+  <table><tr><th></th><th>Package</th><th>Version</th><th>Path</th></tr>
     {%- for i in nd.pip[:20] %}
-    <tr>
+    {%- set nr_idx = namespace(val=-1) %}
+    {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
+    <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if i.include else '' }}/></td>
       <td>{{ i.name }}</td>
       <td>{{ i.version }}</td>
       <td><code>{{ i.path }}</code></td>
@@ -654,9 +684,9 @@ th { color: var(--muted); font-weight: 500; }
   {%- set total = (kb.loaded_modules or [])|length %}
   {%- set default_count = total - (kb.non_default_modules|length) %}
   <h3>Non-default loaded modules ({{ kb.non_default_modules|length }})</h3>
-  <table class="data-table"><thead><tr><th>Module</th><th>Size</th><th>Used by</th></tr></thead><tbody>
+  <table class="data-table"><thead><tr><th></th><th>Module</th><th>Size</th><th>Used by</th></tr></thead><tbody>
     {%- for m in kb.non_default_modules %}
-    <tr><td><code>{{ m.name }}</code></td><td>{{ m.size }}</td><td>{{ m.used_by }}</td></tr>
+    <tr{% if not m.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="non_default_modules" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if m.include else '' }}/></td><td><code>{{ m.name }}</code></td><td>{{ m.size }}</td><td>{{ m.used_by }}</td></tr>
     {%- endfor %}
   </tbody></table>
   {%- if default_count > 0 %}<p>{{ default_count }} module(s) at expected defaults (not shown).</p>{%- endif %}
@@ -664,9 +694,10 @@ th { color: var(--muted); font-weight: 500; }
 
   {%- if kb.sysctl_overrides %}
   <h3>Non-default sysctl values ({{ kb.sysctl_overrides|length }})</h3>
-  <table class="data-table"><thead><tr><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
+  <table class="data-table"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
     {%- for s in kb.sysctl_overrides %}
-    <tr>
+    <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if s.include else '' }}/></td>
       <td><code>{{ s.key }}</code></td>
       <td style="color:#d29922;font-weight:bold">{{ s.runtime }}</td>
       <td>{{ s.default or '—' }}</td>
@@ -735,12 +766,13 @@ th { color: var(--muted); font-weight: 500; }
   </p>
 
   <table class="data-table">
-    <thead><tr><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
+    <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
     <tbody>
     {%- for u in ug.users %}
     {%- set cls = u.classification or '?' %}
     {%- set cls_color = '#4caf50' if cls == 'service' else '#2196f3' if cls == 'human' else '#ff9800' %}
-    <tr>
+    <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.get('include', true) else '' }}/></td>
       <td><strong>{{ u.name }}</strong></td>
       <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
       <td><code>{{ u.shell }}</code></td>
@@ -771,10 +803,11 @@ th { color: var(--muted); font-weight: 500; }
   {%- if ug.groups %}
   <h3>Groups</h3>
   <table class="data-table">
-    <thead><tr><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
+    <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
     <tbody>
     {%- for g in ug.groups %}
-    <tr>
+    <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if g.get('include', true) else '' }}/></td>
       <td>{{ g.name }}</td>
       <td>{{ g.gid }}</td>
       <td>{{ g.strategy }}</td>
@@ -849,10 +882,20 @@ th { color: var(--muted); font-weight: 500; }
 <div class="audit-section">{{ audit_html|safe }}</div>
 {% endcall %}
 
+{# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
+<div id="exclude-toolbar">
+  <span class="exclude-count"><span id="exclude-count-num">0</span> item(s) excluded</span>
+  <button id="btn-download-snapshot" type="button">Download Modified Snapshot</button>
+  <button id="btn-rerender" type="button" class="disabled" title="Start yoinkc-refine to enable live re-render">Re-render</button>
+  <button id="btn-tarball" type="button" class="disabled" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
+</div>
+<div id="toast" class="toast"></div>
+
 {# ══════════════════════════════════════════════════════════════════════════
    JavaScript
    ══════════════════════════════════════════════════════════════════════════ #}
 <script>
+var snapshot = {{ snapshot_json|safe }};
 (function(){
   var sections = document.querySelectorAll('.section');
   var cards = document.querySelectorAll('.card[data-section]');
@@ -931,6 +974,106 @@ th { color: var(--muted); font-weight: 500; }
       if (contentEl) contentEl.innerHTML = src ? src.innerHTML : '';
     });
   });
+
+  // --- Interactive item exclusion ---
+  var toolbar = document.getElementById('exclude-toolbar');
+  var countEl = document.getElementById('exclude-count-num');
+  var toast = document.getElementById('toast');
+  var rerenderBtn = document.getElementById('btn-rerender');
+  var tarballBtn = document.getElementById('btn-tarball');
+  var helperAvailable = false;
+
+  function showToast(msg, ms) {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.classList.add('visible');
+    setTimeout(function(){ toast.classList.remove('visible'); }, ms || 4000);
+  }
+
+  function updateExcludeCount() {
+    var n = document.querySelectorAll('.include-cb:not(:checked)').length;
+    if (countEl) countEl.textContent = n;
+    if (toolbar) toolbar.classList.toggle('visible', n > 0);
+  }
+
+  function resolveSnapshotRef(section, list) {
+    if (!snapshot) return null;
+    var sec = snapshot[section];
+    if (!sec) return null;
+    return sec[list] || null;
+  }
+
+  document.querySelectorAll('.include-cb').forEach(function(cb){
+    cb.addEventListener('change', function(){
+      var tr = this.closest('tr[data-snap-section]') || this.closest('[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
+      if (section && list && !isNaN(idx) && idx >= 0) {
+        var arr = resolveSnapshotRef(section, list);
+        if (arr && arr[idx] !== undefined) {
+          arr[idx].include = this.checked;
+        }
+      }
+      tr.classList.toggle('excluded', !this.checked);
+      updateExcludeCount();
+    });
+  });
+
+  // Download modified snapshot
+  document.getElementById('btn-download-snapshot').addEventListener('click', function(){
+    var json = JSON.stringify(snapshot, null, 2);
+    var blob = new Blob([json], {type: 'application/json'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'modified-snapshot.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // Re-render
+  rerenderBtn.addEventListener('click', function(){
+    if (!helperAvailable) return;
+    var origText = rerenderBtn.innerHTML;
+    rerenderBtn.innerHTML = '<span class="spinner"></span>Re-rendering...';
+    rerenderBtn.classList.add('disabled');
+    fetch('/api/re-render', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(snapshot),
+    }).then(function(r){
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function(html){
+      document.open();
+      document.write(html);
+      document.close();
+    }).catch(function(err){
+      showToast('Re-render failed: ' + err.message, 5000);
+      rerenderBtn.innerHTML = origText;
+      rerenderBtn.classList.remove('disabled');
+    });
+  });
+
+  // Download tarball
+  tarballBtn.addEventListener('click', function(){
+    if (!helperAvailable) return;
+    window.location.href = '/api/tarball';
+  });
+
+  // Probe helper script availability
+  fetch('/api/health', {method: 'HEAD'}).then(function(r){
+    if (r.ok) {
+      helperAvailable = true;
+      rerenderBtn.classList.remove('disabled');
+      rerenderBtn.title = '';
+      tarballBtn.classList.remove('disabled');
+      tarballBtn.title = '';
+    }
+  }).catch(function(){});
+
+  updateExcludeCount();
 })();
 </script>
 </body>

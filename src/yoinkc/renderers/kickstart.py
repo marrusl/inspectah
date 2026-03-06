@@ -90,7 +90,7 @@ def render(
     # Users deferred to kickstart
     ug = snapshot.users_groups
     if ug and ug.users:
-        ks_users = [u for u in ug.users if u.get("strategy") == "kickstart"]
+        ks_users = [u for u in ug.users if u.get("strategy") == "kickstart" and u.get("include", True)]
         if ks_users:
             lines.append("# --- Human users (deploy-time provisioning) ---")
             for u in ks_users:

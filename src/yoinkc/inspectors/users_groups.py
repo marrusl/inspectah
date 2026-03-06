@@ -86,6 +86,7 @@ def run(
                                 "gid": int(parts[3]) if parts[3].isdigit() else None,
                                 "shell": parts[6],
                                 "home": parts[5],
+                                "include": True,
                             })
                             section.passwd_entries.append(line)
                     except ValueError:
@@ -126,7 +127,7 @@ def run(
                         if 1000 <= gid < 60000:
                             non_system_groups.add(parts[0])
                             members = parts[3].split(",") if len(parts) > 3 and parts[3] else []
-                            section.groups.append({"name": parts[0], "gid": gid, "members": members})
+                            section.groups.append({"name": parts[0], "gid": gid, "members": members, "include": True})
                             section.group_entries.append(line)
                     except ValueError:
                         pass
