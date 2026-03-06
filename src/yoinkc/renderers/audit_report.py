@@ -348,8 +348,16 @@ def render(
         if st.cron_jobs:
             lines.append("### Cron jobs")
             lines.append("")
+            lines.append("| Path | Source | Package-owned | Action |")
+            lines.append("|------|--------|:-------------:|--------|")
             for j in st.cron_jobs:
-                lines.append(f"- `{j.path}` ({j.source})")
+                if j.rpm_owned:
+                    action = "Handled by package install"
+                    owned_str = "Yes"
+                else:
+                    action = "Convert to systemd timer"
+                    owned_str = "No"
+                lines.append(f"| `{j.path}` | {j.source} | {owned_str} | {action} |")
             lines.append("")
 
         # At jobs

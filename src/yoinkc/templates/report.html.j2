@@ -455,9 +455,26 @@ th { color: var(--muted); font-weight: 500; }
 
   {%- if st.cron_jobs %}
   <h3>Cron jobs</h3>
-  <ul>
-    {%- for j in st.cron_jobs %}<li><code>{{ j.path }}</code> ({{ j.source }})</li>{%- endfor %}
-  </ul>
+  <table>
+    <tr><th>Path</th><th>Source</th><th>Ownership</th><th>Action</th></tr>
+    {%- for j in st.cron_jobs %}
+    {%- if j.rpm_owned %}
+    <tr style="opacity:0.55">
+      <td><code>{{ j.path }}</code></td>
+      <td>{{ j.source }}</td>
+      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">package</span></td>
+      <td style="color:#777">Handled by package install</td>
+    </tr>
+    {%- else %}
+    <tr>
+      <td><code>{{ j.path }}</code></td>
+      <td>{{ j.source }}</td>
+      <td><span style="background:#d2991a;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">operator</span></td>
+      <td>Convert to systemd timer</td>
+    </tr>
+    {%- endif %}
+    {%- endfor %}
+  </table>
   {%- endif %}
 
   {%- if st.at_jobs %}

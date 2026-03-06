@@ -6,7 +6,7 @@ local), at spool files, and generates timer units from cron entries.
 
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from ..executor import Executor
 from ..schema import (
@@ -187,9 +187,19 @@ def _make_timer_service(name: str, cron_expr: str, path: str, command: str = "")
     return timer_content, service_content
 
 
-def _scan_cron_file(section: ScheduledTaskSection, host_root: Path, f: Path, source: str) -> None:
+def _scan_cron_file(
+    section: ScheduledTaskSection,
+    host_root: Path,
+    f: Path,
+    source: str,
+    rpm_owned_paths: Optional[Set[str]] = None,
+) -> None:
     rel = str(f.relative_to(host_root))
-    section.cron_jobs.append(CronJob(path=rel, source=source))
+    abs_path = "/" + rel
+    is_rpm_owned = rpm_owned_paths is not None and abs_path in rpm_owned_paths
+    section.cron_jobs.append(CronJob(path=rel, source=source, rpm_owned=is_rpm_owned))
+    if is_rpm_owned:
+        return
     try:
         text = f.read_text()
         for line in text.splitlines():
@@ -329,6 +339,7 @@ def _parse_at_job(host_root: Path, f: Path) -> Dict[str, str]:
 def run(
     host_root: Path,
     executor: Optional[Executor],
+    rpm_owned_paths: Optional[Set[str]] = None,
 ) -> ScheduledTaskSection:
     section = ScheduledTaskSection()
     host_root = Path(host_root)
@@ -338,12 +349,12 @@ def run(
     if cron_d.exists():
         for f in _safe_iterdir(cron_d):
             if f.is_file() and not f.name.startswith("."):
-                _scan_cron_file(section, host_root, f, "cron.d")
+                _scan_cron_file(section, host_root, f, "cron.d", rpm_owned_paths=rpm_owned_paths)
 
     crontab = host_root / "etc/crontab"
     try:
         if crontab.exists():
-            _scan_cron_file(section, host_root, crontab, "crontab")
+            _scan_cron_file(section, host_root, crontab, "crontab", rpm_owned_paths=rpm_owned_paths)
     except (PermissionError, OSError):
         pass
 
@@ -359,7 +370,11 @@ def run(
             for f in _safe_iterdir(d):
                 if f.is_file() and not f.name.startswith("."):
                     rel = str(f.relative_to(host_root))
-                    section.cron_jobs.append(CronJob(path=rel, source=f"cron.{period}"))
+                    abs_path = "/" + rel
+                    is_rpm_owned = rpm_owned_paths is not None and abs_path in rpm_owned_paths
+                    section.cron_jobs.append(CronJob(path=rel, source=f"cron.{period}", rpm_owned=is_rpm_owned))
+                    if is_rpm_owned:
+                        continue
                     safe_name = f"cron-{period}-{f.name}".replace(".", "-")
                     on_calendar = _PERIOD_SCHEDULES[period]
                     command = f"/{rel}"

@@ -228,8 +228,14 @@ def run_all(
             "nsenter the host), (2) ensure --pid=host is set, or (3) provide a package "
             "list via --baseline-packages FILE.",
         ))
+
+    # Build RPM-owned path set once; shared by config and scheduled_tasks inspectors
+    # to avoid issuing two separate rpm -qa queries.
+    from .config import _rpm_owned_paths as _build_rpm_owned_paths
+    rpm_owned = _build_rpm_owned_paths(executor, host_root, warnings=w)
+
     _status("Inspecting config files...")
-    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=None, config_diffs=config_diffs, warnings=w), None, w)
+    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=rpm_owned, config_diffs=config_diffs, warnings=w), None, w)
 
     _status("Inspecting services...")
     base_image_preset_text = None
@@ -241,7 +247,7 @@ def run_all(
     _status("Inspecting storage...")
     snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor), None, w)
     _status("Inspecting scheduled tasks...")
-    snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor), None, w)
+    snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor, rpm_owned_paths=rpm_owned), None, w)
     _status("Inspecting containers...")
     snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman, warnings=w), None, w)
     _status("Inspecting non-RPM software...")

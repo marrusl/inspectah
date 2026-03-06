@@ -231,6 +231,7 @@ class StorageSection(BaseModel):
 class CronJob(BaseModel):
     path: str
     source: str  # "cron.d", "crontab", "cron.daily", "spool/cron (user)", etc.
+    rpm_owned: bool = False
 
 
 class SystemdTimer(BaseModel):
