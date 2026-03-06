@@ -30,6 +30,37 @@ OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 echo "Image:  $IMAGE"
 echo "Output: $OUTPUT_DIR"
 
+# On RHEL hosts, yoinkc needs to pull a base image from registry.redhat.io at
+# build time (or at inspection time if using an RH-based YOINKC_IMAGE).
+# Check for a stored login credential before hitting the registry.
+_check_rh_login() {
+  if ! podman login --get-login registry.redhat.io >/dev/null 2>&1; then
+    echo "" >&2
+    echo "ERROR: You are not logged in to registry.redhat.io." >&2
+    echo "" >&2
+    echo "  Run:  podman login registry.redhat.io" >&2
+    echo "" >&2
+    echo "  Use your Red Hat account (https://access.redhat.com)." >&2
+    echo "  Free developer account: https://developers.redhat.com" >&2
+    echo "" >&2
+    exit 1
+  fi
+}
+
+case "$IMAGE" in
+  registry.redhat.io/*)
+    # Image itself is from the Red Hat registry
+    _check_rh_login
+    ;;
+  *)
+    # For any image on a RHEL host, yoinkc will pull a rhel-bootc base image
+    # from registry.redhat.io to compute the package baseline.
+    if [ -f /etc/redhat-release ] && grep -qi "red hat" /etc/redhat-release 2>/dev/null; then
+      _check_rh_login
+    fi
+    ;;
+esac
+
 echo "=== Pulling yoinkc image ==="
 podman pull "$IMAGE"
 
