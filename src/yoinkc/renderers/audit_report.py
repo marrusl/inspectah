@@ -73,7 +73,7 @@ def render(
         lines.append(f"- Packages (no baseline — all installed): {n_added}")
     else:
         lines.append(f"- Packages added (beyond base image): {n_added}")
-    lines.append(f"- Packages removed: {n_removed}")
+    lines.append(f"- Packages in target image only: {n_removed}")
     if n_modified:
         lines.append(f"- Packages with modified configs: {n_modified}")
     lines.append(f"- Config files captured: {n_config}")
@@ -146,7 +146,7 @@ def render(
                 lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
             lines.append("")
         if snapshot.rpm.packages_removed:
-            lines.append("### Removed (from baseline)")
+            lines.append("### In target image only (not on inspected host)")
             for p in snapshot.rpm.packages_removed:
                 lines.append(f"- {p.name}")
             lines.append("")

@@ -417,7 +417,7 @@ def _build_context(
 
     summary_glance = [
         (counts["packages_added"], "Packages added"),
-        (counts["packages_removed"], "Packages removed"),
+        (counts["packages_removed"], "Packages in target image only"),
         (counts["config_files"], "Config files"),
         (counts["services_enabled"], "Services enabled"),
         (counts["redactions"], "Secrets redacted"),

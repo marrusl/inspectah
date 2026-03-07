@@ -63,7 +63,7 @@ def render(
     else:
         lines.append(f"| Packages added (beyond base image) | {pkg_added} |")
     if pkg_removed:
-        lines.append(f"| Packages removed | {pkg_removed} |")
+        lines.append(f"| Packages in target image only | {pkg_removed} |")
     lines.append(f"| Configs modified (RPM-owned) | {configs_modified} |")
     lines.append(f"| Configs unowned | {configs_unowned} |")
     lines.append(f"| Services changed | {svc_enabled + svc_disabled} ({svc_enabled} enabled, {svc_disabled} disabled) |")
