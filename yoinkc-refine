@@ -85,7 +85,12 @@ def _extract_tarball(tarball_path: Path, dest: Path) -> None:
                 continue
             m.name = safe_name
             members.append(m)
-        tf.extractall(dest, members=members)  # noqa: S202
+        # Use filter='data' to strip dangerous metadata (setuid bits, absolute paths, etc.).
+        # filter parameter was added in Python 3.12; gracefully omit for older versions.
+        try:
+            tf.extractall(dest, members=members, filter='data')  # noqa: S202
+        except TypeError:
+            tf.extractall(dest, members=members)  # noqa: S202
 
 
 def _validate_output_dir(d: Path) -> None:
