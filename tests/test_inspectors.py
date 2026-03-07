@@ -49,6 +49,8 @@ def _fixture_executor(cmd, cwd=None):
         return RunResult(stdout=(FIXTURES / "semodule_l_output.txt").read_text(), stderr="", returncode=0)
     if "semanage" in cmd and "boolean" in cmd:
         return RunResult(stdout=(FIXTURES / "semanage_boolean_l_output.txt").read_text(), stderr="", returncode=0)
+    if "semanage" in cmd and "port" in cmd:
+        return RunResult(stdout=(FIXTURES / "semanage_port_l_C_output.txt").read_text(), stderr="", returncode=0)
     if "lsmod" in cmd:
         return RunResult(stdout=(FIXTURES / "lsmod_output.txt").read_text(), stderr="", returncode=0)
     if "ip" in cmd and "route" in cmd:
@@ -507,6 +509,44 @@ def test_selinux_inspector_with_fixtures(host_root, fixture_executor):
     # Unchanged booleans should also be in the list (for completeness) but marked non_default=False
     httpd_cgi = next(b for b in section.boolean_overrides if b["name"] == "httpd_enable_cgi")
     assert httpd_cgi["non_default"] is False
+
+    # Custom port labels from semanage port -l -C
+    assert len(section.port_labels) == 2
+    port_map = {(pl.protocol, pl.port): pl.type for pl in section.port_labels}
+    assert port_map[("tcp", "2222")] == "ssh_port_t"
+    assert port_map[("tcp", "8080")] == "http_port_t"
+
+
+def test_non_rpm_inspector_detects_env_files(host_root, fixture_executor):
+    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    section = run_non_rpm(host_root, fixture_executor)
+    assert section is not None
+
+    env_paths = [ef.path for ef in section.env_files]
+    assert any("myapp/.env" in p for p in env_paths), f"Expected myapp/.env in {env_paths}"
+
+    # The .env entry should be an unowned ConfigFileEntry with content
+    myapp_env = next(ef for ef in section.env_files if "myapp/.env" in ef.path)
+    from yoinkc.schema import ConfigFileKind
+    assert myapp_env.kind == ConfigFileKind.UNOWNED
+    assert "API_KEY" in myapp_env.content
+
+
+def test_env_files_are_redacted(host_root, fixture_executor):
+    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from yoinkc.redact import redact_snapshot
+    from yoinkc.schema import InspectionSnapshot
+
+    non_rpm = run_non_rpm(host_root, fixture_executor)
+    snapshot = InspectionSnapshot(non_rpm_software=non_rpm)
+    redacted = redact_snapshot(snapshot)
+
+    myapp_env = next(ef for ef in redacted.non_rpm_software.env_files if "myapp/.env" in ef.path)
+    # API key value should be redacted
+    assert "sk-fakekeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234" not in myapp_env.content
+    assert "REDACTED_" in myapp_env.content
+    # At least one redaction entry should reference this path
+    assert any("myapp/.env" in r["path"] for r in redacted.redactions)
 
 
 def test_user_classification():

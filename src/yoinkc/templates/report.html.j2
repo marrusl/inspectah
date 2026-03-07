@@ -735,6 +735,19 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   </table>
   {%- endif %}
 
+  {%- if nr and nr.env_files %}
+  <h3>Dotenv / secret files ({{ nr.env_files|length }})</h3>
+  <p style="color:var(--amber)">⚠ These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
+  <table class="data-table"><thead><tr><th>Path</th><th>Status</th></tr></thead><tbody>
+    {%- for ef in nr.env_files %}
+    <tr>
+      <td><code>{{ ef.path }}</code></td>
+      <td>captured &amp; redacted</td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+
   {%- else %}
   <p>No non-RPM software.</p>
   {%- endif %}
@@ -788,7 +801,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── SELinux ──────────────────────────────────────────────────────────────── #}
 {% call section("selinux", "SELinux / Security") %}
   {%- set se = snapshot.selinux %}
-  {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode) %}
+  {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode or se.port_labels) %}
 
   {%- if se.mode %}<p><strong>Mode:</strong> {{ se.mode }}</p>{%- endif %}
   {%- if se.fips_mode %}<p><strong>FIPS mode:</strong> enabled</p>{%- endif %}
@@ -814,6 +827,19 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     {%- endfor %}
   </tbody></table>
   {%- if unchanged_count > 0 %}<p>{{ unchanged_count }} boolean(s) at default values (not shown).</p>{%- endif %}
+  {%- endif %}
+
+  {%- if se.port_labels %}
+  <h3>Custom port labels ({{ se.port_labels|length }})</h3>
+  <table class="data-table"><thead><tr><th>Protocol</th><th>Port</th><th>SELinux type</th></tr></thead><tbody>
+    {%- for pl in se.port_labels %}
+    <tr>
+      <td><code>{{ pl.protocol }}</code></td>
+      <td><code>{{ pl.port }}</code></td>
+      <td><code>{{ pl.type }}</code></td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
   {%- endif %}
 
   {%- if se.audit_rules %}<p>Audit rule files: {{ se.audit_rules|length }}</p>{%- endif %}

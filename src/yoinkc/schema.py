@@ -365,6 +365,7 @@ class NonRpmSoftwareSection(BaseModel):
     """Output of the Non-RPM Software inspector."""
 
     items: List[NonRpmItem] = Field(default_factory=list)
+    env_files: List["ConfigFileEntry"] = Field(default_factory=list)
 
 
 class ConfigSnippet(BaseModel):
@@ -406,6 +407,14 @@ class KernelBootSection(BaseModel):
     non_default_modules: List[KernelModule] = Field(default_factory=list)
 
 
+class SelinuxPortLabel(BaseModel):
+    """A custom SELinux port label assignment (from ``semanage port -l -C``)."""
+
+    protocol: str  # "tcp" or "udp"
+    port: str      # port number or range, e.g. "2222" or "8080-8090"
+    type: str      # SELinux type, e.g. "ssh_port_t"
+
+
 class SelinuxSection(BaseModel):
     """Output of the SELinux/Security inspector."""
 
@@ -416,6 +425,7 @@ class SelinuxSection(BaseModel):
     audit_rules: List[str] = Field(default_factory=list)
     fips_mode: bool = False
     pam_configs: List[str] = Field(default_factory=list)
+    port_labels: List[SelinuxPortLabel] = Field(default_factory=list)
 
 
 class UserGroupSection(BaseModel):
@@ -436,7 +446,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class InspectionSnapshot(BaseModel):

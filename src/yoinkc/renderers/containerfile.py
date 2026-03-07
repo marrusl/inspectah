@@ -232,6 +232,16 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             if u.name and u.content:
                 (quadlet_dir / u.name).write_text(u.content)
 
+    # Dotenv / secret files found under /opt
+    if snapshot.non_rpm_software and snapshot.non_rpm_software.env_files:
+        for entry in snapshot.non_rpm_software.env_files:
+            if not entry.include:
+                continue
+            rel = entry.path.lstrip("/")
+            dest = config_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(entry.content or "")
+
     # Non-RPM software files
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
         for item in snapshot.non_rpm_software.items:
@@ -991,7 +1001,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     has_selinux = snapshot.selinux and (
         snapshot.selinux.custom_modules or snapshot.selinux.boolean_overrides
         or snapshot.selinux.fcontext_rules or snapshot.selinux.audit_rules
-        or snapshot.selinux.fips_mode
+        or snapshot.selinux.fips_mode or snapshot.selinux.port_labels
     )
     if has_selinux:
         lines.append("# === SELinux Customizations ===")
@@ -1021,6 +1031,16 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             lines.append("# RUN restorecon -Rv /  # apply fcontext changes after all COPYs")
         if snapshot.selinux.audit_rules:
             lines.append(f"# {len(snapshot.selinux.audit_rules)} audit rule file(s) — included in COPY config/etc/ above")
+        if snapshot.selinux.port_labels:
+            lines.append(f"# {len(snapshot.selinux.port_labels)} custom SELinux port label(s) detected")
+            for pl in snapshot.selinux.port_labels:
+                proto = _sanitize_shell_value(pl.protocol, "semanage port protocol")
+                port = _sanitize_shell_value(pl.port, "semanage port number")
+                ptype = _sanitize_shell_value(pl.type, "semanage port type")
+                if proto is not None and port is not None and ptype is not None:
+                    lines.append(f"RUN semanage port -a -t {ptype} -p {proto} {port}")
+                else:
+                    lines.append(f"# FIXME: port label contains unsafe characters, skipped: {pl.type!r} {pl.protocol!r} {pl.port!r}")
         if snapshot.selinux.fips_mode:
             lines.append("# FIXME: host has FIPS mode enabled — enable FIPS in the bootc image via fips-mode-setup")
         lines.append("")

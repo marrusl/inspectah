@@ -319,7 +319,35 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             updates["kernel_boot"] = snapshot.kernel_boot.model_copy(update=kb_updates)
 
     # -----------------------------------------------------------------------
-    # 6. UserGroupSection — sudoers rules
+    # 6. NonRpmSoftwareSection — dotenv / secret files under /opt
+    # -----------------------------------------------------------------------
+    if snapshot.non_rpm_software and snapshot.non_rpm_software.env_files:
+        new_env_files: List[ConfigFileEntry] = []
+        changed = False
+        for entry in snapshot.non_rpm_software.env_files:
+            if _is_excluded_path(entry.path):
+                if entry.content != _EXCLUDED_PLACEHOLDER:
+                    redactions.append({
+                        "path": entry.path,
+                        "pattern": "EXCLUDED_PATH",
+                        "line": "entire file",
+                        "remediation": "File not included; handle credentials manually.",
+                    })
+                new_env_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER}))
+                continue
+            new_content = _redact_text(entry.content or "", entry.path, redactions)
+            if new_content != (entry.content or ""):
+                new_env_files.append(entry.model_copy(update={"content": new_content}))
+                changed = True
+            else:
+                new_env_files.append(entry)
+        if changed or len(new_env_files) != len(snapshot.non_rpm_software.env_files):
+            updates["non_rpm_software"] = snapshot.non_rpm_software.model_copy(
+                update={"env_files": new_env_files}
+            )
+
+    # -----------------------------------------------------------------------
+    # 7. UserGroupSection — sudoers rules
     # -----------------------------------------------------------------------
     if snapshot.users_groups and snapshot.users_groups.sudoers_rules:
         new_rules: List[str] = []

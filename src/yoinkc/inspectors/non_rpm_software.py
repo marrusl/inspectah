@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..executor import Executor
-from ..schema import NonRpmSoftwareSection, NonRpmItem, PipPackage
+from ..schema import NonRpmSoftwareSection, NonRpmItem, PipPackage, ConfigFileEntry, ConfigFileKind
 from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning
 from . import is_dev_artifact, filtered_rglob
 
@@ -583,6 +583,40 @@ def _scan_gem(section: NonRpmSoftwareSection, host_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Dotenv / secret file detection
+# ---------------------------------------------------------------------------
+
+_ENV_FILE_NAMES = frozenset({".env", ".env.local", ".env.production", ".env.staging", ".env.development"})
+
+
+def _scan_env_files(section: NonRpmSoftwareSection, host_root: Path) -> None:
+    """Scan /opt for dotenv files and add them to section.env_files.
+
+    These are forwarded to the redaction pipeline as unowned ConfigFileEntry
+    items so any embedded secrets are caught before the snapshot is written.
+    """
+    opt = host_root / "opt"
+    if not opt.exists():
+        return
+    try:
+        for candidate in filtered_rglob(opt, ".env*"):
+            if not candidate.is_file():
+                continue
+            if candidate.name not in _ENV_FILE_NAMES:
+                continue
+            rel = str(candidate.relative_to(host_root))
+            content = _safe_read(candidate)
+            _debug(f"env file: found {rel}")
+            section.env_files.append(ConfigFileEntry(
+                path=rel,
+                kind=ConfigFileKind.UNOWNED,
+                content=content,
+            ))
+    except (PermissionError, OSError) as e:
+        _debug(f"env file scan error: {e}")
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -617,6 +651,7 @@ def run(
     _scan_pip(section, host_root, executor)
     _scan_npm(section, host_root)
     _scan_gem(section, host_root)
+    _scan_env_files(section, host_root)
 
     _CONFIDENCE_RANK = {"high": 2, "medium": 1, "low": 0}
     seen: dict = {}

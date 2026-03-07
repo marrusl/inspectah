@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..executor import Executor
-from ..schema import SelinuxSection
+from ..schema import SelinuxSection, SelinuxPortLabel
 from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, make_warning
 
 
@@ -57,6 +57,33 @@ def _discover_custom_modules(host_root: Path, policy_type: str) -> List[str]:
 _BOOL_RE = re.compile(
     r"^(\S+)\s+\((\w+)\s*,\s*(\w+)\)\s+(.*)"
 )
+
+# semanage port -l -C output: "<type>  <protocol>  <port>[,<port>...]"
+_PORT_RE = re.compile(r"^(\S+)\s+(tcp|udp)\s+([\d,\-\s]+)", re.IGNORECASE)
+
+
+def _parse_semanage_ports(text: str) -> List[SelinuxPortLabel]:
+    """Parse ``semanage port -l -C`` output.
+
+    Each line has the form::
+
+        ssh_port_t    tcp    2222
+
+    Returns a list of :class:`SelinuxPortLabel` objects.
+    """
+    results: List[SelinuxPortLabel] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("SELinux"):
+            continue
+        m = _PORT_RE.match(line)
+        if not m:
+            continue
+        port_type, protocol, ports_raw = m.group(1), m.group(2).lower(), m.group(3).strip()
+        # ports_raw may be a comma-separated list; emit one entry per port/range
+        for port in (p.strip() for p in ports_raw.split(",") if p.strip()):
+            results.append(SelinuxPortLabel(protocol=protocol, port=port, type=port_type))
+    return results
 
 
 def _parse_semanage_booleans(text: str) -> List[dict]:
@@ -188,6 +215,15 @@ def run(
                 _debug(f"fcontext: {len(section.fcontext_rules)} rules from file_contexts.local")
         except (PermissionError, OSError) as e:
             _debug(f"fcontext: cannot read file_contexts.local: {e}")
+
+    # --- Custom port label assignments ----------------------------------------
+    if executor:
+        out = executor(["chroot", str(host_root), "semanage", "port", "-l", "-C"])
+        if out.returncode == 0 and out.stdout.strip():
+            section.port_labels = _parse_semanage_ports(out.stdout)
+            _debug(f"port labels: {len(section.port_labels)} custom assignment(s)")
+        else:
+            _debug(f"semanage port -l -C failed or empty (rc={out.returncode})")
 
     audit_d = host_root / "etc/audit/rules.d"
     if audit_d.exists():

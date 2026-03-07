@@ -252,6 +252,7 @@ def _summary_counts(snapshot: InspectionSnapshot) -> dict:
         n_selinux = (len(snapshot.selinux.custom_modules or [])
                      + len(snapshot.selinux.boolean_overrides or [])
                      + len(snapshot.selinux.audit_rules or [])
+                     + len(snapshot.selinux.port_labels or [])
                      + (1 if snapshot.selinux.fips_mode else 0))
     return {
         "packages_added": len(snapshot.rpm.packages_added or []) if snapshot.rpm else 0,

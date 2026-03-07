@@ -1,0 +1,4 @@
+SELinux Port Type          Proto    Port Number
+
+ssh_port_t                 tcp      2222
+http_port_t                tcp      8080
