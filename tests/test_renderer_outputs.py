@@ -458,6 +458,153 @@ class TestContainerfileQuality:
 
 
 # ===========================================================================
+# Kernel kargs.d migration
+# ===========================================================================
+
+class TestKernelKargs:
+    """Tests for the bootc-native kargs.d migration (replaces rpm-ostree kargs).
+
+    The fixture cmdline is:
+        BOOT_IMAGE=... root=/dev/vda1 ro crashkernel=auto rhgb quiet
+        hugepagesz=2M transparent_hugepage=never
+    Only hugepagesz and transparent_hugepage are operator-added; the rest are
+    standard bootloader/installer parameters and must be excluded from the TOML.
+    """
+
+    def test_kargs_toml_generated(self, outputs_with_baseline):
+        """TOML drop-in is written for operator-added kargs."""
+        toml_path = (outputs_with_baseline["dir"]
+                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+        assert toml_path.exists(), "kargs TOML not written"
+
+    def test_kargs_toml_contains_operator_args(self, outputs_with_baseline):
+        """Operator-added kargs from the fixture appear in the TOML array."""
+        toml_path = (outputs_with_baseline["dir"]
+                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+        content = toml_path.read_text()
+        assert '"hugepagesz=2M"' in content
+        assert '"transparent_hugepage=never"' in content
+
+    def test_kargs_toml_excludes_bootloader_params(self, outputs_with_baseline):
+        """Standard bootloader/installer parameters are NOT written to the TOML."""
+        toml_path = (outputs_with_baseline["dir"]
+                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+        content = toml_path.read_text()
+        for excluded in ("BOOT_IMAGE", "root=", '"ro"', '"rhgb"', '"quiet"', "crashkernel"):
+            assert excluded not in content, (
+                f"Bootloader param {excluded!r} should not appear in kargs TOML:\n{content}"
+            )
+
+    def test_kargs_toml_format(self, outputs_with_baseline):
+        """TOML content uses the correct kargs array format."""
+        toml_path = (outputs_with_baseline["dir"]
+                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+        content = toml_path.read_text()
+        assert re.search(r'^kargs = \[".+"\]', content, re.MULTILINE), (
+            f"kargs TOML does not have expected array format:\n{content}"
+        )
+
+    def test_containerfile_uses_kargs_copy(self, outputs_with_baseline):
+        """Containerfile references the kargs TOML via COPY, not rpm-ostree kargs."""
+        cf = (outputs_with_baseline["dir"] / "Containerfile").read_text()
+        assert "rpm-ostree kargs" not in cf, "Containerfile still references rpm-ostree kargs"
+        assert "COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/" in cf
+        assert "RUN mkdir -p /usr/lib/bootc/kargs.d" in cf
+
+    def test_kargs_section_header_in_containerfile(self, outputs_with_baseline):
+        """Containerfile contains the bootc-native kargs section header."""
+        cf = (outputs_with_baseline["dir"] / "Containerfile").read_text()
+        assert "Kernel Arguments (bootc-native kargs.d)" in cf
+
+    def test_no_kargs_toml_when_no_cmdline(self):
+        """No TOML file and no kargs section when kernel_boot has no cmdline."""
+        from yoinkc.schema import InspectionSnapshot, OsRelease, KernelBootSection
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6"),
+            kernel_boot=KernelBootSection(cmdline=""),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            render_containerfile(snapshot, Environment(), output_dir)
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            assert not toml_path.exists(), "TOML written for empty cmdline"
+            cf = (output_dir / "Containerfile").read_text()
+            assert "kargs.d" not in cf
+            assert "rpm-ostree kargs" not in cf
+
+    def test_no_kargs_toml_when_only_bootloader_params(self):
+        """No TOML file or kargs section when cmdline contains only standard boot params."""
+        from yoinkc.schema import InspectionSnapshot, OsRelease, KernelBootSection
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6"),
+            kernel_boot=KernelBootSection(
+                cmdline="BOOT_IMAGE=/vmlinuz root=/dev/sda1 ro crashkernel=auto rhgb quiet"
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            render_containerfile(snapshot, Environment(), output_dir)
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            assert not toml_path.exists(), "TOML written for bootloader-only cmdline"
+            cf = (output_dir / "Containerfile").read_text()
+            assert "kargs.d" not in cf
+
+    def test_no_kargs_toml_when_no_kernel_boot(self):
+        """No TOML file and no kargs section when kernel_boot is absent."""
+        from yoinkc.schema import InspectionSnapshot, OsRelease
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            render_containerfile(snapshot, Environment(), output_dir)
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            assert not toml_path.exists()
+            cf = (output_dir / "Containerfile").read_text()
+            assert "kargs.d" not in cf
+
+    def test_multiple_kargs_combined_in_single_toml(self):
+        """Multiple operator kargs from cmdline are collected into a single TOML array."""
+        from yoinkc.schema import InspectionSnapshot, OsRelease, KernelBootSection
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6"),
+            kernel_boot=KernelBootSection(
+                # Mix of bootloader params (excluded) and operator params (included)
+                cmdline=(
+                    "BOOT_IMAGE=/vmlinuz root=/dev/sda1 ro rhgb quiet "
+                    "hugepagesz=2M transparent_hugepage=never mitigations=off"
+                ),
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            render_containerfile(snapshot, Environment(), output_dir)
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            assert toml_path.exists()
+            content = toml_path.read_text()
+            # Operator kargs present
+            assert '"hugepagesz=2M"' in content
+            assert '"transparent_hugepage=never"' in content
+            assert '"mitigations=off"' in content
+            # Bootloader params absent
+            assert "BOOT_IMAGE" not in content
+            assert '"ro"' not in content
+            assert '"rhgb"' not in content
+            # Exactly one kargs line
+            kargs_lines = [ln for ln in content.splitlines() if ln.startswith("kargs =")]
+            assert len(kargs_lines) == 1, f"Expected single kargs line, got: {kargs_lines}"
+            # Containerfile has exactly one COPY for kargs.d
+            cf = (output_dir / "Containerfile").read_text()
+            copies = [ln for ln in cf.splitlines()
+                      if "kargs.d/yoinkc-migrated.toml" in ln and ln.startswith("COPY")]
+            assert len(copies) == 1, f"Expected 1 COPY for kargs TOML, got: {copies}"
+
+
+# ===========================================================================
 # Baseline mode variations (moved from test_renderers.py)
 # ===========================================================================
 

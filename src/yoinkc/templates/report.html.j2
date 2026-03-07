@@ -114,7 +114,7 @@ th { color: var(--muted); font-weight: 500; }
 .audit-section { max-height: 70vh; overflow-y: auto; }
 tr.excluded td { text-decoration: line-through; opacity: 0.45; }
 tr.excluded td:first-child { text-decoration: none; opacity: 1; }
-.include-cb { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
+.include-cb { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); display: none; }
 #exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 2px solid var(--accent); padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
 #exclude-toolbar.visible { display: flex; }
 #exclude-toolbar .exclude-count { font-weight: 600; color: var(--warn); flex: 1; }
@@ -918,7 +918,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {% endcall %}
 
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
-<div id="exclude-toolbar">
+<div id="exclude-toolbar" style="display:none">
   <span class="exclude-count"><span id="exclude-count-num">0</span> item(s) excluded</span>
   <button id="btn-download-snapshot" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   <button id="btn-rerender" type="button" class="disabled" title="Start yoinkc-refine to enable live re-render">Re-render</button>
@@ -1158,6 +1158,8 @@ var snapshot = {{ snapshot_json|safe }};
   // --- Helper script detection with retry ---
   function enableHelperButtons() {
     helperAvailable = true;
+    document.querySelectorAll('.include-cb').forEach(function(el){ el.style.display = ''; });
+    if (toolbar) toolbar.style.display = '';
     rerenderBtn.classList.remove('disabled');
     rerenderBtn.title = 'Re-render with excluded items removed';
     tarballBtn.classList.remove('disabled');
