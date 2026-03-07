@@ -1237,12 +1237,16 @@ var snapshot = {{ snapshot_json|safe }};
   });
 
   // --- Helper script detection with retry ---
-  function enableHelperButtons() {
+  function enableHelperButtons(reRenderAvailable) {
     helperAvailable = true;
     document.querySelectorAll('.include-cb').forEach(function(el){ el.style.display = 'inline-block'; });
     if (toolbar) toolbar.style.display = '';
-    rerenderBtn.classList.remove('disabled');
-    rerenderBtn.title = 'Re-render with excluded items removed';
+    if (reRenderAvailable !== false) {
+      rerenderBtn.classList.remove('disabled');
+      rerenderBtn.title = 'Re-render with excluded items removed';
+    } else {
+      rerenderBtn.title = 'Re-render requires podman or docker — not found on this system';
+    }
     tarballBtn.classList.remove('disabled');
     tarballBtn.title = 'Download current output as tar.gz';
   }
@@ -1252,7 +1256,7 @@ var snapshot = {{ snapshot_json|safe }};
       .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('not ok')); })
       .then(function(d) {
         if (d && d.status === 'ok') {
-          enableHelperButtons();
+          enableHelperButtons(d.re_render !== false);
         } else {
           retryOrGiveUp(attempt);
         }

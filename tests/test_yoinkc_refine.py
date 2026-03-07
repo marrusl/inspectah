@@ -376,12 +376,26 @@ class TestServer:
         assert status == 200
         assert b"<html>report</html>" in body
 
-    def test_get_health_returns_ok(self, live_server):
+    def test_get_health_returns_ok(self, live_server, refine):
         url, _ = live_server
+        refine._Handler.re_render_available = True
         status, body, _ = _get(url + "/api/health")
         assert status == 200
         data = json.loads(body)
         assert data["status"] == "ok"
+        assert data["re_render"] is True
+
+    def test_get_health_re_render_false_when_no_runtime(self, live_server, refine):
+        url, _ = live_server
+        refine._Handler.re_render_available = False
+        try:
+            status, body, _ = _get(url + "/api/health")
+            assert status == 200
+            data = json.loads(body)
+            assert data["status"] == "ok"
+            assert data["re_render"] is False
+        finally:
+            refine._Handler.re_render_available = True
 
     def test_cors_headers_on_all_responses(self, live_server):
         url, _ = live_server

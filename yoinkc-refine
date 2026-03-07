@@ -241,6 +241,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     # Injected at server creation time
     output_dir: Path
+    re_render_available: bool = True
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -290,7 +291,11 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_file(output_dir / "report.html", "text/html; charset=utf-8")
 
         elif path == "/api/health":
-            self._send(200, json.dumps({"status": "ok"}), "application/json")
+            self._send(
+                200,
+                json.dumps({"status": "ok", "re_render": self.__class__.re_render_available}),
+                "application/json",
+            )
 
         elif path == "/snapshot":
             self._send_file(
@@ -428,7 +433,8 @@ def main(argv: list[str] | None = None) -> None:
         pass
 
     runtime = _find_runtime()
-    if runtime is None:
+    re_render_available = runtime is not None
+    if not re_render_available:
         _log("warning: podman and docker not found — Re-render will not be available")
     else:
         _ensure_image(runtime)
@@ -440,8 +446,9 @@ def main(argv: list[str] | None = None) -> None:
         shutil.rmtree(tmpdir, ignore_errors=True)
         sys.exit(1)
 
-    # Inject output_dir into the handler class
+    # Inject runtime config into the handler class
     _Handler.output_dir = output_dir  # type: ignore[attr-defined]
+    _Handler.re_render_available = re_render_available  # type: ignore[attr-defined]
 
     server = HTTPServer(("127.0.0.1", port), _Handler)
     url = f"http://localhost:{port}"

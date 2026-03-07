@@ -234,6 +234,32 @@ output/
 
 ---
 
+## Interactive refinement
+
+`yoinkc-refine` is a small local helper that serves a yoinkc output tarball over HTTP on your workstation. Once running, the HTML report's include/exclude checkboxes and Re-render button become active, letting you toggle packages, repos, and config files and immediately see an updated Containerfile — without touching the inspected host again.
+
+**Workflow:**
+
+1. Copy the tarball from the target host to your workstation:
+   ```bash
+   scp target-host:~/yoinkc-output/yoinkc-output-*.tar.gz .
+   ```
+2. Download `yoinkc-refine` (one-time):
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/yoinkc-refine -o yoinkc-refine
+   chmod +x yoinkc-refine
+   ```
+3. Start the server and open the URL it prints:
+   ```bash
+   ./yoinkc-refine yoinkc-output-hostname-*.tar.gz
+   ```
+
+**Requirements:** Python 3.9+ (stdlib only, no pip dependencies). Podman or Docker is required for re-rendering; the include/exclude checkboxes and tarball download work without it.
+
+The server runs entirely locally. It extracts the tarball into a temporary directory, serves the report at `http://localhost:8642` (or the next available port), and prints the URL on startup. Press Ctrl+C to stop.
+
+---
+
 ## CLI Reference
 
 ### Core Options
