@@ -241,18 +241,23 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- set auto_set = snapshot.rpm.auto_packages or [] %}
   {%- set dep_tree = snapshot.rpm.leaf_dep_tree or {} %}
 
-  <div class="banner" style="margin-bottom:1rem">
+  <div class="banner" id="pkg-selection-banner" style="margin-bottom:1rem">
     <strong>{{ leaf_packages_sorted|length }} leaf packages</strong> pull in <strong>{{ auto_set|length }} dependencies</strong>
     — only leaf packages appear in the Containerfile's <code>dnf install</code> line.
   </div>
 
   <h3>Dependency Tree</h3>
-  <table class="data-table">
-    <thead><tr><th>Leaf Package</th><th>Dependencies</th><th></th></tr></thead>
+  <table class="data-table" id="pkg-dep-tree">
+    <thead><tr><th></th><th>Leaf Package</th><th>Dependencies</th><th></th></tr></thead>
     <tbody>
     {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
     {%- set deps = dep_tree.get(lf, []) %}
-    <tr>
+    {%- set leaf_idx = namespace(val=-1) %}
+    {%- for p in snapshot.rpm.packages_added %}
+      {%- if p.name == lf %}{% set leaf_idx.val = loop.index0 %}{% endif %}
+    {%- endfor %}
+    <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
+      <td><input type="checkbox" class="include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></td>
       <td><strong>{{ lf }}</strong></td>
       <td>{{ deps|length }}</td>
       <td>
@@ -273,9 +278,37 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     </tbody>
   </table>
 
-  <h3>All Added Packages ({{ snapshot.rpm.packages_added|length }})</h3>
+  {%- set leaf_names = snapshot.rpm.leaf_packages %}
+  {%- set auto_names = snapshot.rpm.auto_packages or [] %}
+  {%- set unclassified_pkgs = [] %}
+  {%- for p in snapshot.rpm.packages_added %}
+    {%- if p.name not in leaf_names and p.name not in auto_names %}
+      {%- set _ = unclassified_pkgs.append(p) %}
+    {%- endif %}
+  {%- endfor %}
+  {%- if unclassified_pkgs %}
+  <h3 style="margin-top:1.5rem">Unclassified Packages ({{ unclassified_pkgs|length }})</h3>
+  <p style="font-size:0.85em;color:var(--muted)">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
+  <table class="data-table">
+    <thead><tr><th></th><th>Name</th><th>Version</th><th>Arch</th></tr></thead>
+    <tbody>
+    {%- for p in unclassified_pkgs %}
+    {%- set uidx = namespace(val=-1) %}
+    {%- for q in snapshot.rpm.packages_added %}
+      {%- if q.name == p.name %}{% set uidx.val = loop.index0 %}{% endif %}
+    {%- endfor %}
+    <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ uidx.val }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if p.include else '' }}/></td>
+      <td>{{ p.name }}</td>
+      <td>{{ p.version }}-{{ p.release }}</td>
+      <td>{{ p.arch }}</td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
   {%- endif %}
 
+  {%- else %}
   <table><thead><tr><th></th><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
     <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if p.include else '' }}/></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
@@ -284,6 +317,8 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- if snapshot.rpm.packages_added|length > 100 %}
   <p>... and {{ snapshot.rpm.packages_added|length - 100 }} more.</p>
   {%- endif %}
+  {%- endif %}
+
   {%- else %}
   <p>No added packages.</p>
   {%- endif %}
@@ -885,7 +920,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
 <div id="exclude-toolbar">
   <span class="exclude-count"><span id="exclude-count-num">0</span> item(s) excluded</span>
-  <button id="btn-download-snapshot" type="button">Download Modified Snapshot</button>
+  <button id="btn-download-snapshot" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   <button id="btn-rerender" type="button" class="disabled" title="Start yoinkc-refine to enable live re-render">Re-render</button>
   <button id="btn-tarball" type="button" class="disabled" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
 </div>
@@ -1021,7 +1056,65 @@ var snapshot = {{ snapshot_json|safe }};
     });
   });
 
-  // Download modified snapshot
+  // --- Package leaf/auto-dep cascade ---
+  var pkgDepTree = (snapshot.rpm && snapshot.rpm.leaf_dep_tree) || {};
+  var pkgAutoNames = new Set((snapshot.rpm && snapshot.rpm.auto_packages) || []);
+
+  function getPkgIdx(name) {
+    var pkgs = (snapshot.rpm && snapshot.rpm.packages_added) || [];
+    for (var i = 0; i < pkgs.length; i++) {
+      if (pkgs[i] && pkgs[i].name === name) return i;
+    }
+    return -1;
+  }
+
+  function recomputeAutoDeps() {
+    var covered = new Set();
+    document.querySelectorAll('#pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+      var cb = row.querySelector('.leaf-cb');
+      if (cb && cb.checked) {
+        (pkgDepTree[row.getAttribute('data-leaf')] || []).forEach(function(d) { covered.add(d); });
+      }
+    });
+    pkgAutoNames.forEach(function(dep) {
+      var i = getPkgIdx(dep);
+      if (i >= 0 && snapshot.rpm && snapshot.rpm.packages_added[i]) {
+        snapshot.rpm.packages_added[i].include = covered.has(dep);
+      }
+    });
+  }
+
+  function updatePkgBanner() {
+    var banner = document.getElementById('pkg-selection-banner');
+    if (!banner) return;
+    var leafRows = document.querySelectorAll('#pkg-dep-tree tr[data-leaf]');
+    if (!leafRows.length) return;
+    var total = leafRows.length;
+    var selected = 0;
+    var covered = new Set();
+    leafRows.forEach(function(row) {
+      var cb = row.querySelector('.leaf-cb');
+      if (cb && cb.checked) {
+        selected++;
+        (pkgDepTree[row.getAttribute('data-leaf')] || []).forEach(function(d) { covered.add(d); });
+      }
+    });
+    banner.innerHTML = '<strong>' + selected + ' of ' + total + ' leaf package' + (total !== 1 ? 's' : '') + ' selected</strong>'
+      + ', pulling in <strong>' + covered.size + ' dependenc' + (covered.size !== 1 ? 'ies' : 'y') + '</strong>'
+      + ' \u2014 only leaf packages appear in the Containerfile\u2019s <code>dnf\u00a0install</code> line.';
+  }
+
+  document.querySelectorAll('#pkg-dep-tree .leaf-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      recomputeAutoDeps();
+      updatePkgBanner();
+      // updateExcludeCount() already called by the generic include-cb handler above
+    });
+  });
+
+  updatePkgBanner();
+
+  // --- Download modified snapshot ---
   document.getElementById('btn-download-snapshot').addEventListener('click', function(){
     var json = JSON.stringify(snapshot, null, 2);
     var blob = new Blob([json], {type: 'application/json'});
@@ -1032,13 +1125,13 @@ var snapshot = {{ snapshot_json|safe }};
     URL.revokeObjectURL(a.href);
   });
 
-  // Re-render
+  // --- Re-render ---
   rerenderBtn.addEventListener('click', function(){
     if (!helperAvailable) return;
     var origText = rerenderBtn.innerHTML;
     rerenderBtn.innerHTML = '<span class="spinner"></span>Re-rendering...';
     rerenderBtn.classList.add('disabled');
-    fetch('/api/re-render', {
+    fetch(window.location.origin + '/api/re-render', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(snapshot),
@@ -1056,23 +1149,43 @@ var snapshot = {{ snapshot_json|safe }};
     });
   });
 
-  // Download tarball
+  // --- Download tarball ---
   tarballBtn.addEventListener('click', function(){
     if (!helperAvailable) return;
-    window.location.href = '/api/tarball';
+    window.location.href = window.location.origin + '/api/tarball';
   });
 
-  // Probe helper script availability
-  fetch('/api/health', {method: 'HEAD'}).then(function(r){
-    if (r.ok) {
-      helperAvailable = true;
-      rerenderBtn.classList.remove('disabled');
-      rerenderBtn.title = '';
-      tarballBtn.classList.remove('disabled');
-      tarballBtn.title = '';
-    }
-  }).catch(function(){});
+  // --- Helper script detection with retry ---
+  function enableHelperButtons() {
+    helperAvailable = true;
+    rerenderBtn.classList.remove('disabled');
+    rerenderBtn.title = 'Re-render with excluded items removed';
+    tarballBtn.classList.remove('disabled');
+    tarballBtn.title = 'Download current output as tar.gz';
+  }
 
+  function checkHelperAvailable(attempt) {
+    fetch(window.location.origin + '/api/health')
+      .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('not ok')); })
+      .then(function(d) {
+        if (d && d.status === 'ok') {
+          enableHelperButtons();
+        } else {
+          retryOrGiveUp(attempt);
+        }
+      })
+      .catch(function() { retryOrGiveUp(attempt); });
+  }
+
+  function retryOrGiveUp(attempt) {
+    if (attempt < 3) {
+      setTimeout(function() { checkHelperAvailable(attempt + 1); }, 2000);
+    } else {
+      console.log('yoinkc-refine not detected');
+    }
+  }
+
+  checkHelperAvailable(0);
   updateExcludeCount();
 })();
 </script>
