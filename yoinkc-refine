@@ -120,17 +120,25 @@ def _find_runtime() -> str | None:
 
 
 def _ensure_image(runtime: str) -> None:
-    """Pull the yoinkc image if it is not already available locally."""
+    """Pull the latest yoinkc image; fall back to cached copy if pull fails."""
+    print(f"{_SCRIPT_NAME}: pulling latest yoinkc image...", end=" ", flush=True)
+    pull = subprocess.run([runtime, "pull", _IMAGE], capture_output=True)
+    if pull.returncode == 0:
+        print("done", flush=True)
+        return
+
+    # Pull failed — check whether a cached copy is usable.
     check_cmd = (
         [runtime, "image", "exists", _IMAGE]
         if runtime == "podman"
         else [runtime, "image", "inspect", _IMAGE]
     )
-    result = subprocess.run(check_cmd, capture_output=True)
-    if result.returncode == 0:
-        return
-    _log("pulling yoinkc image (first run, may take a moment)...")
-    subprocess.run([runtime, "pull", _IMAGE], check=False)
+    has_cache = subprocess.run(check_cmd, capture_output=True).returncode == 0
+    if has_cache:
+        print("failed, using cached version", flush=True)
+    else:
+        print("failed", flush=True)
+        _log("warning: no cached yoinkc image found — Re-render will not be available")
 
 
 def _count_excluded(snapshot: dict) -> int:

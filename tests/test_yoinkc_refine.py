@@ -232,6 +232,36 @@ class TestCountExcluded:
 
 
 # ---------------------------------------------------------------------------
+# Image pre-pull
+# ---------------------------------------------------------------------------
+
+class TestEnsureImage:
+    def test_pull_success_logs_done(self, refine, capsys):
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            refine._ensure_image("podman")
+        out = capsys.readouterr().out
+        assert "done" in out
+        assert mock_run.call_count == 1  # only pull, no check needed
+
+    def test_pull_failure_with_cache_logs_cached(self, refine, capsys):
+        results = [MagicMock(returncode=1), MagicMock(returncode=0)]
+        with patch("subprocess.run", side_effect=results):
+            refine._ensure_image("podman")
+        out = capsys.readouterr().out
+        assert "failed" in out
+        assert "cached" in out
+
+    def test_pull_failure_no_cache_warns(self, refine, capsys):
+        with patch("subprocess.run", return_value=MagicMock(returncode=1)):
+            refine._ensure_image("podman")
+        captured = capsys.readouterr()
+        combined = captured.out + captured.err
+        assert "failed" in combined
+        assert "Re-render will not be available" in combined
+
+
+# ---------------------------------------------------------------------------
 # Re-render via container
 # ---------------------------------------------------------------------------
 
