@@ -1159,6 +1159,7 @@ var snapshot = {{ snapshot_json|safe }};
   function enableHelperButtons() {
     helperAvailable = true;
     document.querySelectorAll('.include-cb').forEach(function(el){ el.style.display = 'inline-block'; });
+    if (toolbar) toolbar.style.display = '';
     rerenderBtn.classList.remove('disabled');
     rerenderBtn.title = 'Re-render with excluded items removed';
     tarballBtn.classList.remove('disabled');
