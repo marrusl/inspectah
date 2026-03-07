@@ -82,6 +82,9 @@ th { color: var(--muted); font-weight: 500; }
 .badge.error { background: #da3633; color: #fff; }
 .badge.info { background: #1f6feb; color: #fff; }
 .containerfile-pre { background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
+.containerfile-wrapper { position: relative; }
+.btn-copy-cf { position: absolute; top: 0.5rem; right: 0.5rem; background: var(--card); border: 1px solid #30363d; color: var(--muted); border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.78rem; font-family: inherit; z-index: 1; transition: color .1s, border-color .1s; }
+.btn-copy-cf:hover { color: var(--text); border-color: var(--accent); }
 .file-browser-layout { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
 .file-tree-panel { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 0.75rem; }
 .file-tree-root { padding: 0; }
@@ -127,7 +130,8 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 #exclude-toolbar button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid #30363d; cursor: pointer; font-size: 0.9rem; font-weight: 500; }
 #btn-download-snapshot { background: var(--card); color: var(--text); }
 #btn-rerender { background: var(--card); color: var(--text); }
-#btn-tarball { background: var(--accent); color: #fff; border-color: var(--accent); }
+#btn-tarball { background: var(--card); color: var(--text); }
+#exclude-toolbar button.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 #btn-rerender.disabled { opacity: 0.4; cursor: not-allowed; }
 #btn-tarball.disabled { opacity: 0.4; cursor: not-allowed; }
 .toast { position: fixed; top: 1rem; right: 1rem; background: #da3633; color: #fff; padding: 0.75rem 1.5rem; border-radius: 8px; z-index: 2000; display: none; }
@@ -173,42 +177,42 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
 {# ── Summary cards ──────────────────────────────────────────────────────── #}
 <div class="cards">
+  <div class="card" data-section="output_files"><h4>File browser</h4><div class="count">config / quadlet</div><div class="status">Browse</div></div>
   <div class="card status-{{ card_status.packages }}" data-section="packages"><h4>Packages</h4><div class="count">{{ counts.packages_added }} added</div><div class="status">{{ counts.packages_removed }} removed</div></div>
   <div class="card status-{{ card_status.services }}" data-section="services"><h4>Services</h4><div class="count">{{ counts.services_enabled }} enabled</div><div class="status">{{ counts.services_disabled }} disabled</div></div>
   <div class="card status-{{ card_status.config }}" data-section="config"><h4>Config</h4><div class="count">{{ counts.config_files }} files</div><div class="status">rpm_va: {{ counts.rpm_va }}</div></div>
-  <div class="card status-{{ card_status.network }}" data-section="network"><h4>Network</h4><div class="count">{{ counts.network }}</div><div class="status">connections / firewall</div></div>
-  <div class="card status-{{ card_status.storage }}" data-section="storage"><h4>Storage</h4><div class="count">{{ counts.storage }}</div><div class="status">fstab entries</div></div>
-  <div class="card status-{{ card_status.scheduled_tasks }}" data-section="scheduled_tasks"><h4>Scheduled</h4><div class="count">{{ counts.scheduled_tasks }}</div><div class="status">cron / timers</div></div>
-  <div class="card status-{{ card_status.containers }}" data-section="containers"><h4>Containers</h4><div class="count">{{ counts.containers }}</div><div class="status">quadlet / compose</div></div>
   <div class="card status-{{ card_status.non_rpm }}" data-section="non_rpm"><h4>Non-RPM</h4><div class="count">{{ counts.non_rpm }}</div><div class="status">items</div></div>
+  <div class="card status-{{ card_status.containers }}" data-section="containers"><h4>Containers</h4><div class="count">{{ counts.containers }}</div><div class="status">quadlet / compose</div></div>
+  <div class="card status-{{ card_status.users_groups }}" data-section="users_groups"><h4>Users/Groups</h4><div class="count">{{ counts.users_groups }}</div><div class="status">non-system</div></div>
+  <div class="card status-{{ card_status.scheduled_tasks }}" data-section="scheduled_tasks"><h4>Scheduled jobs</h4><div class="count">{{ counts.scheduled_tasks }}</div><div class="status">cron / timers</div></div>
   <div class="card status-{{ card_status.kernel_boot }}" data-section="kernel_boot"><h4>Kernel/Boot</h4><div class="count">{{ counts.kernel_boot }}</div><div class="status">configs</div></div>
   <div class="card status-{{ card_status.selinux }}" data-section="selinux"><h4>SELinux</h4><div class="count">{{ counts.selinux }}</div><div class="status">customizations</div></div>
-  <div class="card status-{{ card_status.users_groups }}" data-section="users_groups"><h4>Users/Groups</h4><div class="count">{{ counts.users_groups }}</div><div class="status">non-system</div></div>
+  <div class="card status-{{ card_status.network }}" data-section="network"><h4>Network</h4><div class="count">{{ counts.network }}</div><div class="status">connections / firewall</div></div>
+  <div class="card status-{{ card_status.storage }}" data-section="storage"><h4>Storage</h4><div class="count">{{ counts.storage }}</div><div class="status">fstab entries</div></div>
   <div class="card" data-section="warnings"><h4>Warnings</h4><div class="count" id="warnings-card-count">{{ warnings|length }}</div><div class="status" id="warnings-card-status">Review required</div></div>
-  <div class="card" data-section="containerfile"><h4>Containerfile</h4><div class="count">{{ containerfile_lines }} lines</div><div class="status">Generated</div></div>
-  <div class="card" data-section="output_files"><h4>Output files</h4><div class="count">config / quadlet</div><div class="status">Browse</div></div>
   <div class="card" data-section="audit"><h4>Audit report</h4><div class="count">Full report</div><div class="status">Markdown</div></div>
+  <div class="card" data-section="containerfile"><h4>Containerfile</h4><div class="count">{{ containerfile_lines }} lines</div><div class="status">Generated</div></div>
 </div>
 
 {# ── Tab navigation ─────────────────────────────────────────────────────── #}
 <div class="tabs">
   <button class="active" data-tab="summary">Summary</button>
+  <button data-tab="output_files">File browser</button>
   <button data-tab="packages">Packages</button>
   <button data-tab="services">Services</button>
   <button data-tab="config">Config</button>
-  <button data-tab="network">Network</button>
-  <button data-tab="storage">Storage</button>
-  <button data-tab="scheduled_tasks">Scheduled</button>
-  <button data-tab="containers">Containers</button>
   <button data-tab="non_rpm">Non-RPM</button>
+  <button data-tab="containers">Containers</button>
+  <button data-tab="users_groups">Users/Groups</button>
+  <button data-tab="scheduled_tasks">Scheduled jobs</button>
   <button data-tab="kernel_boot">Kernel/Boot</button>
   <button data-tab="selinux">SELinux</button>
-  <button data-tab="users_groups">Users/Groups</button>
   <button data-tab="secrets">Secrets</button>
+  <button data-tab="network">Network</button>
+  <button data-tab="storage">Storage</button>
   <button data-tab="warnings">Warnings</button>
-  <button data-tab="containerfile">Containerfile</button>
-  <button data-tab="output_files">Output files</button>
   <button data-tab="audit">Audit report</button>
+  <button data-tab="containerfile">Containerfile</button>
 </div>
 
 {# ══════════════════════════════════════════════════════════════════════════
@@ -234,6 +238,19 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 <div class="summary-next">
   <p><strong>Next steps:</strong> Review the <strong>Audit report</strong> tab, fix any FIXMEs in the Containerfile, run <code>podman build -t my-image .</code>, then deploy with <code>bootc switch my-image:latest</code>.</p>
 </div>
+{% endcall %}
+
+{# ── File browser ─────────────────────────────────────────────────────────── #}
+{% call section("output_files", "File browser") %}
+<p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
+<div class="file-browser-layout">
+  <div class="file-tree-panel"><div class="file-tree-root">{{ tree_html|safe }}</div></div>
+  <div class="file-viewer-panel">
+    <div class="file-path" id="file-viewer-path">Click a file</div>
+    <div id="file-viewer-content"></div>
+  </div>
+</div>
+{{ file_content_snippets_html|safe }}
 {% endcall %}
 
 {# ── Packages ────────────────────────────────────────────────────────────── #}
@@ -396,249 +413,6 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 {% endcall %}
 
-{# ── Network ─────────────────────────────────────────────────────────────── #}
-{% call section("network", "Network") %}
-  {%- set net = snapshot.network %}
-  {%- if net and (net.connections or net.firewall_zones or net.firewall_direct_rules or net.ip_routes or net.ip_rules or net.resolv_provenance) %}
-
-  {%- if net.connections %}
-  <h3>Connections</h3>
-  <table class="data-table"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
-    {%- for c in net.connections %}
-    <tr>
-      <td><code>{{ c.name }}</code></td>
-      <td>{{ c.method }}</td>
-      <td>{{ c.type }}</td>
-      <td>
-        {%- if c.method == 'static' -%}
-        <span style="color:#3fb950;font-weight:bold">Bake into image</span>
-        {%- elif c.method == 'dhcp' -%}
-        <span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>
-        {%- else -%}
-        <span style="color:var(--muted)">Review</span>
-        {%- endif -%}
-      </td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
-  {%- endif %}
-
-  {%- if net.firewall_zones %}
-  <h3>Firewall zones <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
-  {%- for z in net.firewall_zones %}
-  <h4>{{ z.name }}</h4>
-  {%- if z.services %}<p>Services: <code>{{ z.services|join(', ') }}</code></p>{%- endif %}
-  {%- if z.ports %}<p>Ports: <code>{{ z.ports|join(', ') }}</code></p>{%- endif %}
-  {%- if z.rich_rules %}
-  <p>Rich rules ({{ z.rich_rules|length }}):</p><ul>
-    {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
-  </ul>
-  {%- endif %}
-  {%- endfor %}
-  {%- endif %}
-
-  {%- if net.firewall_direct_rules %}
-  <h3>Firewall direct rules <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
-  <ul>
-    {%- for r in net.firewall_direct_rules %}
-    <li>{{ r.ipv }} {{ r.chain }}: <code>{{ r.args }}</code></li>
-    {%- endfor %}
-  </ul>
-  {%- endif %}
-
-  {%- if net.resolv_provenance %}
-  <h3>DNS</h3>
-  <p>resolv.conf provenance:
-    {%- if net.resolv_provenance == 'networkmanager' %}
-    <span style="color:#d29922;font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
-    {%- elif net.resolv_provenance == 'systemd-resolved' %}
-    <span style="color:#d29922;font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
-    {%- else %}
-    <span style="color:#3fb950;font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
-    {%- endif %}
-  </p>
-  {%- endif %}
-
-  {%- if net.ip_routes %}
-  {%- set static_rt = net.ip_routes|selectattr('proto static', 'in', []) | list %}
-  {%- set static_rt = [] %}
-  {%- for r in net.ip_routes %}{% if 'proto static' in r %}{% set _ = static_rt.append(r) %}{% endif %}{%- endfor %}
-  {%- if static_rt %}
-  <h3>Static routes ({{ static_rt|length }})</h3><ul>
-    {%- for r in static_rt %}<li><code>{{ r }}</code></li>{%- endfor %}
-  </ul>
-  {%- endif %}
-  {%- endif %}
-
-  {%- if net.ip_rules %}
-  <h3>Policy routing rules ({{ net.ip_rules|length }})</h3><ul>
-    {%- for r in net.ip_rules %}<li><code>{{ r }}</code></li>{%- endfor %}
-  </ul>
-  {%- endif %}
-
-  {%- else %}
-  <p>No network config captured.</p>
-  {%- endif %}
-{% endcall %}
-
-{# ── Storage ─────────────────────────────────────────────────────────────── #}
-{% call section("storage", "Storage") %}
-  {%- if snapshot.storage and snapshot.storage.fstab_entries %}
-  <table><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
-    {%- for e in snapshot.storage.fstab_entries[:30] %}
-    <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
-    {%- endfor %}
-  </tbody></table>
-  {%- else %}
-  <p>No fstab entries.</p>
-  {%- endif %}
-{% endcall %}
-
-{# ── Scheduled tasks ─────────────────────────────────────────────────────── #}
-{% call section("scheduled_tasks", "Scheduled tasks") %}
-  {%- set st = snapshot.scheduled_tasks %}
-  {%- if st and (st.cron_jobs or st.systemd_timers or st.generated_timer_units or st.at_jobs) %}
-
-  {%- set local_timers = [] %}{%- set vendor_timers = [] %}
-  {%- for t in st.systemd_timers %}
-    {%- if t.source == 'local' %}{% set _ = local_timers.append(t) %}
-    {%- elif t.source == 'vendor' %}{% set _ = vendor_timers.append(t) %}
-    {%- endif %}
-  {%- endfor %}
-
-  {%- if local_timers or vendor_timers %}
-  <h3>Existing systemd timers</h3>
-  <table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th><th>Source</th></tr>
-    {%- for t in local_timers %}
-    <tr style="background:rgba(63,185,80,0.1)">
-      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
-      <td><code>{{ t.exec_start }}</code></td>
-      <td><span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">local</span></td>
-    </tr>
-    {%- endfor %}
-    {%- for t in vendor_timers %}
-    <tr>
-      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
-      <td><code>{{ t.exec_start }}</code></td>
-      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px">vendor</span></td>
-    </tr>
-    {%- endfor %}
-  </table>
-  {%- endif %}
-
-  {%- if st.generated_timer_units %}
-  <h3>Cron-converted timers</h3>
-  <table><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>
-    {%- for u in st.generated_timer_units %}
-    <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
-      <td>{{ u.name }}</td>
-      <td><code>{{ u.cron_expr }}</code></td>
-      <td><code>{{ u.source_path }}</code></td>
-    </tr>
-    {%- endfor %}
-  </table>
-  {%- endif %}
-
-  {%- if st.cron_jobs %}
-  <h3>Cron jobs</h3>
-  <table>
-    <tr><th></th><th>Path</th><th>Source</th><th>Ownership</th><th>Action</th></tr>
-    {%- for j in st.cron_jobs %}
-    {%- if j.rpm_owned %}
-    <tr{% if not j.include %} class="excluded"{% endif %} style="opacity:0.55" data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
-      <td><code>{{ j.path }}</code></td>
-      <td>{{ j.source }}</td>
-      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">package</span></td>
-      <td style="color:#777">Handled by package install</td>
-    </tr>
-    {%- else %}
-    <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
-      <td><code>{{ j.path }}</code></td>
-      <td>{{ j.source }}</td>
-      <td><span style="background:#d2991a;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">operator</span></td>
-      <td>Convert to systemd timer</td>
-    </tr>
-    {%- endif %}
-    {%- endfor %}
-  </table>
-  {%- endif %}
-
-  {%- if st.at_jobs %}
-  <h3>At jobs</h3>
-  <table><tr><th>File</th><th>User</th><th>Command</th></tr>
-    {%- for a in st.at_jobs %}
-    {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
-    <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
-    {%- endfor %}
-  </table>
-  {%- endif %}
-
-  {%- else %}
-  <p>No scheduled tasks.</p>
-  {%- endif %}
-{% endcall %}
-
-{# ── Containers ──────────────────────────────────────────────────────────── #}
-{% call section("containers", "Containers") %}
-  {%- set ct = snapshot.containers %}
-  {%- if ct and (ct.quadlet_units or ct.compose_files or ct.running_containers) %}
-
-  {%- if ct.quadlet_units %}
-  <h3>Quadlet units</h3>
-  <table><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr>
-    {%- for u in ct.quadlet_units %}
-    <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
-      <td>{{ u.name }}</td>
-      <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
-      <td><code>{{ u.path }}</code></td>
-    </tr>
-    {%- endfor %}
-  </table>
-  {%- endif %}
-
-  {%- if ct.compose_files %}
-  <h3>Compose files</h3>
-  {%- for c in ct.compose_files %}
-  <div{% if not c.include %} style="opacity:0.45;text-decoration:line-through"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
-  <label><input type="checkbox" class="include-cb" {{ 'checked' if c.include else '' }}/></label>
-  <h4 style="display:inline"><code>{{ c.path }}</code></h4>
-  {%- if c.images %}
-  <table><tr><th>Service</th><th>Image</th></tr>
-    {%- for img in c.images %}
-    <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
-    {%- endfor %}
-  </table>
-  {%- else %}
-  <p>No image references found.</p>
-  {%- endif %}
-  </div>
-  {%- endfor %}
-  {%- endif %}
-
-  {%- if ct.running_containers %}
-  <h3>Running containers (podman)</h3>
-  <table><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr>
-    {%- for item in containers_data.running %}
-    <tr>
-      <td><strong>{{ item.name }}</strong></td>
-      <td><code>{{ item.image }}</code></td>
-      <td>{{ item.status }}</td>
-      <td style="font-size:0.85em">{{ item.mount_summary|safe }}</td>
-      <td style="font-size:0.85em">{{ item.net_summary or '' }}</td>
-    </tr>
-    {%- endfor %}
-  </table>
-  {%- endif %}
-
-  {%- else %}
-  <p>No container workloads.</p>
-  {%- endif %}
-{% endcall %}
-
 {# ── Non-RPM software ────────────────────────────────────────────────────── #}
 {% call section("non_rpm", "Non-RPM software") %}
   {%- set nr = snapshot.non_rpm_software %}
@@ -753,6 +527,219 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 {% endcall %}
 
+{# ── Containers ──────────────────────────────────────────────────────────── #}
+{% call section("containers", "Containers") %}
+  {%- set ct = snapshot.containers %}
+  {%- if ct and (ct.quadlet_units or ct.compose_files or ct.running_containers) %}
+
+  {%- if ct.quadlet_units %}
+  <h3>Quadlet units</h3>
+  <table><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr>
+    {%- for u in ct.quadlet_units %}
+    <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
+      <td>{{ u.name }}</td>
+      <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
+      <td><code>{{ u.path }}</code></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if ct.compose_files %}
+  <h3>Compose files</h3>
+  {%- for c in ct.compose_files %}
+  <div{% if not c.include %} style="opacity:0.45;text-decoration:line-through"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
+  <label><input type="checkbox" class="include-cb" {{ 'checked' if c.include else '' }}/></label>
+  <h4 style="display:inline"><code>{{ c.path }}</code></h4>
+  {%- if c.images %}
+  <table><tr><th>Service</th><th>Image</th></tr>
+    {%- for img in c.images %}
+    <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
+    {%- endfor %}
+  </table>
+  {%- else %}
+  <p>No image references found.</p>
+  {%- endif %}
+  </div>
+  {%- endfor %}
+  {%- endif %}
+
+  {%- if ct.running_containers %}
+  <h3>Running containers (podman)</h3>
+  <table><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr>
+    {%- for item in containers_data.running %}
+    <tr>
+      <td><strong>{{ item.name }}</strong></td>
+      <td><code>{{ item.image }}</code></td>
+      <td>{{ item.status }}</td>
+      <td style="font-size:0.85em">{{ item.mount_summary|safe }}</td>
+      <td style="font-size:0.85em">{{ item.net_summary or '' }}</td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- else %}
+  <p>No container workloads.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Users / Groups ───────────────────────────────────────────────────────── #}
+{% call section("users_groups", "Users and groups") %}
+  {%- if snapshot.users_groups and snapshot.users_groups.users %}
+  {%- set ug = snapshot.users_groups %}
+  {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart", "exact-copy"] %}
+
+  <p style="color:var(--muted);font-size:0.9em">
+    To change strategies, re-run with <code>--user-strategy</code> or edit the Containerfile directly.
+  </p>
+
+  <table class="data-table">
+    <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
+    <tbody>
+    {%- for u in ug.users %}
+    {%- set cls = u.classification or '?' %}
+    {%- set cls_color = '#4caf50' if cls == 'service' else '#2196f3' if cls == 'human' else '#ff9800' %}
+    <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.get('include', true) else '' }}/></td>
+      <td><strong>{{ u.name }}</strong></td>
+      <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
+      <td><code>{{ u.shell }}</code></td>
+      <td><code>{{ u.home }}</code></td>
+      <td><span style="background:{{ cls_color }};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">{{ cls }}</span></td>
+      <td>
+        <select disabled style="background:var(--card);color:var(--text);border:1px solid #30363d;border-radius:4px;padding:2px 4px;font-size:0.85em" data-user="{{ u.name }}">
+          {%- for s in strategies %}
+          <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
+          {%- endfor %}
+        </select>
+      </td>
+      <td style="font-size:0.85em">
+        {%- set notes = [] %}
+        {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
+          {%- set _ = notes.append('SSH keys') %}
+          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="authorized_keys found on source but not included in image">SSH KEYS</span>
+        {%- endif %}
+        {%- if cls == 'ambiguous' %}
+          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="Classification uncertain — verify intent">ambiguous</span>
+        {%- endif %}
+      </td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+
+  {%- if ug.groups %}
+  <h3>Groups</h3>
+  <table class="data-table">
+    <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
+    <tbody>
+    {%- for g in ug.groups %}
+    <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if g.get('include', true) else '' }}/></td>
+      <td>{{ g.name }}</td>
+      <td>{{ g.gid }}</td>
+      <td>{{ g.strategy }}</td>
+      <td>{{ (g.members or [])|join(', ') or '—' }}</td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+
+  {%- else %}
+  <p>No non-system users/groups.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Scheduled jobs ───────────────────────────────────────────────────────── #}
+{% call section("scheduled_tasks", "Scheduled jobs") %}
+  {%- set st = snapshot.scheduled_tasks %}
+  {%- if st and (st.cron_jobs or st.systemd_timers or st.generated_timer_units or st.at_jobs) %}
+
+  {%- set local_timers = [] %}{%- set vendor_timers = [] %}
+  {%- for t in st.systemd_timers %}
+    {%- if t.source == 'local' %}{% set _ = local_timers.append(t) %}
+    {%- elif t.source == 'vendor' %}{% set _ = vendor_timers.append(t) %}
+    {%- endif %}
+  {%- endfor %}
+
+  {%- if local_timers or vendor_timers %}
+  <h3>Existing systemd timers</h3>
+  <table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th><th>Source</th></tr>
+    {%- for t in local_timers %}
+    <tr style="background:rgba(63,185,80,0.1)">
+      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
+      <td><code>{{ t.exec_start }}</code></td>
+      <td><span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">local</span></td>
+    </tr>
+    {%- endfor %}
+    {%- for t in vendor_timers %}
+    <tr>
+      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
+      <td><code>{{ t.exec_start }}</code></td>
+      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px">vendor</span></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if st.generated_timer_units %}
+  <h3>Cron-converted timers</h3>
+  <table><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>
+    {%- for u in st.generated_timer_units %}
+    <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
+      <td>{{ u.name }}</td>
+      <td><code>{{ u.cron_expr }}</code></td>
+      <td><code>{{ u.source_path }}</code></td>
+    </tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if st.cron_jobs %}
+  <h3>Cron jobs</h3>
+  <table>
+    <tr><th></th><th>Path</th><th>Source</th><th>Ownership</th><th>Action</th></tr>
+    {%- for j in st.cron_jobs %}
+    {%- if j.rpm_owned %}
+    <tr{% if not j.include %} class="excluded"{% endif %} style="opacity:0.55" data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
+      <td><code>{{ j.path }}</code></td>
+      <td>{{ j.source }}</td>
+      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">package</span></td>
+      <td style="color:#777">Handled by package install</td>
+    </tr>
+    {%- else %}
+    <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
+      <td><code>{{ j.path }}</code></td>
+      <td>{{ j.source }}</td>
+      <td><span style="background:#d2991a;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">operator</span></td>
+      <td>Convert to systemd timer</td>
+    </tr>
+    {%- endif %}
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- if st.at_jobs %}
+  <h3>At jobs</h3>
+  <table><tr><th>File</th><th>User</th><th>Command</th></tr>
+    {%- for a in st.at_jobs %}
+    {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
+    <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
+    {%- endfor %}
+  </table>
+  {%- endif %}
+
+  {%- else %}
+  <p>No scheduled tasks.</p>
+  {%- endif %}
+{% endcall %}
+
 {# ── Kernel / Boot ────────────────────────────────────────────────────────── #}
 {% call section("kernel_boot", "Kernel and boot") %}
   {%- set kb = snapshot.kernel_boot %}
@@ -850,74 +837,6 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 {% endcall %}
 
-{# ── Users / Groups ───────────────────────────────────────────────────────── #}
-{% call section("users_groups", "Users and groups") %}
-  {%- if snapshot.users_groups and snapshot.users_groups.users %}
-  {%- set ug = snapshot.users_groups %}
-  {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart", "exact-copy"] %}
-
-  <p style="color:var(--muted);font-size:0.9em">
-    To change strategies, re-run with <code>--user-strategy</code> or edit the Containerfile directly.
-  </p>
-
-  <table class="data-table">
-    <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
-    <tbody>
-    {%- for u in ug.users %}
-    {%- set cls = u.classification or '?' %}
-    {%- set cls_color = '#4caf50' if cls == 'service' else '#2196f3' if cls == 'human' else '#ff9800' %}
-    <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.get('include', true) else '' }}/></td>
-      <td><strong>{{ u.name }}</strong></td>
-      <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
-      <td><code>{{ u.shell }}</code></td>
-      <td><code>{{ u.home }}</code></td>
-      <td><span style="background:{{ cls_color }};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">{{ cls }}</span></td>
-      <td>
-        <select disabled style="background:var(--card);color:var(--text);border:1px solid #30363d;border-radius:4px;padding:2px 4px;font-size:0.85em" data-user="{{ u.name }}">
-          {%- for s in strategies %}
-          <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
-          {%- endfor %}
-        </select>
-      </td>
-      <td style="font-size:0.85em">
-        {%- set notes = [] %}
-        {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
-          {%- set _ = notes.append('SSH keys') %}
-          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="authorized_keys found on source but not included in image">SSH KEYS</span>
-        {%- endif %}
-        {%- if cls == 'ambiguous' %}
-          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="Classification uncertain — verify intent">ambiguous</span>
-        {%- endif %}
-      </td>
-    </tr>
-    {%- endfor %}
-    </tbody>
-  </table>
-
-  {%- if ug.groups %}
-  <h3>Groups</h3>
-  <table class="data-table">
-    <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
-    <tbody>
-    {%- for g in ug.groups %}
-    <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if g.get('include', true) else '' }}/></td>
-      <td>{{ g.name }}</td>
-      <td>{{ g.gid }}</td>
-      <td>{{ g.strategy }}</td>
-      <td>{{ (g.members or [])|join(', ') or '—' }}</td>
-    </tr>
-    {%- endfor %}
-    </tbody>
-  </table>
-  {%- endif %}
-
-  {%- else %}
-  <p>No non-system users/groups.</p>
-  {%- endif %}
-{% endcall %}
-
 {# ── Secrets ──────────────────────────────────────────────────────────────── #}
 {% call section("secrets", "Secrets") %}
   {%- if secrets_data %}
@@ -940,6 +859,104 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 {% endcall %}
 
+{# ── Network ─────────────────────────────────────────────────────────────── #}
+{% call section("network", "Network") %}
+  {%- set net = snapshot.network %}
+  {%- if net and (net.connections or net.firewall_zones or net.firewall_direct_rules or net.ip_routes or net.ip_rules or net.resolv_provenance) %}
+
+  {%- if net.connections %}
+  <h3>Connections</h3>
+  <table class="data-table"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
+    {%- for c in net.connections %}
+    <tr>
+      <td><code>{{ c.name }}</code></td>
+      <td>{{ c.method }}</td>
+      <td>{{ c.type }}</td>
+      <td>
+        {%- if c.method == 'static' -%}
+        <span style="color:#3fb950;font-weight:bold">Bake into image</span>
+        {%- elif c.method == 'dhcp' -%}
+        <span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>
+        {%- else -%}
+        <span style="color:var(--muted)">Review</span>
+        {%- endif -%}
+      </td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+
+  {%- if net.firewall_zones %}
+  <h3>Firewall zones <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
+  {%- for z in net.firewall_zones %}
+  <h4>{{ z.name }}</h4>
+  {%- if z.services %}<p>Services: <code>{{ z.services|join(', ') }}</code></p>{%- endif %}
+  {%- if z.ports %}<p>Ports: <code>{{ z.ports|join(', ') }}</code></p>{%- endif %}
+  {%- if z.rich_rules %}
+  <p>Rich rules ({{ z.rich_rules|length }}):</p><ul>
+    {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
+  </ul>
+  {%- endif %}
+  {%- endfor %}
+  {%- endif %}
+
+  {%- if net.firewall_direct_rules %}
+  <h3>Firewall direct rules <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
+  <ul>
+    {%- for r in net.firewall_direct_rules %}
+    <li>{{ r.ipv }} {{ r.chain }}: <code>{{ r.args }}</code></li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+
+  {%- if net.resolv_provenance %}
+  <h3>DNS</h3>
+  <p>resolv.conf provenance:
+    {%- if net.resolv_provenance == 'networkmanager' %}
+    <span style="color:#d29922;font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
+    {%- elif net.resolv_provenance == 'systemd-resolved' %}
+    <span style="color:#d29922;font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
+    {%- else %}
+    <span style="color:#3fb950;font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
+    {%- endif %}
+  </p>
+  {%- endif %}
+
+  {%- if net.ip_routes %}
+  {%- set static_rt = net.ip_routes|selectattr('proto static', 'in', []) | list %}
+  {%- set static_rt = [] %}
+  {%- for r in net.ip_routes %}{% if 'proto static' in r %}{% set _ = static_rt.append(r) %}{% endif %}{%- endfor %}
+  {%- if static_rt %}
+  <h3>Static routes ({{ static_rt|length }})</h3><ul>
+    {%- for r in static_rt %}<li><code>{{ r }}</code></li>{%- endfor %}
+  </ul>
+  {%- endif %}
+  {%- endif %}
+
+  {%- if net.ip_rules %}
+  <h3>Policy routing rules ({{ net.ip_rules|length }})</h3><ul>
+    {%- for r in net.ip_rules %}<li><code>{{ r }}</code></li>{%- endfor %}
+  </ul>
+  {%- endif %}
+
+  {%- else %}
+  <p>No network config captured.</p>
+  {%- endif %}
+{% endcall %}
+
+{# ── Storage ─────────────────────────────────────────────────────────────── #}
+{% call section("storage", "Storage") %}
+  {%- if snapshot.storage and snapshot.storage.fstab_entries %}
+  <table><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
+    {%- for e in snapshot.storage.fstab_entries[:30] %}
+    <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- else %}
+  <p>No fstab entries.</p>
+  {%- endif %}
+{% endcall %}
+
 {# ── Warnings ─────────────────────────────────────────────────────────────── #}
 {% call section("warnings", "Warnings") %}
 <div class="search"><input type="text" id="warn-search" placeholder="Search warnings..."/></div>
@@ -952,29 +969,19 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 </ul>
 {% endcall %}
 
-{# ── Containerfile ────────────────────────────────────────────────────────── #}
-{% call section("containerfile", "Containerfile") %}
-<p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
-<pre class="containerfile-pre">{{ containerfile_html|safe }}</pre>
-{% endcall %}
-
-{# ── Output files browser ─────────────────────────────────────────────────── #}
-{% call section("output_files", "Output files") %}
-<p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
-<div class="file-browser-layout">
-  <div class="file-tree-panel"><div class="file-tree-root">{{ tree_html|safe }}</div></div>
-  <div class="file-viewer-panel">
-    <div class="file-path" id="file-viewer-path">Click a file</div>
-    <div id="file-viewer-content"></div>
-  </div>
-</div>
-{{ file_content_snippets_html|safe }}
-{% endcall %}
-
 {# ── Audit report ─────────────────────────────────────────────────────────── #}
 {% call section("audit", "Audit report") %}
 <p>Full audit findings (from <code>audit-report.md</code>).</p>
 <div class="audit-section">{{ audit_html|safe }}</div>
+{% endcall %}
+
+{# ── Containerfile ────────────────────────────────────────────────────────── #}
+{% call section("containerfile", "Containerfile") %}
+<p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
+<div class="containerfile-wrapper">
+  <button type="button" class="btn-copy-cf" id="btn-copy-cf">Copy</button>
+  <pre class="containerfile-pre" id="containerfile-pre">{{ containerfile_html|safe }}</pre>
+</div>
 {% endcall %}
 
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
@@ -982,7 +989,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   <span class="exclude-count"><span id="exclude-count-num">0</span> item(s) excluded</span>
   <button id="btn-download-snapshot" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   <button id="btn-rerender" type="button" class="disabled" title="Start yoinkc-refine to enable live re-render">Re-render</button>
-  <button id="btn-tarball" type="button" class="disabled" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
+  <button id="btn-tarball" type="button" class="disabled btn-primary" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
 </div>
 <div id="toast" class="toast"></div>
 
@@ -1077,6 +1084,13 @@ var snapshot = {{ snapshot_json|safe }};
   var rerenderBtn = document.getElementById('btn-rerender');
   var tarballBtn = document.getElementById('btn-tarball');
   var helperAvailable = false;
+  var dirty = false;
+
+  function setDirty(isDirty) {
+    dirty = isDirty;
+    if (tarballBtn) tarballBtn.classList.toggle('btn-primary', !isDirty);
+    if (rerenderBtn) rerenderBtn.classList.toggle('btn-primary', isDirty);
+  }
 
   function showToast(msg, ms) {
     if (!toast) return;
@@ -1113,6 +1127,7 @@ var snapshot = {{ snapshot_json|safe }};
       }
       tr.classList.toggle('excluded', !this.checked);
       updateExcludeCount();
+      setDirty(true);
     });
   });
 
@@ -1246,6 +1261,7 @@ var snapshot = {{ snapshot_json|safe }};
       if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.text();
     }).then(function(html){
+      setDirty(false);
       document.open();
       document.write(html);
       document.close();
@@ -1300,6 +1316,37 @@ var snapshot = {{ snapshot_json|safe }};
 
   checkHelperAvailable(0);
   updateExcludeCount();
+
+  // --- Copy Containerfile to clipboard ---
+  (function() {
+    var btn = document.getElementById('btn-copy-cf');
+    if (!btn) return;
+    var pre = document.getElementById('containerfile-pre');
+    function flash() {
+      btn.textContent = 'Copied!';
+      setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+    }
+    function fallback(text) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch(e) {}
+      document.body.removeChild(ta);
+      if (ok) { flash(); } else { showToast('Clipboard not available in this context', 3000); }
+    }
+    btn.addEventListener('click', function() {
+      var text = pre ? pre.textContent : '';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(flash).catch(function() { fallback(text); });
+      } else {
+        fallback(text);
+      }
+    });
+  })();
 })();
 </script>
 </body>
