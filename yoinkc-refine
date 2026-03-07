@@ -119,6 +119,20 @@ def _find_runtime() -> str | None:
     return None
 
 
+def _ensure_image(runtime: str) -> None:
+    """Pull the yoinkc image if it is not already available locally."""
+    check_cmd = (
+        [runtime, "image", "exists", _IMAGE]
+        if runtime == "podman"
+        else [runtime, "image", "inspect", _IMAGE]
+    )
+    result = subprocess.run(check_cmd, capture_output=True)
+    if result.returncode == 0:
+        return
+    _log("pulling yoinkc image (first run, may take a moment)...")
+    subprocess.run([runtime, "pull", _IMAGE], check=False)
+
+
 def _count_excluded(snapshot: dict) -> int:
     """Count items where include==False across the snapshot."""
     count = 0
@@ -285,7 +299,6 @@ class _Handler(BaseHTTPRequestHandler):
             )
 
         elif path == "/api/tarball":
-            _log("tarball downloaded")
             timestamp = time.strftime("%Y%m%d-%H%M%S")
             filename = f"yoinkc-refined-{timestamp}.tar.gz"
             data = _build_tarball(output_dir)
@@ -296,6 +309,7 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(data)
+            _log(f"tarball downloaded: {filename}")
 
         else:
             # Serve any other file from the output directory
@@ -370,7 +384,6 @@ def main(argv: list[str] | None = None) -> None:
             f"Usage: {_SCRIPT_NAME} output-tarball.tar.gz\n\n"
             "Extracts the tarball, serves the report at http://localhost:8642,\n"
             "and enables live re-rendering from the browser UI.",
-            file=sys.stderr,
         )
         sys.exit(0 if argv and argv[0] in ("-h", "--help") else 1)
 
@@ -402,8 +415,23 @@ def main(argv: list[str] | None = None) -> None:
 
     _validate_output_dir(output_dir)  # exits on failure
 
-    if _find_runtime() is None:
-        _log("warning: podman and docker not found — re-render will not be available")
+    # Count extracted files for the startup banner
+    file_count = sum(1 for _ in output_dir.rglob("*") if _.is_file())
+
+    # Read hostname from snapshot metadata for the startup banner
+    snapshot_path = output_dir / "inspection-snapshot.json"
+    host_label = ""
+    try:
+        snap = json.loads(snapshot_path.read_text())
+        host_label = (snap.get("meta") or {}).get("hostname", "")
+    except Exception:
+        pass
+
+    runtime = _find_runtime()
+    if runtime is None:
+        _log("warning: podman and docker not found — Re-render will not be available")
+    else:
+        _ensure_image(runtime)
 
     try:
         port = _find_free_port()
@@ -418,7 +446,13 @@ def main(argv: list[str] | None = None) -> None:
     server = HTTPServer(("127.0.0.1", port), _Handler)
     url = f"http://localhost:{port}"
 
-    _log(f"serving report at {url}")
+    src_name = tarball.name
+    summary = f"{file_count} files from {src_name}" + (f"  [{host_label}]" if host_label else "")
+    rule = "─" * 42
+    _log(f"extracted {summary}")
+    _log(rule)
+    _log(f"  Report: {url}")
+    _log(rule)
     _log("edit items in the browser, then click Re-render")
     _log("Ctrl+C to stop")
 
