@@ -36,6 +36,7 @@ from yoinkc.schema import (
     OsRelease,
     PackageEntry,
     ProxyEntry,
+    RepoFile,
     RpmSection,
     ScheduledTaskSection,
     SelinuxSection,
@@ -1154,6 +1155,9 @@ class TestIncludeFieldDefaults:
     def test_compose_file_defaults_true(self):
         assert ComposeFile(path="/opt/app/docker-compose.yml").include is True
 
+    def test_repofile_include_defaults_true(self):
+        assert RepoFile(path="etc/yum.repos.d/epel.repo", content="").include is True
+
 
 class TestContainerfileExclusion:
     """Excluded items are omitted from Containerfile output."""
@@ -1256,6 +1260,38 @@ class TestContainerfileExclusion:
             render_containerfile(snapshot, _env(), Path(tmp))
             assert (Path(tmp) / "quadlet" / "a.container").exists()
             assert not (Path(tmp) / "quadlet" / "b.container").exists()
+
+    def test_excluded_repo_not_written(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                repo_files=[
+                    RepoFile(path="etc/yum.repos.d/epel.repo", content="[epel]\nbaseurl=http://epel"),
+                    RepoFile(path="etc/yum.repos.d/custom.repo", content="[custom]\nbaseurl=http://custom", include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            assert (Path(tmp) / "config" / "etc" / "yum.repos.d" / "epel.repo").exists()
+            assert not (Path(tmp) / "config" / "etc" / "yum.repos.d" / "custom.repo").exists()
+
+    def test_excluded_repo_comment_in_containerfile(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                repo_files=[
+                    RepoFile(path="etc/yum.repos.d/epel.repo", content="[epel]\n"),
+                    RepoFile(path="etc/yum.repos.d/custom.repo", content="[custom]\n", include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "# Excluded repo: etc/yum.repos.d/custom.repo" in cf
 
 
 class TestAuditReportExcluded:
@@ -1368,3 +1404,78 @@ class TestUserGroupIncludeKey:
             render_containerfile(snapshot, _env(), Path(tmp))
             cf = (Path(tmp) / "Containerfile").read_text()
         assert "carol" in cf
+
+
+class TestSourceRepo:
+    """PackageEntry.source_repo field."""
+
+    def test_source_repo_field_populated(self):
+        p = PackageEntry(name="htop", version="3.2", release="1", arch="x86_64", source_repo="epel")
+        assert p.source_repo == "epel"
+        d = p.model_dump()
+        assert d["source_repo"] == "epel"
+        p2 = PackageEntry.model_validate(d)
+        assert p2.source_repo == "epel"
+
+    def test_source_repo_defaults_empty(self):
+        p = PackageEntry(name="x", version="1", release="1", arch="x86_64")
+        assert p.source_repo == ""
+
+
+class TestRepoFileClassification:
+    """is_default_repo classification logic."""
+
+    def test_default_repo_redhat(self):
+        from yoinkc.inspectors.rpm import _classify_default_repo
+        rf = RepoFile(path="etc/yum.repos.d/redhat.repo", content="[rhel-baseos]\nbaseurl=http://x\n")
+        assert _classify_default_repo(rf) is True
+
+    def test_non_default_repo_epel(self):
+        from yoinkc.inspectors.rpm import _classify_default_repo
+        rf = RepoFile(path="etc/yum.repos.d/epel.repo", content="[epel]\nbaseurl=http://x\n")
+        assert _classify_default_repo(rf) is False
+
+    def test_default_repo_appstream_section(self):
+        from yoinkc.inspectors.rpm import _classify_default_repo
+        rf = RepoFile(path="etc/yum.repos.d/centos.repo", content="[appstream]\nbaseurl=http://x\n")
+        assert _classify_default_repo(rf) is True
+
+    def test_non_default_repo_copr(self):
+        from yoinkc.inspectors.rpm import _classify_default_repo
+        rf = RepoFile(path="etc/yum.repos.d/copr-myrepo.repo", content="[copr:user:project]\nbaseurl=http://x\n")
+        assert _classify_default_repo(rf) is False
+
+    def test_default_repo_fedora_section(self):
+        from yoinkc.inspectors.rpm import _classify_default_repo
+        rf = RepoFile(path="etc/yum.repos.d/fedora.repo", content="[fedora]\nbaseurl=http://x\n")
+        assert _classify_default_repo(rf) is True
+
+
+class TestRepoCascadeContainerfile:
+    """When repo include=False and its packages also have include=False, both are excluded."""
+
+    def test_excluded_repo_and_its_packages(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64", source_repo="baseos"),
+                    PackageEntry(name="htop", version="3.2", release="1", arch="x86_64", source_repo="epel", include=False),
+                ],
+                leaf_packages=["httpd", "htop"],
+                auto_packages=[],
+                repo_files=[
+                    RepoFile(path="etc/yum.repos.d/epel.repo", content="[epel]\nbaseurl=http://x\n",
+                             is_default_repo=False, include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, _env(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+        assert "httpd" in cf
+        assert "htop" not in cf
+        assert "# Excluded repo: etc/yum.repos.d/epel.repo" in cf
+        assert not (Path(tmp) / "config" / "etc" / "yum.repos.d" / "epel.repo").exists()

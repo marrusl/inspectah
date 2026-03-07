@@ -44,6 +44,7 @@ class PackageEntry(BaseModel):
     arch: str
     state: PackageState = PackageState.ADDED
     include: bool = True
+    source_repo: str = ""
 
 
 class RpmVaEntry(BaseModel):
@@ -59,6 +60,8 @@ class RepoFile(BaseModel):
 
     path: str
     content: str = ""
+    is_default_repo: bool = True
+    include: bool = True
 
 
 class RpmSection(BaseModel):

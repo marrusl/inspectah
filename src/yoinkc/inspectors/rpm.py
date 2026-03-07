@@ -135,6 +135,60 @@ def _read_os_id_version(host_root: Path) -> tuple[str, str]:
     return id_val, version_id
 
 
+def _populate_source_repos(
+    executor: Executor,
+    host_root: Path,
+    packages: List["PackageEntry"],
+) -> None:
+    """Set source_repo on each PackageEntry via ``rpm -qi``."""
+    if not packages:
+        return
+    names = sorted({p.name for p in packages})
+    repo_map: dict = {}
+    batch_size = 100
+    for i in range(0, len(names), batch_size):
+        batch = names[i:i + batch_size]
+        result = _run_rpm_query(executor, host_root, ["-qi"] + batch)
+        if result.returncode != 0:
+            continue
+        cur_name = ""
+        for line in result.stdout.splitlines():
+            if line.startswith("Name"):
+                parts = line.split(":", 1)
+                if len(parts) == 2:
+                    cur_name = parts[1].strip()
+            elif line.startswith("From repo"):
+                parts = line.split(":", 1)
+                if len(parts) == 2 and cur_name:
+                    repo_map[cur_name] = parts[1].strip()
+    for p in packages:
+        p.source_repo = repo_map.get(p.name, "")
+    _debug(f"source_repo populated for {len(repo_map)}/{len(names)} packages")
+
+
+_DEFAULT_REPO_FILENAME_PATTERNS = ("redhat.repo", "redhat-rhui", "redhat.redhat")
+_DEFAULT_REPO_ID_PREFIXES = (
+    "rhel-", "baseos", "appstream", "rhui-", "crb", "codeready",
+    "fedora", "updates",
+)
+
+
+def _classify_default_repo(repo: RepoFile) -> bool:
+    """Return True if *repo* looks like a default distro repository."""
+    basename = repo.path.rsplit("/", 1)[-1] if "/" in repo.path else repo.path
+    for pat in _DEFAULT_REPO_FILENAME_PATTERNS:
+        if pat in basename:
+            return True
+    for line in repo.content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section_id = stripped[1:-1]
+            for prefix in _DEFAULT_REPO_ID_PREFIXES:
+                if section_id.startswith(prefix):
+                    return True
+    return False
+
+
 def _collect_repo_files(host_root: Path) -> List[RepoFile]:
     """Read repo files from host_root/etc/yum.repos.d and host_root/etc/dnf."""
     repo_files = []
@@ -152,7 +206,9 @@ def _collect_repo_files(host_root: Path) -> List[RepoFile]:
                     content = f.read_text()
                 except Exception:
                     content = ""
-                repo_files.append(RepoFile(path=str(f.relative_to(host_root)), content=content))
+                rf = RepoFile(path=str(f.relative_to(host_root)), content=content)
+                rf.is_default_repo = _classify_default_repo(rf)
+                repo_files.append(rf)
     return repo_files
 
 
@@ -382,6 +438,10 @@ def run(
             for p in installed:
                 p.state = PackageState.ADDED
                 section.packages_added.append(p)
+
+    # 2b) Source repo per added package
+    if executor is not None and section.packages_added:
+        _populate_source_repos(executor, host_root, section.packages_added)
 
     # 3) rpm -Va (rc != 0 is normal — it means files were modified)
     #    --root tells rpm where to verify files; --dbpath tells it where the

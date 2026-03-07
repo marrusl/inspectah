@@ -169,6 +169,8 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
 
     if snapshot.rpm and snapshot.rpm.repo_files:
         for repo in snapshot.rpm.repo_files:
+            if not repo.include:
+                continue
             dest = config_dir / repo.path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(repo.content or "")
@@ -443,9 +445,14 @@ def _config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> 
 
     # Repo files
     if snapshot.rpm and snapshot.rpm.repo_files:
-        lines.append(f"# Repo files ({len(snapshot.rpm.repo_files)}):")
-        for r in snapshot.rpm.repo_files[:5]:
-            lines.append(f"#   {r.path}")
+        included_repos = [r for r in snapshot.rpm.repo_files if r.include]
+        excluded_repos = [r for r in snapshot.rpm.repo_files if not r.include]
+        if included_repos:
+            lines.append(f"# Repo files ({len(included_repos)}):")
+            for r in included_repos[:5]:
+                lines.append(f"#   {r.path}")
+        for r in excluded_repos:
+            lines.append(f"# Excluded repo: {r.path}")
 
     # Firewall
     net = snapshot.network

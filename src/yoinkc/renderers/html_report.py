@@ -431,6 +431,34 @@ def _build_context(
         dep_tree = snapshot.rpm.leaf_dep_tree
         leaf_sorted = sorted(snapshot.rpm.leaf_packages, key=lambda k: -len(dep_tree.get(k, [])))
 
+    # Pre-compute repo display metadata for the template
+    repo_display: List[dict] = []
+    if snapshot.rpm and snapshot.rpm.repo_files:
+        for rf in snapshot.rpm.repo_files:
+            section_ids = []
+            for line in (rf.content or "").splitlines():
+                stripped = line.strip()
+                if stripped.startswith("[") and stripped.endswith("]"):
+                    section_ids.append(stripped[1:-1])
+            content_lower = (rf.content or "").lower()
+            path_lower = rf.path.lower()
+            if rf.is_default_repo:
+                badge = "base"
+            elif "epel" in path_lower or any(sid.startswith("epel") for sid in section_ids):
+                badge = "epel"
+            elif "copr" in content_lower or "copr" in path_lower:
+                badge = "copr"
+            elif "rpmfusion" in content_lower or "rpmfusion" in path_lower:
+                badge = "rpmfusion"
+            else:
+                badge = ""
+            repo_display.append({
+                "path": rf.path,
+                "badge": badge,
+                "section_ids": section_ids,
+                "is_default": rf.is_default_repo,
+            })
+
     # Per-category card status based on warnings
     _SOURCE_TO_CATEGORY = {
         "rpm": "packages", "config": "config", "service": "services",
@@ -493,6 +521,7 @@ def _build_context(
         "non_rpm_data": _prepare_non_rpm(snapshot),
         "summary_glance": summary_glance,
         "leaf_packages_sorted": leaf_sorted,
+        "repo_display": repo_display,
         "card_status": card_status,
         "secrets_data": redactions,
         "secrets_file_count": secrets_files,

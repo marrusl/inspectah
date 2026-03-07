@@ -65,9 +65,9 @@ a { color: var(--accent); }
 .card h4 { margin: 0 0 .5rem 0; font-size: .95rem; }
 .card .count { font-size: 1.5rem; font-weight: 600; }
 .card .status { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
-.section { display: none; background: var(--card); border-radius: 8px; padding: 1.5rem; margin-top: 1rem; }
+.section { display: none; background: var(--card); border-radius: 8px; padding: 1.5rem; margin-top: 1rem; max-width: 1200px; }
 .section.visible { display: block; }
-table { width: 100%; border-collapse: collapse; }
+table { width: auto; border-collapse: collapse; }
 th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #30363d; }
 th { color: var(--muted); font-weight: 500; }
 .tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
@@ -114,7 +114,13 @@ th { color: var(--muted); font-weight: 500; }
 .audit-section { max-height: 70vh; overflow-y: auto; }
 tr.excluded td { text-decoration: line-through; opacity: 0.45; }
 tr.excluded td:first-child { text-decoration: none; opacity: 1; }
-.include-cb { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); border: 1px solid #8b949e; display: none; }
+.include-cb { width: 18px; height: 18px; cursor: pointer; accent-color: #4a9eff; border: 1px solid #8b949e; display: none; }
+.repo-badge { display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
+.repo-badge.epel { background: #1f6feb33; color: #58a6ff; }
+.repo-badge.copr { background: #da363333; color: #f85149; }
+.repo-badge.rpmfusion { background: #f0883e33; color: #f0883e; }
+.repo-badge.base { background: #30363d; color: #8b949e; }
+.repo-content-pre { background: #0d1117; border: 1px solid #30363d; border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
 #exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 2px solid var(--accent); padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
 #exclude-toolbar.visible { display: flex; }
 #exclude-toolbar .exclude-count { font-weight: 600; color: var(--warn); flex: 1; }
@@ -246,9 +252,36 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     — only leaf packages appear in the Containerfile's <code>dnf install</code> line.
   </div>
 
+  {%- if snapshot.rpm.repo_files %}
+  <h3>Repositories ({{ snapshot.rpm.repo_files|length }})</h3>
+  <table class="data-table" id="pkg-repo-table">
+    <thead><tr><th></th><th>Path</th><th></th><th></th></tr></thead>
+    <tbody>
+    {%- for rf in snapshot.rpm.repo_files %}
+    <tr{% if not rf.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="repo_files" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb repo-cb" {{ 'checked' if rf.include else '' }}{{ ' disabled title="Default distribution repository — cannot be excluded"' if rf.is_default_repo else '' }}/></td>
+      <td><code>{{ rf.path }}</code></td>
+      <td>
+        {%- if repo_display[loop.index0].badge %}
+        <span class="repo-badge {{ repo_display[loop.index0].badge }}">{{ repo_display[loop.index0].badge|upper }}</span>
+        {%- endif %}
+      </td>
+      <td>
+        {%- if rf.content %}
+        <details><summary>show</summary>
+          <pre class="repo-content-pre">{{ rf.content }}</pre>
+        </details>
+        {%- endif %}
+      </td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
+
   <h3>Dependency Tree</h3>
   <table class="data-table" id="pkg-dep-tree">
-    <thead><tr><th></th><th>Leaf Package</th><th>Dependencies</th><th></th></tr></thead>
+    <thead><tr><th></th><th>Leaf Package</th><th>Repo</th><th>Dependencies</th><th></th></tr></thead>
     <tbody>
     {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
     {%- set deps = dep_tree.get(lf, []) %}
@@ -259,6 +292,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
       <td><input type="checkbox" class="include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></td>
       <td><strong>{{ lf }}</strong></td>
+      <td style="font-size:0.85em;color:var(--muted)">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
       <td>{{ deps|length }}</td>
       <td>
         {%- if deps %}
@@ -1108,11 +1142,58 @@ var snapshot = {{ snapshot_json|safe }};
     cb.addEventListener('change', function() {
       recomputeAutoDeps();
       updatePkgBanner();
-      // updateExcludeCount() already called by the generic include-cb handler above
     });
   });
 
   updatePkgBanner();
+
+  // --- Repo cascade: unchecking a repo cascades to its leaf packages ---
+  function parseRepoSectionIds(content) {
+    var ids = [];
+    if (!content) return ids;
+    var lines = content.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+      if (m) ids.push(m[1]);
+    }
+    return ids;
+  }
+
+  document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      var tr = this.closest('tr[data-snap-index]');
+      if (!tr) return;
+      var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
+      var repos = (snapshot.rpm && snapshot.rpm.repo_files) || [];
+      if (idx < 0 || idx >= repos.length) return;
+      var repoIds = new Set(parseRepoSectionIds(repos[idx].content));
+      if (!repoIds.size) return;
+      var checked = this.checked;
+
+      document.querySelectorAll('#pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+        var leafName = row.getAttribute('data-leaf');
+        var pkgIdx = parseInt(row.getAttribute('data-snap-index'), 10);
+        if (pkgIdx < 0) return;
+        var pkg = snapshot.rpm.packages_added[pkgIdx];
+        if (!pkg || !repoIds.has(pkg.source_repo)) return;
+
+        var leafCb = row.querySelector('.leaf-cb');
+        if (!leafCb) return;
+
+        if (!checked) {
+          leafCb.checked = false;
+          leafCb.disabled = true;
+          pkg.include = false;
+          row.classList.add('excluded');
+        } else {
+          leafCb.disabled = false;
+        }
+      });
+      recomputeAutoDeps();
+      updatePkgBanner();
+      updateExcludeCount();
+    });
+  });
 
   // --- Download modified snapshot ---
   document.getElementById('btn-download-snapshot').addEventListener('click', function(){
