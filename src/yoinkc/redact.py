@@ -81,6 +81,35 @@ def _is_comment_line(text: str, match_start: int) -> bool:
     return prefix.startswith("#") or prefix.startswith(";") or prefix.startswith("!")
 
 
+_SHADOW_NOOP_HASHES = frozenset({"*", "!", "!!", ""})
+
+
+def _redact_shadow_entry(line: str, redactions: List[dict]) -> str:
+    """Redact the password hash (field index 1) of a shadow-format line.
+
+    Locked/disabled markers (``*``, ``!``, ``!!``, empty) are left intact.
+    """
+    fields = line.split(":")
+    if len(fields) < 2:
+        return line
+    raw_hash = fields[1]
+    if raw_hash.startswith("REDACTED_"):
+        return line
+    # Locked prefixes: "!" prepended to a real hash (e.g. "!$y$j9T$…")
+    stripped = raw_hash.lstrip("!")
+    if stripped in _SHADOW_NOOP_HASHES or not stripped:
+        return line
+    replacement = f"REDACTED_SHADOW_HASH_{_truncated_sha256(raw_hash)}"
+    redactions.append({
+        "path": f"users:shadow/{fields[0]}",
+        "pattern": "SHADOW_HASH",
+        "line": "field 2",
+        "remediation": "Do not ship password hashes in image output.",
+    })
+    fields[1] = replacement
+    return ":".join(fields)
+
+
 def _redact_text(text: str, path: str, redactions: List[dict]) -> str:
     out = text
     for pattern, type_label in REDACT_PATTERNS:
@@ -351,20 +380,52 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             )
 
     # -----------------------------------------------------------------------
-    # 7. UserGroupSection — sudoers rules
+    # 7. UserGroupSection — sudoers, shadow entries, passwd GECOS
     # -----------------------------------------------------------------------
-    if snapshot.users_groups and snapshot.users_groups.sudoers_rules:
-        new_rules: List[str] = []
-        changed = False
-        for rule in snapshot.users_groups.sudoers_rules:
-            new_rule = _redact_text(rule, "users:sudoers", redactions)
-            new_rules.append(new_rule)
-            if new_rule != rule:
-                changed = True
-        if changed:
-            updates["users_groups"] = snapshot.users_groups.model_copy(
-                update={"sudoers_rules": new_rules}
-            )
+    if snapshot.users_groups:
+        ug = snapshot.users_groups
+        ug_updates: dict = {}
+
+        if ug.sudoers_rules:
+            new_rules: List[str] = []
+            changed = False
+            for rule in ug.sudoers_rules:
+                new_rule = _redact_text(rule, "users:sudoers", redactions)
+                new_rules.append(new_rule)
+                if new_rule != rule:
+                    changed = True
+            if changed:
+                ug_updates["sudoers_rules"] = new_rules
+
+        if ug.shadow_entries:
+            new_shadow: List[str] = []
+            changed = False
+            for entry in ug.shadow_entries:
+                new_entry = _redact_shadow_entry(entry, redactions)
+                new_shadow.append(new_entry)
+                if new_entry != entry:
+                    changed = True
+            if changed:
+                ug_updates["shadow_entries"] = new_shadow
+
+        if ug.passwd_entries:
+            new_passwd: List[str] = []
+            changed = False
+            for entry in ug.passwd_entries:
+                fields = entry.split(":")
+                if len(fields) >= 5:
+                    new_gecos = _redact_text(fields[4], f"users:passwd/{fields[0]}:gecos", redactions)
+                    if new_gecos != fields[4]:
+                        fields[4] = new_gecos
+                        new_passwd.append(":".join(fields))
+                        changed = True
+                        continue
+                new_passwd.append(entry)
+            if changed:
+                ug_updates["passwd_entries"] = new_passwd
+
+        if ug_updates:
+            updates["users_groups"] = ug.model_copy(update=ug_updates)
 
     updates["redactions"] = redactions
     return snapshot.model_copy(update=updates)

@@ -297,6 +297,82 @@ def test_sudoers_no_secrets():
 
 
 # ---------------------------------------------------------------------------
+# Shadow entries
+# ---------------------------------------------------------------------------
+
+def test_redact_shadow_entry_with_hash():
+    """A real yescrypt hash in a shadow entry must be redacted."""
+    snapshot = _base_snapshot(
+        users_groups=UserGroupSection(
+            shadow_entries=[
+                "jdoe:$y$j9T$abc123hashdata$longhashcontinues:19700:0:99999:7:::"
+            ],
+        )
+    )
+    result = redact_snapshot(snapshot)
+    entry = result.users_groups.shadow_entries[0]
+    assert "$y$j9T$" not in entry
+    assert "REDACTED_SHADOW_HASH_" in entry
+    fields = entry.split(":")
+    assert fields[0] == "jdoe"
+    assert fields[2] == "19700"
+    assert any("SHADOW_HASH" in r["pattern"] for r in result.redactions)
+
+
+def test_redact_shadow_entry_locked_unchanged():
+    """Locked accounts (!! or * hash) must not be modified."""
+    snapshot = _base_snapshot(
+        users_groups=UserGroupSection(
+            shadow_entries=[
+                "locked:!!:19700:0:99999:7:::",
+                "nologin:*:19700:0:99999:7:::",
+                "empty::19700:0:99999:7:::",
+            ],
+        )
+    )
+    result = redact_snapshot(snapshot)
+    assert result.users_groups.shadow_entries[0] == "locked:!!:19700:0:99999:7:::"
+    assert result.users_groups.shadow_entries[1] == "nologin:*:19700:0:99999:7:::"
+    assert result.users_groups.shadow_entries[2] == "empty::19700:0:99999:7:::"
+    assert not any("SHADOW_HASH" in r.get("pattern", "") for r in result.redactions)
+
+
+def test_redact_passwd_gecos_with_credentials():
+    """Credentials embedded in the GECOS field of a passwd entry must be redacted."""
+    snapshot = _base_snapshot(
+        users_groups=UserGroupSection(
+            passwd_entries=[
+                "svcacct:x:1001:1001:password=svc_secret_99:/home/svcacct:/bin/bash"
+            ],
+        )
+    )
+    result = redact_snapshot(snapshot)
+    entry = result.users_groups.passwd_entries[0]
+    assert "svc_secret_99" not in entry
+    assert "REDACTED_PASSWORD" in entry
+    fields = entry.split(":")
+    assert fields[0] == "svcacct"
+    assert fields[5] == "/home/svcacct"
+
+
+def test_redact_shadow_round_trip():
+    """Build a full snapshot with shadow entries, redact, verify no hash leaks."""
+    snapshot = _base_snapshot(
+        users_groups=UserGroupSection(
+            shadow_entries=[
+                "root:$6$rounds=65536$saltsalt$longhashvalue:19700:0:99999:7:::",
+                "nobody:*:19700:0:99999:7:::",
+            ],
+        )
+    )
+    result = redact_snapshot(snapshot)
+    for entry in result.users_groups.shadow_entries:
+        assert "$6$" not in entry
+        assert "longhashvalue" not in entry
+    assert result.users_groups.shadow_entries[1] == "nobody:*:19700:0:99999:7:::"
+
+
+# ---------------------------------------------------------------------------
 # Idempotency — calling redact_snapshot twice produces the same result
 # ---------------------------------------------------------------------------
 
