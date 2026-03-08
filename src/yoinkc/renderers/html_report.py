@@ -456,41 +456,6 @@ def _build_context(
                 "is_default": rf.is_default_repo,
             })
 
-    # Per-category card status based on warnings
-    _SOURCE_TO_CATEGORY = {
-        "rpm": "packages", "config": "config", "service": "services",
-        "network": "network", "storage": "storage", "scheduled_tasks": "scheduled_tasks",
-        "containers": "containers", "non_rpm_software": "non_rpm",
-        "kernel_boot": "kernel_boot", "selinux": "selinux",
-        "users_groups": "users_groups", "pipeline": "packages",
-    }
-    category_has_fixme: set = set()
-    category_has_manual: set = set()
-    for w in warnings:
-        src = w.get("source", "")
-        cat = _SOURCE_TO_CATEGORY.get(src, "")
-        if not cat:
-            continue
-        sev = w.get("severity", "warning")
-        if sev == "error":
-            category_has_manual.add(cat)
-        else:
-            category_has_fixme.add(cat)
-    # FIXMEs from Containerfile are hard to attribute — mark packages/config/non_rpm as fixme
-    if triage.get("fixme", 0) > 0:
-        for c in ("packages", "config", "non_rpm", "containers", "users_groups", "kernel_boot"):
-            category_has_fixme.add(c)
-    card_status: dict = {}
-    for cat in ("packages", "services", "config", "network", "storage",
-                "scheduled_tasks", "containers", "non_rpm", "kernel_boot",
-                "selinux", "users_groups"):
-        if cat in category_has_manual:
-            card_status[cat] = "red"
-        elif cat in category_has_fixme:
-            card_status[cat] = "amber"
-        else:
-            card_status[cat] = "green"
-
     # Secrets data for dedicated tab
     redactions = snapshot.redactions or []
     secrets_files = len(set(r.get("path", "") for r in redactions))
@@ -521,7 +486,6 @@ def _build_context(
         "triage_detail": triage_detail,
         "leaf_packages_sorted": leaf_sorted,
         "repo_display": repo_display,
-        "card_status": card_status,
         "secrets_data": redactions,
         "secrets_file_count": secrets_files,
     }

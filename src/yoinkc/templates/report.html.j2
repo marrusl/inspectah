@@ -58,16 +58,6 @@ a { color: var(--accent); }
 .warning-row .warning-msg { flex: 1; font-size: 0.9rem; }
 .warning-row-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0.15rem 0.35rem; border-radius: 4px; flex-shrink: 0; }
 .warning-row-dismiss:hover { color: var(--warn); background: rgba(210,153,34,0.15); }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.card { background: var(--card); border-radius: 8px; padding: 1rem; cursor: pointer; border: 1px solid transparent; border-left: 4px solid transparent; transition: transform .2s ease, box-shadow .2s ease, border-color .15s; }
-.card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
-[data-theme="light"] .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
-.card.status-green { border-left-color: var(--ok); }
-.card.status-amber { border-left-color: var(--warn); }
-.card.status-red { border-left-color: var(--error); }
-.card h4 { margin: 0 0 .5rem 0; font-size: .95rem; }
-.card .count { font-size: 1.5rem; font-weight: 600; }
-.card .status { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .section { display: none; background: var(--card); border-radius: 8px; padding: 1.5rem; margin-top: 1rem; max-width: 1200px; }
 .section.visible { display: block; animation: fadeIn .15s ease; }
@@ -209,25 +199,6 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   </div>
 </div>
 {% endif %}
-
-{# ── Summary cards ──────────────────────────────────────────────────────── #}
-<div class="cards">
-  <div class="card" data-section="output_files"><h4>File browser</h4><div class="count">config / quadlet</div><div class="status">Browse</div></div>
-  <div class="card status-{{ card_status.packages }}" data-section="packages"><h4>Packages</h4><div class="count">{{ counts.packages_added }} added</div><div class="status">{{ counts.base_image_only }} in base image only</div></div>
-  <div class="card status-{{ card_status.services }}" data-section="services"><h4>Services</h4><div class="count">{{ counts.services_enabled }} enabled</div><div class="status">{{ counts.services_disabled }} disabled</div></div>
-  <div class="card status-{{ card_status.config }}" data-section="config"><h4>Config</h4><div class="count">{{ counts.config_files }} files</div><div class="status">rpm_va: {{ counts.rpm_va }}</div></div>
-  <div class="card status-{{ card_status.non_rpm }}" data-section="non_rpm"><h4>Non-RPM</h4><div class="count">{{ counts.non_rpm }}</div><div class="status">items</div></div>
-  <div class="card status-{{ card_status.containers }}" data-section="containers"><h4>Containers</h4><div class="count">{{ counts.containers }}</div><div class="status">quadlet / compose</div></div>
-  <div class="card status-{{ card_status.users_groups }}" data-section="users_groups"><h4>Users/Groups</h4><div class="count">{{ counts.users_groups }}</div><div class="status">non-system</div></div>
-  <div class="card status-{{ card_status.scheduled_tasks }}" data-section="scheduled_tasks"><h4>Scheduled jobs</h4><div class="count">{{ counts.scheduled_tasks }}</div><div class="status">cron / timers</div></div>
-  <div class="card status-{{ card_status.kernel_boot }}" data-section="kernel_boot"><h4>Kernel/Boot</h4><div class="count">{{ counts.kernel_boot }}</div><div class="status">configs</div></div>
-  <div class="card status-{{ card_status.selinux }}" data-section="selinux"><h4>SELinux</h4><div class="count">{{ counts.selinux }}</div><div class="status">customizations</div></div>
-  <div class="card status-{{ card_status.network }}" data-section="network"><h4>Network</h4><div class="count">{{ counts.network }}</div><div class="status">connections / firewall</div></div>
-  <div class="card status-{{ card_status.storage }}" data-section="storage"><h4>Storage</h4><div class="count">{{ counts.storage }}</div><div class="status">fstab entries</div></div>
-  <div class="card" data-section="warnings"><h4>Warnings</h4><div class="count" id="warnings-card-count">{{ warnings|length }}</div><div class="status" id="warnings-card-status">Review required</div></div>
-  <div class="card" data-section="audit"><h4>Audit report</h4><div class="count">Full report</div><div class="status">Markdown</div></div>
-  <div class="card" data-section="containerfile"><h4>Containerfile</h4><div class="count">{{ containerfile_lines }} lines</div><div class="status">Generated</div></div>
-</div>
 
 {# ── Tab navigation ─────────────────────────────────────────────────────── #}
 <div class="tabs">
@@ -1056,7 +1027,6 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 var snapshot = {{ snapshot_json|safe }};
 (function(){
   var sections = document.querySelectorAll('.section');
-  var cards = document.querySelectorAll('.card[data-section]');
   var tabs = document.querySelectorAll('.tabs button[data-tab]');
   function show(id) {
     if (!id) return;
@@ -1066,9 +1036,6 @@ var snapshot = {{ snapshot_json|safe }};
     tabs.forEach(function(t){ t.classList.toggle('active', t.getAttribute('data-tab') === id); });
   }
   window.show = show;
-  cards.forEach(function(c){
-    c.addEventListener('click', function(){ show(c.getAttribute('data-section')); });
-  });
   tabs.forEach(function(t){
     t.addEventListener('click', function(){ show(t.getAttribute('data-tab')); });
   });

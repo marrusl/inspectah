@@ -66,6 +66,7 @@ def compute_triage_detail(
     # Automatic
     if snapshot.rpm:
         _add("Packages added", len(snapshot.rpm.packages_added), "packages", "automatic")
+        _add("New from base image", len(snapshot.rpm.base_image_only), "packages", "automatic")
     if snapshot.services:
         n = len(snapshot.services.enabled_units) + len(snapshot.services.disabled_units)
         _add("Services enabled/disabled", n, "services", "automatic")
