@@ -1086,6 +1086,40 @@ var snapshot = {{ snapshot_json|safe }};
   var helperAvailable = false;
   var dirty = false;
 
+  // Baseline of include flags at page load (or after a successful re-render).
+  // Keyed by "section/list/index"; value is the initial checked boolean.
+  var includeBaseline = {};
+  function buildBaseline() {
+    includeBaseline = {};
+    document.querySelectorAll('.include-cb').forEach(function(cb) {
+      var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = tr.getAttribute('data-snap-index');
+      if (section && list && idx !== null) {
+        includeBaseline[section + '/' + list + '/' + idx] = cb.checked;
+      }
+    });
+  }
+  function isSnapshotClean() {
+    var clean = true;
+    document.querySelectorAll('.include-cb').forEach(function(cb) {
+      var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = tr.getAttribute('data-snap-index');
+      if (section && list && idx !== null) {
+        if (cb.checked !== includeBaseline[section + '/' + list + '/' + idx]) {
+          clean = false;
+        }
+      }
+    });
+    return clean;
+  }
+  buildBaseline();
+
   function setDirty(isDirty) {
     dirty = isDirty;
     if (tarballBtn) tarballBtn.classList.toggle('btn-primary', !isDirty);
@@ -1127,7 +1161,7 @@ var snapshot = {{ snapshot_json|safe }};
       }
       tr.classList.toggle('excluded', !this.checked);
       updateExcludeCount();
-      setDirty(true);
+      setDirty(!isSnapshotClean());
     });
   });
 
@@ -1233,6 +1267,7 @@ var snapshot = {{ snapshot_json|safe }};
       recomputeAutoDeps();
       updatePkgBanner();
       updateExcludeCount();
+      setDirty(!isSnapshotClean());
     });
   });
 
