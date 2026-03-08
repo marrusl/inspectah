@@ -286,12 +286,12 @@ def _scan_systemd_timers(
 # At job parser
 # ---------------------------------------------------------------------------
 
-def _parse_at_job(host_root: Path, f: Path) -> Dict[str, str]:
+def _parse_at_job(host_root: Path, f: Path) -> AtJob:
     """Parse an at spool file to extract the command, user, and working dir."""
     rel = str(f.relative_to(host_root))
     text = _safe_read(f)
     if not text:
-        return {"file": rel, "command": "", "user": "", "working_dir": ""}
+        return AtJob(file=rel, command="", user="", working_dir="")
 
     lines = text.splitlines()
     user = ""
