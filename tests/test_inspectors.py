@@ -535,6 +535,20 @@ def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
     assert swap.default == "30"
 
 
+def test_kernel_boot_detects_tuned_profile(host_root, fixture_executor):
+    """Tuned active profile and custom profiles are detected."""
+    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    section = run_kernel_boot(host_root, fixture_executor)
+    assert section.tuned_active == "my-web-profile"
+    assert len(section.tuned_custom_profiles) >= 1
+    custom = next(
+        (p for p in section.tuned_custom_profiles if "my-web-profile" in p.path),
+        None,
+    )
+    assert custom is not None
+    assert "net.core.somaxconn" in custom.content
+
+
 def test_selinux_inspector_with_fixtures(host_root, fixture_executor):
     from yoinkc.inspectors.selinux import run as run_selinux
     section = run_selinux(host_root, fixture_executor)

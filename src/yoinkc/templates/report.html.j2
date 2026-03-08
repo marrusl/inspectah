@@ -787,7 +787,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── Kernel / Boot ────────────────────────────────────────────────────────── #}
 {% call section("kernel_boot", "Kernel and boot") %}
   {%- set kb = snapshot.kernel_boot %}
-  {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf) %}
+  {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf or kb.tuned_active or kb.tuned_custom_profiles) %}
 
   {%- if kb.cmdline %}
   <p><strong>cmdline:</strong> <code>{{ kb.cmdline[:300] }}</code></p>
@@ -823,6 +823,19 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- if kb.modules_load_d %}<p>modules-load.d: {{ kb.modules_load_d|length }} file(s)</p>{%- endif %}
   {%- if kb.modprobe_d %}<p>modprobe.d: {{ kb.modprobe_d|length }} file(s)</p>{%- endif %}
   {%- if kb.dracut_conf %}<p>dracut.conf.d: {{ kb.dracut_conf|length }} file(s)</p>{%- endif %}
+
+  {%- if kb.tuned_active or kb.tuned_custom_profiles %}
+  <h3>Tuned profile</h3>
+  {%- if kb.tuned_active %}<p>Active profile: <strong>{{ kb.tuned_active }}</strong></p>{%- endif %}
+  {%- if kb.tuned_custom_profiles %}
+  <p>Custom profiles ({{ kb.tuned_custom_profiles|length }}):</p>
+  <ul>
+    {%- for tp in kb.tuned_custom_profiles %}
+    <li><code>{{ tp.path }}</code></li>
+    {%- endfor %}
+  </ul>
+  {%- endif %}
+  {%- endif %}
 
   {%- else %}
   <p>No kernel/boot customizations detected.</p>

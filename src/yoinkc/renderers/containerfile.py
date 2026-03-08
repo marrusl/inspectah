@@ -205,6 +205,14 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
                 if not dest.exists():
                     dest.write_text("")
 
+    # Custom tuned profiles
+    if snapshot.kernel_boot and snapshot.kernel_boot.tuned_custom_profiles:
+        for tp in snapshot.kernel_boot.tuned_custom_profiles:
+            if tp.path:
+                dest = config_dir / tp.path
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(tp.content or "")
+
     # Systemd drop-in overrides
     if snapshot.services and snapshot.services.drop_ins:
         for di in snapshot.services.drop_ins:
@@ -528,6 +536,14 @@ def _config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> 
     # SELinux audit rules
     if snapshot.selinux and snapshot.selinux.audit_rules:
         lines.append(f"# Audit rules: {len(snapshot.selinux.audit_rules)} file(s)")
+
+    # Tuned profiles
+    kb = snapshot.kernel_boot
+    if kb and (kb.tuned_active or kb.tuned_custom_profiles):
+        parts = [f"Tuned: active={kb.tuned_active or '(none)'}"]
+        if kb.tuned_custom_profiles:
+            parts.append(f"{len(kb.tuned_custom_profiles)} custom profile(s)")
+        lines.append(f"# {', '.join(parts)}")
 
     # tmpfiles.d (always written)
     lines.append("# tmpfiles.d: etc/tmpfiles.d/yoinkc-var.conf")
@@ -1009,6 +1025,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     has_kernel = kb and (
         kb.cmdline or kb.modules_load_d or kb.modprobe_d
         or kb.dracut_conf or kb.sysctl_overrides or kb.non_default_modules
+        or kb.tuned_active or kb.tuned_custom_profiles
     )
     if has_kernel:
         lines.append("# === Kernel Configuration ===")
@@ -1039,6 +1056,17 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         included_sysctl = [s for s in kb.sysctl_overrides if s.include] if kb.sysctl_overrides else []
         if included_sysctl:
             lines.append(f"# sysctl: {len(included_sysctl)} non-default value(s) — included in COPY config/etc/ above")
+        if kb.tuned_active or kb.tuned_custom_profiles:
+            lines.append(f"# Tuned profile: {kb.tuned_active or '(none active)'}")
+            if kb.tuned_custom_profiles:
+                lines.append(f"# Custom tuned profiles ({len(kb.tuned_custom_profiles)}): "
+                             "included in COPY config/etc/ above")
+            if kb.tuned_active:
+                safe_profile = _sanitize_shell_value(kb.tuned_active, "tuned-adm")
+                if safe_profile:
+                    lines.append(f"RUN tuned-adm profile {safe_profile}")
+                else:
+                    lines.append(f"# FIXME: tuned profile name contains unsafe characters: {kb.tuned_active!r}")
         lines.append("")
 
     # 11. SELinux Customizations

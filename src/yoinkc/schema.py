@@ -414,6 +414,8 @@ class KernelBootSection(BaseModel):
     dracut_conf: List[ConfigSnippet] = Field(default_factory=list)
     loaded_modules: List[KernelModule] = Field(default_factory=list)
     non_default_modules: List[KernelModule] = Field(default_factory=list)
+    tuned_active: str = ""
+    tuned_custom_profiles: List[ConfigSnippet] = Field(default_factory=list)
 
 
 class SelinuxPortLabel(BaseModel):

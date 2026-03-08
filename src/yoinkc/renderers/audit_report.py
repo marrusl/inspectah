@@ -532,6 +532,7 @@ def render(
     has_kernel = kb and (
         kb.cmdline or kb.sysctl_overrides or kb.non_default_modules
         or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf
+        or kb.tuned_active or kb.tuned_custom_profiles
     )
     if has_kernel:
         lines.append("## Kernel and boot")
@@ -540,6 +541,12 @@ def render(
             lines.append(f"- cmdline: `{kb.cmdline}`")
         if kb.grub_defaults:
             lines.append("- GRUB defaults present")
+        if kb.tuned_active:
+            lines.append(f"- Tuned profile: **{kb.tuned_active}**")
+        if kb.tuned_custom_profiles:
+            lines.append(f"- Custom tuned profiles ({len(kb.tuned_custom_profiles)}):")
+            for tp in kb.tuned_custom_profiles:
+                lines.append(f"  - `{tp.path}`")
 
         if kb.non_default_modules:
             lines.append("")

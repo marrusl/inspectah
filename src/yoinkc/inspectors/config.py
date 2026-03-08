@@ -181,6 +181,9 @@ _UNOWNED_EXCLUDE_GLOBS: List[str] = [
     "/etc/systemd/system/*.timer.d/*.conf",
     "/etc/systemd/system/*.socket.d/*.conf",
 
+    # ── tuned custom profiles (kernel/boot inspector handles these) ───────
+    "/etc/tuned/*/tuned.conf",
+
     # ── systemd vendor drop-ins ──────────────────────────────────────────────
     "/etc/systemd/sleep.conf.d/*",
 

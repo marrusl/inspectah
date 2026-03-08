@@ -245,6 +245,40 @@ def run(
                         content=_safe_read(f),
                     ))
 
+    # --- tuned profile ---
+    active_profile = ""
+    active_path = host_root / "etc/tuned/active_profile"
+    try:
+        if active_path.exists():
+            active_profile = active_path.read_text().strip()
+    except (PermissionError, OSError):
+        pass
+    if not active_profile and executor:
+        try:
+            r = executor(["tuned-adm", "active"])
+            if r.returncode == 0 and r.stdout.strip():
+                for line in r.stdout.strip().splitlines():
+                    if ":" in line:
+                        active_profile = line.split(":", 1)[1].strip()
+                        break
+        except Exception:
+            pass
+    section.tuned_active = active_profile
+
+    tuned_dir = host_root / "etc/tuned"
+    try:
+        if tuned_dir.exists():
+            for entry in sorted(_safe_iterdir(tuned_dir)):
+                if entry.is_dir():
+                    conf = entry / "tuned.conf"
+                    if conf.is_file():
+                        section.tuned_custom_profiles.append(ConfigSnippet(
+                            path=str(conf.relative_to(host_root)),
+                            content=_safe_read(conf),
+                        ))
+    except (PermissionError, OSError):
+        pass
+
     # --- lsmod + diff ---
     if executor:
         try:
