@@ -505,8 +505,10 @@ def _build_context(
     redactions = snapshot.redactions or []
     secrets_files = len(set(r.get("path", "") for r in redactions))
 
-    # Embed snapshot as JSON for interactive UI
-    snapshot_json = snapshot.model_dump_json()
+    # Embed snapshot as JSON for interactive UI.
+    # Escape "</" so a value containing "</script>" cannot terminate the
+    # enclosing <script> block (standard JSON-in-HTML XSS prevention).
+    snapshot_json = snapshot.model_dump_json().replace("</", "<\\/")
 
     return {
         "snapshot": snapshot,

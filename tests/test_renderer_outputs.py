@@ -745,6 +745,40 @@ class TestHtmlStructure:
             f"d.service should have snap-index=3, got {index_by_unit}"
         )
 
+    def test_snapshot_json_script_tag_injection_escaped(self):
+        """</script> inside snapshot values must not terminate the embedded <script> block."""
+        import tempfile
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
+        )
+        from yoinkc.renderers import run_all as run_all_renderers
+
+        payload = '</script><img src=x onerror=alert(1)>'
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(
+                    path="/etc/myapp/config.conf",
+                    kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                    content=payload,
+                )
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            html = (Path(tmp) / "report.html").read_text()
+
+        # The payload must not appear verbatim inside the embedded JSON blob.
+        # Legitimate </script> tags close the page's own script blocks, so we
+        # check the payload-specific string rather than banning the tag globally.
+        assert '</script><img' not in html, (
+            "Injection payload must not appear unescaped in the HTML report"
+        )
+        assert "<\\/" in html, (
+            "The escaped form <\\/ must be present in the embedded JSON"
+        )
+
     def test_readme_detailed(self, outputs_with_baseline):
         """README includes build command, deploy, findings summary, artifacts, FIXMEs."""
         readme = (outputs_with_baseline["dir"] / "README.md").read_text()
