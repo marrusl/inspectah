@@ -195,6 +195,46 @@ def test_scan_unit_files_from_fs(host_root):
         assert units["fstrim.service"] in ("disabled", "static")
 
 
+def test_preset_glob_rules_applied(host_root, fixture_executor):
+    """Glob preset rules like 'enable cloud-*' must set default_state correctly."""
+    from yoinkc.inspectors.service import run as run_service
+
+    preset_text = "enable cloud-*\ndisable *\n"
+    section = run_service(
+        host_root, fixture_executor, base_image_preset_text=preset_text,
+    )
+    changes = {s.unit: s for s in section.state_changes}
+
+    cloud_init = changes.get("cloud-init.service")
+    assert cloud_init is not None, (
+        f"cloud-init.service not in state_changes; units: {list(changes)}"
+    )
+    assert cloud_init.default_state == "enabled", (
+        f"expected default_state='enabled' via glob, got '{cloud_init.default_state}'"
+    )
+
+
+def test_preset_glob_first_match_wins(host_root, fixture_executor):
+    """Glob rules use first-match-wins: earlier rules take precedence."""
+    from yoinkc.inspectors.service import run as run_service
+
+    # 'disable cloud-*' appears before 'enable cloud-*': disable should win
+    preset_text = "disable cloud-*\nenable cloud-*\ndisable *\n"
+    section = run_service(
+        host_root, fixture_executor, base_image_preset_text=preset_text,
+    )
+    changes = {s.unit: s for s in section.state_changes}
+
+    cloud_init = changes.get("cloud-init.service")
+    assert cloud_init is not None, (
+        f"cloud-init.service not in state_changes; units: {list(changes)}"
+    )
+    assert cloud_init.default_state == "disabled", (
+        f"first-match-wins: 'disable cloud-*' should beat 'enable cloud-*', "
+        f"got '{cloud_init.default_state}'"
+    )
+
+
 def test_config_inspector_with_fixtures(host_root, fixture_executor):
     from yoinkc.inspectors.config import run as run_config
     from yoinkc.inspectors.rpm import run as run_rpm

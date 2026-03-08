@@ -3,6 +3,7 @@ Service inspector: systemd unit state vs baseline (enabled/disabled/masked).
 Baseline is derived from systemd preset files on the host, not static manifests.
 """
 
+import fnmatch
 import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
@@ -16,8 +17,15 @@ def _debug(msg: str) -> None:
     _debug_fn("service", msg)
 
 
-def _parse_preset_lines(lines: List[str]) -> Tuple[Set[str], Set[str], bool]:
-    """Parse preset content lines into (enabled, disabled, has_disable_all)."""
+def _parse_preset_lines(
+    lines: List[str],
+) -> Tuple[Set[str], Set[str], bool, List[Tuple[str, str]]]:
+    """Parse preset content lines into (enabled, disabled, has_disable_all, glob_rules).
+
+    *glob_rules* is an ordered list of ``(action, pattern)`` tuples for patterns
+    containing wildcards (``*`` or ``?``).  Callers should evaluate them with
+    first-match-wins semantics, matching ``systemd-preset(5)`` behaviour.
+    """
     default_enabled: Set[str] = set()
     default_disabled: Set[str] = set()
     already_matched: Set[str] = set()
@@ -52,13 +60,13 @@ def _parse_preset_lines(lines: List[str]) -> Tuple[Set[str], Set[str], bool]:
     _debug(f"presets: {len(default_enabled)} explicit enable, "
            f"{len(default_disabled)} explicit disable, "
            f"disable_all={has_disable_all}, {len(glob_rules)} glob rules")
-    return default_enabled, default_disabled, has_disable_all
+    return default_enabled, default_disabled, has_disable_all, glob_rules
 
 
 def _parse_preset_files(
     host_root: Path,
     base_image_preset_text: Optional[str] = None,
-) -> Tuple[Set[str], Set[str], bool]:
+) -> Tuple[Set[str], Set[str], bool, List[Tuple[str, str]]]:
     """Parse systemd preset files to determine default-enabled and default-disabled services.
 
     If *base_image_preset_text* is provided (from querying the base image), it is
@@ -219,7 +227,7 @@ def run(
     if not current:
         return section
 
-    default_enabled, default_disabled, has_disable_all = _parse_preset_files(
+    default_enabled, default_disabled, has_disable_all, glob_rules = _parse_preset_files(
         host_root, base_image_preset_text=base_image_preset_text,
     )
     if base_image_preset_text is None and warnings is not None:
@@ -237,10 +245,15 @@ def run(
             default_state = "enabled"
         elif unit in default_disabled:
             default_state = "disabled"
-        elif has_disable_all:
-            default_state = "disabled"
         else:
-            default_state = "unknown"
+            # First-match-wins over glob rules (systemd-preset(5) semantics)
+            default_state = None
+            for action, pattern in glob_rules:
+                if fnmatch.fnmatch(unit, pattern):
+                    default_state = "enabled" if action == "enable" else "disabled"
+                    break
+            if default_state is None:
+                default_state = "disabled" if has_disable_all else "unknown"
 
         action = "unchanged"
         if state == "enabled" and default_state != "enabled":

@@ -3,6 +3,7 @@ proc-sys-fs-binfmt_misc.automount      static
 dev-hugepages.mount                    static
 dev-mqueue.mount                       static
 httpd.service                          enabled
+cloud-init.service                     enabled
 chronyd.service                        enabled
 sshd.service                           enabled
 kdump.service                          disabled

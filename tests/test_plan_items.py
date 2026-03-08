@@ -69,14 +69,15 @@ class TestServiceBaselinePresets:
             "disable kdump.service",
             "disable *",
         ]
-        enabled, disabled, has_disable_all = _parse_preset_lines(lines)
+        enabled, disabled, has_disable_all, glob_rules = _parse_preset_lines(lines)
         assert "sshd.service" in enabled
         assert "kdump.service" in disabled
         assert has_disable_all is True
+        assert ("disable", "*") in glob_rules
 
     def test_base_image_text_preferred_over_host(self):
         from yoinkc.inspectors.service import _parse_preset_files
-        enabled, disabled, _ = _parse_preset_files(
+        enabled, disabled, _, _glob = _parse_preset_files(
             Path("/nonexistent"),
             base_image_preset_text="enable sshd.service\ndisable *\n",
         )
