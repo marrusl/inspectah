@@ -711,22 +711,19 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if local_timers or vendor_timers %}
   <h3>Existing systemd timers</h3>
-  <table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th><th>Source</th></tr>
+  {%- if vendor_timers %}
+  <p style="color:var(--muted);font-size:0.9em">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
+  {%- endif %}
+  {%- if local_timers %}
+  <table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th></tr>
     {%- for t in local_timers %}
     <tr style="background:rgba(63,185,80,0.1)">
       <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
       <td><code>{{ t.exec_start }}</code></td>
-      <td><span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">local</span></td>
-    </tr>
-    {%- endfor %}
-    {%- for t in vendor_timers %}
-    <tr>
-      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
-      <td><code>{{ t.exec_start }}</code></td>
-      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px">vendor</span></td>
     </tr>
     {%- endfor %}
   </table>
+  {%- endif %}
   {%- endif %}
 
   {%- if st.generated_timer_units %}
@@ -743,30 +740,27 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   </table>
   {%- endif %}
 
+  {%- set rpm_cron_count = st.cron_jobs | selectattr('rpm_owned') | list | length %}
   {%- if st.cron_jobs %}
   <h3>Cron jobs</h3>
+  {%- if rpm_cron_count %}
+  <p style="color:var(--muted);font-size:0.9em">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
+  {%- endif %}
+  {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
   <table>
-    <tr><th></th><th>Path</th><th>Source</th><th>Ownership</th><th>Action</th></tr>
+    <tr><th></th><th>Path</th><th>Source</th><th>Action</th></tr>
     {%- for j in st.cron_jobs %}
-    {%- if j.rpm_owned %}
-    <tr{% if not j.include %} class="excluded"{% endif %} style="opacity:0.55" data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
-      <td><code>{{ j.path }}</code></td>
-      <td>{{ j.source }}</td>
-      <td><span style="background:#90a4ae;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">package</span></td>
-      <td style="color:#777">Handled by package install</td>
-    </tr>
-    {%- else %}
+    {%- if not j.rpm_owned %}
     <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
       <td><code>{{ j.path }}</code></td>
       <td>{{ j.source }}</td>
-      <td><span style="background:#d2991a;color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">operator</span></td>
       <td>Convert to systemd timer</td>
     </tr>
     {%- endif %}
     {%- endfor %}
   </table>
+  {%- endif %}
   {%- endif %}
 
   {%- if st.at_jobs %}

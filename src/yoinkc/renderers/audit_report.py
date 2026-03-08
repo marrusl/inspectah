@@ -353,12 +353,7 @@ def render(
                 lines.append(f"| {t.name} | {t.on_calendar} | `{t.exec_start}` | `{t.path}` |")
             lines.append("")
         if vendor_timers:
-            lines.append("### Existing systemd timers (vendor)")
-            lines.append("")
-            lines.append("| Timer | Schedule | ExecStart | Path |")
-            lines.append("|-------|----------|-----------|------|")
-            for t in vendor_timers:
-                lines.append(f"| {t.name} | {t.on_calendar} | `{t.exec_start}` | `{t.path}` |")
+            lines.append(f"- {len(vendor_timers)} vendor timer(s) from the base image are present and will carry over automatically.")
             lines.append("")
 
         # Cron-converted timers
@@ -370,22 +365,22 @@ def render(
                 lines.append(f"- {prefix}**{u.name}** — converted from `{u.source_path}` (cron: `{u.cron_expr}`)")
             lines.append("")
 
-        # Raw cron jobs
-        if st.cron_jobs:
+        # Raw cron jobs — only show operator-added jobs
+        operator_cron = [j for j in st.cron_jobs if not j.rpm_owned]
+        rpm_cron = [j for j in st.cron_jobs if j.rpm_owned]
+        if operator_cron or rpm_cron:
             lines.append("### Cron jobs")
             lines.append("")
-            lines.append("| Path | Source | Package-owned | Action |")
-            lines.append("|------|--------|:-------------:|--------|")
-            for j in st.cron_jobs:
-                prefix = "[EXCLUDED] " if not j.include else ""
-                if j.rpm_owned:
-                    action = "Handled by package install"
-                    owned_str = "Yes"
-                else:
-                    action = "Convert to systemd timer"
-                    owned_str = "No"
-                lines.append(f"| {prefix}`{j.path}` | {j.source} | {owned_str} | {action} |")
-            lines.append("")
+            if rpm_cron:
+                lines.append(f"- {len(rpm_cron)} package-owned cron job(s) not listed (handled by package install).")
+                lines.append("")
+            if operator_cron:
+                lines.append("| Path | Source | Action |")
+                lines.append("|------|--------|--------|")
+                for j in operator_cron:
+                    prefix = "[EXCLUDED] " if not j.include else ""
+                    lines.append(f"| {prefix}`{j.path}` | {j.source} | Convert to systemd timer |")
+                lines.append("")
 
         # At jobs
         if st.at_jobs:
