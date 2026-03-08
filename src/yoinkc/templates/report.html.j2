@@ -794,7 +794,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── SELinux ──────────────────────────────────────────────────────────────── #}
 {% call section("selinux", "SELinux / Security") %}
   {%- set se = snapshot.selinux %}
-  {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode or se.port_labels) %}
+  {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode or se.port_labels or se.fcontext_rules or se.pam_configs) %}
 
   {%- if se.mode %}<p><strong>Mode:</strong> {{ se.mode }}</p>{%- endif %}
   {%- if se.fips_mode %}<p><strong>FIPS mode:</strong> enabled</p>{%- endif %}

@@ -76,7 +76,7 @@ def _render_tree_html(nodes: List[dict], content_snippets: List[str]) -> str:
             ch_html = _render_tree_html(n.get("children", []), content_snippets)
             parts.append(
                 '<details class="tree-dir" open><summary class="tree-dir-summary">'
-                + (n.get("name", "")).replace("<", "&lt;")
+                + (n.get("name", "")).replace("&", "&amp;").replace("<", "&lt;")
                 + "</summary><ul class=\"tree-children\">"
                 + ch_html
                 + "</ul></details>"
@@ -92,7 +92,7 @@ def _render_tree_html(nodes: List[dict], content_snippets: List[str]) -> str:
             parts.append(
                 f'<li><button type="button" class="file-entry"'
                 f' data-content-id="{cid}" data-path="{path_attr}">'
-                f'{(n.get("name", "")).replace("<", "&lt;")}</button></li>'
+                f'{(n.get("name", "")).replace("&", "&amp;").replace("<", "&lt;")}</button></li>'
             )
     return "\n".join(parts)
 
@@ -132,7 +132,13 @@ def _markdown_to_html(md: str) -> str:
         if in_table and table_rows:
             out.append("<table class=\"audit-table\">")
             for i, row in enumerate(table_rows):
-                cells = [c.strip() for c in row.split("|") if c.strip() or row.strip().startswith("|")]
+                raw = [c.strip() for c in row.split("|")]
+                # "| a | b |" splits to ['', 'a', 'b', ''] — drop boundary empties
+                if raw and raw[0] == "":
+                    raw = raw[1:]
+                if raw and raw[-1] == "":
+                    raw = raw[:-1]
+                cells = [c for c in raw if c]
                 if not cells:
                     continue
                 if i == 1 and all(re.match(r"^[-:\s]+$", c) for c in cells):
