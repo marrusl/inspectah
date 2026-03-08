@@ -169,8 +169,6 @@ def render(
                       "Users missing if kickstart not applied |")
         lines.append("| **blueprint** | bootc-image-builder TOML customization | When using image-builder as build pipeline | "
                       "Only works with bootc-image-builder |")
-        lines.append("| **exact-copy** | Raw `cat >> /etc/passwd` append | Byte-level replication of source entries | "
-                      "Highest merge conflict risk |")
         lines.append("")
         lines.append("**Recommendation:** Use **sysusers** for service accounts and **kickstart** or identity management "
                       "(FreeIPA, SSSD) for human users. Use `--user-strategy` to override the per-classification defaults "

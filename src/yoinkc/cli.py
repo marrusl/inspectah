@@ -82,7 +82,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Connect to podman socket to enumerate running containers",
     )
 
-    _VALID_STRATEGIES = ("sysusers", "blueprint", "useradd", "kickstart", "exact-copy")
+    _VALID_STRATEGIES = ("sysusers", "blueprint", "useradd", "kickstart")
     parser.add_argument(
         "--user-strategy",
         type=str,

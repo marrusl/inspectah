@@ -315,25 +315,6 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
                 tmpfiles_path = tmpfiles_dir / "yoinkc-sysusers-homes.conf"
                 tmpfiles_path.write_text("\n".join(home_lines) + "\n")
 
-        # Exact-copy: write append fragments (only for exact-copy users)
-        exact_users = {u.get("name") for u in (ug.users or []) if u.get("strategy") == "exact-copy" and u.get("include", True)}
-        exact_groups = {g.get("name") for g in (ug.groups or []) if g.get("strategy") == "exact-copy" and g.get("include", True)}
-        if exact_users or exact_groups:
-            tmp_dir = config_dir / "tmp"
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            for attr, filename, match_set in (
-                ("passwd_entries", "passwd.append", exact_users),
-                ("shadow_entries", "shadow.append", exact_users),
-                ("group_entries", "group.append", exact_groups),
-                ("gshadow_entries", "gshadow.append", exact_groups),
-                ("subuid_entries", "subuid.append", exact_users),
-                ("subgid_entries", "subgid.append", exact_users),
-            ):
-                entries = getattr(ug, attr, [])
-                filtered = [e for e in entries if e.split(":")[0] in match_set] if match_set else []
-                if filtered:
-                    (tmp_dir / filename).write_text("\n".join(filtered) + "\n")
-
         # Blueprint TOML — only when at least one user has blueprint strategy
         blueprint_users = [u for u in (ug.users or []) if u.get("strategy") == "blueprint" and u.get("include", True)]
         blueprint_groups = [g for g in (ug.groups or []) if g.get("strategy") == "blueprint" and g.get("include", True)]
@@ -921,7 +902,6 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         # Group users/groups by strategy
         sysusers_users = [u for u in _included_users if u.get("strategy") == "sysusers"]
         useradd_users = [u for u in _included_users if u.get("strategy") == "useradd"]
-        exact_users = [u for u in _included_users if u.get("strategy") == "exact-copy"]
         blueprint_users = [u for u in _included_users if u.get("strategy") == "blueprint"]
         kickstart_users = [u for u in _included_users if u.get("strategy") == "kickstart"]
 
@@ -972,21 +952,6 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             for ref in (ug.ssh_authorized_keys_refs or []):
                 if ref.get("user") in useradd_names:
                     lines.append(f"# FIXME: SSH keys for '{ref.get('user')}' — deploy via kickstart, cloud-init, or identity provider")
-
-        # --- exact-copy strategy ---
-        if exact_users:
-            exact_names = {u.get("name") for u in exact_users}
-            lines.append(f"# Exact-copy users ({len(exact_users)}): byte-level replica of source entries")
-            lines.append("# NOTE: raw append to /etc/passwd may conflict with bootc /etc merge on updates")
-            cat_parts = []
-            tmp_dir = output_dir / "config" / "tmp"
-            for name in ("group", "passwd", "shadow", "gshadow", "subuid", "subgid"):
-                if (tmp_dir / f"{name}.append").exists():
-                    cat_parts.append(f"cat /tmp/{name}.append >> /etc/{name}")
-            if cat_parts:
-                lines.append("COPY config/tmp/ /tmp/")
-                cat_parts.append("rm -f /tmp/*.append")
-                lines.append("RUN " + " && \\\n    ".join(cat_parts))
 
         # --- blueprint strategy ---
         if blueprint_users:

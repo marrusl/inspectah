@@ -680,8 +680,7 @@ def render(
                          "sysusers = systemd-sysusers drop-in (boot-time), "
                          "useradd = explicit RUN in Containerfile, "
                          "kickstart = deferred to deploy-time provisioning, "
-                         "blueprint = bootc-image-builder TOML, "
-                         "exact-copy = raw /etc/passwd append")
+                         "blueprint = bootc-image-builder TOML")
             lines.append("")
 
     lines.append("## Data Migration Plan (/var)")

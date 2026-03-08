@@ -222,9 +222,7 @@ Each user is assigned a provisioning strategy:
 | `blueprint` | `bootc-image-builder` TOML user definition (`yoinkc-users.toml`) | Optional alternative for service accounts |
 | `useradd` | Explicit `RUN useradd ...` in the Containerfile | Ambiguous accounts |
 | `kickstart` | Deploy-time provisioning via kickstart `user --name=...` directives | Human users |
-| `exact-copy` | Raw `cat >>` append of passwd/group/shadow entries | Fallback for snapshots without clean entries |
-
-Default assignment: service → `sysusers`, human → `kickstart`, ambiguous → `useradd`. The `--user-strategy STRATEGY` flag overrides the strategy for all users (e.g., `--user-strategy exact-copy` to force raw append for everything).
+Default assignment: service → `sysusers`, human → `kickstart`, ambiguous → `useradd`. The `--user-strategy STRATEGY` flag overrides the strategy for all users (e.g., `--user-strategy useradd` to use explicit `useradd` commands for everything).
 
 SSH authorized keys are never embedded in the image — they always appear as a `# FIXME: provision SSH keys via cloud-init, kickstart, or identity provider` comment. Baking SSH keys into an image is an anti-pattern for fleet management.
 
@@ -525,7 +523,7 @@ The default run is optimized for speed — it covers the vast majority of system
 | `--push-to-github REPO` | off | Push output to a GitHub repository. Requires confirmation (or `--yes`). Shows total data size before push. |
 | `--public` | off | When creating a new GitHub repo, make it public instead of private. |
 | `--yes` | off | Skip interactive confirmation prompts (for automation). |
-| `--user-strategy STRATEGY` | off | Override user creation strategy for all users. Valid: sysusers, blueprint, useradd, kickstart, exact-copy. Default: auto-assigned per classification. |
+| `--user-strategy STRATEGY` | off | Override user creation strategy for all users. Valid: sysusers, blueprint, useradd, kickstart. Default: auto-assigned per classification. |
 | `--host-root PATH` | `/host` | Root path for host inspection. |
 | `--from-snapshot PATH` | off | Skip inspection, load a previously saved snapshot and render only. Mutually exclusive with `--inspect-only`. |
 | `--inspect-only` | off | Run inspectors only, save snapshot, skip renderers. Mutually exclusive with `--from-snapshot`. |

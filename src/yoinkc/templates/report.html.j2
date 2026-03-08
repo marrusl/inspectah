@@ -634,7 +634,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {% call section("users_groups", "Users and groups") %}
   {%- if snapshot.users_groups and snapshot.users_groups.users %}
   {%- set ug = snapshot.users_groups %}
-  {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart", "exact-copy"] %}
+  {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart"] %}
 
   <p style="color:var(--muted);font-size:0.9em">
     To change strategies, re-run with <code>--user-strategy</code> or edit the Containerfile directly.

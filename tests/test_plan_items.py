@@ -478,31 +478,6 @@ def test_storage_recommendation_mapping():
 
 class TestUserStrategies:
 
-    def test_exact_copy_writes_append_files(self):
-        snapshot = InspectionSnapshot(
-            meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
-            users_groups=UserGroupSection(
-                users=[{"name": "mark", "uid": 1000, "gid": 1000,
-                        "home": "/home/mark", "shell": "/bin/bash",
-                        "classification": "human", "strategy": "exact-copy"}],
-                groups=[{"name": "mark", "gid": 1000, "members": [], "strategy": "exact-copy"}],
-                passwd_entries=["mark:x:1000:1000::/home/mark:/bin/bash"],
-                shadow_entries=["mark:!!:19700:0:99999:7:::"],
-                group_entries=["mark:x:1000:"],
-                gshadow_entries=["mark:!::"],
-                subuid_entries=["mark:100000:65536"],
-                subgid_entries=["mark:100000:65536"],
-            ),
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            render_containerfile(snapshot, _env(), Path(tmp))
-            tmp_dir = Path(tmp) / "config" / "tmp"
-            assert (tmp_dir / "passwd.append").exists()
-            assert "mark:x:1000:1000" in (tmp_dir / "passwd.append").read_text()
-            cf = (Path(tmp) / "Containerfile").read_text()
-            assert "COPY config/tmp/ /tmp/" in cf
-            assert "byte-level replica" in cf
-
     def test_sysusers_writes_conf(self):
         snapshot = InspectionSnapshot(
             meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
