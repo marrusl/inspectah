@@ -488,7 +488,7 @@ A `kickstart-suggestion.ks` file containing suggested kickstart snippets for set
 
 This file is clearly marked as a **suggestion** — it needs to be reviewed and adapted for the target environment.
 
-## The `/var` Problem — Explicitly Documented
+## The `/var` Handling — Explicitly Documented
 
 bootc's contract is that `/var` content from the image is written to disk at initial bootstrap, but is **never updated by subsequent image deployments**. It becomes fully mutable state from that point forward. This means you *can* seed `/var` with initial directory structures and default data in the image, but anything that lives there is the operator's responsibility to manage, back up, and migrate going forward — bootc won't touch it again.
 
