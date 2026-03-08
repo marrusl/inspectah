@@ -6,6 +6,8 @@ When config_diffs=True, extracts original from RPM (dnf cache or host) and sets 
 
 import difflib
 import fnmatch
+import shutil
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Set
 
@@ -269,34 +271,42 @@ def _find_rpm_in_cache(host_root: Path, package_name: str) -> Optional[Path]:
     return None
 
 
-def _download_rpm_from_repo(executor: Executor, host_root: Path, package_name: str) -> Optional[Path]:
-    """Download the RPM for *package_name* using dnf download (strategy 2).
+def _download_rpm_from_repo(
+    executor: Executor,
+    host_root: Path,
+    package_name: str,
+    path_in_rpm: str,
+) -> Optional[str]:
+    """Download the RPM for *package_name* and extract *path_in_rpm* from it.
 
-    Returns the path to the downloaded .rpm file, or None on failure.
+    Uses a unique temporary directory so concurrent runs do not collide.
+    The directory is always removed before the function returns.
+    Returns the extracted file content, or None on any failure.
     """
     if not executor:
         return None
-    tmp_dir = "/tmp/yoinkc-rpm-download"
-    cmd = [
-        "dnf", "download", "--destdir", tmp_dir,
-        "--installroot", str(host_root),
-        "--releasever=/",
-        package_name,
-    ]
-    _debug(f"dnf download: {' '.join(cmd)}")
-    r = executor(cmd)
-    if r.returncode != 0:
-        _debug(f"dnf download failed (rc={r.returncode}): {r.stderr.strip()[:200]}")
-        return None
+    tmp_dir = tempfile.mkdtemp(prefix="yoinkc-rpm-")
     try:
-        tmp = Path(tmp_dir)
+        cmd = [
+            "dnf", "download", "--destdir", tmp_dir,
+            "--installroot", str(host_root),
+            "--releasever=/",
+            package_name,
+        ]
+        _debug(f"dnf download: {' '.join(cmd)}")
+        r = executor(cmd)
+        if r.returncode != 0:
+            _debug(f"dnf download failed (rc={r.returncode}): {r.stderr.strip()[:200]}")
+            return None
         prefix = package_name + "-"
-        for rpm in tmp.glob("*.rpm"):
+        for rpm in Path(tmp_dir).glob("*.rpm"):
             if rpm.name.startswith(prefix):
                 _debug(f"dnf download succeeded: {rpm}")
-                return rpm
+                return _extract_file_from_rpm(executor, rpm, path_in_rpm)
     except (PermissionError, OSError):
         pass
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
     return None
 
 
@@ -373,9 +383,7 @@ def run(
 
             # Strategy 2: download from repos
             if original is None and pkg:
-                rpm_path = _download_rpm_from_repo(executor, host_root, pkg)
-                if rpm_path:
-                    original = _extract_file_from_rpm(executor, rpm_path, path_in_rpm)
+                original = _download_rpm_from_repo(executor, host_root, pkg, path_in_rpm)
 
             if original is not None:
                 diff_against_rpm = _unified_diff(original, content, path)

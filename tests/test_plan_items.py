@@ -404,16 +404,22 @@ class TestConfigDiffFallback:
         from yoinkc.executor import RunResult
 
         def exec_(cmd, cwd=None):
-            if "dnf" in " ".join(cmd) and "download" in " ".join(cmd):
-                dest = Path("/tmp/yoinkc-rpm-download")
-                dest.mkdir(parents=True, exist_ok=True)
-                (dest / "httpd-2.4.51-7.el9.x86_64.rpm").write_text("fake")
+            cmd_str = " ".join(cmd)
+            if "dnf" in cmd_str and "download" in cmd_str:
+                # Write a fake RPM into whatever --destdir was passed
+                for i, part in enumerate(cmd):
+                    if part == "--destdir" and i + 1 < len(cmd):
+                        dest = Path(cmd[i + 1])
+                        dest.mkdir(parents=True, exist_ok=True)
+                        (dest / "httpd-2.4.51-7.el9.x86_64.rpm").write_text("fake")
+                        break
                 return RunResult(stdout="", stderr="", returncode=0)
+            if "rpm2cpio" in cmd_str:
+                return RunResult(stdout="ServerRoot /etc/httpd", stderr="", returncode=0)
             return RunResult(stdout="", stderr="", returncode=1)
 
-        result = _download_rpm_from_repo(exec_, Path("/host"), "httpd")
-        assert result is not None and result.name.startswith("httpd-")
-        import shutil; shutil.rmtree("/tmp/yoinkc-rpm-download", ignore_errors=True)
+        result = _download_rpm_from_repo(exec_, Path("/host"), "httpd", "etc/httpd/conf/httpd.conf")
+        assert result == "ServerRoot /etc/httpd"
 
     def test_extract_uses_dot_slash_prefix(self):
         from yoinkc.inspectors.config import _extract_file_from_rpm
