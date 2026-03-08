@@ -11,7 +11,7 @@
     non_rpm_data (dict of categorized items),
     containers_data (dict),
     network_data (dict),
-    summary_glance (list of (num, label)),
+    triage_detail (list of dicts),
 #}
 
 {# ── Section wrapper macro ─────────────────────────────────────────────── #}
@@ -42,6 +42,7 @@
 [data-theme="light"] { --bg: #f6f8fa; --card: #ffffff; --text: #1f2328; --muted: #57606a; --accent: #0969da; --warn: #9a6700; --error: #cf222e; --ok: #1a7f37; --code-bg: #eaeef2; --border: #d0d7de; --warn-bg: #fff8c5; }
 * { box-sizing: border-box; }
 body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 1rem; line-height: 1.5; }
+.container { max-width: 1400px; margin: 0 auto; padding: 0 2rem; }
 h1, h2, h3 { margin-top: 0; }
 a { color: var(--accent); }
 .banner { background: var(--card); border-radius: 8px; padding: 1rem 1.5rem; margin-bottom: 1rem; border-left: 4px solid var(--accent); }
@@ -58,22 +59,29 @@ a { color: var(--accent); }
 .warning-row-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0.15rem 0.35rem; border-radius: 4px; flex-shrink: 0; }
 .warning-row-dismiss:hover { color: var(--warn); background: rgba(210,153,34,0.15); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.card { background: var(--card); border-radius: 8px; padding: 1rem; cursor: pointer; border: 1px solid transparent; border-left: 4px solid transparent; transition: border-color .15s; }
-.card:hover { border-color: var(--accent); }
+.card { background: var(--card); border-radius: 8px; padding: 1rem; cursor: pointer; border: 1px solid transparent; border-left: 4px solid transparent; transition: transform .2s ease, box-shadow .2s ease, border-color .15s; }
+.card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.25); }
+[data-theme="light"] .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
 .card.status-green { border-left-color: var(--ok); }
 .card.status-amber { border-left-color: var(--warn); }
 .card.status-red { border-left-color: var(--error); }
 .card h4 { margin: 0 0 .5rem 0; font-size: .95rem; }
 .card .count { font-size: 1.5rem; font-weight: 600; }
 .card .status { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
-.section { display: none; background: var(--card); border-radius: 8px; padding: 1.5rem; margin-top: 1rem; max-width: 1200px; }
-.section.visible { display: block; }
+.section { visibility: hidden; height: 0; overflow: hidden; opacity: 0; transition: opacity .15s ease; background: var(--card); border-radius: 8px; padding: 0; max-width: 1200px; }
+.section.visible { visibility: visible; height: auto; overflow: visible; opacity: 1; padding: 1.5rem; margin-top: 1rem; }
 table { width: auto; border-collapse: collapse; }
 th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 500; }
-.tabs { display: flex; gap: .5rem; margin-bottom: 1rem; flex-wrap: wrap; }
-.tabs button { background: var(--card); border: 1px solid var(--border); color: var(--text); padding: .5rem 1rem; border-radius: 6px; cursor: pointer; }
-.tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.tabs { display: flex; gap: 0; margin-bottom: 1rem; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.tabs button { background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 0.5rem 0.75rem; color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
+.tabs button:hover { color: var(--text); }
+.tabs button.active { border-bottom-color: var(--accent); color: var(--text); }
+tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+tbody tr:hover td { background: rgba(88,166,255,0.06); }
+[data-theme="light"] tbody tr:nth-child(even) td { background: rgba(0,0,0,0.02); }
+[data-theme="light"] tbody tr:hover td { background: rgba(9,105,218,0.06); }
+button:focus-visible, .card:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #warnings-list { max-height: 400px; overflow-y: auto; }
 .search { margin-bottom: 1rem; }
 .search input { width: 100%; max-width: 400px; padding: .5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
@@ -101,8 +109,8 @@ th { color: var(--muted); font-weight: 500; }
 .file-viewer-panel .file-content-pre { max-height: 65vh; margin: 0; }
 .file-content-hidden { display: none; }
 .diff-view { max-height: 300px; overflow: auto; font-size: 0.85em; line-height: 1.5; background: var(--code-bg); padding: 0.5rem; border-radius: 4px; }
-.diff-add { color: #3fb950; background: rgba(46,160,67,0.15); display: block; }
-.diff-del { color: #f85149; background: rgba(248,81,73,0.15); display: block; }
+.diff-add { color: #3fb950; background: rgba(46,160,67,0.08); display: block; border-left: 3px solid #3fb950; padding-left: 0.5rem; }
+.diff-del { color: #f85149; background: rgba(248,81,73,0.08); display: block; border-left: 3px solid #f85149; padding-left: 0.5rem; }
 .diff-hdr { color: #8b949e; display: block; font-weight: bold; }
 .diff-hunk { color: #79c0ff; display: block; }
 .summary-hero { font-size: 1.1rem; margin-bottom: 1.5rem; color: var(--muted); }
@@ -110,10 +118,24 @@ th { color: var(--muted); font-weight: 500; }
 .summary-meta dt { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
 .summary-meta dt:first-child { margin-top: 0; }
 .summary-meta dd { margin: 0.15rem 0 0 0; }
-.summary-glance { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1.5rem; }
-.summary-glance-item { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem 1rem; }
-.summary-glance-item .num { font-size: 1.5rem; font-weight: 600; color: var(--accent); }
-.summary-glance-item .label { font-size: 0.8rem; color: var(--muted); margin-top: 0.2rem; }
+.readiness-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.readiness-col { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
+.readiness-col.readiness-auto { border-left: 4px solid var(--ok); }
+.readiness-col.readiness-fixme { border-left: 4px solid var(--warn); }
+.readiness-col.readiness-manual { border-left: 4px solid var(--error); }
+.readiness-header { font-weight: 600; margin-bottom: 0.5rem; }
+.readiness-count { font-size: 1.3rem; margin-right: 0.25rem; }
+.readiness-col.readiness-auto .readiness-count { color: var(--ok); }
+.readiness-col.readiness-fixme .readiness-count { color: var(--warn); }
+.readiness-col.readiness-manual .readiness-count { color: var(--error); }
+.readiness-col ul { list-style: none; padding: 0; margin: 0; }
+.readiness-col li { padding: 0.2rem 0; }
+.readiness-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 0.9rem; text-align: left; }
+.readiness-link:hover { text-decoration: underline; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--muted); }
 .summary-next { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
 .audit-pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
 .audit-table { margin: 0.5rem 0; }
@@ -148,6 +170,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 </style>
 </head>
 <body>
+<div class="container">
 
 <div class="page-header">
   <h1>yoinkc Inspection Report</h1>
@@ -239,11 +262,27 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   <dt>Inspection time (UTC)</dt><dd>{{ meta.timestamp|default('—') }}</dd>
   <dt>OS</dt><dd>{{ os_desc }}</dd>
 </dl>
-<h3>At a glance</h3>
-<div class="summary-glance">
-  {%- for num, label in summary_glance %}
-  <div class="summary-glance-item"><div class="num">{{ num }}</div><div class="label">{{ label }}</div></div>
-  {%- endfor %}
+<h3>Migration readiness</h3>
+<div class="readiness-panel">
+  {%- set auto_items = triage_detail|selectattr('status', 'equalto', 'automatic')|list %}
+  {%- set fixme_items = triage_detail|selectattr('status', 'equalto', 'fixme')|list %}
+  {%- set manual_items = triage_detail|selectattr('status', 'equalto', 'manual')|list %}
+  <div class="readiness-col readiness-auto">
+    <div class="readiness-header"><span class="readiness-count">{{ triage.automatic }}</span> Automatic</div>
+    <ul>{%- for item in auto_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
+  </div>
+  {%- if fixme_items %}
+  <div class="readiness-col readiness-fixme">
+    <div class="readiness-header"><span class="readiness-count">{{ triage.fixme }}</span> Needs review</div>
+    <ul>{%- for item in fixme_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
+  </div>
+  {%- endif %}
+  {%- if manual_items %}
+  <div class="readiness-col readiness-manual">
+    <div class="readiness-header"><span class="readiness-count">{{ triage.manual }}</span> Manual</div>
+    <ul>{%- for item in manual_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
+  </div>
+  {%- endif %}
 </div>
 <div class="summary-next">
   <p><strong>Next steps:</strong> Review the <strong>Audit report</strong> tab, fix any FIXMEs in the Containerfile, run <code>podman build -t my-image .</code>, then deploy with <code>bootc switch my-image:latest</code>.</p>
@@ -989,6 +1028,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   <p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
   <pre class="containerfile-pre" id="containerfile-pre">{{ containerfile_html|safe }}</pre>
 </div>
+</div>{# /.container #}
 
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
 <div id="exclude-toolbar" style="display:none">
@@ -1014,9 +1054,17 @@ var snapshot = {{ snapshot_json|safe }};
     if (!id) return;
     sections.forEach(function(s){ s.classList.remove('visible'); });
     var el = document.getElementById('section-' + id);
-    if (el) el.classList.add('visible');
+    if (el) {
+      el.style.visibility = 'visible';
+      el.style.height = 'auto';
+      el.style.overflow = 'visible';
+      el.style.padding = '1.5rem';
+      el.style.marginTop = '1rem';
+      requestAnimationFrame(function(){ requestAnimationFrame(function(){ el.classList.add('visible'); }); });
+    }
     tabs.forEach(function(t){ t.classList.toggle('active', t.getAttribute('data-tab') === id); });
   }
+  window.show = show;
   cards.forEach(function(c){
     c.addEventListener('click', function(){ show(c.getAttribute('data-section')); });
   });

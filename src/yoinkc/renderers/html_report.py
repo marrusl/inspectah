@@ -381,10 +381,11 @@ def _build_context(
     output_dir: Path,
     env: Environment,
 ) -> dict:
-    from ._triage import compute_triage
+    from ._triage import compute_triage, compute_triage_detail
 
     counts = _summary_counts(snapshot)
     triage = compute_triage(snapshot, output_dir)
+    triage_detail = compute_triage_detail(snapshot, output_dir)
     os_desc = (snapshot.os_release.pretty_name or snapshot.os_release.name
                if snapshot.os_release else "Unknown")
 
@@ -420,17 +421,6 @@ def _build_context(
     # Escape containerfile for embedding in <pre>
     containerfile_html = (containerfile_content or "(Containerfile not generated)").replace(
         "&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    summary_glance = [
-        (counts["packages_added"], "Packages added"),
-        (counts["packages_removed"], "Packages in target image only"),
-        (counts["config_files"], "Config files"),
-        (counts["services_enabled"], "Services enabled"),
-        (counts["redactions"], "Secrets redacted"),
-        (len(warnings), "Warnings"),
-        (counts["containers"], "Containers/quadlet"),
-        (counts["users_groups"], "Users/groups"),
-    ]
 
     # Sort leaf packages by dependency count descending for the HTML tree view
     leaf_sorted: List[str] = []
@@ -528,7 +518,7 @@ def _build_context(
         "config_files_rendered": _prepare_config_files(snapshot),
         "containers_data": _prepare_containers(snapshot),
         "non_rpm_data": _prepare_non_rpm(snapshot),
-        "summary_glance": summary_glance,
+        "triage_detail": triage_detail,
         "leaf_packages_sorted": leaf_sorted,
         "repo_display": repo_display,
         "card_status": card_status,
