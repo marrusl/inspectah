@@ -131,4 +131,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Skip interactive confirmation prompts",
     )
 
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+
+    if args.from_snapshot and args.inspect_only:
+        parser.error("--from-snapshot and --inspect-only cannot be used together")
+
+    return args

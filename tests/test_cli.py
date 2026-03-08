@@ -6,6 +6,8 @@ import sys
 import unittest.mock
 from pathlib import Path
 
+import pytest
+
 from yoinkc.cli import parse_args
 
 
@@ -25,16 +27,12 @@ def test_defaults():
     assert args.yes is False
 
 
-def test_all_flags_set():
+def test_from_snapshot_flags():
+    """Flags compatible with --from-snapshot parse correctly."""
     args = parse_args([
         "--host-root", "/mnt/host",
         "--output-dir", "/tmp/out",
         "--from-snapshot", "/tmp/snap.json",
-        "--inspect-only",
-        "--baseline-packages", "/tmp/pkgs.txt",
-        "--config-diffs",
-        "--deep-binary-scan",
-        "--query-podman",
         "--validate",
         "--push-to-github", "owner/repo",
         "--public",
@@ -43,15 +41,32 @@ def test_all_flags_set():
     assert args.host_root == Path("/mnt/host")
     assert args.output_dir == Path("/tmp/out")
     assert args.from_snapshot == Path("/tmp/snap.json")
+    assert args.inspect_only is False
+    assert args.validate is True
+    assert args.push_to_github == "owner/repo"
+    assert args.public is True
+    assert args.yes is True
+
+
+def test_inspect_only_flags():
+    """Flags compatible with --inspect-only parse correctly."""
+    args = parse_args([
+        "--host-root", "/mnt/host",
+        "--output-dir", "/tmp/out",
+        "--inspect-only",
+        "--baseline-packages", "/tmp/pkgs.txt",
+        "--config-diffs",
+        "--deep-binary-scan",
+        "--query-podman",
+    ])
+    assert args.host_root == Path("/mnt/host")
+    assert args.output_dir == Path("/tmp/out")
+    assert args.from_snapshot is None
     assert args.inspect_only is True
     assert args.baseline_packages == Path("/tmp/pkgs.txt")
     assert args.config_diffs is True
     assert args.deep_binary_scan is True
     assert args.query_podman is True
-    assert args.validate is True
-    assert args.push_to_github == "owner/repo"
-    assert args.public is True
-    assert args.yes is True
 
 
 def test_baseline_packages_reaches_inspectors():
@@ -117,3 +132,9 @@ def test_main_git_init_failure_returns_error(capsys, tmp_path, monkeypatch):
     assert "git" in err.lower()
     assert "pip install" in err
     mock_commit.assert_not_called()
+
+
+def test_from_snapshot_and_inspect_only_are_mutually_exclusive():
+    """--from-snapshot and --inspect-only together must be rejected."""
+    with pytest.raises(SystemExit):
+        parse_args(["--from-snapshot", "snap.json", "--inspect-only"])
