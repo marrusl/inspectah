@@ -18,6 +18,8 @@ The tool itself ships as a container: `ghcr.io/marrusl/yoinkc:latest`.
 
 The tool is structured as a pipeline of **inspectors** that each produce structured JSON, fed into **renderers** that produce the output artifacts. That separation is important — it means you can re-render from a saved inspection snapshot without re-running against the host, and you can test renderers in isolation.
 
+**Baseline subtraction.** The tool's output should represent operator intent, not system state. Wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the Containerfile and reports. This principle applies across all inspectors: packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there. Items that reflect hardware-specific or host-specific state (autoloaded kernel modules, DHCP interfaces) are flagged as deploy-time concerns rather than baked into the image.
+
 ### Inspector Modules
 
 #### RPM Inspector
@@ -55,6 +57,8 @@ Rather than running `rpm -qf` per-file across `/etc` (which is O(n) RPM database
 A maintainable exclusion list filters out known system-generated files that are not operator-placed configs. The lists cover machine identity files, systemd state, PKI/subscription certs, SELinux policy store, PAM base configs, package manager state, installer artifacts, and more. See `src/yoinkc/inspectors/config.py` for the full current list.
 
 The exclusion list is defined as two data structures (exact paths and glob patterns) at the top of the config inspector source, making it easy to extend as new false positives are discovered.
+
+Quadlet unit files captured under `/etc/containers/systemd/` are excluded from the config file display in both the HTML report and audit report. They appear in the Config inspector's snapshot data and are written to the output, but their dedicated home is the Containers section where they are shown with image references and unit type context. The Containerfile renders them via `COPY quadlet/ /etc/containers/systemd/` rather than the consolidated `COPY config/etc/ /etc/` block, so writing them to the config tree would duplicate them in the image.
 
 When custom CA certificates are found under `/etc/pki/ca-trust/source/anchors/` (captured as unowned configs), the Containerfile renderer emits `RUN update-ca-trust` immediately after the consolidated COPY block. Without this, copied certificates would not be added to the system trust store and TLS connections to internal services would silently fail.
 
@@ -121,6 +125,8 @@ Captures and converts all scheduled execution:
 
 For the Containerfile output, cron jobs are converted to systemd timer units (since bootc images should use systemd timers as the canonical scheduling mechanism). Each generated timer includes a comment with the original cron expression for reference. Local timers get COPY + `systemctl enable` directives, vendor timers get a comment noting they're already in the base image. At jobs get FIXME comments urging conversion to systemd timers. Jobs that can't be cleanly converted (e.g., per-user crontabs with environment variable dependencies) get a `# FIXME` comment and appear in the audit report.
 
+Vendor systemd timers (those that ship with the base image, `source == "vendor"`) are excluded from the HTML report table and audit report listing — they require no operator action. A count note is shown in their place. RPM-owned cron jobs are similarly hidden from the display, replaced with a count note; the inspector already skips generating timer units from rpm-owned cron jobs.
+
 #### Container Inspector
 
 Discovers container workloads through a fast file-based scan:
@@ -180,7 +186,7 @@ If pip packages with C extensions are detected (identified by `.so` files in `*.
 #### Kernel/Boot Inspector
 
 - `/proc/cmdline` and `/etc/default/grub` — kernel boot parameters
-- Kernel modules: loaded (`lsmod`) diffed against defaults. Modules configured in `/etc/modules-load.d/` and `/usr/lib/modules-load.d/` are treated as expected. Modules loaded only as dependencies (non-empty `used_by` column) are filtered out. Only modules that are neither explicitly configured nor loaded as dependencies appear as non-default.
+- Kernel modules: loaded (`lsmod`) diffed against defaults. Modules configured in `/etc/modules-load.d/` and `/usr/lib/modules-load.d/` are treated as expected. Modules loaded only as dependencies (non-empty `used_by` column) are filtered out. Only modules that are neither explicitly configured nor loaded as dependencies appear as non-default. The non-default module list is collected in the snapshot for reference, but the HTML report and audit report do not display it — hardware-autoloaded modules are host-specific and have no meaning for migration. Only explicitly configured modules (from modules-load.d, modprobe.d, and dracut.conf.d) appear in the report.
 - Sysctl settings: reads runtime values from `/proc/sys/`, reads shipped defaults from `/usr/lib/sysctl.d/*.conf` (sorted by filename, matching systemd precedence), reads operator overrides from `/etc/sysctl.d/*.conf` and `/etc/sysctl.conf`. Only values where runtime differs from shipped default appear in output, with source attribution.
 - Dracut configuration: `/etc/dracut.conf.d/`
 - Tuned profiles: reads the active profile name from `/etc/tuned/active_profile` (falls back to `tuned-adm active` via executor). Scans `/etc/tuned/` for subdirectories containing a `tuned.conf` and captures them as custom profiles. Custom profiles are written to the config tree and the Containerfile emits `RUN tuned-adm profile <name>` in the Kernel section. Tuned profile files are excluded from the unowned-file list to avoid double-reporting.
@@ -190,9 +196,9 @@ If pip packages with C extensions are detected (identified by `.so` files in `*.
 - SELinux mode from `/host/etc/selinux/config`
 - Custom policy modules: detected by scanning the priority-400 module store (`/host/etc/selinux/<type>/active/modules/400/`). Only modules at priority 400 (installed via `semodule -i`) are reported as custom.
 - Boolean overrides: `chroot /host semanage boolean -l` returns current and default values in a single command. Non-default booleans are flagged. Falls back to reading `/host/sys/fs/selinux/booleans/*` (runtime values as current/pending pairs) if chroot fails.
-- Audit rules from `/etc/audit/rules.d/`
+- Audit rules from `/etc/audit/rules.d/` — filtered against RPM ownership. Only operator-added audit rule files (not owned by any installed RPM) are reported.
 - FIPS mode status
-- Custom PAM configurations
+- Custom PAM configurations — filtered against RPM ownership. Only PAM config files under `/etc/pam.d/` that are not owned by any installed RPM appear in the report. RPM-shipped defaults (the vast majority of `/etc/pam.d/` entries) are excluded.
 
 #### User/Group Inspector
 
