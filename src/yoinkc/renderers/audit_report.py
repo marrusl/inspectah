@@ -711,6 +711,93 @@ def render(
         lines.append("*No significant application data directories found under `/var`.*")
         lines.append("")
 
+    # --- Environment-specific considerations ---
+    # Each subsection is conditional on relevant data being present.
+    env_notes: list = []
+
+    config_paths = {f.path for f in (snapshot.config.files if snapshot.config else [])}
+
+    # Alternatives selections
+    if any(p.startswith("/etc/alternatives/") for p in config_paths):
+        env_notes.append((
+            "### Alternatives selections",
+            "The system has custom alternatives selections (e.g., default Python, Java, or editor). "
+            "Installing the same packages in the image may not reproduce these selections. "
+            "Review `alternatives --list` output and add `RUN alternatives --set ...` directives to the "
+            "Containerfile if needed.",
+        ))
+
+    # Raw nftables rules outside firewalld
+    _NFTABLES_PATHS = {"/etc/nftables.conf", "/etc/sysconfig/nftables.conf"}
+    if _NFTABLES_PATHS & config_paths:
+        env_notes.append((
+            "### nftables rules",
+            "This system has raw nftables rules outside of firewalld. These are included in the config "
+            "tree but may conflict with firewalld if both are active. Review and consolidate firewall "
+            "management before deployment.",
+        ))
+
+    # Complex network topologies
+    _COMPLEX_NW_TYPES = ("bond", "vlan", "bridge", "team")
+    if snapshot.network:
+        complex_conns = [
+            c for c in snapshot.network.connections
+            if any(t in c.type.lower() for t in _COMPLEX_NW_TYPES)
+        ]
+        if complex_conns:
+            names = ", ".join(f"`{c.name}` ({c.type})" for c in complex_conns)
+            env_notes.append((
+                "### Complex network topologies",
+                "The following network connections use complex topologies (bonding, VLAN, bridging, "
+                f"teaming): {names}. "
+                "The NM profiles are included in the image, but deploy-time network configuration via "
+                "kickstart should account for the physical topology of the target environment.",
+            ))
+
+    # Identity provider integration
+    _IDP_PATHS = {"/etc/sssd/sssd.conf", "/etc/krb5.conf"}
+    if _IDP_PATHS & config_paths:
+        env_notes.append((
+            "### Identity provider integration",
+            "This system is integrated with an identity provider (SSSD/Kerberos). Config files are "
+            "included, but Kerberos keytabs are machine-specific and excluded. After deployment: "
+            "re-enroll the machine in the Kerberos realm, regenerate keytabs, and verify SSSD connectivity.",
+        ))
+
+    # NTP/Chrony configuration
+    if "/etc/chrony.conf" in config_paths:
+        env_notes.append((
+            "### NTP/Chrony configuration",
+            "Custom NTP servers are configured in `chrony.conf`. If deploying across multiple sites "
+            "with different time sources, consider making the NTP server address a deploy-time parameter.",
+        ))
+
+    # Rsyslog forwarding
+    if any(p.startswith("/etc/rsyslog.d/") for p in config_paths):
+        env_notes.append((
+            "### Rsyslog forwarding",
+            "Custom rsyslog forwarding rules are configured. Log forwarding targets (syslog server "
+            "addresses) are typically site-specific. For golden images deployed across multiple "
+            "environments, consider injecting rsyslog forwarding configuration at deploy time.",
+        ))
+
+    # Always include the bootc /etc merge note
+    env_notes.append((
+        None,
+        "**Note:** bootc uses a 3-way merge strategy for `/etc` during image updates. Local changes to "
+        "`/etc` persist across updates, but the merge behavior has nuances — see the "
+        "[bootc filesystem documentation](https://containers.github.io/bootc/filesystem.html) for details.",
+    ))
+
+    lines.append("## Environment-specific considerations")
+    lines.append("")
+    for heading, note in env_notes:
+        if heading:
+            lines.append(heading)
+            lines.append("")
+        lines.append(note)
+        lines.append("")
+
     if snapshot.warnings:
         lines.append("## Items requiring manual intervention")
         lines.append("")
