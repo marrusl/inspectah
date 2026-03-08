@@ -649,6 +649,31 @@ def test_group_strategy_no_user(tmp_path):
     )
 
 
+def test_group_strategy_first_user_wins_on_shared_gid(tmp_path):
+    """When two users share a primary GID, the group inherits the first user's strategy."""
+    from yoinkc.inspectors.users_groups import run as run_users_groups
+
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    # alice (uid 1000, gid 2000) is a human; bob (uid 1001, also gid 2000) is a service.
+    # The appgroup (gid 2000) should follow alice, not bob.
+    (etc / "passwd").write_text(
+        "alice:x:1000:2000:Alice:/home/alice:/bin/bash\n"
+        "bob:x:1001:2000:Bob:/var/lib/bob:/sbin/nologin\n"
+    )
+    (etc / "group").write_text("appgroup:x:2000:\n")
+
+    section = run_users_groups(tmp_path, executor=None)
+
+    alice = next(u for u in section.users if u["name"] == "alice")
+    assert alice["strategy"] == "kickstart"
+
+    appgroup = next(g for g in section.groups if g["name"] == "appgroup")
+    assert appgroup["strategy"] == "kickstart", (
+        f"appgroup should follow alice (first user with gid 2000), got {appgroup['strategy']!r}"
+    )
+
+
 def test_users_groups_inspector_with_fixtures(host_root, fixture_executor):
     from yoinkc.inspectors.users_groups import run as run_users_groups
     section = run_users_groups(host_root, fixture_executor)

@@ -134,8 +134,14 @@ def run(
 
     _debug(f"found {len(section.groups)} non-system groups (gid >= 1000)")
 
-    # Assign strategy to groups: override, follow primary user, or default to sysusers
-    user_by_gid = {u.get("gid"): u for u in section.users}
+    # Assign strategy to groups: override, follow primary user, or default to sysusers.
+    # Use first-match so that when multiple users share a primary GID, the group
+    # inherits from the user who was likely created alongside it.
+    user_by_gid: dict = {}
+    for u in section.users:
+        gid = u.get("gid")
+        if gid is not None and gid not in user_by_gid:
+            user_by_gid[gid] = u
     for g in section.groups:
         if user_strategy_override:
             g["strategy"] = user_strategy_override
