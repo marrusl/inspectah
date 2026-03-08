@@ -259,6 +259,27 @@ The server runs entirely locally. It extracts the tarball into a temporary direc
 
 ---
 
+## Building the image
+
+`yoinkc-build` wraps `podman build` (or `docker build`) with automatic RHEL entitlement handling and image tagging. Point it at a yoinkc output directory or tarball:
+
+```bash
+./yoinkc-build ./yoinkc-output/ my-bootc-image:latest
+./yoinkc-build output.tar.gz my-bootc-image:v1.0
+```
+
+For RHEL base images (`registry.redhat.io`), it searches for subscription certificates in this order: host-local (`/etc/pki/entitlement`), bundled in the output (from `run-yoinkc.sh`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build automatically. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
+
+Push directly after building:
+
+```bash
+./yoinkc-build ./yoinkc-output/ my-bootc-image:v1.0 --push registry.example.com/my-bootc-image:v1.0
+```
+
+**Requirements:** Python 3.9+ (stdlib only). Podman or Docker.
+
+---
+
 ## CLI Reference
 
 ### Core Options

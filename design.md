@@ -372,6 +372,10 @@ COPY config/etc/tmpfiles.d/app-dirs.conf /etc/tmpfiles.d/
 
 Each section has comments explaining what was detected and why it was included. `FIXME` comments mark anything that needs human review. See the README for the complete layer ordering documentation.
 
+### Building on Non-RHEL Hosts
+
+When the Containerfile's `FROM` line references `registry.redhat.io`, the `dnf install` step requires RHEL subscription entitlement certificates. On a RHEL host, podman handles this automatically. For non-RHEL build hosts (a developer laptop, CI runner, etc.), `yoinkc-build` searches for certificates in a priority cascade: host-local → bundled in the output directory (placed there by `run-yoinkc.sh`) → `./entitlement/` in the current directory → the `YOINKC_ENTITLEMENT` environment variable. Found certificates are bind-mounted into the build container transparently. Certificate expiry is validated via `openssl x509 -checkend` so the operator gets a clear warning before a build fails due to stale credentials.
+
 ### Git Repo Layout
 
 ```
