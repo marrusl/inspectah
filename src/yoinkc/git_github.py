@@ -18,7 +18,7 @@ def init_git_repo(output_dir: Path) -> bool:
     if git_dir.exists():
         return True
     try:
-        repo = git.Repo.init(output_dir)
+        git.Repo.init(output_dir)
         return True
     except Exception:
         return False
@@ -99,8 +99,13 @@ def push_to_github(
                     )
                 g = Github(token)
                 user = g.get_user()
-                name = repo_spec.split("/")[-1] if "/" in repo_spec else "yoinkc"
-                gh_repo = user.create_repo(name, private=create_private, auto_init=False)
+                parts = repo_spec.split("/", 1)
+                name = parts[-1] if len(parts) == 2 else "yoinkc"
+                if len(parts) == 2 and parts[0] != user.login:
+                    owner = g.get_organization(parts[0])
+                else:
+                    owner = user
+                gh_repo = owner.create_repo(name, private=create_private, auto_init=False)
                 origin_url = gh_repo.clone_url
             except ImportError:
                 origin_url = f"https://github.com/{repo_spec}.git"
@@ -109,7 +114,12 @@ def push_to_github(
             repo.create_remote("origin", origin_url)
         else:
             origin = repo.remotes.origin
-            if repo_spec not in str(origin.url):
+            # Normalise both sides: strip trailing .git, leading slash, then compare.
+            def _norm(url: str) -> str:
+                return url.rstrip("/").removesuffix(".git").lstrip("/")
+            expected = _norm(repo_spec)
+            actual = _norm(str(origin.url)).split("github.com/", 1)[-1]
+            if expected != actual:
                 origin.set_url(f"https://github.com/{repo_spec}.git")
         origin = repo.remotes.origin
         try:

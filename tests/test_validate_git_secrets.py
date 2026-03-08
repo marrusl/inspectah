@@ -137,3 +137,131 @@ def test_output_stats_empty_dir():
         assert count == 0
         assert total == 0
         assert fixmes == 0
+
+
+# ---------------------------------------------------------------------------
+# git_github.push_to_github — org vs user repo creation and URL match
+# ---------------------------------------------------------------------------
+
+import unittest.mock as _mock
+
+
+def _make_remote(name, url):
+    """Build a MagicMock that looks like a gitpython Remote."""
+    r = _mock.MagicMock()
+    r.name = name
+    r.url = url
+    r.push = _mock.MagicMock(return_value=None)
+    return r
+
+
+def _make_remotes_mock(remotes_list):
+    """Return a MagicMock whose .origin attribute works and iterates correctly."""
+    m = _mock.MagicMock()
+    m.__iter__ = _mock.MagicMock(return_value=iter(remotes_list))
+    m.__len__ = _mock.MagicMock(return_value=len(remotes_list))
+    m.__contains__ = _mock.MagicMock(
+        side_effect=lambda name: any(r.name == name for r in remotes_list)
+    )
+    if remotes_list:
+        m.origin = remotes_list[0]
+    return m
+
+
+def _push_test_context(tmp, mock_git, mock_Github, mock_repo):
+    """Return a context-manager stack for push_to_github tests."""
+    import contextlib, sys
+    github_mod = _mock.MagicMock()
+    github_mod.Github = mock_Github
+    return (
+        _mock.patch("yoinkc.redact.scan_directory_for_secrets", return_value=None),
+        _mock.patch.dict(sys.modules, {"git": mock_git, "github": github_mod}),
+    )
+
+
+def _run_push(tmp_path, repo_spec, mock_git, mock_Github, mock_repo):
+    from yoinkc import git_github
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    mock_git.Repo.return_value = mock_repo
+    patches = _push_test_context(tmp_path, mock_git, mock_Github, mock_repo)
+    with patches[0], patches[1]:
+        return git_github.push_to_github(
+            tmp_path, repo_spec,
+            skip_confirmation=True,
+            github_token="tok",
+        )
+
+
+def _make_github_mocks(user_login):
+    mock_gh_repo = _mock.MagicMock()
+    mock_gh_repo.clone_url = "https://github.com/placeholder/repo.git"
+
+    mock_user = _mock.MagicMock()
+    mock_user.login = user_login
+    mock_user.create_repo = _mock.MagicMock(return_value=mock_gh_repo)
+
+    mock_org = _mock.MagicMock()
+    mock_org.create_repo = _mock.MagicMock(return_value=mock_gh_repo)
+
+    mock_g = _mock.MagicMock()
+    mock_g.get_user.return_value = mock_user
+    mock_g.get_organization.return_value = mock_org
+
+    mock_Github = _mock.MagicMock(return_value=mock_g)
+
+    mock_git = _mock.MagicMock()
+    return mock_git, mock_Github, mock_user, mock_org, mock_gh_repo
+
+
+def test_push_creates_repo_under_org_not_user():
+    """When owner != authenticated user, repo is created under the org."""
+    mock_git, mock_Github, mock_user, mock_org, mock_gh_repo = _make_github_mocks("alice")
+    mock_gh_repo.clone_url = "https://github.com/my-org/myrepo.git"
+    mock_repo = _mock.MagicMock()
+    mock_repo.remotes = _make_remotes_mock([])  # no origin → will create
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_push(Path(tmp), "my-org/myrepo", mock_git, mock_Github, mock_repo)
+
+    mock_org.create_repo.assert_called_once()
+    mock_user.create_repo.assert_not_called()
+
+
+def test_push_creates_repo_under_user_when_owner_matches():
+    """When owner == authenticated user, repo is created under the user."""
+    mock_git, mock_Github, mock_user, mock_org, mock_gh_repo = _make_github_mocks("alice")
+    mock_gh_repo.clone_url = "https://github.com/alice/myrepo.git"
+    mock_repo = _mock.MagicMock()
+    mock_repo.remotes = _make_remotes_mock([])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_push(Path(tmp), "alice/myrepo", mock_git, mock_Github, mock_repo)
+
+    mock_user.create_repo.assert_called_once()
+    mock_org.create_repo.assert_not_called()
+
+
+def test_push_url_exact_match_no_spurious_reset():
+    """'foo/bar' in origin URL must not match 'foo/bar-legacy.git'."""
+    mock_git, mock_Github, mock_user, mock_org, _ = _make_github_mocks("foo")
+    origin = _make_remote("origin", "https://github.com/foo/bar-legacy.git")
+    mock_repo = _mock.MagicMock()
+    mock_repo.remotes = _make_remotes_mock([origin])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_push(Path(tmp), "foo/bar", mock_git, mock_Github, mock_repo)
+
+    origin.set_url.assert_called_once_with("https://github.com/foo/bar.git")
+
+
+def test_push_url_no_reset_when_already_correct():
+    """When remote URL already points to the right repo, set_url must not be called."""
+    mock_git, mock_Github, mock_user, mock_org, _ = _make_github_mocks("foo")
+    origin = _make_remote("origin", "https://github.com/foo/bar.git")
+    mock_repo = _mock.MagicMock()
+    mock_repo.remotes = _make_remotes_mock([origin])
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _run_push(Path(tmp), "foo/bar", mock_git, mock_Github, mock_repo)
+
+    origin.set_url.assert_not_called()
