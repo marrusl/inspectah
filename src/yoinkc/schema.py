@@ -122,12 +122,22 @@ class ServiceStateChange(BaseModel):
     include: bool = True
 
 
+class SystemdDropIn(BaseModel):
+    """A systemd drop-in override file (e.g. /etc/systemd/system/foo.service.d/override.conf)."""
+
+    unit: str          # parent unit name, e.g. "postgresql.service"
+    path: str          # relative path, e.g. "etc/systemd/system/postgresql.service.d/override.conf"
+    content: str = ""
+    include: bool = True
+
+
 class ServiceSection(BaseModel):
     """Output of the Service inspector."""
 
     state_changes: List[ServiceStateChange] = Field(default_factory=list)
     enabled_units: List[str] = Field(default_factory=list)
     disabled_units: List[str] = Field(default_factory=list)
+    drop_ins: List[SystemdDropIn] = Field(default_factory=list)
 
 
 # --- Placeholders for remaining inspectors (added in later steps) ---

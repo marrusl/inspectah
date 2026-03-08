@@ -416,6 +416,26 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- else %}
   <p>No service changes.</p>
   {%- endif %}
+
+  {%- if snapshot.services and snapshot.services.drop_ins %}
+  <h3>Systemd drop-in overrides ({{ snapshot.services.drop_ins|length }})</h3>
+  <table><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
+    {%- for d in snapshot.services.drop_ins %}
+    <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if d.include else '' }}/></td>
+      <td>{{ d.unit }}</td>
+      <td><code>{{ d.path }}</code></td>
+      <td>
+        {%- if d.content.strip() %}
+        <details><summary>show</summary>
+          <pre style="background:var(--code-bg);border:1px solid var(--border);border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ d.content }}</pre>
+        </details>
+        {%- endif %}
+      </td>
+    </tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
 {% endcall %}
 
 {# ── Config ──────────────────────────────────────────────────────────────── #}

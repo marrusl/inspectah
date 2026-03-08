@@ -205,6 +205,15 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
                 if not dest.exists():
                     dest.write_text("")
 
+    # Systemd drop-in overrides
+    if snapshot.services and snapshot.services.drop_ins:
+        for di in snapshot.services.drop_ins:
+            if not di.include:
+                continue
+            dest = config_dir / di.path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(di.content or "")
+
     # Systemd timer units: cron-generated and existing local timers
     st = snapshot.scheduled_tasks
     if st and (st.generated_timer_units or st.systemd_timers):
@@ -507,6 +516,15 @@ def _config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> 
         if kb.sysctl_overrides:
             lines.append(f"# sysctl overrides: etc/sysctl.d/99-yoinkc.conf ({len(kb.sysctl_overrides)} value(s))")
 
+    # Systemd drop-in overrides
+    if snapshot.services and snapshot.services.drop_ins:
+        included = [d for d in snapshot.services.drop_ins if d.include]
+        if included:
+            units = sorted(set(d.unit for d in included))
+            lines.append(f"# Systemd drop-in overrides ({len(included)}): "
+                         + ", ".join(units[:5])
+                         + (" ..." if len(units) > 5 else ""))
+
     # SELinux audit rules
     if snapshot.selinux and snapshot.selinux.audit_rules:
         lines.append(f"# Audit rules: {len(snapshot.selinux.audit_rules)} file(s)")
@@ -668,6 +686,20 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                 lines.append("RUN systemctl enable " + " ".join(safe_enabled))
             if safe_disabled:
                 lines.append("RUN systemctl disable " + " ".join(safe_disabled))
+            lines.append("")
+
+    # 3b. Systemd drop-in overrides
+    if snapshot.services and snapshot.services.drop_ins:
+        included_dropins = [d for d in snapshot.services.drop_ins if d.include]
+        if included_dropins:
+            lines.append("# === Systemd Drop-in Overrides ===")
+            lines.append(f"# Detected: {len(included_dropins)} drop-in override(s) — included in COPY config/etc/ below")
+            seen_dirs: set = set()
+            for di in included_dropins:
+                dropin_dir = str(Path(di.path).parent)
+                if dropin_dir not in seen_dirs:
+                    seen_dirs.add(dropin_dir)
+                    lines.append(f"#   {di.unit}: {dropin_dir}/")
             lines.append("")
 
     # 4. Firewall Configuration (bake into image)

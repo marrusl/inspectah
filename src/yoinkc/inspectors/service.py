@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..executor import Executor
-from ..schema import ServiceSection, ServiceStateChange
+from ..schema import ServiceSection, ServiceStateChange, SystemdDropIn
 from .._util import debug as _debug_fn, is_debug as _DEBUG_check, make_warning
 
 
@@ -272,6 +272,39 @@ def run(
                 action=action,
             )
         )
+
+    # Scan for systemd drop-in override directories under /etc/systemd/system/.
+    # Only admin overrides — vendor drop-ins under /usr/lib/ ship with the base image.
+    _DROPIN_SUFFIXES = (".service.d", ".timer.d", ".socket.d")
+    admin_dir = host_root / "etc/systemd/system"
+    try:
+        if admin_dir.exists():
+            for entry in sorted(admin_dir.iterdir()):
+                if not entry.is_dir():
+                    continue
+                if not any(entry.name.endswith(s) for s in _DROPIN_SUFFIXES):
+                    continue
+                unit_name = entry.name[:-2]  # strip ".d" → e.g. "httpd.service"
+                try:
+                    for conf in sorted(entry.iterdir()):
+                        if not conf.is_file() or not conf.name.endswith(".conf"):
+                            continue
+                        try:
+                            content = conf.read_text()
+                        except (PermissionError, OSError):
+                            content = ""
+                        rel = str(conf.relative_to(host_root))
+                        section.drop_ins.append(SystemdDropIn(
+                            unit=unit_name,
+                            path=rel,
+                            content=content,
+                        ))
+                except (PermissionError, OSError):
+                    continue
+    except (PermissionError, OSError) as exc:
+        _debug(f"cannot scan drop-in dirs under {admin_dir}: {exc}")
+    if section.drop_ins:
+        _debug(f"found {len(section.drop_ins)} drop-in override(s)")
 
     _debug(f"result: {len(section.enabled_units)} enabled changes, "
            f"{len(section.disabled_units)} disabled changes, "

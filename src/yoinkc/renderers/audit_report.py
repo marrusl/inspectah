@@ -173,6 +173,23 @@ def render(
                 lines.append(f"| {prefix}{s.unit} | {s.current_state} | {s.default_state} | {s.action} |")
             lines.append("")
 
+    if snapshot.services and snapshot.services.drop_ins:
+        included = [d for d in snapshot.services.drop_ins if d.include]
+        excluded = [d for d in snapshot.services.drop_ins if not d.include]
+        if included or excluded:
+            lines.append("### Systemd drop-in overrides")
+            lines.append("")
+            for di in included:
+                lines.append(f"**{di.unit}** — `{di.path}`")
+                if di.content.strip():
+                    lines.append("```ini")
+                    lines.append(di.content.strip())
+                    lines.append("```")
+                lines.append("")
+            for di in excluded:
+                lines.append(f"[EXCLUDED] **{di.unit}** — `{di.path}`")
+                lines.append("")
+
     if snapshot.config and snapshot.config.files:
         lines.append("## Configuration Files")
         lines.append("")

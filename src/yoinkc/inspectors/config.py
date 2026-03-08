@@ -176,6 +176,11 @@ _UNOWNED_EXCLUDE_GLOBS: List[str] = [
     "/etc/systemd/user/*.wants/*",
     "/etc/systemd/user/*.requires/*",
 
+    # ── systemd admin drop-ins (service inspector handles these) ────────────
+    "/etc/systemd/system/*.service.d/*.conf",
+    "/etc/systemd/system/*.timer.d/*.conf",
+    "/etc/systemd/system/*.socket.d/*.conf",
+
     # ── systemd vendor drop-ins ──────────────────────────────────────────────
     "/etc/systemd/sleep.conf.d/*",
 

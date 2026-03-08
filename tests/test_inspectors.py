@@ -235,6 +235,21 @@ def test_preset_glob_first_match_wins(host_root, fixture_executor):
     )
 
 
+def test_service_inspector_detects_drop_ins(host_root, fixture_executor):
+    """Drop-in overrides under /etc/systemd/system/*.service.d/ are detected."""
+    from yoinkc.inspectors.service import run as run_service
+    section = run_service(host_root, fixture_executor)
+    assert len(section.drop_ins) >= 1
+    httpd_dropin = next(
+        (d for d in section.drop_ins if d.unit == "httpd.service"), None,
+    )
+    assert httpd_dropin is not None, (
+        f"expected httpd.service drop-in, got units: {[d.unit for d in section.drop_ins]}"
+    )
+    assert httpd_dropin.path.endswith("override.conf")
+    assert "TimeoutStartSec=600" in httpd_dropin.content
+
+
 def test_config_inspector_with_fixtures(host_root, fixture_executor):
     from yoinkc.inspectors.config import run as run_config
     from yoinkc.inspectors.rpm import run as run_rpm
