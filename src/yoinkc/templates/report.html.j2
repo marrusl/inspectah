@@ -788,15 +788,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 
   {%- if kb.non_default_modules %}
-  {%- set total = (kb.loaded_modules or [])|length %}
-  {%- set default_count = total - (kb.non_default_modules|length) %}
-  <h3>Non-default loaded modules ({{ kb.non_default_modules|length }})</h3>
-  <table class="data-table"><thead><tr><th></th><th>Module</th><th>Size</th><th>Used by</th></tr></thead><tbody>
-    {%- for m in kb.non_default_modules %}
-    <tr{% if not m.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="non_default_modules" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if m.include else '' }}/></td><td><code>{{ m.name }}</code></td><td>{{ m.size }}</td><td>{{ m.used_by }}</td></tr>
-    {%- endfor %}
-  </tbody></table>
-  {%- if default_count > 0 %}<p>{{ default_count }} module(s) at expected defaults (not shown).</p>{%- endif %}
+  <p style="color:var(--muted);font-size:0.9em">{{ kb.non_default_modules|length }} kernel module(s) were loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.</p>
   {%- endif %}
 
   {%- if kb.sysctl_overrides %}

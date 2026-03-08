@@ -550,18 +550,7 @@ def render(
 
         if kb.non_default_modules:
             lines.append("")
-            lines.append(f"### Non-default loaded modules ({len(kb.non_default_modules)})")
-            lines.append("")
-            lines.append("| Module | Size | Used by |")
-            lines.append("|--------|------|---------|")
-            for m in kb.non_default_modules:
-                prefix = "[EXCLUDED] " if not m.include else ""
-                lines.append(f"| {prefix}`{m.name}` | {m.size} | {m.used_by} |")
-            total = len(kb.loaded_modules or [])
-            default_count = total - len(kb.non_default_modules)
-            if default_count > 0:
-                lines.append("")
-                lines.append(f"_{default_count} module(s) at expected defaults (not shown)._")
+            lines.append(f"- {len(kb.non_default_modules)} kernel module(s) loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.")
 
         if kb.sysctl_overrides:
             lines.append("")
