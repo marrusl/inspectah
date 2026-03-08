@@ -24,6 +24,13 @@ if [ -n "$_need_install" ]; then
     fi
 fi
 
+# Track whether podman itself was just installed so the registry login check
+# below can offer interactive login instead of immediately erroring out.
+_podman_just_installed=false
+case " ${_need_install} " in
+  *" podman "*) _podman_just_installed=true ;;
+esac
+
 # Expose the list of just-installed tools to the yoinkc container so it can
 # exclude them from its RPM output (they're tool prerequisites, not operator
 # additions to the migration target).
@@ -55,16 +62,51 @@ _check_rh_login() {
   fi
 }
 
+# Called when podman was JUST installed by this script and has no stored
+# credentials. If stdin is a TTY we can prompt interactively; otherwise
+# we give actionable instructions and exit so the user can log in first.
+_prompt_rh_login_fresh() {
+  if [ -t 0 ]; then
+    printf '\nyoinkc needs access to registry.redhat.io for the RHEL base image.\nLet'\''s log in now:\n\n' >&2
+    if podman login registry.redhat.io; then
+      return 0
+    fi
+    echo "" >&2
+    echo "ERROR: podman login failed." >&2
+    echo "  Use your Red Hat account (https://access.redhat.com)." >&2
+    exit 1
+  else
+    echo "" >&2
+    echo "ERROR: podman was just installed and has no credentials for registry.redhat.io." >&2
+    echo "" >&2
+    echo "  Run:  sudo podman login registry.redhat.io" >&2
+    echo "  Then re-run this script." >&2
+    echo "" >&2
+    echo "  Use your Red Hat account (https://access.redhat.com)." >&2
+    echo "  Free developer account: https://developers.redhat.com" >&2
+    echo "" >&2
+    exit 1
+  fi
+}
+
 case "$IMAGE" in
   registry.redhat.io/*)
     # Image itself is from the Red Hat registry
-    _check_rh_login
+    if $_podman_just_installed && ! podman login --get-login registry.redhat.io >/dev/null 2>&1; then
+      _prompt_rh_login_fresh
+    else
+      _check_rh_login
+    fi
     ;;
   *)
     # For any image on a RHEL host, yoinkc will pull a rhel-bootc base image
     # from registry.redhat.io to compute the package baseline.
     if [ -f /etc/redhat-release ] && grep -qi "red hat" /etc/redhat-release 2>/dev/null; then
-      _check_rh_login
+      if $_podman_just_installed && ! podman login --get-login registry.redhat.io >/dev/null 2>&1; then
+        _prompt_rh_login_fresh
+      else
+        _check_rh_login
+      fi
     fi
     ;;
 esac
