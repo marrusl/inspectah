@@ -8,7 +8,7 @@ A container run with `--pid=host --privileged --security-opt label=disable -v /:
 
 This is clean — no contamination of the source system, no installation required, and it naturally separates the tool from the thing being inspected.
 
-During inspection, the tool emits progress messages to stderr (e.g., `Inspecting packages...`, `Inspecting services...`) so the operator knows what's happening.
+During inspection, the tool emits styled progress output to stderr using ANSI colours and step counters (e.g., `── [1/11] Packages ──`, `── [2/11] Config files ──`). Colours are suppressed automatically when stderr is not a TTY. The renderer phase emits a `Rendering output…` / `Done.` pair.
 
 Output goes to a mounted volume that becomes either local files, a local git repo, or gets pushed to GitHub via the API.
 
@@ -22,7 +22,7 @@ The tool is structured as a pipeline of **inspectors** that each produce structu
 
 #### RPM Inspector
 
-`rpm -qa --queryformat` to get the full package list with epoch/version/release/arch, then diff against the package set from the target bootc base image (see [Baseline Generation](#baseline-generation)). Identifies: added packages (present on host but not in base image), removed packages (present in base image but not on host — rare but possible), and modified package configs via `rpm -Va`.
+`rpm -qa --queryformat` to get the full package list with epoch/version/release/arch, then diff against the package set from the target bootc base image (see [Baseline Generation](#baseline-generation)). Identifies: added packages (present on host but not in base image), base-image-only packages (present in base image but not on host — will be present after migration, shown as "new from base image"), and modified package configs via `rpm -Va`.
 
 Also captures repo definitions from `/host/etc/yum.repos.d/` and `/host/etc/dnf/`.
 
@@ -34,7 +34,7 @@ After computing the added-packages list, the tool runs a dependency resolution p
 
 Uses `systemctl --root=/host` as the preferred detection method for accurate service state (enabled, disabled, masked, static). This leverages systemd's own logic and avoids reimplementing preset evaluation. Falls back to filesystem-based scanning when `systemctl --root` is unavailable or returns errors (e.g., systemd version mismatches between the tool container and host): scans `.wants/` symlinks in `/host/etc/systemd/system/` for enabled services, symlinks to `/dev/null` for masked services, and parses `[Install]` sections in vendor units under `/host/usr/lib/systemd/system/` for disabled/static classification.
 
-Diffs enabled/disabled/masked state against the defaults from systemd preset files in the base image.
+Diffs enabled/disabled/masked state against the defaults from systemd preset files in the base image. Preset glob rules (e.g. `enable cloud-*`) are evaluated using `fnmatch` with first-match-wins semantics, matching `systemd-preset(5)` behaviour.
 
 #### Config Inspector
 
@@ -234,7 +234,7 @@ The tool generates its package baseline by querying the target bootc base image 
    - Fedora → `quay.io/fedora/fedora-bootc:{major}` (clamped to 41 minimum)
 3. **Verify registry credentials.** For `registry.redhat.io` images, run `podman login --get-login` via nsenter to verify the host has valid credentials before attempting the pull. On failure, emit an actionable error instructing the operator to run `sudo podman login registry.redhat.io` or provide `--baseline-packages FILE`. This prevents cryptic pull failures and gives a clear fix.
 4. **Query the base image package list.** Run `podman run --rm --cgroups=disabled <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete set of packages in the base image. Since the tool runs inside a container, it uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces (this is why `--pid=host` and `--privileged` are required on the outer container). `--cgroups=disabled` avoids cgroup permission issues in the nsenter context. This is the authoritative baseline — it's the actual content of the image the Containerfile's `FROM` line references.
-5. **Diff against host.** Compare the host's installed package names against the base image's package list. Packages on the host but not in the base image are "added" (go into `dnf install`). Packages in the base image but not on the host are "removed" (rare, noted in the audit report).
+5. **Diff against host.** Compare the host's installed package names against the base image's package list. Packages on the host but not in the base image are "added" (go into `dnf install`). Packages in the base image but not on the host are "base-image-only" — they will be present after migration. These are noted in the audit report as "new from base image."
 6. **Cache in the snapshot.** The base image package list is stored in `inspection-snapshot.json` so re-renders via `--from-snapshot` don't need to pull the image again.
 
 **Source/target version separation:** The source host version can differ from the target image version. `--target-version` overrides the auto-detected version (e.g., migrating a RHEL 9.4 host to a 9.6 image), and `--target-image` overrides the base image reference entirely (useful for custom base images or testing). Cross-major migrations (e.g., RHEL 9 host → RHEL 10 image) produce a warning since package sets may differ significantly. RHEL images require `podman login registry.redhat.io` on the host before running the tool.
@@ -275,6 +275,8 @@ A dedicated redaction pass runs over all captured file contents **before any out
 - Password fields in config files (`password = ...`, `PASSWD=...`, `secret=...`)
 - Connection strings with embedded credentials (JDBC, MongoDB, Redis, PostgreSQL URIs)
 - Cloud provider credential files
+- Shadow entries: field 1 (password hash) is replaced with `REDACTED_SHADOW_HASH_<sha>` when it is a real hash (not `*`, `!`, `!!`, or empty)
+- `passwd` GECOS fields (field 4) are scanned for embedded credentials
 
 Matched values are replaced with `REDACTED_<TYPE>_<hash>` where the hash is a truncated SHA-256 of the original value. This means you can tell redacted values apart without knowing them — useful for spotting "these three config files all use the same database password."
 
@@ -400,10 +402,10 @@ A markdown document for version control and quick terminal reference. For the in
 
 Organized as:
 
-1. **Executive Summary**: counts of packages added/removed, configs modified, containers found, secrets redacted, issues flagged. A clear triage: X items handled automatically, Y items handled with FIXME, Z items need manual intervention.
+1. **Executive Summary**: counts of packages added, new-from-base-image, configs modified, containers found, secrets redacted, issues flagged. A clear triage: X items handled automatically, Y items handled with FIXME, Z items need manual intervention.
 
 2. **Per-Inspector Sections** (each with tables):
-   - RPM analysis (added, removed, modified packages)
+   - RPM analysis (added packages, base-image-only packages, modified configs)
    - Service state changes
    - Configuration changes (RPM-owned modified, unowned files)
    - Network configuration (what's baked vs. what should be kickstart)
@@ -429,13 +431,14 @@ The report opens to a **dashboard view** with:
 
 - **Status banner**: hostname, OS version, inspection timestamp, overall health with triage breakdown (X automatic, Y FIXME, Z manual).
 - **Warning panel** (prominently placed, always visible at the top): all warnings, FIXMEs, and errors from the run, color-coded by severity (red for "needs manual intervention", amber for "handled with FIXME", blue for informational). Each warning is individually dismissable (dismissed warnings remain in the warnings tab). Dismiss All button collapses the panel. Warning count in status banner updates as warnings are dismissed.
-- **Category cards**: one card per inspector area (Packages, Services, Config, Network, Storage, Scheduled Tasks, Containers, Non-RPM Software, Kernel/Boot, SELinux, Users/Groups). Each card shows a summary count and a status indicator (green checkmark if fully automated, amber if FIXMEs exist, red if manual intervention needed).
+- **Migration readiness panel** (in the Summary tab): three columns — Automatic (green), Needs review (amber), Manual (red) — each listing per-category item counts as clickable links that navigate to the relevant tab.
+- **Tab navigation** in three rows: overview (Summary, Audit, Warnings, Containerfile), primary inspection categories (Packages, Config, Services, Users/Groups, Containers, Non-RPM, File browser), and secondary categories (Scheduled, Kernel/Boot, SELinux, Network, Storage, Secrets).
 
 **Drill-down:**
 
-Clicking any category card expands to the full detail view for that inspector:
+Clicking any tab navigates to the full detail view for that inspector:
 
-- **Packages**: table of added, removed, and modified packages with version info.
+- **Packages**: table of added packages (with version info), base-image-only packages (new from base image), and modified configs.
 - **Services**: table of state changes with columns for service name, current state, default state, and action taken in Containerfile.
 - **Config files**: list of unowned and modified files. For modified RPM-owned files: if `--config-diffs` was used, shows the diff against the package default with syntax highlighting; otherwise, shows the full file with `rpm -Va` verification flags.
 - **Network**: connections table with color-coded Deployment column (green "Bake into image" for static, yellow "Kickstart at deploy" for DHCP). Firewall zones with services, ports, rich rules, and direct rules. resolv.conf provenance with action guidance. Static routes and policy routing rules.
@@ -447,6 +450,24 @@ Clicking any category card expands to the full detail view for that inspector:
 Accessible both from the top-level warning panel and as a dedicated tab. Displays all warnings in a flat, searchable list with severity, source inspector, description, affected resource, and suggested action.
 
 **Implementation:** Generated from `inspection-snapshot.json` by the renderer. The entire report is a single `.html` file (typically < 2MB) that can be opened in any browser, emailed, or served statically. No server required.
+
+### Interactive Refinement (yoinkc-refine)
+
+The HTML report embeds the full inspection snapshot and exposes include/exclude checkboxes on every package, service, config file, and other inspected item. Operators can deselect items they don't want in the output and click **Re-render** to generate a new Containerfile and updated artifacts without re-running the inspection.
+
+**Workflow:**
+
+1. **Inspect on host:** run yoinkc, collect the output tarball.
+2. **Copy to workstation:** `scp target-host:~/yoinkc-output/yoinkc-output-*.tar.gz .`
+3. **Start yoinkc-refine:** `./yoinkc-refine yoinkc-output-hostname-*.tar.gz` — the server extracts the tarball, serves the report at `http://localhost:8642`, and prints the URL.
+4. **Iterate in browser:** toggle items with checkboxes, click Re-render to apply changes (requires podman or docker for the re-render step), download a refined tarball when done.
+
+**yoinkc-refine** is a single-file Python 3.9+ stdlib-only HTTP server that:
+- Extracts the tarball into a temporary directory and serves `report.html`
+- Forwards re-render requests to a yoinkc container (`podman run` or `docker run`)
+- Serves the download tarball of the current output state
+
+Podman or Docker is required for re-rendering. The include/exclude checkboxes and tarball download work without it.
 
 ### Kickstart Suggestion File
 
@@ -493,8 +514,8 @@ The default run is optimized for speed — it covers the vast majority of system
 | `--yes` | off | Skip interactive confirmation prompts (for automation). |
 | `--user-strategy STRATEGY` | off | Override user creation strategy for all users. Valid: sysusers, blueprint, useradd, kickstart, exact-copy. Default: auto-assigned per classification. |
 | `--host-root PATH` | `/host` | Root path for host inspection. |
-| `--from-snapshot PATH` | off | Skip inspection, load a previously saved snapshot and render only. |
-| `--inspect-only` | off | Run inspectors only, save snapshot, skip renderers. |
+| `--from-snapshot PATH` | off | Skip inspection, load a previously saved snapshot and render only. Mutually exclusive with `--inspect-only`. |
+| `--inspect-only` | off | Run inspectors only, save snapshot, skip renderers. Mutually exclusive with `--from-snapshot`. |
 | `--target-version VERSION` | auto-detected | Target bootc image version (clamped to minimum supported version per distro). |
 | `--target-image IMAGE` | auto-selected | Full target base image reference (overrides `--target-version`). |
 | `--skip-preflight` | off | Skip container privilege checks. |
@@ -514,6 +535,8 @@ The build runs with `--no-cache` to ensure a clean test. On success, the tool re
 The resulting image is not pushed or deployed — it's a local build test only. The operator is expected to review, refine, and rebuild before deployment.
 
 Note: validation requires access to the host's podman (via `nsenter`, same mechanism as baseline generation). It also requires network access to pull the base image and install packages, so it won't work in fully air-gapped runs without a pre-pulled base image.
+
+When podman is not installed, `--validate` reports failure with an explanatory warning rather than silently claiming success.
 
 ## Implementation Language
 
@@ -536,5 +559,3 @@ The following are out of scope for the POC and v1 but represent the natural evol
 **Enhanced cron-to-timer conversion.** Deeper semantic analysis of cron jobs to handle edge cases: `MAILTO` conversion to systemd journal notifications, `@reboot` entries mapped to oneshot services, `%` character handling, and environment variable inheritance differences.
 
 **Config file semantic diffing.** Beyond line-level diffs (via `--config-diffs`), understanding the *meaning* of config changes — e.g., recognizing that a change to `MaxClients` in `httpd.conf` is a performance tuning decision vs. a change to `DocumentRoot` which is a structural decision. This would improve the audit report's guidance on which changes to keep vs. reconsider.
-
-**Interactive report re-rendering.** The HTML report embeds the full inspection snapshot. A natural extension is a JavaScript-based renderer that lets operators change strategy assignments, toggle packages between leaf and auto, and preview a re-rendered Containerfile directly in the browser — or generate a new output directory with modified artifacts. This would eliminate the re-run cycle for what-if exploration.
