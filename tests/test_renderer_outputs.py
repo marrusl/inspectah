@@ -888,3 +888,28 @@ def test_repo_copy_precedes_dnf_install():
         f"COPY config/etc/yum.repos.d/ (pos {copy_idx}) must come before "
         f"RUN dnf install (pos {dnf_idx})"
     )
+
+
+def test_bootc_container_lint_is_last_run():
+    """RUN bootc container lint must appear at the end of every generated Containerfile."""
+    from yoinkc.renderers.containerfile import render as render_containerfile
+    from yoinkc.schema import InspectionSnapshot
+    from jinja2 import Environment
+    import tempfile
+
+    snap = InspectionSnapshot()
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        render_containerfile(snap, Environment(), out)
+        cf = (out / "Containerfile").read_text()
+
+    assert "RUN bootc container lint" in cf
+    # It must be the last non-empty line
+    last_run = next(
+        (line.strip() for line in reversed(cf.splitlines()) if line.strip()),
+        "",
+    )
+    assert last_run == "RUN bootc container lint", (
+        f"Expected 'RUN bootc container lint' as last line, got: {last_run!r}"
+    )

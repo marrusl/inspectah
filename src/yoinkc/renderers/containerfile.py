@@ -1178,6 +1178,10 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     lines.append("# tmpfiles.d/yoinkc-var.conf included in COPY config/etc/ above")
     lines.append("")
 
+    # 14. Validate bootc compatibility
+    lines.append("# === Validate bootc compatibility ===")
+    lines.append("RUN bootc container lint")
+
     return "\n".join(lines)
 
 
