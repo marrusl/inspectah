@@ -36,6 +36,8 @@ Uses `systemctl --root=/host` as the preferred detection method for accurate ser
 
 Diffs enabled/disabled/masked state against the defaults from systemd preset files in the base image. Preset glob rules (e.g. `enable cloud-*`) are evaluated using `fnmatch` with first-match-wins semantics, matching `systemd-preset(5)` behaviour.
 
+After unit-file scanning, the inspector also scans `/etc/systemd/system/` for drop-in override directories matching `*.service.d/`, `*.timer.d/`, and `*.socket.d/`. For each `.conf` file found, a `SystemdDropIn` entry is created with the parent unit name (derived by stripping the `.d` suffix) and the file content. Only admin overrides are scanned; vendor drop-ins under `/usr/lib/systemd/system/` ship with the base image and are not reported. The config inspector excludes these paths from the unowned-file list to avoid double-reporting. The Containerfile renderer writes included drop-ins to the config tree and references them in the consolidated COPY block; the audit report shows them in a "Systemd drop-in overrides" subsection under Services.
+
 #### Config Inspector
 
 Three passes:
@@ -53,6 +55,8 @@ Rather than running `rpm -qf` per-file across `/etc` (which is O(n) RPM database
 A maintainable exclusion list filters out known system-generated files that are not operator-placed configs. The lists cover machine identity files, systemd state, PKI/subscription certs, SELinux policy store, PAM base configs, package manager state, installer artifacts, and more. See `src/yoinkc/inspectors/config.py` for the full current list.
 
 The exclusion list is defined as two data structures (exact paths and glob patterns) at the top of the config inspector source, making it easy to extend as new false positives are discovered.
+
+When custom CA certificates are found under `/etc/pki/ca-trust/source/anchors/` (captured as unowned configs), the Containerfile renderer emits `RUN update-ca-trust` immediately after the consolidated COPY block. Without this, copied certificates would not be added to the system trust store and TLS connections to internal services would silently fail.
 
 **Diff against RPM defaults (opt-in: `--config-diffs`):**
 
@@ -121,7 +125,7 @@ For the Containerfile output, cron jobs are converted to systemd timer units (si
 
 Discovers container workloads through a fast file-based scan:
 
-1. **Quadlet units**: `/etc/containers/systemd/`, `/usr/share/containers/systemd/`, and `/etc/systemd/system/` — these are the primary source of truth and are always captured. Also scans user-level quadlets at `~/.config/containers/systemd/` for real users (UID 1000–59999) via targeted path lookup (no recursive home directory traversal). Parses `Image=` from the `[Container]` section (handles whitespace and case variations).
+1. **Quadlet units**: `/etc/containers/systemd/`, `/usr/share/containers/systemd/`, and `/etc/systemd/system/` — these are the primary source of truth and are always captured. Also scans user-level quadlets at `~/.config/containers/systemd/` for real users (UID 1000–59999) via targeted path lookup (no recursive home directory traversal). All six quadlet unit types are captured: `.container`, `.volume`, `.network`, `.kube`, `.image`, and `.build`. `Image=` is parsed from `.container` files; other types carry an empty image field. All unit files are copied to `quadlet/` and included via `COPY quadlet/ /etc/containers/systemd/`.
 2. **Compose files**: podman-compose and docker-compose files found via search across `/opt`, `/srv`, `/etc`. Parses `image:` fields to extract image references per service.
 3. **Container image references**: extracted from both quadlet units and compose files and displayed in the audit report.
 
@@ -179,6 +183,7 @@ If pip packages with C extensions are detected (identified by `.so` files in `*.
 - Kernel modules: loaded (`lsmod`) diffed against defaults. Modules configured in `/etc/modules-load.d/` and `/usr/lib/modules-load.d/` are treated as expected. Modules loaded only as dependencies (non-empty `used_by` column) are filtered out. Only modules that are neither explicitly configured nor loaded as dependencies appear as non-default.
 - Sysctl settings: reads runtime values from `/proc/sys/`, reads shipped defaults from `/usr/lib/sysctl.d/*.conf` (sorted by filename, matching systemd precedence), reads operator overrides from `/etc/sysctl.d/*.conf` and `/etc/sysctl.conf`. Only values where runtime differs from shipped default appear in output, with source attribution.
 - Dracut configuration: `/etc/dracut.conf.d/`
+- Tuned profiles: reads the active profile name from `/etc/tuned/active_profile` (falls back to `tuned-adm active` via executor). Scans `/etc/tuned/` for subdirectories containing a `tuned.conf` and captures them as custom profiles. Custom profiles are written to the config tree and the Containerfile emits `RUN tuned-adm profile <name>` in the Kernel section. Tuned profile files are excluded from the unowned-file list to avoid double-reporting.
 
 #### SELinux/Security Inspector
 
@@ -419,7 +424,9 @@ Organized as:
 
 3. **Data Migration Plan** (`/var` problem): dedicated section listing everything found under `/var/lib`, `/var/log`, `/var/data` that looks like application state — databases, app data directories, log directories — with explicit notes on what can be seeded in the image (deployed only at initial bootstrap, never updated by bootc afterward) vs. what needs a separate migration strategy. The Containerfile generates `systemd-tmpfiles.d` snippets to ensure expected directory structures exist on every boot.
 
-4. **Items Requiring Manual Intervention**: consolidated list pulled from all inspectors, prioritized by risk.
+4. **Environment-specific considerations**: advisory subsections rendered only when relevant data is present. Flags: custom alternatives selections (packages may not reproduce the same default), raw nftables rules outside firewalld (potential conflict), complex network topologies (bond/vlan/bridge/team connections need physical-topology-aware kickstart), identity provider integration (SSSD/Kerberos keytabs are machine-specific and must be regenerated after deployment), NTP/chrony config (NTP server addresses are often site-specific), and rsyslog forwarding rules (log target addresses are site-specific). Always ends with a note on bootc's 3-way `/etc` merge strategy and a link to the bootc filesystem documentation.
+
+5. **Items Requiring Manual Intervention**: consolidated list pulled from all inspectors, prioritized by risk.
 
 ### HTML Report (report.html)
 
@@ -554,8 +561,10 @@ The following are out of scope for the POC and v1 but represent the natural evol
 
 **Snapshot diffing and drift detection.** The structured inspection snapshot is independently valuable beyond migration. Diffing snapshots across hosts or across time enables configuration drift detection, compliance auditing, and fleet-wide inventory. A stable, well-documented snapshot schema is the foundation for this.
 
-**Distribution support.** RHEL 9, RHEL 10, CentOS Stream 9, CentOS Stream 10, and Fedora are all supported. Future distro additions (e.g., RHEL 11) require only adding entries to the data-driven mapping tables in `baseline.py`.
+**Distribution support.** RHEL 9, RHEL 10, CentOS Stream 9, CentOS Stream 10, and Fedora are supported. Future distro additions (e.g., RHEL 11) require only adding entries to the data-driven mapping tables in `baseline.py`.
 
 **Enhanced cron-to-timer conversion.** Deeper semantic analysis of cron jobs to handle edge cases: `MAILTO` conversion to systemd journal notifications, `@reboot` entries mapped to oneshot services, `%` character handling, and environment variable inheritance differences.
 
-**Config file semantic diffing.** Beyond line-level diffs (via `--config-diffs`), understanding the *meaning* of config changes — e.g., recognizing that a change to `MaxClients` in `httpd.conf` is a performance tuning decision vs. a change to `DocumentRoot` which is a structural decision. This would improve the audit report's guidance on which changes to keep vs. reconsider.
+**Lightweight local re-rendering.** A Python-only Containerfile regeneration path in `yoinkc-refine` that does not require a container runtime. Currently, re-rendering from a modified snapshot requires podman or docker to run a fresh yoinkc container. A pure-Python renderer invocation would allow tarball-only workflows on machines where no container runtime is available.
+
+**`/var` size estimation improvement.** The storage inspector currently estimates directory sizes via Python-level file iteration, which is slow for large trees. Using `du` via the executor would be significantly faster and avoid Python-level I/O overhead.
