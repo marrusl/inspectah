@@ -6,6 +6,17 @@ IMAGE="${YOINKC_IMAGE:-ghcr.io/marrusl/yoinkc:latest}"
 OUTPUT_DIR="${1:-${YOINKC_OUTPUT:-./yoinkc-output}}"
 shift 2>/dev/null || true
 
+# Strip --no-entitlement from pass-through args before forwarding to yoinkc.
+_skip_entitlement=false
+_args=""
+for _arg in "$@"; do
+    case "$_arg" in
+        --no-entitlement) _skip_entitlement=true ;;
+        *) _args="${_args} ${_arg}" ;;
+    esac
+done
+set -- ${_args}
+
 _need_install=""
 for cmd in podman tar; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -124,6 +135,21 @@ podman run --rm \
   -v "${HOST_ROOT}:/host:ro" \
   -v "${OUTPUT_DIR}:/output:z" \
   "$IMAGE" --output-dir /output "$@"
+
+# Bundle RHEL subscription certs so the tarball can be used for podman build
+# on non-RHEL workstations.  --no-entitlement suppresses this (e.g. when
+# sharing the tarball publicly).
+if ! $_skip_entitlement; then
+    if [ -d /etc/pki/entitlement ] && ls /etc/pki/entitlement/*.pem >/dev/null 2>&1; then
+        mkdir -p "$OUTPUT_DIR/entitlement"
+        cp /etc/pki/entitlement/*.pem "$OUTPUT_DIR/entitlement/"
+        echo "Bundled $(ls "$OUTPUT_DIR/entitlement/"*.pem | wc -l | tr -d ' ') entitlement cert(s) for non-RHEL builds"
+    fi
+    if [ -d /etc/rhsm ]; then
+        cp -a /etc/rhsm "$OUTPUT_DIR/rhsm"
+        echo "Bundled /etc/rhsm for non-RHEL builds"
+    fi
+fi
 
 echo "=== Packaging results ==="
 HOSTNAME="$(hostname -s 2>/dev/null || cat /etc/hostname 2>/dev/null || echo unknown)"
