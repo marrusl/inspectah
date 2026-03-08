@@ -629,23 +629,24 @@ def test_user_classification_in_fixture(host_root, fixture_executor):
     assert jdoe_group["strategy"] == "kickstart"
 
 
-def test_group_strategy_no_user():
-    """Groups with no associated user default to sysusers."""
+def test_group_strategy_no_user(tmp_path):
+    """Groups with no associated user default to sysusers — tested via the real run()."""
     from yoinkc.inspectors.users_groups import run as run_users_groups
-    from yoinkc.schema import UserGroupSection
 
-    section = UserGroupSection()
-    section.groups.append({"name": "mygroup", "gid": 2000, "members": []})
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    # No non-system users (uid ≥ 1000) in passwd
+    (etc / "passwd").write_text("root:x:0:0:root:/root:/bin/bash\n")
+    # One group with gid 2000 and no matching user
+    (etc / "group").write_text("mygroup:x:2000:\n")
 
-    user_by_gid = {}
-    for g in section.groups:
-        primary_user = user_by_gid.get(g.get("gid"))
-        if primary_user:
-            g["strategy"] = primary_user.get("strategy", "sysusers")
-        else:
-            g["strategy"] = "sysusers"
+    section = run_users_groups(tmp_path, executor=None)
 
-    assert section.groups[0]["strategy"] == "sysusers"
+    mygroup = next((g for g in section.groups if g["name"] == "mygroup"), None)
+    assert mygroup is not None, "mygroup must be collected by the inspector"
+    assert mygroup["strategy"] == "sysusers", (
+        f"Group with no primary user must default to sysusers, got {mygroup['strategy']!r}"
+    )
 
 
 def test_users_groups_inspector_with_fixtures(host_root, fixture_executor):
