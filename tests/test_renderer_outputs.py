@@ -959,3 +959,62 @@ def test_bootc_container_lint_is_last_run():
     assert last_run == "RUN bootc container lint", (
         f"Expected 'RUN bootc container lint' as last line, got: {last_run!r}"
     )
+
+
+def test_nonrpm_emits_nodejs_prereq_when_missing_from_packages():
+    """A dnf install for nodejs must appear before npm ci when nodejs is not in packages_added."""
+    from yoinkc.renderers.containerfile import render as render_containerfile
+    from yoinkc.schema import InspectionSnapshot, NonRpmSoftwareSection, NonRpmItem
+    from jinja2 import Environment
+    import tempfile
+
+    snap = InspectionSnapshot()
+    snap.non_rpm_software = NonRpmSoftwareSection()
+    snap.non_rpm_software.items = [
+        NonRpmItem(path="opt/webapp", method="npm package-lock.json", include=True),
+    ]
+    # No packages_added — nodejs/npm not in the dnf install block
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        render_containerfile(snap, Environment(), out)
+        cf = (out / "Containerfile").read_text()
+
+    assert "nodejs" in cf, "Expected a nodejs install directive"
+    nodejs_idx = cf.find("nodejs")
+    npm_ci_idx = cf.find("npm ci")
+    assert npm_ci_idx != -1, "Expected RUN npm ci"
+    assert nodejs_idx < npm_ci_idx, (
+        f"dnf install nodejs (pos {nodejs_idx}) must come before npm ci (pos {npm_ci_idx})"
+    )
+
+
+def test_nonrpm_no_nodejs_prereq_when_already_in_packages():
+    """No extra nodejs install when nodejs is already in the leaf packages."""
+    from yoinkc.renderers.containerfile import render as render_containerfile
+    from yoinkc.schema import (
+        InspectionSnapshot, NonRpmSoftwareSection, NonRpmItem,
+        RpmSection, PackageEntry, PackageState,
+    )
+    from jinja2 import Environment
+    import tempfile
+
+    snap = InspectionSnapshot()
+    snap.non_rpm_software = NonRpmSoftwareSection()
+    snap.non_rpm_software.items = [
+        NonRpmItem(path="opt/webapp", method="npm package-lock.json", include=True),
+    ]
+    snap.rpm = RpmSection()
+    snap.rpm.packages_added = [
+        PackageEntry(name="nodejs", epoch="0", version="20.0", release="1.el10",
+                     arch="x86_64", state=PackageState.ADDED, include=True),
+    ]
+    snap.rpm.leaf_packages = ["nodejs"]
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        render_containerfile(snap, Environment(), out)
+        cf = (out / "Containerfile").read_text()
+
+    # The prerequisite block must not appear (nodejs is already in the dnf install)
+    assert "Tool prerequisites not in the dnf install block" not in cf

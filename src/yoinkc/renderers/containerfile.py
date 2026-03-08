@@ -850,6 +850,49 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
         lines.append("# === Non-RPM Software ===")
 
+        # Determine which tool packages are actually needed by items in this section.
+        # If they're not already guaranteed by the dnf install block (i.e., not in
+        # leaf_packages or packages_added), emit a prerequisite install up front.
+        _installed_names: set = set()
+        if snapshot.rpm:
+            if snapshot.rpm.packages_added:
+                _installed_names.update(p.name for p in snapshot.rpm.packages_added if p.include)
+            if snapshot.rpm.leaf_packages:
+                _installed_names.update(snapshot.rpm.leaf_packages)
+            if snapshot.rpm.auto_packages:
+                _installed_names.update(snapshot.rpm.auto_packages)
+
+        _included_items = [it for it in snapshot.non_rpm_software.items if it.include]
+        _needs_nodejs = any(it.method in ("npm package-lock.json", "yarn.lock")
+                            for it in _included_items)
+        # python venv uses the venv's own pip — system python3-pip only needed for
+        # bare "pip install" calls (requirements.txt and non-C-extension dist-info).
+        _needs_pip = any(it.method == "pip requirements.txt" for it in _included_items) or any(
+            it.method == "pip dist-info" and it.version and not it.has_c_extensions
+            for it in _included_items
+        )
+
+        _prereq_pkgs: list = []
+        if _needs_nodejs and not (_installed_names & {"npm", "nodejs"}):
+            # RHEL 9: npm is a separate package; RHEL 10: bundled in nodejs.
+            # The || fallback handles both distro generations.
+            _prereq_pkgs.append("nodejs npm || dnf install -y nodejs")
+        if _needs_pip and "python3-pip" not in _installed_names:
+            _prereq_pkgs.append("python3-pip")
+
+        if _prereq_pkgs:
+            lines.append("# Tool prerequisites not in the dnf install block above:")
+            if len(_prereq_pkgs) == 1 and "||" in _prereq_pkgs[0]:
+                lines.append(f"RUN dnf install -y {_prereq_pkgs[0]}")
+            else:
+                non_fallback = [p for p in _prereq_pkgs if "||" not in p]
+                fallback = [p for p in _prereq_pkgs if "||" in p]
+                if non_fallback:
+                    lines.append("RUN dnf install -y " + " ".join(non_fallback))
+                for fb in fallback:
+                    lines.append(f"RUN dnf install -y {fb}")
+            lines.append("")
+
         pip_packages: list = []
         remaining: list = []
 
