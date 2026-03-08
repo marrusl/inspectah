@@ -47,6 +47,33 @@ def test_redact_text_password():
     assert redactions[0]["path"] == "test/path"
 
 
+def test_redact_text_multiple_passwords_different_lengths():
+    """Two passwords where the first replacement changes string length.
+
+    Before the reverse-order fix, the second match's position was stale
+    after the first replacement mutated the string, potentially leaving it
+    unredacted or mis-evaluating _is_comment_line.
+    """
+    redactions = []
+    text = "password=short\npassword=muchlongervalue"
+    out = _redact_text(text, "test/multi", redactions)
+    assert "short" not in out
+    assert "muchlongervalue" not in out
+    assert out.count("REDACTED_PASSWORD") == 2
+    assert len(redactions) == 2
+
+
+def test_redact_text_comment_line_preserved():
+    """A commented secret must survive while the real one on the next line is redacted."""
+    redactions = []
+    text = "# password=safe_example\npassword=realsecret"
+    out = _redact_text(text, "test/comment", redactions)
+    assert "safe_example" in out, "commented value should be preserved"
+    assert "realsecret" not in out, "real value should be redacted"
+    assert out.count("REDACTED_PASSWORD") == 1
+    assert len(redactions) == 1
+
+
 def test_redact_text_false_positive():
     """PAM config lines should not be redacted."""
     redactions = []

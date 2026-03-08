@@ -84,10 +84,11 @@ def _is_comment_line(text: str, match_start: int) -> bool:
 def _redact_text(text: str, path: str, redactions: List[dict]) -> str:
     out = text
     for pattern, type_label in REDACT_PATTERNS:
-        for m in list(re.finditer(pattern, out, re.IGNORECASE | re.DOTALL)):
+        matches = list(re.finditer(pattern, out, re.IGNORECASE | re.DOTALL))
+        spans: List[Tuple[int, int, str]] = []
+        for m in matches:
             if _is_comment_line(out, m.start()):
                 continue
-            original = m.group(0)
             if type_label == "PRIVATE_KEY":
                 replacement = f"REDACTED_{type_label}_<removed>"
             else:
@@ -95,13 +96,16 @@ def _redact_text(text: str, path: str, redactions: List[dict]) -> str:
                 if type_label == "PASSWORD" and sub.strip().lower() in _FALSE_POSITIVE_VALUES:
                     continue
                 replacement = f"REDACTED_{type_label}_{_truncated_sha256(sub)}"
-            out = out.replace(original, replacement, 1)
+            spans.append((m.start(), m.end(), replacement))
             redactions.append({
                 "path": path,
                 "pattern": type_label,
                 "line": "content",
                 "remediation": "Use a secret store or inject at deploy time.",
             })
+        # Apply in reverse so earlier positions stay valid.
+        for start, end, replacement in reversed(spans):
+            out = out[:start] + replacement + out[end:]
     return out
 
 
