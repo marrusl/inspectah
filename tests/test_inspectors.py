@@ -948,3 +948,33 @@ def test_rpm_inspector_captures_gpg_keys(host_root, fixture_executor):
     assert "etc/pki/rpm-gpg/RPM-GPG-KEY-TEST" in key_paths
     key = next(k for k in section.gpg_keys if "TEST" in k.path)
     assert "BEGIN PGP PUBLIC KEY BLOCK" in key.content
+
+
+def test_collect_gpg_keys_resolves_dnf_vars(tmp_path):
+    """gpgkey= paths containing $releasever_major are resolved before file lookup."""
+    from yoinkc.inspectors.rpm import _collect_gpg_keys
+    from yoinkc.schema import RepoFile
+
+    # Set up a minimal host_root with os-release and the resolved key file
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "os-release").write_text('VERSION_ID="10.0"\nID=rhel\n')
+
+    gpg_dir = etc / "pki" / "rpm-gpg"
+    gpg_dir.mkdir(parents=True)
+    key_content = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nFAKE\n-----END PGP PUBLIC KEY BLOCK-----\n"
+    (gpg_dir / "RPM-GPG-KEY-TEST-10").write_text(key_content)
+
+    # Repo file using $releasever_major in the gpgkey path
+    repo = RepoFile(
+        path="etc/yum.repos.d/test.repo",
+        content=(
+            "[test]\nbaseurl=http://example.com\ngpgcheck=1\n"
+            "gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-TEST-$releasever_major\n"
+        ),
+    )
+
+    keys = _collect_gpg_keys(tmp_path, [repo])
+    assert keys, "Expected the GPG key to be captured after variable resolution"
+    assert keys[0].path == "etc/pki/rpm-gpg/RPM-GPG-KEY-TEST-10"
+    assert "BEGIN PGP PUBLIC KEY BLOCK" in keys[0].content

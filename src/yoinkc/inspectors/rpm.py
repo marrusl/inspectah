@@ -213,6 +213,34 @@ def _collect_repo_files(host_root: Path) -> List[RepoFile]:
     return repo_files
 
 
+def _resolve_dnf_vars(path: str, host_root: Path) -> str:
+    """Replace dnf variable references ($releasever, $releasever_major, $basearch) in *path*.
+
+    Values are read from the host's /etc/os-release and platform.machine().
+    Returns the original path unchanged if it contains no variables.
+    """
+    if "$" not in path:
+        return path
+
+    os_release: dict = {}
+    try:
+        for line in (host_root / "etc/os-release").read_text().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                os_release[k] = v.strip().strip('"')
+    except (FileNotFoundError, PermissionError, OSError):
+        pass
+
+    version_id = os_release.get("VERSION_ID", "")
+    major = version_id.split(".")[0] if version_id else ""
+    path = path.replace("$releasever_major", major)
+    path = path.replace("$releasever", version_id)
+
+    import platform as _platform
+    path = path.replace("$basearch", _platform.machine())
+    return path
+
+
 def _collect_gpg_keys(host_root: Path, repo_files: List[RepoFile]) -> List[RepoFile]:
     """Read GPG key files referenced by gpgkey=file:///... in repo configs.
 
@@ -245,6 +273,8 @@ def _collect_gpg_keys(host_root: Path, repo_files: List[RepoFile]) -> List[RepoF
                 if not token.startswith("file://"):
                     continue
                 abs_path = token[len("file://"):]
+                if "$" in abs_path:
+                    abs_path = _resolve_dnf_vars(abs_path, host_root)
                 rel_path = abs_path.lstrip("/")
                 if rel_path in seen:
                     continue
