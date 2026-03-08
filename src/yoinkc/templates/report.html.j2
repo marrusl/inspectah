@@ -387,16 +387,12 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
 {# ── Services ────────────────────────────────────────────────────────────── #}
 {% call section("services", "Services") %}
-  {%- set service_rows = [] %}
-  {%- if snapshot.services %}
-    {%- for s in snapshot.services.state_changes %}
-      {%- if s.action != 'unchanged' %}{% set _ = service_rows.append(s) %}{% endif %}
-    {%- endfor %}
-  {%- endif %}
-  {%- if service_rows %}
+  {%- if snapshot.services and snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list %}
   <table><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
-    {%- for s in service_rows %}
+    {%- for s in snapshot.services.state_changes %}
+    {%- if s.action != 'unchanged' %}
     <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if s.include else '' }}/></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
+    {%- endif %}
     {%- endfor %}
   </tbody></table>
   {%- else %}

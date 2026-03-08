@@ -695,6 +695,58 @@ class TestHtmlStructure:
         assert 'id="section-summary"' in html
         assert 'class="section visible"' in html
 
+    def test_service_snap_index_matches_unfiltered_array(self):
+        """data-snap-index for each rendered service row must equal its position in
+        the full state_changes array, not in the filtered set of changed units."""
+        import re as _re
+        import tempfile
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, ServiceSection, ServiceStateChange,
+        )
+        from yoinkc.renderers import run_all as run_all_renderers
+
+        # index 0: unchanged — must not render a row
+        # index 1: enable — row with data-snap-index="1"
+        # index 2: unchanged — must not render a row
+        # index 3: mask   — row with data-snap-index="3"
+        services = ServiceSection(
+            state_changes=[
+                ServiceStateChange(unit="a.service", current_state="enabled",
+                                   default_state="enabled", action="unchanged"),
+                ServiceStateChange(unit="b.service", current_state="enabled",
+                                   default_state="disabled", action="enable"),
+                ServiceStateChange(unit="c.service", current_state="disabled",
+                                   default_state="disabled", action="unchanged"),
+                ServiceStateChange(unit="d.service", current_state="masked",
+                                   default_state="disabled", action="mask"),
+            ],
+        )
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            services=services,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            html = (Path(tmp) / "report.html").read_text()
+
+        # Extract (unit-name, snap-index) pairs from the services table rows
+        rows = _re.findall(
+            r'data-snap-section="services"[^>]*data-snap-index="(\d+)"[^>]*>'
+            r'.*?<td>([^<]+)</td>',
+            html,
+        )
+        index_by_unit = {unit: int(idx) for idx, unit in rows}
+
+        assert "a.service" not in index_by_unit, "unchanged rows must not be rendered"
+        assert "c.service" not in index_by_unit, "unchanged rows must not be rendered"
+        assert index_by_unit.get("b.service") == 1, (
+            f"b.service should have snap-index=1, got {index_by_unit}"
+        )
+        assert index_by_unit.get("d.service") == 3, (
+            f"d.service should have snap-index=3, got {index_by_unit}"
+        )
+
     def test_readme_detailed(self, outputs_with_baseline):
         """README includes build command, deploy, findings summary, artifacts, FIXMEs."""
         readme = (outputs_with_baseline["dir"] / "README.md").read_text()
