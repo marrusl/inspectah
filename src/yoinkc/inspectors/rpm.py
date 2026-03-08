@@ -3,6 +3,7 @@ RPM inspector: package list, rpm -Va, repo files, dnf history removed.
 Baseline is the target bootc base image package list (or --baseline-packages file).
 """
 
+import os
 import re
 from pathlib import Path
 from typing import List, Optional, Set
@@ -403,14 +404,26 @@ def run(
     if installed:
         installed_names = {p.name for p in installed}
         _debug(f"installed package count: {len(installed_names)}")
+        # Exclude tool prerequisites installed by run-yoinkc.sh so they don't
+        # appear in the migration output or the generated Containerfile.
+        _prereq_exclude: Set[str] = set()
+        _prereq_raw = os.environ.get("YOINKC_EXCLUDE_PREREQS", "").split()
+        if _prereq_raw:
+            _prereq_exclude = set(_prereq_raw)
+            _debug(f"YOINKC_EXCLUDE_PREREQS: will exclude tool prerequisites: {sorted(_prereq_exclude)}")
         if baseline_names is not None and not section.no_baseline:
             added_names = installed_names - baseline_names
+            if _prereq_exclude:
+                _excluded = added_names & _prereq_exclude
+                if _excluded:
+                    _debug(f"excluded tool prerequisites from added set: {sorted(_excluded)}")
+                    added_names -= _excluded
             base_only_names = baseline_names - installed_names
             matched_names = installed_names & baseline_names
             _debug(f"baseline has {len(baseline_names)} names, "
                    f"installed has {len(installed_names)} names")
             _debug(f"matched={len(matched_names)}, "
-                   f"added (installed-baseline)={len(added_names)}, "
+                   f"added (installed-baseline, after prereq exclusion)={len(added_names)}, "
                    f"base-image-only (baseline-installed)={len(base_only_names)}")
             section.baseline_package_names = sorted(baseline_names)
             for p in installed:
@@ -424,8 +437,13 @@ def run(
         else:
             section.baseline_package_names = None
             for p in installed:
-                p.state = PackageState.ADDED
-                section.packages_added.append(p)
+                if p.name not in _prereq_exclude:
+                    p.state = PackageState.ADDED
+                    section.packages_added.append(p)
+            if _prereq_exclude:
+                _skipped = [p.name for p in installed if p.name in _prereq_exclude]
+                if _skipped:
+                    _debug(f"(no-baseline) excluded tool prerequisites: {sorted(_skipped)}")
 
     # 2b) Source repo per added package
     if executor is not None and section.packages_added:

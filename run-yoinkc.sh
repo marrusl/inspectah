@@ -24,6 +24,14 @@ if [ -n "$_need_install" ]; then
     fi
 fi
 
+# Expose the list of just-installed tools to the yoinkc container so it can
+# exclude them from its RPM output (they're tool prerequisites, not operator
+# additions to the migration target).
+if [ -n "$_need_install" ]; then
+  YOINKC_EXCLUDE_PREREQS="${_need_install# }"
+  export YOINKC_EXCLUDE_PREREQS
+fi
+
 mkdir -p "$OUTPUT_DIR"
 OUTPUT_DIR="$(cd "$OUTPUT_DIR" && pwd)"
 
@@ -70,6 +78,7 @@ podman run --rm \
   --privileged \
   --security-opt label=disable \
   ${YOINKC_DEBUG:+-e YOINKC_DEBUG=1} \
+  ${YOINKC_EXCLUDE_PREREQS:+--env YOINKC_EXCLUDE_PREREQS} \
   -v "${HOST_ROOT}:/host:ro" \
   -v "${OUTPUT_DIR}:/output:z" \
   "$IMAGE" --output-dir /output "$@"
