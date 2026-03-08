@@ -51,6 +51,7 @@ def _scan_var_directories(host_root: Path) -> List[VarDirectory]:
             # Check if non-empty (has at least one file)
             has_file = False
             total_size = 0
+            capped = False
             try:
                 for f in entry.rglob("*"):
                     if f.is_file():
@@ -60,6 +61,7 @@ def _scan_var_directories(host_root: Path) -> List[VarDirectory]:
                         except (PermissionError, OSError):
                             pass
                         if total_size > 10 * 1024 * 1024:
+                            capped = True
                             break  # stop counting after 10 MB
             except (PermissionError, OSError):
                 pass
@@ -68,7 +70,9 @@ def _scan_var_directories(host_root: Path) -> List[VarDirectory]:
                 continue
 
             # Human-readable size estimate
-            if total_size > 1024 * 1024 * 1024:
+            if capped:
+                size_str = "Over 10 MB"
+            elif total_size > 1024 * 1024 * 1024:
                 size_str = f"~{total_size / (1024**3):.1f} GB"
             elif total_size > 1024 * 1024:
                 size_str = f"~{total_size / (1024**2):.0f} MB"
