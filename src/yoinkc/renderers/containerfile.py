@@ -617,9 +617,17 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
 
     # 1. Repository Configuration
     if snapshot.rpm and snapshot.rpm.repo_files:
-        lines.append("# === Repository Configuration ===")
-        lines.append(f"# Detected: {len(snapshot.rpm.repo_files)} repo file(s) — included in COPY config/etc/ below")
-        lines.append("")
+        included_repos = [r for r in snapshot.rpm.repo_files if r.include]
+        if included_repos:
+            lines.append("# === Repository Configuration ===")
+            has_yum_repos = any(r.path.startswith("etc/yum.repos.d/") for r in included_repos)
+            has_dnf_conf   = any(r.path.startswith("etc/dnf/")         for r in included_repos)
+            if has_yum_repos:
+                lines.append("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/")
+            if has_dnf_conf:
+                lines.append("COPY config/etc/dnf/ /etc/dnf/")
+            lines.append(f"# {len(included_repos)} repo file(s) — also included in consolidated COPY config/etc/ below")
+            lines.append("")
 
     # 2. Package Installation
     if snapshot.rpm and snapshot.rpm.packages_added:

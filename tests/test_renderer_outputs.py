@@ -787,3 +787,34 @@ class TestHtmlStructure:
         assert "bootc switch" in readme
         assert "audit-report.md" in readme
         assert "FIXME" in readme
+
+
+def test_repo_copy_precedes_dnf_install():
+    """Repo COPY directives must appear before RUN dnf install so repos exist when packages are installed."""
+    from yoinkc.schema import InspectionSnapshot, RpmSection, PackageEntry, PackageState, RepoFile
+
+    snap = InspectionSnapshot()
+    snap.rpm = RpmSection()
+    snap.rpm.packages_added = [
+        PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64",
+                     state=PackageState.ADDED, include=True),
+    ]
+    snap.rpm.leaf_packages = ["httpd"]
+    snap.rpm.auto_packages = []
+    snap.rpm.leaf_dep_tree = {"httpd": []}
+    repo = RepoFile(path="etc/yum.repos.d/custom.repo", content="[custom]\nbaseurl=http://repo.example.com\n")
+    snap.rpm.repo_files = [repo]
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        render_containerfile(snap, Environment(), out)
+        cf = (out / "Containerfile").read_text()
+
+    copy_idx = cf.find("COPY config/etc/yum.repos.d/")
+    dnf_idx  = cf.find("RUN dnf install")
+    assert copy_idx != -1, "Expected a COPY directive for etc/yum.repos.d/"
+    assert dnf_idx  != -1, "Expected a RUN dnf install directive"
+    assert copy_idx < dnf_idx, (
+        f"COPY config/etc/yum.repos.d/ (pos {copy_idx}) must come before "
+        f"RUN dnf install (pos {dnf_idx})"
+    )
