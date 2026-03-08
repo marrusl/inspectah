@@ -40,7 +40,7 @@ def render(
     lines.append("")
 
     pkg_added = len(snapshot.rpm.packages_added) if snapshot.rpm else 0
-    pkg_removed = len(snapshot.rpm.packages_removed) if snapshot.rpm else 0
+    pkg_base_only = len(snapshot.rpm.base_image_only) if snapshot.rpm else 0
 
     configs_modified = 0
     configs_unowned = 0
@@ -62,8 +62,8 @@ def render(
         lines.append(f"| Packages (all — no baseline) | {pkg_added} |")
     else:
         lines.append(f"| Packages added (beyond base image) | {pkg_added} |")
-    if pkg_removed:
-        lines.append(f"| Packages in target image only | {pkg_removed} |")
+    if pkg_base_only:
+        lines.append(f"| New from base image | {pkg_base_only} |")
     lines.append(f"| Configs modified (RPM-owned) | {configs_modified} |")
     lines.append(f"| Configs unowned | {configs_unowned} |")
     lines.append(f"| Services changed | {svc_enabled + svc_disabled} ({svc_enabled} enabled, {svc_disabled} disabled) |")

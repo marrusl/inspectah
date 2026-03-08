@@ -262,7 +262,7 @@ def _summary_counts(snapshot: InspectionSnapshot) -> dict:
                      + (1 if snapshot.selinux.fips_mode else 0))
     return {
         "packages_added": len(snapshot.rpm.packages_added or []) if snapshot.rpm else 0,
-        "packages_removed": len(snapshot.rpm.packages_removed or []) if snapshot.rpm else 0,
+        "base_image_only": len(snapshot.rpm.base_image_only or []) if snapshot.rpm else 0,
         "rpm_va": len(snapshot.rpm.rpm_va or []) if snapshot.rpm else 0,
         "config_files": len(snapshot.config.files or []) if snapshot.config else 0,
         "services_enabled": len(snapshot.services.enabled_units or []) if snapshot.services else 0,

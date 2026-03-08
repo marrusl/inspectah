@@ -30,7 +30,7 @@ class OsRelease(BaseModel):
 
 class PackageState(str, Enum):
     ADDED = "added"
-    REMOVED = "removed"
+    BASE_IMAGE_ONLY = "base_image_only"
     MODIFIED = "modified"
 
 
@@ -68,7 +68,7 @@ class RpmSection(BaseModel):
     """Output of the RPM inspector."""
 
     packages_added: List[PackageEntry] = Field(default_factory=list)
-    packages_removed: List[PackageEntry] = Field(default_factory=list)
+    base_image_only: List[PackageEntry] = Field(default_factory=list)
     rpm_va: List[RpmVaEntry] = Field(default_factory=list)
     repo_files: List[RepoFile] = Field(default_factory=list)
     dnf_history_removed: List[str] = Field(default_factory=list)  # package names

@@ -405,21 +405,21 @@ def run(
         _debug(f"installed package count: {len(installed_names)}")
         if baseline_names is not None and not section.no_baseline:
             added_names = installed_names - baseline_names
-            removed_names = baseline_names - installed_names
+            base_only_names = baseline_names - installed_names
             matched_names = installed_names & baseline_names
             _debug(f"baseline has {len(baseline_names)} names, "
                    f"installed has {len(installed_names)} names")
             _debug(f"matched={len(matched_names)}, "
                    f"added (installed-baseline)={len(added_names)}, "
-                   f"removed (baseline-installed)={len(removed_names)}")
+                   f"base-image-only (baseline-installed)={len(base_only_names)}")
             section.baseline_package_names = sorted(baseline_names)
             for p in installed:
                 if p.name in added_names:
                     p.state = PackageState.ADDED
                     section.packages_added.append(p)
-            for name in sorted(removed_names):
-                section.packages_removed.append(
-                    PackageEntry(name=name, epoch="0", version="", release="", arch="noarch", state=PackageState.REMOVED)
+            for name in sorted(base_only_names):
+                section.base_image_only.append(
+                    PackageEntry(name=name, epoch="0", version="", release="", arch="noarch", state=PackageState.BASE_IMAGE_ONLY)
                 )
         else:
             section.baseline_package_names = None

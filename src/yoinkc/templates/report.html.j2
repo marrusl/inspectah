@@ -213,7 +213,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── Summary cards ──────────────────────────────────────────────────────── #}
 <div class="cards">
   <div class="card" data-section="output_files"><h4>File browser</h4><div class="count">config / quadlet</div><div class="status">Browse</div></div>
-  <div class="card status-{{ card_status.packages }}" data-section="packages"><h4>Packages</h4><div class="count">{{ counts.packages_added }} added</div><div class="status">{{ counts.packages_removed }} in target image only</div></div>
+  <div class="card status-{{ card_status.packages }}" data-section="packages"><h4>Packages</h4><div class="count">{{ counts.packages_added }} added</div><div class="status">{{ counts.base_image_only }} in base image only</div></div>
   <div class="card status-{{ card_status.services }}" data-section="services"><h4>Services</h4><div class="count">{{ counts.services_enabled }} enabled</div><div class="status">{{ counts.services_disabled }} disabled</div></div>
   <div class="card status-{{ card_status.config }}" data-section="config"><h4>Config</h4><div class="count">{{ counts.config_files }} files</div><div class="status">rpm_va: {{ counts.rpm_va }}</div></div>
   <div class="card status-{{ card_status.non_rpm }}" data-section="non_rpm"><h4>Non-RPM</h4><div class="count">{{ counts.non_rpm }}</div><div class="status">items</div></div>
