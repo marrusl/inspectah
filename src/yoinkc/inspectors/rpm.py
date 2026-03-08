@@ -213,6 +213,52 @@ def _collect_repo_files(host_root: Path) -> List[RepoFile]:
     return repo_files
 
 
+def _collect_gpg_keys(host_root: Path, repo_files: List[RepoFile]) -> List[RepoFile]:
+    """Read GPG key files referenced by gpgkey=file:///... in repo configs.
+
+    Handles comma-separated URLs on a single line and INI-style continuation
+    lines (indented lines following ``gpgkey=``).  https:// URLs are skipped
+    since dnf will fetch them at build time.
+    """
+    seen: dict = {}
+    for repo in repo_files:
+        lines = repo.content.splitlines()
+        i = 0
+        while i < len(lines):
+            stripped = lines[i].strip()
+            if not stripped.startswith("gpgkey"):
+                i += 1
+                continue
+            _, _, value = stripped.partition("=")
+            # Accumulate continuation lines (indented, not a new key or section)
+            parts = [value]
+            while i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if next_line and next_line[0] in (" ", "\t") and "=" not in next_line:
+                    parts.append(next_line.strip())
+                    i += 1
+                else:
+                    break
+            combined = " ".join(parts)
+            for token in re.split(r"[,\s]+", combined.strip()):
+                token = token.strip()
+                if not token.startswith("file://"):
+                    continue
+                abs_path = token[len("file://"):]
+                rel_path = abs_path.lstrip("/")
+                if rel_path in seen:
+                    continue
+                key_path = host_root / rel_path
+                try:
+                    content = key_path.read_text()
+                except (FileNotFoundError, PermissionError, OSError):
+                    _debug(f"gpgkey file not found or unreadable: {key_path}")
+                    continue
+                seen[rel_path] = content
+            i += 1
+    return [RepoFile(path=p, content=c) for p, c in sorted(seen.items())]
+
+
 def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional[list] = None) -> List[str]:
     """Run dnf history and collect package names from Remove transactions."""
     result = executor(["dnf", "history", "list", "-q"], cwd=str(host_root))
@@ -553,6 +599,7 @@ def run(
 
     # 5) Repo files
     section.repo_files = _collect_repo_files(host_root)
+    section.gpg_keys = _collect_gpg_keys(host_root, section.repo_files)
 
     # 6) dnf history removed
     if executor is not None:

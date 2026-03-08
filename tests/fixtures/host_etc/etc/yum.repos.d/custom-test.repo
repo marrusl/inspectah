@@ -1,0 +1,6 @@
+[custom-test]
+name = Custom Test Repo
+baseurl = http://repo.example.com/el9/
+enabled = 1
+gpgcheck = 1
+gpgkey = file:///etc/pki/rpm-gpg/RPM-GPG-KEY-TEST

@@ -71,6 +71,7 @@ class RpmSection(BaseModel):
     base_image_only: List[PackageEntry] = Field(default_factory=list)
     rpm_va: List[RpmVaEntry] = Field(default_factory=list)
     repo_files: List[RepoFile] = Field(default_factory=list)
+    gpg_keys: List[RepoFile] = Field(default_factory=list)
     dnf_history_removed: List[str] = Field(default_factory=list)  # package names
     leaf_packages: Optional[List[str]] = None
     auto_packages: Optional[List[str]] = None

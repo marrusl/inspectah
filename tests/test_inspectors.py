@@ -937,3 +937,14 @@ class TestInspectorFailures:
         section = run_network(host_root, _failing_executor)
         assert section is not None
         assert isinstance(section.connections, list)
+
+
+def test_rpm_inspector_captures_gpg_keys(host_root, fixture_executor):
+    """GPG keys referenced by gpgkey=file:// in repo files are captured."""
+    from yoinkc.inspectors.rpm import run as run_rpm
+    section = run_rpm(host_root, fixture_executor)
+    assert section.gpg_keys, "Expected at least one GPG key captured"
+    key_paths = [k.path for k in section.gpg_keys]
+    assert "etc/pki/rpm-gpg/RPM-GPG-KEY-TEST" in key_paths
+    key = next(k for k in section.gpg_keys if "TEST" in k.path)
+    assert "BEGIN PGP PUBLIC KEY BLOCK" in key.content

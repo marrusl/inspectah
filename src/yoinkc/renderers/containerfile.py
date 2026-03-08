@@ -178,6 +178,14 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(repo.content or "")
 
+    if snapshot.rpm and snapshot.rpm.gpg_keys:
+        for key in snapshot.rpm.gpg_keys:
+            if not key.include:
+                continue
+            dest = config_dir / key.path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(key.content or "")
+
     # Firewalld zones and direct rules
     if snapshot.network:
         for z in snapshot.network.firewall_zones:
@@ -616,18 +624,29 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         lines.append("")
 
     # 1. Repository Configuration
+    included_gpg = [k for k in snapshot.rpm.gpg_keys if k.include] if snapshot.rpm else []
+    gpg_copy_dirs = sorted(set(str(Path(k.path).parent) for k in included_gpg)) if included_gpg else []
+
     if snapshot.rpm and snapshot.rpm.repo_files:
         included_repos = [r for r in snapshot.rpm.repo_files if r.include]
         if included_repos:
             lines.append("# === Repository Configuration ===")
+            for d in gpg_copy_dirs:
+                lines.append(f"COPY config/{d}/ /{d}/")
             has_yum_repos = any(r.path.startswith("etc/yum.repos.d/") for r in included_repos)
             has_dnf_conf   = any(r.path.startswith("etc/dnf/")         for r in included_repos)
             if has_yum_repos:
                 lines.append("COPY config/etc/yum.repos.d/ /etc/yum.repos.d/")
             if has_dnf_conf:
                 lines.append("COPY config/etc/dnf/ /etc/dnf/")
-            lines.append(f"# {len(included_repos)} repo file(s) — also included in consolidated COPY config/etc/ below")
+            key_note = f" + {len(included_gpg)} GPG key(s)" if included_gpg else ""
+            lines.append(f"# {len(included_repos)} repo file(s){key_note} — also included in consolidated COPY config/etc/ below")
             lines.append("")
+    elif gpg_copy_dirs:
+        lines.append("# === GPG Keys ===")
+        for d in gpg_copy_dirs:
+            lines.append(f"COPY config/{d}/ /{d}/")
+        lines.append("")
 
     # 2. Package Installation
     if snapshot.rpm and snapshot.rpm.packages_added:

@@ -139,7 +139,13 @@ class TestContainerfile:
         cf = self._cf(outputs_with_baseline)
         # Per-file COPYs look like: COPY config/etc/httpd/conf/httpd.conf /etc/httpd/...
         # The consolidated form is: COPY config/etc/ /etc/
-        per_file = re.findall(r"^COPY config/etc/[^\s/]+/[^\s]+\s+/etc/[^\s]+$", cf, re.MULTILINE)
+        # GPG key directory COPYs in the Repository Configuration section are
+        # intentionally early (before dnf install) and excluded from this check.
+        per_file = [
+            line for line in
+            re.findall(r"^COPY config/etc/[^\s/]+/[^\s]+\s+/etc/[^\s]+$", cf, re.MULTILINE)
+            if "/rpm-gpg/" not in line
+        ]
         assert len(per_file) == 0, f"Found per-file COPY lines: {per_file[:5]}"
 
     def test_consolidated_copy_etc_present(self, outputs_with_baseline):
@@ -787,6 +793,42 @@ class TestHtmlStructure:
         assert "bootc switch" in readme
         assert "audit-report.md" in readme
         assert "FIXME" in readme
+
+
+def test_gpg_key_copy_precedes_repo_copy():
+    """GPG key COPY must appear before repo COPY which must appear before dnf install."""
+    from yoinkc.schema import InspectionSnapshot, RpmSection, PackageEntry, PackageState, RepoFile
+
+    snap = InspectionSnapshot()
+    snap.rpm = RpmSection()
+    snap.rpm.packages_added = [
+        PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64",
+                     state=PackageState.ADDED, include=True),
+    ]
+    snap.rpm.leaf_packages = ["httpd"]
+    snap.rpm.auto_packages = []
+    snap.rpm.leaf_dep_tree = {"httpd": []}
+    repo = RepoFile(path="etc/yum.repos.d/custom.repo",
+                    content="[custom]\nbaseurl=http://example.com\ngpgkey=file:///etc/pki/rpm-gpg/KEY\n")
+    snap.rpm.repo_files = [repo]
+    snap.rpm.gpg_keys = [
+        RepoFile(path="etc/pki/rpm-gpg/KEY", content="-----BEGIN PGP PUBLIC KEY BLOCK-----\nFAKE\n-----END PGP PUBLIC KEY BLOCK-----\n"),
+    ]
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        render_containerfile(snap, Environment(), out)
+        cf = (out / "Containerfile").read_text()
+
+    gpg_idx  = cf.find("COPY config/etc/pki/rpm-gpg/")
+    repo_idx = cf.find("COPY config/etc/yum.repos.d/")
+    dnf_idx  = cf.find("RUN dnf install")
+    assert gpg_idx  != -1, "Expected COPY for GPG keys"
+    assert repo_idx != -1, "Expected COPY for repos"
+    assert dnf_idx  != -1, "Expected RUN dnf install"
+    assert gpg_idx < repo_idx < dnf_idx, (
+        f"Order must be: GPG keys ({gpg_idx}) < repos ({repo_idx}) < dnf install ({dnf_idx})"
+    )
 
 
 def test_repo_copy_precedes_dnf_install():
