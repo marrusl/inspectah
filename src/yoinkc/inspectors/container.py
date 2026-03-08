@@ -7,7 +7,7 @@ and optionally runs podman inspect for live container details.
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from ..executor import Executor
 from ..schema import (

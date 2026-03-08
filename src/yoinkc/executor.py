@@ -6,7 +6,7 @@ so that tests can inject fixture file reads instead of running real commands.
 """
 
 from dataclasses import dataclass
-from typing import Callable, List, Optional, Protocol
+from typing import List, Optional, Protocol
 
 
 @dataclass

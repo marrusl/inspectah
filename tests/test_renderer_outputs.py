@@ -28,8 +28,6 @@ from yoinkc.renderers.html_report import render as render_html_report
 from yoinkc.renderers.audit_report import render as render_audit_report
 from yoinkc.renderers.kickstart import render as render_kickstart
 from yoinkc.renderers.readme import render as render_readme
-from yoinkc.renderers.secrets_review import render as render_secrets_review
-
 FIXTURES = Path(__file__).parent / "fixtures"
 
 

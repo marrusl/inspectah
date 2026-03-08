@@ -26,7 +26,7 @@ def _parse_lsmod(text: str) -> List[KernelModule]:
             continue
         results.append(KernelModule(
             name=parts[0],
-            size=parts[1] if len(parts) > 1 else "0",
+            size=parts[1],
             used_by=parts[3] if len(parts) > 3 else "",
         ))
     return results

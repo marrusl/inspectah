@@ -6,7 +6,7 @@ All inspectors produce data that fits into this schema; all renderers consume it
 """
 
 from enum import Enum
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -69,7 +69,6 @@ class RpmSection(BaseModel):
 
     packages_added: List[PackageEntry] = Field(default_factory=list)
     packages_removed: List[PackageEntry] = Field(default_factory=list)
-    packages_modified: List[PackageEntry] = Field(default_factory=list)
     rpm_va: List[RpmVaEntry] = Field(default_factory=list)
     repo_files: List[RepoFile] = Field(default_factory=list)
     dnf_history_removed: List[str] = Field(default_factory=list)  # package names

@@ -929,7 +929,6 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 
   {%- if net.ip_routes %}
-  {%- set static_rt = net.ip_routes|selectattr('proto static', 'in', []) | list %}
   {%- set static_rt = [] %}
   {%- for r in net.ip_routes %}{% if 'proto static' in r %}{% set _ = static_rt.append(r) %}{% endif %}{%- endfor %}
   {%- if static_rt %}

@@ -51,7 +51,7 @@ def _is_excluded_path(path: str) -> bool:
     normalised = "/" + path.lstrip("/")
     for pat in EXCLUDED_PATHS:
         regex = pat.replace("*", ".*")
-        if re.fullmatch(regex, normalised) or re.search(regex, normalised):
+        if re.search(regex, normalised):
             return True
     return False
 

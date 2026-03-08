@@ -56,7 +56,6 @@ def render(
     lines.append("")
     n_added = len(snapshot.rpm.packages_added) if snapshot.rpm else 0
     n_removed = len(snapshot.rpm.packages_removed) if snapshot.rpm else 0
-    n_modified = len(snapshot.rpm.packages_modified) if snapshot.rpm else 0
     no_baseline = getattr(snapshot.rpm, "no_baseline", False) if snapshot.rpm else False
     n_config = len(snapshot.config.files) if snapshot.config else 0
     n_redactions = len(snapshot.redactions)
@@ -74,8 +73,6 @@ def render(
     else:
         lines.append(f"- Packages added (beyond base image): {n_added}")
     lines.append(f"- Packages in target image only: {n_removed}")
-    if n_modified:
-        lines.append(f"- Packages with modified configs: {n_modified}")
     lines.append(f"- Config files captured: {n_config}")
     lines.append(f"- Containers/quadlet found: {n_containers}")
     lines.append(f"- Secrets redacted: {n_redactions}")
@@ -149,11 +146,6 @@ def render(
             lines.append("### In target image only (not on inspected host)")
             for p in snapshot.rpm.packages_removed:
                 lines.append(f"- {p.name}")
-            lines.append("")
-        if snapshot.rpm.packages_modified:
-            lines.append("### Modified (config changes detected by rpm -Va)")
-            for p in snapshot.rpm.packages_modified:
-                lines.append(f"- {p.name} {p.version}-{p.release}.{p.arch}")
             lines.append("")
         if snapshot.rpm.rpm_va:
             lines.append("### Modified file details (rpm -Va)")
