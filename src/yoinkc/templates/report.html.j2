@@ -68,12 +68,14 @@ a { color: var(--accent); }
 .card h4 { margin: 0 0 .5rem 0; font-size: .95rem; }
 .card .count { font-size: 1.5rem; font-weight: 600; }
 .card .status { font-size: .8rem; color: var(--muted); margin-top: .25rem; }
-.section { visibility: hidden; height: 0; overflow: hidden; opacity: 0; transition: opacity .15s ease; background: var(--card); border-radius: 8px; padding: 0; max-width: 1200px; }
-.section.visible { visibility: visible; height: auto; overflow: visible; opacity: 1; padding: 1.5rem; margin-top: 1rem; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.section { display: none; background: var(--card); border-radius: 8px; padding: 1.5rem; margin-top: 1rem; max-width: 1200px; }
+.section.visible { display: block; animation: fadeIn .15s ease; }
 table { width: auto; border-collapse: collapse; }
 th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
 th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
-.tabs { display: flex; gap: 0; margin-bottom: 1rem; flex-wrap: wrap; border-bottom: 1px solid var(--border); }
+.tabs { display: flex; flex-direction: column; gap: 0; margin-bottom: 1rem; }
+.tab-row { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .tabs button { background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 0.5rem 0.75rem; color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
 .tabs button:hover { color: var(--text); }
 .tabs button.active { border-bottom-color: var(--accent); color: var(--text); }
@@ -229,23 +231,27 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
 {# ── Tab navigation ─────────────────────────────────────────────────────── #}
 <div class="tabs">
-  <button class="active" data-tab="summary">Summary</button>
-  <button data-tab="output_files">File browser</button>
-  <button data-tab="packages">Packages</button>
-  <button data-tab="services">Services</button>
-  <button data-tab="config">Config</button>
-  <button data-tab="non_rpm">Non-RPM</button>
-  <button data-tab="containers">Containers</button>
-  <button data-tab="users_groups">Users/Groups</button>
-  <button data-tab="scheduled_tasks">Scheduled jobs</button>
-  <button data-tab="kernel_boot">Kernel/Boot</button>
-  <button data-tab="selinux">SELinux</button>
-  <button data-tab="secrets">Secrets</button>
-  <button data-tab="network">Network</button>
-  <button data-tab="storage">Storage</button>
-  <button data-tab="warnings">Warnings</button>
-  <button data-tab="audit">Audit report</button>
-  <button data-tab="containerfile">Containerfile</button>
+  <div class="tab-row">
+    <button class="active" data-tab="summary">Summary</button>
+    <button data-tab="audit">Audit report</button>
+    <button data-tab="containerfile">Containerfile</button>
+    <button data-tab="warnings">Warnings</button>
+    <button data-tab="secrets">Secrets</button>
+    <button data-tab="output_files">File browser</button>
+  </div>
+  <div class="tab-row">
+    <button data-tab="packages">Packages</button>
+    <button data-tab="services">Services</button>
+    <button data-tab="config">Config</button>
+    <button data-tab="users_groups">Users/Groups</button>
+    <button data-tab="containers">Containers</button>
+    <button data-tab="scheduled_tasks">Scheduled</button>
+    <button data-tab="kernel_boot">Kernel/Boot</button>
+    <button data-tab="selinux">SELinux</button>
+    <button data-tab="network">Network</button>
+    <button data-tab="storage">Storage</button>
+    <button data-tab="non_rpm">Non-RPM</button>
+  </div>
 </div>
 
 {# ══════════════════════════════════════════════════════════════════════════
@@ -1054,14 +1060,7 @@ var snapshot = {{ snapshot_json|safe }};
     if (!id) return;
     sections.forEach(function(s){ s.classList.remove('visible'); });
     var el = document.getElementById('section-' + id);
-    if (el) {
-      el.style.visibility = 'visible';
-      el.style.height = 'auto';
-      el.style.overflow = 'visible';
-      el.style.padding = '1.5rem';
-      el.style.marginTop = '1rem';
-      requestAnimationFrame(function(){ requestAnimationFrame(function(){ el.classList.add('visible'); }); });
-    }
+    if (el) el.classList.add('visible');
     tabs.forEach(function(t){ t.classList.toggle('active', t.getAttribute('data-tab') === id); });
   }
   window.show = show;
