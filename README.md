@@ -211,7 +211,7 @@ output/
 ├── Containerfile                 # Layered image definition (cache-optimized layer order)
 ├── README.md                     # Build/deploy commands, FIXME checklist
 ├── audit-report.md               # Detailed findings with storage migration plan
-├── report.html                   # Self-contained interactive HTML dashboard
+├── report.html                   # Self-contained interactive HTML dashboard (migration readiness panel, include/exclude refinement, works with yoinkc-refine for live re-rendering)
 ├── secrets-review.md             # Redacted sensitive content for operator review
 ├── kickstart-suggestion.ks       # Deploy-time config (DHCP, DNS, credentials)
 ├── inspection-snapshot.json      # Raw structured data (re-renderable via --from-snapshot)
@@ -268,8 +268,8 @@ The server runs entirely locally. It extracts the tarball into a temporary direc
 |------|-------------|
 | `--host-root PATH` | Root path for host inspection (default: `/host`) |
 | `-o, --output-dir DIR` | Output directory for all artifacts (default: `./output`) |
-| `--from-snapshot PATH` | Skip inspection; load snapshot from file and run renderers only |
-| `--inspect-only` | Run inspectors and save snapshot; do not run renderers |
+| `--from-snapshot PATH` | Skip inspection; load snapshot from file and run renderers only. Mutually exclusive with `--inspect-only`. |
+| `--inspect-only` | Run inspectors and save snapshot; do not run renderers. Mutually exclusive with `--from-snapshot`. |
 
 ### Target Image
 
@@ -293,7 +293,7 @@ The server runs entirely locally. It extracts the tarball into a temporary direc
 
 | Flag | Description |
 |------|-------------|
-| `--validate` | After generating output, run `podman build` to verify the Containerfile |
+| `--validate` | After generating output, run `podman build` to verify the Containerfile. Requires `podman`; reports failure with a warning if podman is not installed. |
 | `--push-to-github REPO` | Push output directory to a GitHub repository (e.g. `owner/repo`) |
 | `--github-token TOKEN` | GitHub personal access token for repo creation (falls back to `GITHUB_TOKEN` env var) |
 | `--public` | When creating a new GitHub repo, make it public (default: private) |
