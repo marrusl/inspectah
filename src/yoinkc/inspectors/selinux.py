@@ -2,7 +2,7 @@
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from ..executor import Executor
 from ..schema import SelinuxSection, SelinuxPortLabel
@@ -150,6 +150,7 @@ def run(
     host_root: Path,
     executor: Optional[Executor],
     warnings: Optional[list] = None,
+    rpm_owned_paths: Optional[Set[str]] = None,
 ) -> SelinuxSection:
     section = SelinuxSection()
     host_root = Path(host_root)
@@ -229,7 +230,11 @@ def run(
     if audit_d.exists():
         for f in _safe_iterdir(audit_d):
             if f.is_file():
-                section.audit_rules.append(str(f.relative_to(host_root)))
+                rel = str(f.relative_to(host_root))
+                abs_path = "/" + rel
+                if rpm_owned_paths is not None and abs_path in rpm_owned_paths:
+                    continue
+                section.audit_rules.append(rel)
 
     fips_path = host_root / "proc/sys/crypto/fips_enabled"
     try:
@@ -242,6 +247,10 @@ def run(
     if pam_d.exists():
         for f in _safe_iterdir(pam_d):
             if f.is_file():
-                section.pam_configs.append(str(f.relative_to(host_root)))
+                rel = str(f.relative_to(host_root))
+                abs_path = "/" + rel
+                if rpm_owned_paths is not None and abs_path in rpm_owned_paths:
+                    continue
+                section.pam_configs.append(rel)
 
     return section

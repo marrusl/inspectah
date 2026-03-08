@@ -262,7 +262,7 @@ def run_all(
     snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor, warnings=w), None, w)
 
     _section_banner("SELinux / security", 10, _TOTAL_STEPS)
-    snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor, warnings=w), None, w)
+    snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor, warnings=w, rpm_owned_paths=rpm_owned), None, w)
 
     _section_banner("Users / groups", 11, _TOTAL_STEPS)
     snapshot.users_groups = _safe_run("users_groups", lambda: run_users_groups(host_root, executor, user_strategy_override=user_strategy), None, w)
