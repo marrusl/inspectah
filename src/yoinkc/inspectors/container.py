@@ -181,19 +181,25 @@ def run(
             exists = False
         if not exists:
             continue
-        for f in _safe_glob(d, "*.container"):
-            content = _safe_read(f)
-            _debug(f"quadlet: {f} ({len(content)} bytes)")
-            image_ref = _extract_quadlet_image(content)
-            _debug(f"quadlet: {f.name} Image={image_ref!r}")
-            if not image_ref and content:
-                _debug(f"quadlet: no Image= found, first 5 lines: {content.splitlines()[:5]}")
-            section.quadlet_units.append(QuadletUnit(
-                path=str(f.relative_to(host_root)),
-                name=f.name,
-                content=content,
-                image=image_ref,
-            ))
+        _QUADLET_GLOBS = (
+            "*.container", "*.volume", "*.network",
+            "*.kube", "*.image", "*.build",
+        )
+        for pattern in _QUADLET_GLOBS:
+            for f in _safe_glob(d, pattern):
+                content = _safe_read(f)
+                _debug(f"quadlet: {f} ({len(content)} bytes)")
+                image_ref = _extract_quadlet_image(content) if f.suffix == ".container" else ""
+                if f.suffix == ".container":
+                    _debug(f"quadlet: {f.name} Image={image_ref!r}")
+                    if not image_ref and content:
+                        _debug(f"quadlet: no Image= found, first 5 lines: {content.splitlines()[:5]}")
+                section.quadlet_units.append(QuadletUnit(
+                    path=str(f.relative_to(host_root)),
+                    name=f.name,
+                    content=content,
+                    image=image_ref,
+                ))
 
     # --- Compose files ---
     for search_dir in ("opt", "srv", "etc"):

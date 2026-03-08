@@ -369,9 +369,18 @@ def test_container_inspector_with_fixtures(host_root, fixture_executor):
     section = run_container(host_root, fixture_executor, query_podman=False)
     assert section is not None
 
-    # Quadlet units with image references (system + user-level)
-    assert len(section.quadlet_units) >= 3
+    # Quadlet units: .container, .volume, .network (system + user-level)
+    assert len(section.quadlet_units) >= 5
     unit_map = {u.name: u for u in section.quadlet_units}
+
+    # .volume and .network types
+    assert "app-data.volume" in unit_map
+    assert "[Volume]" in unit_map["app-data.volume"].content
+    assert "internal.network" in unit_map
+    assert "[Network]" in unit_map["internal.network"].content
+    assert unit_map["app-data.volume"].image == ""
+    assert unit_map["internal.network"].image == ""
+
     assert "nginx.container" in unit_map
     assert unit_map["nginx.container"].image == "docker.io/library/nginx:1.25-alpine"
     assert "redis.container" in unit_map
