@@ -852,6 +852,35 @@ def test_snapshot_roundtrip_with_baseline(host_root, fixture_executor):
         assert (out / "report.html").exists()
 
 
+def test_classify_leaf_auto_falls_back_when_dnf_repoquery_fails(host_root):
+    """When dnf repoquery is unavailable, _classify_leaf_auto falls back to rpm -qR."""
+    from yoinkc.inspectors.rpm import _classify_leaf_auto
+    from yoinkc.schema import PackageEntry, PackageState
+
+    packages = [
+        PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+        PackageEntry(name="mod_ssl", epoch="1", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+    ]
+
+    def dnf_fail_executor(cmd, cwd=None):
+        cmd_str = " ".join(cmd)
+        if "dnf" in cmd and "repoquery" in cmd:
+            return RunResult(stdout="", stderr="dnf: command not found", returncode=127)
+        if "rpm" in cmd and "-qR" in cmd:
+            if "httpd" in cmd_str:
+                return RunResult(stdout="mod_ssl\nhttpd-core\n", stderr="", returncode=0)
+            return RunResult(stdout="", stderr="", returncode=0)
+        if "rpm" in cmd and "--whatprovides" in cmd:
+            return RunResult(stdout="mod_ssl-1:2.4.62-1.el9.x86_64\n", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    leaf, auto, dep_tree = _classify_leaf_auto(dnf_fail_executor, host_root, packages)
+
+    assert "httpd" in leaf
+    assert "mod_ssl" in auto
+    assert dep_tree["httpd"] == ["mod_ssl"]
+
+
 # ===========================================================================
 # Graceful degradation: inspectors must not crash when commands fail
 # ===========================================================================

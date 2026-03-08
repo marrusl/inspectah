@@ -252,26 +252,20 @@ def _run_rpm_query(executor: Executor, host_root: Path, args: List[str]):
     return _util_run_rpm_query(executor, host_root, args)
 
 
-def _classify_leaf_auto(
+def _classify_deps_via_rpm(
     executor: Executor,
     host_root: Path,
-    packages_added: List["PackageEntry"],
-) -> tuple:
-    """Split added packages into leaf vs auto with per-leaf dependency tree.
+    added_names: Set[str],
+) -> dict:
+    """Build dependency graph using rpm -qR + --whatprovides.
 
-    Returns ``(leaf_list, auto_list, leaf_dep_tree)`` where *leaf_dep_tree*
-    maps each leaf package name to the sorted list of auto packages it
-    pulls in (transitively, within the added set).
+    Returns ``depends_on`` where ``depends_on[A] = {B, C}`` means A directly
+    requires B and C (within *added_names*).
     """
-    added_names = {p.name for p in packages_added}
-
-    # Build direct dependency graph: depends_on[A] = {B, C} means A requires B and C
     depends_on: dict = {name: set() for name in added_names}
-
     name_list = sorted(added_names)
     batch_size = 50
 
-    # Query requirements per package individually to track which package needs what
     for i in range(0, len(name_list), batch_size):
         batch = name_list[i:i + batch_size]
 
@@ -304,6 +298,79 @@ def _classify_leaf_auto(
                     if provider in added_names and provider != pkg_name:
                         depends_on[pkg_name].add(provider)
 
+    return depends_on
+
+
+def _classify_deps_via_dnf(
+    executor: Executor,
+    host_root: Path,
+    added_names: Set[str],
+) -> Optional[dict]:
+    """Build transitive dependency graph using dnf repoquery.
+
+    Returns ``depends_on`` where ``depends_on[A]`` contains the full transitive
+    set of dependencies of A (within *added_names*), or ``None`` if dnf
+    repoquery is unavailable.
+    """
+    if not added_names:
+        return {name: set() for name in added_names}
+
+    cmd_base = ["dnf", "repoquery"]
+    if str(host_root) != "/":
+        cmd_base += ["--installroot", str(host_root)]
+    cmd_base += ["--requires", "--resolve", "--recursive", "--installed",
+                 "--queryformat", "%{NAME}"]
+
+    name_list = sorted(added_names)
+
+    first_result = executor(cmd_base + [name_list[0]])
+    if first_result.returncode != 0:
+        _debug(f"dnf repoquery unavailable (rc={first_result.returncode}), "
+               "will fall back to rpm")
+        return None
+
+    depends_on: dict = {name: set() for name in added_names}
+
+    for line in first_result.stdout.splitlines():
+        dep_name = line.strip()
+        if dep_name and dep_name in added_names and dep_name != name_list[0]:
+            depends_on[name_list[0]].add(dep_name)
+
+    for pkg_name in name_list[1:]:
+        result = executor(cmd_base + [pkg_name])
+        if result.returncode != 0:
+            continue
+        for line in result.stdout.splitlines():
+            dep_name = line.strip()
+            if dep_name and dep_name in added_names and dep_name != pkg_name:
+                depends_on[pkg_name].add(dep_name)
+
+    return depends_on
+
+
+def _classify_leaf_auto(
+    executor: Executor,
+    host_root: Path,
+    packages_added: List["PackageEntry"],
+) -> tuple:
+    """Split added packages into leaf vs auto with per-leaf dependency tree.
+
+    Returns ``(leaf_list, auto_list, leaf_dep_tree)`` where *leaf_dep_tree*
+    maps each leaf package name to the sorted list of auto packages it
+    pulls in (transitively, within the added set).
+
+    Tries ``dnf repoquery --recursive`` first for accurate transitive
+    resolution (handles weak deps, rich boolean deps, etc).  Falls back
+    to ``rpm -qR`` + ``--whatprovides`` if dnf is unavailable.
+    """
+    added_names = {p.name for p in packages_added}
+
+    depends_on = _classify_deps_via_dnf(executor, host_root, added_names)
+    transitive = depends_on is not None
+
+    if depends_on is None:
+        depends_on = _classify_deps_via_rpm(executor, host_root, added_names)
+
     # Identify depended-on packages (auto)
     depended_on: Set[str] = set()
     for pkg, deps in depends_on.items():
@@ -313,18 +380,24 @@ def _classify_leaf_auto(
     auto = sorted(depended_on)
 
     # Build per-leaf transitive dependency tree
+    auto_set = set(auto)
     leaf_dep_tree: dict = {}
-    for lf in leaf:
-        reachable: Set[str] = set()
-        stack = list(depends_on.get(lf, set()))
-        while stack:
-            dep = stack.pop()
-            if dep in reachable:
-                continue
-            reachable.add(dep)
-            stack.extend(depends_on.get(dep, set()) - reachable)
-        # Only include deps that are in the auto set
-        leaf_dep_tree[lf] = sorted(reachable & set(auto))
+    if transitive:
+        # dnf repoquery --recursive already gave us the transitive closure
+        for lf in leaf:
+            leaf_dep_tree[lf] = sorted(depends_on.get(lf, set()) & auto_set)
+    else:
+        # rpm gives only direct deps; walk the graph
+        for lf in leaf:
+            reachable: Set[str] = set()
+            stack = list(depends_on.get(lf, set()))
+            while stack:
+                dep = stack.pop()
+                if dep in reachable:
+                    continue
+                reachable.add(dep)
+                stack.extend(depends_on.get(dep, set()) - reachable)
+            leaf_dep_tree[lf] = sorted(reachable & auto_set)
 
     return leaf, auto, leaf_dep_tree
 
