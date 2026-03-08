@@ -2,7 +2,9 @@
 CLI entry point. Parses args and delegates to pipeline.
 """
 
+import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -79,8 +81,19 @@ def main(argv: Optional[list] = None) -> int:
                 run_validate(args.output_dir)
             if args.push_to_github:
                 from .git_github import init_git_repo, add_and_commit, push_to_github, output_stats
-                init_git_repo(args.output_dir)
-                add_and_commit(args.output_dir)
+                if not init_git_repo(args.output_dir):
+                    print(
+                        "Error: failed to initialise git repository in output directory. "
+                        "GitPython may not be installed — try: pip install 'yoinkc[github]'",
+                        file=sys.stderr,
+                    )
+                    return 1
+                if not add_and_commit(args.output_dir):
+                    print(
+                        "Error: failed to commit output files to git repository.",
+                        file=sys.stderr,
+                    )
+                    return 1
                 size, file_count, fixme_count = output_stats(args.output_dir)
                 err = push_to_github(
                     args.output_dir,
@@ -99,4 +112,8 @@ def main(argv: Optional[list] = None) -> int:
         return 0
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
+        if os.environ.get("YOINKC_DEBUG"):
+            traceback.print_exc()
+        else:
+            print("Set YOINKC_DEBUG=1 for the full traceback.", file=sys.stderr)
         return 1
