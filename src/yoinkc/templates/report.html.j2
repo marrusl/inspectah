@@ -636,9 +636,15 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- set ug = snapshot.users_groups %}
   {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart"] %}
 
-  <p style="color:var(--muted);font-size:0.9em">
-    To change strategies, re-run with <code>--user-strategy</code> or edit the Containerfile directly.
-  </p>
+  <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
+    <span style="color:var(--muted);font-size:0.9em">Apply strategy to all users:</span>
+    <select id="strategy-apply-all" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
+      {%- for s in strategies %}
+      <option value="{{ s }}">{{ s }}</option>
+      {%- endfor %}
+    </select>
+    <button type="button" id="btn-strategy-apply-all" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:0.85em;cursor:pointer">Apply</button>
+  </div>
 
   <table class="data-table">
     <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
@@ -654,7 +660,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td><code>{{ u.home }}</code></td>
       <td><span style="background:{{ cls_color }};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">{{ cls }}</span></td>
       <td>
-        <select disabled style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em" data-user="{{ u.name }}">
+        <select class="strategy-select" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
           {%- for s in strategies %}
           <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
           {%- endfor %}
@@ -677,6 +683,15 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if ug.groups %}
   <h3>Groups</h3>
+  <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
+    <span style="color:var(--muted);font-size:0.9em">Apply strategy to all groups:</span>
+    <select id="strategy-apply-all-groups" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
+      {%- for s in strategies %}
+      <option value="{{ s }}">{{ s }}</option>
+      {%- endfor %}
+    </select>
+    <button type="button" id="btn-strategy-apply-all-groups" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:0.85em;cursor:pointer">Apply</button>
+  </div>
   <table class="data-table">
     <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
     <tbody>
@@ -685,7 +700,13 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td><input type="checkbox" class="include-cb" {{ 'checked' if g.get('include', true) else '' }}/></td>
       <td>{{ g.name }}</td>
       <td>{{ g.gid }}</td>
-      <td>{{ g.strategy }}</td>
+      <td>
+        <select class="strategy-select" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
+          {%- for s in strategies %}
+          <option value="{{ s }}" {{ 'selected' if s == g.strategy else '' }}>{{ s }}</option>
+          {%- endfor %}
+        </select>
+      </td>
       <td>{{ (g.members or [])|join(', ') or '—' }}</td>
     </tr>
     {%- endfor %}
@@ -1130,11 +1151,11 @@ var snapshot = {{ snapshot_json|safe }};
   var helperAvailable = false;
   var dirty = false;
 
-  // Baseline of include flags at page load (or after a successful re-render).
-  // Keyed by "section/list/index"; value is the initial checked boolean.
   var includeBaseline = {};
+  var strategyBaseline = {};
   function buildBaseline() {
     includeBaseline = {};
+    strategyBaseline = {};
     document.querySelectorAll('.include-cb').forEach(function(cb) {
       var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
       if (!tr) return;
@@ -1144,6 +1165,12 @@ var snapshot = {{ snapshot_json|safe }};
       if (section && list && idx !== null) {
         includeBaseline[section + '/' + list + '/' + idx] = cb.checked;
       }
+    });
+    document.querySelectorAll('.strategy-select').forEach(function(sel) {
+      var tr = sel.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      strategyBaseline[key] = sel.value;
     });
   }
   function isSnapshotClean() {
@@ -1159,6 +1186,12 @@ var snapshot = {{ snapshot_json|safe }};
           clean = false;
         }
       }
+    });
+    document.querySelectorAll('.strategy-select').forEach(function(sel) {
+      var tr = sel.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      if (sel.value !== strategyBaseline[key]) clean = false;
     });
     return clean;
   }
@@ -1208,6 +1241,44 @@ var snapshot = {{ snapshot_json|safe }};
       setDirty(!isSnapshotClean());
     });
   });
+
+  // --- Strategy select handler ---
+  document.querySelectorAll('.strategy-select').forEach(function(sel){
+    sel.addEventListener('change', function(){
+      var tr = this.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
+      if (section && list && !isNaN(idx) && idx >= 0) {
+        var arr = resolveSnapshotRef(section, list);
+        if (arr && arr[idx] !== undefined) {
+          arr[idx].strategy = this.value;
+        }
+      }
+      setDirty(!isSnapshotClean());
+    });
+  });
+
+  // --- Apply strategy to all users/groups ---
+  function applyStrategyToAll(btnId, selectId, listName) {
+    var btn = document.getElementById(btnId);
+    var sel = document.getElementById(selectId);
+    if (!btn || !sel) return;
+    btn.addEventListener('click', function() {
+      var val = sel.value;
+      var arr = resolveSnapshotRef('users_groups', listName);
+      if (!arr) return;
+      document.querySelectorAll('tr[data-snap-section="users_groups"][data-snap-list="' + listName + '"] .strategy-select').forEach(function(s) {
+        s.value = val;
+        var idx = parseInt(s.closest('tr').getAttribute('data-snap-index'), 10);
+        if (!isNaN(idx) && arr[idx] !== undefined) arr[idx].strategy = val;
+      });
+      setDirty(!isSnapshotClean());
+    });
+  }
+  applyStrategyToAll('btn-strategy-apply-all', 'strategy-apply-all', 'users');
+  applyStrategyToAll('btn-strategy-apply-all-groups', 'strategy-apply-all-groups', 'groups');
 
   // --- Package leaf/auto-dep cascade ---
   var pkgDepTree = (snapshot.rpm && snapshot.rpm.leaf_dep_tree) || {};
