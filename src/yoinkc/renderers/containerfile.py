@@ -781,6 +781,18 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         lines.append("# (no config files captured)")
     lines.append("")
 
+    # 6b. CA trust anchors — run update-ca-trust if custom certs were captured
+    _CA_ANCHOR_PREFIX = "etc/pki/ca-trust/source/anchors/"
+    has_ca_anchors = snapshot.config and any(
+        f.include and f.path.lstrip("/").startswith(_CA_ANCHOR_PREFIX)
+        for f in snapshot.config.files
+    )
+    if has_ca_anchors:
+        lines.append("# === CA Trust Store ===")
+        lines.append("# Custom CA certificates detected in /etc/pki/ca-trust/source/anchors/")
+        lines.append("RUN update-ca-trust")
+        lines.append("")
+
     # 7. Non-RPM Software
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
         lines.append("# === Non-RPM Software ===")

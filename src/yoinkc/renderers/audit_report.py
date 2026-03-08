@@ -200,6 +200,12 @@ def render(
         lines.append(f"- Unowned: {len(unowned)}")
         if orphaned:
             lines.append(f"- Orphaned (from removed packages): {len(orphaned)}")
+        ca_anchors = [f for f in snapshot.config.files
+                      if f.include and f.path.lstrip("/").startswith("etc/pki/ca-trust/source/anchors/")]
+        if ca_anchors:
+            names = ", ".join(f"`{f.path}`" for f in ca_anchors)
+            lines.append(f"- **Custom CA certificates** ({len(ca_anchors)}): {names}")
+            lines.append("  `update-ca-trust` will be run in the Containerfile after COPYing these files.")
         for f in snapshot.config.files:
             prefix = "[EXCLUDED] " if not f.include else ""
             flags_note = f" — rpm -Va flags: `{f.rpm_va_flags}`" if f.rpm_va_flags else ""
