@@ -7,6 +7,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 
 from ..schema import InspectionSnapshot
+from .._util import status as _status_fn
 
 from .containerfile import render as render_containerfile
 from .audit_report import render as render_audit_report
@@ -25,9 +26,11 @@ def run_all(snapshot: InspectionSnapshot, output_dir: Path) -> None:
         loader=FileSystemLoader(str(templates_dir)),
         autoescape=True,
     )
+    _status_fn("Rendering output…")
     render_containerfile(snapshot, env, output_dir)
     render_audit_report(snapshot, env, output_dir)
     render_html_report(snapshot, env, output_dir)
     render_readme(snapshot, env, output_dir)
     render_kickstart(snapshot, env, output_dir)
     render_secrets_review(snapshot, env, output_dir)
+    _status_fn("Done.")

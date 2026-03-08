@@ -10,7 +10,7 @@ from typing import Callable, List, Optional, TypeVar
 
 from ..executor import Executor, make_executor
 from ..schema import InspectionSnapshot, OsRelease
-from .._util import make_warning
+from .._util import make_warning, section_banner as _section_banner, status as _status_fn
 
 T = TypeVar("T")
 
@@ -214,10 +214,10 @@ def run_all(
     from ..baseline import BaselineResolver
     resolver = BaselineResolver(executor)
 
-    def _status(msg: str) -> None:
-        print(msg, file=sys.stderr)
+    _TOTAL_STEPS = 11
+    _status_fn("Starting inspection…")
 
-    _status("Inspecting packages...")
+    _section_banner("Packages", 1, _TOTAL_STEPS)
     snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w, resolver=resolver, target_version=target_version, target_image=target_image), None, w)
     if snapshot.rpm and snapshot.rpm.no_baseline:
         w.append(make_warning(
@@ -234,30 +234,39 @@ def run_all(
     from .config import _rpm_owned_paths as _build_rpm_owned_paths
     rpm_owned = _build_rpm_owned_paths(executor, host_root, warnings=w)
 
-    _status("Inspecting config files...")
+    _section_banner("Config files", 2, _TOTAL_STEPS)
     snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=rpm_owned, config_diffs=config_diffs, warnings=w), None, w)
 
-    _status("Inspecting services...")
+    _section_banner("Services", 3, _TOTAL_STEPS)
     base_image_preset_text = None
     if snapshot.rpm and snapshot.rpm.base_image and executor is not None:
         base_image_preset_text = resolver.query_presets(snapshot.rpm.base_image)
     snapshot.services = _safe_run("service", lambda: run_service(host_root, executor, base_image_preset_text=base_image_preset_text, warnings=w), None, w)
-    _status("Inspecting network...")
+
+    _section_banner("Network", 4, _TOTAL_STEPS)
     snapshot.network = _safe_run("network", lambda: run_network(host_root, executor, warnings=w), None, w)
-    _status("Inspecting storage...")
+
+    _section_banner("Storage", 5, _TOTAL_STEPS)
     snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor), None, w)
-    _status("Inspecting scheduled tasks...")
+
+    _section_banner("Scheduled tasks", 6, _TOTAL_STEPS)
     snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor, rpm_owned_paths=rpm_owned), None, w)
-    _status("Inspecting containers...")
+
+    _section_banner("Containers", 7, _TOTAL_STEPS)
     snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman, warnings=w), None, w)
-    _status("Inspecting non-RPM software...")
+
+    _section_banner("Non-RPM software", 8, _TOTAL_STEPS)
     snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan, warnings=w), None, w)
-    _status("Inspecting kernel/boot config...")
+
+    _section_banner("Kernel / boot", 9, _TOTAL_STEPS)
     snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor, warnings=w), None, w)
-    _status("Inspecting SELinux/security...")
+
+    _section_banner("SELinux / security", 10, _TOTAL_STEPS)
     snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor, warnings=w), None, w)
-    _status("Inspecting users/groups...")
+
+    _section_banner("Users / groups", 11, _TOTAL_STEPS)
     snapshot.users_groups = _safe_run("users_groups", lambda: run_users_groups(host_root, executor, user_strategy_override=user_strategy), None, w)
-    _status("Inspection complete.")
+
+    _status_fn("Inspection complete.")
 
     return snapshot

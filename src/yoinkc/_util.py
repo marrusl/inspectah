@@ -26,6 +26,36 @@ def is_debug() -> bool:
     return _DEBUG
 
 
+# ---------------------------------------------------------------------------
+# User-facing progress output (distinct from debug logging)
+# ---------------------------------------------------------------------------
+
+class _C:
+    """ANSI colour constants.  All blanked when stderr is not a TTY."""
+    BOLD   = "\033[1m"
+    DIM    = "\033[2m"
+    GREEN  = "\033[32m"
+    YELLOW = "\033[33m"
+    CYAN   = "\033[36m"
+    RESET  = "\033[0m"
+
+
+if not sys.stderr.isatty():
+    _C.BOLD = _C.DIM = _C.GREEN = _C.YELLOW = _C.CYAN = _C.RESET = ""
+
+
+def status(msg: str) -> None:
+    """Print a user-facing progress line to stderr."""
+    print(f"  {_C.GREEN}\uf00c{_C.RESET}  {msg}", file=sys.stderr)
+
+
+def section_banner(title: str, step: int, total: int) -> None:
+    """Print a section header with a [step/total] counter to stderr."""
+    counter = f"{_C.DIM}[{step}/{total}]{_C.RESET}"
+    rule = f"{_C.DIM}{'─' * (42 - len(title))}{_C.RESET}"
+    print(f"{_C.CYAN}──{_C.RESET} {counter} {_C.BOLD}{title}{_C.RESET} {rule}", file=sys.stderr)
+
+
 def safe_iterdir(d: Path) -> List[Path]:
     """List directory contents, returning [] on permission/OS errors."""
     try:
