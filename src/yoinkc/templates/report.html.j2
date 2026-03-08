@@ -83,9 +83,11 @@ th { color: var(--muted); font-weight: 500; }
 .badge.error { background: #da3633; color: #fff; }
 .badge.info { background: #1f6feb; color: #fff; }
 .containerfile-pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
-.containerfile-wrapper { position: relative; }
-.btn-copy-cf { position: absolute; top: 0.5rem; right: 0.5rem; background: var(--card); border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.78rem; font-family: inherit; z-index: 1; transition: color .1s, border-color .1s; }
+.section-heading-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.section-heading-row h2 { margin: 0; }
+.btn-copy-cf { background: var(--card); border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.78rem; font-family: inherit; transition: color .1s, border-color .1s, background .1s; }
 .btn-copy-cf:hover { color: var(--text); border-color: var(--accent); }
+.btn-copy-cf.copied { background: var(--ok); border-color: var(--ok); color: #fff; }
 .file-browser-layout { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
 .file-tree-panel { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; }
 .file-tree-root { padding: 0; }
@@ -981,13 +983,14 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {% endcall %}
 
 {# ── Containerfile ────────────────────────────────────────────────────────── #}
-{% call section("containerfile", "Containerfile") %}
-<p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
-<div class="containerfile-wrapper">
-  <button type="button" class="btn-copy-cf" id="btn-copy-cf">Copy</button>
+<div id="section-containerfile" class="section">
+  <div class="section-heading-row">
+    <h2>Containerfile</h2>
+    <button type="button" class="btn-copy-cf" id="btn-copy-cf">Copy</button>
+  </div>
+  <p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
   <pre class="containerfile-pre" id="containerfile-pre">{{ containerfile_html|safe }}</pre>
 </div>
-{% endcall %}
 
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
 <div id="exclude-toolbar" style="display:none">
@@ -1382,7 +1385,8 @@ var snapshot = {{ snapshot_json|safe }};
     var pre = document.getElementById('containerfile-pre');
     function flash() {
       btn.textContent = 'Copied!';
-      setTimeout(function() { btn.textContent = 'Copy'; }, 1500);
+      btn.classList.add('copied');
+      setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
     }
     function fallback(text) {
       var ta = document.createElement('textarea');
