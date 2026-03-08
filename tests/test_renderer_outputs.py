@@ -139,12 +139,13 @@ class TestContainerfile:
         cf = self._cf(outputs_with_baseline)
         # Per-file COPYs look like: COPY config/etc/httpd/conf/httpd.conf /etc/httpd/...
         # The consolidated form is: COPY config/etc/ /etc/
-        # GPG key directory COPYs in the Repository Configuration section are
-        # intentionally early (before dnf install) and excluded from this check.
+        # Intentional early directory COPYs (before a specific RUN) are excluded:
+        #   - /rpm-gpg/ (GPG keys before dnf install)
+        #   - /systemd/system/ (timer units before systemctl enable)
         per_file = [
             line for line in
             re.findall(r"^COPY config/etc/[^\s/]+/[^\s]+\s+/etc/[^\s]+$", cf, re.MULTILINE)
-            if "/rpm-gpg/" not in line
+            if "/rpm-gpg/" not in line and "/systemd/system/" not in line
         ]
         assert len(per_file) == 0, f"Found per-file COPY lines: {per_file[:5]}"
 
@@ -828,6 +829,33 @@ def test_gpg_key_copy_precedes_repo_copy():
     assert dnf_idx  != -1, "Expected RUN dnf install"
     assert gpg_idx < repo_idx < dnf_idx, (
         f"Order must be: GPG keys ({gpg_idx}) < repos ({repo_idx}) < dnf install ({dnf_idx})"
+    )
+
+
+def test_systemd_timer_copy_precedes_enable():
+    """Timer unit COPY must appear before RUN systemctl enable *.timer."""
+    from yoinkc.schema import InspectionSnapshot, ScheduledTaskSection, SystemdTimer
+
+    snap = InspectionSnapshot()
+    snap.scheduled_tasks = ScheduledTaskSection()
+    snap.scheduled_tasks.systemd_timers = [
+        SystemdTimer(name="myapp-report", source="local", on_calendar="daily",
+                     timer_content="[Timer]\nOnCalendar=daily\n",
+                     service_content="[Service]\nExecStart=/usr/local/bin/report.sh\n"),
+    ]
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        render_containerfile(snap, Environment(), out)
+        cf = (out / "Containerfile").read_text()
+
+    copy_idx   = cf.find("COPY config/etc/systemd/system/")
+    enable_idx = cf.find("RUN systemctl enable myapp-report.timer")
+    assert copy_idx   != -1, "Expected COPY for systemd/system/"
+    assert enable_idx != -1, "Expected RUN systemctl enable"
+    assert copy_idx < enable_idx, (
+        f"COPY config/etc/systemd/system/ (pos {copy_idx}) must come before "
+        f"RUN systemctl enable (pos {enable_idx})"
     )
 
 

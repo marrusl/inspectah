@@ -762,9 +762,15 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
 
         local_timers = [t for t in st.systemd_timers if t.source == "local"]
         vendor_timers = [t for t in st.systemd_timers if t.source == "vendor"]
+        included_timers = [u for u in st.generated_timer_units if u.include]
+
+        # Timer unit files must be present before systemctl enable runs.
+        # The later consolidated COPY config/etc/ /etc/ re-copies them harmlessly.
+        if local_timers or included_timers:
+            lines.append("COPY config/etc/systemd/system/ /etc/systemd/system/")
 
         if local_timers:
-            lines.append(f"# Existing local timers ({len(local_timers)}): timer files included in COPY config/etc/ below")
+            lines.append(f"# Existing local timers ({len(local_timers)})")
             for t in local_timers:
                 lines.append(f"RUN systemctl enable {t.name}.timer")
 
@@ -773,9 +779,8 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             for t in vendor_timers:
                 lines.append(f"#   - {t.name} ({t.on_calendar})")
 
-        included_timers = [u for u in st.generated_timer_units if u.include]
         if included_timers:
-            lines.append(f"# Converted from cron: {len(included_timers)} timer(s) — included in COPY config/etc/ below")
+            lines.append(f"# Converted from cron: {len(included_timers)} timer(s)")
             for u in included_timers:
                 if u.name:
                     lines.append(f"RUN systemctl enable {u.name}.timer")
