@@ -890,6 +890,52 @@ def test_repo_copy_precedes_dnf_install():
     )
 
 
+def test_config_tree_timers_excluded_from_services_enable():
+    """Config-tree timer units must not appear in the services RUN systemctl enable line."""
+    from yoinkc.renderers.containerfile import render as render_containerfile
+    from yoinkc.schema import (
+        InspectionSnapshot, ServiceSection, ScheduledTaskSection, SystemdTimer,
+        )
+    from jinja2 import Environment
+    import tempfile
+
+    snap = InspectionSnapshot()
+    # A package-installed service (enabled after dnf install)
+    snap.services = ServiceSection()
+    snap.services.enabled_units = ["httpd.service", "myapp-report.timer", "myapp-report.service"]
+    # A local timer whose unit file comes from the config tree
+    snap.scheduled_tasks = ScheduledTaskSection()
+    snap.scheduled_tasks.systemd_timers = [
+        SystemdTimer(
+            name="myapp-report", source="local", on_calendar="daily",
+            timer_content="[Timer]\nOnCalendar=daily\n",
+            service_content="[Service]\nExecStart=/bin/true\n",
+        ),
+    ]
+
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td)
+        render_containerfile(snap, Environment(), out)
+        cf = (out / "Containerfile").read_text()
+
+    # Services enable line must contain httpd.service but NOT the timer or its .service
+    services_enable_line = next(
+        (l for l in cf.splitlines() if l.startswith("RUN systemctl enable") and "httpd" in l),
+        "",
+    )
+    assert "httpd.service" in services_enable_line, "httpd.service must be in services enable"
+    assert "myapp-report" not in services_enable_line, (
+        "myapp-report must be excluded from services enable (it's a config-tree unit)"
+    )
+
+    # Timer COPY must precede the timer's enable in the scheduled tasks section
+    copy_idx   = cf.find("COPY config/etc/systemd/system/")
+    enable_idx = cf.find("RUN systemctl enable myapp-report.timer")
+    assert copy_idx   != -1, "Expected COPY for systemd/system/"
+    assert enable_idx != -1, "Expected RUN systemctl enable for myapp-report.timer"
+    assert copy_idx < enable_idx
+
+
 def test_bootc_container_lint_is_last_run():
     """RUN bootc container lint must appear at the end of every generated Containerfile."""
     from yoinkc.renderers.containerfile import render as render_containerfile

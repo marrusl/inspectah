@@ -698,16 +698,37 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         lines.append("")
 
     # 3. Service Enablement
+    # Units whose files come from the config tree (local timers, generated timers)
+    # are not yet present at this point in the build — they arrive via COPY in
+    # the Scheduled Tasks section.  Exclude them here; they'll be enabled there.
+    _config_tree_units: set = set()
+    st_early = snapshot.scheduled_tasks
+    if st_early:
+        for t in st_early.systemd_timers:
+            if t.source == "local" and t.name:
+                _config_tree_units.add(f"{t.name}.timer")
+                _config_tree_units.add(f"{t.name}.service")
+        for u in st_early.generated_timer_units:
+            if u.include and u.name:
+                _config_tree_units.add(f"{u.name}.timer")
+                _config_tree_units.add(f"{u.name}.service")
+
     if snapshot.services:
         enabled = snapshot.services.enabled_units
         disabled = snapshot.services.disabled_units
         if enabled or disabled:
             lines.append("# === Service Enablement ===")
-            safe_enabled = [u for u in enabled if _sanitize_shell_value(u, "systemctl enable") is not None]
+            safe_enabled = [u for u in enabled
+                            if _sanitize_shell_value(u, "systemctl enable") is not None
+                            and u not in _config_tree_units]
             safe_disabled = [u for u in disabled if _sanitize_shell_value(u, "systemctl disable") is not None]
-            skipped = (len(enabled) - len(safe_enabled)) + (len(disabled) - len(safe_disabled))
+            deferred = [u for u in enabled if u in _config_tree_units]
+            skipped = (len(enabled) - len(safe_enabled) - len(deferred)) + (len(disabled) - len(safe_disabled))
             if skipped:
                 lines.append(f"# FIXME: {skipped} unit name(s) contained unsafe characters and were skipped")
+            if deferred:
+                lines.append(f"# Note: {len(deferred)} config-tree unit(s) enabled later in Scheduled Tasks: "
+                             + ", ".join(deferred))
             lines.append(f"# Detected: {len(safe_enabled)} non-default enabled, {len(safe_disabled)} disabled")
             if safe_enabled:
                 lines.append("RUN systemctl enable " + " ".join(safe_enabled))
