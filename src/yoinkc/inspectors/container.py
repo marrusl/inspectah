@@ -14,7 +14,7 @@ from ..schema import (
     ContainerSection, QuadletUnit, ComposeFile, ComposeService,
     RunningContainer, ContainerMount,
 )
-from .._util import debug as _debug_fn, safe_read as _safe_read_raw, make_warning
+from .._util import debug as _debug_fn, safe_read as _safe_read_raw, make_warning, NON_SYSTEM_UID_MIN, NON_SYSTEM_UID_MAX
 from . import filtered_rglob
 
 
@@ -165,7 +165,7 @@ def run(
                         uid = int(parts[2])
                     except ValueError:
                         continue
-                    if 1000 <= uid < 60000:
+                    if NON_SYSTEM_UID_MIN <= uid < NON_SYSTEM_UID_MAX:
                         home = parts[5].lstrip("/")
                         quadlet_dirs.append(
                             f"{home}/.config/containers/systemd"

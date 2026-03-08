@@ -11,7 +11,7 @@ from typing import List, Optional, Set
 
 from ..executor import Executor
 from ..schema import ConfigFileEntry, ConfigFileKind, ConfigSection, RpmSection
-from .._util import debug as _debug_fn, make_warning
+from .._util import debug as _debug_fn, make_warning, run_rpm_query as _run_rpm_query
 
 
 def _debug(msg: str) -> None:
@@ -219,12 +219,7 @@ def _rpm_owned_paths(executor: Optional[Executor], host_root: Path, warnings: Op
     """
     if executor is None:
         return set()
-    dbpath = str(host_root / "var" / "lib" / "rpm")
-    cmd = ["rpm", "--dbpath", dbpath, "-qa", "--queryformat", "[%{FILENAMES}\n]"]
-    result = executor(cmd)
-    if result.returncode != 0:
-        cmd = ["rpm", "--root", str(host_root), "--define", "_rpmlock_path /var/tmp/.rpm.lock", "-qa", "--queryformat", "[%{FILENAMES}\n]"]
-        result = executor(cmd)
+    result = _run_rpm_query(executor, host_root, ["-qa", "--queryformat", "[%{FILENAMES}\n]"])
     if result.returncode != 0:
         if warnings is not None:
             warnings.append(make_warning(

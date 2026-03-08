@@ -3,7 +3,15 @@
 import os
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Optional, Tuple
+
+# UID range treated as "non-system" (operator-created) accounts.
+# Used by both the users_groups and container inspectors.
+NON_SYSTEM_UID_MIN: int = 1000
+NON_SYSTEM_UID_MAX: int = 60000  # exclusive
+
+# RPM fallback args shared between rpm and config inspectors
+_RPM_LOCK_DEFINE: List[str] = ["--define", "_rpmlock_path /var/tmp/.rpm.lock"]
 
 _DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
 
@@ -39,3 +47,35 @@ def safe_read(p: Path, label: str = "") -> str:
         if label:
             debug(label, f"cannot read {p}: {exc}")
         return ""
+
+
+def parse_dist_info_name(stem: str) -> Tuple[str, str]:
+    """Parse a dist-info directory stem (``name-version``) into ``(name, version)``.
+
+    Canonical wheel naming splits on the first component whose first character
+    is a digit.  Returns ``(stem, "")`` if no version component is found.
+    """
+    parts = stem.split("-")
+    for idx, part in enumerate(parts):
+        if part and part[0].isdigit():
+            return "-".join(parts[:idx]), "-".join(parts[idx:])
+    return stem, ""
+
+
+def run_rpm_query(executor, host_root: Path, args: List[str]):
+    """Run an rpm query against *host_root* with ``--dbpath`` fallback to ``--root``.
+
+    On RHEL/CentOS the ``--dbpath`` form is preferred because it avoids
+    chroot limitations.  If it fails (e.g. locked DB), we retry with
+    ``--root`` plus the lock-path override.
+    """
+    if str(host_root) == "/":
+        prefix: List[str] = ["rpm"]
+    else:
+        prefix = ["rpm", "--dbpath", str(host_root / "var" / "lib" / "rpm")]
+    result = executor(prefix + args)
+    if result.returncode != 0 and str(host_root) != "/":
+        result = executor(
+            ["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + args
+        )
+    return result

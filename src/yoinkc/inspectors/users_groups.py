@@ -5,7 +5,7 @@ from typing import List, Optional
 
 from ..executor import Executor
 from ..schema import UserGroupSection
-from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir
+from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, NON_SYSTEM_UID_MIN, NON_SYSTEM_UID_MAX
 
 
 def _debug(msg: str) -> None:
@@ -76,7 +76,7 @@ def run(
                 if len(parts) >= 7:
                     try:
                         uid = int(parts[2])
-                        if 1000 <= uid < 60000:
+                        if NON_SYSTEM_UID_MIN <= uid < NON_SYSTEM_UID_MAX:
                             username = parts[0]
                             non_system_users.add(username)
                             _debug(f"found user: {username} uid={uid} home={parts[5]} shell={parts[6]}")

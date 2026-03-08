@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from ..executor import Executor
 from ..schema import NonRpmSoftwareSection, NonRpmItem, PipPackage, ConfigFileEntry, ConfigFileKind
-from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning
+from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning, parse_dist_info_name as _parse_dist_info_name
 from . import is_dev_artifact, filtered_rglob
 
 
@@ -243,14 +243,7 @@ def _scan_venv_packages(
                 if not sp_dir.is_dir():
                     continue
                 for dist_info in sp_dir.glob("*.dist-info"):
-                    stem = dist_info.name.replace(".dist-info", "")
-                    parts = stem.split("-")
-                    name, version = stem, ""
-                    for idx, part in enumerate(parts):
-                        if part and part[0].isdigit():
-                            name = "-".join(parts[:idx])
-                            version = "-".join(parts[idx:])
-                            break
+                    name, version = _parse_dist_info_name(dist_info.name.replace(".dist-info", ""))
                     packages.append(PipPackage(name=name, version=version))
         except (PermissionError, OSError):
             pass
@@ -459,14 +452,7 @@ def _scan_pip(section: NonRpmSoftwareSection, host_root: Path, executor: Optiona
                 if not site_packages.exists():
                     site_packages = parent
                 for dist_info in site_packages.glob("*.dist-info"):
-                    stem = dist_info.name.replace(".dist-info", "")
-                    parts = stem.split("-")
-                    name, version = stem, ""
-                    for idx, part in enumerate(parts):
-                        if part and part[0].isdigit():
-                            name = "-".join(parts[:idx])
-                            version = "-".join(parts[idx:])
-                            break
+                    name, version = _parse_dist_info_name(dist_info.name.replace(".dist-info", ""))
                     has_c_ext = False
                     record_file = dist_info / "RECORD"
                     try:

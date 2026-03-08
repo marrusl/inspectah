@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import List, Optional, Set
 
-from .._util import debug as _debug_fn, make_warning
+from .._util import debug as _debug_fn, make_warning, run_rpm_query as _util_run_rpm_query, _RPM_LOCK_DEFINE as _UTIL_RPM_LOCK_DEFINE
 
 
 def _debug(msg: str) -> None:
@@ -27,7 +27,7 @@ from ..schema import (
 
 RPM_QA_QUERYFORMAT = r"%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}"
 
-_RPM_LOCK_DEFINE = ["--define", "_rpmlock_path /var/tmp/.rpm.lock"]
+_RPM_LOCK_DEFINE = _UTIL_RPM_LOCK_DEFINE
 
 _VIRTUAL_PACKAGES: Set[str] = {
     "gpg-pubkey",
@@ -246,21 +246,9 @@ def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional
     return removed
 
 
-def _rpm_cmd_prefix(host_root: Path) -> List[str]:
-    """Return the rpm command prefix for querying the host's RPM database."""
-    if str(host_root) == "/":
-        return ["rpm"]
-    dbpath = str(host_root / "var" / "lib" / "rpm")
-    return ["rpm", "--dbpath", dbpath]
-
-
 def _run_rpm_query(executor: Executor, host_root: Path, args: List[str]):
     """Run an rpm query with --dbpath fallback to --root."""
-    rpm_prefix = _rpm_cmd_prefix(host_root)
-    result = executor(rpm_prefix + args)
-    if result.returncode != 0 and str(host_root) != "/":
-        result = executor(["rpm", "--root", str(host_root)] + _RPM_LOCK_DEFINE + args)
-    return result
+    return _util_run_rpm_query(executor, host_root, args)
 
 
 def _classify_leaf_auto(
