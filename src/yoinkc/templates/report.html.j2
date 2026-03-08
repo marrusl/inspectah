@@ -141,15 +141,18 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 .toast.visible { display: block; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
-#theme-toggle { position: fixed; top: 0.75rem; right: 1rem; background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.95rem; z-index: 9999; line-height: 1.4; font-family: inherit; transition: border-color .15s; }
-#theme-toggle:hover { border-color: var(--accent); }
+#theme-toggle { background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem; font-weight: 500; font-family: inherit; white-space: nowrap; transition: background .15s, border-color .15s, color .15s; }
+#theme-toggle:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+.page-header h1 { margin: 0; }
 </style>
 </head>
 <body>
 
-<button id="theme-toggle" title="Switch to light theme" aria-label="Toggle theme">&#9728;</button>
-
-<h1>yoinkc Inspection Report</h1>
+<div class="page-header">
+  <h1>yoinkc Inspection Report</h1>
+  <button id="theme-toggle" title="Switch to light theme" aria-label="Toggle theme">&#9728;</button>
+</div>
 
 {# ── Banner ─────────────────────────────────────────────────────────────── #}
 <div class="banner">
