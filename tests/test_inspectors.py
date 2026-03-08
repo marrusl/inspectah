@@ -812,3 +812,61 @@ def test_snapshot_roundtrip_with_baseline(host_root, fixture_executor):
         assert (out / "Containerfile").exists()
         assert (out / "audit-report.md").exists()
         assert (out / "report.html").exists()
+
+
+# ===========================================================================
+# Graceful degradation: inspectors must not crash when commands fail
+# ===========================================================================
+
+
+def _failing_executor(cmd, cwd=None):
+    """Executor that returns non-zero for everything except nsenter probe."""
+    if cmd[-1] == "true" and "nsenter" in cmd:
+        return RunResult(stdout="", stderr="", returncode=0)
+    return RunResult(stdout="", stderr="command not available", returncode=1)
+
+
+class TestInspectorFailures:
+    """Each inspector must return a valid (possibly empty) section when commands fail."""
+
+    def test_service_falls_back_to_fs_scan(self, host_root):
+        from yoinkc.inspectors.service import run as run_service
+        section = run_service(host_root, _failing_executor)
+        assert section is not None
+        # Filesystem fallback should still find units even when systemctl fails
+        assert isinstance(section.state_changes, list)
+
+    def test_kernel_boot_empty_on_lsmod_failure(self, host_root):
+        from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+        section = run_kernel_boot(host_root, _failing_executor)
+        assert section is not None
+        assert section.loaded_modules == []
+
+    def test_scheduled_tasks_skips_at_jobs(self, host_root):
+        from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+        section = run_scheduled_tasks(host_root, _failing_executor)
+        assert section is not None
+        assert isinstance(section.at_jobs, list)
+        # Cron jobs come from the filesystem, not the executor, so may still appear
+        assert isinstance(section.cron_jobs, list)
+
+    def test_rpm_empty_on_failure(self, host_root):
+        from yoinkc.inspectors.rpm import run as run_rpm
+        section = run_rpm(host_root, _failing_executor)
+        assert section is not None
+        assert section.packages_added == []
+        assert section.rpm_va == []
+
+    def test_selinux_graceful_on_failure(self, host_root):
+        from yoinkc.inspectors.selinux import run as run_selinux
+        section = run_selinux(host_root, _failing_executor)
+        assert section is not None
+        # Filesystem-based module detection still works; executor-backed
+        # fields (booleans, ports) should be empty/absent.
+        assert isinstance(section.boolean_overrides, list)
+
+    def test_network_empty_on_failure(self, host_root):
+        from yoinkc.inspectors.network import run as run_network
+        section = run_network(host_root, _failing_executor)
+        assert section is not None
+        assert isinstance(section.connections, list)
