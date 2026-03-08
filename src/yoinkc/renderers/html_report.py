@@ -308,12 +308,17 @@ def _render_diff_html(diff_text: str) -> str:
     return '<pre class="diff-view">' + "\n".join(colored) + "</pre>"
 
 
+_QUADLET_PREFIX = "etc/containers/systemd/"
+
+
 def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
     """Pre-process config file entries with pre-rendered diff HTML."""
     if not snapshot.config or not snapshot.config.files:
         return []
     result = []
     for f in snapshot.config.files:
+        if f.path.lstrip("/").startswith(_QUADLET_PREFIX):
+            continue
         result.append({
             "path": f.path,
             "kind": f.kind.value,

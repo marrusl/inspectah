@@ -163,6 +163,9 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             rel = entry.path.lstrip("/")
             if rel in dhcp_paths:
                 continue
+            # Quadlet files are written to quadlet/ and COPYed separately
+            if rel.startswith("etc/containers/systemd/"):
+                continue
             dest = config_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(entry.content or "")

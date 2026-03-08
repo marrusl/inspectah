@@ -190,23 +190,28 @@ def render(
                 lines.append(f"[EXCLUDED] **{di.unit}** — `{di.path}`")
                 lines.append("")
 
-    if snapshot.config and snapshot.config.files:
+    _QUADLET_PREFIX = "etc/containers/systemd/"
+    config_files = [
+        f for f in (snapshot.config.files if snapshot.config and snapshot.config.files else [])
+        if not f.path.lstrip("/").startswith(_QUADLET_PREFIX)
+    ]
+    if config_files:
         lines.append("## Configuration Files")
         lines.append("")
-        modified = [f for f in snapshot.config.files if f.kind == ConfigFileKind.RPM_OWNED_MODIFIED]
-        unowned = [f for f in snapshot.config.files if f.kind == ConfigFileKind.UNOWNED]
-        orphaned = [f for f in snapshot.config.files if f.kind == ConfigFileKind.ORPHANED]
+        modified = [f for f in config_files if f.kind == ConfigFileKind.RPM_OWNED_MODIFIED]
+        unowned = [f for f in config_files if f.kind == ConfigFileKind.UNOWNED]
+        orphaned = [f for f in config_files if f.kind == ConfigFileKind.ORPHANED]
         lines.append(f"- RPM-owned modified: {len(modified)}")
         lines.append(f"- Unowned: {len(unowned)}")
         if orphaned:
             lines.append(f"- Orphaned (from removed packages): {len(orphaned)}")
-        ca_anchors = [f for f in snapshot.config.files
+        ca_anchors = [f for f in config_files
                       if f.include and f.path.lstrip("/").startswith("etc/pki/ca-trust/source/anchors/")]
         if ca_anchors:
             names = ", ".join(f"`{f.path}`" for f in ca_anchors)
             lines.append(f"- **Custom CA certificates** ({len(ca_anchors)}): {names}")
             lines.append("  `update-ca-trust` will be run in the Containerfile after COPYing these files.")
-        for f in snapshot.config.files:
+        for f in config_files:
             prefix = "[EXCLUDED] " if not f.include else ""
             flags_note = f" — rpm -Va flags: `{f.rpm_va_flags}`" if f.rpm_va_flags else ""
             pkg_note = f" (package: {f.package})" if f.package else ""
