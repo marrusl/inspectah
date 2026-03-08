@@ -7,6 +7,7 @@ case where yoinkc runs directly on the host.
 """
 
 import subprocess
+import sys
 from pathlib import Path
 
 _NSENTER_PREFIX = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--"]
@@ -57,14 +58,19 @@ def run_validate(output_dir: Path) -> bool:
         _report_build_success(output_dir)
         return True
     except FileNotFoundError:
-        # podman not installed
-        return True
+        print(
+            "Warning: podman not found — build validation skipped. "
+            "Install podman to enable.",
+            file=sys.stderr,
+        )
+        return False
     except subprocess.TimeoutExpired:
         (output_dir / "build-errors.log").write_text("Podman build timed out after 600s.\n")
         _append_build_failure_to_reports(output_dir, "Podman build timed out after 600s.")
         return False
-    except Exception:
-        return True
+    except Exception as e:
+        print(f"Warning: build validation failed unexpectedly: {e}", file=sys.stderr)
+        return False
 
 
 def _report_build_success(output_dir: Path) -> None:

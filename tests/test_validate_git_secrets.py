@@ -18,6 +18,36 @@ def test_run_validate_no_containerfile():
         assert run_validate(Path(tmp)) is True
 
 
+def test_run_validate_podman_not_found(capsys):
+    """FileNotFoundError (podman missing) must return False with a warning, not True."""
+    import unittest.mock as mock
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "Containerfile").write_text("FROM scratch\n")
+        with mock.patch("subprocess.run", side_effect=FileNotFoundError):
+            result = run_validate(d)
+    assert result is False
+    assert "podman not found" in capsys.readouterr().err
+
+
+def test_run_validate_build_failure_creates_log(capsys):
+    """A non-zero podman exit code must write build-errors.log and return False."""
+    import unittest.mock as mock
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "Containerfile").write_text("FROM scratch\n")
+        failed = mock.MagicMock()
+        failed.returncode = 1
+        failed.stdout = "step 1/1 failed"
+        failed.stderr = "error: no such image"
+        with mock.patch("subprocess.run", return_value=failed):
+            result = run_validate(d)
+        assert result is False
+        log = d / "build-errors.log"
+        assert log.exists(), "build-errors.log must be created on build failure"
+        assert "failed" in log.read_text().lower()
+
+
 def test_append_build_failure_to_audit_report():
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
