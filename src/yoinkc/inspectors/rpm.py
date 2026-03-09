@@ -158,10 +158,10 @@ def _populate_source_repos(
         # RPM DB that --installroot accesses.  Run on the host via nsenter when
         # inside a container; plain dnf when already on the host.
         if str(host_root) == "/":
-            cmd_base = ["dnf", "repoquery", "--installed", "--queryformat", "%{name} %{from_repo}"]
+            cmd_base = ["dnf", "repoquery", "--installed", "--queryformat", "%{name} %{from_repo}\n"]
         else:
             cmd_base = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--",
-                        "dnf", "repoquery", "--installed", "--queryformat", "%{name} %{from_repo}"]
+                        "dnf", "repoquery", "--installed", "--queryformat", "%{name} %{from_repo}\n"]
         # Probe with the first package
         probe = executor(cmd_base + [names[0]])
         if probe.returncode != 0:
@@ -222,10 +222,10 @@ def _query_user_installed(
     Returns None if the query fails (e.g. dnf unavailable).
     """
     if str(host_root) == "/":
-        cmd = ["dnf", "repoquery", "--userinstalled", "--queryformat", "%{name}"]
+        cmd = ["dnf", "repoquery", "--userinstalled", "--queryformat", "%{name}\n"]
     else:
         cmd = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--",
-               "dnf", "repoquery", "--userinstalled", "--queryformat", "%{name}"]
+               "dnf", "repoquery", "--userinstalled", "--queryformat", "%{name}\n"]
     result = executor(cmd)
     if result.returncode != 0:
         _debug(f"dnf repoquery --userinstalled failed (rc={result.returncode})")
@@ -467,7 +467,7 @@ def _classify_deps_via_dnf(
     if str(host_root) != "/":
         cmd_base += ["--installroot", str(host_root)]
     cmd_base += ["--requires", "--resolve", "--recursive", "--installed",
-                 "--queryformat", "%{name}"]
+                 "--queryformat", "%{name}\n"]
 
     name_list = sorted(added_names)
 
