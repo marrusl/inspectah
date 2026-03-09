@@ -573,7 +573,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
     if needs_multistage:
         lines.append("# === Build stage: compile pip packages with C extensions ===")
         lines.append(f"FROM {base} AS builder")
-        lines.append("RUN dnf install -y gcc python3-devel make && dnf clean all")
+        lines.append("RUN dnf install -y gcc python3-devel make && dnf clean all && rm -rf /var/cache/dnf /var/lib/dnf/history* /var/log/dnf* /var/log/hawkey.log /var/log/rhsm")
         lines.append("RUN python3 -m venv /tmp/pip-build")
         c_ext_pip.sort()
         specs = " ".join(f"{n}=={v}" for n, v in c_ext_pip)
@@ -692,7 +692,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             for n in install_names[:-1]:
                 lines.append(f"    {n} \\")
             lines.append(f"    {install_names[-1]} \\")
-            lines.append("    && dnf clean all")
+            lines.append("    && dnf clean all && rm -rf /var/cache/dnf /var/lib/dnf/history* /var/log/dnf* /var/log/hawkey.log /var/log/rhsm")
         if auto_count:
             lines.append(f"# {auto_count} additional package(s) will be pulled in as dependencies")
             lines.append("# See audit-report.md for full package list")
