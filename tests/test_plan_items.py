@@ -367,9 +367,9 @@ class TestMultiStageContainerfile:
             NonRpmItem(name="cryptography", version="41.0.0", method="pip dist-info",
                        has_c_extensions=c_ext, confidence="high",
                        path="usr/lib/python3.9/site-packages/cryptography-41.0.0.dist-info"),
-            NonRpmItem(name="requests", version="2.31.0", method="pip dist-info",
+            NonRpmItem(name="requests", version="2.32.5", method="pip dist-info",
                        confidence="high",
-                       path="usr/lib/python3.9/site-packages/requests-2.31.0.dist-info"),
+                       path="usr/lib/python3.9/site-packages/requests-2.32.5.dist-info"),
         ]
         return InspectionSnapshot(
             meta={}, os_release=OsRelease(name="CentOS Stream", version_id="9", id="centos"),
@@ -813,9 +813,9 @@ def test_all_features_render_together():
             NonRpmItem(name="cryptography", version="41.0.0", method="pip dist-info",
                        has_c_extensions=True, confidence="high",
                        path="usr/lib/python3.9/site-packages/cryptography-41.0.0.dist-info"),
-            NonRpmItem(name="requests", version="2.31.0", method="pip dist-info",
+            NonRpmItem(name="requests", version="2.32.5", method="pip dist-info",
                        confidence="high",
-                       path="usr/lib/python3.9/site-packages/requests-2.31.0.dist-info"),
+                       path="usr/lib/python3.9/site-packages/requests-2.32.5.dist-info"),
         ]),
         users_groups=UserGroupSection(
             users=[{"name": "mark", "uid": "1000", "gid": "1000",

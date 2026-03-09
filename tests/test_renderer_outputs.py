@@ -507,8 +507,8 @@ class TestContainerfileQuality:
 
         # pip packages produce real RUN pip install
         assert re.search(r"^RUN pip install", cf, re.MULTILINE)
-        assert "flask==2.3.2" in cf
-        assert "requests==2.31.0" in cf
+        assert "flask==3.1.3" in cf
+        assert "requests==2.32.5" in cf
 
         # npm lockfiles produce real COPY + RUN
         assert re.search(r"^COPY config/opt/myapp/", cf, re.MULTILINE)

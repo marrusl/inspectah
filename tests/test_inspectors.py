@@ -469,9 +469,9 @@ def test_non_rpm_software_inspector_with_fixtures(host_root, fixture_executor):
     pip_items = [i for i in section.items if i.method == "pip dist-info"]
     assert len(pip_items) >= 2
     flask = next((i for i in pip_items if i.name == "flask"), None)
-    assert flask is not None and flask.version == "2.3.2"
+    assert flask is not None and flask.version == "3.1.3"
     requests_ = next((i for i in pip_items if i.name == "requests"), None)
-    assert requests_ is not None and requests_.version == "2.31.0"
+    assert requests_ is not None and requests_.version == "2.32.5"
 
     # npm with lockfile content
     npm_items = [i for i in section.items if i.method == "npm package-lock.json"]
