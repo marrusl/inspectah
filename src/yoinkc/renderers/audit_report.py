@@ -114,40 +114,6 @@ def render(
                     prefix = "[EXCLUDED] " if not p.include else ""
                     lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
                 lines.append("")
-            if auto_pkgs:
-                lines.append(f"### Dependencies ({len(auto_pkgs)})")
-                lines.append("")
-                lines.append("These packages are pulled in automatically by dnf. If the target image "
-                             "produces a different dependency set, promote packages from this list to "
-                             "the `dnf install` line.")
-                lines.append("")
-                for p in auto_pkgs:
-                    prefix = "[EXCLUDED] " if not p.include else ""
-                    lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
-                lines.append("")
-
-            # Dependency tree view
-            if dep_tree:
-                total = len(leaf_pkgs) + len(auto_pkgs)
-                lines.append(f"### Package Dependency Tree ({total} packages beyond base image)")
-                lines.append("")
-                lines.append(f"**{len(leaf_pkgs)} leaf packages** → {len(auto_pkgs)} dependencies")
-                lines.append("")
-
-                sorted_leaves = sorted(dep_tree.keys(), key=lambda k: -len(dep_tree.get(k, [])))
-                for lf in sorted_leaves:
-                    deps = dep_tree.get(lf, [])
-                    if deps:
-                        lines.append(f"**{lf}** ({len(deps)} deps)")
-                        for i, d in enumerate(deps[:10]):
-                            connector = "└──" if i == min(len(deps), 10) - 1 else "├──"
-                            lines.append(f"  {connector} {d}")
-                        if len(deps) > 10:
-                            lines.append(f"  └── ... and {len(deps) - 10} more")
-                        lines.append("")
-                    else:
-                        lines.append(f"**{lf}** (0 deps — installed independently)")
-                        lines.append("")
         else:
             lines.append("### Added")
             for p in snapshot.rpm.packages_added:
@@ -828,6 +794,54 @@ def render(
         for w in snapshot.warnings:
             lines.append(f"- {w.get('message') or '—'}")
         lines.append("")
+
+    if snapshot.rpm and snapshot.rpm.leaf_packages is not None:
+        leaf_set = set(snapshot.rpm.leaf_packages)
+        auto_set = set(snapshot.rpm.auto_packages or [])
+        dep_tree = snapshot.rpm.leaf_dep_tree or {}
+        auto_pkgs = [p for p in snapshot.rpm.packages_added if p.name in auto_set]
+        leaf_pkgs = [p for p in snapshot.rpm.packages_added if p.name in leaf_set]
+        
+        has_package_details = (auto_pkgs or dep_tree)
+        if has_package_details:
+            lines.append("## Package Details")
+            lines.append("")
+            
+            if auto_pkgs:
+                lines.append(f"### Dependencies ({len(auto_pkgs)})")
+                lines.append("")
+                lines.append("These packages are pulled in automatically by dnf. If the target image "
+                             "produces a different dependency set, promote packages from this list to "
+                             "the `dnf install` line.")
+                lines.append("")
+                for p in auto_pkgs:
+                    prefix = "[EXCLUDED] " if not p.include else ""
+                    lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
+                lines.append("")
+
+            # Dependency tree view
+            if dep_tree:
+                total = len(leaf_pkgs) + len(auto_pkgs)
+                lines.append(f"### Package Dependency Tree ({total} packages beyond base image)")
+                lines.append("")
+                lines.append(f"**{len(leaf_pkgs)} leaf packages** → {len(auto_pkgs)} dependencies")
+                lines.append("")
+
+                sorted_leaves = sorted(dep_tree.keys(), key=lambda k: -len(dep_tree.get(k, [])))
+                for lf in sorted_leaves:
+                    deps = dep_tree.get(lf, [])
+                    if deps:
+                        lines.append(f"**{lf}** ({len(deps)} deps)")
+                        for i, d in enumerate(deps[:10]):
+                            connector = "└──" if i == min(len(deps), 10) - 1 else "├──"
+                            lines.append(f"  {connector} {d}")
+                        if len(deps) > 10:
+                            lines.append(f"  └── ... and {len(deps) - 10} more")
+                        lines.append("")
+                    else:
+                        lines.append(f"**{lf}** (0 deps — installed independently)")
+                        lines.append("")
+            lines.append("")
 
     if snapshot.redactions:
         lines.append("## Redactions (secrets)")
