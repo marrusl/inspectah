@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Set, Tuple
 
 from ..executor import Executor
 from ..schema import ServiceSection, ServiceStateChange, SystemdDropIn
-from .._util import debug as _debug_fn, is_debug as _DEBUG_check, make_warning
+from .._util import debug as _debug_fn, is_debug as _DEBUG_check, make_warning, run_rpm_query as _run_rpm_query
 
 
 def _debug(msg: str) -> None:
@@ -209,10 +209,8 @@ def _resolve_owning_packages(
     def _batch_query(prefix: str, units: List['ServiceStateChange']) -> List['ServiceStateChange']:
         """Query rpm -qf for all units under prefix. Returns units that failed."""
         paths = [f"/{prefix}/{sc.unit}" for sc in units]
-        result = executor(
-            ["rpm", "--root", str(host_root), "-qf",
-             "--queryformat", "%{NAME}\\n"] + paths,
-        )
+        result = _run_rpm_query(executor, host_root,
+                                ["-qf", "--queryformat", "%{NAME}\\n"] + paths)
         if result.returncode == 0 and result.stdout.strip():
             names = result.stdout.strip().splitlines()
             for sc, name in zip(units, names):
@@ -221,11 +219,9 @@ def _resolve_owning_packages(
         # Batch failed — fall back to individual queries
         missed = []
         for sc in units:
-            r = executor(
-                ["rpm", "--root", str(host_root), "-qf",
-                 "--queryformat", "%{NAME}\\n",
-                 f"/{prefix}/{sc.unit}"],
-            )
+            r = _run_rpm_query(executor, host_root,
+                               ["-qf", "--queryformat", "%{NAME}\\n",
+                                f"/{prefix}/{sc.unit}"])
             if r.returncode == 0 and r.stdout.strip():
                 sc.owning_package = r.stdout.strip().splitlines()[0]
             else:

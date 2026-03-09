@@ -261,7 +261,7 @@ def _get_owning_package(executor: Executor, host_root: Path, path: str) -> Optio
     """Return package name owning path, or None."""
     if not executor:
         return None
-    r = executor(["rpm", "--root", str(host_root), "-qf", path])
+    r = _run_rpm_query(executor, host_root, ["-qf", path])
     if r.returncode != 0 or not r.stdout.strip():
         return None
     return r.stdout.strip().splitlines()[0].strip()

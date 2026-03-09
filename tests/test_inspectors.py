@@ -54,10 +54,30 @@ def _fixture_executor(cmd, cwd=None):
     if "rpm" in cmd and "-ql" in cmd:
         return RunResult(stdout=(FIXTURES / "rpm_qla_output.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-qf" in cmd:
-        path_arg = cmd[-1]
-        if "httpd.service" in path_arg:
-            return RunResult(stdout="httpd\n", stderr="", returncode=0)
-        return RunResult(stdout="", stderr=f"file {path_arg} is not owned by any package", returncode=1)
+        assert "--root" not in cmd, (
+            f"rpm -qf must use --dbpath, not --root (chroot fails in containers); got: {cmd}"
+        )
+        # Collect path args — skip flag values like the --dbpath argument.
+        path_args = []
+        skip_next = False
+        for a in cmd:
+            if skip_next:
+                skip_next = False
+                continue
+            if a in ("--dbpath", "--root", "--queryformat"):
+                skip_next = True
+                continue
+            if a.startswith("/"):
+                path_args.append(a)
+        _KNOWN_OWNERS = {"httpd.service": "httpd"}
+        names = [_KNOWN_OWNERS.get(Path(p).name, "") for p in path_args]
+        if any(names):
+            return RunResult(stdout="\n".join(names) + "\n", stderr="", returncode=0)
+        return RunResult(
+            stdout="",
+            stderr=f"file {path_args[-1] if path_args else '?'} is not owned by any package",
+            returncode=1,
+        )
     if "systemctl" in cmd and "list-unit-files" in cmd:
         return RunResult(stdout=(FIXTURES / "systemctl_list_unit_files.txt").read_text(), stderr="", returncode=0)
     if "semodule" in cmd and "-l" in cmd:
