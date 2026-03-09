@@ -63,12 +63,18 @@ html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 
 /* Page padding – toolbar lives at the bottom */
 body { padding-bottom: 70px; }
-.pf-v6-c-page__main-section { max-width: 1400px; margin: 0 auto; }
 
-/* Section show/hide for tab switching */
-.section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); max-width: 1200px; }
+/* Section show/hide for nav switching */
+.section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); }
 .section.visible { display: block; animation: fadeIn .15s ease; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Sidebar nav */
+.pf-v6-c-page__sidebar { width: 240px; flex-shrink: 0; }
+.pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.75rem 1rem 0.25rem; }
+@media (max-width: 768px) {
+  .pf-v6-c-page__sidebar { width: 100%; position: static; }
+}
 
 /* Tables: auto-width to avoid full-bleed tables */
 .pf-v6-c-table { width: auto; }
@@ -155,10 +161,27 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 div.excluded { text-decoration: line-through; opacity: 0.45; }
 
 /* Include checkbox – hidden until yoinkc-refine helper is active */
-.include-cb { width: 18px; height: 18px; cursor: pointer; display: none; }
+.include-cb { cursor: pointer; display: none; accent-color: var(--pf-t--global--color--brand--default, #06c); }
 
-/* Select elements */
-select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85em; }
+/* Details/summary disclosure styling */
+details > summary { cursor: pointer; color: var(--pf-v6-global--link--Color, #58a6ff); font-size: 0.85em; padding: 0.25rem 0; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "▸ "; font-size: 0.75em; }
+details[open] > summary::before { content: "▾ "; }
+details > summary:hover { text-decoration: underline; }
+details[open] > summary { margin-bottom: 0.25rem; }
+
+/* Inline semantic labels (colour-coded by category) */
+.pf-v6-c-label.lbl-service  { background: #4caf50; color: #fff; }
+.pf-v6-c-label.lbl-human    { background: #2196f3; color: #fff; }
+.pf-v6-c-label.lbl-ambiguous { background: #ff9800; color: #fff; }
+.pf-v6-c-label.lbl-go       { background: #00ADD8; color: #fff; }
+.pf-v6-c-label.lbl-rust     { background: #DEA584; color: #fff; }
+.pf-v6-c-label.lbl-c-cpp    { background: #555;    color: #fff; }
+.pf-v6-c-label.lbl-static   { background: #4caf50; color: #fff; }
+.pf-v6-c-label.lbl-dynamic  { background: #ff9800; color: #fff; }
+.pf-v6-c-label.lbl-isolated { background: #4caf50; color: #fff; }
+.pf-v6-c-label.lbl-ssp      { background: #f44336; color: #fff; }
 
 /* Audit */
 .audit-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
@@ -179,9 +202,6 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* Allow PF tabs to wrap into multiple rows */
-.pf-v6-c-tabs__list { flex-wrap: wrap; }
-
 /* Scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -199,6 +219,46 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
     <button id="theme-toggle" class="pf-v6-c-button pf-m-plain" title="Switch to light theme" aria-label="Toggle theme">&#9728;</button>
   </div>
 </header>
+
+{# ── Sidebar navigation ─────────────────────────────────────────────────── #}
+<div class="pf-v6-c-page__sidebar">
+  <div class="pf-v6-c-page__sidebar-body">
+    <nav class="pf-v6-c-nav" id="report-nav" aria-label="Report sections">
+      <section class="pf-v6-c-nav__section">
+        <h2 class="pf-v6-c-nav__section-title">Overview</h2>
+        <ul class="pf-v6-c-nav__list">
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link pf-m-current" data-tab="summary" href="#">Summary</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="audit" href="#">Audit report</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="warnings" href="#">Warnings</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="output_files" href="#">File browser</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containerfile" href="#">Containerfile</a></li>
+        </ul>
+      </section>
+      <section class="pf-v6-c-nav__section">
+        <h2 class="pf-v6-c-nav__section-title">Inspectors</h2>
+        <ul class="pf-v6-c-nav__list">
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="config" href="#">Config</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="services" href="#">Services</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="users_groups" href="#">Users/Groups</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containers" href="#">Containers</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="non_rpm" href="#">Non-RPM</a></li>
+        </ul>
+      </section>
+      <section class="pf-v6-c-nav__section">
+        <h2 class="pf-v6-c-nav__section-title">System</h2>
+        <ul class="pf-v6-c-nav__list">
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="scheduled_tasks" href="#">Scheduled</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="kernel_boot" href="#">Kernel/Boot</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="selinux" href="#">SELinux</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="network" href="#">Network</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="storage" href="#">Storage</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="secrets" href="#">Secrets</a></li>
+        </ul>
+      </section>
+    </nav>
+  </div>
+</div>
 
 <main class="pf-v6-c-page__main">
 <section class="pf-v6-c-page__main-section">
@@ -249,28 +309,6 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
 </div>
 {% endif %}
 
-{# ── Tab navigation ─────────────────────────────────────────────────────── #}
-<div class="pf-v6-c-tabs" id="report-tabs">
-  <ul class="pf-v6-c-tabs__list">
-    <li class="pf-v6-c-tabs__item pf-m-current"><button class="pf-v6-c-tabs__link" data-tab="summary" type="button"><span class="pf-v6-c-tabs__item-text">Summary</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="audit" type="button"><span class="pf-v6-c-tabs__item-text">Audit report</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="warnings" type="button"><span class="pf-v6-c-tabs__item-text">Warnings</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="output_files" type="button"><span class="pf-v6-c-tabs__item-text">File browser</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="containerfile" type="button"><span class="pf-v6-c-tabs__item-text">Containerfile</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="packages" type="button"><span class="pf-v6-c-tabs__item-text">Packages</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="config" type="button"><span class="pf-v6-c-tabs__item-text">Config</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="services" type="button"><span class="pf-v6-c-tabs__item-text">Services</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="users_groups" type="button"><span class="pf-v6-c-tabs__item-text">Users/Groups</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="containers" type="button"><span class="pf-v6-c-tabs__item-text">Containers</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="non_rpm" type="button"><span class="pf-v6-c-tabs__item-text">Non-RPM</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="scheduled_tasks" type="button"><span class="pf-v6-c-tabs__item-text">Scheduled</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="kernel_boot" type="button"><span class="pf-v6-c-tabs__item-text">Kernel/Boot</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="selinux" type="button"><span class="pf-v6-c-tabs__item-text">SELinux</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="network" type="button"><span class="pf-v6-c-tabs__item-text">Network</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="storage" type="button"><span class="pf-v6-c-tabs__item-text">Storage</span></button></li>
-    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="secrets" type="button"><span class="pf-v6-c-tabs__item-text">Secrets</span></button></li>
-  </ul>
-</div>
 
 {# ══════════════════════════════════════════════════════════════════════════
    Sections
@@ -278,7 +316,7 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
 
 {# ── Summary ────────────────────────────────────────────────────────────── #}
 {% call section("summary", "Summary", visible=true) %}
-<p class="summary-hero">Inspection overview and run metadata. Use the cards or tabs above to drill into any category.</p>
+<p class="summary-hero">Inspection overview and run metadata. Use the sidebar navigation to drill into any category.</p>
 <p style="font-size:0.9rem">This report is self-contained and portable: all content (Containerfile, audit, config/ and quadlet/ file browser) is embedded. You can copy or share <code>report.html</code> alone.</p>
 <dl class="pf-v6-c-description-list summary-meta">
   <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Host root</dt><dd class="pf-v6-c-description-list__description"><code>{{ meta.host_root|default('') }}</code></dd></div>
@@ -545,17 +583,15 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr></thead><tbody>
     {%- for i in nd.elf %}
     {%- set lang = i.lang %}
-    {%- set lang_colors = {'go': '#00ADD8', 'rust': '#DEA584', 'c/c++': '#555'} %}
-    {%- set color = lang_colors.get(lang, '#999') %}
+    {%- set lang_lbl = {'go': 'lbl-go', 'rust': 'lbl-rust', 'c/c++': 'lbl-c-cpp'} %}
     {%- set linking = 'static' if i.static else 'dynamic' %}
-    {%- set link_color = '#4caf50' if i.static else '#ff9800' %}
     {%- set nr_idx = namespace(val=-1) %}
     {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
     <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if i.include else '' }}/></td>
       <td><code>{{ i.path }}</code></td>
-      <td><span style="background:{{ color }};color:#fff;padding:2px 8px;border-radius:4px">{{ lang }}</span></td>
-      <td><span style="background:{{ link_color }};color:#fff;padding:2px 8px;border-radius:4px">{{ linking }}</span></td>
+      <td><span class="pf-v6-c-label {{ lang_lbl.get(lang, 'lbl-ambiguous') }}">{{ lang }}</span></td>
+      <td><span class="pf-v6-c-label {{ 'lbl-static' if i.static else 'lbl-dynamic' }}">{{ linking }}</span></td>
       <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
     </tr>
     {%- endfor %}
@@ -567,8 +603,8 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
   {%- for v in nd.venv %}
   {%- set ssp = v.system_site_packages %}
   <h4><code>{{ v.path }}</code>
-    {%- if ssp %} <span style="background:#f44336;color:#fff;padding:2px 8px;border-radius:4px">system-site-packages</span>
-    {%- else %} <span style="background:#4caf50;color:#fff;padding:2px 8px;border-radius:4px">isolated</span>
+    {%- if ssp %} <span class="pf-v6-c-label lbl-ssp">system-site-packages</span>
+    {%- else %} <span class="pf-v6-c-label lbl-isolated">isolated</span>
     {%- endif %}
   </h4>
   {%- set pkgs = v.packages %}
@@ -714,11 +750,11 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
 
   <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
     <span style="font-size:0.9em">Apply strategy to all users:</span>
-    <select id="strategy-apply-all">
+    <span class="pf-v6-c-form-control"><select id="strategy-apply-all">
       {%- for s in strategies %}
       <option value="{{ s }}">{{ s }}</option>
       {%- endfor %}
-    </select>
+    </select></span>
     <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all" style="font-size:0.85em">Apply</button>
   </div>
 
@@ -727,29 +763,29 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
     <tbody>
     {%- for u in ug.users %}
     {%- set cls = u.classification or '?' %}
-    {%- set cls_color = '#4caf50' if cls == 'service' else '#2196f3' if cls == 'human' else '#ff9800' %}
+    {%- set cls_lbl = 'lbl-service' if cls == 'service' else 'lbl-human' if cls == 'human' else 'lbl-ambiguous' %}
     <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if u.get('include', true) else '' }}/></td>
       <td><strong>{{ u.name }}</strong></td>
       <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
       <td><code>{{ u.shell }}</code></td>
       <td><code>{{ u.home }}</code></td>
-      <td><span style="background:{{ cls_color }};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">{{ cls }}</span></td>
+      <td><span class="pf-v6-c-label {{ cls_lbl }}">{{ cls }}</span></td>
       <td>
-        <select class="strategy-select">
+        <span class="pf-v6-c-form-control"><select class="strategy-select">
           {%- for s in strategies %}
           <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
           {%- endfor %}
-        </select>
+        </select></span>
       </td>
       <td style="font-size:0.85em">
         {%- set notes = [] %}
         {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
           {%- set _ = notes.append('SSH keys') %}
-          <span style="background:var(--pf-v6-global--warning-color--100, #d29922);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="authorized_keys found on source but not included in image">SSH KEYS</span>
+          <span class="pf-v6-c-label badge warn" title="authorized_keys found on source but not included in image">SSH KEYS</span>
         {%- endif %}
         {%- if cls == 'ambiguous' %}
-          <span style="background:var(--pf-v6-global--warning-color--100, #d29922);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="Classification uncertain — verify intent">ambiguous</span>
+          <span class="pf-v6-c-label badge warn" title="Classification uncertain — verify intent">ambiguous</span>
         {%- endif %}
       </td>
     </tr>
@@ -761,11 +797,11 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
   <h3>Groups</h3>
   <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
     <span style="font-size:0.9em">Apply strategy to all groups:</span>
-    <select id="strategy-apply-all-groups">
+    <span class="pf-v6-c-form-control"><select id="strategy-apply-all-groups">
       {%- for s in strategies %}
       <option value="{{ s }}">{{ s }}</option>
       {%- endfor %}
-    </select>
+    </select></span>
     <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all-groups" style="font-size:0.85em">Apply</button>
   </div>
   <table class="pf-v6-c-table pf-m-compact">
@@ -777,11 +813,11 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
       <td>{{ g.name }}</td>
       <td>{{ g.gid }}</td>
       <td>
-        <select class="strategy-select">
+        <span class="pf-v6-c-form-control"><select class="strategy-select">
           {%- for s in strategies %}
           <option value="{{ s }}" {{ 'selected' if s == g.strategy else '' }}>{{ s }}</option>
           {%- endfor %}
-        </select>
+        </select></span>
       </td>
       <td>{{ (g.members or [])|join(', ') or '—' }}</td>
     </tr>
@@ -1153,11 +1189,10 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
 {# ══════════════════════════════════════════════════════════════════════════
    JavaScript
    ─────────────────────────────────────────────────────────────────────────
-   Class name changes from custom CSS to PatternFly 6:
-   - Tab selectors: .tabs button[data-tab] → .pf-v6-c-tabs__link[data-tab]
-   - Tab active state: button.active → li.pf-v6-c-tabs__item.pf-m-current
-   - Theme toggle: data-theme attribute → pf-v6-theme-dark class on <html>
-   - Button primary: .btn-primary → .pf-m-primary
+   Nav selectors: .pf-v6-c-nav__link[data-tab] for sidebar navigation.
+   Active state: pf-m-current toggled on the .pf-v6-c-nav__link element.
+   Theme toggle: pf-v6-theme-dark class on <html>.
+   Button primary: .pf-m-primary.
    All other JS-targeted classes preserved: .section, .visible, .include-cb,
    .strategy-select, .leaf-cb, .repo-cb, .warning-row, .dismissed,
    .btn-copy-cf, .copied, tr.excluded, #exclude-toolbar, .helper-active,
@@ -1169,20 +1204,19 @@ select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85
 var snapshot = {{ snapshot_json|safe }};
 (function(){
   var sections = document.querySelectorAll('.section');
-  var tabLinks = document.querySelectorAll('.pf-v6-c-tabs__link[data-tab]');
+  var navLinks = document.querySelectorAll('.pf-v6-c-nav__link[data-tab]');
   function show(id) {
     if (!id) return;
     sections.forEach(function(s){ s.classList.remove('visible'); });
     var el = document.getElementById('section-' + id);
     if (el) el.classList.add('visible');
-    tabLinks.forEach(function(t){
-      var li = t.closest('.pf-v6-c-tabs__item');
-      if (li) li.classList.toggle('pf-m-current', t.getAttribute('data-tab') === id);
+    navLinks.forEach(function(link){
+      link.classList.toggle('pf-m-current', link.getAttribute('data-tab') === id);
     });
   }
   window.show = show;
-  tabLinks.forEach(function(t){
-    t.addEventListener('click', function(){ show(t.getAttribute('data-tab')); });
+  navLinks.forEach(function(link){
+    link.addEventListener('click', function(e){ e.preventDefault(); show(link.getAttribute('data-tab')); });
   });
   show('summary');
   var warningBanner = document.getElementById('warning-banner');
