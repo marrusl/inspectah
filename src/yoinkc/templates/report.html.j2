@@ -1180,6 +1180,7 @@ var snapshot = {{ snapshot_json|safe }};
   var toast = document.getElementById('toast');
   var rerenderBtn = document.getElementById('btn-rerender');
   var tarballBtn = document.getElementById('btn-tarball');
+  var downloadSnapshotBtn = document.getElementById('btn-download-snapshot');
   var helperAvailable = false;
   var dirty = false;
 
@@ -1261,9 +1262,11 @@ var snapshot = {{ snapshot_json|safe }};
       if (parts.length === 0) parts.push('Snapshot modified');
       if (statusTextEl) { statusTextEl.textContent = parts.join(', '); statusTextEl.style.color = ''; }
       if (rerenderBtn) rerenderBtn.classList.remove('disabled');
+      if (downloadSnapshotBtn) downloadSnapshotBtn.classList.remove('disabled');
     } else if (isHelper) {
       if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--muted)'; }
       if (rerenderBtn) rerenderBtn.classList.add('disabled');
+      if (downloadSnapshotBtn) downloadSnapshotBtn.classList.add('disabled');
     } else {
       if (statusTextEl) { statusTextEl.textContent = ''; statusTextEl.style.color = ''; }
     }
@@ -1449,7 +1452,8 @@ var snapshot = {{ snapshot_json|safe }};
   });
 
   // --- Download modified snapshot ---
-  document.getElementById('btn-download-snapshot').addEventListener('click', function(){
+  downloadSnapshotBtn.addEventListener('click', function(){
+    if (!dirty) return;
     var json = JSON.stringify(snapshot, null, 2);
     var blob = new Blob([json], {type: 'application/json'});
     var a = document.createElement('a');
