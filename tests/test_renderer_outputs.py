@@ -752,6 +752,91 @@ class TestHtmlStructure:
             f"d.service should have snap-index=3, got {index_by_unit}"
         )
 
+    def test_config_snap_index_matches_unfiltered_array(self):
+        """data-snap-index for each config row must equal its position in the full
+        config.files array, not in the filtered set (which excludes quadlet files)."""
+        import re as _re
+        import tempfile
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
+        )
+        from yoinkc.renderers import run_all as run_all_renderers
+
+        # index 0: regular config file — row with data-snap-index="0"
+        # index 1: quadlet file — must not render a config row
+        # index 2: regular config file — row with data-snap-index="2"
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(path="/etc/myapp/app.conf", kind=ConfigFileKind.RPM_OWNED_MODIFIED),
+                ConfigFileEntry(path="/etc/containers/systemd/myapp.container", kind=ConfigFileKind.UNOWNED),
+                ConfigFileEntry(path="/etc/myapp/extra.conf", kind=ConfigFileKind.UNOWNED),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            html = (Path(tmp) / "report.html").read_text()
+
+        rows = _re.findall(
+            r'data-snap-section="config"[^>]*data-snap-index="(\d+)"[^>]*>'
+            r'.*?<td><code>([^<]+)</code></td>',
+            html,
+            _re.DOTALL,
+        )
+        index_by_path = {path.strip(): int(idx) for idx, path in rows}
+
+        assert "/etc/containers/systemd/myapp.container" not in index_by_path, \
+            "quadlet file must not appear in config table"
+        assert index_by_path.get("/etc/myapp/app.conf") == 0, (
+            f"app.conf should have snap-index=0, got {index_by_path}"
+        )
+        assert index_by_path.get("/etc/myapp/extra.conf") == 2, (
+            f"extra.conf should have snap-index=2, got {index_by_path}"
+        )
+
+    def test_config_file_count_excludes_quadlets(self):
+        """_config_file_count must not count quadlet files."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
+        )
+        from yoinkc.renderers._triage import _config_file_count
+
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(path="/etc/myapp/app.conf", kind=ConfigFileKind.RPM_OWNED_MODIFIED),
+                ConfigFileEntry(path="/etc/containers/systemd/myapp.container", kind=ConfigFileKind.UNOWNED),
+                ConfigFileEntry(path="/etc/myapp/extra.conf", kind=ConfigFileKind.UNOWNED),
+            ]),
+        )
+        assert _config_file_count(snapshot) == 2
+
+    def test_triage_counts_exclude_quadlets(self):
+        """compute_triage automatic count must not include quadlet files."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
+        )
+        from yoinkc.renderers._triage import compute_triage_detail
+
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(path="/etc/myapp/app.conf", kind=ConfigFileKind.RPM_OWNED_MODIFIED),
+                ConfigFileEntry(path="/etc/containers/systemd/myapp.container", kind=ConfigFileKind.UNOWNED),
+            ]),
+        )
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            triage = compute_triage_detail(snapshot, Path(tmp))
+        config_item = next((t for t in triage if t["label"] == "Config files"), None)
+        assert config_item is not None, "expected a Config files triage entry"
+        assert config_item["count"] == 1, (
+            f"expected 1 config file (quadlet excluded), got {config_item['count']}"
+        )
+
     def test_snapshot_json_script_tag_injection_escaped(self):
         """</script> inside snapshot values must not terminate the embedded <script> block."""
         import tempfile

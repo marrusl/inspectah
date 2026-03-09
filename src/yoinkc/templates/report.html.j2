@@ -476,8 +476,8 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- if snapshot.config and snapshot.config.files %}
   <table><thead><tr><th></th><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
     {%- for item in config_files_rendered %}
-    <tr{% if not snapshot.config.files[loop.index0].include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if snapshot.config.files[loop.index0].include else '' }}/></td>
+    <tr{% if not item.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
+      <td><input type="checkbox" class="include-cb" {{ 'checked' if item.include else '' }}/></td>
       <td><code>{{ item.path }}</code></td>
       <td>{{ item.kind }}</td>
       <td>{% if item.flags %}<code>{{ item.flags }}</code>{% endif %}</td>

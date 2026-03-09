@@ -5,7 +5,7 @@ from pathlib import Path
 from jinja2 import Environment
 
 from ..schema import ConfigFileKind, InspectionSnapshot
-from ._triage import compute_triage
+from ._triage import compute_triage, _config_file_count, _QUADLET_PREFIX
 
 
 def _storage_recommendation(mount_point: str, fstype: str, device: str) -> str:
@@ -57,7 +57,7 @@ def render(
     n_added = len(snapshot.rpm.packages_added) if snapshot.rpm else 0
     n_base_only = len(snapshot.rpm.base_image_only) if snapshot.rpm else 0
     no_baseline = getattr(snapshot.rpm, "no_baseline", False) if snapshot.rpm else False
-    n_config = len(snapshot.config.files) if snapshot.config else 0
+    n_config = _config_file_count(snapshot)
     n_redactions = len(snapshot.redactions)
     n_containers = 0
     if snapshot.containers:
@@ -202,7 +202,6 @@ def render(
                 lines.append(f"[EXCLUDED] **{di.unit}** — `{di.path}`")
                 lines.append("")
 
-    _QUADLET_PREFIX = "etc/containers/systemd/"
     config_files = [
         f for f in (snapshot.config.files if snapshot.config and snapshot.config.files else [])
         if not f.path.lstrip("/").startswith(_QUADLET_PREFIX)

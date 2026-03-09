@@ -13,6 +13,7 @@ from markupsafe import Markup
 
 from ..schema import ConfigFileKind, InspectionSnapshot
 from .._util import make_warning
+from ._triage import _QUADLET_PREFIX, _config_file_count
 
 # Max size per file to embed in the report (bytes); larger files show a truncation note
 _MAX_FILE_CONTENT = 100 * 1024
@@ -267,7 +268,7 @@ def _summary_counts(snapshot: InspectionSnapshot) -> dict:
         "packages_added": len(snapshot.rpm.packages_added or []) if snapshot.rpm else 0,
         "base_image_only": len(snapshot.rpm.base_image_only or []) if snapshot.rpm else 0,
         "rpm_va": len(snapshot.rpm.rpm_va or []) if snapshot.rpm else 0,
-        "config_files": len(snapshot.config.files or []) if snapshot.config else 0,
+        "config_files": _config_file_count(snapshot),
         "services_enabled": len(snapshot.services.enabled_units or []) if snapshot.services else 0,
         "services_disabled": len(snapshot.services.disabled_units or []) if snapshot.services else 0,
         "redactions": len(snapshot.redactions or []),
@@ -311,15 +312,12 @@ def _render_diff_html(diff_text: str) -> str:
     return '<pre class="diff-view">' + "\n".join(colored) + "</pre>"
 
 
-_QUADLET_PREFIX = "etc/containers/systemd/"
-
-
 def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
     """Pre-process config file entries with pre-rendered diff HTML."""
     if not snapshot.config or not snapshot.config.files:
         return []
     result = []
-    for f in snapshot.config.files:
+    for idx, f in enumerate(snapshot.config.files):
         if f.path.lstrip("/").startswith(_QUADLET_PREFIX):
             continue
         result.append({
@@ -327,6 +325,8 @@ def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
             "kind": f.kind.value,
             "flags": f.rpm_va_flags or "",
             "diff_html": _render_diff_html(f.diff_against_rpm or ""),
+            "snap_index": idx,
+            "include": f.include,
         })
     return result
 

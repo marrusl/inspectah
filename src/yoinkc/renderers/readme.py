@@ -5,6 +5,7 @@ from pathlib import Path
 from jinja2 import Environment
 
 from ..schema import ConfigFileKind, InspectionSnapshot
+from ._triage import _QUADLET_PREFIX
 
 
 def _base_image(snapshot: InspectionSnapshot) -> str:
@@ -45,8 +46,16 @@ def render(
     configs_modified = 0
     configs_unowned = 0
     if snapshot.config and snapshot.config.files:
-        configs_modified = sum(1 for f in snapshot.config.files if f.kind == ConfigFileKind.RPM_OWNED_MODIFIED)
-        configs_unowned = sum(1 for f in snapshot.config.files if f.kind == ConfigFileKind.UNOWNED)
+        configs_modified = sum(
+            1 for f in snapshot.config.files
+            if f.kind == ConfigFileKind.RPM_OWNED_MODIFIED
+            and not f.path.lstrip("/").startswith(_QUADLET_PREFIX)
+        )
+        configs_unowned = sum(
+            1 for f in snapshot.config.files
+            if f.kind == ConfigFileKind.UNOWNED
+            and not f.path.lstrip("/").startswith(_QUADLET_PREFIX)
+        )
 
     svc_enabled = len(snapshot.services.enabled_units) if snapshot.services else 0
     svc_disabled = len(snapshot.services.disabled_units) if snapshot.services else 0

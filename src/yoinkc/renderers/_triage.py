@@ -4,6 +4,16 @@ from pathlib import Path
 
 from ..schema import InspectionSnapshot
 
+_QUADLET_PREFIX = "etc/containers/systemd/"
+
+
+def _config_file_count(snapshot: InspectionSnapshot) -> int:
+    return sum(
+        1
+        for f in (snapshot.config.files if snapshot.config else [])
+        if not f.path.lstrip("/").startswith(_QUADLET_PREFIX)
+    )
+
 
 def compute_triage(snapshot: InspectionSnapshot, output_dir: Path) -> dict:
     """Classify inspected items into automatic / fixme / manual buckets.
@@ -18,7 +28,7 @@ def compute_triage(snapshot: InspectionSnapshot, output_dir: Path) -> dict:
         automatic += len(snapshot.services.enabled_units)
         automatic += len(snapshot.services.disabled_units)
     if snapshot.config:
-        automatic += len(snapshot.config.files)
+        automatic += _config_file_count(snapshot)
     if snapshot.network and snapshot.network.firewall_zones:
         automatic += len(snapshot.network.firewall_zones)
     if snapshot.scheduled_tasks:
@@ -71,7 +81,7 @@ def compute_triage_detail(
         n = len(snapshot.services.enabled_units) + len(snapshot.services.disabled_units)
         _add("Services enabled/disabled", n, "services", "automatic")
     if snapshot.config:
-        _add("Config files", len(snapshot.config.files), "config", "automatic")
+        _add("Config files", _config_file_count(snapshot), "config", "automatic")
     if snapshot.containers and snapshot.containers.quadlet_units:
         _add("Quadlet units", len(snapshot.containers.quadlet_units), "containers", "automatic")
     if snapshot.users_groups:

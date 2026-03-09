@@ -9,6 +9,7 @@ from typing import List, Optional
 from jinja2 import Environment
 
 from ..schema import ConfigFileKind, InspectionSnapshot
+from ._triage import _QUADLET_PREFIX
 
 
 def _summarise_diff(diff_text: str) -> List[str]:
@@ -164,7 +165,7 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             if rel in dhcp_paths:
                 continue
             # Quadlet files are written to quadlet/ and COPYed separately
-            if rel.startswith("etc/containers/systemd/"):
+            if rel.startswith(_QUADLET_PREFIX):
                 continue
             dest = config_dir / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
