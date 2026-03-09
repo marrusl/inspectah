@@ -154,10 +154,14 @@ def _populate_source_repos(
 
     # --- Primary: dnf repoquery ---
     def _try_dnf() -> bool:
-        cmd_base = ["dnf", "repoquery"]
-        if str(host_root) != "/":
-            cmd_base += ["--installroot", str(host_root)]
-        cmd_base += ["--installed", "--queryformat", "%{name} %{from_repo}"]
+        # from_repo is stored in dnf's own database on the host, not in the raw
+        # RPM DB that --installroot accesses.  Run on the host via nsenter when
+        # inside a container; plain dnf when already on the host.
+        if str(host_root) == "/":
+            cmd_base = ["dnf", "repoquery", "--installed", "--queryformat", "%{name} %{from_repo}"]
+        else:
+            cmd_base = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--",
+                        "dnf", "repoquery", "--installed", "--queryformat", "%{name} %{from_repo}"]
         # Probe with the first package
         probe = executor(cmd_base + [names[0]])
         if probe.returncode != 0:
