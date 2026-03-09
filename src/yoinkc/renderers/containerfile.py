@@ -763,18 +763,7 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                          + " — included in COPY config/etc/ below")
         if net.firewall_direct_rules:
             lines.append(f"# Detected: {len(net.firewall_direct_rules)} direct rule(s) — included in COPY config/etc/ below")
-        lines.append("")
-        lines.append("# firewall-cmd equivalents (alternative to the consolidated COPY below):")
-        for z in net.firewall_zones:
-            for svc in z.services:
-                lines.append(f"# RUN firewall-offline-cmd --zone={z.name} --add-service={svc}")
-            for port in z.ports:
-                lines.append(f"# RUN firewall-offline-cmd --zone={z.name} --add-port={port}")
-            for rr in z.rich_rules:
-                if rr:
-                    lines.append(f"# RUN firewall-offline-cmd --zone={z.name} --add-rich-rule='{rr}'")
-        for dr in net.firewall_direct_rules:
-            lines.append(f"# RUN firewall-offline-cmd --direct --add-rule {dr.ipv} {dr.table} {dr.chain} 0 {dr.args}")
+        lines.append("# See audit-report.md for firewall-offline-cmd equivalents per zone.")
         lines.append("")
 
     # 5. Scheduled Tasks

@@ -278,6 +278,60 @@ class TestAuditReport:
         md = self._md(outputs_no_baseline)
         assert "baseline" in md.lower() or "No baseline" in md
 
+    def test_firewall_offline_cmd_in_audit_report_not_containerfile(self):
+        """firewall-offline-cmd lines must appear in audit report, not Containerfile."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, NetworkSection, FirewallZone,
+        )
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            network=NetworkSection(firewall_zones=[
+                FirewallZone(
+                    name="public",
+                    path="etc/firewalld/zones/public.xml",
+                    content="<zone/>",
+                    services=["http", "https"],
+                    ports=["8080/tcp"],
+                    rich_rules=["rule family=ipv4 source address=10.0.0.0/8 accept"],
+                ),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_containerfile(snapshot, Environment(), Path(tmp))
+            render_audit_report(snapshot, Environment(), Path(tmp))
+            cf = (Path(tmp) / "Containerfile").read_text()
+            md = (Path(tmp) / "audit-report.md").read_text()
+
+        assert "# RUN firewall-offline-cmd" not in cf, \
+            "firewall-offline-cmd comments must not appear in Containerfile"
+        assert "audit-report.md" in cf, "Containerfile should point to audit report"
+        assert "firewall-offline-cmd --zone=public --add-service=http" in md
+        assert "firewall-offline-cmd --zone=public --add-service=https" in md
+        assert "firewall-offline-cmd --zone=public --add-port=8080/tcp" in md
+        assert "--add-rich-rule=" in md
+        assert "Alternative: firewall-offline-cmd" in md
+
+    def test_firewall_direct_rule_priority_used(self):
+        """Direct rule commands must use the rule's actual priority, not hardcoded 0."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, NetworkSection, FirewallDirectRule,
+        )
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            network=NetworkSection(firewall_direct_rules=[
+                FirewallDirectRule(ipv="ipv4", table="filter", chain="INPUT",
+                                   priority="5", args="-j ACCEPT"),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit_report(snapshot, Environment(), Path(tmp))
+            md = (Path(tmp) / "audit-report.md").read_text()
+
+        assert "firewall-offline-cmd --direct --add-rule ipv4 filter INPUT 5 -j ACCEPT" in md, \
+            "direct rule command must use actual priority (5), not hardcoded 0"
+
 
 # ===========================================================================
 # Kickstart tests

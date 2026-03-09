@@ -275,13 +275,38 @@ def render(
                 lines.append(f"**{z.name}:** services={svc_str} | ports={port_str} | rich rules={len(z.rich_rules)}")
                 for r in z.rich_rules[:10]:
                     lines.append(f"  - `{r[:200]}`")
-            lines.append("")
+                fw_cmds = []
+                for svc in z.services:
+                    fw_cmds.append(f"RUN firewall-offline-cmd --zone={z.name} --add-service={svc}")
+                for port in z.ports:
+                    fw_cmds.append(f"RUN firewall-offline-cmd --zone={z.name} --add-port={port}")
+                for rr in z.rich_rules:
+                    if rr:
+                        fw_cmds.append(f"RUN firewall-offline-cmd --zone={z.name} --add-rich-rule='{rr}'")
+                if fw_cmds:
+                    lines.append("")
+                    lines.append("#### Alternative: firewall-offline-cmd (instead of COPY)")
+                    lines.append("")
+                    lines.append("```dockerfile")
+                    lines.extend(fw_cmds)
+                    lines.append("```")
+                lines.append("")
 
         if net.firewall_direct_rules:
             lines.append("### Firewall direct rules (bake into image)")
             lines.append("")
             for r in net.firewall_direct_rules:
                 lines.append(f"- `{r.chain}` {r.ipv} table={r.table}: `{r.args}`")
+            dr_cmds = [
+                f"RUN firewall-offline-cmd --direct --add-rule {dr.ipv} {dr.table} {dr.chain} {dr.priority} {dr.args}"
+                for dr in net.firewall_direct_rules
+            ]
+            lines.append("")
+            lines.append("#### Alternative: firewall-offline-cmd (instead of COPY)")
+            lines.append("")
+            lines.append("```dockerfile")
+            lines.extend(dr_cmds)
+            lines.append("```")
             lines.append("")
 
         if net.resolv_provenance:
