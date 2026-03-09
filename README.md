@@ -154,7 +154,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 - `resolv.conf` provenance detection: systemd-resolved, NetworkManager-managed, or hand-edited
 - `ip route` and `ip rule` capture with default rule filtering
 - `/etc/hosts` additions and proxy settings
-- Containerfile emits both COPY directives and `firewall-offline-cmd` equivalents for firewall rules
+- Containerfile COPYs zone XML files; `firewall-offline-cmd` equivalents are documented in the audit report
 - Static route file detection with FIXME guidance in both Containerfile and kickstart (translate to NM connection properties)
 - Proxy env vars and `/etc/hosts` additions rendered in both Containerfile and kickstart
 
