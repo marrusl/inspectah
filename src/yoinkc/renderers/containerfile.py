@@ -791,9 +791,8 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             lines.append("COPY config/etc/systemd/system/ /etc/systemd/system/")
 
         if local_timers:
-            lines.append(f"# Existing local timers ({len(local_timers)})")
-            for t in local_timers:
-                lines.append(f"RUN systemctl enable {t.name}.timer")
+            lines.append(f"# Existing local timers ({len(local_timers)}): "
+                         + ", ".join(f"{t.name}.timer" for t in local_timers))
 
         if vendor_timers:
             lines.append(f"# Vendor timers ({len(vendor_timers)}): already in base image, no action needed")
@@ -801,10 +800,17 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                 lines.append(f"#   - {t.name} ({t.on_calendar})")
 
         if included_timers:
-            lines.append(f"# Converted from cron: {len(included_timers)} timer(s)")
-            for u in included_timers:
-                if u.name:
-                    lines.append(f"RUN systemctl enable {u.name}.timer")
+            lines.append(f"# Converted from cron: {len(included_timers)} timer(s): "
+                         + ", ".join(u.name for u in included_timers if u.name))
+
+        # Consolidate all timer enables into a single RUN (one layer, matching
+        # the pattern used by the Services section).
+        timer_names_to_enable = (
+            [f"{t.name}.timer" for t in local_timers]
+            + [f"{u.name}.timer" for u in included_timers if u.name]
+        )
+        if timer_names_to_enable:
+            lines.append("RUN systemctl enable " + " ".join(timer_names_to_enable))
 
         if st.at_jobs:
             lines.append(f"# FIXME: {len(st.at_jobs)} at job(s) found — convert to systemd timers or cron")
