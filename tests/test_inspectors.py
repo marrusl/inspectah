@@ -889,6 +889,66 @@ def test_classify_leaf_auto_falls_back_when_dnf_repoquery_fails(host_root):
     assert dep_tree["httpd"] == ["mod_ssl"]
 
 
+def test_classify_leaf_auto_uses_userinstalled(host_root):
+    """When dnf repoquery --userinstalled succeeds, it determines the leaf set."""
+    from yoinkc.inspectors.rpm import _classify_leaf_auto
+    from yoinkc.schema import PackageEntry, PackageState
+
+    packages = [
+        PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+        PackageEntry(name="git", epoch="0", version="2.43.5", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+        PackageEntry(name="httpd-core", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+        PackageEntry(name="perl-interpreter", epoch="4", version="5.32.1", release="480.el9", arch="x86_64", state=PackageState.ADDED),
+    ]
+
+    def executor(cmd, cwd=None):
+        if "--userinstalled" in cmd:
+            return RunResult(stdout="httpd\ngit\n", stderr="", returncode=0)
+        if "dnf" in cmd and "repoquery" in cmd and "--requires" in cmd:
+            pkg = cmd[-1]
+            dep_map = {
+                "httpd": "httpd-core\n",
+                "git": "perl-interpreter\n",
+                "httpd-core": "",
+                "perl-interpreter": "",
+            }
+            return RunResult(stdout=dep_map.get(pkg, ""), stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    leaf, auto, dep_tree = _classify_leaf_auto(executor, host_root, packages)
+
+    assert leaf == ["git", "httpd"]
+    assert auto == ["httpd-core", "perl-interpreter"]
+    assert dep_tree["httpd"] == ["httpd-core"]
+    assert dep_tree["git"] == ["perl-interpreter"]
+
+
+def test_classify_leaf_auto_userinstalled_fallback_on_failure(host_root):
+    """When --userinstalled fails but dnf dep queries work, graph-based classification is used."""
+    from yoinkc.inspectors.rpm import _classify_leaf_auto
+    from yoinkc.schema import PackageEntry, PackageState
+
+    packages = [
+        PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+        PackageEntry(name="httpd-core", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+    ]
+
+    def executor(cmd, cwd=None):
+        if "--userinstalled" in cmd:
+            return RunResult(stdout="", stderr="error", returncode=1)
+        if "dnf" in cmd and "repoquery" in cmd and "--requires" in cmd:
+            pkg = cmd[-1]
+            if pkg == "httpd":
+                return RunResult(stdout="httpd-core\n", stderr="", returncode=0)
+            return RunResult(stdout="", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    leaf, auto, dep_tree = _classify_leaf_auto(executor, host_root, packages)
+
+    assert leaf == ["httpd"]
+    assert auto == ["httpd-core"]
+
+
 # ===========================================================================
 # Graceful degradation: inspectors must not crash when commands fail
 # ===========================================================================

@@ -213,6 +213,32 @@ def _populate_source_repos(
     _debug(f"source_repo populated for {len(repo_map)}/{len(names)} packages")
 
 
+def _query_user_installed(
+    executor: Executor,
+    host_root: Path,
+) -> Optional[Set[str]]:
+    """Query dnf for the set of user-installed (explicitly requested) package names.
+
+    Returns None if the query fails (e.g. dnf unavailable).
+    """
+    if str(host_root) == "/":
+        cmd = ["dnf", "repoquery", "--userinstalled", "--queryformat", "%{NAME}"]
+    else:
+        cmd = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--",
+               "dnf", "repoquery", "--userinstalled", "--queryformat", "%{NAME}"]
+    result = executor(cmd)
+    if result.returncode != 0:
+        _debug(f"dnf repoquery --userinstalled failed (rc={result.returncode})")
+        return None
+    names: Set[str] = set()
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if name:
+            names.add(name)
+    _debug(f"dnf repoquery --userinstalled returned {len(names)} packages")
+    return names
+
+
 _DEFAULT_REPO_FILENAME_PATTERNS = ("redhat.repo", "redhat-rhui", "redhat.redhat")
 _DEFAULT_REPO_ID_PREFIXES = (
     "rhel-", "baseos", "appstream", "rhui-", "crb", "codeready",
@@ -487,19 +513,30 @@ def _classify_leaf_auto(
     """
     added_names = {p.name for p in packages_added}
 
+    # Use dnf's user-installed tracking when available — it directly tells us
+    # which packages the operator explicitly requested vs pulled in as deps.
+    user_installed = _query_user_installed(executor, host_root)
+
     depends_on = _classify_deps_via_dnf(executor, host_root, added_names)
     transitive = depends_on is not None
 
     if depends_on is None:
         depends_on = _classify_deps_via_rpm(executor, host_root, added_names)
 
-    # Identify depended-on packages (auto)
-    depended_on: Set[str] = set()
-    for pkg, deps in depends_on.items():
-        depended_on.update(deps)
-
-    leaf = sorted(added_names - depended_on)
-    auto = sorted(depended_on)
+    if user_installed is not None:
+        leaf_set = user_installed & added_names
+        auto_set_raw = added_names - leaf_set
+        leaf = sorted(leaf_set)
+        auto = sorted(auto_set_raw)
+        _debug(f"using dnf --userinstalled for leaf classification: "
+               f"{len(leaf)} leaf, {len(auto)} auto")
+    else:
+        _debug("dnf --userinstalled unavailable, falling back to graph-based classification")
+        depended_on: Set[str] = set()
+        for deps in depends_on.values():
+            depended_on.update(deps)
+        leaf = sorted(added_names - depended_on)
+        auto = sorted(depended_on)
 
     # Build per-leaf transitive dependency tree
     auto_set = set(auto)
