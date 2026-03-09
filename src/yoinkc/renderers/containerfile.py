@@ -795,11 +795,6 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
             lines.append(f"# Existing local timers ({len(local_timers)}): "
                          + ", ".join(f"{t.name}.timer" for t in local_timers))
 
-        if vendor_timers:
-            lines.append(f"# Vendor timers ({len(vendor_timers)}): already in base image, no action needed")
-            for t in vendor_timers:
-                lines.append(f"#   - {t.name} ({t.on_calendar})")
-
         if included_timers:
             lines.append(f"# Converted from cron: {len(included_timers)} timer(s): "
                          + ", ".join(u.name for u in included_timers if u.name))
