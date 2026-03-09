@@ -122,11 +122,8 @@ case "$IMAGE" in
     ;;
 esac
 
-echo "=== Pulling yoinkc image ==="
-podman pull "$IMAGE"
-
 echo "=== Running yoinkc ==="
-podman run --rm \
+podman run --rm --pull=always \
   --pid=host \
   --privileged \
   --security-opt label=disable \
