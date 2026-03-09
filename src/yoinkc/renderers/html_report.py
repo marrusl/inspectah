@@ -507,6 +507,8 @@ def _build_context(
         "counts": counts,
         "triage": triage,
         "os_desc": os_desc,
+        "os_id": snapshot.os_release.id if snapshot.os_release else "",
+        "hostname": (snapshot.meta or {}).get("hostname", ""),
         "meta": snapshot.meta or {},
         "warnings": warnings,
         "warnings_panel": warnings[:50],
