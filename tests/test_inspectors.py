@@ -37,6 +37,14 @@ def _fixture_executor(cmd, cwd=None):
         return RunResult(stdout=(FIXTURES / "rpm_qa_output.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-Va" in cmd:
         return RunResult(stdout=(FIXTURES / "rpm_va_output.txt").read_text(), stderr="", returncode=0)
+    if "dnf" in cmd and "repoquery" in cmd and "--installed" in cmd and "--requires" not in cmd:
+        repo_output = "\n".join([
+            "httpd baseos",
+            "nginx appstream",
+            "htop epel",
+            "bat epel",
+        ])
+        return RunResult(stdout=repo_output, stderr="", returncode=0)
     if "dnf" in cmd and "history" in cmd and "list" in cmd:
         return RunResult(stdout=(FIXTURES / "dnf_history_list.txt").read_text(), stderr="", returncode=0)
     if "dnf" in cmd and "history" in cmd and "info" in cmd and "4" in cmd:
@@ -978,3 +986,14 @@ def test_collect_gpg_keys_resolves_dnf_vars(tmp_path):
     assert keys, "Expected the GPG key to be captured after variable resolution"
     assert keys[0].path == "etc/pki/rpm-gpg/RPM-GPG-KEY-TEST-10"
     assert "BEGIN PGP PUBLIC KEY BLOCK" in keys[0].content
+
+
+def test_source_repo_populated_via_dnf_repoquery(host_root, fixture_executor):
+    """source_repo is populated for added packages when dnf repoquery succeeds."""
+    from yoinkc.inspectors.rpm import run as run_rpm
+    section = run_rpm(host_root, fixture_executor)
+    pkgs_with_repo = [p for p in section.packages_added if p.source_repo]
+    assert len(pkgs_with_repo) > 0, "Expected at least one package with source_repo set"
+    httpd = next((p for p in section.packages_added if p.name == "httpd"), None)
+    assert httpd is not None, "httpd must be in packages_added"
+    assert httpd.source_repo == "baseos"

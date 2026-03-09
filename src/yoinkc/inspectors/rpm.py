@@ -141,27 +141,69 @@ def _populate_source_repos(
     host_root: Path,
     packages: List["PackageEntry"],
 ) -> None:
-    """Set source_repo on each PackageEntry via ``rpm -qi``."""
+    """Set source_repo on each PackageEntry.
+
+    Primary: dnf repoquery --installed (reliable across RHEL 9/10).
+    Fallback: rpm -qi (checking both "From repo" and "Repository").
+    """
     if not packages:
         return
-    names = sorted({p.name for p in packages})
+    name_set = {p.name for p in packages}
+    names = sorted(name_set)
     repo_map: dict = {}
-    batch_size = 100
-    for i in range(0, len(names), batch_size):
-        batch = names[i:i + batch_size]
-        result = _run_rpm_query(executor, host_root, ["-qi"] + batch)
-        if result.returncode != 0:
-            continue
-        cur_name = ""
-        for line in result.stdout.splitlines():
-            if line.startswith("Name"):
-                parts = line.split(":", 1)
-                if len(parts) == 2:
-                    cur_name = parts[1].strip()
-            elif line.startswith("From repo"):
-                parts = line.split(":", 1)
-                if len(parts) == 2 and cur_name:
-                    repo_map[cur_name] = parts[1].strip()
+
+    # --- Primary: dnf repoquery ---
+    def _try_dnf() -> bool:
+        cmd_base = ["dnf", "repoquery"]
+        if str(host_root) != "/":
+            cmd_base += ["--installroot", str(host_root)]
+        cmd_base += ["--installed", "--queryformat", "%{name} %{from_repo}"]
+        # Probe with the first package
+        probe = executor(cmd_base + [names[0]])
+        if probe.returncode != 0:
+            _debug(f"dnf repoquery probe failed (rc={probe.returncode}), falling back to rpm -qi")
+            return False
+        # Parse probe result
+        for line in probe.stdout.strip().splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2 and parts[0] in name_set:
+                repo_map[parts[0]] = parts[1]
+        # Process remaining in batches
+        batch_size = 100
+        remaining = names[1:]
+        for i in range(0, len(remaining), batch_size):
+            batch = remaining[i:i + batch_size]
+            result = executor(cmd_base + batch)
+            if result.returncode != 0:
+                continue
+            for line in result.stdout.strip().splitlines():
+                parts = line.strip().split(None, 1)
+                if len(parts) == 2 and parts[0] in name_set and parts[0] not in repo_map:
+                    repo_map[parts[0]] = parts[1]
+        return True
+
+    # --- Fallback: rpm -qi ---
+    def _try_rpm() -> None:
+        batch_size = 100
+        for i in range(0, len(names), batch_size):
+            batch = names[i:i + batch_size]
+            result = _run_rpm_query(executor, host_root, ["-qi"] + batch)
+            if result.returncode != 0:
+                continue
+            cur_name = ""
+            for line in result.stdout.splitlines():
+                if line.startswith("Name"):
+                    parts = line.split(":", 1)
+                    if len(parts) == 2:
+                        cur_name = parts[1].strip()
+                elif line.startswith("From repo") or line.startswith("Repository"):
+                    parts = line.split(":", 1)
+                    if len(parts) == 2 and cur_name and cur_name not in repo_map:
+                        repo_map[cur_name] = parts[1].strip()
+
+    if not _try_dnf():
+        _try_rpm()
+
     for p in packages:
         p.source_repo = repo_map.get(p.name, "")
     _debug(f"source_repo populated for {len(repo_map)}/{len(names)} packages")

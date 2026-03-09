@@ -98,10 +98,22 @@ def render(
             lines.append("")
             lines.append("These packages appear in the Containerfile `dnf install` line.")
             lines.append("")
+            # Group by source repo
+            _leaf_by_repo: dict = {}
             for p in leaf_pkgs:
-                prefix = "[EXCLUDED] " if not p.include else ""
-                lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
-            lines.append("")
+                repo = p.source_repo or "(unknown)"
+                _leaf_by_repo.setdefault(repo, []).append(p)
+            _sorted_repos = sorted(k for k in _leaf_by_repo if k != "(unknown)")
+            if "(unknown)" in _leaf_by_repo:
+                _sorted_repos.append("(unknown)")
+            for repo in _sorted_repos:
+                rpkgs = _leaf_by_repo[repo]
+                lines.append(f"#### {repo} ({len(rpkgs)})")
+                lines.append("")
+                for p in rpkgs:
+                    prefix = "[EXCLUDED] " if not p.include else ""
+                    lines.append(f"- {prefix}{p.name} {p.version}-{p.release}.{p.arch}")
+                lines.append("")
             if auto_pkgs:
                 lines.append(f"### Dependencies ({len(auto_pkgs)})")
                 lines.append("")

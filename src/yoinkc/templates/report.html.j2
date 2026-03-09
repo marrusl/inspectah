@@ -326,6 +326,37 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 
   <h3>Dependency Tree</h3>
+  {%- if repo_groups %}
+  {%- for repo_name, entries in repo_groups.items() %}
+  <h4 style="margin-top:1.5rem">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</h4>
+  <table class="data-table pkg-dep-tree-group">
+    <thead><tr><th></th><th>Leaf Package</th><th>Dependencies</th><th></th></tr></thead>
+    <tbody>
+    {%- for entry in entries %}
+    <tr{% if not entry.include %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
+      <td><input type="checkbox" class="include-cb leaf-cb" {{ 'checked' if entry.include else '' }}/></td>
+      <td><strong>{{ entry.name }}</strong></td>
+      <td>{{ entry.deps|length }}</td>
+      <td>
+        {%- if entry.deps %}
+        <details><summary>show</summary>
+          <ul style="margin:0.25rem 0;padding-left:1.5rem">
+          {%- for d in entry.deps %}
+            <li style="font-size:0.85em">{{ d }}</li>
+          {%- endfor %}
+          </ul>
+        </details>
+        {%- else %}
+        <em style="color:var(--muted)">independent</em>
+        {%- endif %}
+      </td>
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  {%- endfor %}
+  {%- else %}
+  {# Fallback: flat table when repo_groups is not populated #}
   <table class="data-table" id="pkg-dep-tree">
     <thead><tr><th></th><th>Leaf Package</th><th>Repo</th><th>Dependencies</th><th></th></tr></thead>
     <tbody>
@@ -357,6 +388,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     {%- endfor %}
     </tbody>
   </table>
+  {%- endif %}
 
   {%- set leaf_names = snapshot.rpm.leaf_packages %}
   {%- set auto_names = snapshot.rpm.auto_packages or [] %}
@@ -1294,7 +1326,7 @@ var snapshot = {{ snapshot_json|safe }};
 
   function recomputeAutoDeps() {
     var covered = new Set();
-    document.querySelectorAll('#pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+    document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
       var cb = row.querySelector('.leaf-cb');
       if (cb && cb.checked) {
         (pkgDepTree[row.getAttribute('data-leaf')] || []).forEach(function(d) { covered.add(d); });
@@ -1311,7 +1343,7 @@ var snapshot = {{ snapshot_json|safe }};
   function updatePkgBanner() {
     var banner = document.getElementById('pkg-selection-banner');
     if (!banner) return;
-    var leafRows = document.querySelectorAll('#pkg-dep-tree tr[data-leaf]');
+    var leafRows = document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]');
     if (!leafRows.length) return;
     var total = leafRows.length;
     var selected = 0;
@@ -1328,7 +1360,7 @@ var snapshot = {{ snapshot_json|safe }};
       + ' \u2014 only leaf packages appear in the Containerfile\u2019s <code>dnf\u00a0install</code> line.';
   }
 
-  document.querySelectorAll('#pkg-dep-tree .leaf-cb').forEach(function(cb) {
+  document.querySelectorAll('.pkg-dep-tree-group .leaf-cb, #pkg-dep-tree .leaf-cb').forEach(function(cb) {
     cb.addEventListener('change', function() {
       recomputeAutoDeps();
       updatePkgBanner();
@@ -1360,7 +1392,7 @@ var snapshot = {{ snapshot_json|safe }};
       if (!repoIds.size) return;
       var checked = this.checked;
 
-      document.querySelectorAll('#pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+      document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
         var leafName = row.getAttribute('data-leaf');
         var pkgIdx = parseInt(row.getAttribute('data-snap-index'), 10);
         if (pkgIdx < 0) return;

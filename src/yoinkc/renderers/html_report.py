@@ -192,7 +192,10 @@ def _markdown_to_html(md: str) -> str:
             continue
         else:
             flush_table()
-        if line.startswith("### "):
+        if line.startswith("#### "):
+            flush_list()
+            out.append("<h4>" + _escape_md_cell(line[5:]) + "</h4>")
+        elif line.startswith("### "):
             flush_list()
             out.append("<h3>" + _escape_md_cell(line[4:]) + "</h3>")
         elif line.startswith("## "):
@@ -433,6 +436,34 @@ def _build_context(
         dep_tree = snapshot.rpm.leaf_dep_tree
         leaf_sorted = sorted(snapshot.rpm.leaf_packages, key=lambda k: -len(dep_tree.get(k, [])))
 
+    # Pre-compute repo groups for the dependency tree display
+    repo_groups: dict = {}
+    if snapshot.rpm and snapshot.rpm.leaf_packages:
+        dep_tree = snapshot.rpm.leaf_dep_tree or {}
+        pkg_by_name = {p.name: p for p in snapshot.rpm.packages_added}
+        for lf in (leaf_sorted or snapshot.rpm.leaf_packages):
+            pkg = pkg_by_name.get(lf)
+            repo = pkg.source_repo if pkg and pkg.source_repo else "(unknown)"
+            snap_idx = -1
+            for idx, p in enumerate(snapshot.rpm.packages_added):
+                if p.name == lf:
+                    snap_idx = idx
+                    break
+            repo_groups.setdefault(repo, []).append({
+                "name": lf,
+                "deps": dep_tree.get(lf, []),
+                "snap_index": snap_idx,
+                "include": pkg.include if pkg else True,
+            })
+        # Sort groups: known repos alphabetically, "(unknown)" last
+        sorted_groups = []
+        for k in sorted(repo_groups.keys()):
+            if k != "(unknown)":
+                sorted_groups.append((k, repo_groups[k]))
+        if "(unknown)" in repo_groups:
+            sorted_groups.append(("(unknown)", repo_groups["(unknown)"]))
+        repo_groups = dict(sorted_groups)
+
     # Pre-compute repo display metadata for the template
     repo_display: List[dict] = []
     if snapshot.rpm and snapshot.rpm.repo_files:
@@ -490,6 +521,7 @@ def _build_context(
         "non_rpm_data": _prepare_non_rpm(snapshot),
         "triage_detail": triage_detail,
         "leaf_packages_sorted": leaf_sorted,
+        "repo_groups": repo_groups,
         "repo_display": repo_display,
         "secrets_data": redactions,
         "secrets_file_count": secrets_files,
