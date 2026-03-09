@@ -42,6 +42,8 @@ Environment variables for customization:
 - **Inspectors** run against a host root (default `/host`) and produce structured JSON (the inspection snapshot).
 - **Renderers** consume the snapshot and produce output artifacts (Containerfile, markdown report, HTML report, etc.).
 
+A core design principle is **baseline subtraction**: wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the output. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there.
+
 ---
 
 ## Running directly (advanced)
@@ -119,10 +121,13 @@ Each inspector examines one aspect of the host and contributes a section to the 
 
 - Full package inventory via `rpm -qa` with epoch/version/release/arch
 - Baseline from the target **bootc base image** — queries the image directly via `podman run` to get its package list, then diffs against installed packages to identify what the operator added
+- Leaf/auto classification: `dnf repoquery --userinstalled` identifies packages the operator explicitly installed vs those pulled in as dependencies. Only leaf packages appear in the Containerfile's `dnf install` line. Falls back to dependency graph analysis (`dnf repoquery --recursive` or `rpm -qR`) when `--userinstalled` is unavailable. This is more accurate than pure graph-based classification — it correctly handles packages like `git` that the operator installed but which other added packages also depend on.
+- Source repo tracking per package via `dnf repoquery --installed`, with repo-grouped display in the HTML report and audit report
+- GPG key handling: parses `gpgkey=file:///...` from repo files (including INI-style continuation lines), resolves `$releasever` and `$basearch` variables, and COPYs key files into the image before `dnf install`
 - Modified config detection via `rpm -Va` with verification flags
 - Unowned file detection using bulk `rpm -qla` set subtraction (fast, avoids per-file lookups)
 - `dnf history` analysis for packages that were installed then removed (orphaned configs)
-- Repo file capture from `/etc/yum.repos.d/`
+- Repo file capture from `/etc/yum.repos.d/` and `/etc/dnf/`
 - Optional line-by-line diffs against RPM defaults (`--config-diffs`) with syntax-highlighted rendering in the HTML report
 
 ### Services
@@ -162,6 +167,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 - Automatic cron-to-systemd timer conversion with **actual command extraction** into `ExecStart`
 - Existing systemd timer scanning from `/etc/systemd/system` (local) and `/usr/lib/systemd/system` (vendor) with `OnCalendar` and `ExecStart` extraction
 - `at` job parsing: extracts actual command, user, and working directory from spool files
+- Display filtering: vendor systemd timers (shipped with the base image) are hidden from reports since they require no operator action. RPM-owned cron jobs are similarly excluded.
 
 ### Containers
 
@@ -196,9 +202,10 @@ Each inspector examines one aspect of the host and contributes a section to the 
 ### Users & Groups
 
 - Non-system users and groups (1000 <= UID/GID < 60000)
-- Raw `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/gshadow` entry capture for append-based provisioning
+- Raw `/etc/passwd`, `/etc/shadow`, `/etc/group`, `/etc/gshadow` entry capture
+- Strategy-aware provisioning: each user is assigned one of four strategies based on account type — `sysusers` (service accounts, created at boot via systemd-sysusers), `useradd` (ambiguous accounts, explicit `RUN useradd` in Containerfile), `kickstart` (human users, deferred to deploy time), or `blueprint` (bootc-image-builder TOML). Override with `--user-strategy` to apply a single strategy to all users.
 - `/etc/subuid` and `/etc/subgid` for rootless container mappings
-- SSH authorized key references (paths only, not key material)
+- SSH authorized key references (paths only, not key material — never baked into image)
 - Sudoers rules capture with FIXME guidance in Containerfile
 - Home directory detection
 
@@ -253,6 +260,10 @@ output/
    ./yoinkc-refine yoinkc-output-hostname-*.tar.gz
    ```
 
+**Interactive UI features (with yoinkc-refine running):**
+
+Every inspected item (packages, config files, services, repos, etc.) has an include/exclude checkbox. Users and groups have per-row strategy dropdowns (`sysusers`, `useradd`, `blueprint`, `kickstart`) with apply-all buttons for batch changes. The sticky footer toolbar reflects three states: **dirty** (changes pending, Re-render button highlighted), **clean + helper** (no pending changes, tarball download available), and **standalone** (report opened without yoinkc-refine — checkboxes hidden, toolbar collapsed). Clicking Re-render sends the modified snapshot to yoinkc-refine, which runs a fresh render in a container and replaces the page with the updated report. The Download Tarball button packages the current output state for transfer.
+
 **Requirements:** Python 3.9+ (stdlib only, no pip dependencies). Podman or Docker is required for re-rendering; the include/exclude checkboxes and tarball download work without it.
 
 The server runs entirely locally. It extracts the tarball into a temporary directory, serves the report at `http://localhost:8642` (or the next available port), and prints the URL on startup. Press Ctrl+C to stop.
@@ -268,13 +279,15 @@ The server runs entirely locally. It extracts the tarball into a temporary direc
 ./yoinkc-build output.tar.gz my-bootc-image:v1.0
 ```
 
-For RHEL base images (`registry.redhat.io`), it searches for subscription certificates in this order: host-local (`/etc/pki/entitlement`), bundled in the output (from `run-yoinkc.sh`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build automatically. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
+For RHEL base images (`registry.redhat.io`), it searches for subscription certificates in this order: host-local (`/etc/pki/entitlement`), bundled in the output (from `run-yoinkc.sh`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, entitlement is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
 
 Push directly after building:
 
 ```bash
 ./yoinkc-build ./yoinkc-output/ my-bootc-image:v1.0 --push registry.example.com/my-bootc-image:v1.0
 ```
+
+Use `--no-cache` for a clean rebuild without layer caching.
 
 **Requirements:** Python 3.9+ (stdlib only). Podman or Docker.
 
@@ -327,19 +340,20 @@ The generated Containerfile follows a deliberate layer order optimized for build
 
 1. **Build stage** (conditional) — multi-stage build for pip packages with C extensions: installs build deps, compiles wheels
 2. **Base image** — auto-detected from `/etc/os-release`, mapped to the corresponding bootc base image
-3. **Repo files** — custom yum/dnf repositories
-4. **Packages** — `dnf install` for packages added beyond the base image
+3. **Repo files** — GPG key files COPYed first (for signature verification), then custom yum/dnf repositories
+4. **Packages** — `dnf install` for leaf packages added beyond the base image (auto-dependencies omitted, resolved by dnf)
 5. **Services** — `systemctl enable/disable` based on base image preset diff
-6. **Firewall** — zone XML files via `COPY` plus commented `firewall-offline-cmd` equivalents
+6. **Firewall** — zone XML files and direct rules via `COPY`; `firewall-offline-cmd` equivalents documented in the audit report
 7. **Scheduled tasks** — timer units (local + cron-converted with actual commands), at job FIXMEs
 8. **Config files** — all captured configs via `COPY config/` with optional diff summaries
-9. **Non-RPM software** — provenance-aware: `pip install` for pip, multi-stage for C extensions, `npm ci` for npm, FIXME for Go/Rust binaries, `git clone` comments for git repos
+9. **Non-RPM software** — tool package prerequisites installed first (e.g. `nodejs`/`python3-pip`) when needed but not already in the package set; then provenance-aware directives: `pip install` for pip, multi-stage for C extensions, `npm ci` for npm, FIXME for Go/Rust binaries, `git clone` comments for git repos
 10. **Container workloads** — quadlet units
-11. **Users & groups** — append-based provisioning (raw entries from `/etc/passwd`, `/etc/shadow`, etc.), sudoers FIXME, SSH key injection guidance
-12. **Kernel** — sysctl overrides, module notes
-13. **SELinux** — booleans, custom modules
+11. **Users & groups** — strategy-aware provisioning: `sysusers` for service accounts, `useradd` for ambiguous, `kickstart` for human users, `blueprint` for bootc-image-builder TOML
+12. **Kernel** — sysctl overrides, kargs.d TOML drop-in, module configs, tuned profiles
+13. **SELinux** — booleans, custom modules, port labels, fcontext rules
 14. **Network** — static connection profiles, `/etc/hosts` additions, proxy env vars, static route guidance
 15. **tmpfiles.d** — transient file/directory setup
+16. **bootc container lint** — validates the generated image is bootc-compatible
 
 ---
 

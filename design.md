@@ -26,15 +26,19 @@ The tool is structured as a pipeline of **inspectors** that each produce structu
 
 `rpm -qa --queryformat` to get the full package list with epoch/version/release/arch, then diff against the package set from the target bootc base image (see [Baseline Generation](#baseline-generation)). Identifies: added packages (present on host but not in base image), base-image-only packages (present in base image but not on host — will be present after migration, shown as "new from base image"), and modified package configs via `rpm -Va`.
 
-Also captures repo definitions from `/host/etc/yum.repos.d/` and `/host/etc/dnf/`.
+Also captures repo definitions from `/host/etc/yum.repos.d/` and `/host/etc/dnf/`. GPG key files referenced by `gpgkey=file:///...` in repo configs are parsed and collected — the parser handles comma-separated URLs, INI-style continuation lines (indented lines following `gpgkey=`), and variable substitution (`$releasever`, `$releasever_major`, `$basearch` resolved from os-release and platform). `https://` URLs are skipped since dnf fetches those at build time. Collected key files are written to the config tree and COPYed into the image before `dnf install` so that package signature verification succeeds.
 
 Additionally checks `dnf history` for packages that were installed and later removed, since these may have left behind config files or state that still affects the system.
 
 After computing the added-packages list, the tool classifies each package as "leaf" (explicitly installed by the operator) or "auto" (pulled in as a dependency). Only leaf packages appear in the Containerfile `dnf install` line; auto packages are noted in a comment above the install directive.
 
+Source repo tracking is populated per added package via `dnf repoquery --installed --queryformat "%{name} %{from_repo}\n"`, with `rpm -qi` as a fallback (checking both the "From repo" and "Repository" header fields). This data drives the repo-grouped package display in the HTML report and audit report, where leaf packages are organized by their source repository rather than shown as a flat list.
+
 The primary classification method uses `dnf repoquery --userinstalled`, which queries dnf's own tracking of which packages were explicitly requested vs pulled in as dependencies. This correctly identifies packages like `git` as leaf even when other added packages happen to depend on them — something the graph-based approach gets wrong. When `--userinstalled` is unavailable (e.g., dnf not installed, or the query returns results that don't overlap with the added set), the tool falls back to dependency graph analysis: `dnf repoquery --requires --recursive` for transitive resolution, or `rpm -qR` + `rpm --whatprovides` if dnf repoquery is unavailable. In the graph-based fallback, packages are leaf if no other added package depends on them. If dependency resolution fails for a package, it is treated as a leaf — over-include rather than under-include.
 
 Regardless of which method determines the leaf/auto split, a dependency graph is always built (via dnf repoquery or rpm) to power the per-leaf dependency tree view in the audit report, so operators can verify the classification. This typically reduces the `dnf install` list by 60–80%, producing a cleaner Containerfile that expresses intent rather than transitive closure.
+
+**dnf5 compatibility.** All `--queryformat` strings used with `rpm` and `dnf repoquery` include an explicit `\n` delimiter. In dnf5 (Fedora 41+), `--queryformat` no longer appends a newline after each record automatically, so omitting the `\n` would produce concatenated output. The explicit delimiter works correctly on both dnf4 and dnf5.
 
 #### Service Inspector
 
@@ -325,7 +329,8 @@ Structured in a deliberate layer order to maximize cache efficiency:
 # === Base Image ===
 FROM quay.io/centos-bootc/centos-bootc:stream9
 
-# === Repos ===
+# === Repository Configuration ===
+COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/
 COPY config/etc/yum.repos.d/ /etc/yum.repos.d/
 
 # === Packages (4 leaf, 23 auto-dependencies) ===
@@ -334,8 +339,8 @@ RUN dnf install -y httpd postgresql-server mod_ssl certbot && dnf clean all
 # === Services ===
 RUN systemctl enable httpd && systemctl disable kdump
 
-# === Firewall ===
-COPY config/etc/firewalld/ /etc/firewalld/
+# === Firewall (zone files baked into image via config tree) ===
+# See audit-report.md for firewall-offline-cmd equivalents per zone.
 
 # === Scheduled Tasks (cron → systemd timers) ===
 COPY config/etc/systemd/system/backup-daily.timer /etc/systemd/system/
@@ -358,8 +363,9 @@ COPY quadlet/ /etc/containers/systemd/
 COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/
 # FIXME: human user 'appuser' (uid 1001) — provision via kickstart or identity provider
 
-# === Kernel ===
-RUN rpm-ostree kargs --append=hugepagesz=2M
+# === Kernel Arguments (bootc-native kargs.d) ===
+RUN mkdir -p /usr/lib/bootc/kargs.d
+COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/
 
 # === SELinux ===
 COPY config/selinux/ /tmp/selinux/
@@ -372,9 +378,18 @@ COPY config/etc/NetworkManager/system-connections/ /etc/NetworkManager/system-co
 
 # === tmpfiles.d ===
 COPY config/etc/tmpfiles.d/app-dirs.conf /etc/tmpfiles.d/
+
+# === Validate bootc compatibility ===
+RUN bootc container lint
 ```
 
 Each section has comments explaining what was detected and why it was included. `FIXME` comments mark anything that needs human review. See the README for the complete layer ordering documentation.
+
+Every generated Containerfile ends with `RUN bootc container lint`, which validates that the image is bootc-compatible (correct ostree structure, no conflicting state). This catches structural problems at build time rather than at deployment.
+
+**Tool package detection.** The Non-RPM Software section of the Containerfile checks whether tool packages needed by non-RPM items are already present in the `dnf install` block. If `npm`/`nodejs` or `python3-pip` are needed (for npm lockfile installs or pip requirements, respectively) but not in the added package set, a prerequisite `RUN dnf install` is emitted before the non-RPM directives. This avoids build failures when a package like `nodejs` wasn't on the source host but npm lockfile items need it.
+
+**Firewall handling.** Firewall zone XML files and direct rules are written to the config tree and included in the consolidated `COPY config/etc/ /etc/` block. The Containerfile section for firewall is comments-only, referencing the audit report for `firewall-offline-cmd` equivalents per zone. The zone files themselves are the source of truth for `firewalld` — the command equivalents are informational.
 
 ### Building on Non-RHEL Hosts
 
@@ -485,6 +500,20 @@ The HTML report embeds the full inspection snapshot and exposes include/exclude 
 - Extracts the tarball into a temporary directory and serves `report.html`
 - Forwards re-render requests to a yoinkc container (`podman run` or `docker run`)
 - Serves the download tarball of the current output state
+
+**Interactive UI in the HTML report:**
+
+The report embeds the full inspection snapshot as JSON. When served by yoinkc-refine, the JavaScript UI activates additional controls beyond the base include/exclude checkboxes:
+
+Every inspected item has an include/exclude checkbox. Unchecking an item sets `include: false` in the embedded snapshot, and the dirty state is tracked client-side. Users and groups have per-row strategy dropdowns (one of `sysusers`, `useradd`, `blueprint`, `kickstart`) that modify the snapshot's strategy field. Apply-all buttons above the user and group tables allow batch strategy changes. Leaf packages cascade: unchecking a leaf package automatically unchecks its auto-dependency packages that aren't depended on by other included leaves.
+
+The sticky footer toolbar reflects three states:
+
+- **Dirty** — changes are pending. The Re-render button is highlighted and the status text shows what changed (e.g., "3 items excluded, 1 strategy change"). The Download Snapshot button is also active, allowing the modified snapshot JSON to be saved without re-rendering.
+- **Clean + helper** — no pending changes, yoinkc-refine is running. The Re-render button is dimmed. The Download Tarball button is active, packaging the current output state as a `.tar.gz`.
+- **Standalone** — report opened directly in a browser without yoinkc-refine. Include/exclude checkboxes are hidden, the toolbar is collapsed, and all interactive buttons are disabled. The report is still fully functional as a read-only dashboard.
+
+On startup, the JavaScript probes `http://localhost:{port}/api/health` (with retries) to detect whether yoinkc-refine is running and whether re-rendering is available (i.e., podman or docker was found).
 
 Podman or Docker is required for re-rendering. The include/exclude checkboxes and tarball download work without it.
 
