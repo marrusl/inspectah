@@ -1408,7 +1408,10 @@ var snapshot = {{ snapshot_json|safe }};
           pkg.include = false;
           row.classList.add('excluded');
         } else {
+          leafCb.checked = true;
           leafCb.disabled = false;
+          pkg.include = true;
+          row.classList.remove('excluded');
         }
       });
       recomputeAutoDeps();
