@@ -53,6 +53,11 @@ def _fixture_executor(cmd, cwd=None):
         return RunResult(stdout=(FIXTURES / "dnf_history_info_4.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-ql" in cmd:
         return RunResult(stdout=(FIXTURES / "rpm_qla_output.txt").read_text(), stderr="", returncode=0)
+    if "rpm" in cmd and "-qf" in cmd:
+        path_arg = cmd[-1]
+        if "httpd.service" in path_arg:
+            return RunResult(stdout="httpd\n", stderr="", returncode=0)
+        return RunResult(stdout="", stderr=f"file {path_arg} is not owned by any package", returncode=1)
     if "systemctl" in cmd and "list-unit-files" in cmd:
         return RunResult(stdout=(FIXTURES / "systemctl_list_unit_files.txt").read_text(), stderr="", returncode=0)
     if "semodule" in cmd and "-l" in cmd:
@@ -243,6 +248,22 @@ def test_preset_glob_first_match_wins(host_root, fixture_executor):
         f"first-match-wins: 'disable cloud-*' should beat 'enable cloud-*', "
         f"got '{cloud_init.default_state}'"
     )
+
+
+def test_service_inspector_resolves_owning_packages(host_root, fixture_executor):
+    """Changed units should have owning_package populated via rpm -qf."""
+    from yoinkc.inspectors.service import run as run_service
+    section = run_service(host_root, fixture_executor)
+    httpd = next((s for s in section.state_changes if s.unit == "httpd.service"), None)
+    assert httpd is not None, "httpd.service must be in state_changes"
+    assert httpd.owning_package == "httpd", (
+        f"expected owning_package='httpd', got {httpd.owning_package!r}"
+    )
+    unchanged = [s for s in section.state_changes if s.action == "unchanged"]
+    for s in unchanged:
+        assert s.owning_package is None, (
+            f"unchanged unit {s.unit} should not have owning_package set"
+        )
 
 
 def test_service_inspector_detects_drop_ins(host_root, fixture_executor):

@@ -192,6 +192,54 @@ def _scan_unit_files_from_fs(host_root: Path) -> Dict[str, str]:
     return units
 
 
+def _resolve_owning_packages(
+    executor: Executor,
+    host_root: Path,
+    section: ServiceSection,
+) -> None:
+    """Populate ``owning_package`` for non-unchanged state changes via ``rpm -qf``.
+
+    Batches all vendor paths into a single rpm call to minimize subprocess
+    overhead, then falls back to /etc/systemd/system/ for any that failed.
+    """
+    changed = [sc for sc in section.state_changes if sc.action != "unchanged"]
+    if not changed:
+        return
+
+    def _batch_query(prefix: str, units: List['ServiceStateChange']) -> List['ServiceStateChange']:
+        """Query rpm -qf for all units under prefix. Returns units that failed."""
+        paths = [f"/{prefix}/{sc.unit}" for sc in units]
+        result = executor(
+            ["rpm", "--root", str(host_root), "-qf",
+             "--queryformat", "%{NAME}\\n"] + paths,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            names = result.stdout.strip().splitlines()
+            for sc, name in zip(units, names):
+                sc.owning_package = name
+            return []
+        # Batch failed — fall back to individual queries
+        missed = []
+        for sc in units:
+            r = executor(
+                ["rpm", "--root", str(host_root), "-qf",
+                 "--queryformat", "%{NAME}\\n",
+                 f"/{prefix}/{sc.unit}"],
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                sc.owning_package = r.stdout.strip().splitlines()[0]
+            else:
+                missed.append(sc)
+        return missed
+
+    missed = _batch_query("usr/lib/systemd/system", changed)
+    if missed:
+        _batch_query("etc/systemd/system", missed)
+
+    resolved = sum(1 for sc in changed if sc.owning_package)
+    _debug(f"owning packages: resolved {resolved}/{len(changed)} changed units")
+
+
 def run(
     host_root: Path,
     executor: Optional[Executor],
@@ -272,6 +320,12 @@ def run(
                 action=action,
             )
         )
+
+    # Look up the owning RPM package for units that changed state.
+    # This allows the Containerfile renderer to skip enable/disable for units
+    # whose package won't be installed in the image.
+    if executor is not None:
+        _resolve_owning_packages(executor, host_root, section)
 
     # Scan for systemd drop-in override directories under /etc/systemd/system/.
     # Only admin overrides — vendor drop-ins under /usr/lib/ ship with the base image.

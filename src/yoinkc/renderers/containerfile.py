@@ -719,14 +719,44 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
         disabled = snapshot.services.disabled_units
         if enabled or disabled:
             lines.append("# === Service Enablement ===")
+
+            # Build unit -> owning_package lookup
+            unit_owner: dict = {}
+            for sc in snapshot.services.state_changes:
+                if sc.owning_package:
+                    unit_owner[sc.unit] = sc.owning_package
+
+            # Build set of packages that will be present in the image
+            installable: set = set()
+            if snapshot.rpm:
+                installable.update(snapshot.rpm.baseline_package_names or [])
+                if snapshot.rpm.leaf_packages is not None:
+                    installable.update(snapshot.rpm.leaf_packages)
+                    if snapshot.rpm.leaf_dep_tree:
+                        for deps in snapshot.rpm.leaf_dep_tree.values():
+                            installable.update(deps)
+                elif snapshot.rpm.packages_added:
+                    installable.update(p.name for p in snapshot.rpm.packages_added if p.include)
+
+            def _unit_installable(unit: str) -> bool:
+                owner = unit_owner.get(unit)
+                return owner is None or not installable or owner in installable
+
             safe_enabled = [u for u in enabled
                             if _sanitize_shell_value(u, "systemctl enable") is not None
                             and u not in _config_tree_units]
             safe_disabled = [u for u in disabled if _sanitize_shell_value(u, "systemctl disable") is not None]
             deferred = [u for u in enabled if u in _config_tree_units]
-            skipped = (len(enabled) - len(safe_enabled) - len(deferred)) + (len(disabled) - len(safe_disabled))
-            if skipped:
-                lines.append(f"# FIXME: {skipped} unit name(s) contained unsafe characters and were skipped")
+
+            orphan_enabled = [u for u in safe_enabled if not _unit_installable(u)]
+            orphan_disabled = [u for u in safe_disabled if not _unit_installable(u)]
+            safe_enabled = [u for u in safe_enabled if _unit_installable(u)]
+            safe_disabled = [u for u in safe_disabled if _unit_installable(u)]
+
+            unsafe_count = (len(enabled) - len(safe_enabled) - len(deferred) - len(orphan_enabled)) \
+                         + (len(disabled) - len(safe_disabled) - len(orphan_disabled))
+            if unsafe_count > 0:
+                lines.append(f"# FIXME: {unsafe_count} unit name(s) contained unsafe characters and were skipped")
             if deferred:
                 lines.append(f"# Note: {len(deferred)} config-tree unit(s) enabled later in Scheduled Tasks: "
                              + ", ".join(deferred))
@@ -735,6 +765,10 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
                 lines.append("RUN systemctl enable " + " ".join(safe_enabled))
             if safe_disabled:
                 lines.append("RUN systemctl disable " + " ".join(safe_disabled))
+            for u in orphan_enabled:
+                lines.append(f"# {u} — skipped (package {unit_owner[u]} not in dnf install line)")
+            for u in orphan_disabled:
+                lines.append(f"# {u} — skipped (package {unit_owner[u]} not in dnf install line)")
             lines.append("")
 
     # 3b. Systemd drop-in overrides

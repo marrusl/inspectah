@@ -1075,6 +1075,168 @@ def test_config_tree_timers_excluded_from_services_enable():
     assert copy_idx < enable_idx
 
 
+class TestServicePackageFiltering:
+    """systemctl enable/disable must skip units whose package won't be installed."""
+
+    @staticmethod
+    def _render_cf(snap) -> str:
+        from yoinkc.renderers.containerfile import render as render_containerfile
+        from jinja2 import Environment
+        with tempfile.TemporaryDirectory() as td:
+            render_containerfile(snap, Environment(), Path(td))
+            return (Path(td) / "Containerfile").read_text()
+
+    def _make_snap(self, enabled=None, disabled=None, state_changes=None,
+                   leaf=None, auto=None, baseline=None, dep_tree=None):
+        from yoinkc.schema import (
+            InspectionSnapshot, RpmSection, ServiceSection, ServiceStateChange,
+            PackageEntry, PackageState,
+        )
+        services = ServiceSection(
+            enabled_units=enabled or [],
+            disabled_units=disabled or [],
+            state_changes=state_changes or [],
+        )
+        rpm = RpmSection(
+            packages_added=[PackageEntry(name=n, version="1.0", release="1.el9", arch="x86_64")
+                            for n in (leaf or [])],
+            leaf_packages=leaf,
+            auto_packages=auto,
+            leaf_dep_tree=dep_tree,
+            baseline_package_names=baseline,
+        )
+        return InspectionSnapshot(services=services, rpm=rpm)
+
+    def test_leaf_package_service_included(self):
+        """Service from a leaf package must appear in RUN systemctl enable."""
+        from yoinkc.schema import ServiceStateChange
+        snap = self._make_snap(
+            enabled=["httpd.service"],
+            state_changes=[ServiceStateChange(
+                unit="httpd.service", current_state="enabled",
+                default_state="disabled", action="enable",
+                owning_package="httpd",
+            )],
+            leaf=["httpd"], baseline=["bash"],
+        )
+        cf = self._render_cf(snap)
+        assert "RUN systemctl enable httpd.service" in cf
+
+    def test_baseline_package_service_included(self):
+        """Service from a base image package must appear in RUN systemctl enable."""
+        from yoinkc.schema import ServiceStateChange
+        snap = self._make_snap(
+            enabled=["sshd.service"],
+            state_changes=[ServiceStateChange(
+                unit="sshd.service", current_state="enabled",
+                default_state="disabled", action="enable",
+                owning_package="openssh-server",
+            )],
+            leaf=["httpd"], baseline=["bash", "openssh-server"],
+        )
+        cf = self._render_cf(snap)
+        assert "RUN systemctl enable sshd.service" in cf
+
+    def test_auto_dep_of_leaf_included(self):
+        """Service from an auto package that is a dep of a leaf must be included."""
+        from yoinkc.schema import ServiceStateChange
+        snap = self._make_snap(
+            enabled=["mod_ssl.service"],
+            state_changes=[ServiceStateChange(
+                unit="mod_ssl.service", current_state="enabled",
+                default_state="disabled", action="enable",
+                owning_package="mod_ssl",
+            )],
+            leaf=["httpd"], auto=["mod_ssl"],
+            baseline=["bash"],
+            dep_tree={"httpd": ["mod_ssl"]},
+        )
+        cf = self._render_cf(snap)
+        assert "RUN systemctl enable mod_ssl.service" in cf
+
+    def test_orphan_auto_package_skipped(self):
+        """Service from an auto package not depended on by any leaf must be skipped."""
+        from yoinkc.schema import ServiceStateChange
+        snap = self._make_snap(
+            enabled=["insights-client-boot.service", "httpd.service"],
+            state_changes=[
+                ServiceStateChange(
+                    unit="insights-client-boot.service", current_state="enabled",
+                    default_state="disabled", action="enable",
+                    owning_package="insights-client",
+                ),
+                ServiceStateChange(
+                    unit="httpd.service", current_state="enabled",
+                    default_state="disabled", action="enable",
+                    owning_package="httpd",
+                ),
+            ],
+            leaf=["httpd"], auto=["insights-client"],
+            baseline=["bash"],
+            dep_tree={"httpd": []},
+        )
+        cf = self._render_cf(snap)
+        enable_lines = [l for l in cf.splitlines() if l.startswith("RUN systemctl enable")]
+        assert enable_lines, "expected at least one RUN systemctl enable line"
+        for line in enable_lines:
+            assert "insights-client-boot.service" not in line
+            assert "httpd.service" in line
+        assert "insights-client-boot.service" in cf, "should appear as a skip comment"
+        assert "skipped (package insights-client not in dnf install line)" in cf
+
+    def test_unknown_owner_included(self):
+        """Service with unknown owning package must be included (safe default)."""
+        from yoinkc.schema import ServiceStateChange
+        snap = self._make_snap(
+            enabled=["custom.service"],
+            state_changes=[ServiceStateChange(
+                unit="custom.service", current_state="enabled",
+                default_state="disabled", action="enable",
+                owning_package=None,
+            )],
+            leaf=["httpd"], baseline=["bash"],
+        )
+        cf = self._render_cf(snap)
+        assert "RUN systemctl enable custom.service" in cf
+
+    def test_orphan_disable_skipped(self):
+        """systemctl disable must also skip units whose package won't be installed."""
+        from yoinkc.schema import ServiceStateChange
+        snap = self._make_snap(
+            disabled=["insights-client.service"],
+            state_changes=[ServiceStateChange(
+                unit="insights-client.service", current_state="disabled",
+                default_state="enabled", action="disable",
+                owning_package="insights-client",
+            )],
+            leaf=["httpd"], auto=["insights-client"],
+            baseline=["bash"],
+            dep_tree={"httpd": []},
+        )
+        cf = self._render_cf(snap)
+        assert "RUN systemctl disable" not in cf
+        assert "insights-client.service" in cf
+        assert "skipped (package insights-client not in dnf install line)" in cf
+
+    def test_no_rpm_data_includes_all(self):
+        """When RPM section has no package lists, all units should be included."""
+        from yoinkc.schema import (
+            InspectionSnapshot, ServiceSection, ServiceStateChange,
+        )
+        snap = InspectionSnapshot(
+            services=ServiceSection(
+                enabled_units=["httpd.service"],
+                state_changes=[ServiceStateChange(
+                    unit="httpd.service", current_state="enabled",
+                    default_state="disabled", action="enable",
+                    owning_package="httpd",
+                )],
+            ),
+        )
+        cf = self._render_cf(snap)
+        assert "RUN systemctl enable httpd.service" in cf
+
+
 def test_bootc_container_lint_is_last_run():
     """RUN bootc container lint must appear at the end of every generated Containerfile."""
     from yoinkc.renderers.containerfile import render as render_containerfile

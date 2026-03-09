@@ -121,6 +121,7 @@ class ServiceStateChange(BaseModel):
     default_state: str
     action: str  # "enable", "disable", "mask", or "unchanged"
     include: bool = True
+    owning_package: Optional[str] = None
 
 
 class SystemdDropIn(BaseModel):
