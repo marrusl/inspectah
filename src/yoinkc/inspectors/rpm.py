@@ -222,10 +222,10 @@ def _query_user_installed(
     Returns None if the query fails (e.g. dnf unavailable).
     """
     if str(host_root) == "/":
-        cmd = ["dnf", "repoquery", "--userinstalled", "--queryformat", "%{NAME}"]
+        cmd = ["dnf", "repoquery", "--userinstalled", "--queryformat", "%{name}"]
     else:
         cmd = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--",
-               "dnf", "repoquery", "--userinstalled", "--queryformat", "%{NAME}"]
+               "dnf", "repoquery", "--userinstalled", "--queryformat", "%{name}"]
     result = executor(cmd)
     if result.returncode != 0:
         _debug(f"dnf repoquery --userinstalled failed (rc={result.returncode})")
@@ -467,7 +467,7 @@ def _classify_deps_via_dnf(
     if str(host_root) != "/":
         cmd_base += ["--installroot", str(host_root)]
     cmd_base += ["--requires", "--resolve", "--recursive", "--installed",
-                 "--queryformat", "%{NAME}"]
+                 "--queryformat", "%{name}"]
 
     name_list = sorted(added_names)
 
@@ -525,12 +525,17 @@ def _classify_leaf_auto(
 
     if user_installed is not None:
         leaf_set = user_installed & added_names
-        auto_set_raw = added_names - leaf_set
-        leaf = sorted(leaf_set)
-        auto = sorted(auto_set_raw)
-        _debug(f"using dnf --userinstalled for leaf classification: "
-               f"{len(leaf)} leaf, {len(auto)} auto")
-    else:
+        if not leaf_set and added_names:
+            _debug("dnf --userinstalled returned no overlap with added packages; "
+                   "falling back to graph-based classification")
+            user_installed = None
+        else:
+            auto_set_raw = added_names - leaf_set
+            leaf = sorted(leaf_set)
+            auto = sorted(auto_set_raw)
+            _debug(f"using dnf --userinstalled for leaf classification: "
+                   f"{len(leaf)} leaf, {len(auto)} auto")
+    if user_installed is None:
         _debug("dnf --userinstalled unavailable, falling back to graph-based classification")
         depended_on: Set[str] = set()
         for deps in depends_on.values():

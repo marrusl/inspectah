@@ -37,6 +37,8 @@ def _fixture_executor(cmd, cwd=None):
         return RunResult(stdout=(FIXTURES / "rpm_qa_output.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-Va" in cmd:
         return RunResult(stdout=(FIXTURES / "rpm_va_output.txt").read_text(), stderr="", returncode=0)
+    if "dnf" in cmd and "repoquery" in cmd and "--userinstalled" in cmd:
+        return RunResult(stdout="httpd\nrsync\n", stderr="", returncode=0)
     if "dnf" in cmd and "repoquery" in cmd and "--installed" in cmd and "--requires" not in cmd:
         repo_output = "\n".join([
             "httpd baseos",
@@ -936,6 +938,32 @@ def test_classify_leaf_auto_userinstalled_fallback_on_failure(host_root):
     def executor(cmd, cwd=None):
         if "--userinstalled" in cmd:
             return RunResult(stdout="", stderr="error", returncode=1)
+        if "dnf" in cmd and "repoquery" in cmd and "--requires" in cmd:
+            pkg = cmd[-1]
+            if pkg == "httpd":
+                return RunResult(stdout="httpd-core\n", stderr="", returncode=0)
+            return RunResult(stdout="", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    leaf, auto, dep_tree = _classify_leaf_auto(executor, host_root, packages)
+
+    assert leaf == ["httpd"]
+    assert auto == ["httpd-core"]
+
+
+def test_classify_leaf_auto_empty_userinstalled_falls_back(host_root):
+    """When --userinstalled succeeds but has no overlap with added packages, fall back to graph."""
+    from yoinkc.inspectors.rpm import _classify_leaf_auto
+    from yoinkc.schema import PackageEntry, PackageState
+
+    packages = [
+        PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+        PackageEntry(name="httpd-core", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
+    ]
+
+    def executor(cmd, cwd=None):
+        if "--userinstalled" in cmd:
+            return RunResult(stdout="vim\nemacs\n", stderr="", returncode=0)
         if "dnf" in cmd and "repoquery" in cmd and "--requires" in cmd:
             pkg = cmd[-1]
             if pkg == "httpd":
