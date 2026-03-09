@@ -32,7 +32,7 @@ yoinkc = "yoinkc.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-yoinkc = ["templates/*.j2"]
+yoinkc = ["templates/*.j2", "templates/*.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

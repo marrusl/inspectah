@@ -501,9 +501,16 @@ def _build_context(
     # enclosing <script> block (standard JSON-in-HTML XSS prevention).
     snapshot_json = snapshot.model_dump_json().replace("</", "<\\/")
 
+    # Load PatternFly 6 CSS for inline embedding (self-contained report)
+    pf_css_path = Path(__file__).resolve().parent.parent / "templates" / "patternfly.min.css"
+    patternfly_css = ""
+    if pf_css_path.exists():
+        patternfly_css = pf_css_path.read_text()
+
     return {
         "snapshot": snapshot,
         "snapshot_json": snapshot_json,
+        "patternfly_css": Markup(patternfly_css),
         "counts": counts,
         "triage": triage,
         "os_desc": os_desc,

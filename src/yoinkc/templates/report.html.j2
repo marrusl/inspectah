@@ -12,19 +12,24 @@
     containers_data (dict),
     network_data (dict),
     triage_detail (list of dicts),
+    patternfly_css (Markup),
 #}
 
 {# ── Section wrapper macro ─────────────────────────────────────────────── #}
 {% macro section(id, title, visible=false) -%}
 <div id="section-{{ id }}" class="section{% if visible %} visible{% endif %}">
-  <h2>{{ title }}</h2>
-  {{- caller() }}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h2>{{ title }}</h2></div></div>
+    <div class="pf-v6-c-card__body">
+    {{- caller() }}
+    </div>
+  </div>
 </div>
 {%- endmacro %}
 
 {# ── Simple data table macro ────────────────────────────────────────────── #}
 {% macro data_table(headers) %}
-<table class="data-table"><thead><tr>
+<table class="pf-v6-c-table pf-m-compact"><thead><tr>
   {%- for h in headers %}<th>{{ h }}</th>{% endfor -%}
 </tr></thead><tbody>
 {{ caller() }}
@@ -32,157 +37,174 @@
 {% endmacro %}
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="pf-v6-theme-dark">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>yoinkc Report</title>
+<style>{{ patternfly_css }}</style>
 <style>
-:root { --bg: #0f1419; --card: #1a2332; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --warn: #d29922; --error: #f85149; --ok: #3fb950; --code-bg: #0d1117; --border: #30363d; --warn-bg: #2d1f1f; }
-[data-theme="light"] { --bg: #f6f8fa; --card: #ffffff; --text: #1f2328; --muted: #57606a; --accent: #0969da; --warn: #9a6700; --error: #cf222e; --ok: #1a7f37; --code-bg: #eaeef2; --border: #d0d7de; --warn-bg: #fff8c5; }
+/* ═══════════════════════════════════════════════════════════════════════
+   yoinkc report – custom overrides on top of PatternFly 6
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* OS icon theme-aware colours */
 .os-icon { vertical-align: middle; margin-right: 6px; }
-.os-icon-rhel { color: #ffffff; }
+.os-icon-rhel   { color: #ffffff; }
 .os-icon-fedora { color: #79B8FF; }
 .os-icon-centos { color: #c678dd; }
-.os-icon-rocky { color: #73BA25; }
-.os-icon-alma { color: #ff4649; }
-[data-theme="light"] .os-icon-rhel { color: #EE0000; }
-[data-theme="light"] .os-icon-fedora { color: #294172; }
-[data-theme="light"] .os-icon-centos { color: #932279; }
-[data-theme="light"] .os-icon-rocky { color: #10B981; }
-[data-theme="light"] .os-icon-alma { color: #ff4649; }
-* { box-sizing: border-box; }
-body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 1rem; padding-bottom: 70px; line-height: 1.5; }
-.container { max-width: 1400px; margin: 0 auto; padding: 0 2rem; }
-h1, h2, h3 { margin-top: 0; }
-a { color: var(--accent); }
-.banner { background: var(--card); border-radius: 8px; padding: 1rem 1.5rem; margin-bottom: 1rem; border-left: 4px solid var(--accent); }
-.warning-panel { background: var(--warn-bg); border: 1px solid var(--warn); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+.os-icon-rocky  { color: #73BA25; }
+.os-icon-alma   { color: #ff4649; }
+html:not(.pf-v6-theme-dark) .os-icon-rhel   { color: #EE0000; }
+html:not(.pf-v6-theme-dark) .os-icon-fedora { color: #294172; }
+html:not(.pf-v6-theme-dark) .os-icon-centos { color: #932279; }
+html:not(.pf-v6-theme-dark) .os-icon-rocky  { color: #10B981; }
+html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
+
+/* Page padding – toolbar lives at the bottom */
+body { padding-bottom: 70px; }
+.pf-v6-c-page__main-section { max-width: 1400px; margin: 0 auto; }
+
+/* Section show/hide for tab switching */
+.section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); max-width: 1200px; }
+.section.visible { display: block; animation: fadeIn .15s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Tables: auto-width to avoid full-bleed tables */
+.pf-v6-c-table { width: auto; }
+
+/* Badge/label colour overrides */
+.pf-v6-c-label.badge { font-size: .75rem; }
+.pf-v6-c-label.badge.ok      { --pf-v6-c-label--BackgroundColor: #238636; --pf-v6-c-label--Color: #fff; background: #238636; color: #fff; }
+.pf-v6-c-label.badge.warn,
+.pf-v6-c-label.badge.warning  { --pf-v6-c-label--BackgroundColor: #9e6a03; --pf-v6-c-label--Color: #fff; background: #9e6a03; color: #fff; }
+.pf-v6-c-label.badge.error    { --pf-v6-c-label--BackgroundColor: #da3633; --pf-v6-c-label--Color: #fff; background: #da3633; color: #fff; }
+.pf-v6-c-label.badge.info     { --pf-v6-c-label--BackgroundColor: #1f6feb; --pf-v6-c-label--Color: #fff; background: #1f6feb; color: #fff; }
+
+/* Repo badges */
+.repo-badge { display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
+.repo-badge.epel      { background: #1f6feb33; color: #58a6ff; }
+.repo-badge.copr      { background: #da363333; color: #f85149; }
+.repo-badge.rpmfusion  { background: #f0883e33; color: #f0883e; }
+.repo-badge.base      { color: #8b949e; }
+
+/* Warning panel */
 .warning-panel.collapsed { display: none; }
-.warning-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 0.5rem; }
-.warning-panel h3 { color: var(--warn); margin: 0; flex: 1; }
-.warning-panel-dismiss { background: var(--card); border: 1px solid var(--warn); color: var(--warn); border-radius: 6px; padding: 0.35rem 0.75rem; cursor: pointer; font-size: 0.9rem; font-weight: 500; white-space: nowrap; }
-.warning-panel-dismiss:hover { background: var(--warn); color: var(--bg); border-color: var(--warn); }
 .warning-row { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid rgba(210,153,34,0.15); }
 .warning-row.dismissed { display: none; }
 .warning-row:last-child { border-bottom: none; }
 .warning-row .warning-msg { flex: 1; font-size: 0.9rem; }
-.warning-row-dismiss { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0.15rem 0.35rem; border-radius: 4px; flex-shrink: 0; }
-.warning-row-dismiss:hover { color: var(--warn); background: rgba(210,153,34,0.15); }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-.section { display: none; background: var(--card); border-radius: 8px; padding: 1.5rem; margin-top: 1rem; max-width: 1200px; }
-.section.visible { display: block; animation: fadeIn .15s ease; }
-table { width: auto; border-collapse: collapse; }
-th, td { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
-.tabs { display: flex; flex-direction: column; gap: 0; margin-bottom: 1rem; }
-.tab-row { display: flex; gap: 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.tabs button { background: transparent; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 0.5rem 0.75rem; color: var(--muted); cursor: pointer; transition: color .15s, border-color .15s; }
-.tabs button:hover { color: var(--text); }
-.tabs button.active { border-bottom-color: var(--accent); color: var(--text); }
-tbody tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
-tbody tr:hover td { background: rgba(88,166,255,0.06); }
-[data-theme="light"] tbody tr:nth-child(even) td { background: rgba(0,0,0,0.02); }
-[data-theme="light"] tbody tr:hover td { background: rgba(9,105,218,0.06); }
-button:focus-visible, .card:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 #warnings-list { max-height: 400px; overflow-y: auto; }
-.search { margin-bottom: 1rem; }
-.search input { width: 100%; max-width: 400px; padding: .5rem; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
-.badge { display: inline-block; padding: .15rem .5rem; border-radius: 4px; font-size: .75rem; }
-.badge.ok { background: #238636; color: #fff; }
-.badge.warn { background: #9e6a03; color: #fff; }
-.badge.error { background: #da3633; color: #fff; }
-.badge.info { background: #1f6feb; color: #fff; }
-.containerfile-pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
+
+/* Readiness panel */
+.readiness-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.readiness-col { border-radius: 8px; padding: 1rem; }
+.readiness-col.readiness-auto   { border-left: 4px solid var(--pf-v6-global--success-color--100, #3fb950); }
+.readiness-col.readiness-fixme  { border-left: 4px solid var(--pf-v6-global--warning-color--100, #d29922); }
+.readiness-col.readiness-manual { border-left: 4px solid var(--pf-v6-global--danger-color--100, #f85149); }
+.readiness-header { font-weight: 600; margin-bottom: 0.5rem; }
+.readiness-count  { font-size: 1.3rem; margin-right: 0.25rem; }
+.readiness-col.readiness-auto   .readiness-count { color: var(--pf-v6-global--success-color--100, #3fb950); }
+.readiness-col.readiness-fixme  .readiness-count { color: var(--pf-v6-global--warning-color--100, #d29922); }
+.readiness-col.readiness-manual .readiness-count { color: var(--pf-v6-global--danger-color--100, #f85149); }
+.readiness-col ul { list-style: none; padding: 0; margin: 0; }
+.readiness-col li { padding: 0.2rem 0; }
+.readiness-link { background: none; border: none; color: var(--pf-v6-global--link--Color, #58a6ff); cursor: pointer; padding: 0; font-size: 0.9rem; text-align: left; }
+.readiness-link:hover { text-decoration: underline; }
+
+/* Summary */
+.summary-hero { font-size: 1.1rem; margin-bottom: 1.5rem; }
+.summary-meta dt { font-size: 0.85rem; margin-top: 0.5rem; }
+.summary-meta dt:first-child { margin-top: 0; }
+.summary-meta dd { margin: 0.15rem 0 0 0; }
+.summary-next { margin-top: 1.5rem; padding-top: 1rem; }
+
+/* Diff view */
+.diff-view { max-height: 300px; overflow: auto; font-size: 0.85em; line-height: 1.5; padding: 0.5rem; border-radius: 4px; }
+.diff-add  { color: #3fb950; background: rgba(46,160,67,0.08);  display: block; border-left: 3px solid #3fb950; padding-left: 0.5rem; }
+.diff-del  { color: #f85149; background: rgba(248,81,73,0.08);  display: block; border-left: 3px solid #f85149; padding-left: 0.5rem; }
+.diff-hdr  { color: #8b949e; display: block; font-weight: bold; }
+.diff-hunk { color: #79c0ff; display: block; }
+
+/* Containerfile code block */
+.containerfile-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
 .section-heading-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
 .section-heading-row h2 { margin: 0; }
-.btn-copy-cf { background: var(--card); border: 1px solid var(--border); color: var(--muted); border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.78rem; font-family: inherit; transition: color .1s, border-color .1s, background .1s; }
-.btn-copy-cf:hover { color: var(--text); border-color: var(--accent); }
-.btn-copy-cf.copied { background: var(--ok); border-color: var(--ok); color: #fff; }
-[data-theme="light"] .btn-copy-cf.copied { background: #2da44e; border-color: #2da44e; opacity: 0.85; }
+.btn-copy-cf.copied { background: var(--pf-v6-global--success-color--100, #3fb950) !important; border-color: var(--pf-v6-global--success-color--100, #3fb950) !important; color: #fff !important; }
+
+/* Repo content preview */
+.repo-content-pre { border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
+
+/* File browser */
 .file-browser-layout { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
-.file-tree-panel { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 0.75rem; }
+.file-tree-panel { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; border-radius: 6px; padding: 0.75rem; }
 .file-tree-root { padding: 0; }
 .file-tree-root > details { margin-bottom: 0.25rem; }
 .file-tree-panel ul { list-style: none; padding-left: 1rem; margin: 0.25rem 0; }
 .file-tree-panel .tree-dir summary { cursor: pointer; padding: 0.2rem 0; }
-.file-tree-panel .file-entry { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0.2rem 0; text-align: left; font-size: 0.9rem; }
+.file-tree-panel .file-entry { background: none; border: none; color: var(--pf-v6-global--link--Color, #58a6ff); cursor: pointer; padding: 0.2rem 0; text-align: left; font-size: 0.9rem; }
 .file-tree-panel .file-entry:hover { text-decoration: underline; }
-.file-viewer-panel { flex: 1 1 400px; min-height: 200px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow: auto; }
-.file-viewer-panel .file-path { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.5rem; }
+.file-viewer-panel { flex: 1 1 400px; min-height: 200px; border-radius: 6px; padding: 1rem; overflow: auto; }
+.file-viewer-panel .file-path { font-size: 0.85rem; margin-bottom: 0.5rem; }
 .file-viewer-panel .file-content-pre { max-height: 65vh; margin: 0; }
 .file-content-hidden { display: none; }
-.diff-view { max-height: 300px; overflow: auto; font-size: 0.85em; line-height: 1.5; background: var(--code-bg); padding: 0.5rem; border-radius: 4px; }
-.diff-add { color: #3fb950; background: rgba(46,160,67,0.08); display: block; border-left: 3px solid #3fb950; padding-left: 0.5rem; }
-.diff-del { color: #f85149; background: rgba(248,81,73,0.08); display: block; border-left: 3px solid #f85149; padding-left: 0.5rem; }
-.diff-hdr { color: #8b949e; display: block; font-weight: bold; }
-.diff-hunk { color: #79c0ff; display: block; }
-.summary-hero { font-size: 1.1rem; margin-bottom: 1.5rem; color: var(--muted); }
-.summary-meta { display: grid; gap: 0.5rem; margin-bottom: 1.5rem; padding: 1rem; background: var(--code-bg); border-radius: 8px; border: 1px solid var(--border); }
-.summary-meta dt { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
-.summary-meta dt:first-child { margin-top: 0; }
-.summary-meta dd { margin: 0.15rem 0 0 0; }
-.readiness-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.readiness-col { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
-.readiness-col.readiness-auto { border-left: 4px solid var(--ok); }
-.readiness-col.readiness-fixme { border-left: 4px solid var(--warn); }
-.readiness-col.readiness-manual { border-left: 4px solid var(--error); }
-.readiness-header { font-weight: 600; margin-bottom: 0.5rem; }
-.readiness-count { font-size: 1.3rem; margin-right: 0.25rem; }
-.readiness-col.readiness-auto .readiness-count { color: var(--ok); }
-.readiness-col.readiness-fixme .readiness-count { color: var(--warn); }
-.readiness-col.readiness-manual .readiness-count { color: var(--error); }
-.readiness-col ul { list-style: none; padding: 0; margin: 0; }
-.readiness-col li { padding: 0.2rem 0; }
-.readiness-link { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 0.9rem; text-align: left; }
-.readiness-link:hover { text-decoration: underline; }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: var(--muted); }
-.summary-next { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
-.audit-pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
-.audit-table { margin: 0.5rem 0; }
-.audit-section { max-height: 70vh; overflow-y: auto; }
+
+/* Excluded rows */
 tr.excluded td { text-decoration: line-through; opacity: 0.45; }
 tr.excluded td:first-child { text-decoration: none; opacity: 1; }
-.include-cb { width: 18px; height: 18px; cursor: pointer; accent-color: #4a9eff; border: 1px solid #8b949e; display: none; }
-.repo-badge { display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
-.repo-badge.epel { background: #1f6feb33; color: #58a6ff; }
-.repo-badge.copr { background: #da363333; color: #f85149; }
-.repo-badge.rpmfusion { background: #f0883e33; color: #f0883e; }
-.repo-badge.base { background: var(--border); color: #8b949e; }
-.repo-content-pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
-#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 2px solid var(--accent); padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
+div.excluded { text-decoration: line-through; opacity: 0.45; }
+
+/* Include checkbox – hidden until yoinkc-refine helper is active */
+.include-cb { width: 18px; height: 18px; cursor: pointer; display: none; }
+
+/* Select elements */
+select, .strategy-select { border-radius: 4px; padding: 2px 4px; font-size: 0.85em; }
+
+/* Audit */
+.audit-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
+.audit-table { margin: 0.5rem 0; }
+.audit-section { max-height: 70vh; overflow-y: auto; }
+
+/* Sticky toolbar */
+#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
 #exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
-#exclude-toolbar .toolbar-status { font-weight: 600; color: var(--warn); flex: 1; }
-#exclude-toolbar button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; font-size: 0.9rem; font-weight: 500; }
-#btn-download-snapshot { background: var(--card); color: var(--text); }
-#btn-rerender { background: var(--card); color: var(--text); }
-#btn-tarball { background: var(--card); color: var(--text); }
-#exclude-toolbar button.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-#btn-rerender.disabled { opacity: 0.4; cursor: not-allowed; }
-#btn-tarball.disabled { opacity: 0.4; cursor: not-allowed; }
-.toast { position: fixed; top: 1rem; right: 1rem; background: #da3633; color: #fff; padding: 0.75rem 1.5rem; border-radius: 8px; z-index: 2000; display: none; }
+#exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
+#btn-rerender.disabled, #btn-tarball.disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Toast */
+.toast { position: fixed; top: 1rem; right: 1rem; z-index: 2000; display: none; }
 .toast.visible { display: block; }
-.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
+
+/* Spinner (for re-render button) */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
-#theme-toggle { background: var(--card); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 0.5rem 1rem; cursor: pointer; font-size: 0.9rem; font-weight: 500; font-family: inherit; white-space: nowrap; transition: background .15s, border-color .15s, color .15s; }
-#theme-toggle:hover { background: var(--accent); border-color: var(--accent); color: #fff; }
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
-.page-header h1 { margin: 0; }
+
+/* Allow PF tabs to wrap into multiple rows */
+.pf-v6-c-tabs__list { flex-wrap: wrap; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { border-radius: 4px; }
 </style>
 </head>
 <body>
-<div class="container">
+<div class="pf-v6-c-page">
 
-<div class="page-header">
-  <h1>yoinkc Inspection Report</h1>
-  <button id="theme-toggle" title="Switch to light theme" aria-label="Toggle theme">&#9728;</button>
-</div>
+<header class="pf-v6-c-masthead">
+  <div class="pf-v6-c-masthead__main">
+    <span class="pf-v6-c-masthead__brand">yoinkc Inspection Report</span>
+  </div>
+  <div class="pf-v6-c-masthead__content">
+    <button id="theme-toggle" class="pf-v6-c-button pf-m-plain" title="Switch to light theme" aria-label="Toggle theme">&#9728;</button>
+  </div>
+</header>
+
+<main class="pf-v6-c-page__main">
+<section class="pf-v6-c-page__main-section">
 
 {# ── Banner ─────────────────────────────────────────────────────────────── #}
-<div class="banner">
+<div class="pf-v6-c-banner pf-m-info">
   {%- if os_id == "rhel" -%}
   <svg role="img" class="os-icon os-icon-rhel" height="20" viewBox="0 0 24 24" aria-label="Red Hat"><path fill="currentColor" d="M16.009 13.386c1.577 0 3.86-.326 3.86-2.202a1.765 1.765 0 0 0-.04-.431l-.94-4.08c-.216-.898-.406-1.305-1.982-2.093-1.223-.625-3.888-1.658-4.676-1.658-.733 0-.947.946-1.822.946-.842 0-1.467-.706-2.255-.706-.757 0-1.25.515-1.63 1.576 0 0-1.06 2.99-1.197 3.424a.81.81 0 0 0-.028.245c0 1.162 4.577 4.974 10.71 4.974m4.101-1.435c.218 1.032.218 1.14.218 1.277 0 1.765-1.984 2.745-4.593 2.745-5.895.004-11.06-3.451-11.06-5.734a2.326 2.326 0 0 1 .19-.925C2.746 9.415 0 9.794 0 12.217c0 3.969 9.405 8.861 16.851 8.861 5.71 0 7.149-2.582 7.149-4.62 0-1.605-1.387-3.425-3.887-4.512"/></svg>
   {%- elif os_id == "fedora" -%}
@@ -205,51 +227,49 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
 {# ── Warning panel ──────────────────────────────────────────────────────── #}
 {% if warnings %}
-<div id="warning-banner" class="warning-panel" data-overflow-count="{{ warnings_overflow }}">
-  <div class="warning-panel-header">
+<div id="warning-banner" class="pf-v6-c-alert pf-m-warning pf-m-inline warning-panel" data-overflow-count="{{ warnings_overflow }}">
+  <div class="pf-v6-c-alert__title">
     <h3>Warnings &amp; items to review (<span id="warning-banner-count">{{ warnings|length }}</span>)</h3>
-    <button type="button" class="warning-panel-dismiss" id="warning-dismiss-all" aria-label="Dismiss All">Dismiss All</button>
   </div>
-  <div id="warning-rows">
+  <div class="pf-v6-c-alert__action">
+    <button type="button" class="pf-v6-c-button pf-m-plain" id="warning-dismiss-all" aria-label="Dismiss All">Dismiss All</button>
+  </div>
+  <div class="pf-v6-c-alert__description" id="warning-rows">
     {%- for w in warnings_panel %}
     <div class="warning-row" data-warning-idx="{{ loop.index0 }}">
-      <span class="badge {{ w.severity|default('warning') }}">{{ w.severity|default('warning') }}</span>
+      <span class="pf-v6-c-label badge {{ w.severity|default('warning') }}">{{ w.severity|default('warning') }}</span>
       <span class="warning-msg">{{ (w.message or w.detail or '—') }}</span>
-      <button type="button" class="warning-row-dismiss" aria-label="Dismiss">&times;</button>
+      <button type="button" class="pf-v6-c-button pf-m-plain warning-row-dismiss" aria-label="Dismiss">&times;</button>
     </div>
     {%- endfor %}
     {%- if warnings_overflow > 0 %}
-    <div class="warning-row" style="color:var(--muted);font-size:0.85rem;justify-content:center;">… and {{ warnings_overflow }} more in the Warnings tab</div>
+    <div class="warning-row" style="font-size:0.85rem;justify-content:center;">… and {{ warnings_overflow }} more in the Warnings tab</div>
     {%- endif %}
   </div>
 </div>
 {% endif %}
 
 {# ── Tab navigation ─────────────────────────────────────────────────────── #}
-<div class="tabs">
-  <div class="tab-row">
-    <button class="active" data-tab="summary">Summary</button>
-    <button data-tab="audit">Audit report</button>
-    <button data-tab="warnings">Warnings</button>
-    <button data-tab="output_files">File browser</button>
-    <button data-tab="containerfile">Containerfile</button>
-  </div>
-  <div class="tab-row">
-    <button data-tab="packages">Packages</button>
-    <button data-tab="config">Config</button>
-    <button data-tab="services">Services</button>
-    <button data-tab="users_groups">Users/Groups</button>
-    <button data-tab="containers">Containers</button>
-    <button data-tab="non_rpm">Non-RPM</button>
-  </div>
-  <div class="tab-row">
-    <button data-tab="scheduled_tasks">Scheduled</button>
-    <button data-tab="kernel_boot">Kernel/Boot</button>
-    <button data-tab="selinux">SELinux</button>
-    <button data-tab="network">Network</button>
-    <button data-tab="storage">Storage</button>
-    <button data-tab="secrets">Secrets</button>
-  </div>
+<div class="pf-v6-c-tabs" id="report-tabs">
+  <ul class="pf-v6-c-tabs__list">
+    <li class="pf-v6-c-tabs__item pf-m-current"><button class="pf-v6-c-tabs__link" data-tab="summary" type="button"><span class="pf-v6-c-tabs__item-text">Summary</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="audit" type="button"><span class="pf-v6-c-tabs__item-text">Audit report</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="warnings" type="button"><span class="pf-v6-c-tabs__item-text">Warnings</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="output_files" type="button"><span class="pf-v6-c-tabs__item-text">File browser</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="containerfile" type="button"><span class="pf-v6-c-tabs__item-text">Containerfile</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="packages" type="button"><span class="pf-v6-c-tabs__item-text">Packages</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="config" type="button"><span class="pf-v6-c-tabs__item-text">Config</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="services" type="button"><span class="pf-v6-c-tabs__item-text">Services</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="users_groups" type="button"><span class="pf-v6-c-tabs__item-text">Users/Groups</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="containers" type="button"><span class="pf-v6-c-tabs__item-text">Containers</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="non_rpm" type="button"><span class="pf-v6-c-tabs__item-text">Non-RPM</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="scheduled_tasks" type="button"><span class="pf-v6-c-tabs__item-text">Scheduled</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="kernel_boot" type="button"><span class="pf-v6-c-tabs__item-text">Kernel/Boot</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="selinux" type="button"><span class="pf-v6-c-tabs__item-text">SELinux</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="network" type="button"><span class="pf-v6-c-tabs__item-text">Network</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="storage" type="button"><span class="pf-v6-c-tabs__item-text">Storage</span></button></li>
+    <li class="pf-v6-c-tabs__item"><button class="pf-v6-c-tabs__link" data-tab="secrets" type="button"><span class="pf-v6-c-tabs__item-text">Secrets</span></button></li>
+  </ul>
 </div>
 
 {# ══════════════════════════════════════════════════════════════════════════
@@ -259,30 +279,30 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── Summary ────────────────────────────────────────────────────────────── #}
 {% call section("summary", "Summary", visible=true) %}
 <p class="summary-hero">Inspection overview and run metadata. Use the cards or tabs above to drill into any category.</p>
-<p class="summary-portable" style="font-size:0.9rem;color:var(--muted);">This report is self-contained and portable: all content (Containerfile, audit, config/ and quadlet/ file browser) is embedded. You can copy or share <code>report.html</code> alone.</p>
-<dl class="summary-meta">
-  <dt>Host root</dt><dd><code>{{ meta.host_root|default('') }}</code></dd>
-  <dt>Hostname</dt><dd>{{ meta.hostname|default('—') }}</dd>
-  <dt>Inspection time (UTC)</dt><dd>{{ meta.timestamp|default('—') }}</dd>
-  <dt>OS</dt><dd>{{ os_desc }}</dd>
+<p style="font-size:0.9rem">This report is self-contained and portable: all content (Containerfile, audit, config/ and quadlet/ file browser) is embedded. You can copy or share <code>report.html</code> alone.</p>
+<dl class="pf-v6-c-description-list summary-meta">
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Host root</dt><dd class="pf-v6-c-description-list__description"><code>{{ meta.host_root|default('') }}</code></dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Hostname</dt><dd class="pf-v6-c-description-list__description">{{ meta.hostname|default('—') }}</dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Inspection time (UTC)</dt><dd class="pf-v6-c-description-list__description">{{ meta.timestamp|default('—') }}</dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">OS</dt><dd class="pf-v6-c-description-list__description">{{ os_desc }}</dd></div>
 </dl>
 <h3>Migration readiness</h3>
 <div class="readiness-panel">
   {%- set auto_items = triage_detail|selectattr('status', 'equalto', 'automatic')|list %}
   {%- set fixme_items = triage_detail|selectattr('status', 'equalto', 'fixme')|list %}
   {%- set manual_items = triage_detail|selectattr('status', 'equalto', 'manual')|list %}
-  <div class="readiness-col readiness-auto">
+  <div class="pf-v6-c-card readiness-col readiness-auto">
     <div class="readiness-header"><span class="readiness-count">{{ triage.automatic }}</span> Automatic</div>
     <ul>{%- for item in auto_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
   </div>
   {%- if fixme_items %}
-  <div class="readiness-col readiness-fixme">
+  <div class="pf-v6-c-card readiness-col readiness-fixme">
     <div class="readiness-header"><span class="readiness-count">{{ triage.fixme }}</span> Needs review</div>
     <ul>{%- for item in fixme_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
   </div>
   {%- endif %}
   {%- if manual_items %}
-  <div class="readiness-col readiness-manual">
+  <div class="pf-v6-c-card readiness-col readiness-manual">
     <div class="readiness-header"><span class="readiness-count">{{ triage.manual }}</span> Manual</div>
     <ul>{%- for item in manual_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
   </div>
@@ -317,14 +337,14 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- set auto_set = snapshot.rpm.auto_packages or [] %}
   {%- set dep_tree = snapshot.rpm.leaf_dep_tree or {} %}
 
-  <div class="banner" id="pkg-selection-banner" style="margin-bottom:1rem">
+  <div class="pf-v6-c-banner pf-m-info" id="pkg-selection-banner" style="margin-bottom:1rem">
     <strong>{{ leaf_packages_sorted|length }} leaf packages</strong> pull in <strong>{{ auto_set|length }} dependencies</strong>
     — only leaf packages appear in the Containerfile's <code>dnf install</code> line.
   </div>
 
   {%- if snapshot.rpm.repo_files %}
   <h3>Repositories ({{ snapshot.rpm.repo_files|length }})</h3>
-  <table class="data-table" id="pkg-repo-table">
+  <table class="pf-v6-c-table pf-m-compact" id="pkg-repo-table">
     <thead><tr><th></th><th>Path</th><th></th><th></th></tr></thead>
     <tbody>
     {%- for rf in snapshot.rpm.repo_files %}
@@ -353,7 +373,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- if repo_groups %}
   {%- for repo_name, entries in repo_groups.items() %}
   <h4 style="margin-top:1.5rem">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</h4>
-  <table class="data-table pkg-dep-tree-group">
+  <table class="pf-v6-c-table pf-m-compact pkg-dep-tree-group">
     <thead><tr><th></th><th>Leaf Package</th><th>Dependencies</th><th></th></tr></thead>
     <tbody>
     {%- for entry in entries %}
@@ -371,7 +391,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
           </ul>
         </details>
         {%- else %}
-        <em style="color:var(--muted)">independent</em>
+        <em>independent</em>
         {%- endif %}
       </td>
     </tr>
@@ -381,7 +401,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endfor %}
   {%- else %}
   {# Fallback: flat table when repo_groups is not populated #}
-  <table class="data-table" id="pkg-dep-tree">
+  <table class="pf-v6-c-table pf-m-compact" id="pkg-dep-tree">
     <thead><tr><th></th><th>Leaf Package</th><th>Repo</th><th>Dependencies</th><th></th></tr></thead>
     <tbody>
     {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
@@ -393,7 +413,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
       <td><input type="checkbox" class="include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></td>
       <td><strong>{{ lf }}</strong></td>
-      <td style="font-size:0.85em;color:var(--muted)">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
+      <td style="font-size:0.85em">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
       <td>{{ deps|length }}</td>
       <td>
         {%- if deps %}
@@ -405,7 +425,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
           </ul>
         </details>
         {%- else %}
-        <em style="color:var(--muted)">independent</em>
+        <em>independent</em>
         {%- endif %}
       </td>
     </tr>
@@ -424,8 +444,8 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endfor %}
   {%- if unclassified_pkgs %}
   <h3 style="margin-top:1.5rem">Unclassified Packages ({{ unclassified_pkgs|length }})</h3>
-  <p style="font-size:0.85em;color:var(--muted)">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
-  <table class="data-table">
+  <p style="font-size:0.85em">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
+  <table class="pf-v6-c-table pf-m-compact">
     <thead><tr><th></th><th>Name</th><th>Version</th><th>Arch</th></tr></thead>
     <tbody>
     {%- for p in unclassified_pkgs %}
@@ -445,7 +465,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 
   {%- else %}
-  <table><thead><tr><th></th><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
     <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if p.include else '' }}/></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
     {%- endfor %}
@@ -463,7 +483,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── Services ────────────────────────────────────────────────────────────── #}
 {% call section("services", "Services") %}
   {%- if snapshot.services and snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list %}
-  <table><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
     {%- for s in snapshot.services.state_changes %}
     {%- if s.action != 'unchanged' %}
     <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if s.include else '' }}/></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
@@ -476,7 +496,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if snapshot.services and snapshot.services.drop_ins %}
   <h3>Systemd drop-in overrides ({{ snapshot.services.drop_ins|length }})</h3>
-  <table><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
     {%- for d in snapshot.services.drop_ins %}
     <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if d.include else '' }}/></td>
@@ -485,7 +505,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td>
         {%- if d.content.strip() %}
         <details><summary>show</summary>
-          <pre style="background:var(--code-bg);border:1px solid var(--border);border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ d.content }}</pre>
+          <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ d.content }}</pre>
         </details>
         {%- endif %}
       </td>
@@ -498,7 +518,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── Config ──────────────────────────────────────────────────────────────── #}
 {% call section("config", "Configuration files") %}
   {%- if snapshot.config and snapshot.config.files %}
-  <table><thead><tr><th></th><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
     {%- for item in config_files_rendered %}
     <tr{% if not item.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if item.include else '' }}/></td>
@@ -522,7 +542,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if nd.elf %}
   <h3>Compiled binaries</h3>
-  <table><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr></thead><tbody>
     {%- for i in nd.elf %}
     {%- set lang = i.lang %}
     {%- set lang_colors = {'go': '#00ADD8', 'rust': '#DEA584', 'c/c++': '#555'} %}
@@ -539,7 +559,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- if nd.venv %}
@@ -553,14 +573,14 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   </h4>
   {%- set pkgs = v.packages %}
   {%- if pkgs %}
-  <table><tr><th>Package</th><th>Version</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>
     {%- for p in pkgs[:20] %}
     <tr><td>{{ p.name }}</td><td>{{ p.version }}</td></tr>
     {%- endfor %}
     {%- if pkgs|length > 20 %}
     <tr><td colspan="2"><em>+{{ pkgs|length - 20 }} more</em></td></tr>
     {%- endif %}
-  </table>
+  </tbody></table>
   {%- else %}
   <p>No packages found.</p>
   {%- endif %}
@@ -569,7 +589,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if nd.git %}
   <h3>Git-managed directories</h3>
-  <table><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr></thead><tbody>
     {%- for i in nd.git %}
     <tr>
       <td><code>{{ i.path }}</code></td>
@@ -578,12 +598,12 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td><code>{{ i.git_commit[:12] }}</code></td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- if nd.pip %}
   <h3>System pip packages</h3>
-  <table><tr><th></th><th>Package</th><th>Version</th><th>Path</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Package</th><th>Version</th><th>Path</th></tr></thead><tbody>
     {%- for i in nd.pip[:20] %}
     {%- set nr_idx = namespace(val=-1) %}
     {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
@@ -594,12 +614,12 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td><code>{{ i.path }}</code></td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- if nd.other %}
   <h3>Other non-RPM items</h3>
-  <table><tr><th>Path</th><th>Confidence</th><th>Method</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Path</th><th>Confidence</th><th>Method</th></tr></thead><tbody>
     {%- for i in nd.other[:20] %}
     <tr>
       <td><code>{{ i.path or i.name }}</code></td>
@@ -607,13 +627,13 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td>{{ i.method }}</td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- if nr and nr.env_files %}
   <h3>Dotenv / secret files ({{ nr.env_files|length }})</h3>
-  <p style="color:var(--amber)">⚠ These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
-  <table class="data-table"><thead><tr><th>Path</th><th>Status</th></tr></thead><tbody>
+  <p>These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Path</th><th>Status</th></tr></thead><tbody>
     {%- for ef in nr.env_files %}
     <tr>
       <td><code>{{ ef.path }}</code></td>
@@ -635,7 +655,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if ct.quadlet_units %}
   <h3>Quadlet units</h3>
-  <table><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
     {%- for u in ct.quadlet_units %}
     <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
@@ -644,7 +664,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td><code>{{ u.path }}</code></td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- if ct.compose_files %}
@@ -654,11 +674,11 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   <label><input type="checkbox" class="include-cb" {{ 'checked' if c.include else '' }}/></label>
   <h4 style="display:inline"><code>{{ c.path }}</code></h4>
   {%- if c.images %}
-  <table><tr><th>Service</th><th>Image</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Service</th><th>Image</th></tr></thead><tbody>
     {%- for img in c.images %}
     <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- else %}
   <p>No image references found.</p>
   {%- endif %}
@@ -668,7 +688,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if ct.running_containers %}
   <h3>Running containers (podman)</h3>
-  <table><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr></thead><tbody>
     {%- for item in containers_data.running %}
     <tr>
       <td><strong>{{ item.name }}</strong></td>
@@ -678,7 +698,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td style="font-size:0.85em">{{ item.net_summary or '' }}</td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- else %}
@@ -693,16 +713,16 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart"] %}
 
   <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
-    <span style="color:var(--muted);font-size:0.9em">Apply strategy to all users:</span>
-    <select id="strategy-apply-all" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
+    <span style="font-size:0.9em">Apply strategy to all users:</span>
+    <select id="strategy-apply-all">
       {%- for s in strategies %}
       <option value="{{ s }}">{{ s }}</option>
       {%- endfor %}
     </select>
-    <button type="button" id="btn-strategy-apply-all" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:0.85em;cursor:pointer">Apply</button>
+    <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all" style="font-size:0.85em">Apply</button>
   </div>
 
-  <table class="data-table">
+  <table class="pf-v6-c-table pf-m-compact">
     <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
     <tbody>
     {%- for u in ug.users %}
@@ -716,7 +736,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td><code>{{ u.home }}</code></td>
       <td><span style="background:{{ cls_color }};color:#fff;padding:2px 8px;border-radius:4px;font-size:0.8em">{{ cls }}</span></td>
       <td>
-        <select class="strategy-select" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
+        <select class="strategy-select">
           {%- for s in strategies %}
           <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
           {%- endfor %}
@@ -726,10 +746,10 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
         {%- set notes = [] %}
         {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
           {%- set _ = notes.append('SSH keys') %}
-          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="authorized_keys found on source but not included in image">SSH KEYS</span>
+          <span style="background:var(--pf-v6-global--warning-color--100, #d29922);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="authorized_keys found on source but not included in image">SSH KEYS</span>
         {%- endif %}
         {%- if cls == 'ambiguous' %}
-          <span style="background:var(--warn);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="Classification uncertain — verify intent">ambiguous</span>
+          <span style="background:var(--pf-v6-global--warning-color--100, #d29922);color:#fff;padding:1px 6px;border-radius:3px;font-size:0.8em" title="Classification uncertain — verify intent">ambiguous</span>
         {%- endif %}
       </td>
     </tr>
@@ -740,15 +760,15 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- if ug.groups %}
   <h3>Groups</h3>
   <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
-    <span style="color:var(--muted);font-size:0.9em">Apply strategy to all groups:</span>
-    <select id="strategy-apply-all-groups" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
+    <span style="font-size:0.9em">Apply strategy to all groups:</span>
+    <select id="strategy-apply-all-groups">
       {%- for s in strategies %}
       <option value="{{ s }}">{{ s }}</option>
       {%- endfor %}
     </select>
-    <button type="button" id="btn-strategy-apply-all-groups" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:0.85em;cursor:pointer">Apply</button>
+    <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all-groups" style="font-size:0.85em">Apply</button>
   </div>
-  <table class="data-table">
+  <table class="pf-v6-c-table pf-m-compact">
     <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
     <tbody>
     {%- for g in ug.groups %}
@@ -757,7 +777,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td>{{ g.name }}</td>
       <td>{{ g.gid }}</td>
       <td>
-        <select class="strategy-select" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-size:0.85em">
+        <select class="strategy-select">
           {%- for s in strategies %}
           <option value="{{ s }}" {{ 'selected' if s == g.strategy else '' }}>{{ s }}</option>
           {%- endfor %}
@@ -790,23 +810,23 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- if local_timers or vendor_timers %}
   <h3>Existing systemd timers</h3>
   {%- if vendor_timers %}
-  <p style="color:var(--muted);font-size:0.9em">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
+  <p style="font-size:0.9em">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
   {%- endif %}
   {%- if local_timers %}
-  <table><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th></tr></thead><tbody>
     {%- for t in local_timers %}
     <tr style="background:rgba(63,185,80,0.1)">
       <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
       <td><code>{{ t.exec_start }}</code></td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
   {%- endif %}
 
   {%- if st.generated_timer_units %}
   <h3>Cron-converted timers</h3>
-  <table><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr></thead><tbody>
     {%- for u in st.generated_timer_units %}
     <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
@@ -815,18 +835,18 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
       <td><code>{{ u.source_path }}</code></td>
     </tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- set rpm_cron_count = st.cron_jobs | selectattr('rpm_owned') | list | length %}
   {%- if st.cron_jobs %}
   <h3>Cron jobs</h3>
   {%- if rpm_cron_count %}
-  <p style="color:var(--muted);font-size:0.9em">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
+  <p style="font-size:0.9em">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
   {%- endif %}
   {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
-  <table>
-    <tr><th></th><th>Path</th><th>Source</th><th>Action</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead>
+    <tr><th></th><th>Path</th><th>Source</th><th>Action</th></tr></thead><tbody>
     {%- for j in st.cron_jobs %}
     {%- if not j.rpm_owned %}
     <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
@@ -837,18 +857,18 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     </tr>
     {%- endif %}
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
   {%- endif %}
 
   {%- if st.at_jobs %}
   <h3>At jobs</h3>
-  <table><tr><th>File</th><th>User</th><th>Command</th></tr>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>File</th><th>User</th><th>Command</th></tr></thead><tbody>
     {%- for a in st.at_jobs %}
     {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
     <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
     {%- endfor %}
-  </table>
+  </tbody></table>
   {%- endif %}
 
   {%- else %}
@@ -866,12 +886,12 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- endif %}
 
   {%- if kb.non_default_modules %}
-  <p style="color:var(--muted);font-size:0.9em">{{ kb.non_default_modules|length }} kernel module(s) were loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.</p>
+  <p style="font-size:0.9em">{{ kb.non_default_modules|length }} kernel module(s) were loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.</p>
   {%- endif %}
 
   {%- if kb.sysctl_overrides %}
   <h3>Non-default sysctl values ({{ kb.sysctl_overrides|length }})</h3>
-  <table class="data-table"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
     {%- for s in kb.sysctl_overrides %}
     <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
       <td><input type="checkbox" class="include-cb" {{ 'checked' if s.include else '' }}/></td>
@@ -923,7 +943,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
   {%- set unchanged_count = (se.boolean_overrides|length) - (non_default|length) %}
   {%- if non_default %}
   <h3>Non-default booleans ({{ non_default|length }})</h3>
-  <table class="data-table"><thead><tr><th>Boolean</th><th>Current</th><th>Default</th><th>Description</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Boolean</th><th>Current</th><th>Default</th><th>Description</th></tr></thead><tbody>
     {%- for b in non_default %}
     {%- set cur = b.get('current', '?') %}
     <tr>
@@ -939,7 +959,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if se.port_labels %}
   <h3>Custom port labels ({{ se.port_labels|length }})</h3>
-  <table class="data-table"><thead><tr><th>Protocol</th><th>Port</th><th>SELinux type</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Protocol</th><th>Port</th><th>SELinux type</th></tr></thead><tbody>
     {%- for pl in se.port_labels %}
     <tr>
       <td><code>{{ pl.protocol }}</code></td>
@@ -962,7 +982,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {% call section("secrets", "Secrets") %}
   {%- if secrets_data %}
   <p><strong>{{ secrets_data|length }} value(s) redacted</strong> across <strong>{{ secrets_file_count }} file(s)</strong>.</p>
-  <table class="data-table">
+  <table class="pf-v6-c-table pf-m-compact">
     <thead><tr><th>File Path</th><th>Pattern</th><th>Line</th><th>Remediation</th></tr></thead>
     <tbody>
     {%- for r in secrets_data %}
@@ -976,7 +996,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
     </tbody>
   </table>
   {%- else %}
-  <p style="color:var(--ok)">No secrets detected.</p>
+  <p style="color:var(--pf-v6-global--success-color--100, #3fb950)">No secrets detected.</p>
   {%- endif %}
 {% endcall %}
 
@@ -987,7 +1007,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
   {%- if net.connections %}
   <h3>Connections</h3>
-  <table class="data-table"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
     {%- for c in net.connections %}
     <tr>
       <td><code>{{ c.name }}</code></td>
@@ -999,7 +1019,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
         {%- elif c.method == 'dhcp' -%}
         <span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>
         {%- else -%}
-        <span style="color:var(--muted)">Review</span>
+        <span>Review</span>
         {%- endif -%}
       </td>
     </tr>
@@ -1067,7 +1087,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 {# ── Storage ─────────────────────────────────────────────────────────────── #}
 {% call section("storage", "Storage") %}
   {%- if snapshot.storage and snapshot.storage.fstab_entries %}
-  <table><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
+  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
     {%- for e in snapshot.storage.fstab_entries[:30] %}
     <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
     {%- endfor %}
@@ -1079,7 +1099,11 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
 {# ── Warnings ─────────────────────────────────────────────────────────────── #}
 {% call section("warnings", "Warnings") %}
-<div class="search"><input type="text" id="warn-search" placeholder="Search warnings..."/></div>
+<div class="pf-v6-c-text-input-group" style="margin-bottom:1rem">
+  <div class="pf-v6-c-text-input-group__main">
+    <input type="text" class="pf-v6-c-text-input-group__text-input" id="warn-search" placeholder="Search warnings..."/>
+  </div>
+</div>
 <ul id="warnings-list">
   {%- for w in warnings %}
   {%- set msg = w.message or w.detail or '—' %}
@@ -1097,43 +1121,67 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
 {# ── Containerfile ────────────────────────────────────────────────────────── #}
 <div id="section-containerfile" class="section">
-  <div class="section-heading-row">
-    <h2>Containerfile</h2>
-    <button type="button" class="btn-copy-cf" id="btn-copy-cf">Copy</button>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <div class="pf-v6-c-card__title">
+        <div class="section-heading-row">
+          <h2>Containerfile</h2>
+          <button type="button" class="pf-v6-c-button pf-m-secondary btn-copy-cf" id="btn-copy-cf">Copy</button>
+        </div>
+      </div>
+    </div>
+    <div class="pf-v6-c-card__body">
+      <p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
+      <pre class="containerfile-pre" id="containerfile-pre">{{ containerfile_html|safe }}</pre>
+    </div>
   </div>
-  <p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
-  <pre class="containerfile-pre" id="containerfile-pre">{{ containerfile_html|safe }}</pre>
 </div>
-</div>{# /.container #}
+
+</section>{# /.pf-v6-c-page__main-section #}
+</main>{# /.pf-v6-c-page__main #}
+</div>{# /.pf-v6-c-page #}
 
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
-<div id="exclude-toolbar" style="display:none">
+<div id="exclude-toolbar" class="pf-v6-c-toolbar">
   <span class="toolbar-status" id="toolbar-status-text"></span>
-  <button id="btn-download-snapshot" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
-  <button id="btn-rerender" type="button" class="disabled" title="Start yoinkc-refine to enable live re-render">Re-render</button>
-  <button id="btn-tarball" type="button" class="disabled btn-primary" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
+  <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
+  <button id="btn-rerender" class="pf-v6-c-button pf-m-secondary disabled" type="button" title="Start yoinkc-refine to enable live re-render">Re-render</button>
+  <button id="btn-tarball" class="pf-v6-c-button pf-m-primary disabled" type="button" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
 </div>
-<div id="toast" class="toast"></div>
+<div id="toast" class="pf-v6-c-alert pf-m-danger toast"></div>
 
 {# ══════════════════════════════════════════════════════════════════════════
    JavaScript
+   ─────────────────────────────────────────────────────────────────────────
+   Class name changes from custom CSS to PatternFly 6:
+   - Tab selectors: .tabs button[data-tab] → .pf-v6-c-tabs__link[data-tab]
+   - Tab active state: button.active → li.pf-v6-c-tabs__item.pf-m-current
+   - Theme toggle: data-theme attribute → pf-v6-theme-dark class on <html>
+   - Button primary: .btn-primary → .pf-m-primary
+   All other JS-targeted classes preserved: .section, .visible, .include-cb,
+   .strategy-select, .leaf-cb, .repo-cb, .warning-row, .dismissed,
+   .btn-copy-cf, .copied, tr.excluded, #exclude-toolbar, .helper-active,
+   .toolbar-status, .disabled, .spinner, .toast
    ══════════════════════════════════════════════════════════════════════════ #}
 <script>
 // Apply saved theme immediately so re-rendered pages don't flash
-(function(){ var t = localStorage.getItem('yoinkc-theme'); if (t) document.documentElement.setAttribute('data-theme', t); })();
+(function(){ var t = localStorage.getItem('yoinkc-theme'); if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark'); })();
 var snapshot = {{ snapshot_json|safe }};
 (function(){
   var sections = document.querySelectorAll('.section');
-  var tabs = document.querySelectorAll('.tabs button[data-tab]');
+  var tabLinks = document.querySelectorAll('.pf-v6-c-tabs__link[data-tab]');
   function show(id) {
     if (!id) return;
     sections.forEach(function(s){ s.classList.remove('visible'); });
     var el = document.getElementById('section-' + id);
     if (el) el.classList.add('visible');
-    tabs.forEach(function(t){ t.classList.toggle('active', t.getAttribute('data-tab') === id); });
+    tabLinks.forEach(function(t){
+      var li = t.closest('.pf-v6-c-tabs__item');
+      if (li) li.classList.toggle('pf-m-current', t.getAttribute('data-tab') === id);
+    });
   }
   window.show = show;
-  tabs.forEach(function(t){
+  tabLinks.forEach(function(t){
     t.addEventListener('click', function(){ show(t.getAttribute('data-tab')); });
   });
   show('summary');
@@ -1256,8 +1304,8 @@ var snapshot = {{ snapshot_json|safe }};
 
   function setDirty(isDirty) {
     dirty = isDirty;
-    if (tarballBtn) tarballBtn.classList.toggle('btn-primary', !isDirty);
-    if (rerenderBtn) rerenderBtn.classList.toggle('btn-primary', isDirty);
+    if (tarballBtn) tarballBtn.classList.toggle('pf-m-primary', !isDirty);
+    if (rerenderBtn) rerenderBtn.classList.toggle('pf-m-primary', isDirty);
   }
 
   function showToast(msg, ms) {
@@ -1288,7 +1336,7 @@ var snapshot = {{ snapshot_json|safe }};
       if (rerenderBtn) rerenderBtn.classList.remove('disabled');
       if (downloadSnapshotBtn) downloadSnapshotBtn.classList.remove('disabled');
     } else if (isHelper) {
-      if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--muted)'; }
+      if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--pf-v6-global--Color--200, #8b949e)'; }
       if (rerenderBtn) rerenderBtn.classList.add('disabled');
       if (downloadSnapshotBtn) downloadSnapshotBtn.classList.add('disabled');
     } else {
@@ -1568,14 +1616,19 @@ var snapshot = {{ snapshot_json|safe }};
     var btn = document.getElementById('theme-toggle');
     if (!btn) return;
     function applyTheme(theme) {
-      document.documentElement.setAttribute('data-theme', theme);
+      if (theme === 'dark') {
+        document.documentElement.classList.add('pf-v6-theme-dark');
+      } else {
+        document.documentElement.classList.remove('pf-v6-theme-dark');
+      }
       btn.textContent = theme === 'light' ? '\u263D' : '\u2600';
       btn.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
       localStorage.setItem('yoinkc-theme', theme);
     }
     applyTheme(localStorage.getItem('yoinkc-theme') || 'dark');
     btn.addEventListener('click', function() {
-      applyTheme((document.documentElement.getAttribute('data-theme') || 'dark') === 'dark' ? 'light' : 'dark');
+      var isDark = document.documentElement.classList.contains('pf-v6-theme-dark');
+      applyTheme(isDark ? 'light' : 'dark');
     });
   })();
 
