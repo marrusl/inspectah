@@ -144,7 +144,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 .repo-content-pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
 #exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 2px solid var(--accent); padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
 #exclude-toolbar.visible { display: flex; }
-#exclude-toolbar .exclude-count { font-weight: 600; color: var(--warn); flex: 1; }
+#exclude-toolbar .toolbar-status { font-weight: 600; color: var(--warn); flex: 1; }
 #exclude-toolbar button { padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; font-size: 0.9rem; font-weight: 500; }
 #btn-download-snapshot { background: var(--card); color: var(--text); }
 #btn-rerender { background: var(--card); color: var(--text); }
@@ -1084,7 +1084,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
 <div id="exclude-toolbar" style="display:none">
-  <span class="exclude-count"><span id="exclude-count-num">0</span> item(s) excluded</span>
+  <span class="toolbar-status" id="toolbar-status-text"></span>
   <button id="btn-download-snapshot" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   <button id="btn-rerender" type="button" class="disabled" title="Start yoinkc-refine to enable live re-render">Re-render</button>
   <button id="btn-tarball" type="button" class="disabled btn-primary" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
@@ -1176,7 +1176,7 @@ var snapshot = {{ snapshot_json|safe }};
 
   // --- Interactive item exclusion ---
   var toolbar = document.getElementById('exclude-toolbar');
-  var countEl = document.getElementById('exclude-count-num');
+  var statusTextEl = document.getElementById('toolbar-status-text');
   var toast = document.getElementById('toast');
   var rerenderBtn = document.getElementById('btn-rerender');
   var tarballBtn = document.getElementById('btn-tarball');
@@ -1242,10 +1242,22 @@ var snapshot = {{ snapshot_json|safe }};
     setTimeout(function(){ toast.classList.remove('visible'); }, ms || 4000);
   }
 
-  function updateExcludeCount() {
+  function updateToolbar() {
     var n = document.querySelectorAll('.include-cb:not(:checked)').length;
-    if (countEl) countEl.textContent = n;
-    if (toolbar) toolbar.classList.toggle('visible', n > 0);
+    var strategyChanges = 0;
+    document.querySelectorAll('.strategy-select').forEach(function(sel) {
+      var tr = sel.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      if (sel.value !== strategyBaseline[key]) strategyChanges++;
+    });
+    var parts = [];
+    if (n > 0) parts.push(n + ' item(s) excluded');
+    if (strategyChanges > 0) parts.push(strategyChanges + ' strategy change(s)');
+    var changed = !isSnapshotClean();
+    if (parts.length === 0 && changed) parts.push('Snapshot modified');
+    if (statusTextEl) statusTextEl.textContent = parts.join(', ');
+    if (toolbar) toolbar.classList.toggle('visible', n > 0 || changed);
   }
 
   function resolveSnapshotRef(section, list) {
@@ -1269,7 +1281,7 @@ var snapshot = {{ snapshot_json|safe }};
         }
       }
       tr.classList.toggle('excluded', !this.checked);
-      updateExcludeCount();
+      updateToolbar();
       setDirty(!isSnapshotClean());
     });
   });
@@ -1289,6 +1301,7 @@ var snapshot = {{ snapshot_json|safe }};
         }
       }
       setDirty(!isSnapshotClean());
+      updateToolbar();
     });
   });
 
@@ -1307,6 +1320,7 @@ var snapshot = {{ snapshot_json|safe }};
         if (!isNaN(idx) && arr[idx] !== undefined) arr[idx].strategy = val;
       });
       setDirty(!isSnapshotClean());
+      updateToolbar();
     });
   }
   applyStrategyToAll('btn-strategy-apply-all', 'strategy-apply-all', 'users');
@@ -1416,7 +1430,7 @@ var snapshot = {{ snapshot_json|safe }};
       });
       recomputeAutoDeps();
       updatePkgBanner();
-      updateExcludeCount();
+      updateToolbar();
       setDirty(!isSnapshotClean());
     });
   });
@@ -1500,7 +1514,7 @@ var snapshot = {{ snapshot_json|safe }};
   }
 
   checkHelperAvailable(0);
-  updateExcludeCount();
+  updateToolbar();
 
   // --- Theme toggle ---
   (function() {
