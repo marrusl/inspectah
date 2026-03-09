@@ -7,6 +7,7 @@ from typing import List, Optional, Set
 from ..executor import Executor
 from ..schema import SelinuxSection, SelinuxPortLabel
 from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, make_warning
+from .config import _is_excluded_unowned
 
 
 def _debug(msg: str) -> None:
@@ -250,6 +251,8 @@ def run(
                 rel = str(f.relative_to(host_root))
                 abs_path = "/" + rel
                 if rpm_owned_paths is not None and abs_path in rpm_owned_paths:
+                    continue
+                if _is_excluded_unowned(abs_path):
                     continue
                 section.pam_configs.append(rel)
 
