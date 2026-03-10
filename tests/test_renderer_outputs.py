@@ -224,11 +224,11 @@ class TestHtmlReport:
             assert f'id="section-{section}"' in html, f"Missing section: {section}"
 
     def test_warnings_panel_populated(self, outputs_with_baseline):
-        """If there are warnings, the warning panel should appear."""
+        """If there are warnings, the warnings tab alert-group should appear."""
         html = self._html(outputs_with_baseline)
         snapshot = outputs_with_baseline["snapshot"]
         if snapshot.warnings:
-            assert "warning-panel" in html
+            assert "warnings-list" in html
 
     def test_redacted_tokens_in_report(self, outputs_with_baseline):
         """Redacted secrets should appear in the report as REDACTED_... tokens."""

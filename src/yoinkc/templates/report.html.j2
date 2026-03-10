@@ -94,12 +94,8 @@ body { padding-bottom: 70px; }
 .repo-badge.rpmfusion  { background: #f0883e33; color: #f0883e; }
 .repo-badge.base      { color: #8b949e; }
 
-/* Warning panel */
-.warning-panel.collapsed { display: none; }
-.warning-row { display: flex; align-items: flex-start; gap: 0.5rem; padding: 0.4rem 0; border-bottom: 1px solid rgba(210,153,34,0.15); }
+/* Warning dismiss */
 .warning-row.dismissed { display: none; }
-.warning-row:last-child { border-bottom: none; }
-.warning-row .warning-msg { flex: 1; font-size: 0.9rem; }
 #warnings-list { max-height: 400px; overflow-y: auto; }
 
 /* Readiness panel */
@@ -136,7 +132,6 @@ body { padding-bottom: 70px; }
 .containerfile-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
 .section-heading-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
 .section-heading-row h2 { margin: 0; }
-.btn-copy-cf.copied { background: var(--pf-v6-global--success-color--100, #3fb950) !important; border-color: var(--pf-v6-global--success-color--100, #3fb950) !important; color: #fff !important; }
 
 /* Repo content preview */
 .repo-content-pre { border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
@@ -161,7 +156,7 @@ tr.excluded td:first-child { text-decoration: none; opacity: 1; }
 div.excluded { text-decoration: line-through; opacity: 0.45; }
 
 /* Include checkbox – hidden until yoinkc-refine helper is active */
-.include-cb { cursor: pointer; display: none; accent-color: var(--pf-t--global--color--brand--default, #06c); }
+.pf-v6-c-check.pf-m-standalone.include-cb-wrap { display: none; }
 
 /* Details/summary disclosure styling */
 details > summary { cursor: pointer; color: var(--pf-v6-global--link--Color, #58a6ff); font-size: 0.85em; padding: 0.25rem 0; list-style: none; }
@@ -192,7 +187,6 @@ details[open] > summary { margin-bottom: 0.25rem; }
 #exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
 #exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
 #exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
-#btn-rerender.disabled, #btn-tarball.disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* Toast */
 .toast { position: fixed; top: 1rem; right: 1rem; z-index: 2000; display: none; }
@@ -229,7 +223,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
         <ul class="pf-v6-c-nav__list">
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link pf-m-current" data-tab="summary" href="#">Summary</a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="audit" href="#">Audit report</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="warnings" href="#">Warnings</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="warnings" href="#">Warnings <span class="pf-v6-c-badge pf-m-unread" id="nav-warning-badge">{{ warnings|length }}</span></a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="output_files" href="#">File browser</a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containerfile" href="#">Containerfile</a></li>
         </ul>
@@ -285,29 +279,6 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <strong>Warnings:</strong> <span id="banner-warning-count">{{ warnings|length }}</span>
 </div>
 
-{# ── Warning panel ──────────────────────────────────────────────────────── #}
-{% if warnings %}
-<div id="warning-banner" class="pf-v6-c-alert pf-m-warning pf-m-inline warning-panel" data-overflow-count="{{ warnings_overflow }}">
-  <div class="pf-v6-c-alert__title">
-    <h3>Warnings &amp; items to review (<span id="warning-banner-count">{{ warnings|length }}</span>)</h3>
-  </div>
-  <div class="pf-v6-c-alert__action">
-    <button type="button" class="pf-v6-c-button pf-m-plain" id="warning-dismiss-all" aria-label="Dismiss All">Dismiss All</button>
-  </div>
-  <div class="pf-v6-c-alert__description" id="warning-rows">
-    {%- for w in warnings_panel %}
-    <div class="warning-row" data-warning-idx="{{ loop.index0 }}">
-      <span class="pf-v6-c-label badge {{ w.severity|default('warning') }}">{{ w.severity|default('warning') }}</span>
-      <span class="warning-msg">{{ (w.message or w.detail or '—') }}</span>
-      <button type="button" class="pf-v6-c-button pf-m-plain warning-row-dismiss" aria-label="Dismiss">&times;</button>
-    </div>
-    {%- endfor %}
-    {%- if warnings_overflow > 0 %}
-    <div class="warning-row" style="font-size:0.85rem;justify-content:center;">… and {{ warnings_overflow }} more in the Warnings tab</div>
-    {%- endif %}
-  </div>
-</div>
-{% endif %}
 
 
 {# ══════════════════════════════════════════════════════════════════════════
@@ -387,7 +358,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
     <tbody>
     {%- for rf in snapshot.rpm.repo_files %}
     <tr{% if not rf.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="repo_files" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb repo-cb" {{ 'checked' if rf.include else '' }}{{ ' disabled title="Default distribution repository — cannot be excluded"' if rf.is_default_repo else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb repo-cb" {{ 'checked' if rf.include else '' }}{{ ' disabled title="Default distribution repository — cannot be excluded"' if rf.is_default_repo else '' }}/></span></td>
       <td><code>{{ rf.path }}</code></td>
       <td>
         {%- if repo_display[loop.index0].badge %}
@@ -416,7 +387,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
     <tbody>
     {%- for entry in entries %}
     <tr{% if not entry.include %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
-      <td><input type="checkbox" class="include-cb leaf-cb" {{ 'checked' if entry.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if entry.include else '' }}/></span></td>
       <td><strong>{{ entry.name }}</strong></td>
       <td>{{ entry.deps|length }}</td>
       <td>
@@ -449,7 +420,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
       {%- if p.name == lf %}{% set leaf_idx.val = loop.index0 %}{% endif %}
     {%- endfor %}
     <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
-      <td><input type="checkbox" class="include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></span></td>
       <td><strong>{{ lf }}</strong></td>
       <td style="font-size:0.85em">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
       <td>{{ deps|length }}</td>
@@ -492,7 +463,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
       {%- if q.name == p.name %}{% set uidx.val = loop.index0 %}{% endif %}
     {%- endfor %}
     <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ uidx.val }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if p.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if p.include else '' }}/></span></td>
       <td>{{ p.name }}</td>
       <td>{{ p.version }}-{{ p.release }}</td>
       <td>{{ p.arch }}</td>
@@ -505,7 +476,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   {%- else %}
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
-    <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if p.include else '' }}/></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
+    <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if p.include else '' }}/></span></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
     {%- endfor %}
   </tbody></table>
   {%- if snapshot.rpm.packages_added|length > 100 %}
@@ -524,7 +495,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
     {%- for s in snapshot.services.state_changes %}
     {%- if s.action != 'unchanged' %}
-    <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><input type="checkbox" class="include-cb" {{ 'checked' if s.include else '' }}/></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
+    <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
     {%- endif %}
     {%- endfor %}
   </tbody></table>
@@ -537,7 +508,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
     {%- for d in snapshot.services.drop_ins %}
     <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if d.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if d.include else '' }}/></span></td>
       <td>{{ d.unit }}</td>
       <td><code>{{ d.path }}</code></td>
       <td>
@@ -559,7 +530,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
     {%- for item in config_files_rendered %}
     <tr{% if not item.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if item.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if item.include else '' }}/></span></td>
       <td><code>{{ item.path }}</code></td>
       <td>{{ item.kind }}</td>
       <td>{% if item.flags %}<code>{{ item.flags }}</code>{% endif %}</td>
@@ -588,7 +559,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
     {%- set nr_idx = namespace(val=-1) %}
     {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
     <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if i.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
       <td><code>{{ i.path }}</code></td>
       <td><span class="pf-v6-c-label {{ lang_lbl.get(lang, 'lbl-ambiguous') }}">{{ lang }}</span></td>
       <td><span class="pf-v6-c-label {{ 'lbl-static' if i.static else 'lbl-dynamic' }}">{{ linking }}</span></td>
@@ -644,7 +615,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
     {%- set nr_idx = namespace(val=-1) %}
     {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
     <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if i.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
       <td>{{ i.name }}</td>
       <td>{{ i.version }}</td>
       <td><code>{{ i.path }}</code></td>
@@ -694,7 +665,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
     {%- for u in ct.quadlet_units %}
     <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
       <td>{{ u.name }}</td>
       <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
       <td><code>{{ u.path }}</code></td>
@@ -707,7 +678,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <h3>Compose files</h3>
   {%- for c in ct.compose_files %}
   <div{% if not c.include %} style="opacity:0.45;text-decoration:line-through"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
-  <label><input type="checkbox" class="include-cb" {{ 'checked' if c.include else '' }}/></label>
+  <label><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if c.include else '' }}/></span></label>
   <h4 style="display:inline"><code>{{ c.path }}</code></h4>
   {%- if c.images %}
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Service</th><th>Image</th></tr></thead><tbody>
@@ -765,7 +736,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
     {%- set cls = u.classification or '?' %}
     {%- set cls_lbl = 'lbl-service' if cls == 'service' else 'lbl-human' if cls == 'human' else 'lbl-ambiguous' %}
     <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.get('include', true) else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.get('include', true) else '' }}/></span></td>
       <td><strong>{{ u.name }}</strong></td>
       <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
       <td><code>{{ u.shell }}</code></td>
@@ -809,7 +780,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
     <tbody>
     {%- for g in ug.groups %}
     <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if g.get('include', true) else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if g.get('include', true) else '' }}/></span></td>
       <td>{{ g.name }}</td>
       <td>{{ g.gid }}</td>
       <td>
@@ -865,7 +836,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr></thead><tbody>
     {%- for u in st.generated_timer_units %}
     <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if u.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
       <td>{{ u.name }}</td>
       <td><code>{{ u.cron_expr }}</code></td>
       <td><code>{{ u.source_path }}</code></td>
@@ -886,7 +857,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
     {%- for j in st.cron_jobs %}
     {%- if not j.rpm_owned %}
     <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if j.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if j.include else '' }}/></span></td>
       <td><code>{{ j.path }}</code></td>
       <td>{{ j.source }}</td>
       <td>Convert to systemd timer</td>
@@ -930,7 +901,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
     {%- for s in kb.sysctl_overrides %}
     <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
-      <td><input type="checkbox" class="include-cb" {{ 'checked' if s.include else '' }}/></td>
+      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
       <td><code>{{ s.key }}</code></td>
       <td style="color:#d29922;font-weight:bold">{{ s.runtime }}</td>
       <td>{{ s.default or '—' }}</td>
@@ -1140,13 +1111,24 @@ details[open] > summary { margin-bottom: 0.25rem; }
     <input type="text" class="pf-v6-c-text-input-group__text-input" id="warn-search" placeholder="Search warnings..."/>
   </div>
 </div>
-<ul id="warnings-list">
+<div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem">
+  <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" id="warning-dismiss-all">Dismiss All</button>
+</div>
+<div class="pf-v6-c-alert-group" id="warnings-list">
   {%- for w in warnings %}
   {%- set msg = w.message or w.detail or '—' %}
   {%- set detail = w.detail or '' %}
-  <li><strong>{{ msg }}</strong><br/><small>{{ detail }}</small></li>
+  <div class="pf-v6-c-alert pf-m-warning pf-m-inline warning-row" data-warning-idx="{{ loop.index0 }}">
+    <div class="pf-v6-c-alert__title">{{ msg }}</div>
+    {%- if detail and detail != msg %}
+    <div class="pf-v6-c-alert__description">{{ detail }}</div>
+    {%- endif %}
+    <div class="pf-v6-c-alert__action">
+      <button type="button" class="pf-v6-c-button pf-m-plain warning-row-dismiss" aria-label="Dismiss">&times;</button>
+    </div>
+  </div>
   {%- endfor %}
-</ul>
+</div>
 {% endcall %}
 
 {# ── Audit report ─────────────────────────────────────────────────────────── #}
@@ -1162,7 +1144,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
       <div class="pf-v6-c-card__title">
         <div class="section-heading-row">
           <h2>Containerfile</h2>
-          <button type="button" class="pf-v6-c-button pf-m-secondary btn-copy-cf" id="btn-copy-cf">Copy</button>
+          <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small btn-copy-cf" id="btn-copy-cf">Copy</button>
         </div>
       </div>
     </div>
@@ -1181,8 +1163,8 @@ details[open] > summary { margin-bottom: 0.25rem; }
 <div id="exclude-toolbar" class="pf-v6-c-toolbar">
   <span class="toolbar-status" id="toolbar-status-text"></span>
   <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
-  <button id="btn-rerender" class="pf-v6-c-button pf-m-secondary disabled" type="button" title="Start yoinkc-refine to enable live re-render">Re-render</button>
-  <button id="btn-tarball" class="pf-v6-c-button pf-m-primary disabled" type="button" title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
+  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start yoinkc-refine to enable live re-render">Re-render</button>
+  <button id="btn-tarball" class="pf-v6-c-button pf-m-secondary" type="button" disabled title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
 </div>
 <div id="toast" class="pf-v6-c-alert pf-m-danger toast"></div>
 
@@ -1192,11 +1174,11 @@ details[open] > summary { margin-bottom: 0.25rem; }
    Nav selectors: .pf-v6-c-nav__link[data-tab] for sidebar navigation.
    Active state: pf-m-current toggled on the .pf-v6-c-nav__link element.
    Theme toggle: pf-v6-theme-dark class on <html>.
-   Button primary: .pf-m-primary.
+   Button state: disabled HTML attribute for btn-rerender / btn-tarball.
    All other JS-targeted classes preserved: .section, .visible, .include-cb,
-   .strategy-select, .leaf-cb, .repo-cb, .warning-row, .dismissed,
-   .btn-copy-cf, .copied, tr.excluded, #exclude-toolbar, .helper-active,
-   .toolbar-status, .disabled, .spinner, .toast
+   .include-cb-wrap, .strategy-select, .leaf-cb, .repo-cb, .warning-row,
+   .warning-row-dismiss, .dismissed, .btn-copy-cf, tr.excluded,
+   #exclude-toolbar, .helper-active, .toolbar-status, .spinner, .toast
    ══════════════════════════════════════════════════════════════════════════ #}
 <script>
 // Apply saved theme immediately so re-rendered pages don't flash
@@ -1219,52 +1201,46 @@ var snapshot = {{ snapshot_json|safe }};
     link.addEventListener('click', function(e){ e.preventDefault(); show(link.getAttribute('data-tab')); });
   });
   show('summary');
-  var warningBanner = document.getElementById('warning-banner');
+
+  // --- Warning dismiss + badge ---
   var bannerCount = document.getElementById('banner-warning-count');
-  var panelCount = document.getElementById('warning-banner-count');
+  var warningBadge = document.getElementById('nav-warning-badge');
 
-  var overflowCount = parseInt(warningBanner ? warningBanner.getAttribute('data-overflow-count') : '0', 10) || 0;
-
-  function updateWarningCounts() {
-    if (!warningBanner) return;
-    var visibleRows = warningBanner.querySelectorAll('.warning-row[data-warning-idx]:not(.dismissed)');
-    var panelVisible = visibleRows.length;
-    var total = panelVisible + overflowCount;
+  function updateWarningBadge() {
+    var total = document.querySelectorAll('#warnings-list .warning-row:not(.dismissed)').length;
     if (bannerCount) bannerCount.textContent = total;
-    if (panelCount) panelCount.textContent = total;
-    var cardCount = document.getElementById('warnings-card-count');
-    if (cardCount) cardCount.textContent = total;
-    var statusEl = document.getElementById('warnings-card-status');
-    if (statusEl) statusEl.textContent = panelVisible > 0 ? 'Review required' : (overflowCount > 0 ? 'Panel cleared' : 'All dismissed');
-    if (panelVisible === 0) {
-      warningBanner.classList.add('collapsed');
+    if (warningBadge) {
+      warningBadge.textContent = total;
+      warningBadge.classList.toggle('pf-m-unread', total > 0);
+      warningBadge.classList.toggle('pf-m-read', total === 0);
     }
   }
 
-  if (warningBanner) {
-    warningBanner.querySelectorAll('.warning-row-dismiss').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        this.closest('.warning-row').classList.add('dismissed');
-        updateWarningCounts();
-      });
+  document.querySelectorAll('#warnings-list .warning-row-dismiss').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      this.closest('.warning-row').classList.add('dismissed');
+      updateWarningBadge();
     });
-    var dismissAll = document.getElementById('warning-dismiss-all');
-    if (dismissAll) {
-      dismissAll.addEventListener('click', function(){
-        warningBanner.querySelectorAll('.warning-row').forEach(function(row){
-          row.classList.add('dismissed');
-        });
-        updateWarningCounts();
+  });
+  var dismissAll = document.getElementById('warning-dismiss-all');
+  if (dismissAll) {
+    dismissAll.addEventListener('click', function(){
+      document.querySelectorAll('#warnings-list .warning-row').forEach(function(row){
+        row.classList.add('dismissed');
       });
-    }
+      updateWarningBadge();
+    });
   }
+  updateWarningBadge();
+
   var search = document.getElementById('warn-search');
   if (search) {
     search.addEventListener('input', function(){
       var q = (this.value || '').toLowerCase();
-      var listItems = document.querySelectorAll('#warnings-list li');
-      listItems.forEach(function(li){
-        li.style.display = (q === '' || (li.textContent || '').toLowerCase().indexOf(q) >= 0) ? '' : 'none';
+      document.querySelectorAll('#warnings-list .warning-row').forEach(function(row){
+        var isDismissed = row.classList.contains('dismissed');
+        var matches = q === '' || (row.textContent || '').toLowerCase().indexOf(q) >= 0;
+        row.style.display = (!isDismissed && matches) ? '' : 'none';
       });
     });
   }
@@ -1338,8 +1314,8 @@ var snapshot = {{ snapshot_json|safe }};
 
   function setDirty(isDirty) {
     dirty = isDirty;
-    if (tarballBtn) tarballBtn.classList.toggle('pf-m-primary', !isDirty);
-    if (rerenderBtn) rerenderBtn.classList.toggle('pf-m-primary', isDirty);
+    if (tarballBtn) tarballBtn.disabled = isDirty;
+    if (rerenderBtn) rerenderBtn.disabled = !isDirty;
   }
 
   function showToast(msg, ms) {
@@ -1367,12 +1343,12 @@ var snapshot = {{ snapshot_json|safe }};
       if (strategyChanges > 0) parts.push(strategyChanges + ' strategy change(s)');
       if (parts.length === 0) parts.push('Snapshot modified');
       if (statusTextEl) { statusTextEl.textContent = parts.join(', '); statusTextEl.style.color = ''; }
-      if (rerenderBtn) rerenderBtn.classList.remove('disabled');
-      if (downloadSnapshotBtn) downloadSnapshotBtn.classList.remove('disabled');
+      if (rerenderBtn) rerenderBtn.disabled = false;
+      if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = false;
     } else if (isHelper) {
       if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--pf-v6-global--Color--200, #8b949e)'; }
-      if (rerenderBtn) rerenderBtn.classList.add('disabled');
-      if (downloadSnapshotBtn) downloadSnapshotBtn.classList.add('disabled');
+      if (rerenderBtn) rerenderBtn.disabled = true;
+      if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = true;
     } else {
       if (statusTextEl) { statusTextEl.textContent = ''; statusTextEl.style.color = ''; }
     }
@@ -1575,7 +1551,7 @@ var snapshot = {{ snapshot_json|safe }};
     if (!dirty) return;
     var origText = rerenderBtn.innerHTML;
     rerenderBtn.innerHTML = '<span class="spinner"></span>Re-rendering...';
-    rerenderBtn.classList.add('disabled');
+    rerenderBtn.disabled = true;
     fetch(window.location.origin + '/api/re-render', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -1591,7 +1567,7 @@ var snapshot = {{ snapshot_json|safe }};
     }).catch(function(err){
       showToast('Re-render failed: ' + err.message, 5000);
       rerenderBtn.innerHTML = origText;
-      rerenderBtn.classList.remove('disabled');
+      rerenderBtn.disabled = false;
     });
   });
 
@@ -1604,19 +1580,19 @@ var snapshot = {{ snapshot_json|safe }};
   // --- Helper script detection with retry ---
   function enableHelperButtons(reRenderAvailable) {
     helperAvailable = true;
-    document.querySelectorAll('.include-cb').forEach(function(el){ el.style.display = 'inline-block'; });
+    document.querySelectorAll('.include-cb-wrap').forEach(function(el){ el.style.display = 'inline-grid'; });
     if (toolbar) {
       toolbar.style.display = '';
       toolbar.classList.remove('visible');
       toolbar.classList.add('helper-active');
     }
     if (reRenderAvailable !== false) {
-      rerenderBtn.classList.remove('disabled');
+      rerenderBtn.disabled = false;
       rerenderBtn.title = 'Re-render with excluded items removed';
     } else {
       rerenderBtn.title = 'Re-render requires podman or docker — not found on this system';
     }
-    tarballBtn.classList.remove('disabled');
+    tarballBtn.disabled = false;
     tarballBtn.title = 'Download current output as tar.gz';
     updateToolbar();
   }
@@ -1673,8 +1649,13 @@ var snapshot = {{ snapshot_json|safe }};
     var pre = document.getElementById('containerfile-pre');
     function flash() {
       btn.textContent = 'Copied!';
-      btn.classList.add('copied');
-      setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+      btn.classList.remove('pf-m-secondary');
+      btn.classList.add('pf-m-primary');
+      setTimeout(function() {
+        btn.textContent = 'Copy';
+        btn.classList.remove('pf-m-primary');
+        btn.classList.add('pf-m-secondary');
+      }, 1500);
     }
     function fallback(text) {
       var ta = document.createElement('textarea');
