@@ -1,7 +1,8 @@
 """HTML report renderer.
 
-Builds a context dict from the snapshot and delegates all HTML generation
-to templates/report.html.j2 via Jinja2.  No HTML strings live in this file.
+Builds a context dict from the snapshot and delegates to
+templates/report.html.j2 via Jinja2.  A few helpers produce pre-rendered
+Markup for the file-browser tree and audit report.
 """
 
 import re
@@ -56,7 +57,7 @@ def _walk_dir(path: Path, prefix: str, rel_path: str) -> List[dict]:
                         text = raw.decode("utf-8", errors="replace")
                         if len(text) > _MAX_FILE_CONTENT:
                             text = text[:_MAX_FILE_CONTENT] + "\n\n... (truncated)"
-                        content = text.replace("<", "&lt;").replace(">", "&gt;")
+                        content = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 except Exception:
                     content = "(could not read)"
                 out.append({"type": "file", "name": p.name, "rel_path": child_rel,
@@ -69,33 +70,61 @@ def _walk_dir(path: Path, prefix: str, rel_path: str) -> List[dict]:
     return out
 
 
-def _render_tree_html(nodes: List[dict], content_snippets: List[str]) -> str:
-    """Render tree nodes to HTML; append file content divs to content_snippets."""
+_TOGGLE_ICON_SVG = (
+    '<span class="pf-v6-c-tree-view__node-toggle-icon">'
+    '<svg aria-hidden="true" fill="currentColor" height="1em" width="1em" viewBox="0 0 256 512">'
+    '<path d="M224.3 273l-136 136c-9.4 9.4-24.6 9.4-33.9 0l-22.6-22.6c-9.4-9.4-9.4-24.6 0-33.9l96.4-96.4-96.4-96.4c-9.4-9.4-9.4-24.6 0-33.9L54.3 103c9.4-9.4 24.6-9.4 33.9 0l136 136c9.5 9.4 9.5 24.6.1 34z"/>'
+    '</svg></span>'
+)
+
+
+def _render_tree_items(nodes: List[dict], content_snippets: List[str]) -> str:
+    """Render tree nodes as PF6 tree-view list items."""
     parts: List[str] = []
     for n in nodes:
+        name_esc = (n.get("name", "")).replace("&", "&amp;").replace("<", "&lt;")
         if n.get("type") == "dir":
-            ch_html = _render_tree_html(n.get("children", []), content_snippets)
+            ch_html = _render_tree_items(n.get("children", []), content_snippets)
             parts.append(
-                '<details class="tree-dir" open><summary class="tree-dir-summary">'
-                + (n.get("name", "")).replace("&", "&amp;").replace("<", "&lt;")
-                + "</summary><ul class=\"tree-children\">"
-                + ch_html
-                + "</ul></details>"
+                '<li class="pf-v6-c-tree-view__list-item pf-m-expanded" role="treeitem" aria-expanded="true">'
+                '<div class="pf-v6-c-tree-view__content">'
+                '<button class="pf-v6-c-tree-view__node" type="button">'
+                '<div class="pf-v6-c-tree-view__node-container">'
+                f'<span class="pf-v6-c-tree-view__node-toggle">{_TOGGLE_ICON_SVG}</span>'
+                '<span class="pf-v6-c-tree-view__node-icon">\U0001F4C1</span>'
+                f'<span class="pf-v6-c-tree-view__node-text">{name_esc}</span>'
+                '</div></button></div>'
+                f'<ul class="pf-v6-c-tree-view__list" role="group">{ch_html}</ul>'
+                '</li>'
             )
         else:
             cid = n.get("content_id", "")
             content = n.get("content", "")
             path_attr = (n.get("rel_path", "")).replace('"', "&quot;")
             content_snippets.append(
-                f'<div id="{cid}" class="file-content-hidden">'
-                f'<pre class="file-content-pre">{content}</pre></div>'
+                f'<div id="{cid}" class="file-content-hidden">{content}</div>'
             )
             parts.append(
-                f'<li><button type="button" class="file-entry"'
+                '<li class="pf-v6-c-tree-view__list-item" role="treeitem">'
+                '<div class="pf-v6-c-tree-view__content">'
+                f'<button class="pf-v6-c-tree-view__node file-entry" type="button"'
                 f' data-content-id="{cid}" data-path="{path_attr}">'
-                f'{(n.get("name", "")).replace("&", "&amp;").replace("<", "&lt;")}</button></li>'
+                '<div class="pf-v6-c-tree-view__node-container">'
+                '<span class="pf-v6-c-tree-view__node-icon">\U0001F4C4</span>'
+                f'<span class="pf-v6-c-tree-view__node-text">{name_esc}</span>'
+                '</div></button></div></li>'
             )
     return "\n".join(parts)
+
+
+def _render_tree_html(nodes: List[dict], content_snippets: List[str]) -> str:
+    """Render tree nodes as a complete PF6 tree-view component."""
+    items = _render_tree_items(nodes, content_snippets)
+    return (
+        '<div class="pf-v6-c-tree-view">'
+        f'<ul class="pf-v6-c-tree-view__list" role="tree" aria-label="File browser">{items}</ul>'
+        '</div>'
+    )
 
 
 # ---------------------------------------------------------------------------

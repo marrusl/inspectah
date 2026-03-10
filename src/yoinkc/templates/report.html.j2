@@ -140,17 +140,10 @@ body { padding-bottom: 70px; }
 .repo-content-pre { border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
 
 /* File browser */
-.file-browser-layout { display: flex; gap: 1rem; margin-top: 1rem; flex-wrap: wrap; }
-.file-tree-panel { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; border-radius: 6px; padding: 0.75rem; }
-.file-tree-root { padding: 0; }
-.file-tree-root > details { margin-bottom: 0.25rem; }
-.file-tree-panel ul { list-style: none; padding-left: 1rem; margin: 0.25rem 0; }
-.file-tree-panel .tree-dir summary { cursor: pointer; padding: 0.2rem 0; }
-.file-tree-panel .file-entry { background: none; border: none; color: var(--pf-v6-global--link--Color, #58a6ff); cursor: pointer; padding: 0.2rem 0; text-align: left; font-size: 0.9rem; }
-.file-tree-panel .file-entry:hover { text-decoration: underline; }
-.file-viewer-panel { flex: 1 1 400px; min-height: 200px; border-radius: 6px; padding: 1rem; overflow: auto; }
-.file-viewer-panel .file-path { font-size: 0.85rem; margin-bottom: 0.5rem; }
-.file-viewer-panel .file-content-pre { max-height: 65vh; margin: 0; }
+.fb-tree { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; }
+.fb-tree .pf-v6-c-tree-view__node-icon { margin-right: 0.25rem; }
+.fb-viewer { flex: 1 1 400px; min-height: 200px; }
+.fb-viewer .pf-v6-c-code-block__pre { max-height: 65vh; overflow: auto; }
 .file-content-hidden { display: none; }
 
 /* Excluded rows */
@@ -329,11 +322,15 @@ details[open] > summary { margin-bottom: 0.25rem; }
 {# ── File browser ─────────────────────────────────────────────────────────── #}
 {% call section("output_files", "File browser") %}
 <p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
-<div class="file-browser-layout">
-  <div class="file-tree-panel"><div class="file-tree-root">{{ tree_html|safe }}</div></div>
-  <div class="file-viewer-panel">
-    <div class="file-path" id="file-viewer-path">Click a file</div>
-    <div id="file-viewer-content"></div>
+<div class="pf-v6-l-flex pf-m-nowrap" style="gap:1rem;margin-top:1rem">
+  <div class="fb-tree">{{ tree_html|safe }}</div>
+  <div class="fb-viewer">
+    <div class="pf-v6-c-code-block">
+      <div class="pf-v6-c-code-block__header"><span id="file-viewer-path">Click a file</span></div>
+      <div class="pf-v6-c-code-block__content">
+        <pre class="pf-v6-c-code-block__pre"><code class="pf-v6-c-code-block__code" id="file-viewer-content"></code></pre>
+      </div>
+    </div>
   </div>
 </div>
 {{ file_content_snippets_html|safe }}
@@ -1248,6 +1245,14 @@ var snapshot = {{ snapshot_json|safe }};
       });
     });
   }
+  document.querySelectorAll('.pf-v6-c-tree-view__node:not(.file-entry)').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var li = this.closest('.pf-v6-c-tree-view__list-item');
+      if (!li) return;
+      var expanded = li.classList.toggle('pf-m-expanded');
+      li.setAttribute('aria-expanded', expanded);
+    });
+  });
   document.querySelectorAll('.file-entry').forEach(function(btn){
     btn.addEventListener('click', function(){
       var id = this.getAttribute('data-content-id');
@@ -1257,6 +1262,8 @@ var snapshot = {{ snapshot_json|safe }};
       var src = id ? document.getElementById(id) : null;
       if (pathEl) pathEl.textContent = path || 'Click a file';
       if (contentEl) contentEl.innerHTML = src ? src.innerHTML : '';
+      document.querySelectorAll('.file-entry.pf-m-current').forEach(function(n){ n.classList.remove('pf-m-current'); });
+      this.classList.add('pf-m-current');
     });
   });
 
