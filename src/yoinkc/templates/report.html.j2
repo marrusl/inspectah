@@ -154,6 +154,12 @@ div.excluded { text-decoration: line-through; opacity: 0.45; }
 /* Include checkbox – hidden until yoinkc-refine helper is active */
 .pf-v6-c-check.pf-m-standalone.include-cb-wrap { display: none; }
 
+/* Gap between stacked inner cards inside a card body */
+.pf-v6-c-card__body > .pf-v6-c-card + .pf-v6-c-card { margin-top: var(--pf-v6-global--spacer--md, 1rem); }
+
+/* Checkbox cell right-padding so the checkbox doesn't crowd adjacent content */
+td:has(> .include-cb-wrap) { --pf-v6-c-table--cell--PaddingRight: var(--pf-v6-global--spacer--sm, 0.5rem); }
+
 /* Details/summary disclosure styling */
 details > summary { cursor: pointer; color: var(--pf-v6-global--link--Color, #58a6ff); font-size: 0.85em; padding: 0.25rem 0; list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
@@ -964,12 +970,18 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set kb = snapshot.kernel_boot %}
   {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf or kb.tuned_active or kb.tuned_custom_profiles) %}
 
-  {%- if kb.cmdline %}
-  <p><strong>cmdline:</strong> <code>{{ kb.cmdline[:300] }}</code></p>
-  {%- endif %}
-
-  {%- if kb.non_default_modules %}
-  <p style="font-size:0.9em">{{ kb.non_default_modules|length }} kernel module(s) were loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.</p>
+  {%- if kb.cmdline or kb.non_default_modules %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Kernel Command Line</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if kb.cmdline %}
+    <div class="pf-v6-c-code-block"><div class="pf-v6-c-code-block__content"><pre class="pf-v6-c-code-block__pre"><code class="pf-v6-c-code-block__code">{{ kb.cmdline[:300] }}</code></pre></div></div>
+    {%- endif %}
+    {%- if kb.non_default_modules %}
+    <p>{{ kb.non_default_modules|length }} kernel module(s) loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.</p>
+    {%- endif %}
+    </div>
+  </div>
   {%- endif %}
 
   {%- if kb.sysctl_overrides %}
