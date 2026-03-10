@@ -494,36 +494,45 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
 {# ── Services ────────────────────────────────────────────────────────────── #}
 {% call section("services", "Services") %}
-  {%- if snapshot.services and snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list %}
-  <table class="pf-v6-c-table"><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
-    {%- for s in snapshot.services.state_changes %}
-    {%- if s.action != 'unchanged' %}
-    <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Service State Changes</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if snapshot.services and snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list %}
+    <table class="pf-v6-c-table"><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
+      {%- for s in snapshot.services.state_changes %}
+      {%- if s.action != 'unchanged' %}
+      <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
+      {%- endif %}
+      {%- endfor %}
+    </tbody></table>
+    {%- else %}
+    <p>No service changes.</p>
     {%- endif %}
-    {%- endfor %}
-  </tbody></table>
-  {%- else %}
-  <p>No service changes.</p>
-  {%- endif %}
+    </div>
+  </div>
 
   {%- if snapshot.services and snapshot.services.drop_ins %}
-  <h3>Systemd drop-in overrides ({{ snapshot.services.drop_ins|length }})</h3>
-  <table class="pf-v6-c-table"><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
-    {%- for d in snapshot.services.drop_ins %}
-    <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if d.include else '' }}/></span></td>
-      <td>{{ d.unit }}</td>
-      <td><code>{{ d.path }}</code></td>
-      <td>
-        {%- if d.content.strip() %}
-        <details><summary>show</summary>
-          <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ d.content }}</pre>
-        </details>
-        {%- endif %}
-      </td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Drop-in Overrides ({{ snapshot.services.drop_ins|length }})</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
+      {%- for d in snapshot.services.drop_ins %}
+      <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if d.include else '' }}/></span></td>
+        <td>{{ d.unit }}</td>
+        <td><code>{{ d.path }}</code></td>
+        <td>
+          {%- if d.content.strip() %}
+          <details><summary>show</summary>
+            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ d.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 {% endcall %}
 
@@ -553,104 +562,128 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set nd = non_rpm_data %}
 
   {%- if nd.elf %}
-  <h3>Compiled binaries</h3>
-  <table class="pf-v6-c-table"><thead><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr></thead><tbody>
-    {%- for i in nd.elf %}
-    {%- set lang = i.lang %}
-    {%- set lang_lbl = {'go': 'lbl-go', 'rust': 'lbl-rust', 'c/c++': 'lbl-c-cpp'} %}
-    {%- set linking = 'static' if i.static else 'dynamic' %}
-    {%- set nr_idx = namespace(val=-1) %}
-    {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
-    <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
-      <td><code>{{ i.path }}</code></td>
-      <td><span class="pf-v6-c-label {{ lang_lbl.get(lang, 'lbl-ambiguous') }}">{{ lang }}</span></td>
-      <td><span class="pf-v6-c-label {{ 'lbl-static' if i.static else 'lbl-dynamic' }}">{{ linking }}</span></td>
-      <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compiled Binaries</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr></thead><tbody>
+      {%- for i in nd.elf %}
+      {%- set lang = i.lang %}
+      {%- set lang_lbl = {'go': 'lbl-go', 'rust': 'lbl-rust', 'c/c++': 'lbl-c-cpp'} %}
+      {%- set linking = 'static' if i.static else 'dynamic' %}
+      {%- set nr_idx = namespace(val=-1) %}
+      {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
+      <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
+        <td><code>{{ i.path }}</code></td>
+        <td><span class="pf-v6-c-label {{ lang_lbl.get(lang, 'lbl-ambiguous') }}">{{ lang }}</span></td>
+        <td><span class="pf-v6-c-label {{ 'lbl-static' if i.static else 'lbl-dynamic' }}">{{ linking }}</span></td>
+        <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if nd.venv %}
-  <h3>Python virtual environments</h3>
-  {%- for v in nd.venv %}
-  {%- set ssp = v.system_site_packages %}
-  <h4><code>{{ v.path }}</code>
-    {%- if ssp %} <span class="pf-v6-c-label lbl-ssp">system-site-packages</span>
-    {%- else %} <span class="pf-v6-c-label lbl-isolated">isolated</span>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Python Virtual Environments</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- for v in nd.venv %}
+    {%- set ssp = v.system_site_packages %}
+    <h4><code>{{ v.path }}</code>
+      {%- if ssp %} <span class="pf-v6-c-label lbl-ssp">system-site-packages</span>
+      {%- else %} <span class="pf-v6-c-label lbl-isolated">isolated</span>
+      {%- endif %}
+    </h4>
+    {%- set pkgs = v.packages %}
+    {%- if pkgs %}
+    <table class="pf-v6-c-table"><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>
+      {%- for p in pkgs[:20] %}
+      <tr><td>{{ p.name }}</td><td>{{ p.version }}</td></tr>
+      {%- endfor %}
+      {%- if pkgs|length > 20 %}
+      <tr><td colspan="2"><em>+{{ pkgs|length - 20 }} more</em></td></tr>
+      {%- endif %}
+    </tbody></table>
+    {%- else %}
+    <p>No packages found.</p>
     {%- endif %}
-  </h4>
-  {%- set pkgs = v.packages %}
-  {%- if pkgs %}
-  <table class="pf-v6-c-table"><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>
-    {%- for p in pkgs[:20] %}
-    <tr><td>{{ p.name }}</td><td>{{ p.version }}</td></tr>
     {%- endfor %}
-    {%- if pkgs|length > 20 %}
-    <tr><td colspan="2"><em>+{{ pkgs|length - 20 }} more</em></td></tr>
-    {%- endif %}
-  </tbody></table>
-  {%- else %}
-  <p>No packages found.</p>
-  {%- endif %}
-  {%- endfor %}
+    </div>
+  </div>
   {%- endif %}
 
   {%- if nd.git %}
-  <h3>Git-managed directories</h3>
-  <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr></thead><tbody>
-    {%- for i in nd.git %}
-    <tr>
-      <td><code>{{ i.path }}</code></td>
-      <td><code>{{ i.git_remote }}</code></td>
-      <td>{{ i.git_branch }}</td>
-      <td><code>{{ i.git_commit[:12] }}</code></td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Git Repositories</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr></thead><tbody>
+      {%- for i in nd.git %}
+      <tr>
+        <td><code>{{ i.path }}</code></td>
+        <td><code>{{ i.git_remote }}</code></td>
+        <td>{{ i.git_branch }}</td>
+        <td><code>{{ i.git_commit[:12] }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if nd.pip %}
-  <h3>System pip packages</h3>
-  <table class="pf-v6-c-table"><thead><tr><th></th><th>Package</th><th>Version</th><th>Path</th></tr></thead><tbody>
-    {%- for i in nd.pip[:20] %}
-    {%- set nr_idx = namespace(val=-1) %}
-    {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
-    <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
-      <td>{{ i.name }}</td>
-      <td>{{ i.version }}</td>
-      <td><code>{{ i.path }}</code></td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>System Pip Packages</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th></th><th>Package</th><th>Version</th><th>Path</th></tr></thead><tbody>
+      {%- for i in nd.pip[:20] %}
+      {%- set nr_idx = namespace(val=-1) %}
+      {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
+      <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
+        <td>{{ i.name }}</td>
+        <td>{{ i.version }}</td>
+        <td><code>{{ i.path }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if nd.other %}
-  <h3>Other non-RPM items</h3>
-  <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Confidence</th><th>Method</th></tr></thead><tbody>
-    {%- for i in nd.other[:20] %}
-    <tr>
-      <td><code>{{ i.path or i.name }}</code></td>
-      <td>{{ i.confidence }}</td>
-      <td>{{ i.method }}</td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Other Items</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Confidence</th><th>Method</th></tr></thead><tbody>
+      {%- for i in nd.other[:20] %}
+      <tr>
+        <td><code>{{ i.path or i.name }}</code></td>
+        <td>{{ i.confidence }}</td>
+        <td>{{ i.method }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if nr and nr.env_files %}
-  <h3>Dotenv / secret files ({{ nr.env_files|length }})</h3>
-  <p>These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
-  <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Status</th></tr></thead><tbody>
-    {%- for ef in nr.env_files %}
-    <tr>
-      <td><code>{{ ef.path }}</code></td>
-      <td>captured &amp; redacted</td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Dotenv / Secret Files</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <p>These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
+    <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Status</th></tr></thead><tbody>
+      {%- for ef in nr.env_files %}
+      <tr>
+        <td><code>{{ ef.path }}</code></td>
+        <td>captured &amp; redacted</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- else %}
@@ -664,51 +697,63 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- if ct and (ct.quadlet_units or ct.compose_files or ct.running_containers) %}
 
   {%- if ct.quadlet_units %}
-  <h3>Quadlet units</h3>
-  <table class="pf-v6-c-table"><thead><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
-    {%- for u in ct.quadlet_units %}
-    <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
-      <td>{{ u.name }}</td>
-      <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
-      <td><code>{{ u.path }}</code></td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Quadlet Units</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
+      {%- for u in ct.quadlet_units %}
+      <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
+        <td>{{ u.name }}</td>
+        <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
+        <td><code>{{ u.path }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if ct.compose_files %}
-  <h3>Compose files</h3>
-  {%- for c in ct.compose_files %}
-  <div{% if not c.include %} style="opacity:0.45;text-decoration:line-through"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
-  <label><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if c.include else '' }}/></span></label>
-  <h4 style="display:inline"><code>{{ c.path }}</code></h4>
-  {%- if c.images %}
-  <table class="pf-v6-c-table"><thead><tr><th>Service</th><th>Image</th></tr></thead><tbody>
-    {%- for img in c.images %}
-    <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compose Files</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- for c in ct.compose_files %}
+    <div{% if not c.include %} style="opacity:0.45;text-decoration:line-through"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
+    <label><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if c.include else '' }}/></span></label>
+    <h4 style="display:inline"><code>{{ c.path }}</code></h4>
+    {%- if c.images %}
+    <table class="pf-v6-c-table"><thead><tr><th>Service</th><th>Image</th></tr></thead><tbody>
+      {%- for img in c.images %}
+      <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- else %}
+    <p>No image references found.</p>
+    {%- endif %}
+    </div>
     {%- endfor %}
-  </tbody></table>
-  {%- else %}
-  <p>No image references found.</p>
-  {%- endif %}
+    </div>
   </div>
-  {%- endfor %}
   {%- endif %}
 
   {%- if ct.running_containers %}
-  <h3>Running containers (podman)</h3>
-  <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr></thead><tbody>
-    {%- for item in containers_data.running %}
-    <tr>
-      <td><strong>{{ item.name }}</strong></td>
-      <td><code>{{ item.image }}</code></td>
-      <td>{{ item.status }}</td>
-      <td style="font-size:0.85em">{{ item.mount_summary|safe }}</td>
-      <td style="font-size:0.85em">{{ item.net_summary or '' }}</td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Running Containers</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr></thead><tbody>
+      {%- for item in containers_data.running %}
+      <tr>
+        <td><strong>{{ item.name }}</strong></td>
+        <td><code>{{ item.image }}</code></td>
+        <td>{{ item.status }}</td>
+        <td style="font-size:0.85em">{{ item.mount_summary|safe }}</td>
+        <td style="font-size:0.85em">{{ item.net_summary or '' }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- else %}
@@ -722,82 +767,94 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set ug = snapshot.users_groups %}
   {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart"] %}
 
-  <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
-    <span style="font-size:0.9em">Apply strategy to all users:</span>
-    <span class="pf-v6-c-form-control"><select id="strategy-apply-all">
-      {%- for s in strategies %}
-      <option value="{{ s }}">{{ s }}</option>
-      {%- endfor %}
-    </select></span>
-    <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all" style="font-size:0.85em">Apply</button>
-  </div>
-
-  <table class="pf-v6-c-table">
-    <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
-    <tbody>
-    {%- for u in ug.users %}
-    {%- set cls = u.classification or '?' %}
-    {%- set cls_lbl = 'lbl-service' if cls == 'service' else 'lbl-human' if cls == 'human' else 'lbl-ambiguous' %}
-    <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.get('include', true) else '' }}/></span></td>
-      <td><strong>{{ u.name }}</strong></td>
-      <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
-      <td><code>{{ u.shell }}</code></td>
-      <td><code>{{ u.home }}</code></td>
-      <td><span class="pf-v6-c-label {{ cls_lbl }}">{{ cls }}</span></td>
-      <td>
-        <span class="pf-v6-c-form-control"><select class="strategy-select">
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <div class="pf-v6-c-card__title"><h3>Users</h3></div>
+      <div class="pf-v6-c-card__actions">
+        <span>Apply strategy to all users:</span>
+        <span class="pf-v6-c-form-control"><select id="strategy-apply-all">
           {%- for s in strategies %}
-          <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
+          <option value="{{ s }}">{{ s }}</option>
           {%- endfor %}
         </select></span>
-      </td>
-      <td style="font-size:0.85em">
-        {%- set notes = [] %}
-        {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
-          {%- set _ = notes.append('SSH keys') %}
-          <span class="pf-v6-c-label badge warn" title="authorized_keys found on source but not included in image">SSH KEYS</span>
-        {%- endif %}
-        {%- if cls == 'ambiguous' %}
-          <span class="pf-v6-c-label badge warn" title="Classification uncertain — verify intent">ambiguous</span>
-        {%- endif %}
-      </td>
-    </tr>
-    {%- endfor %}
-    </tbody>
-  </table>
+        <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all">Apply</button>
+      </div>
+    </div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table">
+      <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
+      <tbody>
+      {%- for u in ug.users %}
+      {%- set cls = u.classification or '?' %}
+      {%- set cls_lbl = 'lbl-service' if cls == 'service' else 'lbl-human' if cls == 'human' else 'lbl-ambiguous' %}
+      <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.get('include', true) else '' }}/></span></td>
+        <td><strong>{{ u.name }}</strong></td>
+        <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
+        <td><code>{{ u.shell }}</code></td>
+        <td><code>{{ u.home }}</code></td>
+        <td><span class="pf-v6-c-label {{ cls_lbl }}">{{ cls }}</span></td>
+        <td>
+          <span class="pf-v6-c-form-control"><select class="strategy-select">
+            {%- for s in strategies %}
+            <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
+            {%- endfor %}
+          </select></span>
+        </td>
+        <td style="font-size:0.85em">
+          {%- set notes = [] %}
+          {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
+            {%- set _ = notes.append('SSH keys') %}
+            <span class="pf-v6-c-label badge warn" title="authorized_keys found on source but not included in image">SSH KEYS</span>
+          {%- endif %}
+          {%- if cls == 'ambiguous' %}
+            <span class="pf-v6-c-label badge warn" title="Classification uncertain — verify intent">ambiguous</span>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
 
   {%- if ug.groups %}
-  <h3>Groups</h3>
-  <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.5rem">
-    <span style="font-size:0.9em">Apply strategy to all groups:</span>
-    <span class="pf-v6-c-form-control"><select id="strategy-apply-all-groups">
-      {%- for s in strategies %}
-      <option value="{{ s }}">{{ s }}</option>
-      {%- endfor %}
-    </select></span>
-    <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all-groups" style="font-size:0.85em">Apply</button>
-  </div>
-  <table class="pf-v6-c-table">
-    <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
-    <tbody>
-    {%- for g in ug.groups %}
-    <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if g.get('include', true) else '' }}/></span></td>
-      <td>{{ g.name }}</td>
-      <td>{{ g.gid }}</td>
-      <td>
-        <span class="pf-v6-c-form-control"><select class="strategy-select">
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <div class="pf-v6-c-card__title"><h3>Groups</h3></div>
+      <div class="pf-v6-c-card__actions">
+        <span>Apply strategy to all groups:</span>
+        <span class="pf-v6-c-form-control"><select id="strategy-apply-all-groups">
           {%- for s in strategies %}
-          <option value="{{ s }}" {{ 'selected' if s == g.strategy else '' }}>{{ s }}</option>
+          <option value="{{ s }}">{{ s }}</option>
           {%- endfor %}
         </select></span>
-      </td>
-      <td>{{ (g.members or [])|join(', ') or '—' }}</td>
-    </tr>
-    {%- endfor %}
-    </tbody>
-  </table>
+        <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all-groups">Apply</button>
+      </div>
+    </div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table">
+      <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
+      <tbody>
+      {%- for g in ug.groups %}
+      <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if g.get('include', true) else '' }}/></span></td>
+        <td>{{ g.name }}</td>
+        <td>{{ g.gid }}</td>
+        <td>
+          <span class="pf-v6-c-form-control"><select class="strategy-select">
+            {%- for s in strategies %}
+            <option value="{{ s }}" {{ 'selected' if s == g.strategy else '' }}>{{ s }}</option>
+            {%- endfor %}
+          </select></span>
+        </td>
+        <td>{{ (g.members or [])|join(', ') or '—' }}</td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- else %}
@@ -818,67 +875,83 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- endfor %}
 
   {%- if local_timers or vendor_timers %}
-  <h3>Existing systemd timers</h3>
-  {%- if vendor_timers %}
-  <p style="font-size:0.9em">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
-  {%- endif %}
-  {%- if local_timers %}
-  <table class="pf-v6-c-table"><thead><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th></tr></thead><tbody>
-    {%- for t in local_timers %}
-    <tr style="background:rgba(63,185,80,0.1)">
-      <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
-      <td><code>{{ t.exec_start }}</code></td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
-  {%- endif %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Systemd Timers</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if vendor_timers %}
+    <p style="font-size:0.9em">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
+    {%- endif %}
+    {%- if local_timers %}
+    <table class="pf-v6-c-table"><thead><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th></tr></thead><tbody>
+      {%- for t in local_timers %}
+      <tr style="background:rgba(63,185,80,0.1)">
+        <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
+        <td><code>{{ t.exec_start }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- endif %}
+    </div>
+  </div>
   {%- endif %}
 
   {%- if st.generated_timer_units %}
-  <h3>Cron-converted timers</h3>
-  <table class="pf-v6-c-table"><thead><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr></thead><tbody>
-    {%- for u in st.generated_timer_units %}
-    <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
-      <td>{{ u.name }}</td>
-      <td><code>{{ u.cron_expr }}</code></td>
-      <td><code>{{ u.source_path }}</code></td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron-Converted Timers</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr></thead><tbody>
+      {%- for u in st.generated_timer_units %}
+      <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
+        <td>{{ u.name }}</td>
+        <td><code>{{ u.cron_expr }}</code></td>
+        <td><code>{{ u.source_path }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- set rpm_cron_count = st.cron_jobs | selectattr('rpm_owned') | list | length %}
   {%- if st.cron_jobs %}
-  <h3>Cron jobs</h3>
-  {%- if rpm_cron_count %}
-  <p style="font-size:0.9em">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
-  {%- endif %}
-  {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
-  <table class="pf-v6-c-table"><thead>
-    <tr><th></th><th>Path</th><th>Source</th><th>Action</th></tr></thead><tbody>
-    {%- for j in st.cron_jobs %}
-    {%- if not j.rpm_owned %}
-    <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if j.include else '' }}/></span></td>
-      <td><code>{{ j.path }}</code></td>
-      <td>{{ j.source }}</td>
-      <td>Convert to systemd timer</td>
-    </tr>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron Jobs</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if rpm_cron_count %}
+    <p style="font-size:0.9em">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
     {%- endif %}
-    {%- endfor %}
-  </tbody></table>
-  {%- endif %}
+    {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
+    <table class="pf-v6-c-table"><thead>
+      <tr><th></th><th>Path</th><th>Source</th><th>Action</th></tr></thead><tbody>
+      {%- for j in st.cron_jobs %}
+      {%- if not j.rpm_owned %}
+      <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if j.include else '' }}/></span></td>
+        <td><code>{{ j.path }}</code></td>
+        <td>{{ j.source }}</td>
+        <td>Convert to systemd timer</td>
+      </tr>
+      {%- endif %}
+      {%- endfor %}
+    </tbody></table>
+    {%- endif %}
+    </div>
+  </div>
   {%- endif %}
 
   {%- if st.at_jobs %}
-  <h3>At jobs</h3>
-  <table class="pf-v6-c-table"><thead><tr><th>File</th><th>User</th><th>Command</th></tr></thead><tbody>
-    {%- for a in st.at_jobs %}
-    {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
-    <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>At Jobs</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th>File</th><th>User</th><th>Command</th></tr></thead><tbody>
+      {%- for a in st.at_jobs %}
+      {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
+      <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- else %}
@@ -900,35 +973,50 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- endif %}
 
   {%- if kb.sysctl_overrides %}
-  <h3>Non-default sysctl values ({{ kb.sysctl_overrides|length }})</h3>
-  <table class="pf-v6-c-table"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
-    {%- for s in kb.sysctl_overrides %}
-    <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
-      <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
-      <td><code>{{ s.key }}</code></td>
-      <td style="color:#d29922;font-weight:bold">{{ s.runtime }}</td>
-      <td>{{ s.default or '—' }}</td>
-      <td><code>{{ s.source }}</code></td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Sysctl Overrides</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
+      {%- for s in kb.sysctl_overrides %}
+      <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
+        <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
+        <td><code>{{ s.key }}</code></td>
+        <td style="color:#d29922;font-weight:bold">{{ s.runtime }}</td>
+        <td>{{ s.default or '—' }}</td>
+        <td><code>{{ s.source }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
-  {%- if kb.modules_load_d %}<p>modules-load.d: {{ kb.modules_load_d|length }} file(s)</p>{%- endif %}
-  {%- if kb.modprobe_d %}<p>modprobe.d: {{ kb.modprobe_d|length }} file(s)</p>{%- endif %}
-  {%- if kb.dracut_conf %}<p>dracut.conf.d: {{ kb.dracut_conf|length }} file(s)</p>{%- endif %}
+  {%- if kb.modules_load_d or kb.modprobe_d or kb.dracut_conf %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Module and Dracut Configuration</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if kb.modules_load_d %}<p>modules-load.d: {{ kb.modules_load_d|length }} file(s)</p>{%- endif %}
+    {%- if kb.modprobe_d %}<p>modprobe.d: {{ kb.modprobe_d|length }} file(s)</p>{%- endif %}
+    {%- if kb.dracut_conf %}<p>dracut.conf.d: {{ kb.dracut_conf|length }} file(s)</p>{%- endif %}
+    </div>
+  </div>
+  {%- endif %}
 
   {%- if kb.tuned_active or kb.tuned_custom_profiles %}
-  <h3>Tuned profile</h3>
-  {%- if kb.tuned_active %}<p>Active profile: <strong>{{ kb.tuned_active }}</strong></p>{%- endif %}
-  {%- if kb.tuned_custom_profiles %}
-  <p>Custom profiles ({{ kb.tuned_custom_profiles|length }}):</p>
-  <ul>
-    {%- for tp in kb.tuned_custom_profiles %}
-    <li><code>{{ tp.path }}</code></li>
-    {%- endfor %}
-  </ul>
-  {%- endif %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Tuned Profile</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if kb.tuned_active %}<p>Active profile: <strong>{{ kb.tuned_active }}</strong></p>{%- endif %}
+    {%- if kb.tuned_custom_profiles %}
+    <p>Custom profiles ({{ kb.tuned_custom_profiles|length }}):</p>
+    <ul>
+      {%- for tp in kb.tuned_custom_profiles %}
+      <li><code>{{ tp.path }}</code></li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+    </div>
+  </div>
   {%- endif %}
 
   {%- else %}
@@ -941,47 +1029,63 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set se = snapshot.selinux %}
   {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode or se.port_labels or se.fcontext_rules or se.pam_configs) %}
 
-  {%- if se.mode %}<p><strong>Mode:</strong> {{ se.mode }}</p>{%- endif %}
-  {%- if se.fips_mode %}<p><strong>FIPS mode:</strong> enabled</p>{%- endif %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Overview</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if se.mode %}<p><strong>Mode:</strong> {{ se.mode }}</p>{%- endif %}
+    {%- if se.fips_mode %}<p><strong>FIPS mode:</strong> enabled</p>{%- endif %}
+    {%- if se.audit_rules %}<p>Audit rule files: {{ se.audit_rules|length }}</p>{%- endif %}
+    {%- if se.pam_configs %}<p>PAM configs: {{ se.pam_configs|length }}</p>{%- endif %}
+    </div>
+  </div>
 
   {%- if se.custom_modules %}
-  <h3>Custom policy modules ({{ se.custom_modules|length }})</h3>
-  <ul>{%- for m in se.custom_modules %}<li><code>{{ m }}</code></li>{%- endfor %}</ul>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Custom Policy Modules</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <ul>{%- for m in se.custom_modules %}<li><code>{{ m }}</code></li>{%- endfor %}</ul>
+    </div>
+  </div>
   {%- endif %}
 
   {%- set non_default = se.boolean_overrides|selectattr('non_default')|list %}
   {%- set unchanged_count = (se.boolean_overrides|length) - (non_default|length) %}
   {%- if non_default %}
-  <h3>Non-default booleans ({{ non_default|length }})</h3>
-  <table class="pf-v6-c-table"><thead><tr><th>Boolean</th><th>Current</th><th>Default</th><th>Description</th></tr></thead><tbody>
-    {%- for b in non_default %}
-    {%- set cur = b.get('current', '?') %}
-    <tr>
-      <td><code>{{ b.get('name', '?') }}</code></td>
-      <td style="{{ 'color:#3fb950' if cur == 'on' else 'color:#f85149' }};font-weight:bold">{{ cur }}</td>
-      <td>{{ b.get('default', '?') }}</td>
-      <td>{{ b.get('description', '') }}</td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
-  {%- if unchanged_count > 0 %}<p>{{ unchanged_count }} boolean(s) at default values (not shown).</p>{%- endif %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Non-Default Booleans</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th>Boolean</th><th>Current</th><th>Default</th><th>Description</th></tr></thead><tbody>
+      {%- for b in non_default %}
+      {%- set cur = b.get('current', '?') %}
+      <tr>
+        <td><code>{{ b.get('name', '?') }}</code></td>
+        <td style="{{ 'color:#3fb950' if cur == 'on' else 'color:#f85149' }};font-weight:bold">{{ cur }}</td>
+        <td>{{ b.get('default', '?') }}</td>
+        <td>{{ b.get('description', '') }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- if unchanged_count > 0 %}<p>{{ unchanged_count }} boolean(s) at default values (not shown).</p>{%- endif %}
+    </div>
+  </div>
   {%- endif %}
 
   {%- if se.port_labels %}
-  <h3>Custom port labels ({{ se.port_labels|length }})</h3>
-  <table class="pf-v6-c-table"><thead><tr><th>Protocol</th><th>Port</th><th>SELinux type</th></tr></thead><tbody>
-    {%- for pl in se.port_labels %}
-    <tr>
-      <td><code>{{ pl.protocol }}</code></td>
-      <td><code>{{ pl.port }}</code></td>
-      <td><code>{{ pl.type }}</code></td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Custom Port Labels</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th>Protocol</th><th>Port</th><th>SELinux type</th></tr></thead><tbody>
+      {%- for pl in se.port_labels %}
+      <tr>
+        <td><code>{{ pl.protocol }}</code></td>
+        <td><code>{{ pl.port }}</code></td>
+        <td><code>{{ pl.type }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
-
-  {%- if se.audit_rules %}<p>Audit rule files: {{ se.audit_rules|length }}</p>{%- endif %}
-  {%- if se.pam_configs %}<p>PAM configs: {{ se.pam_configs|length }}</p>{%- endif %}
 
   {%- else %}
   <p>No SELinux/security customizations detected.</p>
@@ -1016,77 +1120,103 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- if net and (net.connections or net.firewall_zones or net.firewall_direct_rules or net.ip_routes or net.ip_rules or net.resolv_provenance) %}
 
   {%- if net.connections %}
-  <h3>Connections</h3>
-  <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
-    {%- for c in net.connections %}
-    <tr>
-      <td><code>{{ c.name }}</code></td>
-      <td>{{ c.method }}</td>
-      <td>{{ c.type }}</td>
-      <td>
-        {%- if c.method == 'static' -%}
-        <span style="color:#3fb950;font-weight:bold">Bake into image</span>
-        {%- elif c.method == 'dhcp' -%}
-        <span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>
-        {%- else -%}
-        <span>Review</span>
-        {%- endif -%}
-      </td>
-    </tr>
-    {%- endfor %}
-  </tbody></table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Connections</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
+      {%- for c in net.connections %}
+      <tr>
+        <td><code>{{ c.name }}</code></td>
+        <td>{{ c.method }}</td>
+        <td>{{ c.type }}</td>
+        <td>
+          {%- if c.method == 'static' -%}
+          <span style="color:#3fb950;font-weight:bold">Bake into image</span>
+          {%- elif c.method == 'dhcp' -%}
+          <span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>
+          {%- else -%}
+          <span>Review</span>
+          {%- endif -%}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if net.firewall_zones %}
-  <h3>Firewall zones <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
-  {%- for z in net.firewall_zones %}
-  <h4>{{ z.name }}</h4>
-  {%- if z.services %}<p>Services: <code>{{ z.services|join(', ') }}</code></p>{%- endif %}
-  {%- if z.ports %}<p>Ports: <code>{{ z.ports|join(', ') }}</code></p>{%- endif %}
-  {%- if z.rich_rules %}
-  <p>Rich rules ({{ z.rich_rules|length }}):</p><ul>
-    {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
-  </ul>
-  {%- endif %}
-  {%- endfor %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- for z in net.firewall_zones %}
+    <h4>{{ z.name }}</h4>
+    {%- if z.services %}<p>Services: <code>{{ z.services|join(', ') }}</code></p>{%- endif %}
+    {%- if z.ports %}<p>Ports: <code>{{ z.ports|join(', ') }}</code></p>{%- endif %}
+    {%- if z.rich_rules %}
+    <p>Rich rules ({{ z.rich_rules|length }}):</p><ul>
+      {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
+    </ul>
+    {%- endif %}
+    {%- endfor %}
+    </div>
+  </div>
   {%- endif %}
 
   {%- if net.firewall_direct_rules %}
-  <h3>Firewall direct rules <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3>
-  <ul>
-    {%- for r in net.firewall_direct_rules %}
-    <li>{{ r.ipv }} {{ r.chain }}: <code>{{ r.args }}</code></li>
-    {%- endfor %}
-  </ul>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Direct Rules</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <ul>
+      {%- for r in net.firewall_direct_rules %}
+      <li>{{ r.ipv }} {{ r.chain }}: <code>{{ r.args }}</code></li>
+      {%- endfor %}
+    </ul>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if net.resolv_provenance %}
-  <h3>DNS</h3>
-  <p>resolv.conf provenance:
-    {%- if net.resolv_provenance == 'networkmanager' %}
-    <span style="color:#d29922;font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
-    {%- elif net.resolv_provenance == 'systemd-resolved' %}
-    <span style="color:#d29922;font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
-    {%- else %}
-    <span style="color:#3fb950;font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
-    {%- endif %}
-  </p>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>DNS</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <p>resolv.conf provenance:
+      {%- if net.resolv_provenance == 'networkmanager' %}
+      <span style="color:#d29922;font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
+      {%- elif net.resolv_provenance == 'systemd-resolved' %}
+      <span style="color:#d29922;font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
+      {%- else %}
+      <span style="color:#3fb950;font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
+      {%- endif %}
+    </p>
+    </div>
+  </div>
   {%- endif %}
 
   {%- if net.ip_routes %}
   {%- set static_rt = [] %}
   {%- for r in net.ip_routes %}{% if 'proto static' in r %}{% set _ = static_rt.append(r) %}{% endif %}{%- endfor %}
   {%- if static_rt %}
-  <h3>Static routes ({{ static_rt|length }})</h3><ul>
-    {%- for r in static_rt %}<li><code>{{ r }}</code></li>{%- endfor %}
-  </ul>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Static Routes</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <ul>
+      {%- for r in static_rt %}<li><code>{{ r }}</code></li>{%- endfor %}
+    </ul>
+    </div>
+  </div>
   {%- endif %}
   {%- endif %}
 
   {%- if net.ip_rules %}
-  <h3>Policy routing rules ({{ net.ip_rules|length }})</h3><ul>
-    {%- for r in net.ip_rules %}<li><code>{{ r }}</code></li>{%- endfor %}
-  </ul>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Policy Routing</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <ul>
+      {%- for r in net.ip_rules %}<li><code>{{ r }}</code></li>{%- endfor %}
+    </ul>
+    </div>
+  </div>
   {%- endif %}
 
   {%- else %}
