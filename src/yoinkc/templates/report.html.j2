@@ -28,7 +28,7 @@
 
 {# ── Simple data table macro ────────────────────────────────────────────── #}
 {% macro data_table(headers) %}
-<table class="pf-v6-c-table pf-m-compact"><thead><tr>
+<table class="pf-v6-c-table"><thead><tr>
   {%- for h in headers %}<th>{{ h }}</th>{% endfor -%}
 </tr></thead><tbody>
 {{ caller() }}
@@ -63,8 +63,11 @@ html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 /* Page padding – toolbar lives at the bottom */
 body { padding-bottom: 70px; }
 
-/* OS status banner */
-.os-status-banner { padding: 0.75rem 1rem !important; margin-bottom: 1rem; overflow-x: auto; white-space: nowrap; }
+/* Inline alert banners – wrap content in .pf-v6-c-alert__title to land in the
+   grid's "title" area; nowrap + overflow-x keeps stats on a single line. */
+.os-status-banner { margin-bottom: 1rem; }
+.os-status-banner .pf-v6-c-alert__title,
+#pkg-selection-banner .pf-v6-c-alert__title { white-space: nowrap; overflow-x: auto; }
 
 /* Section show/hide for nav switching */
 .section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); }
@@ -118,9 +121,6 @@ body { padding-bottom: 70px; }
 
 /* Summary */
 .summary-hero { font-size: 1.1rem; margin-bottom: 1.5rem; }
-.summary-meta dt { font-size: 0.85rem; margin-top: 0.5rem; }
-.summary-meta dt:first-child { margin-top: 0; }
-.summary-meta dd { margin: 0.15rem 0 0 0; }
 .summary-next { margin-top: 1.5rem; padding-top: 1rem; }
 
 /* Diff view */
@@ -257,6 +257,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
 {# ── Banner ─────────────────────────────────────────────────────────────── #}
 <div class="pf-v6-c-alert pf-m-info pf-m-inline os-status-banner">
+  <p class="pf-v6-c-alert__title">
   {%- if os_id == "rhel" -%}
   <svg role="img" class="os-icon os-icon-rhel" height="20" viewBox="0 0 24 24" aria-label="Red Hat"><path fill="currentColor" d="M16.009 13.386c1.577 0 3.86-.326 3.86-2.202a1.765 1.765 0 0 0-.04-.431l-.94-4.08c-.216-.898-.406-1.305-1.982-2.093-1.223-.625-3.888-1.658-4.676-1.658-.733 0-.947.946-1.822.946-.842 0-1.467-.706-2.255-.706-.757 0-1.25.515-1.63 1.576 0 0-1.06 2.99-1.197 3.424a.81.81 0 0 0-.028.245c0 1.162 4.577 4.974 10.71 4.974m4.101-1.435c.218 1.032.218 1.14.218 1.277 0 1.765-1.984 2.745-4.593 2.745-5.895.004-11.06-3.451-11.06-5.734a2.326 2.326 0 0 1 .19-.925C2.746 9.415 0 9.794 0 12.217c0 3.969 9.405 8.861 16.851 8.861 5.71 0 7.149-2.582 7.149-4.62 0-1.605-1.387-3.425-3.887-4.512"/></svg>
   {%- elif os_id == "fedora" -%}
@@ -275,6 +276,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <span style="color:#d29922">&#9888; {{ triage.fixme }} FIXME</span> &nbsp;|&nbsp;
   <span style="color:#f85149">&#9679; {{ triage.manual }} manual</span> &nbsp;|&nbsp;
   <strong>Warnings:</strong> <span id="banner-warning-count">{{ warnings|length }}</span>
+  </p>
 </div>
 
 
@@ -349,13 +351,12 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set dep_tree = snapshot.rpm.leaf_dep_tree or {} %}
 
   <div class="pf-v6-c-alert pf-m-info pf-m-inline" id="pkg-selection-banner" style="margin-bottom:1rem">
-    <strong>{{ leaf_packages_sorted|length }} leaf packages</strong> pull in <strong>{{ auto_set|length }} dependencies</strong>
-    — only leaf packages appear in the Containerfile's <code>dnf install</code> line.
+    <p class="pf-v6-c-alert__title" id="pkg-selection-text"><strong>{{ leaf_packages_sorted|length }} leaf packages</strong> pull in <strong>{{ auto_set|length }} dependencies</strong> — only leaf packages appear in the Containerfile's <code>dnf install</code> line.</p>
   </div>
 
   {%- if snapshot.rpm.repo_files %}
   <h3>Repositories ({{ snapshot.rpm.repo_files|length }})</h3>
-  <table class="pf-v6-c-table pf-m-compact" id="pkg-repo-table">
+  <table class="pf-v6-c-table" id="pkg-repo-table">
     <thead><tr><th></th><th>Path</th><th></th><th></th></tr></thead>
     <tbody>
     {%- for rf in snapshot.rpm.repo_files %}
@@ -384,7 +385,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- if repo_groups %}
   {%- for repo_name, entries in repo_groups.items() %}
   <h4 style="margin-top:1.5rem">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</h4>
-  <table class="pf-v6-c-table pf-m-compact pkg-dep-tree-group">
+  <table class="pf-v6-c-table pkg-dep-tree-group">
     <thead><tr><th></th><th>Leaf Package</th><th>Dependencies</th><th></th></tr></thead>
     <tbody>
     {%- for entry in entries %}
@@ -412,7 +413,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- endfor %}
   {%- else %}
   {# Fallback: flat table when repo_groups is not populated #}
-  <table class="pf-v6-c-table pf-m-compact" id="pkg-dep-tree">
+  <table class="pf-v6-c-table" id="pkg-dep-tree">
     <thead><tr><th></th><th>Leaf Package</th><th>Repo</th><th>Dependencies</th><th></th></tr></thead>
     <tbody>
     {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
@@ -456,7 +457,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- if unclassified_pkgs %}
   <h3 style="margin-top:1.5rem">Unclassified Packages ({{ unclassified_pkgs|length }})</h3>
   <p style="font-size:0.85em">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
-  <table class="pf-v6-c-table pf-m-compact">
+  <table class="pf-v6-c-table">
     <thead><tr><th></th><th>Name</th><th>Version</th><th>Arch</th></tr></thead>
     <tbody>
     {%- for p in unclassified_pkgs %}
@@ -476,7 +477,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- endif %}
 
   {%- else %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Name</th><th>Version</th><th>Release</th><th>Arch</th></tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
     <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if p.include else '' }}/></span></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td></tr>
     {%- endfor %}
@@ -494,7 +495,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {# ── Services ────────────────────────────────────────────────────────────── #}
 {% call section("services", "Services") %}
   {%- if snapshot.services and snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
     {%- for s in snapshot.services.state_changes %}
     {%- if s.action != 'unchanged' %}
     <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
@@ -507,7 +508,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if snapshot.services and snapshot.services.drop_ins %}
   <h3>Systemd drop-in overrides ({{ snapshot.services.drop_ins|length }})</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Parent unit</th><th>Drop-in path</th><th>Content</th></tr></thead><tbody>
     {%- for d in snapshot.services.drop_ins %}
     <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
       <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if d.include else '' }}/></span></td>
@@ -529,7 +530,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {# ── Config ──────────────────────────────────────────────────────────────── #}
 {% call section("config", "Configuration files") %}
   {%- if snapshot.config and snapshot.config.files %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Path</th><th>Kind</th><th>rpm -Va flags</th><th>Diff</th></tr></thead><tbody>
     {%- for item in config_files_rendered %}
     <tr{% if not item.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
       <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if item.include else '' }}/></span></td>
@@ -553,7 +554,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if nd.elf %}
   <h3>Compiled binaries</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Path</th><th>Language</th><th>Linking</th><th>Shared Libraries</th></tr></thead><tbody>
     {%- for i in nd.elf %}
     {%- set lang = i.lang %}
     {%- set lang_lbl = {'go': 'lbl-go', 'rust': 'lbl-rust', 'c/c++': 'lbl-c-cpp'} %}
@@ -582,7 +583,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   </h4>
   {%- set pkgs = v.packages %}
   {%- if pkgs %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>
     {%- for p in pkgs[:20] %}
     <tr><td>{{ p.name }}</td><td>{{ p.version }}</td></tr>
     {%- endfor %}
@@ -598,7 +599,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if nd.git %}
   <h3>Git-managed directories</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Remote</th><th>Branch</th><th>Commit</th></tr></thead><tbody>
     {%- for i in nd.git %}
     <tr>
       <td><code>{{ i.path }}</code></td>
@@ -612,7 +613,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if nd.pip %}
   <h3>System pip packages</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Package</th><th>Version</th><th>Path</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Package</th><th>Version</th><th>Path</th></tr></thead><tbody>
     {%- for i in nd.pip[:20] %}
     {%- set nr_idx = namespace(val=-1) %}
     {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
@@ -628,7 +629,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if nd.other %}
   <h3>Other non-RPM items</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Path</th><th>Confidence</th><th>Method</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Confidence</th><th>Method</th></tr></thead><tbody>
     {%- for i in nd.other[:20] %}
     <tr>
       <td><code>{{ i.path or i.name }}</code></td>
@@ -642,7 +643,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- if nr and nr.env_files %}
   <h3>Dotenv / secret files ({{ nr.env_files|length }})</h3>
   <p>These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Path</th><th>Status</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Status</th></tr></thead><tbody>
     {%- for ef in nr.env_files %}
     <tr>
       <td><code>{{ ef.path }}</code></td>
@@ -664,7 +665,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if ct.quadlet_units %}
   <h3>Quadlet units</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
     {%- for u in ct.quadlet_units %}
     <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
       <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
@@ -683,7 +684,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <label><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if c.include else '' }}/></span></label>
   <h4 style="display:inline"><code>{{ c.path }}</code></h4>
   {%- if c.images %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Service</th><th>Image</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Service</th><th>Image</th></tr></thead><tbody>
     {%- for img in c.images %}
     <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
     {%- endfor %}
@@ -697,7 +698,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if ct.running_containers %}
   <h3>Running containers (podman)</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Image</th><th>Status</th><th>Mounts</th><th>Networks</th></tr></thead><tbody>
     {%- for item in containers_data.running %}
     <tr>
       <td><strong>{{ item.name }}</strong></td>
@@ -731,7 +732,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all" style="font-size:0.85em">Apply</button>
   </div>
 
-  <table class="pf-v6-c-table pf-m-compact">
+  <table class="pf-v6-c-table">
     <thead><tr><th></th><th>User</th><th>UID/GID</th><th>Shell</th><th>Home</th><th>Type</th><th>Strategy</th><th>Notes</th></tr></thead>
     <tbody>
     {%- for u in ug.users %}
@@ -777,7 +778,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     </select></span>
     <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all-groups" style="font-size:0.85em">Apply</button>
   </div>
-  <table class="pf-v6-c-table pf-m-compact">
+  <table class="pf-v6-c-table">
     <thead><tr><th></th><th>Group</th><th>GID</th><th>Strategy</th><th>Members</th></tr></thead>
     <tbody>
     {%- for g in ug.groups %}
@@ -822,7 +823,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <p style="font-size:0.9em">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
   {%- endif %}
   {%- if local_timers %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Timer</th><th>Schedule</th><th>ExecStart</th></tr></thead><tbody>
     {%- for t in local_timers %}
     <tr style="background:rgba(63,185,80,0.1)">
       <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
@@ -835,7 +836,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if st.generated_timer_units %}
   <h3>Cron-converted timers</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Name</th><th>Cron Expression</th><th>Source File</th></tr></thead><tbody>
     {%- for u in st.generated_timer_units %}
     <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
       <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
@@ -854,7 +855,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <p style="font-size:0.9em">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
   {%- endif %}
   {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
-  <table class="pf-v6-c-table pf-m-compact"><thead>
+  <table class="pf-v6-c-table"><thead>
     <tr><th></th><th>Path</th><th>Source</th><th>Action</th></tr></thead><tbody>
     {%- for j in st.cron_jobs %}
     {%- if not j.rpm_owned %}
@@ -872,7 +873,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if st.at_jobs %}
   <h3>At jobs</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>File</th><th>User</th><th>Command</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>File</th><th>User</th><th>Command</th></tr></thead><tbody>
     {%- for a in st.at_jobs %}
     {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
     <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
@@ -900,7 +901,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if kb.sysctl_overrides %}
   <h3>Non-default sysctl values ({{ kb.sysctl_overrides|length }})</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th></th><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead><tbody>
     {%- for s in kb.sysctl_overrides %}
     <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
       <td><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
@@ -952,7 +953,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set unchanged_count = (se.boolean_overrides|length) - (non_default|length) %}
   {%- if non_default %}
   <h3>Non-default booleans ({{ non_default|length }})</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Boolean</th><th>Current</th><th>Default</th><th>Description</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Boolean</th><th>Current</th><th>Default</th><th>Description</th></tr></thead><tbody>
     {%- for b in non_default %}
     {%- set cur = b.get('current', '?') %}
     <tr>
@@ -968,7 +969,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if se.port_labels %}
   <h3>Custom port labels ({{ se.port_labels|length }})</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Protocol</th><th>Port</th><th>SELinux type</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Protocol</th><th>Port</th><th>SELinux type</th></tr></thead><tbody>
     {%- for pl in se.port_labels %}
     <tr>
       <td><code>{{ pl.protocol }}</code></td>
@@ -991,7 +992,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {% call section("secrets", "Secrets") %}
   {%- if secrets_data %}
   <p><strong>{{ secrets_data|length }} value(s) redacted</strong> across <strong>{{ secrets_file_count }} file(s)</strong>.</p>
-  <table class="pf-v6-c-table pf-m-compact">
+  <table class="pf-v6-c-table">
     <thead><tr><th>File Path</th><th>Pattern</th><th>Line</th><th>Remediation</th></tr></thead>
     <tbody>
     {%- for r in secrets_data %}
@@ -1016,7 +1017,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if net.connections %}
   <h3>Connections</h3>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Method</th><th>Type</th><th>Deployment</th></tr></thead><tbody>
     {%- for c in net.connections %}
     <tr>
       <td><code>{{ c.name }}</code></td>
@@ -1096,7 +1097,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {# ── Storage ─────────────────────────────────────────────────────────────── #}
 {% call section("storage", "Storage") %}
   {%- if snapshot.storage and snapshot.storage.fstab_entries %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
     {%- for e in snapshot.storage.fstab_entries[:30] %}
     <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
     {%- endfor %}
@@ -1160,7 +1161,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <summary>Packages</summary>
   {%- if _audit_leaf %}
   <h4>Explicitly installed ({{ _audit_leaf|length }})</h4>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Name</th><th>Version</th><th>Repo</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Version</th><th>Repo</th></tr></thead><tbody>
     {%- for lf in _audit_leaf %}
     {%- for p in snapshot.rpm.packages_added if p.name == lf %}
     <tr><td>{{ p.name }}</td><td>{{ p.version }}-{{ p.release }}</td><td>{{ p.source_repo or '' }}</td></tr>
@@ -1169,7 +1170,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   </tbody></table>
   {%- elif _audit_pkgs %}
   <h4>Packages added ({{ _audit_pkgs|length }})</h4>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Name</th><th>Version</th><th>Arch</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Name</th><th>Version</th><th>Arch</th></tr></thead><tbody>
     {%- for p in _audit_pkgs[:50] %}
     <tr><td>{{ p.name }}</td><td>{{ p.version }}-{{ p.release }}</td><td>{{ p.arch }}</td></tr>
     {%- endfor %}
@@ -1180,7 +1181,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- endif %}
   {%- if _audit_bio %}
   <h4>In target image only ({{ _audit_bio|length }})</h4>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Package</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Package</th></tr></thead><tbody>
     {%- for p in _audit_bio[:30] %}
     <tr><td>{{ p.name }}</td></tr>
     {%- endfor %}
@@ -1197,7 +1198,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {%- if _audit_svc %}
 <details class="audit-expand">
   <summary>Services ({{ _audit_svc|length }})</summary>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Unit</th><th>Current</th><th>Default</th><th>Action</th></tr></thead><tbody>
     {%- for s in _audit_svc %}
     <tr><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
     {%- endfor %}
@@ -1212,7 +1213,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {%- if config_files_rendered %}
 <details class="audit-expand">
   <summary>Configuration Files ({{ config_files_rendered|length }})</summary>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Path</th><th>Kind</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Path</th><th>Kind</th></tr></thead><tbody>
     {%- for item in config_files_rendered %}
     <tr><td><code>{{ item.path }}</code></td><td>{{ item.kind }}</td></tr>
     {%- endfor %}
@@ -1226,7 +1227,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 <details class="audit-expand">
   <summary>Network</summary>
   {%- if _net.connections %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Connection</th><th>Method</th><th>Type</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Connection</th><th>Method</th><th>Type</th></tr></thead><tbody>
     {%- for c in _net.connections %}
     <tr><td><code>{{ c.name }}</code></td><td>{{ c.method }}</td><td>{{ c.type }}</td></tr>
     {%- endfor %}
@@ -1249,7 +1250,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {%- if snapshot.storage and snapshot.storage.fstab_entries %}
 <details class="audit-expand">
   <summary>Storage ({{ snapshot.storage.fstab_entries|length }} fstab entries)</summary>
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Device</th><th>Mount</th><th>Type</th></tr></thead><tbody>
     {%- for e in snapshot.storage.fstab_entries %}
     <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
     {%- endfor %}
@@ -1265,7 +1266,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set _local_timers = [] %}
   {%- for t in _st.systemd_timers %}{% if t.source == 'local' %}{% set _ = _local_timers.append(t) %}{% endif %}{%- endfor %}
   {%- if _local_timers %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Timer</th><th>Schedule</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Timer</th><th>Schedule</th></tr></thead><tbody>
     {%- for t in _local_timers %}
     <tr><td>{{ t.name }}</td><td>{{ t.on_calendar }}</td></tr>
     {%- endfor %}
@@ -1282,7 +1283,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 <details class="audit-expand">
   <summary>Container Workloads</summary>
   {%- if _ct.quadlet_units %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>Unit</th><th>Image</th><th>Path</th></tr></thead><tbody>
     {%- for u in _ct.quadlet_units %}
     <tr><td>{{ u.name }}</td><td>{% if u.image %}<code>{{ u.image }}</code>{% endif %}</td><td><code>{{ u.path }}</code></td></tr>
     {%- endfor %}
@@ -1348,14 +1349,14 @@ details.audit-expand { margin-bottom: 0.25rem; }
 <details class="audit-expand">
   <summary>Users / Groups</summary>
   {%- if _ug.users %}
-  <table class="pf-v6-c-table pf-m-compact"><thead><tr><th>User</th><th>UID</th><th>Type</th><th>Strategy</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th>User</th><th>UID</th><th>Type</th><th>Strategy</th></tr></thead><tbody>
     {%- for u in _ug.users %}
     <tr><td>{{ u.name }}</td><td>{{ u.uid }}</td><td>{{ u.classification or '?' }}</td><td>{{ u.strategy or '' }}</td></tr>
     {%- endfor %}
   </tbody></table>
   {%- endif %}
   {%- if _ug.groups %}
-  <table class="pf-v6-c-table pf-m-compact" style="margin-top:0.5rem"><thead><tr><th>Group</th><th>GID</th><th>Members</th></tr></thead><tbody>
+  <table class="pf-v6-c-table" style="margin-top:0.5rem"><thead><tr><th>Group</th><th>GID</th><th>Members</th></tr></thead><tbody>
     {%- for g in _ug.groups %}
     <tr><td>{{ g.name }}</td><td>{{ g.gid }}</td><td>{{ (g.members or [])|join(', ') or '—' }}</td></tr>
     {%- endfor %}
@@ -1707,8 +1708,8 @@ var snapshot = {{ snapshot_json|safe }};
   }
 
   function updatePkgBanner() {
-    var banner = document.getElementById('pkg-selection-banner');
-    if (!banner) return;
+    var bannerText = document.getElementById('pkg-selection-text');
+    if (!bannerText) return;
     var leafRows = document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]');
     if (!leafRows.length) return;
     var total = leafRows.length;
@@ -1721,7 +1722,7 @@ var snapshot = {{ snapshot_json|safe }};
         (pkgDepTree[row.getAttribute('data-leaf')] || []).forEach(function(d) { covered.add(d); });
       }
     });
-    banner.innerHTML = '<strong>' + selected + ' of ' + total + ' leaf package' + (total !== 1 ? 's' : '') + ' selected</strong>'
+    bannerText.innerHTML = '<strong>' + selected + ' of ' + total + ' leaf package' + (total !== 1 ? 's' : '') + ' selected</strong>'
       + ', pulling in <strong>' + covered.size + ' dependenc' + (covered.size !== 1 ? 'ies' : 'y') + '</strong>'
       + ' \u2014 only leaf packages appear in the Containerfile\u2019s <code>dnf\u00a0install</code> line.';
   }
