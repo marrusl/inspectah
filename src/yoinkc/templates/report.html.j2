@@ -64,7 +64,7 @@ html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 body { padding-bottom: 70px; }
 
 /* OS status banner */
-.os-status-banner { padding: 0.75rem 1rem !important; margin-bottom: 1rem; }
+.os-status-banner { padding: 0.75rem 1rem !important; margin-bottom: 1rem; overflow-x: auto; white-space: nowrap; }
 
 /* Section show/hide for nav switching */
 .section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); }
@@ -139,8 +139,9 @@ body { padding-bottom: 70px; }
 .repo-content-pre { border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
 
 /* File browser */
-.fb-tree { flex: 0 1 280px; min-width: 200px; max-height: 70vh; overflow-y: auto; }
+.fb-tree { flex: 0 1 280px; min-width: 200px; max-width: 280px; max-height: 70vh; overflow-y: auto; overflow-x: hidden; }
 .fb-tree .pf-v6-c-tree-view__node-icon { margin-right: 0.25rem; }
+.fb-tree .pf-v6-c-tree-view__node-text { overflow-wrap: anywhere; word-break: break-all; }
 .fb-viewer { flex: 1 1 400px; min-height: 200px; }
 .fb-viewer .pf-v6-c-code-block__pre { max-height: 65vh; overflow: auto; }
 .file-content-hidden { display: none; }
@@ -1366,17 +1367,15 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {# ── 13. Items Requiring Manual Intervention ── #}
 {%- if warnings %}
 <h3>Items Requiring Manual Intervention</h3>
-<div class="pf-v6-c-alert-group">
+<ul style="margin:0.25rem 0 0;padding-left:1.5rem;font-size:0.9rem">
   {%- for w in warnings[:20] %}
   {%- set msg = w.message or w.detail or '—' %}
-  <div class="pf-v6-c-alert pf-m-warning pf-m-inline" style="margin-bottom:0.25rem">
-    <div class="pf-v6-c-alert__title">{{ msg }}</div>
-  </div>
+  <li>{{ msg }}</li>
   {%- endfor %}
   {%- if warnings|length > 20 %}
-  <div class="pf-v6-c-alert pf-m-info pf-m-inline"><div class="pf-v6-c-alert__title">+{{ warnings|length - 20 }} more — see Warnings tab.</div></div>
+  <li><em>+{{ warnings|length - 20 }} more — see Warnings tab.</em></li>
   {%- endif %}
-</div>
+</ul>
 {%- endif %}
 
 </div>{# /.audit-section #}
