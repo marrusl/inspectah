@@ -64,6 +64,9 @@ html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 /* Page padding – toolbar lives at the bottom */
 body { padding-bottom: 70px; }
 
+/* OS status banner */
+.os-status-banner { padding: 0.75rem 1rem !important; margin-bottom: 1rem; }
+
 /* Section show/hide for nav switching */
 .section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); }
 .section.visible { display: block; animation: fadeIn .15s ease; }
@@ -182,6 +185,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
 .audit-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
 .audit-table { margin: 0.5rem 0; }
 .audit-section { max-height: 70vh; overflow-y: auto; }
+.audit-section pre { font-family: 'Red Hat Mono', 'Liberation Mono', monospace; font-size: 0.9rem; line-height: 1.5; }
 
 /* Sticky toolbar */
 #exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
@@ -258,7 +262,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
 <section class="pf-v6-c-page__main-section">
 
 {# ── Banner ─────────────────────────────────────────────────────────────── #}
-<div class="pf-v6-c-banner pf-m-info">
+<div class="pf-v6-c-alert pf-m-info pf-m-inline os-status-banner">
   {%- if os_id == "rhel" -%}
   <svg role="img" class="os-icon os-icon-rhel" height="20" viewBox="0 0 24 24" aria-label="Red Hat"><path fill="currentColor" d="M16.009 13.386c1.577 0 3.86-.326 3.86-2.202a1.765 1.765 0 0 0-.04-.431l-.94-4.08c-.216-.898-.406-1.305-1.982-2.093-1.223-.625-3.888-1.658-4.676-1.658-.733 0-.947.946-1.822.946-.842 0-1.467-.706-2.255-.706-.757 0-1.25.515-1.63 1.576 0 0-1.06 2.99-1.197 3.424a.81.81 0 0 0-.028.245c0 1.162 4.577 4.974 10.71 4.974m4.101-1.435c.218 1.032.218 1.14.218 1.277 0 1.765-1.984 2.745-4.593 2.745-5.895.004-11.06-3.451-11.06-5.734a2.326 2.326 0 0 1 .19-.925C2.746 9.415 0 9.794 0 12.217c0 3.969 9.405 8.861 16.851 8.861 5.71 0 7.149-2.582 7.149-4.62 0-1.605-1.387-3.425-3.887-4.512"/></svg>
   {%- elif os_id == "fedora" -%}
@@ -346,7 +350,7 @@ details[open] > summary { margin-bottom: 0.25rem; }
   {%- set auto_set = snapshot.rpm.auto_packages or [] %}
   {%- set dep_tree = snapshot.rpm.leaf_dep_tree or {} %}
 
-  <div class="pf-v6-c-banner pf-m-info" id="pkg-selection-banner" style="margin-bottom:1rem">
+  <div class="pf-v6-c-alert pf-m-info pf-m-inline" id="pkg-selection-banner" style="margin-bottom:1rem">
     <strong>{{ leaf_packages_sorted|length }} leaf packages</strong> pull in <strong>{{ auto_set|length }} dependencies</strong>
     — only leaf packages appear in the Containerfile's <code>dnf install</code> line.
   </div>
