@@ -11,6 +11,7 @@ directly. The tool uses ``nsenter -t 1 -m -u -i -n`` to execute podman in
 the host's namespaces.  This requires ``--pid=host`` on the outer container.
 """
 
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional, Set, Tuple
@@ -36,6 +37,8 @@ _CENTOS_STREAM_IMAGES: dict = {
 }
 
 _DEFAULT_FALLBACK_IMAGE = "registry.redhat.io/rhel9/rhel-bootc:9.6"
+
+_PULL_TIMEOUT_S = 600
 
 
 def _clamp_version(version_id: str, minimum: str) -> str:
@@ -195,6 +198,71 @@ class BaselineResolver:
         return result
 
     # ------------------------------------------------------------------
+    # Image cache check and pull
+    # ------------------------------------------------------------------
+
+    def _image_is_cached(self, base_image: str) -> bool:
+        """Return True if *base_image* is already present in the local podman store."""
+        result = self._run_on_host(["podman", "image", "exists", base_image])
+        if result is None:
+            return False
+        cached = result.returncode == 0
+        _debug(f"image {'cached' if cached else 'not cached'}: {base_image}")
+        return cached
+
+    def pull_image(self, base_image: str) -> bool:
+        """Pull *base_image* via nsenter with live progress output to stderr.
+
+        Skips the pull if the image is already in the local podman store.
+        Returns True if the image is available after the call, False on failure.
+
+        Requires a non-None executor (the cache check runs through the normal
+        executor path).  Callers must guard with ``self._executor is not None``.
+        """
+        if self._image_is_cached(base_image):
+            return True
+
+        # _image_is_cached already triggered the nsenter probe (via
+        # _run_on_host).  This guard handles the case where the probe
+        # failed — _image_is_cached returned False because nsenter is
+        # unavailable, not because the image is uncached.
+        if not self._probe_nsenter():
+            return False
+
+        print(f"  Pulling baseline image {base_image}\u2026", file=sys.stderr)
+        nsenter_pull = [
+            "nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--",
+            "podman", "pull", base_image,
+        ]
+        _debug(f"pulling: {' '.join(nsenter_pull)}")
+
+        try:
+            result = subprocess.run(
+                nsenter_pull,
+                stderr=None,        # inherit — streams podman's layer progress to terminal
+                stdout=subprocess.DEVNULL,
+                timeout=_PULL_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            print(
+                f"  ERROR: podman pull timed out after {_PULL_TIMEOUT_S}s.",
+                file=sys.stderr,
+            )
+            _debug(f"podman pull timed out after {_PULL_TIMEOUT_S}s")
+            return False
+        except FileNotFoundError:
+            print("  ERROR: nsenter or podman not found; cannot pull base image.", file=sys.stderr)
+            _debug("nsenter or podman not found during pull")
+            return False
+
+        if result.returncode != 0:
+            _debug(f"podman pull failed (rc={result.returncode})")
+            return False
+
+        _debug(f"pull succeeded: {base_image}")
+        return True
+
+    # ------------------------------------------------------------------
     # Podman queries
     # ------------------------------------------------------------------
 
@@ -228,9 +296,12 @@ class BaselineResolver:
     def query_packages(self, base_image: str) -> Optional[Set[str]]:
         """Run ``podman run --rm <base_image> rpm -qa`` via nsenter.
 
-        Returns the set of package names in the base image, or None on failure.
+        Pulls the image first if it is not already cached, so progress is
+        visible to the user.  Returns the set of package names, or None on failure.
         """
         if not self._check_registry_auth(base_image):
+            return None
+        if not self.pull_image(base_image):
             return None
         cmd = [
             "podman", "run", "--rm", "--cgroups=disabled", base_image,
@@ -255,8 +326,13 @@ class BaselineResolver:
     def query_presets(self, base_image: str) -> Optional[str]:
         """Dump all systemd preset content from the base image via nsenter.
 
+        Checks registry auth, pulls the image if not cached, then queries.
         Returns the concatenated preset text, or None on failure.
         """
+        if not self._check_registry_auth(base_image):
+            return None
+        if not self.pull_image(base_image):
+            return None
         cmd = [
             "podman", "run", "--rm", "--cgroups=disabled", base_image,
             "bash", "-c",

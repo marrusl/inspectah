@@ -1,5 +1,6 @@
 """Tests for baseline generation (base image query)."""
 
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +23,9 @@ def _make_executor(podman_result=None, probe_ok=True):
             if probe_ok:
                 return RunResult(stdout="", stderr="", returncode=0)
             return RunResult(stdout="", stderr="Operation not permitted", returncode=1)
+        # Always report the image as cached so pull_image() is a no-op in tests.
+        if "podman" in cmd and "image" in cmd and "exists" in cmd:
+            return RunResult(stdout="", stderr="", returncode=0)
         if podman_result is not None and "podman" in cmd:
             return podman_result(cmd) if callable(podman_result) else podman_result
         return RunResult(stdout="", stderr="", returncode=1)
@@ -308,3 +312,123 @@ def test_resolve_delegates_to_get_baseline_packages():
     assert no_baseline is False
     assert base_image == "quay.io/centos-bootc/centos-bootc:stream9"
     assert "bash" in names
+
+
+# ---------------------------------------------------------------------------
+# pull_image / _image_is_cached
+# ---------------------------------------------------------------------------
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_pull_image_skipped_when_cached(_mock_userns):
+    """pull_image() returns True immediately when the image is already cached."""
+    cmds = []
+
+    def executor(cmd, cwd=None):
+        cmds.append(cmd)
+        if cmd[-1] == "true" and "nsenter" in cmd:
+            return RunResult(stdout="", stderr="", returncode=0)
+        if "podman" in cmd and "image" in cmd and "exists" in cmd:
+            return RunResult(stdout="", stderr="", returncode=0)  # cached
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    resolver = BaselineResolver(executor)
+    result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
+    assert result is True
+    pull_cmds = [c for c in cmds if "podman" in c and "pull" in c]
+    assert len(pull_cmds) == 0, "pull should be skipped when image is already cached"
+
+
+def _not_cached_executor(cmd, cwd=None):
+    """Executor that reports nsenter available but the image not cached."""
+    if cmd[-1] == "true" and "nsenter" in cmd:
+        return RunResult(stdout="", stderr="", returncode=0)
+    if "podman" in cmd and "image" in cmd and "exists" in cmd:
+        return RunResult(stdout="", stderr="", returncode=1)  # not cached
+    return RunResult(stdout="", stderr="", returncode=1)
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_pull_image_triggers_subprocess_when_not_cached(_mock_userns):
+    """pull_image() calls subprocess.run when the image is not cached."""
+    subprocess_calls = []
+
+    def fake_subprocess_run(cmd, **kwargs):
+        subprocess_calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, returncode=0)
+
+    resolver = BaselineResolver(_not_cached_executor)
+    with patch("yoinkc.baseline.subprocess.run", fake_subprocess_run):
+        result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
+
+    assert result is True
+    assert len(subprocess_calls) == 1
+    pull_cmd = subprocess_calls[0]
+    assert "podman" in pull_cmd
+    assert "pull" in pull_cmd
+    assert "quay.io/centos-bootc/centos-bootc:stream9" in pull_cmd
+    assert "nsenter" in pull_cmd
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_pull_image_returns_false_on_subprocess_failure(_mock_userns):
+    """pull_image() returns False when podman pull exits non-zero."""
+    def failing_subprocess_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, returncode=125)
+
+    resolver = BaselineResolver(_not_cached_executor)
+    with patch("yoinkc.baseline.subprocess.run", failing_subprocess_run):
+        result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
+
+    assert result is False
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_pull_image_returns_false_on_timeout(_mock_userns, capsys):
+    """pull_image() returns False and prints an error when podman pull times out."""
+    def timeout_subprocess_run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, timeout=baseline_mod._PULL_TIMEOUT_S)
+
+    resolver = BaselineResolver(_not_cached_executor)
+    with patch("yoinkc.baseline.subprocess.run", timeout_subprocess_run):
+        result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
+
+    assert result is False
+    assert "timed out" in capsys.readouterr().err
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_pull_image_returns_false_on_file_not_found(_mock_userns, capsys):
+    """pull_image() returns False and prints an error when nsenter/podman is not found."""
+    def fnfe_subprocess_run(cmd, **kwargs):
+        raise FileNotFoundError("nsenter not found")
+
+    resolver = BaselineResolver(_not_cached_executor)
+    with patch("yoinkc.baseline.subprocess.run", fnfe_subprocess_run):
+        result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
+
+    assert result is False
+    assert "not found" in capsys.readouterr().err
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_pull_image_skipped_when_nsenter_unavailable(_mock_userns):
+    """pull_image() returns False without calling subprocess when nsenter fails."""
+    def eperm_executor(cmd, cwd=None):
+        if cmd[-1] == "true" and "nsenter" in cmd:
+            return RunResult(stdout="", stderr="Operation not permitted", returncode=1)
+        if "podman" in cmd and "image" in cmd and "exists" in cmd:
+            return RunResult(stdout="", stderr="", returncode=1)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    subprocess_calls = []
+
+    def should_not_be_called(cmd, **kwargs):
+        subprocess_calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, returncode=0)
+
+    resolver = BaselineResolver(eperm_executor)
+    with patch("yoinkc.baseline.subprocess.run", should_not_be_called):
+        result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
+
+    assert result is False
+    assert len(subprocess_calls) == 0, "subprocess.run must not be called when nsenter unavailable"
