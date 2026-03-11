@@ -81,20 +81,12 @@ body { padding-bottom: 70px; }
   .pf-v6-c-page__sidebar { width: 100%; position: static; }
 }
 
-/* Badge/label colour overrides */
-.pf-v6-c-label.badge { font-size: .75rem; }
-.pf-v6-c-label.badge.ok      { --pf-v6-c-label--BackgroundColor: #238636; --pf-v6-c-label--Color: #fff; background: #238636; color: #fff; }
-.pf-v6-c-label.badge.warn,
-.pf-v6-c-label.badge.warning  { --pf-v6-c-label--BackgroundColor: #9e6a03; --pf-v6-c-label--Color: #fff; background: #9e6a03; color: #fff; }
-.pf-v6-c-label.badge.error    { --pf-v6-c-label--BackgroundColor: #da3633; --pf-v6-c-label--Color: #fff; background: #da3633; color: #fff; }
-.pf-v6-c-label.badge.info     { --pf-v6-c-label--BackgroundColor: #1f6feb; --pf-v6-c-label--Color: #fff; background: #1f6feb; color: #fff; }
-
-/* Repo badges */
+/* Repo badges — use PF6 status tokens for theme-awareness */
 .repo-badge { display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
-.repo-badge.epel      { background: #1f6feb33; color: #58a6ff; }
-.repo-badge.copr      { background: #da363333; color: #f85149; }
-.repo-badge.rpmfusion  { background: #f0883e33; color: #f0883e; }
-.repo-badge.base      { color: #8b949e; }
+.repo-badge.epel      { background: var(--pf-t--global--color--status--info--100); color: var(--pf-t--global--text--color--status--info--default); }
+.repo-badge.copr      { background: var(--pf-t--global--color--status--danger--100); color: var(--pf-t--global--text--color--status--danger--default); }
+.repo-badge.rpmfusion  { background: var(--pf-t--global--color--status--warning--100); color: var(--pf-t--global--text--color--status--warning--default); }
+.repo-badge.base      { color: var(--pf-t--global--text--color--subtle); }
 
 /* Warning dismiss */
 .warning-row.dismissed { display: none; }
@@ -103,17 +95,17 @@ body { padding-bottom: 70px; }
 /* Readiness panel */
 .readiness-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 .readiness-col { border-radius: 8px; padding: 1rem; }
-.readiness-col.readiness-auto   { border-left: 4px solid var(--pf-v6-global--success-color--100, #3fb950); }
-.readiness-col.readiness-fixme  { border-left: 4px solid var(--pf-v6-global--warning-color--100, #d29922); }
-.readiness-col.readiness-manual { border-left: 4px solid var(--pf-v6-global--danger-color--100, #f85149); }
+.readiness-col.readiness-auto   { border-left: 4px solid var(--pf-t--global--color--status--success--default); }
+.readiness-col.readiness-fixme  { border-left: 4px solid var(--pf-t--global--color--status--warning--default); }
+.readiness-col.readiness-manual { border-left: 4px solid var(--pf-t--global--color--status--danger--default); }
 .readiness-header { font-weight: 600; margin-bottom: 0.5rem; }
 .readiness-count  { font-size: 1.3rem; margin-right: 0.25rem; }
-.readiness-col.readiness-auto   .readiness-count { color: var(--pf-v6-global--success-color--100, #3fb950); }
-.readiness-col.readiness-fixme  .readiness-count { color: var(--pf-v6-global--warning-color--100, #d29922); }
-.readiness-col.readiness-manual .readiness-count { color: var(--pf-v6-global--danger-color--100, #f85149); }
+.readiness-col.readiness-auto   .readiness-count { color: var(--pf-t--global--text--color--status--success--default); }
+.readiness-col.readiness-fixme  .readiness-count { color: var(--pf-t--global--text--color--status--warning--default); }
+.readiness-col.readiness-manual .readiness-count { color: var(--pf-t--global--text--color--status--danger--default); }
 .readiness-col ul { list-style: none; padding: 0; margin: 0; }
 .readiness-col li { padding: 0.2rem 0; }
-.readiness-link { background: none; border: none; color: var(--pf-v6-global--link--Color, #58a6ff); cursor: pointer; padding: 0; font-size: 0.9rem; text-align: left; }
+.readiness-link { background: none; border: none; color: var(--pf-t--global--text--color--link--default); cursor: pointer; padding: 0; font-size: 0.9rem; text-align: left; }
 .readiness-link:hover { text-decoration: underline; }
 
 /* Summary */
@@ -122,10 +114,10 @@ body { padding-bottom: 70px; }
 
 /* Diff view */
 .diff-view { max-height: 300px; overflow: auto; font-size: 0.85em; line-height: 1.5; padding: 0.5rem; border-radius: 4px; }
-.diff-add  { color: #3fb950; background: rgba(46,160,67,0.08);  display: block; border-left: 3px solid #3fb950; padding-left: 0.5rem; }
-.diff-del  { color: #f85149; background: rgba(248,81,73,0.08);  display: block; border-left: 3px solid #f85149; padding-left: 0.5rem; }
-.diff-hdr  { color: #8b949e; display: block; font-weight: bold; }
-.diff-hunk { color: #79c0ff; display: block; }
+.diff-add  { color: var(--pf-t--global--text--color--status--success--default); background: var(--pf-t--global--color--status--success--100); display: block; border-left: 3px solid var(--pf-t--global--color--status--success--default); padding-left: 0.5rem; }
+.diff-del  { color: var(--pf-t--global--text--color--status--danger--default); background: var(--pf-t--global--color--status--danger--100); display: block; border-left: 3px solid var(--pf-t--global--color--status--danger--default); padding-left: 0.5rem; }
+.diff-hdr  { color: var(--pf-t--global--text--color--subtle); display: block; font-weight: bold; }
+.diff-hunk { color: var(--pf-t--global--text--color--status--info--default); display: block; }
 
 /* Containerfile code block */
 .containerfile-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
@@ -155,7 +147,7 @@ div.excluded { text-decoration: line-through; opacity: 0.45; }
 
 
 /* Details/summary disclosure styling */
-details > summary { cursor: pointer; color: var(--pf-v6-global--link--Color, #58a6ff); font-size: 0.85em; padding: 0.25rem 0; list-style: none; }
+details > summary { cursor: pointer; color: var(--pf-t--global--text--color--link--default); font-size: 0.85em; padding: 0.25rem 0; list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
 details > summary::before { content: "▸ "; font-size: 0.75em; }
 details[open] > summary::before { content: "▾ "; }
@@ -194,6 +186,14 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .pf-v6-c-table td {
   vertical-align: middle;
 }
+
+/* Status text/background utility classes — theme-aware via PF6 tokens */
+.text-status-success { color: var(--pf-t--global--text--color--status--success--default); }
+.text-status-warning { color: var(--pf-t--global--text--color--status--warning--default); }
+.text-status-danger  { color: var(--pf-t--global--text--color--status--danger--default); }
+.text-status-info    { color: var(--pf-t--global--text--color--status--info--default); }
+.bg-status-success-subtle { background: var(--pf-t--global--color--status--success--100); }
+.bg-status-warning-subtle { background: var(--pf-t--global--color--status--warning--100); }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -273,9 +273,9 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <strong>Host:</strong>
   {%- endif -%}
   {{ os_desc }}{% if hostname %} <span style="opacity:0.7">({{ hostname }})</span>{% endif %} &nbsp;|&nbsp;
-  <span style="color:#3fb950">&#10003; {{ triage.automatic }} automatic</span> &nbsp;|&nbsp;
-  <span style="color:#d29922">&#9888; {{ triage.fixme }} FIXME</span> &nbsp;|&nbsp;
-  <span style="color:#f85149">&#9679; {{ triage.manual }} manual</span> &nbsp;|&nbsp;
+  <span class="text-status-success">&#10003; {{ triage.automatic }} automatic</span> &nbsp;|&nbsp;
+  <span class="text-status-warning">&#9888; {{ triage.fixme }} FIXME</span> &nbsp;|&nbsp;
+  <span class="text-status-danger">&#9679; {{ triage.manual }} manual</span> &nbsp;|&nbsp;
   <strong>Warnings:</strong> <span id="banner-warning-count">{{ warnings|length }}</span>
   </p>
 </div>
@@ -576,8 +576,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
       <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
         <td><code>{{ i.path }}</code></td>
-        <td><span class="pf-v6-c-label {{ lang_lbl.get(lang, 'pf-m-grey') }}">{{ lang }}</span></td>
-        <td><span class="pf-v6-c-label {{ 'pf-m-green' if i.static else 'pf-m-orange' }}">{{ linking }}</span></td>
+        <td><span class="pf-v6-c-label pf-m-filled {{ lang_lbl.get(lang, 'pf-m-grey') }}">{{ lang }}</span></td>
+        <td><span class="pf-v6-c-label pf-m-filled {{ 'pf-m-green' if i.static else 'pf-m-orange' }}">{{ linking }}</span></td>
         <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
       </tr>
       {%- endfor %}
@@ -593,8 +593,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
     {%- for v in nd.venv %}
     {%- set ssp = v.system_site_packages %}
     <h4><code>{{ v.path }}</code>
-      {%- if ssp %} <span class="pf-v6-c-label pf-m-red">system-site-packages</span>
-      {%- else %} <span class="pf-v6-c-label pf-m-green">isolated</span>
+      {%- if ssp %} <span class="pf-v6-c-label pf-m-filled pf-m-red">system-site-packages</span>
+      {%- else %} <span class="pf-v6-c-label pf-m-filled pf-m-green">isolated</span>
       {%- endif %}
     </h4>
     {%- set pkgs = v.packages %}
@@ -801,7 +801,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
         <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
         <td><code>{{ u.shell }}</code></td>
         <td><code>{{ u.home }}</code></td>
-        <td><span class="pf-v6-c-label {{ cls_lbl }}">{{ cls }}</span></td>
+        <td><span class="pf-v6-c-label pf-m-filled {{ cls_lbl }}">{{ cls }}</span></td>
         <td>
           <span class="pf-v6-c-form-control"><select class="strategy-select">
             {%- for s in strategies %}
@@ -813,10 +813,10 @@ details.audit-expand { margin-bottom: 0.25rem; }
           {%- set notes = [] %}
           {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
             {%- set _ = notes.append('SSH keys') %}
-            <span class="pf-v6-c-label badge warn" title="authorized_keys found on source but not included in image">SSH KEYS</span>
+            <span class="pf-v6-c-label pf-m-filled pf-m-orange" title="authorized_keys found on source but not included in image">SSH KEYS</span>
           {%- endif %}
           {%- if cls == 'ambiguous' %}
-            <span class="pf-v6-c-label badge warn" title="Classification uncertain — verify intent">ambiguous</span>
+            <span class="pf-v6-c-label pf-m-filled pf-m-orange" title="Classification uncertain — verify intent">ambiguous</span>
           {%- endif %}
         </td>
       </tr>
@@ -892,7 +892,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     {%- if local_timers %}
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Timer</th><th scope="col">Schedule</th><th scope="col">ExecStart</th></tr></thead><tbody>
       {%- for t in local_timers %}
-      <tr style="background:rgba(63,185,80,0.1)">
+      <tr class="bg-status-success-subtle">
         <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
         <td><code>{{ t.exec_start }}</code></td>
       </tr>
@@ -909,7 +909,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Cron Expression</th><th scope="col">Source File</th></tr></thead><tbody>
       {%- for u in st.generated_timer_units %}
-      <tr{% if not u.include %} class="excluded"{% endif %} style="background:rgba(210,153,34,0.1)" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
+      <tr class="bg-status-warning-subtle{% if not u.include %} excluded{% endif %}" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
         <td>{{ u.name }}</td>
         <td><code>{{ u.cron_expr }}</code></td>
@@ -995,7 +995,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
       <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
         <td><code>{{ s.key }}</code></td>
-        <td style="color:#d29922;font-weight:bold">{{ s.runtime }}</td>
+        <td class="text-status-warning" style="font-weight:bold">{{ s.runtime }}</td>
         <td>{{ s.default or '—' }}</td>
         <td><code>{{ s.source }}</code></td>
       </tr>
@@ -1121,7 +1121,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
       {%- set cur = b.get('current', '?') %}
       <tr>
         <td><code>{{ b.get('name', '?') }}</code></td>
-        <td style="{{ 'color:#3fb950' if cur == 'on' else 'color:#f85149' }};font-weight:bold">{{ cur }}</td>
+        <td class="{{ 'text-status-success' if cur == 'on' else 'text-status-danger' }}" style="font-weight:bold">{{ cur }}</td>
         <td>{{ b.get('default', '?') }}</td>
         <td>{{ b.get('description', '') }}</td>
       </tr>
@@ -1172,7 +1172,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     </tbody>
   </table>
   {%- else %}
-  <p style="color:var(--pf-v6-global--success-color--100, #3fb950)">No secrets detected.</p>
+  <p class="text-status-success">No secrets detected.</p>
   {%- endif %}
 {% endcall %}
 
@@ -1193,9 +1193,9 @@ details.audit-expand { margin-bottom: 0.25rem; }
         <td>{{ c.type }}</td>
         <td>
           {%- if c.method == 'static' -%}
-          <span style="color:#3fb950;font-weight:bold">Bake into image</span>
+          <span class="text-status-success" style="font-weight:bold">Bake into image</span>
           {%- elif c.method == 'dhcp' -%}
-          <span style="color:#d29922;font-weight:bold">Kickstart at deploy</span>
+          <span class="text-status-warning" style="font-weight:bold">Kickstart at deploy</span>
           {%- else -%}
           <span>Review</span>
           {%- endif -%}
@@ -1209,7 +1209,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if net.firewall_zones %}
   <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones <span style="color:#3fb950;font-size:0.8em">(bake into image)</span></h3></div></div>
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones <span class="text-status-success" style="font-size:0.8em">(bake into image)</span></h3></div></div>
     <div class="pf-v6-c-card__body">
     {%- for z in net.firewall_zones %}
     <h4>{{ z.name }}</h4>
@@ -1244,11 +1244,11 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__body">
     <p>resolv.conf provenance:
       {%- if net.resolv_provenance == 'networkmanager' %}
-      <span style="color:#d29922;font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
+      <span class="text-status-warning" style="font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
       {%- elif net.resolv_provenance == 'systemd-resolved' %}
-      <span style="color:#d29922;font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
+      <span class="text-status-warning" style="font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
       {%- else %}
-      <span style="color:#3fb950;font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
+      <span class="text-status-success" style="font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
       {%- endif %}
     </p>
     </div>
@@ -1341,7 +1341,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Config files</dt><dd class="pf-v6-c-description-list__description">{{ counts.config_files }}</dd></div>
   <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Containers / quadlets</dt><dd class="pf-v6-c-description-list__description">{{ counts.containers }}</dd></div>
   <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Secrets redacted</dt><dd class="pf-v6-c-description-list__description">{{ counts.redactions }}</dd></div>
-  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Triage</dt><dd class="pf-v6-c-description-list__description"><span style="color:#3fb950">{{ triage.automatic }} automatic</span> · <span style="color:#d29922">{{ triage.fixme }} FIXME</span> · <span style="color:#f85149">{{ triage.manual }} manual</span></dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Triage</dt><dd class="pf-v6-c-description-list__description"><span class="text-status-success">{{ triage.automatic }} automatic</span> · <span class="text-status-warning">{{ triage.fixme }} FIXME</span> · <span class="text-status-danger">{{ triage.manual }} manual</span></dd></div>
 </dl>
 
 {# ── 2. Packages ── #}
@@ -1793,7 +1793,7 @@ var snapshot = {{ snapshot_json|safe }};
       if (rerenderBtn) rerenderBtn.disabled = false;
       if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = false;
     } else if (isHelper) {
-      if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--pf-v6-global--Color--200, #8b949e)'; }
+      if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--pf-t--global--text--color--subtle)'; }
       if (rerenderBtn) rerenderBtn.disabled = true;
       if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = true;
     } else {
