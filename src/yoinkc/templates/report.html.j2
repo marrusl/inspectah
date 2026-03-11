@@ -163,17 +163,7 @@ details[open] > summary::before { content: "▾ "; }
 details > summary:hover { text-decoration: underline; }
 details[open] > summary { margin-bottom: 0.25rem; }
 
-/* Inline semantic labels (colour-coded by category) */
-.pf-v6-c-label.lbl-service  { background: #4caf50; color: #fff; }
-.pf-v6-c-label.lbl-human    { background: #2196f3; color: #fff; }
-.pf-v6-c-label.lbl-ambiguous { background: #ff9800; color: #fff; }
-.pf-v6-c-label.lbl-go       { background: #00ADD8; color: #fff; }
-.pf-v6-c-label.lbl-rust     { background: #DEA584; color: #fff; }
-.pf-v6-c-label.lbl-c-cpp    { background: #555;    color: #fff; }
-.pf-v6-c-label.lbl-static   { background: #4caf50; color: #fff; }
-.pf-v6-c-label.lbl-dynamic  { background: #ff9800; color: #fff; }
-.pf-v6-c-label.lbl-isolated { background: #4caf50; color: #fff; }
-.pf-v6-c-label.lbl-ssp      { background: #f44336; color: #fff; }
+/* Inline semantic labels now use native PF6 variants */
 
 /* Audit */
 .audit-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
@@ -194,6 +184,12 @@ details.audit-expand { margin-bottom: 0.25rem; }
 /* Spinner (for re-render button) */
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Form controls in table cells – reduce margins for compact rows */
+.pf-v6-c-table td .pf-v6-c-form-control {
+  margin: 0;
+  padding: 0.25rem 0;
+}
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -569,15 +565,15 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col">Language</th><th scope="col">Linking</th><th scope="col">Shared Libraries</th></tr></thead><tbody>
       {%- for i in nd.elf %}
       {%- set lang = i.lang %}
-      {%- set lang_lbl = {'go': 'lbl-go', 'rust': 'lbl-rust', 'c/c++': 'lbl-c-cpp'} %}
+      {%- set lang_lbl = {'go': 'pf-m-teal', 'rust': 'pf-m-orange', 'c/c++': 'pf-m-purple'} %}
       {%- set linking = 'static' if i.static else 'dynamic' %}
       {%- set nr_idx = namespace(val=-1) %}
       {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
       <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
         <td><code>{{ i.path }}</code></td>
-        <td><span class="pf-v6-c-label {{ lang_lbl.get(lang, 'lbl-ambiguous') }}">{{ lang }}</span></td>
-        <td><span class="pf-v6-c-label {{ 'lbl-static' if i.static else 'lbl-dynamic' }}">{{ linking }}</span></td>
+        <td><span class="pf-v6-c-label {{ lang_lbl.get(lang, 'pf-m-grey') }}">{{ lang }}</span></td>
+        <td><span class="pf-v6-c-label {{ 'pf-m-green' if i.static else 'pf-m-orange' }}">{{ linking }}</span></td>
         <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
       </tr>
       {%- endfor %}
@@ -593,8 +589,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
     {%- for v in nd.venv %}
     {%- set ssp = v.system_site_packages %}
     <h4><code>{{ v.path }}</code>
-      {%- if ssp %} <span class="pf-v6-c-label lbl-ssp">system-site-packages</span>
-      {%- else %} <span class="pf-v6-c-label lbl-isolated">isolated</span>
+      {%- if ssp %} <span class="pf-v6-c-label pf-m-red">system-site-packages</span>
+      {%- else %} <span class="pf-v6-c-label pf-m-green">isolated</span>
       {%- endif %}
     </h4>
     {%- set pkgs = v.packages %}
@@ -701,13 +697,20 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Quadlet Units</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th></tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
       {%- for u in ct.quadlet_units %}
       <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
         <td>{{ u.name }}</td>
         <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
         <td><code>{{ u.path }}</code></td>
+        <td>
+          {%- if u.content and u.content.strip() %}
+          <details><summary>show</summary>
+            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ u.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
       </tr>
       {%- endfor %}
     </tbody></table>
@@ -771,8 +774,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header">
       <div class="pf-v6-c-card__title"><h3>Users</h3></div>
-      <div class="pf-v6-c-card__actions">
-        <span>Apply strategy to all users:</span>
+      <div class="pf-v6-c-card__actions" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;">
+        <span>Apply to all:</span>
         <span class="pf-v6-c-form-control"><select id="strategy-apply-all">
           {%- for s in strategies %}
           <option value="{{ s }}">{{ s }}</option>
@@ -787,7 +790,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
       <tbody>
       {%- for u in ug.users %}
       {%- set cls = u.classification or '?' %}
-      {%- set cls_lbl = 'lbl-service' if cls == 'service' else 'lbl-human' if cls == 'human' else 'lbl-ambiguous' %}
+      {%- set cls_lbl = 'pf-m-green' if cls == 'service' else 'pf-m-blue' if cls == 'human' else 'pf-m-orange' %}
       <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.get('include', true) else '' }}/></span></td>
         <td><strong>{{ u.name }}</strong></td>
@@ -823,8 +826,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header">
       <div class="pf-v6-c-card__title"><h3>Groups</h3></div>
-      <div class="pf-v6-c-card__actions">
-        <span>Apply strategy to all groups:</span>
+      <div class="pf-v6-c-card__actions" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;">
+        <span>Apply to all:</span>
         <span class="pf-v6-c-form-control"><select id="strategy-apply-all-groups">
           {%- for s in strategies %}
           <option value="{{ s }}">{{ s }}</option>
@@ -1002,9 +1005,57 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Module and Dracut Configuration</h3></div></div>
     <div class="pf-v6-c-card__body">
-    {%- if kb.modules_load_d %}<p>modules-load.d: {{ kb.modules_load_d|length }} file(s)</p>{%- endif %}
-    {%- if kb.modprobe_d %}<p>modprobe.d: {{ kb.modprobe_d|length }} file(s)</p>{%- endif %}
-    {%- if kb.dracut_conf %}<p>dracut.conf.d: {{ kb.dracut_conf|length }} file(s)</p>{%- endif %}
+    {%- if kb.modules_load_d %}
+    <h4>modules-load.d</h4>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
+      {%- for cfg in kb.modules_load_d %}
+      <tr>
+        <td><code>{{ cfg.path }}</code></td>
+        <td>
+          {%- if cfg.content and cfg.content.strip() %}
+          <details><summary>show</summary>
+            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ cfg.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- endif %}
+    {%- if kb.modprobe_d %}
+    <h4 style="margin-top: 1rem;">modprobe.d</h4>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
+      {%- for cfg in kb.modprobe_d %}
+      <tr>
+        <td><code>{{ cfg.path }}</code></td>
+        <td>
+          {%- if cfg.content and cfg.content.strip() %}
+          <details><summary>show</summary>
+            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ cfg.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- endif %}
+    {%- if kb.dracut_conf %}
+    <h4 style="margin-top: 1rem;">dracut.conf.d</h4>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
+      {%- for cfg in kb.dracut_conf %}
+      <tr>
+        <td><code>{{ cfg.path }}</code></td>
+        <td>
+          {%- if cfg.content and cfg.content.strip() %}
+          <details><summary>show</summary>
+            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ cfg.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- endif %}
     </div>
   </div>
   {%- endif %}
