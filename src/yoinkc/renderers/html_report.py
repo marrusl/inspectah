@@ -77,6 +77,18 @@ _TOGGLE_ICON_SVG = (
     '</svg></span>'
 )
 
+_FOLDER_ICON_SVG = (
+    '<svg aria-hidden="true" viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor">'
+    '<path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h3.879a1.5 1.5 0 0 1 1.06.44l1.122 1.12A1.5 1.5 0 0 0 9.62 4H13.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9z"/>'
+    '</svg>'
+)
+
+_FILE_ICON_SVG = (
+    '<svg aria-hidden="true" viewBox="0 0 16 16" width="1em" height="1em" fill="currentColor">'
+    '<path d="M4 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4.707A1 1 0 0 0 13.707 4L10 .293A1 1 0 0 0 9.293 0H4zm5.5 1.5v2a1 1 0 0 0 1 1h2z"/>'
+    '</svg>'
+)
+
 
 def _render_tree_items(nodes: List[dict], content_snippets: List[str]) -> str:
     """Render tree nodes as PF6 tree-view list items."""
@@ -91,7 +103,7 @@ def _render_tree_items(nodes: List[dict], content_snippets: List[str]) -> str:
                 '<button class="pf-v6-c-tree-view__node" type="button">'
                 '<div class="pf-v6-c-tree-view__node-container">'
                 f'<span class="pf-v6-c-tree-view__node-toggle">{_TOGGLE_ICON_SVG}</span>'
-                '<span class="pf-v6-c-tree-view__node-icon">\U0001F4C1</span>'
+                f'<span class="pf-v6-c-tree-view__node-icon">{_FOLDER_ICON_SVG}</span>'
                 f'<span class="pf-v6-c-tree-view__node-text">{name_esc}</span>'
                 '</div></button></div>'
                 f'<ul class="pf-v6-c-tree-view__list" role="group">{ch_html}</ul>'
@@ -110,7 +122,7 @@ def _render_tree_items(nodes: List[dict], content_snippets: List[str]) -> str:
                 f'<button class="pf-v6-c-tree-view__node file-entry" type="button"'
                 f' data-content-id="{cid}" data-path="{path_attr}">'
                 '<div class="pf-v6-c-tree-view__node-container">'
-                '<span class="pf-v6-c-tree-view__node-icon">\U0001F4C4</span>'
+                f'<span class="pf-v6-c-tree-view__node-icon">{_FILE_ICON_SVG}</span>'
                 f'<span class="pf-v6-c-tree-view__node-text">{name_esc}</span>'
                 '</div></button></div></li>'
             )
@@ -121,7 +133,7 @@ def _render_tree_html(nodes: List[dict], content_snippets: List[str]) -> str:
     """Render tree nodes as a complete PF6 tree-view component."""
     items = _render_tree_items(nodes, content_snippets)
     return (
-        '<div class="pf-v6-c-tree-view">'
+        '<div class="pf-v6-c-tree-view pf-m-guides">'
         f'<ul class="pf-v6-c-tree-view__list" role="tree" aria-label="File browser">{items}</ul>'
         '</div>'
     )
