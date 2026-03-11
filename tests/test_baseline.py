@@ -245,3 +245,66 @@ def test_resolver_instances_independent(_mock_userns):
     # r1's state is unchanged
     assert r1._nsenter_available is True
     assert r2._nsenter_available is False
+
+
+# ---------------------------------------------------------------------------
+# BaselineResolver.resolve — unified entry point
+# ---------------------------------------------------------------------------
+
+def test_resolve_target_image_with_file():
+    """resolve() with --target-image and --baseline-packages loads from file."""
+    resolver = BaselineResolver(None)
+    names, image, no_baseline = resolver.resolve(
+        FIXTURES / "host_etc", "rhel", "9.4",
+        baseline_packages_file=FIXTURES / "base_image_packages.txt",
+        target_image="my-registry.example.com/custom:latest",
+    )
+    assert no_baseline is False
+    assert image == "my-registry.example.com/custom:latest"
+    assert names is not None
+    assert "bash" in names
+
+
+def test_resolve_target_image_no_executor():
+    """resolve() with --target-image but no executor returns no_baseline=True."""
+    resolver = BaselineResolver(None)
+    names, image, no_baseline = resolver.resolve(
+        FIXTURES / "host_etc", "rhel", "9.4",
+        target_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+    )
+    assert no_baseline is True
+    assert image == "registry.redhat.io/rhel9/rhel-bootc:9.6"
+    assert names is None
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_resolve_target_image_with_executor(_mock_userns):
+    """resolve() with --target-image and an executor queries podman."""
+    pkg_list = (FIXTURES / "base_image_packages.txt").read_text()
+
+    def podman_handler(cmd):
+        if "rpm" in cmd:
+            return RunResult(stdout=pkg_list, stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    resolver = BaselineResolver(_make_executor(podman_result=podman_handler))
+    names, image, no_baseline = resolver.resolve(
+        FIXTURES / "host_etc", "centos", "9",
+        target_image="quay.io/centos-bootc/centos-bootc:stream9",
+    )
+    assert no_baseline is False
+    assert image == "quay.io/centos-bootc/centos-bootc:stream9"
+    assert names is not None
+    assert "bash" in names
+
+
+def test_resolve_delegates_to_get_baseline_packages():
+    """resolve() without --target-image delegates to get_baseline_packages."""
+    resolver = BaselineResolver(None)
+    names, base_image, no_baseline = resolver.resolve(
+        FIXTURES / "host_etc", "centos", "9",
+        baseline_packages_file=FIXTURES / "base_image_packages.txt",
+    )
+    assert no_baseline is False
+    assert base_image == "quay.io/centos-bootc/centos-bootc:stream9"
+    assert "bash" in names

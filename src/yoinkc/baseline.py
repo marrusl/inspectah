@@ -278,8 +278,36 @@ class BaselineResolver:
         return result.stdout
 
     # ------------------------------------------------------------------
-    # Top-level entry point
+    # Top-level entry points
     # ------------------------------------------------------------------
+
+    def resolve(
+        self,
+        host_root: Path,
+        os_id: str,
+        version_id: str,
+        baseline_packages_file: Optional[Path] = None,
+        target_version: Optional[str] = None,
+        target_image: Optional[str] = None,
+    ) -> Tuple[Optional[Set[str]], Optional[str], bool]:
+        """Resolve the full baseline, handling both ``--target-image`` and auto-detection.
+
+        Returns ``(package_names, base_image_ref, no_baseline)``.
+        """
+        if target_image:
+            if baseline_packages_file:
+                names = load_baseline_packages_file(baseline_packages_file)
+                return (names, target_image, not bool(names))
+            elif self._executor is not None:
+                names = self.query_packages(target_image)
+                return (names, target_image, names is None)
+            else:
+                return (None, target_image, True)
+        return self.get_baseline_packages(
+            host_root, os_id, version_id,
+            baseline_packages_file=baseline_packages_file,
+            target_version=target_version,
+        )
 
     def get_baseline_packages(
         self,

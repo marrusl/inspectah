@@ -65,6 +65,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Path to a newline-separated list of package names for air-gapped "
              "environments where the base image cannot be queried via podman.",
     )
+    parser.add_argument(
+        "--no-baseline",
+        action="store_true",
+        help="Run without base image comparison — all installed packages will be "
+             "included in the Containerfile. Use when the base image cannot be "
+             "queried and --baseline-packages is unavailable.",
+    )
     # Opt-in deeper inspection (design doc)
     parser.add_argument(
         "--config-diffs",
@@ -135,5 +142,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
     if args.from_snapshot and args.inspect_only:
         parser.error("--from-snapshot and --inspect-only cannot be used together")
+
+    if args.no_baseline and args.baseline_packages:
+        parser.error("--no-baseline and --baseline-packages cannot be used together")
 
     return args

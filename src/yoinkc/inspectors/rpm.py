@@ -6,7 +6,7 @@ Baseline is the target bootc base image package list (or --baseline-packages fil
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 from .._util import debug as _debug_fn, make_warning, run_rpm_query as _util_run_rpm_query, _RPM_LOCK_DEFINE as _UTIL_RPM_LOCK_DEFINE
 
@@ -574,6 +574,7 @@ def run(
     resolver: Optional[BaselineResolver] = None,
     target_version: Optional[str] = None,
     target_image: Optional[str] = None,
+    preflight_baseline: Optional[Tuple[Optional[Set[str]], Optional[str], bool]] = None,
 ) -> RpmSection:
     """Run RPM inspection.
 
@@ -606,37 +607,46 @@ def run(
         installed = []
 
     # 2) Baseline from base image (or file, or fallback)
-    id_val, version_id = _read_os_id_version(host_root)
     baseline_names: Optional[Set[str]] = None
     section.no_baseline = False
 
-    if id_val and version_id:
-        _resolver = resolver if resolver is not None else BaselineResolver(executor)
-        if target_image:
-            section.base_image = target_image
-            if baseline_packages_file:
-                baseline_set = load_baseline_packages_file(baseline_packages_file)
-                no_baseline = not baseline_set
-            elif _resolver._executor is not None:
-                baseline_set = _resolver.query_packages(target_image)
-                no_baseline = baseline_set is None
-            else:
-                baseline_set, no_baseline = None, True
-        else:
-            baseline_set, base_image, no_baseline = _resolver.get_baseline_packages(
-                host_root, id_val, version_id,
-                baseline_packages_file=baseline_packages_file,
-                target_version=target_version,
-            )
-            section.base_image = base_image
+    if preflight_baseline is not None:
+        baseline_set, base_image, no_baseline = preflight_baseline
+        section.base_image = base_image
         if no_baseline:
             section.no_baseline = True
             baseline_names = set()
         else:
             baseline_names = baseline_set
     else:
-        section.no_baseline = True
-        baseline_names = set()
+        id_val, version_id = _read_os_id_version(host_root)
+        if id_val and version_id:
+            _resolver = resolver if resolver is not None else BaselineResolver(executor)
+            if target_image:
+                section.base_image = target_image
+                if baseline_packages_file:
+                    baseline_set = load_baseline_packages_file(baseline_packages_file)
+                    no_baseline = not baseline_set
+                elif _resolver._executor is not None:
+                    baseline_set = _resolver.query_packages(target_image)
+                    no_baseline = baseline_set is None
+                else:
+                    baseline_set, no_baseline = None, True
+            else:
+                baseline_set, base_image, no_baseline = _resolver.get_baseline_packages(
+                    host_root, id_val, version_id,
+                    baseline_packages_file=baseline_packages_file,
+                    target_version=target_version,
+                )
+                section.base_image = base_image
+            if no_baseline:
+                section.no_baseline = True
+                baseline_names = set()
+            else:
+                baseline_names = baseline_set
+        else:
+            section.no_baseline = True
+            baseline_names = set()
 
     if installed:
         installed_names = {p.name for p in installed}

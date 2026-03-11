@@ -18,6 +18,7 @@ def test_defaults():
     assert args.from_snapshot is None
     assert args.inspect_only is False
     assert args.baseline_packages is None
+    assert args.no_baseline is False
     assert args.config_diffs is False
     assert args.deep_binary_scan is False
     assert args.query_podman is False
@@ -84,6 +85,21 @@ def test_baseline_packages_reaches_inspectors():
         assert call_kwargs.kwargs.get("baseline_packages_file") == Path("/tmp/pkgs.txt")
 
 
+def test_no_baseline_reaches_inspectors():
+    """--no-baseline is parsed and passed through to run_all as no_baseline_opt_in."""
+    import unittest.mock
+    args = parse_args(["--no-baseline"])
+    assert args.no_baseline is True
+
+    with unittest.mock.patch("yoinkc.inspectors.run_all") as mock_run_all:
+        mock_run_all.return_value = unittest.mock.MagicMock()
+        from yoinkc.__main__ import _run_inspectors
+        _run_inspectors(Path("/host"), args)
+        mock_run_all.assert_called_once()
+        call_kwargs = mock_run_all.call_args
+        assert call_kwargs.kwargs.get("no_baseline_opt_in") is True
+
+
 def _make_main_snapshot():
     """Minimal snapshot mock for main() tests."""
     snap = unittest.mock.MagicMock()
@@ -138,3 +154,9 @@ def test_from_snapshot_and_inspect_only_are_mutually_exclusive():
     """--from-snapshot and --inspect-only together must be rejected."""
     with pytest.raises(SystemExit):
         parse_args(["--from-snapshot", "snap.json", "--inspect-only"])
+
+
+def test_no_baseline_and_baseline_packages_are_mutually_exclusive():
+    """--no-baseline and --baseline-packages together must be rejected."""
+    with pytest.raises(SystemExit):
+        parse_args(["--no-baseline", "--baseline-packages", "/tmp/pkgs.txt"])

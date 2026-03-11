@@ -31,6 +31,8 @@ def _fixture_executor(cmd, cwd=None):
     cmd_str = " ".join(cmd)
     if "podman" in cmd and "login" in cmd and "--get-login" in cmd:
         return RunResult(stdout="testuser\n", stderr="", returncode=0)
+    if "podman" in cmd and "image" in cmd and "exists" in cmd:
+        return RunResult(stdout="", stderr="", returncode=0)
     if "podman" in cmd and "rpm" in cmd and "-qa" in cmd:
         return RunResult(stdout=(FIXTURES / "base_image_packages.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-qa" in cmd:
@@ -820,27 +822,60 @@ def test_run_all_with_fixtures(host_root, fixture_executor):
     assert snapshot.users_groups is not None
 
 
-def test_run_all_no_baseline_warning(host_root):
-    """When podman fails, no-baseline warning is produced and tool continues."""
-    def failing_executor(cmd, cwd=None):
-        cmd_str = " ".join(cmd)
-        if "podman" in cmd:
-            return RunResult(stdout="", stderr="not available", returncode=127)
-        if "rpm" in cmd and "-qa" in cmd:
-            return RunResult(stdout=(FIXTURES / "rpm_qa_output.txt").read_text(), stderr="", returncode=0)
-        if "rpm" in cmd and "-Va" in cmd:
-            return RunResult(stdout=(FIXTURES / "rpm_va_output.txt").read_text(), stderr="", returncode=0)
-        if "rpm" in cmd and "-ql" in cmd:
-            return RunResult(stdout=(FIXTURES / "rpm_qla_output.txt").read_text(), stderr="", returncode=0)
-        if "systemctl" in cmd:
-            return RunResult(stdout=(FIXTURES / "systemctl_list_unit_files.txt").read_text(), stderr="", returncode=0)
-        return RunResult(stdout="", stderr="", returncode=1)
+def _no_baseline_executor(cmd, cwd=None):
+    """Executor where podman always fails but rpm/systemctl work."""
+    if "podman" in cmd:
+        return RunResult(stdout="", stderr="not available", returncode=127)
+    if "rpm" in cmd and "-qa" in cmd:
+        return RunResult(stdout=(FIXTURES / "rpm_qa_output.txt").read_text(), stderr="", returncode=0)
+    if "rpm" in cmd and "-Va" in cmd:
+        return RunResult(stdout=(FIXTURES / "rpm_va_output.txt").read_text(), stderr="", returncode=0)
+    if "rpm" in cmd and "-ql" in cmd:
+        return RunResult(stdout=(FIXTURES / "rpm_qla_output.txt").read_text(), stderr="", returncode=0)
+    if "systemctl" in cmd:
+        return RunResult(stdout=(FIXTURES / "systemctl_list_unit_files.txt").read_text(), stderr="", returncode=0)
+    return RunResult(stdout="", stderr="", returncode=1)
 
-    snapshot = run_all(host_root, executor=failing_executor)
+
+def test_run_all_no_baseline_fails_fast(host_root, capsys):
+    """Without --no-baseline, missing baseline causes sys.exit(1)."""
+    with pytest.raises(SystemExit) as exc_info:
+        run_all(host_root, executor=_no_baseline_executor)
+    assert exc_info.value.code == 1
+    err = capsys.readouterr().err
+    assert "Could not query the base image package list" in err
+    assert "--no-baseline" in err
+    assert "--baseline-packages" in err
+
+
+def test_no_baseline_error_includes_registry_login_for_rhel(host_root, capsys):
+    """Fail-fast error includes registry login step for RHEL images."""
+    with pytest.raises(SystemExit):
+        run_all(host_root, executor=_no_baseline_executor)
+    err = capsys.readouterr().err
+    # Host fixture is RHEL 9 → base image is registry.redhat.io
+    assert "sudo podman login registry.redhat.io" in err
+
+
+def test_no_baseline_error_omits_registry_login_for_centos(tmp_path, capsys):
+    """Fail-fast error omits registry login step for CentOS (public registry)."""
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "os-release").write_text('NAME="CentOS Stream"\nVERSION_ID="9"\nID=centos\n')
+    with pytest.raises(SystemExit):
+        run_all(tmp_path, executor=_no_baseline_executor)
+    err = capsys.readouterr().err
+    assert "Could not query the base image package list" in err
+    assert "registry.redhat.io" not in err
+
+
+def test_run_all_no_baseline_warning(host_root):
+    """With --no-baseline, missing baseline produces a warning and continues."""
+    snapshot = run_all(host_root, executor=_no_baseline_executor, no_baseline_opt_in=True)
     assert snapshot.rpm is not None
     assert snapshot.rpm.no_baseline is True
     rpm_warnings = [w for w in snapshot.warnings if w.get("source") == "rpm"]
-    assert any("base image" in w.get("message", "").lower() for w in rpm_warnings)
+    assert any("--no-baseline" in w.get("message", "") for w in rpm_warnings)
 
 
 def test_cross_major_warning_in_snapshot(host_root, fixture_executor):

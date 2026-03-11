@@ -43,6 +43,8 @@ def _make_executor(pkg_list: Optional[str] = None):
         c = " ".join(cmd)
         if "podman" in c and "login" in c and "--get-login" in c:
             return RunResult(stdout="testuser\n", stderr="", returncode=0)
+        if "podman" in c and "image" in c and "exists" in c:
+            return RunResult(stdout="", stderr="", returncode=0)
         if "podman" in c and "rpm" in c:
             if pkg_list is not None:
                 return RunResult(stdout=pkg_list, stderr="", returncode=0)
@@ -79,6 +81,7 @@ def _build_snapshot(with_baseline: bool):
         snapshot = run_all_inspectors(
             FIXTURES / "host_etc",
             executor=_make_executor(pkg_list),
+            no_baseline_opt_in=not with_baseline,
         )
     return redact_snapshot(snapshot)
 

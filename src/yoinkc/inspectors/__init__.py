@@ -159,6 +159,34 @@ def _validate_supported_host(os_release: Optional[OsRelease]) -> Optional[str]:
 
 
 
+def _baseline_fail_fast(base_image: Optional[str]) -> None:
+    """Print a clear error about missing baseline and exit."""
+    lines = [
+        "ERROR: Could not query the base image package list.",
+        "",
+        "Without a baseline, the generated Containerfile would include every",
+        "installed package — not just the ones added by the operator. This is",
+        "almost certainly not what you want.",
+        "",
+        "To fix this, try one of:",
+    ]
+    step = 1
+    if base_image and "registry.redhat.io" in base_image:
+        lines.append(f"  {step}. Log in to the registry on the host:")
+        lines.append("       sudo podman login registry.redhat.io")
+        step += 1
+    lines.append(f"  {step}. Ensure the container has host access:")
+    lines.append("       --pid=host and --privileged")
+    step += 1
+    lines.append(f"  {step}. Provide a pre-exported package list (for air-gapped environments):")
+    lines.append("       --baseline-packages FILE")
+    step += 1
+    lines.append(f"  {step}. Explicitly opt in to degraded all-packages mode (not recommended):")
+    lines.append("       --no-baseline")
+    print("\n".join(lines), file=sys.stderr)
+    sys.exit(1)
+
+
 def run_all(
     host_root: Path,
     executor: Optional[Executor] = None,
@@ -169,6 +197,7 @@ def run_all(
     target_version: Optional[str] = None,
     target_image: Optional[str] = None,
     user_strategy: Optional[str] = None,
+    no_baseline_opt_in: bool = False,
 ) -> InspectionSnapshot:
     """Run all inspectors and return a merged snapshot."""
     host_root = Path(host_root)
@@ -214,19 +243,53 @@ def run_all(
     from ..baseline import BaselineResolver
     resolver = BaselineResolver(executor)
 
+    # Preflight: resolve baseline before inspectors start so the user gets a
+    # clear error in seconds rather than after a long inspection run.
+    preflight_baseline = None
+    host_os_id = os_release.id if os_release else ""
+    host_version_id = os_release.version_id if os_release else ""
+    if host_os_id and host_version_id:
+        preflight_baseline = resolver.resolve(
+            host_root, host_os_id, host_version_id,
+            baseline_packages_file=baseline_packages_file,
+            target_version=target_version,
+            target_image=target_image,
+        )
+        _, resolved_image, no_baseline = preflight_baseline
+        if no_baseline:
+            if not no_baseline_opt_in:
+                _baseline_fail_fast(resolved_image)
+            w.append(make_warning(
+                "rpm",
+                "Running without baseline (--no-baseline). All installed packages "
+                "will be included in the Containerfile.",
+            ))
+
     _TOTAL_STEPS = 11
     _status_fn("Starting inspection…")
 
     _section_banner("Packages", 1, _TOTAL_STEPS)
-    snapshot.rpm = _safe_run("rpm", lambda: run_rpm(host_root, executor, baseline_packages_file=baseline_packages_file, warnings=w, resolver=resolver, target_version=target_version, target_image=target_image), None, w)
-    if snapshot.rpm and snapshot.rpm.no_baseline:
+    def _run_rpm_inspector():
+        return run_rpm(
+            host_root, executor,
+            baseline_packages_file=baseline_packages_file,
+            warnings=w, resolver=resolver,
+            target_version=target_version,
+            target_image=target_image,
+            preflight_baseline=preflight_baseline,
+        )
+    snapshot.rpm = _safe_run("rpm", _run_rpm_inspector, None, w)
+
+    # Post-inspector fallback: if the preflight was skipped (e.g. os-release
+    # missing or incomplete) but the RPM inspector still ended up without a
+    # baseline, apply the same fail-fast / warn logic.
+    if preflight_baseline is None and snapshot.rpm and snapshot.rpm.no_baseline:
+        if not no_baseline_opt_in:
+            _baseline_fail_fast(None)
         w.append(make_warning(
             "rpm",
-            "Could not query base image package list. "
-            "No baseline available — all installed packages will be included in the Containerfile. "
-            "Common fixes: (1) run with 'sudo podman run …' (rootless containers cannot "
-            "nsenter the host), (2) ensure --pid=host is set, or (3) provide a package "
-            "list via --baseline-packages FILE.",
+            "Running without baseline (--no-baseline). All installed packages "
+            "will be included in the Containerfile.",
         ))
 
     # Build RPM-owned path set once; shared by config and scheduled_tasks inspectors
