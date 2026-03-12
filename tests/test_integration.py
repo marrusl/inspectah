@@ -5,11 +5,13 @@ Test 1: Full pipeline with all fixtures; verify every output file is written and
 Test 2: Load snapshot via --from-snapshot path and run only renderers; verify identical output.
 """
 
+import tarfile
 import tempfile
 from pathlib import Path
 
 from yoinkc.executor import Executor, RunResult
 from yoinkc.inspectors import run_all as run_all_inspectors
+from yoinkc.packaging import create_tarball
 from yoinkc.pipeline import load_snapshot, save_snapshot
 from yoinkc.redact import redact_snapshot
 from yoinkc.renderers import run_all as run_all_renderers
@@ -147,3 +149,23 @@ def test_from_snapshot_produces_identical_output():
             assert c1 == c2, f"Output differs for {rel_path}"
 
         _verify_all_output_files_written_and_non_empty(dir_second)
+
+
+def test_tarball_output_contains_all_expected_files():
+    """Tarball mode produces a valid .tar.gz with all expected output files."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        dir_out = root / "dir_out"
+        _run_full_pipeline(dir_out)
+
+        tarball_path = root / "test-output.tar.gz"
+        create_tarball(dir_out, tarball_path, prefix="testhost-20260312-120000")
+
+        assert tarball_path.exists()
+        with tarfile.open(tarball_path, "r:gz") as tf:
+            names = tf.getnames()
+            prefix = "testhost-20260312-120000"
+            for expected in EXPECTED_OUTPUT_FILES:
+                assert f"{prefix}/{expected}" in names, f"Missing {expected} in tarball"
+            assert any(f"{prefix}/config/" in n for n in names), "Missing config/ in tarball"
+            assert f"{prefix}/{SNAPSHOT_FILENAME}" in names, "Missing snapshot in tarball"
