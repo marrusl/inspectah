@@ -4,30 +4,25 @@ Inspect package-based RHEL, CentOS Stream, and Fedora hosts and produce bootc im
 
 ## Quick start
 
-Run yoinkc on any supported host. The script installs podman if needed, pulls the pre-built image, runs the inspection, and packages the output into a hostname-stamped tarball:
+Run yoinkc on any supported host. The wrapper script installs podman if needed, pulls the pre-built image, and runs the inspection. A hostname-stamped tarball appears in your current directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
 ```
 
-Output goes to `./yoinkc-output` by default. To specify a different directory:
+That's it. The tarball (e.g. `webserver01-20260312-143000.tar.gz`) contains everything: Containerfile, config tree, reports, snapshot, and RHEL entitlement certs (if present). Pass it to `yoinkc-refine` for interactive editing or `yoinkc-build` to build the image.
+
+All yoinkc flags pass through the wrapper:
 
 ```bash
 curl -fsSL -o run-yoinkc.sh https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh
-sudo sh run-yoinkc.sh /path/to/output
-```
-
-Pass extra flags through to yoinkc after the output directory:
-
-```bash
-sudo sh run-yoinkc.sh /path/to/output --config-diffs --validate
+sudo sh run-yoinkc.sh --config-diffs --no-baseline
 ```
 
 Environment variables for customization:
 
 | Variable | Effect |
 |----------|--------|
-| `YOINKC_OUTPUT` | Default output directory (overridden by positional arg) |
 | `YOINKC_IMAGE` | Override the container image (e.g. a local build or pinned tag) |
 | `YOINKC_DEBUG` | Set to `1` to enable debug logging to stderr |
 
@@ -63,9 +58,10 @@ sudo podman run --rm \
   --pid=host \
   --privileged \
   --security-opt label=disable \
+  -w /output \
   -v /:/host:ro \
-  -v ./output:/output:z \
-  ghcr.io/marrusl/yoinkc:latest --output-dir /output
+  -v "$(pwd):/output" \
+  ghcr.io/marrusl/yoinkc:latest
 ```
 
 To build locally instead:
@@ -85,7 +81,7 @@ podman build -t yoinkc .
 >
 > The tool needs broad read access across the host filesystem — the container is a packaging convenience, not a security boundary.
 
-After the run, the output directory contains the Containerfile, config tree, reports, and snapshot. You can then copy that directory off the host or push it to GitHub with `--push-to-github`. The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
+After the run, a hostname-stamped tarball appears in your current directory. Extract it to inspect the contents, or pass it directly to `yoinkc-refine` or `yoinkc-build`. Use `--output-dir DIR` instead if you prefer unpacked directory output (required for `--validate` and `--push-to-github`). The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
 
 ---
 
@@ -100,17 +96,23 @@ pytest
 ### Usage (when installed directly)
 
 ```bash
-# Inspect host mounted at /host, write to default ./output
+# Inspect host mounted at /host, produce tarball in current directory
 yoinkc
 
-# Specify output directory
+# Write tarball to a specific path
+yoinkc -o /tmp/migration.tar.gz
+
+# Write to a directory instead of tarball
 yoinkc --output-dir ./my-output
 
 # Save snapshot only (no render)
-yoinkc --inspect-only -o ./out
+yoinkc --inspect-only
 
 # Render from existing snapshot
-yoinkc --from-snapshot ./out/inspection-snapshot.json -o ./rendered
+yoinkc --from-snapshot ./inspection-snapshot.json
+
+# Skip bundling RHEL entitlement certs (e.g. when sharing publicly)
+yoinkc --no-entitlement
 ```
 
 ---
@@ -215,30 +217,30 @@ Each inspector examines one aspect of the host and contributes a section to the 
 
 ## Output Artifacts
 
+The default output is a tarball (`hostname-YYYYMMDD-HHMMSS.tar.gz`) containing:
+
 ```
-output/
-├── Containerfile                 # Layered image definition (cache-optimized layer order)
-├── README.md                     # Build/deploy commands, FIXME checklist
-├── audit-report.md               # Detailed findings with storage migration plan
-├── report.html                   # Self-contained interactive HTML dashboard (migration readiness panel, include/exclude refinement, works with yoinkc-refine for live re-rendering)
-├── secrets-review.md             # Redacted sensitive content for operator review
-├── kickstart-suggestion.ks       # Deploy-time config (DHCP, DNS, credentials)
-├── inspection-snapshot.json      # Raw structured data (re-renderable via --from-snapshot)
-├── config/                       # Files to COPY into the image
-│   ├── etc/                      # Mirrors /etc — modified configs, repos, firewall, timers
-│   │   ├── httpd/conf/           # Modified RPM-owned configs
-│   │   ├── firewalld/zones/      # Firewall zone definitions
-│   │   ├── systemd/system/       # Local timer units (cron-converted + operator)
-│   │   ├── sysctl.d/             # Non-default sysctl values
-│   │   ├── modules-load.d/       # Kernel module configs
-│   │   ├── tmpfiles.d/           # /var directory structure for bootc bootstrap
-│   │   └── ...
-│   ├── opt/                      # Non-RPM software (venvs, npm apps, binaries)
-│   ├── usr/                      # Files under /usr/local
-│   └── usr/lib/sysusers.d/      # systemd-sysusers conf (sysusers strategy)
-├── quadlet/                      # Container workload unit files
-└── yoinkc-users.toml             # bootc-image-builder user config (blueprint strategy, when active)
+hostname-20260312-143000.tar.gz
+└── hostname-20260312-143000/
+    ├── Containerfile                 # Layered image definition (cache-optimized layer order)
+    ├── README.md                     # Build/deploy commands, FIXME checklist
+    ├── audit-report.md               # Detailed findings with storage migration plan
+    ├── report.html                   # Self-contained interactive HTML dashboard
+    ├── secrets-review.md             # Redacted sensitive content for operator review
+    ├── kickstart-suggestion.ks       # Deploy-time config (conditional)
+    ├── inspection-snapshot.json      # Raw structured data (re-renderable via --from-snapshot)
+    ├── config/                       # Files to COPY into the image
+    │   ├── etc/                      # Mirrors /etc — modified configs, repos, firewall, timers
+    │   ├── opt/                      # Non-RPM software (venvs, npm apps, binaries)
+    │   ├── usr/                      # Files under /usr/local
+    │   └── usr/lib/sysusers.d/       # systemd-sysusers conf (sysusers strategy)
+    ├── quadlet/                      # Container workload unit files (conditional)
+    ├── yoinkc-users.toml             # bootc-image-builder user config (conditional)
+    ├── entitlement/                  # RHEL subscription certs (conditional, RHEL only)
+    └── rhsm/                         # RHEL subscription manager config (conditional, RHEL only)
 ```
+
+Use `--output-dir` to get unpacked directory output instead.
 
 ---
 
@@ -250,7 +252,7 @@ output/
 
 1. Copy the tarball from the target host to your workstation:
    ```bash
-   scp target-host:~/yoinkc-output/yoinkc-output-*.tar.gz .
+   scp target-host:~/hostname-*.tar.gz .
    ```
 2. Download `yoinkc-refine` (one-time):
    ```bash
@@ -259,7 +261,7 @@ output/
    ```
 3. Start the server and open the URL it prints:
    ```bash
-   ./yoinkc-refine yoinkc-output-hostname-*.tar.gz
+   ./yoinkc-refine hostname-*.tar.gz
    ```
 
 **Interactive UI features (with yoinkc-refine running):**
@@ -274,19 +276,19 @@ The server runs entirely locally. It extracts the tarball into a temporary direc
 
 ## Building the image
 
-`yoinkc-build` wraps `podman build` (or `docker build`) with automatic RHEL entitlement handling and image tagging. Point it at a yoinkc output directory or tarball:
+`yoinkc-build` wraps `podman build` (or `docker build`) with automatic RHEL entitlement handling and image tagging. Point it at a yoinkc tarball or output directory:
 
 ```bash
-./yoinkc-build ./yoinkc-output/ my-bootc-image:latest
-./yoinkc-build output.tar.gz my-bootc-image:v1.0
+./yoinkc-build hostname-20260312-143000.tar.gz my-bootc-image:latest
+./yoinkc-build ./output-dir/ my-bootc-image:v1.0
 ```
 
-For RHEL base images (`registry.redhat.io`), it searches for subscription certificates in this order: host-local (`/etc/pki/entitlement`), bundled in the output (from `run-yoinkc.sh`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, entitlement is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
+For RHEL base images (`registry.redhat.io`), it searches for subscription certificates in this order: bundled in the yoinkc output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, entitlement is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
 
 Push directly after building:
 
 ```bash
-./yoinkc-build ./yoinkc-output/ my-bootc-image:v1.0 --push registry.example.com/my-bootc-image:v1.0
+./yoinkc-build hostname-20260312-143000.tar.gz my-bootc-image:v1.0 --push registry.example.com/my-bootc-image:v1.0
 ```
 
 Use `--no-cache` for a clean rebuild without layer caching.
@@ -302,9 +304,11 @@ Use `--no-cache` for a clean rebuild without layer caching.
 | Flag | Description |
 |------|-------------|
 | `--host-root PATH` | Root path for host inspection (default: `/host`) |
-| `-o, --output-dir DIR` | Output directory for all artifacts (default: `./output`) |
+| `-o FILE` | Write tarball to FILE (default: `HOSTNAME-TIMESTAMP.tar.gz` in current directory) |
+| `--output-dir DIR` | Write files to a directory instead of producing a tarball. Mutually exclusive with `-o`. |
+| `--no-entitlement` | Skip bundling RHEL entitlement certs into the output |
 | `--from-snapshot PATH` | Skip inspection; load snapshot from file and run renderers only. Mutually exclusive with `--inspect-only`. |
-| `--inspect-only` | Run inspectors and save snapshot; do not run renderers. Mutually exclusive with `--from-snapshot`. |
+| `--inspect-only` | Run inspectors and save snapshot to current directory; do not run renderers. Mutually exclusive with `--from-snapshot`. |
 
 ### Target Image
 
@@ -328,8 +332,8 @@ Use `--no-cache` for a clean rebuild without layer caching.
 
 | Flag | Description |
 |------|-------------|
-| `--validate` | After generating output, run `podman build` to verify the Containerfile. Requires `podman`; reports failure with a warning if podman is not installed. |
-| `--push-to-github REPO` | Push output directory to a GitHub repository (e.g. `owner/repo`) |
+| `--validate` | After generating output, run `podman build` to verify the Containerfile. Requires `--output-dir`. |
+| `--push-to-github REPO` | Push output directory to a GitHub repository (e.g. `owner/repo`). Requires `--output-dir`. |
 | `--github-token TOKEN` | GitHub personal access token for repo creation (falls back to `GITHUB_TOKEN` env var) |
 | `--public` | When creating a new GitHub repo, make it public (default: private) |
 | `--yes` | Skip interactive confirmation prompts |
