@@ -1,12 +1,17 @@
 """
-Pipeline orchestrator: run inspectors (or load snapshot), redact, then run renderers.
-All renderers write to output_dir (created if it does not exist).
+Pipeline orchestrator: run inspectors (or load snapshot), redact, optionally
+bundle entitlement certs, then produce a tarball or write to a directory.
 """
 
 import json
+import shutil
+import sys
+import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
+from .entitlement import bundle_entitlement_certs
+from .packaging import create_tarball, get_output_stamp
 from .redact import redact_snapshot
 from .schema import InspectionSnapshot, SCHEMA_VERSION
 
@@ -33,32 +38,73 @@ def save_snapshot(snapshot: InspectionSnapshot, path: Path) -> None:
 def run_pipeline(
     *,
     host_root: Path,
-    output_dir: Path,
     run_inspectors: Callable[[Path], InspectionSnapshot],
     run_renderers: Callable[[InspectionSnapshot, Path], None],
     from_snapshot_path: Optional[Path] = None,
     inspect_only: bool = False,
+    output_file: Optional[Path] = None,
+    output_dir: Optional[Path] = None,
+    no_entitlement: bool = False,
+    cwd: Optional[Path] = None,
 ) -> InspectionSnapshot:
-    """
-    Either load snapshot from file or run inspectors; then optionally run renderers.
+    """Run the yoinkc pipeline.
 
-    Returns the snapshot (loaded or newly built).
+    Output modes (mutually exclusive):
+    - output_file: write tarball to this path
+    - output_dir: write files to this directory
+    - neither: write tarball to CWD with auto-generated name
+
+    inspect_only: save snapshot to CWD and exit early.
+    cwd: override working directory for default output paths (testing).
     """
+    working_dir = cwd or Path.cwd()
+
+    # Load or build the snapshot
     if from_snapshot_path is not None:
         snapshot = load_snapshot(from_snapshot_path)
         snapshot = redact_snapshot(snapshot)
-        if not inspect_only:
-            output_dir.mkdir(parents=True, exist_ok=True)
-            run_renderers(snapshot, output_dir)
+    else:
+        snapshot = run_inspectors(host_root)
+        snapshot = redact_snapshot(snapshot)
+
+    # --inspect-only: save snapshot and return
+    if inspect_only:
+        save_snapshot(snapshot, working_dir / "inspection-snapshot.json")
         return snapshot
 
-    snapshot = run_inspectors(host_root)
-    snapshot = redact_snapshot(snapshot)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_path = output_dir / "inspection-snapshot.json"
-    save_snapshot(snapshot, snapshot_path)
+    # Render into a temp directory
+    tmp_dir = Path(tempfile.mkdtemp(prefix="yoinkc-"))
+    try:
+        save_snapshot(snapshot, tmp_dir / "inspection-snapshot.json")
+        run_renderers(snapshot, tmp_dir)
 
-    if not inspect_only:
-        run_renderers(snapshot, output_dir)
+        # Bundle entitlement certs (skip in --from-snapshot mode where
+        # host filesystem may not be mounted)
+        if not no_entitlement and from_snapshot_path is None:
+            bundle_entitlement_certs(host_root, tmp_dir)
+
+        # Output: tarball or directory
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for item in tmp_dir.iterdir():
+                dest = output_dir / item.name
+                if item.is_dir():
+                    shutil.copytree(item, dest, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(item, dest)
+        else:
+            stamp = get_output_stamp()
+            if output_file is None:
+                output_file = working_dir / f"{stamp}.tar.gz"
+            create_tarball(tmp_dir, output_file, prefix=stamp)
+            print(f"Output: {output_file}")
+    except Exception:
+        print(
+            f"Error during output. Rendered files preserved at: {tmp_dir}",
+            file=sys.stderr,
+        )
+        raise
+    else:
+        shutil.rmtree(tmp_dir)
 
     return snapshot

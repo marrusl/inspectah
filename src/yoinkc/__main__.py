@@ -41,8 +41,6 @@ def main(argv: Optional[list] = None) -> int:
     args = parse_args(argv)
 
     # Preflight: bail out early if container privileges are missing.
-    # Only applies when inspecting via a mounted host root (not --from-snapshot,
-    # not running directly on the host with --host-root /).
     if (
         args.from_snapshot is None
         and str(args.host_root) != "/"
@@ -53,12 +51,12 @@ def main(argv: Optional[list] = None) -> int:
         if errors:
             print("ERROR: container privilege checks failed:\n", file=sys.stderr)
             for err in errors:
-                print(f"  • {err}", file=sys.stderr)
+                print(f"  \u2022 {err}", file=sys.stderr)
             print(
                 "\nRun with the required flags, e.g.:\n"
                 "  sudo podman run --rm --pid=host --privileged "
                 "--security-opt label=disable \\\n"
-                "    -v /:/host:ro -v ./output:/output:z yoinkc --output-dir /output\n"
+                "    -v /:/host:ro yoinkc\n"
                 "\nOr use --skip-preflight to bypass these checks.",
                 file=sys.stderr,
             )
@@ -70,13 +68,16 @@ def main(argv: Optional[list] = None) -> int:
 
         snapshot = run_pipeline(
             host_root=args.host_root,
-            output_dir=args.output_dir,
             run_inspectors=run_inspectors,
             run_renderers=_run_renderers,
             from_snapshot_path=args.from_snapshot,
             inspect_only=args.inspect_only,
+            output_file=args.output_file,
+            output_dir=args.output_dir,
+            no_entitlement=args.no_entitlement,
         )
-        if not args.inspect_only and args.output_dir.exists():
+        # --validate and --push-to-github require --output-dir (enforced by CLI)
+        if args.output_dir and not args.inspect_only:
             if args.validate:
                 from .validate import run_validate
                 run_validate(args.output_dir)
@@ -85,7 +86,7 @@ def main(argv: Optional[list] = None) -> int:
                 if not init_git_repo(args.output_dir):
                     print(
                         "Error: failed to initialise git repository in output directory. "
-                        "GitPython may not be installed — try: pip install 'yoinkc[github]'",
+                        "GitPython may not be installed \u2014 try: pip install 'yoinkc[github]'",
                         file=sys.stderr,
                     )
                     return 1
