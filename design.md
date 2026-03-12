@@ -2,7 +2,7 @@
 
 ## Runtime Model
 
-A container run with `--pid=host --privileged --security-opt label=disable -v /:/host:ro` plus a writable output mount that inspects the host via `/host`. The container is a packaging convenience — the tool needs full read access to the host filesystem, so SELinux label enforcement is disabled.
+A container run with `--pid=host --privileged --security-opt label=disable -v /:/host:ro` that inspects the host via `/host` and produces a hostname-stamped tarball. The user's current directory is mounted at `/output` (`-w /output -v $(pwd):/output`) so the tarball lands directly where the user ran the command. The container is a packaging convenience — the tool needs full read access to the host filesystem, so SELinux label enforcement is disabled. No `:z` volume flag — `--security-opt label=disable` makes it unnecessary, and relabeling the user's CWD would risk corrupting host SELinux contexts.
 
 `--pid=host` and `--privileged` are required for baseline generation: the tool uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces, querying the target bootc base image for its package list and systemd presets. Without these flags, the tool still runs but falls back to all-packages mode (no baseline subtraction). See [Baseline Generation](#baseline-generation) for details.
 
@@ -10,7 +10,7 @@ This is clean — no contamination of the source system, no installation require
 
 During inspection, the tool emits styled progress output to stderr using ANSI colours and step counters (e.g., `── [1/11] Packages ──`, `── [2/11] Config files ──`). Colours are suppressed automatically when stderr is not a TTY. The renderer phase emits a `Rendering output…` / `Done.` pair.
 
-Output goes to a mounted volume that becomes either local files, a local git repo, or gets pushed to GitHub via the API.
+The default output is a tarball (`HOSTNAME-YYYYMMDD-HHMMSS.tar.gz`) containing the Containerfile, config tree, reports, snapshot, and RHEL entitlement certs (if present on the inspected host). Use `--output-dir` for unpacked directory output, which is required for `--validate` and `--push-to-github`.
 
 The tool itself ships as a container: `ghcr.io/marrusl/yoinkc:latest`.
 
@@ -393,7 +393,7 @@ Every generated Containerfile ends with `RUN bootc container lint`, which valida
 
 ### Building on Non-RHEL Hosts
 
-When the Containerfile's `FROM` line references `registry.redhat.io`, the `dnf install` step requires RHEL subscription entitlement certificates. On a RHEL host, podman handles this automatically. For non-RHEL build hosts (a developer laptop, CI runner, etc.), `yoinkc-build` searches for certificates in a priority cascade: host-local → bundled in the output directory (placed there by `run-yoinkc.sh`) → `./entitlement/` in the current directory → the `YOINKC_ENTITLEMENT` environment variable. Found certificates are bind-mounted into the build container transparently. Certificate expiry is validated via `openssl x509 -checkend` so the operator gets a clear warning before a build fails due to stale credentials.
+When the Containerfile's `FROM` line references `registry.redhat.io`, the `dnf install` step requires RHEL subscription entitlement certificates. On a RHEL host, podman handles this automatically. For non-RHEL build hosts (a developer laptop, CI runner, etc.), `yoinkc-build` searches for certificates in a priority cascade: bundled in the yoinkc output (placed there by yoinkc's entitlement bundling step) → host-local (`/etc/pki/entitlement`) → `./entitlement/` in the current directory → the `YOINKC_ENTITLEMENT` environment variable. Found certificates are bind-mounted into the build container transparently. Certificate expiry is validated via `openssl x509 -checkend` so the operator gets a clear warning before a build fails due to stale credentials.
 
 ### Git Repo Layout
 
@@ -492,8 +492,8 @@ The HTML report embeds the full inspection snapshot and exposes include/exclude 
 **Workflow:**
 
 1. **Inspect on host:** run yoinkc, collect the output tarball.
-2. **Copy to workstation:** `scp target-host:~/yoinkc-output/yoinkc-output-*.tar.gz .`
-3. **Start yoinkc-refine:** `./yoinkc-refine yoinkc-output-hostname-*.tar.gz` — the server extracts the tarball, serves the report at `http://localhost:8642`, and prints the URL.
+2. **Copy to workstation:** `scp target-host:~/hostname-*.tar.gz .`
+3. **Start yoinkc-refine:** `./yoinkc-refine hostname-*.tar.gz` — the server extracts the tarball, serves the report at `http://localhost:8642`, and prints the URL.
 4. **Iterate in browser:** toggle items with checkboxes, click Re-render to apply changes (requires podman or docker for the re-render step), download a refined tarball when done.
 
 **yoinkc-refine** is a single-file Python 3.9+ stdlib-only HTTP server that:
@@ -551,13 +551,15 @@ The default run is optimized for speed — it covers the vast majority of system
 
 | Flag | Default | Effect |
 |---|---|---|
-| `--output-dir DIR` | `./output/` | Directory to write all output artifacts to. Created if it doesn't exist. |
+| `-o FILE` | auto | Write tarball to FILE. Default: `HOSTNAME-TIMESTAMP.tar.gz` in the current directory. |
+| `--output-dir DIR` | off | Write files to a directory instead of producing a tarball. Required for `--validate` and `--push-to-github`. Mutually exclusive with `-o`. |
+| `--no-entitlement` | off | Skip bundling RHEL entitlement certs into the output. |
 | `--baseline-packages FILE` | off | Path to a newline-separated list of package names for air-gapped environments where the base image cannot be queried via podman. |
-| `--validate` | off | After generating output, run `podman build` against the Containerfile to verify it builds successfully. Reports build errors with context so operators can fix issues before manual review. Requires `podman` on the host or in the tool container. |
+| `--validate` | off | After generating output, run `podman build` against the Containerfile to verify it builds successfully. Requires `--output-dir`. |
 | `--config-diffs` | off | Extract RPM defaults via `rpm2cpio` and generate line-by-line diffs for modified config files. Requires RPMs to be in local cache or downloadable from repos. |
 | `--deep-binary-scan` | off | Run full `strings` scan on unknown binaries in `/opt` and `/usr/local` for version detection. Slow on large statically-linked binaries. |
 | `--query-podman` | off | Connect to the podman socket to enumerate running containers and runtime state beyond what's in unit/compose files. |
-| `--push-to-github REPO` | off | Push output to a GitHub repository. Requires confirmation (or `--yes`). Shows total data size before push. |
+| `--push-to-github REPO` | off | Push output to a GitHub repository. Requires `--output-dir` and confirmation (or `--yes`). Shows total data size before push. |
 | `--public` | off | When creating a new GitHub repo, make it public instead of private. |
 | `--yes` | off | Skip interactive confirmation prompts (for automation). |
 | `--user-strategy STRATEGY` | off | Override user creation strategy for all users. Valid: sysusers, blueprint, useradd, kickstart. Default: auto-assigned per classification. |
