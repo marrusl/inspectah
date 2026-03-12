@@ -25,4 +25,4 @@ def bundle_entitlement_certs(host_root: Path, output_dir: Path) -> None:
     # Copy /etc/rhsm/ tree
     rhsm_src = host_root / "etc" / "rhsm"
     if rhsm_src.is_dir():
-        shutil.copytree(rhsm_src, output_dir / "rhsm")
+        shutil.copytree(rhsm_src, output_dir / "rhsm", dirs_exist_ok=True)
