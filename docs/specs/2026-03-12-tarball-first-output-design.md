@@ -1,7 +1,7 @@
 # Tarball-First Output & run-yoinkc.sh Consolidation
 
 **Date:** 2026-03-12
-**Status:** Draft
+**Status:** Implemented
 
 ## Problem
 
@@ -197,9 +197,9 @@ required. No `:z` volume flag — `--security-opt label=disable` already
 disables SELinux confinement, making relabeling unnecessary. Relabeling
 the user's CWD would risk corrupting host SELinux contexts.
 
-The script shrinks from ~156 lines to ~80, with a single
-responsibility: ensure podman is available, handle registry auth, launch
-the container.
+The script shrinks from ~156 lines to ~106 (registry login handling is
+inherently verbose), with a single responsibility: ensure podman is
+available, handle registry auth, launch the container.
 
 ## Compatibility
 
