@@ -14,7 +14,9 @@ from yoinkc.cli import parse_args
 def test_defaults():
     args = parse_args([])
     assert args.host_root == Path("/host")
-    assert args.output_dir == Path("./output")
+    assert args.output_file is None
+    assert args.output_dir is None
+    assert args.no_entitlement is False
     assert args.from_snapshot is None
     assert args.inspect_only is False
     assert args.baseline_packages is None
@@ -49,11 +51,58 @@ def test_from_snapshot_flags():
     assert args.yes is True
 
 
+def test_output_file_short_flag():
+    """'-o' sets the tarball output path."""
+    args = parse_args(["-o", "/tmp/out.tar.gz"])
+    assert args.output_file == Path("/tmp/out.tar.gz")
+    assert args.output_dir is None
+
+
+def test_output_dir_long_flag():
+    """'--output-dir' sets directory output mode."""
+    args = parse_args(["--output-dir", "/tmp/outdir"])
+    assert args.output_dir == Path("/tmp/outdir")
+    assert args.output_file is None
+
+
+def test_output_file_and_output_dir_mutually_exclusive():
+    """-o and --output-dir together must be rejected."""
+    with pytest.raises(SystemExit):
+        parse_args(["-o", "/tmp/out.tar.gz", "--output-dir", "/tmp/outdir"])
+
+
+def test_no_entitlement_flag():
+    args = parse_args(["--no-entitlement"])
+    assert args.no_entitlement is True
+
+
+def test_validate_requires_output_dir():
+    """--validate without --output-dir must be rejected."""
+    with pytest.raises(SystemExit):
+        parse_args(["--validate"])
+
+
+def test_push_to_github_requires_output_dir():
+    """--push-to-github without --output-dir must be rejected."""
+    with pytest.raises(SystemExit):
+        parse_args(["--push-to-github", "owner/repo"])
+
+
+def test_validate_with_output_dir_accepted():
+    args = parse_args(["--output-dir", "/tmp/out", "--validate"])
+    assert args.validate is True
+    assert args.output_dir == Path("/tmp/out")
+
+
+def test_push_to_github_with_output_dir_accepted():
+    args = parse_args(["--output-dir", "/tmp/out", "--push-to-github", "owner/repo"])
+    assert args.push_to_github == "owner/repo"
+
+
 def test_inspect_only_flags():
     """Flags compatible with --inspect-only parse correctly."""
     args = parse_args([
         "--host-root", "/mnt/host",
-        "--output-dir", "/tmp/out",
         "--inspect-only",
         "--baseline-packages", "/tmp/pkgs.txt",
         "--config-diffs",
@@ -61,7 +110,6 @@ def test_inspect_only_flags():
         "--query-podman",
     ])
     assert args.host_root == Path("/mnt/host")
-    assert args.output_dir == Path("/tmp/out")
     assert args.from_snapshot is None
     assert args.inspect_only is True
     assert args.baseline_packages == Path("/tmp/pkgs.txt")

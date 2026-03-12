@@ -18,13 +18,26 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         default=Path("/host"),
         help="Root path for host inspection (default: /host)",
     )
-    parser.add_argument(
+    # Output mode: tarball (default) or directory
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument(
         "-o",
+        dest="output_file",
+        type=Path,
+        metavar="FILE",
+        help="Write tarball to FILE (default: HOSTNAME-TIMESTAMP.tar.gz in cwd)",
+    )
+    output_group.add_argument(
         "--output-dir",
         dest="output_dir",
         type=Path,
-        default=Path("./output"),
-        help="Output directory for all artifacts (default: ./output)",
+        metavar="DIR",
+        help="Write files to a directory instead of producing a tarball",
+    )
+    parser.add_argument(
+        "--no-entitlement",
+        action="store_true",
+        help="Skip bundling RHEL entitlement certs into the output",
     )
 
     # Snapshot load/save
@@ -145,5 +158,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
     if args.no_baseline and args.baseline_packages:
         parser.error("--no-baseline and --baseline-packages cannot be used together")
+
+    if (args.validate or args.push_to_github) and args.output_dir is None:
+        parser.error(
+            "--validate and --push-to-github require --output-dir "
+            "(directory output mode)"
+        )
 
     return args
