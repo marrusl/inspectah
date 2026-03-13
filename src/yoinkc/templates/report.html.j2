@@ -76,17 +76,12 @@ body { padding-bottom: 70px; }
 
 /* Sidebar nav */
 .pf-v6-c-page__sidebar { width: 240px; flex-shrink: 0; }
+.pf-v6-c-page__sidebar .pf-v6-c-page__sidebar-body { padding-inline-end: 0; }
 .pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.75rem 1rem 0.25rem; }
 @media (max-width: 768px) {
   .pf-v6-c-page__sidebar { width: 100%; position: static; }
 }
 
-/* Repo badges — use PF6 status tokens for theme-awareness */
-.repo-badge { display: inline-block; font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; font-weight: 600; }
-.repo-badge.epel      { background: var(--pf-t--global--color--status--info--100); color: var(--pf-t--global--text--color--status--info--default); }
-.repo-badge.copr      { background: var(--pf-t--global--color--status--danger--100); color: var(--pf-t--global--text--color--status--danger--default); }
-.repo-badge.rpmfusion  { background: var(--pf-t--global--color--status--warning--100); color: var(--pf-t--global--text--color--status--warning--default); }
-.repo-badge.base      { color: var(--pf-t--global--text--color--subtle); }
 
 /* Warning dismiss */
 .warning-row.dismissed { display: none; }
@@ -170,7 +165,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
 /* Utility classes */
 .content-preview { border-radius: 4px; padding: var(--pf-t--global--spacer--sm); font-size: 0.8rem; max-height: 200px; overflow: auto; margin: var(--pf-t--global--spacer--xs) 0; }
-.table-group-header { font-weight: var(--pf-t--global--font--weight--body--default); font-size: var(--pf-t--global--font--size--body--sm); color: var(--pf-t--global--text--color--subtle); padding-bottom: var(--pf-t--global--spacer--xs); padding-top: var(--pf-t--global--spacer--md); border-top: 1px solid var(--pf-t--global--border--color--default); }
+.table-group-header { font-weight: var(--pf-t--global--font--weight--body--bold); padding-bottom: var(--pf-t--global--spacer--xs); padding-top: var(--pf-t--global--spacer--md); border-top: 1px solid var(--pf-t--global--border--color--default); }
 .text-sm { font-size: var(--pf-t--global--font--size--body--sm); }
 .text-bold { font-weight: var(--pf-t--global--font--weight--body--bold); }
 .mt-sm { margin-top: var(--pf-t--global--spacer--sm); }
@@ -367,96 +362,104 @@ details.audit-expand { margin-bottom: 0.25rem; }
   </div>
 
   {%- if snapshot.rpm.repo_files %}
-  <h3>Repositories ({{ snapshot.rpm.repo_files|length }})</h3>
-  <table class="pf-v6-c-table" id="pkg-repo-table">
-    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col"><span class="pf-v6-u-screen-reader">Source</span></th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
-    <tbody>
-    {%- for rf in snapshot.rpm.repo_files %}
-    <tr{% if not rf.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="repo_files" data-snap-index="{{ loop.index0 }}">
-      <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb repo-cb" {{ 'checked' if rf.include else '' }}{{ ' disabled title="Default distribution repository — cannot be excluded"' if rf.is_default_repo else '' }}/></span></td>
-      <td><code>{{ rf.path }}</code></td>
-      <td>
-        {%- if repo_display[loop.index0].badge %}
-        <span class="repo-badge {{ repo_display[loop.index0].badge }}">{{ repo_display[loop.index0].badge|upper }}</span>
-        {%- endif %}
-      </td>
-      <td>
-        {%- if rf.content %}
-        <details><summary>show</summary>
-          <pre class="repo-content-pre">{{ rf.content }}</pre>
-        </details>
-        {%- endif %}
-      </td>
-    </tr>
-    {%- endfor %}
-    </tbody>
-  </table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Repositories ({{ snapshot.rpm.repo_files|length }})</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table" id="pkg-repo-table">
+      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col"><span class="pf-v6-u-screen-reader">Source</span></th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
+      <tbody>
+      {%- for rf in snapshot.rpm.repo_files %}
+      <tr{% if not rf.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="repo_files" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb repo-cb" {{ 'checked' if rf.include else '' }}{{ ' disabled title="Default distribution repository — cannot be excluded"' if rf.is_default_repo else '' }}/></span></td>
+        <td><code>{{ rf.path }}</code></td>
+        <td>
+          {%- if repo_display[loop.index0].badge %}
+          <span class="pf-v6-c-label pf-m-compact {{ repo_display[loop.index0].badge_color }}"><span class="pf-v6-c-label__content">{{ repo_display[loop.index0].badge }}</span></span>
+          {%- endif %}
+        </td>
+        <td>
+          {%- if rf.content %}
+          <details><summary>show</summary>
+            <pre class="repo-content-pre">{{ rf.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
   {%- endif %}
 
-  <h3>Dependency Tree</h3>
-  {%- if repo_groups %}
-  <table class="pf-v6-c-table pkg-dep-tree-group">
-    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
-    <tbody>
-    {%- for repo_name, entries in repo_groups.items() %}
-    <tr><th colspan="4" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</th></tr>
-    {%- for entry in entries %}
-    <tr{% if not entry.include %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
-      <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if entry.include else '' }}/></span></td>
-      <td><strong>{{ entry.name }}</strong></td>
-      <td>{{ entry.deps|length }}</td>
-      <td>
-        {%- if entry.deps %}
-        <details><summary>show</summary>
-          <ul class="deps-list">
-          {%- for d in entry.deps %}
-            <li class="text-sm">{{ d }}</li>
-          {%- endfor %}
-          </ul>
-        </details>
-        {%- else %}
-        <em>independent</em>
-        {%- endif %}
-      </td>
-    </tr>
-    {%- endfor %}
-    {%- endfor %}
-    </tbody>
-  </table>
-  {%- else %}
-  {# Fallback: flat table when repo_groups is not populated #}
-  <table class="pf-v6-c-table" id="pkg-dep-tree">
-    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Repo</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
-    <tbody>
-    {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
-    {%- set deps = dep_tree.get(lf, []) %}
-    {%- set leaf_idx = namespace(val=-1) %}
-    {%- for p in snapshot.rpm.packages_added %}
-      {%- if p.name == lf %}{% set leaf_idx.val = loop.index0 %}{% endif %}
-    {%- endfor %}
-    <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
-      <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></span></td>
-      <td><strong>{{ lf }}</strong></td>
-      <td class="text-sm">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
-      <td>{{ deps|length }}</td>
-      <td>
-        {%- if deps %}
-        <details><summary>show</summary>
-          <ul class="deps-list">
-          {%- for d in deps %}
-            <li class="text-sm">{{ d }}</li>
-          {%- endfor %}
-          </ul>
-        </details>
-        {%- else %}
-        <em>independent</em>
-        {%- endif %}
-      </td>
-    </tr>
-    {%- endfor %}
-    </tbody>
-  </table>
-  {%- endif %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Dependency Tree</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if repo_groups %}
+    <table class="pf-v6-c-table pkg-dep-tree-group">
+      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
+      <tbody>
+      {%- for repo_name, entries in repo_groups.items() %}
+      <tr><th colspan="4" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</th></tr>
+      {%- for entry in entries %}
+      <tr{% if not entry.include %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if entry.include else '' }}/></span></td>
+        <td><strong>{{ entry.name }}</strong></td>
+        <td>{{ entry.deps|length }}</td>
+        <td>
+          {%- if entry.deps %}
+          <details><summary>show</summary>
+            <ul class="deps-list">
+            {%- for d in entry.deps %}
+              <li class="text-sm">{{ d }}</li>
+            {%- endfor %}
+            </ul>
+          </details>
+          {%- else %}
+          <em>independent</em>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      {%- endfor %}
+      </tbody>
+    </table>
+    {%- else %}
+    {# Fallback: flat table when repo_groups is not populated #}
+    <table class="pf-v6-c-table" id="pkg-dep-tree">
+      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Repo</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
+      <tbody>
+      {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
+      {%- set deps = dep_tree.get(lf, []) %}
+      {%- set leaf_idx = namespace(val=-1) %}
+      {%- for p in snapshot.rpm.packages_added %}
+        {%- if p.name == lf %}{% set leaf_idx.val = loop.index0 %}{% endif %}
+      {%- endfor %}
+      <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></span></td>
+        <td><strong>{{ lf }}</strong></td>
+        <td class="text-sm">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
+        <td>{{ deps|length }}</td>
+        <td>
+          {%- if deps %}
+          <details><summary>show</summary>
+            <ul class="deps-list">
+            {%- for d in deps %}
+              <li class="text-sm">{{ d }}</li>
+            {%- endfor %}
+            </ul>
+          </details>
+          {%- else %}
+          <em>independent</em>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    {%- endif %}
+    </div>
+  </div>
 
   {%- set leaf_names = snapshot.rpm.leaf_packages %}
   {%- set auto_names = snapshot.rpm.auto_packages or [] %}
@@ -467,25 +470,29 @@ details.audit-expand { margin-bottom: 0.25rem; }
     {%- endif %}
   {%- endfor %}
   {%- if unclassified_pkgs %}
-  <h3 class="mt-lg">Unclassified Packages ({{ unclassified_pkgs|length }})</h3>
-  <p class="text-sm">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
-  <table class="pf-v6-c-table">
-    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Version</th><th scope="col">Arch</th></tr></thead>
-    <tbody>
-    {%- for p in unclassified_pkgs %}
-    {%- set uidx = namespace(val=-1) %}
-    {%- for q in snapshot.rpm.packages_added %}
-      {%- if q.name == p.name %}{% set uidx.val = loop.index0 %}{% endif %}
-    {%- endfor %}
-    <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ uidx.val }}">
-      <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if p.include else '' }}/></span></td>
-      <td>{{ p.name }}</td>
-      <td>{{ p.version }}-{{ p.release }}</td>
-      <td>{{ p.arch }}</td>
-    </tr>
-    {%- endfor %}
-    </tbody>
-  </table>
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Unclassified Packages ({{ unclassified_pkgs|length }})</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <p class="text-sm">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
+    <table class="pf-v6-c-table">
+      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Version</th><th scope="col">Arch</th></tr></thead>
+      <tbody>
+      {%- for p in unclassified_pkgs %}
+      {%- set uidx = namespace(val=-1) %}
+      {%- for q in snapshot.rpm.packages_added %}
+        {%- if q.name == p.name %}{% set uidx.val = loop.index0 %}{% endif %}
+      {%- endfor %}
+      <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ uidx.val }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if p.include else '' }}/></span></td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.version }}-{{ p.release }}</td>
+        <td>{{ p.arch }}</td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
   {%- endif %}
 
   {%- else %}
@@ -1204,7 +1211,6 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <p><span class="pf-v6-c-label pf-m-filled pf-m-green">Bake into image</span></p>
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Property</th><th scope="col">Value</th></tr></thead><tbody>
       {%- for z in net.firewall_zones %}
       <tr><th colspan="2" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ z.name }}</th></tr>

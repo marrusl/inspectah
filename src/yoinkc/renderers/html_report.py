@@ -517,18 +517,24 @@ def _build_context(
             content_lower = (rf.content or "").lower()
             path_lower = rf.path.lower()
             if rf.is_default_repo:
-                badge = "base"
+                badge = "BASE"
+                badge_color = ""
             elif "epel" in path_lower or any(sid.startswith("epel") for sid in section_ids):
-                badge = "epel"
+                badge = "EPEL"
+                badge_color = "pf-m-blue"
             elif "copr" in content_lower or "copr" in path_lower:
-                badge = "copr"
+                badge = "COPR"
+                badge_color = "pf-m-red"
             elif "rpmfusion" in content_lower or "rpmfusion" in path_lower:
-                badge = "rpmfusion"
+                badge = "RPM FUSION"
+                badge_color = "pf-m-orange"
             else:
                 badge = ""
+                badge_color = ""
             repo_display.append({
                 "path": rf.path,
                 "badge": badge,
+                "badge_color": badge_color,
                 "section_ids": section_ids,
                 "is_default": rf.is_default_repo,
             })
