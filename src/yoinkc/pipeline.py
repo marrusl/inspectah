@@ -97,7 +97,7 @@ def run_pipeline(
             if output_file is None:
                 output_file = working_dir / f"{stamp}.tar.gz"
             create_tarball(tmp_dir, output_file, prefix=stamp)
-            print(f"Output: {output_file}")
+            print(f"Output: {output_file.name}")
     except Exception:
         print(
             f"Error during output. Rendered files preserved at: {tmp_dir}",
