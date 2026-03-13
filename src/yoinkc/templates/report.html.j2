@@ -1613,7 +1613,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
    Nav selectors: .pf-v6-c-nav__link[data-tab] for sidebar navigation.
    Active state: pf-m-current toggled on the .pf-v6-c-nav__link element.
    Theme toggle: pf-v6-theme-dark class on <html>.
-   Button state: disabled HTML attribute for btn-rerender / btn-tarball.
+   Button state: disabled HTML attribute for btn-reset / btn-rerender / btn-tarball.
    All other JS-targeted classes preserved: .section, .visible, .include-cb,
    .include-cb-wrap, .strategy-select, .leaf-cb, .repo-cb, .warning-row,
    .warning-row-dismiss, .dismissed, .btn-copy-cf, tr.excluded,
@@ -1713,6 +1713,7 @@ var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
   var rerenderBtn = document.getElementById('btn-rerender');
   var tarballBtn = document.getElementById('btn-tarball');
   var downloadSnapshotBtn = document.getElementById('btn-download-snapshot');
+  var resetBtn = document.getElementById('btn-reset');
   var helperAvailable = false;
   var dirty = false;
 
@@ -1802,6 +1803,7 @@ var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
     } else {
       if (statusTextEl) { statusTextEl.textContent = ''; statusTextEl.style.color = ''; }
     }
+    if (resetBtn) resetBtn.disabled = !changed;
 
     if (toolbar && !isHelper) {
       toolbar.classList.toggle('visible', n > 0 || changed);
@@ -1979,6 +1981,58 @@ var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
     updatePkgBanner();
   }
 
+  function resetToOriginal() {
+    document.querySelectorAll('[data-snap-section]').forEach(function(el) {
+      var section = el.getAttribute('data-snap-section');
+      var list = el.getAttribute('data-snap-list');
+      var idx = parseInt(el.getAttribute('data-snap-index'), 10);
+      if (!section || !list || isNaN(idx) || idx < 0) return;
+
+      var origSection = originalSnapshot[section];
+      if (!origSection) return;
+      var origList = origSection[list];
+      if (!origList || !origList[idx]) return;
+      var origItem = origList[idx];
+
+      var liveSection = snapshot[section];
+      if (liveSection && liveSection[list] && liveSection[list][idx] !== undefined) {
+        if (origItem.include !== undefined) {
+          liveSection[list][idx].include = origItem.include;
+        }
+        if (origItem.strategy !== undefined) {
+          liveSection[list][idx].strategy = origItem.strategy;
+        }
+      }
+
+      var cb = el.querySelector('.include-cb');
+      if (cb) {
+        var shouldCheck = origItem.include !== undefined ? origItem.include : true;
+        cb.checked = shouldCheck;
+        if (cb.classList.contains('leaf-cb')) {
+          cb.disabled = false;
+        }
+      }
+
+      var sel = el.querySelector('.strategy-select');
+      if (sel && origItem.strategy !== undefined) {
+        sel.value = origItem.strategy;
+      }
+
+      var shouldExclude = origItem.include !== undefined ? !origItem.include : false;
+      el.classList.toggle('excluded', shouldExclude);
+    });
+
+    document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
+      applyRepoCascade(cb);
+    });
+
+    recomputeAutoDeps();
+    updatePkgBanner();
+    updateToolbar();
+    setDirty(false);
+    showToast('Selections reset to initial state');
+  }
+
   document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
     cb.addEventListener('change', function() {
       applyRepoCascade(this);
@@ -1986,6 +2040,14 @@ var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
       setDirty(!isSnapshotClean());
     });
   });
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function() {
+      if (confirm('Reset all selections to their initial state? This cannot be undone.')) {
+        resetToOriginal();
+      }
+    });
+  }
 
   // --- Download modified snapshot ---
   downloadSnapshotBtn.addEventListener('click', function(){
