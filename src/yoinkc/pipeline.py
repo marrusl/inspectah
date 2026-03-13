@@ -93,7 +93,7 @@ def run_pipeline(
                 else:
                     shutil.copy2(item, dest)
         else:
-            stamp = get_output_stamp()
+            stamp = get_output_stamp(host_root=host_root)
             if output_file is None:
                 output_file = working_dir / f"{stamp}.tar.gz"
             create_tarball(tmp_dir, output_file, prefix=stamp)

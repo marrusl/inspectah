@@ -5,6 +5,7 @@ import socket
 import tarfile
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 
 def sanitize_hostname(hostname: str) -> str:
@@ -13,16 +14,22 @@ def sanitize_hostname(hostname: str) -> str:
     return cleaned or "unknown"
 
 
-def _resolve_hostname() -> str:
-    """Hostname with fallback chain: socket -> /etc/hostname -> 'unknown'."""
+def _resolve_hostname(host_root: Optional[Path] = None) -> str:
+    """Hostname with fallback chain: {host_root}/etc/hostname -> socket -> 'unknown'.
+
+    When running inside a container, socket.gethostname() returns the container
+    ID rather than the inspected host's name. Reading from {host_root}/etc/hostname
+    (where the host filesystem is bind-mounted) gives the correct hostname.
+    """
+    if host_root is not None:
+        try:
+            name = (host_root / "etc" / "hostname").read_text().splitlines()[0].strip()
+            if name:
+                return name
+        except (OSError, IndexError):
+            pass
     try:
         name = socket.gethostname()
-        if name:
-            return name
-    except OSError:
-        pass
-    try:
-        name = Path("/etc/hostname").read_text().strip()
         if name:
             return name
     except OSError:
@@ -30,9 +37,9 @@ def _resolve_hostname() -> str:
     return "unknown"
 
 
-def get_output_stamp() -> str:
+def get_output_stamp(host_root: Optional[Path] = None) -> str:
     """Return 'HOSTNAME-YYYYMMDD-HHMMSS' stamp for tarball naming."""
-    hostname = sanitize_hostname(_resolve_hostname())
+    hostname = sanitize_hostname(_resolve_hostname(host_root))
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{hostname}-{now}"
 
