@@ -1943,41 +1943,45 @@ var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
     return ids;
   }
 
+  function applyRepoCascade(repoCb) {
+    var tr = repoCb.closest('tr[data-snap-index]');
+    if (!tr) return;
+    var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
+    var repos = (snapshot.rpm && snapshot.rpm.repo_files) || [];
+    if (idx < 0 || idx >= repos.length) return;
+    var repoIds = new Set(parseRepoSectionIds(repos[idx].content));
+    if (!repoIds.size) return;
+    var checked = repoCb.checked;
+
+    document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+      var leafName = row.getAttribute('data-leaf');
+      var pkgIdx = parseInt(row.getAttribute('data-snap-index'), 10);
+      if (pkgIdx < 0) return;
+      var pkg = snapshot.rpm.packages_added[pkgIdx];
+      if (!pkg || !repoIds.has(pkg.source_repo)) return;
+
+      var leafCb = row.querySelector('.leaf-cb');
+      if (!leafCb) return;
+
+      if (!checked) {
+        leafCb.checked = false;
+        leafCb.disabled = true;
+        pkg.include = false;
+        row.classList.add('excluded');
+      } else {
+        leafCb.checked = true;
+        leafCb.disabled = false;
+        pkg.include = true;
+        row.classList.remove('excluded');
+      }
+    });
+    recomputeAutoDeps();
+    updatePkgBanner();
+  }
+
   document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
     cb.addEventListener('change', function() {
-      var tr = this.closest('tr[data-snap-index]');
-      if (!tr) return;
-      var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
-      var repos = (snapshot.rpm && snapshot.rpm.repo_files) || [];
-      if (idx < 0 || idx >= repos.length) return;
-      var repoIds = new Set(parseRepoSectionIds(repos[idx].content));
-      if (!repoIds.size) return;
-      var checked = this.checked;
-
-      document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
-        var leafName = row.getAttribute('data-leaf');
-        var pkgIdx = parseInt(row.getAttribute('data-snap-index'), 10);
-        if (pkgIdx < 0) return;
-        var pkg = snapshot.rpm.packages_added[pkgIdx];
-        if (!pkg || !repoIds.has(pkg.source_repo)) return;
-
-        var leafCb = row.querySelector('.leaf-cb');
-        if (!leafCb) return;
-
-        if (!checked) {
-          leafCb.checked = false;
-          leafCb.disabled = true;
-          pkg.include = false;
-          row.classList.add('excluded');
-        } else {
-          leafCb.checked = true;
-          leafCb.disabled = false;
-          pkg.include = true;
-          row.classList.remove('excluded');
-        }
-      });
-      recomputeAutoDeps();
-      updatePkgBanner();
+      applyRepoCascade(this);
       updateToolbar();
       setDirty(!isSnapshotClean());
     });
