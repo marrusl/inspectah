@@ -37,11 +37,23 @@ def _resolve_hostname(host_root: Optional[Path] = None) -> str:
     return "unknown"
 
 
-def get_output_stamp(host_root: Optional[Path] = None) -> str:
-    """Return 'HOSTNAME-YYYYMMDD-HHMMSS' stamp for tarball naming."""
-    hostname = sanitize_hostname(_resolve_hostname(host_root))
+def get_output_stamp(
+    host_root: Optional[Path] = None,
+    hostname: Optional[str] = None,
+) -> str:
+    """Return 'HOSTNAME-YYYYMMDD-HHMMSS' stamp for tarball naming.
+
+    If hostname is provided it is used directly (after sanitizing), bypassing
+    filesystem and socket resolution. This lets callers supply the hostname
+    already captured in the inspection snapshot, which is more reliable than
+    re-reading /etc/hostname (empty on RHEL hosts that use hostnamectl).
+    """
+    if hostname:
+        resolved = sanitize_hostname(hostname)
+    else:
+        resolved = sanitize_hostname(_resolve_hostname(host_root))
     now = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{hostname}-{now}"
+    return f"{resolved}-{now}"
 
 
 def create_tarball(source_dir: Path, tarball_path: Path, prefix: str) -> None:

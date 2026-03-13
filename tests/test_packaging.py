@@ -88,6 +88,23 @@ def test_get_output_stamp_uses_host_root():
         assert stamp.startswith("prod-server-")
 
 
+def test_get_output_stamp_explicit_hostname_overrides_resolution():
+    """Explicit hostname bypasses /etc/hostname and socket resolution."""
+    with tempfile.TemporaryDirectory() as tmp:
+        host_root = Path(tmp)
+        (host_root / "etc").mkdir()
+        (host_root / "etc" / "hostname").write_text("file-host")
+        with patch("socket.gethostname", return_value="socket-host"):
+            stamp = get_output_stamp(hostname="explicit-host", host_root=host_root)
+        assert stamp.startswith("explicit-host-")
+
+
+def test_get_output_stamp_explicit_hostname_sanitized():
+    """Explicit hostname is sanitized before use."""
+    stamp = get_output_stamp(hostname="my/host:name")
+    assert stamp.startswith("myhostname-")
+
+
 def test_get_output_stamp_format():
     """Stamp matches HOSTNAME-YYYYMMDD-HHMMSS format."""
     stamp = get_output_stamp()
