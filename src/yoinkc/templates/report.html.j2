@@ -1211,18 +1211,23 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th scope="col">Property</th><th scope="col">Value</th></tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Zone</th><th scope="col">Services</th><th scope="col">Ports</th><th scope="col">Rich Rules</th></tr></thead><tbody>
       {%- for z in net.firewall_zones %}
-      <tr><th colspan="2" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ z.name }}</th></tr>
-      {%- if z.services %}
-      <tr><td>Services</td><td><code>{{ z.services|join(', ') }}</code></td></tr>
-      {%- endif %}
-      {%- if z.ports %}
-      <tr><td>Ports</td><td><code>{{ z.ports|join(', ') }}</code></td></tr>
-      {%- endif %}
-      {%- if z.rich_rules %}
-      <tr><td>Rich rules ({{ z.rich_rules|length }})</td><td>{%- for r in z.rich_rules %}<code>{{ r[:300] }}</code>{{ ', ' if not loop.last else '' }}{%- endfor %}</td></tr>
-      {%- endif %}
+      <tr{% if not z.include %} class="excluded"{% endif %} data-snap-section="network" data-snap-list="firewall_zones" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if z.include else '' }}/></span></td>
+        <td><strong>{{ z.name }}</strong></td>
+        <td>{{ z.services|join(', ') or '—' }}</td>
+        <td>{{ z.ports|join(', ') or '—' }}</td>
+        <td>
+          {%- if z.rich_rules %}
+          <details><summary>{{ z.rich_rules|length }} rule{{ 's' if z.rich_rules|length != 1 else '' }}</summary>
+            <ul class="deps-list">
+              {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
+            </ul>
+          </details>
+          {%- else %}—{%- endif %}
+        </td>
+      </tr>
       {%- endfor %}
     </tbody></table>
     </div>
@@ -1233,11 +1238,17 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Direct Rules</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <ul>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">IPv</th><th scope="col">Table</th><th scope="col">Chain</th><th scope="col">Args</th></tr></thead><tbody>
       {%- for r in net.firewall_direct_rules %}
-      <li>{{ r.ipv }} {{ r.chain }}: <code>{{ r.args }}</code></li>
+      <tr{% if not r.include %} class="excluded"{% endif %} data-snap-section="network" data-snap-list="firewall_direct_rules" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if r.include else '' }}/></span></td>
+        <td>{{ r.ipv }}</td>
+        <td>{{ r.table }}</td>
+        <td>{{ r.chain }}</td>
+        <td><code>{{ r.args }}</code></td>
+      </tr>
       {%- endfor %}
-    </ul>
+    </tbody></table>
     </div>
   </div>
   {%- endif %}

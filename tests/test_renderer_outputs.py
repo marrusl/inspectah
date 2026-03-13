@@ -335,6 +335,82 @@ class TestAuditReport:
         assert "firewall-offline-cmd --direct --add-rule ipv4 filter INPUT 5 -j ACCEPT" in md, \
             "direct rule command must use actual priority (5), not hardcoded 0"
 
+    def test_excluded_firewall_zone_not_written_to_config_tree(self):
+        """Excluded firewall zones must not be written to the config tree or appear in the Containerfile."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, NetworkSection, FirewallZone,
+        )
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            network=NetworkSection(firewall_zones=[
+                FirewallZone(
+                    name="public",
+                    path="etc/firewalld/zones/public.xml",
+                    content="<zone/>",
+                    services=["http"],
+                    include=True,
+                ),
+                FirewallZone(
+                    name="internal",
+                    path="etc/firewalld/zones/internal.xml",
+                    content="<zone/>",
+                    services=["ssh"],
+                    include=False,
+                ),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            render_containerfile(snapshot, Environment(), out)
+            cf = (out / "Containerfile").read_text()
+            public_xml_exists = (out / "config" / "etc" / "firewalld" / "zones" / "public.xml").exists()
+            internal_xml_exists = (out / "config" / "etc" / "firewalld" / "zones" / "internal.xml").exists()
+
+        assert public_xml_exists, "Included zone file must be written to config tree"
+        assert not internal_xml_exists, "Excluded zone file must not be written to config tree"
+        assert "public" in cf, "Included zone must appear in Containerfile header"
+        assert "internal" not in cf, "Excluded zone must not appear in Containerfile header"
+
+    def test_excluded_firewall_direct_rule_not_written(self):
+        """Excluded direct rules must not be written to direct.xml."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, NetworkSection, FirewallDirectRule,
+        )
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            network=NetworkSection(firewall_direct_rules=[
+                FirewallDirectRule(ipv="ipv4", chain="INPUT", args="-j ACCEPT", include=True),
+                FirewallDirectRule(ipv="ipv4", chain="OUTPUT", args="-j DROP", include=False),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            render_containerfile(snapshot, Environment(), out)
+            direct_xml = (out / "config" / "etc" / "firewalld" / "direct.xml").read_text()
+            assert "-j ACCEPT" in direct_xml, "Included direct rule must appear in direct.xml"
+            assert "-j DROP" not in direct_xml, "Excluded direct rule must not appear in direct.xml"
+
+    def test_all_excluded_firewall_direct_rules_no_direct_xml(self):
+        """If all direct rules are excluded, direct.xml must not be written at all."""
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, NetworkSection, FirewallDirectRule,
+        )
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            network=NetworkSection(firewall_direct_rules=[
+                FirewallDirectRule(ipv="ipv4", chain="INPUT", args="-j ACCEPT", include=False),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            render_containerfile(snapshot, Environment(), out)
+            direct_xml_exists = (out / "config" / "etc" / "firewalld" / "direct.xml").exists()
+
+        assert not direct_xml_exists, "direct.xml must not be written when all rules are excluded"
+
 
 # ===========================================================================
 # Kickstart tests

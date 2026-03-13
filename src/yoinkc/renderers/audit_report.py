@@ -232,10 +232,11 @@ def render(
                     lines.append(f"- `{c.name}` — method={c.method} — `{c.path}`")
             lines.append("")
 
-        if net.firewall_zones:
+        included_zones = [z for z in net.firewall_zones if z.include]
+        if included_zones:
             lines.append("### Firewall zones (bake into image)")
             lines.append("")
-            for z in net.firewall_zones:
+            for z in included_zones:
                 svc_str = ', '.join(z.services) or '—'
                 port_str = ', '.join(z.ports) or '—'
                 lines.append(f"**{z.name}:** services={svc_str} | ports={port_str} | rich rules={len(z.rich_rules)}")
@@ -258,14 +259,15 @@ def render(
                     lines.append("```")
                 lines.append("")
 
-        if net.firewall_direct_rules:
+        included_direct = [r for r in net.firewall_direct_rules if r.include]
+        if included_direct:
             lines.append("### Firewall direct rules (bake into image)")
             lines.append("")
-            for r in net.firewall_direct_rules:
+            for r in included_direct:
                 lines.append(f"- `{r.chain}` {r.ipv} table={r.table}: `{r.args}`")
             dr_cmds = [
                 f"RUN firewall-offline-cmd --direct --add-rule {dr.ipv} {dr.table} {dr.chain} {dr.priority} {dr.args}"
-                for dr in net.firewall_direct_rules
+                for dr in included_direct
             ]
             lines.append("")
             lines.append("#### Alternative: firewall-offline-cmd (instead of COPY)")

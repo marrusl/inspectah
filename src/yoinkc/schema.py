@@ -161,6 +161,7 @@ class FirewallZone(BaseModel):
     services: List[str] = Field(default_factory=list)
     ports: List[str] = Field(default_factory=list)
     rich_rules: List[str] = Field(default_factory=list)
+    include: bool = True
 
 
 class FirewallDirectRule(BaseModel):
@@ -169,6 +170,7 @@ class FirewallDirectRule(BaseModel):
     chain: str = "INPUT"
     priority: str = "0"
     args: str = ""
+    include: bool = True
 
 
 class StaticRouteFile(BaseModel):

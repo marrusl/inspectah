@@ -190,14 +190,17 @@ def _write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
     # Firewalld zones and direct rules
     if snapshot.network:
         for z in snapshot.network.firewall_zones:
+            if not z.include:
+                continue
             if z.path:
                 dest = config_dir / z.path
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(z.content)
-        if snapshot.network.firewall_direct_rules:
+        included_direct = [r for r in snapshot.network.firewall_direct_rules if r.include]
+        if included_direct:
             import xml.etree.ElementTree as ET
             direct_el = ET.Element("direct")
-            for r in snapshot.network.firewall_direct_rules:
+            for r in included_direct:
                 rule_el = ET.SubElement(direct_el, "rule")
                 rule_el.set("priority", r.priority)
                 rule_el.set("table", r.table)
@@ -476,10 +479,12 @@ def _config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> 
 
     # Firewall
     net = snapshot.network
-    if net and net.firewall_zones:
-        lines.append(f"# Firewall zones ({len(net.firewall_zones)}): "
-                     + ", ".join(z.name for z in net.firewall_zones[:5]))
-    if net and net.firewall_direct_rules:
+    included_zones = [z for z in net.firewall_zones if z.include] if net else []
+    included_direct = [r for r in net.firewall_direct_rules if r.include] if net else []
+    if included_zones:
+        lines.append(f"# Firewall zones ({len(included_zones)}): "
+                     + ", ".join(z.name for z in included_zones[:5]))
+    if included_direct:
         lines.append(f"# Firewall direct rules: etc/firewalld/direct.xml")
 
     # Static NM connections
@@ -787,16 +792,17 @@ def _render_containerfile_content(snapshot: InspectionSnapshot, output_dir: Path
 
     # 4. Firewall Configuration (bake into image)
     net = snapshot.network
-    has_fw = net and (net.firewall_zones or net.firewall_direct_rules)
-    if has_fw:
+    fw_zones = [z for z in net.firewall_zones if z.include] if net else []
+    fw_direct = [r for r in net.firewall_direct_rules if r.include] if net else []
+    if fw_zones or fw_direct:
         lines.append("# === Firewall Configuration (bake into image) ===")
-        if net.firewall_zones:
-            total_rich = sum(len(z.rich_rules) for z in net.firewall_zones)
-            lines.append(f"# Detected: {len(net.firewall_zones)} zone(s)"
+        if fw_zones:
+            total_rich = sum(len(z.rich_rules) for z in fw_zones)
+            lines.append(f"# Detected: {len(fw_zones)} zone(s)"
                          + (f", {total_rich} rich rule(s)" if total_rich else "")
                          + " — included in COPY config/etc/ below")
-        if net.firewall_direct_rules:
-            lines.append(f"# Detected: {len(net.firewall_direct_rules)} direct rule(s) — included in COPY config/etc/ below")
+        if fw_direct:
+            lines.append(f"# Detected: {len(fw_direct)} direct rule(s) — included in COPY config/etc/ below")
         lines.append("# See audit-report.md for firewall-offline-cmd equivalents per zone.")
         lines.append("")
 
