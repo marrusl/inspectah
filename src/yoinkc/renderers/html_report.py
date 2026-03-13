@@ -549,7 +549,7 @@ def _build_context(
     snapshot_json = snapshot.model_dump_json().replace("</", "<\\/")
 
     # Load PatternFly 6 CSS for inline embedding (self-contained report)
-    pf_css_path = Path(__file__).resolve().parent.parent / "templates" / "patternfly.min.css"
+    pf_css_path = Path(__file__).resolve().parent.parent / "templates" / "patternfly.css"
     patternfly_css = ""
     if pf_css_path.exists():
         patternfly_css = pf_css_path.read_text()
