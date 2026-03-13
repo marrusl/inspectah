@@ -1,10 +1,27 @@
 """Triage computation shared by audit report and HTML renderers."""
 
+import warnings
 from pathlib import Path
 
 from ..schema import InspectionSnapshot
 
 _QUADLET_PREFIX = "etc/containers/systemd/"
+
+
+def _count_containerfile_fixmes(output_dir: Path) -> int:
+    """Count ``# FIXME`` comment lines in the generated Containerfile."""
+    cf = output_dir / "Containerfile"
+    if not cf.exists():
+        return 0
+    try:
+        return sum(
+            1
+            for line in cf.read_text().splitlines()
+            if line.strip().startswith("#") and "FIXME" in line
+        )
+    except OSError as exc:
+        warnings.warn(f"Could not read {cf} for FIXME count: {exc}", stacklevel=2)
+        return 0
 
 
 def _config_file_count(snapshot: InspectionSnapshot) -> int:
@@ -46,15 +63,7 @@ def compute_triage(snapshot: InspectionSnapshot, output_dir: Path) -> dict:
     if snapshot.containers and snapshot.containers.quadlet_units:
         automatic += sum(1 for q in snapshot.containers.quadlet_units if q.include)
 
-    fixme = 0
-    cf = output_dir / "Containerfile"
-    if cf.exists():
-        try:
-            for line in cf.read_text().splitlines():
-                if line.strip().startswith("#") and "FIXME" in line:
-                    fixme += 1
-        except Exception:
-            pass
+    fixme = _count_containerfile_fixmes(output_dir)
 
     manual = len(snapshot.warnings or [])
     manual += len(snapshot.redactions or [])
@@ -125,16 +134,7 @@ def compute_triage_detail(
         )
 
     # Needs review
-    fixme = 0
-    cf = output_dir / "Containerfile"
-    if cf.exists():
-        try:
-            for line in cf.read_text().splitlines():
-                if line.strip().startswith("#") and "FIXME" in line:
-                    fixme += 1
-        except Exception:
-            pass
-    _add("Containerfile FIXMEs", fixme, "containerfile", "fixme")
+    _add("Containerfile FIXMEs", _count_containerfile_fixmes(output_dir), "containerfile", "fixme")
 
     # Manual
     _add("Secrets redacted", len(snapshot.redactions or []), "secrets", "manual")
