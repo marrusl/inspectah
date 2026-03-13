@@ -11,7 +11,7 @@ def _config_file_count(snapshot: InspectionSnapshot) -> int:
     return sum(
         1
         for f in (snapshot.config.files if snapshot.config else [])
-        if not f.path.lstrip("/").startswith(_QUADLET_PREFIX)
+        if f.include and not f.path.lstrip("/").startswith(_QUADLET_PREFIX)
     )
 
 
@@ -23,22 +23,28 @@ def compute_triage(snapshot: InspectionSnapshot, output_dir: Path) -> dict:
     """
     automatic = 0
     if snapshot.rpm:
-        automatic += len(snapshot.rpm.packages_added)
+        automatic += sum(1 for p in snapshot.rpm.packages_added if p.include)
+        automatic += sum(1 for p in snapshot.rpm.base_image_only if p.include)
     if snapshot.services:
-        automatic += len(snapshot.services.enabled_units)
-        automatic += len(snapshot.services.disabled_units)
+        automatic += sum(
+            1
+            for sc in snapshot.services.state_changes
+            if sc.include and sc.action in ("enable", "disable")
+        )
     if snapshot.config:
         automatic += _config_file_count(snapshot)
     if snapshot.network and snapshot.network.firewall_zones:
-        automatic += len(snapshot.network.firewall_zones)
+        automatic += sum(1 for z in snapshot.network.firewall_zones if z.include)
     if snapshot.scheduled_tasks:
-        automatic += len(snapshot.scheduled_tasks.generated_timer_units or [])
-        automatic += len([t for t in snapshot.scheduled_tasks.systemd_timers if t.source == "local"])
+        automatic += sum(
+            1 for t in (snapshot.scheduled_tasks.generated_timer_units or []) if t.include
+        )
+        automatic += sum(1 for t in snapshot.scheduled_tasks.systemd_timers if t.source == "local")
     if snapshot.users_groups:
         automatic += len(snapshot.users_groups.users or [])
         automatic += len(snapshot.users_groups.groups or [])
     if snapshot.containers and snapshot.containers.quadlet_units:
-        automatic += len(snapshot.containers.quadlet_units)
+        automatic += sum(1 for q in snapshot.containers.quadlet_units if q.include)
 
     fixme = 0
     cf = output_dir / "Containerfile"
@@ -75,24 +81,48 @@ def compute_triage_detail(
 
     # Automatic
     if snapshot.rpm:
-        _add("Packages added", len(snapshot.rpm.packages_added), "packages", "automatic")
-        _add("New from base image", len(snapshot.rpm.base_image_only), "packages", "automatic")
+        _add(
+            "Packages added",
+            sum(1 for p in snapshot.rpm.packages_added if p.include),
+            "packages",
+            "automatic",
+        )
+        _add(
+            "New from base image",
+            sum(1 for p in snapshot.rpm.base_image_only if p.include),
+            "packages",
+            "automatic",
+        )
     if snapshot.services:
-        n = len(snapshot.services.enabled_units) + len(snapshot.services.disabled_units)
+        n = sum(
+            1
+            for sc in snapshot.services.state_changes
+            if sc.include and sc.action in ("enable", "disable")
+        )
         _add("Services enabled/disabled", n, "services", "automatic")
     if snapshot.config:
         _add("Config files", _config_file_count(snapshot), "config", "automatic")
     if snapshot.containers and snapshot.containers.quadlet_units:
-        _add("Quadlet units", len(snapshot.containers.quadlet_units), "containers", "automatic")
+        _add(
+            "Quadlet units",
+            sum(1 for q in snapshot.containers.quadlet_units if q.include),
+            "containers",
+            "automatic",
+        )
     if snapshot.users_groups:
         n = len(snapshot.users_groups.users or []) + len(snapshot.users_groups.groups or [])
         _add("Users/groups", n, "users_groups", "automatic")
     if snapshot.scheduled_tasks:
-        n = len(snapshot.scheduled_tasks.generated_timer_units or [])
-        n += len([t for t in snapshot.scheduled_tasks.systemd_timers if t.source == "local"])
+        n = sum(1 for t in (snapshot.scheduled_tasks.generated_timer_units or []) if t.include)
+        n += sum(1 for t in snapshot.scheduled_tasks.systemd_timers if t.source == "local")
         _add("Cron-to-timer conversions", n, "scheduled_tasks", "automatic")
     if snapshot.network and snapshot.network.firewall_zones:
-        _add("Firewall zones", len(snapshot.network.firewall_zones), "network", "automatic")
+        _add(
+            "Firewall zones",
+            sum(1 for z in snapshot.network.firewall_zones if z.include),
+            "network",
+            "automatic",
+        )
 
     # Needs review
     fixme = 0
