@@ -12,4 +12,3 @@ COPY src/ ./src/
 RUN pip install --no-cache-dir -e .
 
 ENTRYPOINT ["yoinkc"]
-CMD ["--help"]
