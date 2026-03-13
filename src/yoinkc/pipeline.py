@@ -4,6 +4,7 @@ bundle entitlement certs, then produce a tarball or write to a directory.
 """
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -93,14 +94,20 @@ def run_pipeline(
                 else:
                     shutil.copy2(item, dest)
         else:
-            stamp = get_output_stamp(host_root=host_root)
+            # Prefer the hostname captured by the inspectors over re-reading
+            # /etc/hostname, which is empty on RHEL hosts using hostnamectl.
+            meta_hostname = snapshot.meta.get("hostname") or None
+            stamp = get_output_stamp(hostname=meta_hostname, host_root=host_root)
             if output_file is None:
                 output_file = working_dir / f"{stamp}.tar.gz"
             create_tarball(tmp_dir, output_file, prefix=stamp)
             name = output_file.name
+            scp_host = stamp.rsplit("-", 2)[0]
+            host_cwd = os.environ.get("YOINKC_HOST_CWD")
+            scp_path = f"{host_cwd}/{name}" if host_cwd else name
             print(f"\nOutput: {name}\n")
             print("Next steps:")
-            print(f"  Copy to workstation:    scp {name} workstation:")
+            print(f"  Copy to workstation:    scp {scp_host}:{scp_path} .")
             print(f"  Interactive refinement: ./yoinkc-refine {name}")
             print(f"  Build the image:        ./yoinkc-build {name} my-image:latest")
     except Exception:
