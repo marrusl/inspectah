@@ -75,10 +75,7 @@ body { padding-bottom: 70px; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* Sidebar nav */
-.pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.75rem 1rem 0.25rem; }
-@media (max-width: 768px) {
-  .pf-v6-c-page__sidebar { position: static; }
-}
+.pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 
 
 /* Warning dismiss */
@@ -188,21 +185,12 @@ details.audit-expand { margin-bottom: 0.25rem; }
   padding: 0.25rem 0;
 }
 
-/* Vertical alignment in table cells – ensures checkboxes and text align with tall content like select dropdowns */
-.pf-v6-c-table td {
-  vertical-align: middle;
-}
-
 /* Status text/background utility classes — theme-aware via PF6 tokens */
 .text-status-success { color: var(--pf-t--global--text--color--status--success--default); }
 .text-status-warning { color: var(--pf-t--global--text--color--status--warning--default); }
 .text-status-danger  { color: var(--pf-t--global--text--color--status--danger--default); }
 .text-status-info    { color: var(--pf-t--global--text--color--status--info--default); }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { border-radius: 4px; }
 </style>
 </head>
 <body>
