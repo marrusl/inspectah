@@ -213,6 +213,14 @@ def run_all(
                 meta["hostname"] = lines[0]
     except (PermissionError, OSError):
         pass
+    if "hostname" not in meta:
+        proc_hostname = host_root / "proc" / "sys" / "kernel" / "hostname"
+        try:
+            name = proc_hostname.read_text().strip()
+            if name:
+                meta["hostname"] = name
+        except (PermissionError, OSError):
+            pass
     os_release = _read_os_release(host_root)
     err = _validate_supported_host(os_release)
     if err:

@@ -909,6 +909,42 @@ def test_no_cross_major_warning_same_version(host_root, fixture_executor):
     assert len(cross_warnings) == 0
 
 
+@pytest.mark.parametrize("etc_hostname_content", ["", "\n"])
+def test_hostname_falls_back_to_proc_when_etc_hostname_empty(tmp_path, fixture_executor, etc_hostname_content):
+    """/proc/sys/kernel/hostname is used when /etc/hostname is empty or blank.
+
+    On systemd-managed hosts (RHEL, CentOS, Fedora, ...) where the hostname was
+    set via hostnamectl, /etc/hostname may be absent or empty while the kernel
+    still has the correct hostname via /proc/sys/kernel/hostname.
+    """
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "hostname").write_text(etc_hostname_content)
+    (etc / "os-release").write_text('NAME="Red Hat Enterprise Linux"\nVERSION_ID="9.4"\nID=rhel\n')
+
+    proc_kernel = tmp_path / "proc" / "sys" / "kernel"
+    proc_kernel.mkdir(parents=True)
+    (proc_kernel / "hostname").write_text("myhost\n")
+
+    snapshot = run_all(tmp_path, executor=fixture_executor, no_baseline_opt_in=True)
+    assert snapshot.meta.get("hostname") == "myhost"
+
+
+def test_hostname_etc_hostname_takes_precedence_over_proc(tmp_path, fixture_executor):
+    """Non-empty /etc/hostname takes precedence over /proc/sys/kernel/hostname."""
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "hostname").write_text("from-etc-hostname\n")
+    (etc / "os-release").write_text('NAME="CentOS Stream"\nVERSION_ID="9"\nID=centos\n')
+
+    proc_kernel = tmp_path / "proc" / "sys" / "kernel"
+    proc_kernel.mkdir(parents=True)
+    (proc_kernel / "hostname").write_text("from-proc\n")
+
+    snapshot = run_all(tmp_path, executor=fixture_executor, no_baseline_opt_in=True)
+    assert snapshot.meta.get("hostname") == "from-etc-hostname"
+
+
 def test_snapshot_roundtrip_with_baseline(host_root, fixture_executor):
     """Resolved baseline is in inspection-snapshot.json; --from-snapshot re-renders without network."""
     import tempfile
