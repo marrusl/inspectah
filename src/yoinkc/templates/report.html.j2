@@ -168,6 +168,19 @@ details.audit-expand { margin-bottom: 0.25rem; }
 #exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
 #exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
 
+/* Utility classes */
+.content-preview { border-radius: 4px; padding: var(--pf-t--global--spacer--sm); font-size: 0.8rem; max-height: 200px; overflow: auto; margin: var(--pf-t--global--spacer--xs) 0; }
+.table-group-header { font-weight: var(--pf-t--global--font--weight--body--default); font-size: var(--pf-t--global--font--size--body--sm); color: var(--pf-t--global--text--color--subtle); padding-bottom: var(--pf-t--global--spacer--xs); padding-top: var(--pf-t--global--spacer--md); border-top: 1px solid var(--pf-t--global--border--color--default); }
+.text-sm { font-size: var(--pf-t--global--font--size--body--sm); }
+.text-bold { font-weight: var(--pf-t--global--font--weight--body--bold); }
+.mt-sm { margin-top: var(--pf-t--global--spacer--sm); }
+.mt-md { margin-top: var(--pf-t--global--spacer--md); }
+.mt-lg { margin-top: var(--pf-t--global--spacer--lg); }
+.mb-md { margin-bottom: var(--pf-t--global--spacer--md); }
+.table-group-header-first { border-top: none; padding-top: var(--pf-t--global--spacer--sm); }
+.deps-list { margin: var(--pf-t--global--spacer--xs) 0; padding-left: 1.5rem; }
+.card-actions-layout { display: flex; align-items: center; gap: var(--pf-t--global--spacer--sm); flex-wrap: nowrap; }
+
 /* Toast */
 .toast { position: fixed; top: 1rem; right: 1rem; z-index: 2000; display: none; }
 .toast.visible { display: block; }
@@ -287,7 +300,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {# ── Summary ────────────────────────────────────────────────────────────── #}
 {% call section("summary", "Summary", visible=true) %}
 <p class="summary-hero">Inspection overview and run metadata. Use the sidebar navigation to drill into any category.</p>
-<p style="font-size:0.9rem">This report is self-contained and portable: all content (Containerfile, audit, config/ and quadlet/ file browser) is embedded. You can copy or share <code>report.html</code> alone.</p>
+<p class="text-sm">This report is self-contained and portable: all content (Containerfile, audit, config/ and quadlet/ file browser) is embedded. You can copy or share <code>report.html</code> alone.</p>
 <dl class="pf-v6-c-description-list summary-meta">
   <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Host root</dt><dd class="pf-v6-c-description-list__description"><code>{{ meta.host_root|default('') }}</code></dd></div>
   <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Hostname</dt><dd class="pf-v6-c-description-list__description">{{ meta.hostname|default('—') }}</dd></div>
@@ -324,7 +337,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 {# ── File browser ─────────────────────────────────────────────────────────── #}
 {% call section("output_files", "File browser") %}
 <p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
-<div class="pf-v6-l-flex pf-m-nowrap" style="gap:1rem;margin-top:1rem">
+<div class="pf-v6-l-flex pf-m-nowrap mt-md" style="gap:1rem">
   <div class="fb-tree">{{ tree_html|safe }}</div>
   <div class="fb-viewer">
     <div class="pf-v6-c-code-block">
@@ -349,14 +362,14 @@ details.audit-expand { margin-bottom: 0.25rem; }
   {%- set auto_set = snapshot.rpm.auto_packages or [] %}
   {%- set dep_tree = snapshot.rpm.leaf_dep_tree or {} %}
 
-  <div class="pf-v6-c-alert pf-m-info pf-m-inline" id="pkg-selection-banner" style="margin-bottom:1rem">
+  <div class="pf-v6-c-alert pf-m-info pf-m-inline mb-md" id="pkg-selection-banner">
     <p class="pf-v6-c-alert__title" id="pkg-selection-text"><strong>{{ leaf_packages_sorted|length }} leaf packages</strong> pull in <strong>{{ auto_set|length }} dependencies</strong> — only leaf packages appear in the Containerfile's <code>dnf install</code> line.</p>
   </div>
 
   {%- if snapshot.rpm.repo_files %}
   <h3>Repositories ({{ snapshot.rpm.repo_files|length }})</h3>
   <table class="pf-v6-c-table" id="pkg-repo-table">
-    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col"></th><th scope="col"></th></tr></thead>
+    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col"><span class="pf-v6-u-screen-reader">Source</span></th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
     <tbody>
     {%- for rf in snapshot.rpm.repo_files %}
     <tr{% if not rf.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="repo_files" data-snap-index="{{ loop.index0 }}">
@@ -382,11 +395,11 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   <h3>Dependency Tree</h3>
   {%- if repo_groups %}
-  {%- for repo_name, entries in repo_groups.items() %}
-  <h4 style="margin-top:1.5rem">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</h4>
   <table class="pf-v6-c-table pkg-dep-tree-group">
-    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Dependencies</th><th scope="col"></th></tr></thead>
+    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
     <tbody>
+    {%- for repo_name, entries in repo_groups.items() %}
+    <tr><th colspan="4" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</th></tr>
     {%- for entry in entries %}
     <tr{% if not entry.include %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
       <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if entry.include else '' }}/></span></td>
@@ -395,9 +408,9 @@ details.audit-expand { margin-bottom: 0.25rem; }
       <td>
         {%- if entry.deps %}
         <details><summary>show</summary>
-          <ul style="margin:0.25rem 0;padding-left:1.5rem">
+          <ul class="deps-list">
           {%- for d in entry.deps %}
-            <li style="font-size:0.85em">{{ d }}</li>
+            <li class="text-sm">{{ d }}</li>
           {%- endfor %}
           </ul>
         </details>
@@ -407,13 +420,13 @@ details.audit-expand { margin-bottom: 0.25rem; }
       </td>
     </tr>
     {%- endfor %}
+    {%- endfor %}
     </tbody>
   </table>
-  {%- endfor %}
   {%- else %}
   {# Fallback: flat table when repo_groups is not populated #}
   <table class="pf-v6-c-table" id="pkg-dep-tree">
-    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Repo</th><th scope="col">Dependencies</th><th scope="col"></th></tr></thead>
+    <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Repo</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th></tr></thead>
     <tbody>
     {%- for lf in leaf_packages_sorted if dep_tree.get(lf) is not none %}
     {%- set deps = dep_tree.get(lf, []) %}
@@ -424,14 +437,14 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
       <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/></span></td>
       <td><strong>{{ lf }}</strong></td>
-      <td style="font-size:0.85em">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
+      <td class="text-sm">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
       <td>{{ deps|length }}</td>
       <td>
         {%- if deps %}
         <details><summary>show</summary>
-          <ul style="margin:0.25rem 0;padding-left:1.5rem">
+          <ul class="deps-list">
           {%- for d in deps %}
-            <li style="font-size:0.85em">{{ d }}</li>
+            <li class="text-sm">{{ d }}</li>
           {%- endfor %}
           </ul>
         </details>
@@ -454,8 +467,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
     {%- endif %}
   {%- endfor %}
   {%- if unclassified_pkgs %}
-  <h3 style="margin-top:1.5rem">Unclassified Packages ({{ unclassified_pkgs|length }})</h3>
-  <p style="font-size:0.85em">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
+  <h3 class="mt-lg">Unclassified Packages ({{ unclassified_pkgs|length }})</h3>
+  <p class="text-sm">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
   <table class="pf-v6-c-table">
     <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Version</th><th scope="col">Arch</th></tr></thead>
     <tbody>
@@ -523,7 +536,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
         <td>
           {%- if d.content.strip() %}
           <details><summary>show</summary>
-            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ d.content }}</pre>
+            <pre class="content-preview">{{ d.content }}</pre>
           </details>
           {%- endif %}
         </td>
@@ -576,7 +589,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
         <td><code>{{ i.path }}</code></td>
         <td><span class="pf-v6-c-label pf-m-filled {{ lang_lbl.get(lang, 'pf-m-grey') }}">{{ lang }}</span></td>
         <td><span class="pf-v6-c-label pf-m-filled {{ 'pf-m-green' if i.static else 'pf-m-orange' }}">{{ linking }}</span></td>
-        <td style="font-size:0.85em">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
+        <td class="text-sm">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
       </tr>
       {%- endfor %}
     </tbody></table>
@@ -590,11 +603,12 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__body">
     {%- for v in nd.venv %}
     {%- set ssp = v.system_site_packages %}
-    <h4><code>{{ v.path }}</code>
+    <div class="mt-md" style="display:flex;align-items:center;gap:var(--pf-t--global--spacer--sm)">
+      <code>{{ v.path }}</code>
       {%- if ssp %} <span class="pf-v6-c-label pf-m-filled pf-m-red">system-site-packages</span>
       {%- else %} <span class="pf-v6-c-label pf-m-filled pf-m-green">isolated</span>
       {%- endif %}
-    </h4>
+    </div>
     {%- set pkgs = v.packages %}
     {%- if pkgs %}
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Package</th><th scope="col">Version</th></tr></thead><tbody>
@@ -709,7 +723,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
         <td>
           {%- if u.content and u.content.strip() %}
           <details><summary>show</summary>
-            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ u.content }}</pre>
+            <pre class="content-preview">{{ u.content }}</pre>
           </details>
           {%- endif %}
         </td>
@@ -725,9 +739,9 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compose Files</h3></div></div>
     <div class="pf-v6-c-card__body">
     {%- for c in ct.compose_files %}
-    <div{% if not c.include %} style="opacity:0.45;text-decoration:line-through"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
+    <div{% if not c.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
     <label><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if c.include else '' }}/></span></label>
-    <h4 style="display:inline"><code>{{ c.path }}</code></h4>
+    <span class="text-bold"><code>{{ c.path }}</code></span>
     {%- if c.images %}
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Service</th><th scope="col">Image</th></tr></thead><tbody>
       {%- for img in c.images %}
@@ -753,8 +767,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
         <td><strong>{{ item.name }}</strong></td>
         <td><code>{{ item.image }}</code></td>
         <td>{{ item.status }}</td>
-        <td style="font-size:0.85em">{{ item.mount_summary|safe }}</td>
-        <td style="font-size:0.85em">{{ item.net_summary or '' }}</td>
+        <td class="text-sm">{{ item.mount_summary|safe }}</td>
+        <td class="text-sm">{{ item.net_summary or '' }}</td>
       </tr>
       {%- endfor %}
     </tbody></table>
@@ -776,7 +790,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header">
       <div class="pf-v6-c-card__title"><h3>Users</h3></div>
-      <div class="pf-v6-c-card__actions" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;">
+      <div class="pf-v6-c-card__actions card-actions-layout">
         <span>Apply to all:</span>
         <span class="pf-v6-c-form-control"><select id="strategy-apply-all">
           {%- for s in strategies %}
@@ -807,7 +821,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
             {%- endfor %}
           </select></span>
         </td>
-        <td style="font-size:0.85em">
+        <td class="text-sm">
           {%- set notes = [] %}
           {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
             {%- set _ = notes.append('SSH keys') %}
@@ -828,7 +842,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header">
       <div class="pf-v6-c-card__title"><h3>Groups</h3></div>
-      <div class="pf-v6-c-card__actions" style="display: flex; align-items: center; gap: 0.5rem; flex-wrap: nowrap;">
+      <div class="pf-v6-c-card__actions card-actions-layout">
         <span>Apply to all:</span>
         <span class="pf-v6-c-form-control"><select id="strategy-apply-all-groups">
           {%- for s in strategies %}
@@ -885,7 +899,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Systemd Timers</h3></div></div>
     <div class="pf-v6-c-card__body">
     {%- if vendor_timers %}
-    <p style="font-size:0.9em">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
+    <p class="text-sm">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
     {%- endif %}
     {%- if local_timers %}
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Timer</th><th scope="col">Schedule</th><th scope="col">ExecStart</th></tr></thead><tbody>
@@ -925,7 +939,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron Jobs</h3></div></div>
     <div class="pf-v6-c-card__body">
     {%- if rpm_cron_count %}
-    <p style="font-size:0.9em">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
+    <p class="text-sm">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
     {%- endif %}
     {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
     <table class="pf-v6-c-table"><thead>
@@ -993,7 +1007,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
       <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
         <td><code>{{ s.key }}</code></td>
-        <td class="text-status-warning" style="font-weight:bold">{{ s.runtime }}</td>
+        <td class="text-status-warning text-bold">{{ s.runtime }}</td>
         <td>{{ s.default or '—' }}</td>
         <td><code>{{ s.source }}</code></td>
       </tr>
@@ -1007,57 +1021,28 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Module and Dracut Configuration</h3></div></div>
     <div class="pf-v6-c-card__body">
-    {%- if kb.modules_load_d %}
-    <h4>modules-load.d</h4>
+    {%- set modconf_sections =
+          ([("modules-load.d", kb.modules_load_d)] if kb.modules_load_d else []) +
+          ([("modprobe.d", kb.modprobe_d)] if kb.modprobe_d else []) +
+          ([("dracut.conf.d", kb.dracut_conf)] if kb.dracut_conf else [])
+    %}
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
-      {%- for cfg in kb.modules_load_d %}
+      {%- for label, items in modconf_sections %}
+      <tr><th colspan="2" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ label }}</th></tr>
+      {%- for cfg in items %}
       <tr>
         <td><code>{{ cfg.path }}</code></td>
         <td>
           {%- if cfg.content and cfg.content.strip() %}
           <details><summary>show</summary>
-            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ cfg.content }}</pre>
+            <pre class="content-preview">{{ cfg.content }}</pre>
           </details>
           {%- endif %}
         </td>
       </tr>
       {%- endfor %}
-    </tbody></table>
-    {%- endif %}
-    {%- if kb.modprobe_d %}
-    <h4 style="margin-top: 1rem;">modprobe.d</h4>
-    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
-      {%- for cfg in kb.modprobe_d %}
-      <tr>
-        <td><code>{{ cfg.path }}</code></td>
-        <td>
-          {%- if cfg.content and cfg.content.strip() %}
-          <details><summary>show</summary>
-            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ cfg.content }}</pre>
-          </details>
-          {%- endif %}
-        </td>
-      </tr>
       {%- endfor %}
     </tbody></table>
-    {%- endif %}
-    {%- if kb.dracut_conf %}
-    <h4 style="margin-top: 1rem;">dracut.conf.d</h4>
-    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
-      {%- for cfg in kb.dracut_conf %}
-      <tr>
-        <td><code>{{ cfg.path }}</code></td>
-        <td>
-          {%- if cfg.content and cfg.content.strip() %}
-          <details><summary>show</summary>
-            <pre style="border-radius:4px;padding:0.5rem;font-size:0.8rem;max-height:200px;overflow:auto;margin:0.25rem 0">{{ cfg.content }}</pre>
-          </details>
-          {%- endif %}
-        </td>
-      </tr>
-      {%- endfor %}
-    </tbody></table>
-    {%- endif %}
     </div>
   </div>
   {%- endif %}
@@ -1092,10 +1077,20 @@ details.audit-expand { margin-bottom: 0.25rem; }
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Overview</h3></div></div>
     <div class="pf-v6-c-card__body">
-    {%- if se.mode %}<p><strong>Mode:</strong> {{ se.mode }}</p>{%- endif %}
-    {%- if se.fips_mode %}<p><strong>FIPS mode:</strong> enabled</p>{%- endif %}
-    {%- if se.audit_rules %}<p>Audit rule files: {{ se.audit_rules|length }}</p>{%- endif %}
-    {%- if se.pam_configs %}<p>PAM configs: {{ se.pam_configs|length }}</p>{%- endif %}
+    <dl class="pf-v6-c-description-list pf-m-horizontal">
+      {%- if se.mode %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">Mode</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.mode }}</div></dd></div>
+      {%- endif %}
+      {%- if se.fips_mode %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">FIPS mode</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">enabled</div></dd></div>
+      {%- endif %}
+      {%- if se.audit_rules %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">Audit rule files</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.audit_rules|length }}</div></dd></div>
+      {%- endif %}
+      {%- if se.pam_configs %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">PAM configs</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.pam_configs|length }}</div></dd></div>
+      {%- endif %}
+    </dl>
     </div>
   </div>
 
@@ -1119,7 +1114,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
       {%- set cur = b.get('current', '?') %}
       <tr>
         <td><code>{{ b.get('name', '?') }}</code></td>
-        <td class="{{ 'text-status-success' if cur == 'on' else 'text-status-danger' }}" style="font-weight:bold">{{ cur }}</td>
+        <td class="{{ 'text-status-success' if cur == 'on' else 'text-status-danger' }} text-bold">{{ cur }}</td>
         <td>{{ b.get('default', '?') }}</td>
         <td>{{ b.get('description', '') }}</td>
       </tr>
@@ -1164,7 +1159,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
       <td><code>{{ r.path or '?' }}</code></td>
       <td>{{ r.pattern or '?' }}</td>
       <td>{{ r.line or '?' }}</td>
-      <td style="font-size:0.85em">{{ r.remediation or '' }}</td>
+      <td class="text-sm">{{ r.remediation or '' }}</td>
     </tr>
     {%- endfor %}
     </tbody>
@@ -1191,9 +1186,9 @@ details.audit-expand { margin-bottom: 0.25rem; }
         <td>{{ c.type }}</td>
         <td>
           {%- if c.method == 'static' -%}
-          <span class="text-status-success" style="font-weight:bold">Bake into image</span>
+          <span class="text-status-success text-bold">Bake into image</span>
           {%- elif c.method == 'dhcp' -%}
-          <span class="text-status-warning" style="font-weight:bold">Kickstart at deploy</span>
+          <span class="text-status-warning text-bold">Kickstart at deploy</span>
           {%- else -%}
           <span>Review</span>
           {%- endif -%}
@@ -1207,18 +1202,23 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
   {%- if net.firewall_zones %}
   <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones <span class="text-status-success" style="font-size:0.8em">(bake into image)</span></h3></div></div>
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones</h3></div></div>
     <div class="pf-v6-c-card__body">
-    {%- for z in net.firewall_zones %}
-    <h4>{{ z.name }}</h4>
-    {%- if z.services %}<p>Services: <code>{{ z.services|join(', ') }}</code></p>{%- endif %}
-    {%- if z.ports %}<p>Ports: <code>{{ z.ports|join(', ') }}</code></p>{%- endif %}
-    {%- if z.rich_rules %}
-    <p>Rich rules ({{ z.rich_rules|length }}):</p><ul>
-      {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
-    </ul>
-    {%- endif %}
-    {%- endfor %}
+    <p><span class="pf-v6-c-label pf-m-filled pf-m-green">Bake into image</span></p>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Property</th><th scope="col">Value</th></tr></thead><tbody>
+      {%- for z in net.firewall_zones %}
+      <tr><th colspan="2" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ z.name }}</th></tr>
+      {%- if z.services %}
+      <tr><td>Services</td><td><code>{{ z.services|join(', ') }}</code></td></tr>
+      {%- endif %}
+      {%- if z.ports %}
+      <tr><td>Ports</td><td><code>{{ z.ports|join(', ') }}</code></td></tr>
+      {%- endif %}
+      {%- if z.rich_rules %}
+      <tr><td>Rich rules ({{ z.rich_rules|length }})</td><td>{%- for r in z.rich_rules %}<code>{{ r[:300] }}</code>{{ ', ' if not loop.last else '' }}{%- endfor %}</td></tr>
+      {%- endif %}
+      {%- endfor %}
+    </tbody></table>
     </div>
   </div>
   {%- endif %}
@@ -1242,11 +1242,11 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__body">
     <p>resolv.conf provenance:
       {%- if net.resolv_provenance == 'networkmanager' %}
-      <span class="text-status-warning" style="font-weight:bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
+      <span class="text-status-warning text-bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
       {%- elif net.resolv_provenance == 'systemd-resolved' %}
-      <span class="text-status-warning" style="font-weight:bold">systemd-resolved</span> — system resolver — kickstart at deploy time
+      <span class="text-status-warning text-bold">systemd-resolved</span> — system resolver — kickstart at deploy time
       {%- else %}
-      <span class="text-status-success" style="font-weight:bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
+      <span class="text-status-success text-bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
       {%- endif %}
     </p>
     </div>
@@ -1299,7 +1299,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 
 {# ── Warnings ─────────────────────────────────────────────────────────────── #}
 {% call section("warnings", "Warnings") %}
-<div class="pf-v6-c-text-input-group" style="margin-bottom:1rem">
+<div class="pf-v6-c-text-input-group mb-md">
   <div class="pf-v6-c-text-input-group__main">
     <input type="text" class="pf-v6-c-text-input-group__text-input" id="warn-search" placeholder="Search warnings..."/>
   </div>
@@ -1394,7 +1394,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     {%- endfor %}
   </tbody></table>
   {%- if snapshot.services.drop_ins %}
-  <p style="margin-top:0.5rem">{{ snapshot.services.drop_ins|length }} systemd drop-in override(s).</p>
+  <p class="mt-sm">{{ snapshot.services.drop_ins|length }} systemd drop-in override(s).</p>
   {%- endif %}
 </details>
 {%- endif %}
@@ -1424,7 +1424,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   </tbody></table>
   {%- endif %}
   {%- if _net.firewall_zones %}
-  <p style="margin-top:0.5rem"><strong>Firewall zones:</strong>
+  <p class="mt-sm"><strong>Firewall zones:</strong>
     {%- for z in _net.firewall_zones %}
     {{ z.name }}{% if z.services %} ({{ z.services|join(', ') }}){% endif %}{% if z.ports %} [{{ z.ports|join(', ') }}]{% endif %}{% if not loop.last %};{% endif %}
     {%- endfor %}
@@ -1480,7 +1480,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   </tbody></table>
   {%- endif %}
   {%- if _ct.compose_files %}
-  <p style="margin-top:0.5rem">Compose files:
+  <p class="mt-sm">Compose files:
     {%- for c in _ct.compose_files %} <code>{{ c.path }}</code>{% if not loop.last %},{% endif %}{%- endfor %}
   </p>
   {%- endif %}
@@ -1546,7 +1546,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
   </tbody></table>
   {%- endif %}
   {%- if _ug.groups %}
-  <table class="pf-v6-c-table" style="margin-top:0.5rem"><thead><tr><th scope="col">Group</th><th scope="col">GID</th><th scope="col">Members</th></tr></thead><tbody>
+  <table class="pf-v6-c-table mt-sm"><thead><tr><th scope="col">Group</th><th scope="col">GID</th><th scope="col">Members</th></tr></thead><tbody>
     {%- for g in _ug.groups %}
     <tr><td>{{ g.name }}</td><td>{{ g.gid }}</td><td>{{ (g.members or [])|join(', ') or '—' }}</td></tr>
     {%- endfor %}
