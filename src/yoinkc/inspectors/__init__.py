@@ -3,6 +3,7 @@ Inspectors produce structured data that is merged into the inspection snapshot.
 Each inspector receives host_root and an executor; returns a section for the snapshot.
 """
 
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -205,20 +206,18 @@ def run_all(
         executor = make_executor(str(host_root))
 
     meta = {"host_root": str(host_root), "timestamp": datetime.now(timezone.utc).isoformat()}
-    hostname_path = host_root / "etc" / "hostname"
-    try:
-        if hostname_path.exists():
-            lines = hostname_path.read_text().strip().splitlines()
-            if lines:
-                meta["hostname"] = lines[0]
-    except (PermissionError, OSError):
-        pass
-    if "hostname" not in meta:
-        proc_hostname = host_root / "proc" / "sys" / "kernel" / "hostname"
+    # Hostname priority: YOINKC_HOSTNAME env var (set by wrapper on host)
+    #                  → /etc/hostname (may be empty on systemd hosts)
+    env_hostname = os.environ.get("YOINKC_HOSTNAME", "").strip()
+    if env_hostname:
+        meta["hostname"] = env_hostname
+    else:
+        hostname_path = host_root / "etc" / "hostname"
         try:
-            name = proc_hostname.read_text().strip()
-            if name:
-                meta["hostname"] = name
+            if hostname_path.exists():
+                lines = hostname_path.read_text().strip().splitlines()
+                if lines:
+                    meta["hostname"] = lines[0]
         except (PermissionError, OSError):
             pass
     os_release = _read_os_release(host_root)

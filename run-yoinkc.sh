@@ -101,6 +101,7 @@ podman run --rm --pull=always \
   ${YOINKC_DEBUG:+-e YOINKC_DEBUG=1} \
   ${YOINKC_EXCLUDE_PREREQS:+--env YOINKC_EXCLUDE_PREREQS} \
   -e YOINKC_HOST_CWD="$(pwd)" \
+  -e YOINKC_HOSTNAME="$(hostname -s)" \
   -v /:/host:ro \
   -v "$(pwd):/output" \
   "$IMAGE" "$@"

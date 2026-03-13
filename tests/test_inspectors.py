@@ -910,36 +910,45 @@ def test_no_cross_major_warning_same_version(host_root, fixture_executor):
 
 
 @pytest.mark.parametrize("etc_hostname_content", ["", "\n"])
-def test_hostname_falls_back_to_proc_when_etc_hostname_empty(tmp_path, fixture_executor, etc_hostname_content):
-    """/proc/sys/kernel/hostname is used when /etc/hostname is empty or blank.
+def test_hostname_env_var_takes_priority_over_etc_hostname(tmp_path, fixture_executor, monkeypatch, etc_hostname_content):
+    """YOINKC_HOSTNAME env var takes priority, covering systemd hosts where /etc/hostname is empty.
 
     On systemd-managed hosts (RHEL, CentOS, Fedora, ...) where the hostname was
-    set via hostnamectl, /etc/hostname may be absent or empty while the kernel
-    still has the correct hostname via /proc/sys/kernel/hostname.
+    set via hostnamectl, /etc/hostname may be absent or empty. The wrapper script
+    passes the host's hostname via YOINKC_HOSTNAME so the container always has it.
     """
+    monkeypatch.setenv("YOINKC_HOSTNAME", "myhost")
+
     etc = tmp_path / "etc"
     etc.mkdir()
     (etc / "hostname").write_text(etc_hostname_content)
     (etc / "os-release").write_text('NAME="Red Hat Enterprise Linux"\nVERSION_ID="9.4"\nID=rhel\n')
 
-    proc_kernel = tmp_path / "proc" / "sys" / "kernel"
-    proc_kernel.mkdir(parents=True)
-    (proc_kernel / "hostname").write_text("myhost\n")
-
     snapshot = run_all(tmp_path, executor=fixture_executor, no_baseline_opt_in=True)
     assert snapshot.meta.get("hostname") == "myhost"
 
 
-def test_hostname_etc_hostname_takes_precedence_over_proc(tmp_path, fixture_executor):
-    """Non-empty /etc/hostname takes precedence over /proc/sys/kernel/hostname."""
+def test_hostname_env_var_overrides_etc_hostname(tmp_path, fixture_executor, monkeypatch):
+    """YOINKC_HOSTNAME takes precedence even when /etc/hostname is non-empty."""
+    monkeypatch.setenv("YOINKC_HOSTNAME", "from-env")
+
     etc = tmp_path / "etc"
     etc.mkdir()
     (etc / "hostname").write_text("from-etc-hostname\n")
     (etc / "os-release").write_text('NAME="CentOS Stream"\nVERSION_ID="9"\nID=centos\n')
 
-    proc_kernel = tmp_path / "proc" / "sys" / "kernel"
-    proc_kernel.mkdir(parents=True)
-    (proc_kernel / "hostname").write_text("from-proc\n")
+    snapshot = run_all(tmp_path, executor=fixture_executor, no_baseline_opt_in=True)
+    assert snapshot.meta.get("hostname") == "from-env"
+
+
+def test_hostname_falls_back_to_etc_hostname_when_env_unset(tmp_path, fixture_executor, monkeypatch):
+    """When YOINKC_HOSTNAME is absent, /etc/hostname is used."""
+    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "hostname").write_text("from-etc-hostname\n")
+    (etc / "os-release").write_text('NAME="CentOS Stream"\nVERSION_ID="9"\nID=centos\n')
 
     snapshot = run_all(tmp_path, executor=fixture_executor, no_baseline_opt_in=True)
     assert snapshot.meta.get("hostname") == "from-etc-hostname"
