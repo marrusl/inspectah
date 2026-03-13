@@ -75,17 +75,9 @@ body { padding-bottom: 70px; }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* Sidebar nav */
-/* Set the CSS variable so both the sidebar element width and the page grid
-   column (grid-template-columns: var(--pf-v6-c-page__sidebar--Width) 1fr)
-   agree on the same value. Overriding width directly would leave the grid
-   column at PF6's default 290px, creating a ~50px gap. */
-.pf-v6-c-page__sidebar { --pf-v6-c-page__sidebar--Width: 240px; }
-/* Zero sidebar-body padding so nav hover/active backgrounds extend edge-to-edge
-   and the scrollbar track sits flush against the panel border. */
-.pf-v6-c-page__sidebar .pf-v6-c-page__sidebar-body { padding-inline: 0; }
 .pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.75rem 1rem 0.25rem; }
 @media (max-width: 768px) {
-  .pf-v6-c-page__sidebar { --pf-v6-c-page__sidebar--Width: 100%; position: static; }
+  .pf-v6-c-page__sidebar { position: static; }
 }
 
 
