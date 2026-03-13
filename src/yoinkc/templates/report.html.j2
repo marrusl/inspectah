@@ -77,6 +77,12 @@ body { padding-bottom: 70px; }
 /* Sidebar nav */
 .pf-v6-c-page__sidebar { width: 240px; flex-shrink: 0; }
 .pf-v6-c-page__sidebar .pf-v6-c-page__sidebar-body { padding-inline-end: 0; }
+/* Zero right padding on nav containers so the scrollbar track sits flush against
+   the sidebar edge. Text padding is preserved on the link element instead. */
+.pf-v6-c-page__sidebar .pf-v6-c-nav,
+.pf-v6-c-page__sidebar .pf-v6-c-nav__section,
+.pf-v6-c-page__sidebar .pf-v6-c-nav__list { padding-inline-end: 0; }
+.pf-v6-c-page__sidebar .pf-v6-c-nav__link { padding-inline-end: var(--pf-v6-global--spacer--md, 1rem); }
 .pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.75rem 1rem 0.25rem; }
 @media (max-width: 768px) {
   .pf-v6-c-page__sidebar { width: 100%; position: static; }
