@@ -246,6 +246,17 @@ class TestHtmlReport:
         assert "containerfile-pre" in html
         assert "FROM " in html
 
+    def test_reset_button_present(self, outputs_with_baseline):
+        """Reset button should be in the toolbar, disabled by default."""
+        html = self._html(outputs_with_baseline)
+        assert 'id="btn-reset"' in html
+        assert "disabled" in html.split('id="btn-reset"')[1].split(">")[0]
+
+    def test_original_snapshot_embedded(self, outputs_with_baseline):
+        """Page JS should deep-copy the snapshot for reset support."""
+        html = self._html(outputs_with_baseline)
+        assert "var originalSnapshot = JSON.parse(JSON.stringify(snapshot));" in html
+
 
 # ===========================================================================
 # Audit report tests
