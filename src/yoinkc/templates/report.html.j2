@@ -192,8 +192,6 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .text-status-warning { color: var(--pf-t--global--text--color--status--warning--default); }
 .text-status-danger  { color: var(--pf-t--global--text--color--status--danger--default); }
 .text-status-info    { color: var(--pf-t--global--text--color--status--info--default); }
-.bg-status-success-subtle { background: var(--pf-t--global--color--status--success--100); }
-.bg-status-warning-subtle { background: var(--pf-t--global--color--status--warning--100); }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -892,7 +890,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     {%- if local_timers %}
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Timer</th><th scope="col">Schedule</th><th scope="col">ExecStart</th></tr></thead><tbody>
       {%- for t in local_timers %}
-      <tr class="bg-status-success-subtle">
+      <tr>
         <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
         <td><code>{{ t.exec_start }}</code></td>
       </tr>
@@ -909,7 +907,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
     <div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Cron Expression</th><th scope="col">Source File</th></tr></thead><tbody>
       {%- for u in st.generated_timer_units %}
-      <tr class="bg-status-warning-subtle{% if not u.include %} excluded{% endif %}" data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
+      <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
         <td>{{ u.name }}</td>
         <td><code>{{ u.cron_expr }}</code></td>
