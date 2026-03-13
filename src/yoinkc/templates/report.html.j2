@@ -131,6 +131,8 @@ div.excluded { text-decoration: line-through; opacity: 0.45; }
 
 /* Include checkbox – hidden until yoinkc-refine helper is active */
 .pf-v6-c-check.pf-m-standalone.include-cb-wrap { display: none; }
+/* Vertically center checkbox cells without overriding all table cells globally */
+.pf-v6-c-table .pf-v6-c-table__check { vertical-align: middle; }
 
 /* Gap between stacked inner cards inside a card body */
 .pf-v6-c-card__body > .pf-v6-c-card + .pf-v6-c-card { margin-top: var(--pf-v6-global--spacer--md, 1rem); }
