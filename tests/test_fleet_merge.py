@@ -236,6 +236,68 @@ class TestMergeWarnings:
         assert len(merged.warnings) == 2
 
 
+class TestMergeLeafAutoPackages:
+    def test_leaf_packages_unioned(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("web-01", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+            leaf_packages=["httpd"],
+            auto_packages=["apr", "apr-util"],
+        ))
+        s2 = _snap("web-02", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+            leaf_packages=["httpd", "nginx"],
+            auto_packages=["apr"],
+        ))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert set(merged.rpm.leaf_packages) == {"httpd", "nginx"}
+        assert set(merged.rpm.auto_packages) == {"apr", "apr-util"}
+
+    def test_leaf_fields_none_when_no_snapshots_have_them(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("web-01", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+        ))
+        s2 = _snap("web-02", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+        ))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert merged.rpm.leaf_packages is None
+        assert merged.rpm.auto_packages is None
+        assert merged.rpm.leaf_dep_tree is None
+
+    def test_leaf_fields_preserved_when_mixed_with_none(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("web-01", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+            leaf_packages=["httpd"],
+            auto_packages=["apr"],
+            leaf_dep_tree={"httpd": ["apr"]},
+        ))
+        s2 = _snap("web-02", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+        ))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert merged.rpm.leaf_packages == ["httpd"]
+        assert merged.rpm.auto_packages == ["apr"]
+        assert merged.rpm.leaf_dep_tree == {"httpd": ["apr"]}
+
+    def test_leaf_dep_tree_merged(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("web-01", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+            leaf_dep_tree={"httpd": ["apr", "apr-util"]},
+        ))
+        s2 = _snap("web-02", rpm=RpmSection(
+            packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
+            leaf_dep_tree={"httpd": ["apr", "mailcap"], "nginx": ["openssl"]},
+        ))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert "httpd" in merged.rpm.leaf_dep_tree
+        assert set(merged.rpm.leaf_dep_tree["httpd"]) == {"apr", "apr-util", "mailcap"}
+        assert merged.rpm.leaf_dep_tree["nginx"] == ["openssl"]
+
+
 class TestNoHostsMode:
     def test_strip_host_lists(self):
         from yoinkc.fleet.merge import merge_snapshots

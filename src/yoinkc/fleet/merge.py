@@ -97,6 +97,14 @@ def _deduplicate_strings(all_lists: list[list[str]]) -> list[str]:
     return result
 
 
+def _deduplicate_optional_strings(raw: list[list[str] | None]) -> list[str] | None:
+    """Union of Optional string lists, preserving None when all inputs are None."""
+    non_none = [v for v in raw if v is not None]
+    if not non_none:
+        return None
+    return _deduplicate_strings(non_none)
+
+
 def _deduplicate_dicts(
     all_lists: list[list[dict]],
     key_field: str,
@@ -147,6 +155,24 @@ def _collect_section_lists(snapshots, section_attr, list_attr):
     return result
 
 
+def _merge_dep_trees(all_trees: list[dict | None]) -> dict | None:
+    """Merge leaf_dep_tree dicts from multiple snapshots."""
+    merged: dict[str, list[str]] = {}
+    for tree in all_trees:
+        if not tree:
+            continue
+        for leaf, deps in tree.items():
+            if leaf not in merged:
+                merged[leaf] = list(deps)
+            else:
+                existing = set(merged[leaf])
+                for d in deps:
+                    if d not in existing:
+                        merged[leaf].append(d)
+                        existing.add(d)
+    return merged if merged else None
+
+
 def merge_snapshots(
     snapshots: list[InspectionSnapshot],
     min_prevalence: int = 100,
@@ -186,6 +212,11 @@ def merge_snapshots(
         )
         # Pass-through fields from first snapshot with rpm
         first_rpm = next(s.rpm for s in snapshots if s.rpm)
+        # These three fields are set together: all None or all populated.
+        # Collect raw Optional values to preserve None when no snapshot has leaf data.
+        raw_leaf = [(s.rpm.leaf_packages if s.rpm else None) for s in snapshots]
+        raw_auto = [(s.rpm.auto_packages if s.rpm else None) for s in snapshots]
+        raw_dep_trees = [(s.rpm.leaf_dep_tree if s.rpm else None) for s in snapshots]
         rpm_section = RpmSection(
             packages_added=packages_added,
             base_image_only=base_image_only,
@@ -195,6 +226,9 @@ def merge_snapshots(
             base_image=first_rpm.base_image,
             baseline_package_names=first_rpm.baseline_package_names,
             no_baseline=first_rpm.no_baseline,
+            leaf_packages=_deduplicate_optional_strings(raw_leaf),
+            auto_packages=_deduplicate_optional_strings(raw_auto),
+            leaf_dep_tree=_merge_dep_trees(raw_dep_trees),
         )
 
     # --- Config ---
