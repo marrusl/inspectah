@@ -25,6 +25,25 @@ class OsRelease(BaseModel):
     pretty_name: str = ""
 
 
+# --- Fleet metadata (set by yoinkc-fleet aggregate) ---
+
+
+class FleetPrevalence(BaseModel):
+    """Fleet prevalence metadata for a merged snapshot item."""
+
+    count: int
+    total: int
+    hosts: List[str] = Field(default_factory=list)
+
+
+class FleetMeta(BaseModel):
+    """Fleet-level metadata for a merged snapshot."""
+
+    source_hosts: List[str]
+    total_hosts: int
+    min_prevalence: int
+
+
 # --- RPM Inspector ---
 
 
