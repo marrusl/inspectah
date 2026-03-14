@@ -139,9 +139,9 @@ empty/None in merged snapshot).
 | `gpg_keys` | merge (by `path`) |
 | `rpm_va` | omit — host-specific verification output |
 | `dnf_history_removed` | deduplicate — union of all removed package names |
-| `leaf_packages` | omit — recomputed by renderers from merged packages |
-| `auto_packages` | omit — recomputed |
-| `leaf_dep_tree` | omit — recomputed |
+| `leaf_packages` | deduplicate — union (if leaf on any host, leaf in fleet) |
+| `auto_packages` | deduplicate — union (if auto on any host, auto in fleet) |
+| `leaf_dep_tree` | merge — union of all dep mappings (leaf→[auto deps]) |
 | `base_image` | pass-through (require identical, error if mismatched) |
 | `baseline_package_names` | pass-through |
 | `no_baseline` | pass-through |
