@@ -153,3 +153,98 @@ class TestMergeNoneSection:
         s2 = _snap("web-02")
         merged = merge_snapshots([s1, s2], min_prevalence=100)
         assert merged.rpm is None
+
+
+from yoinkc.schema import (
+    ConfigSection, ConfigFileEntry, ContainerSection,
+    QuadletUnit, ComposeFile, ComposeService,
+    SystemdDropIn, UserGroupSection,
+)
+
+
+class TestMergeConfigVariants:
+    def test_identical_config_merged(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        f = ConfigFileEntry(path="/etc/httpd/conf/httpd.conf", kind="unowned", content="Listen 80")
+        s1 = _snap("web-01", config=ConfigSection(files=[f]))
+        s2 = _snap("web-02", config=ConfigSection(files=[f]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.config.files) == 1
+        assert merged.config.files[0].fleet.count == 2
+
+    def test_different_content_produces_variants(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        f1 = ConfigFileEntry(path="/etc/httpd/conf/httpd.conf", kind="unowned", content="Listen 80")
+        f2 = ConfigFileEntry(path="/etc/httpd/conf/httpd.conf", kind="unowned", content="Listen 8080")
+        s1 = _snap("web-01", config=ConfigSection(files=[f1]))
+        s2 = _snap("web-02", config=ConfigSection(files=[f2]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.config.files) == 2
+        paths = {f.path for f in merged.config.files}
+        assert paths == {"/etc/httpd/conf/httpd.conf"}
+        for f in merged.config.files:
+            assert f.fleet.count == 1
+            assert f.include is False  # 1/2 < 100%
+
+    def test_majority_variant_included_at_threshold(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        f_majority = ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="version=A")
+        f_outlier = ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="version=B")
+        snaps = [_snap(f"web-{i:02d}", config=ConfigSection(files=[f_majority])) for i in range(9)]
+        snaps.append(_snap("web-09", config=ConfigSection(files=[f_outlier])))
+        merged = merge_snapshots(snaps, min_prevalence=90)
+        included = [f for f in merged.config.files if f.include]
+        excluded = [f for f in merged.config.files if not f.include]
+        assert len(included) == 1
+        assert included[0].content == "version=A"
+        assert len(excluded) == 1
+        assert excluded[0].content == "version=B"
+
+
+class TestMergeQuadletVariants:
+    def test_quadlet_content_variants(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        q1 = QuadletUnit(path="/etc/containers/systemd/app.container", name="app", content="[Container]\nImage=v1")
+        q2 = QuadletUnit(path="/etc/containers/systemd/app.container", name="app", content="[Container]\nImage=v2")
+        s1 = _snap("web-01", containers=ContainerSection(quadlet_units=[q1]))
+        s2 = _snap("web-02", containers=ContainerSection(quadlet_units=[q2]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.containers.quadlet_units) == 2
+
+
+class TestMergeUsersGroups:
+    def test_users_deduplicated_by_name(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        ug1 = UserGroupSection(users=[{"name": "appuser", "uid": 1000}])
+        ug2 = UserGroupSection(users=[{"name": "appuser", "uid": 1000}])
+        s1 = _snap("web-01", users_groups=ug1)
+        s2 = _snap("web-02", users_groups=ug2)
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.users_groups.users) == 1
+        assert merged.users_groups.users[0]["fleet"]["count"] == 2
+
+
+class TestMergeWarnings:
+    def test_warnings_deduplicated(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        w = {"source": "rpm", "message": "package conflict detected"}
+        s1 = _snap("web-01")
+        s1.warnings = [w]
+        s2 = _snap("web-02")
+        s2.warnings = [w, {"source": "config", "message": "orphaned file"}]
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.warnings) == 2
+
+
+class TestNoHostsMode:
+    def test_strip_host_lists(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("web-01", rpm=RpmSection(packages_added=[
+            PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
+        ]))
+        s2 = _snap("web-02", rpm=RpmSection(packages_added=[
+            PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100, include_hosts=False)
+        assert merged.rpm.packages_added[0].fleet.hosts == []
+        assert merged.rpm.packages_added[0].fleet.count == 2
