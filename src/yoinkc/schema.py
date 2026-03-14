@@ -64,6 +64,7 @@ class PackageEntry(BaseModel):
     state: PackageState = PackageState.ADDED
     include: bool = True
     source_repo: str = ""
+    fleet: Optional[FleetPrevalence] = None
 
 
 class RpmVaEntry(BaseModel):
@@ -81,6 +82,7 @@ class RepoFile(BaseModel):
     content: str = ""
     is_default_repo: bool = True
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class RpmSection(BaseModel):
@@ -121,6 +123,7 @@ class ConfigFileEntry(BaseModel):
     package: Optional[str] = None
     diff_against_rpm: Optional[str] = None  # unified diff when --config-diffs
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class ConfigSection(BaseModel):
@@ -141,6 +144,7 @@ class ServiceStateChange(BaseModel):
     action: str  # "enable", "disable", "mask", or "unchanged"
     include: bool = True
     owning_package: Optional[str] = None
+    fleet: Optional[FleetPrevalence] = None
 
 
 class SystemdDropIn(BaseModel):
@@ -150,6 +154,7 @@ class SystemdDropIn(BaseModel):
     path: str          # relative path, e.g. "etc/systemd/system/postgresql.service.d/override.conf"
     content: str = ""
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class ServiceSection(BaseModel):
@@ -181,6 +186,7 @@ class FirewallZone(BaseModel):
     ports: List[str] = Field(default_factory=list)
     rich_rules: List[str] = Field(default_factory=list)
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class FirewallDirectRule(BaseModel):
@@ -271,6 +277,7 @@ class CronJob(BaseModel):
     source: str  # "cron.d", "crontab", "cron.daily", "spool/cron (user)", etc.
     rpm_owned: bool = False
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class SystemdTimer(BaseModel):
@@ -299,6 +306,7 @@ class GeneratedTimerUnit(BaseModel):
     source_path: str = ""
     command: str = ""
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class ScheduledTaskSection(BaseModel):
@@ -326,6 +334,7 @@ class QuadletUnit(BaseModel):
     content: str = ""
     image: str = ""
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class ComposeService(BaseModel):
@@ -337,6 +346,7 @@ class ComposeFile(BaseModel):
     path: str
     images: List[ComposeService] = Field(default_factory=list)
     include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class RunningContainer(BaseModel):
