@@ -24,6 +24,7 @@ Environment variables for customization:
 | Variable | Effect |
 |----------|--------|
 | `YOINKC_IMAGE` | Override the container image (e.g. a local build or pinned tag) |
+| `YOINKC_HOSTNAME` | Override the reported hostname (default: `hostname -s`) |
 | `YOINKC_DEBUG` | Set to `1` to enable debug logging to stderr |
 
 > **Important:** `sudo` must wrap `sh`, not `curl`. The container requires rootful podman — if `sudo` only applies to the download, podman runs rootless and nsenter into host namespaces will fail.
@@ -39,7 +40,11 @@ Environment variables for customization:
 
 A core design principle is **baseline subtraction**: wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the output. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there.
 
-Two companion scripts complete the workflow. `yoinkc-build` builds a bootc container image from yoinkc output, with automatic RHEL entitlement handling for building on non-RHEL hosts. `yoinkc-refine` serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live. See [Building the image](#building-the-image) and [Interactive refinement](#interactive-refinement) for details.
+Three companion tools complete the workflow:
+
+- **`yoinkc-refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live. See [Interactive refinement](#interactive-refinement).
+- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL entitlement handling for building on non-RHEL hosts. See [Building the image](#building-the-image).
+- **`yoinkc-fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations. See [Fleet analysis](#fleet-analysis).
 
 ---
 
@@ -294,6 +299,54 @@ Push directly after building:
 Use `--no-cache` for a clean rebuild without layer caching.
 
 **Requirements:** Python 3.9+ (stdlib only). Podman or Docker.
+
+---
+
+## Fleet analysis
+
+`yoinkc-fleet` aggregates inspection snapshots from multiple hosts serving the same role into a single fleet snapshot. Building one image per host quickly becomes unmanageable. Fleet analysis finds the common ground across your fleet and produces one shared image spec.
+
+**Workflow:**
+
+1. Run yoinkc on each host (however you like — manually, Ansible, scripts):
+   ```bash
+   YOINKC_HOSTNAME=web-01 ./run-yoinkc.sh
+   YOINKC_HOSTNAME=web-02 ./run-yoinkc.sh
+   YOINKC_HOSTNAME=web-03 ./run-yoinkc.sh
+   ```
+
+2. Collect tarballs into a directory on your workstation and run the fleet wrapper:
+   ```bash
+   mkdir web-servers && cp web-0*.tar.gz web-servers/
+   ./run-yoinkc-fleet.sh ./web-servers/ -p 80
+   ```
+
+The fleet tarball contains a Containerfile, HTML report, and snapshot — same structure as single-host output. The HTML report includes fleet-specific UI: a summary banner, prevalence color bars on every item (showing how many hosts have it), click-to-toggle fraction/percentage display, host list popovers, and grouped content variants for config files with differences across hosts.
+
+**Prevalence threshold (`-p`):** Controls what gets included. `-p 100` (default) means strict intersection — only items on every host. `-p 80` includes items on 80%+ of hosts. Items below threshold are still visible in the report (as unchecked), just not included in the Containerfile.
+
+**Container wrapper:** `run-yoinkc-fleet.sh` runs `yoinkc-fleet` inside the yoinkc container — no Python/pip/venv needed on your workstation. Just podman and the script.
+
+| Variable | Effect |
+|----------|--------|
+| `YOINKC_IMAGE` | Override the container image |
+| `YOINKC_OUTPUT_DIR` | Output directory for the fleet tarball (default: CWD) |
+
+**Direct usage** (when installed via pip):
+
+```bash
+yoinkc-fleet aggregate ./web-servers/ -p 80
+yoinkc-fleet aggregate ./web-servers/ --json-only -o merged.json
+yoinkc-fleet aggregate ./web-servers/ --output-dir ./fleet-output/
+```
+
+| Flag | Description |
+|------|-------------|
+| `-p`, `--min-prevalence` | Include items on >= N% of hosts (1-100, default: 100) |
+| `-o`, `--output` | Output tarball path (default: `<dir-name>-TIMESTAMP.tar.gz` in CWD) |
+| `--output-dir` | Write rendered files to a directory instead of tarball |
+| `--json-only` | Write merged snapshot JSON only, skip rendering |
+| `--no-hosts` | Omit per-item host lists from fleet metadata |
 
 ---
 
