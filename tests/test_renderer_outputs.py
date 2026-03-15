@@ -12,16 +12,10 @@ All five renderers are exercised:
 import re
 import tempfile
 from pathlib import Path
-from typing import Optional
-from unittest.mock import patch
 
 import pytest
 from jinja2 import Environment
 
-import yoinkc.preflight as preflight_mod
-from yoinkc.executor import RunResult
-from yoinkc.inspectors import run_all as run_all_inspectors
-from yoinkc.redact import redact_snapshot
 from yoinkc.renderers import run_all as run_all_renderers
 from yoinkc.renderers import html_report
 from yoinkc.renderers.containerfile import render as render_containerfile
@@ -39,80 +33,6 @@ from yoinkc.schema import (
     PackageEntry,
     RpmSection,
 )
-FIXTURES = Path(__file__).parent / "fixtures"
-
-
-# ---------------------------------------------------------------------------
-# Executor + fixture infrastructure
-# ---------------------------------------------------------------------------
-
-def _make_executor(pkg_list: Optional[str] = None):
-    """Return a fixture executor.  If pkg_list is None, the baseline podman call fails."""
-    def executor(cmd, cwd=None):
-        if cmd[-1] == "true" and "nsenter" in cmd:
-            return RunResult(stdout="", stderr="", returncode=0)
-        c = " ".join(cmd)
-        if "podman" in c and "login" in c and "--get-login" in c:
-            return RunResult(stdout="testuser\n", stderr="", returncode=0)
-        if "podman" in c and "image" in c and "exists" in c:
-            return RunResult(stdout="", stderr="", returncode=0)
-        if "podman" in c and "rpm" in c:
-            if pkg_list is not None:
-                return RunResult(stdout=pkg_list, stderr="", returncode=0)
-            return RunResult(stdout="", stderr="Error: podman unavailable", returncode=1)
-        if "rpm" in c and "-qa" in c:
-            return RunResult(stdout=(FIXTURES / "rpm_qa_output.txt").read_text(), stderr="", returncode=0)
-        if "rpm" in c and "-Va" in c:
-            return RunResult(stdout=(FIXTURES / "rpm_va_output.txt").read_text(), stderr="", returncode=0)
-        if "dnf" in c and "list" in c:
-            return RunResult(stdout=(FIXTURES / "dnf_history_list.txt").read_text(), stderr="", returncode=0)
-        if "dnf" in c and "info" in c and "4" in c:
-            return RunResult(stdout=(FIXTURES / "dnf_history_info_4.txt").read_text(), stderr="", returncode=0)
-        if "rpm" in c and "-ql" in c:
-            return RunResult(stdout=(FIXTURES / "rpm_qla_output.txt").read_text(), stderr="", returncode=0)
-        if "systemctl" in c:
-            return RunResult(stdout=(FIXTURES / "systemctl_list_unit_files.txt").read_text(), stderr="", returncode=0)
-        if "semodule" in c and "-l" in c:
-            return RunResult(stdout=(FIXTURES / "semodule_l_output.txt").read_text(), stderr="", returncode=0)
-        if "semanage" in c and "boolean" in c:
-            return RunResult(stdout=(FIXTURES / "semanage_boolean_l_output.txt").read_text(), stderr="", returncode=0)
-        if "lsmod" in c:
-            return RunResult(stdout=(FIXTURES / "lsmod_output.txt").read_text(), stderr="", returncode=0)
-        if "ip" in c and "route" in c:
-            return RunResult(stdout=(FIXTURES / "ip_route_output.txt").read_text(), stderr="", returncode=0)
-        if "ip" in c and "rule" in c:
-            return RunResult(stdout=(FIXTURES / "ip_rule_output.txt").read_text(), stderr="", returncode=0)
-        return RunResult(stdout="", stderr="", returncode=1)
-    return executor
-
-
-def _build_snapshot(with_baseline: bool):
-    pkg_list = (FIXTURES / "base_image_packages.txt").read_text() if with_baseline else None
-    with patch.object(preflight_mod, "in_user_namespace", return_value=False):
-        snapshot = run_all_inspectors(
-            FIXTURES / "host_etc",
-            executor=_make_executor(pkg_list),
-            no_baseline_opt_in=not with_baseline,
-        )
-    return redact_snapshot(snapshot)
-
-
-@pytest.fixture(scope="module")
-def outputs_with_baseline(tmp_path_factory):
-    """Full renderer outputs built with baseline resolved."""
-    tmp = tmp_path_factory.mktemp("with_baseline")
-    snapshot = _build_snapshot(with_baseline=True)
-    run_all_renderers(snapshot, tmp)
-    return {"snapshot": snapshot, "dir": tmp}
-
-
-@pytest.fixture(scope="module")
-def outputs_no_baseline(tmp_path_factory):
-    """Full renderer outputs built without baseline (no_baseline=True)."""
-    tmp = tmp_path_factory.mktemp("no_baseline")
-    snapshot = _build_snapshot(with_baseline=False)
-    run_all_renderers(snapshot, tmp)
-    return {"snapshot": snapshot, "dir": tmp}
 
 
 # ===========================================================================

@@ -50,9 +50,7 @@ from yoinkc.renderers.containerfile import render as render_containerfile
 from yoinkc.renderers.audit_report import render as render_audit
 from yoinkc.renderers.html_report import render as render_html_report
 
-
-def _env():
-    return Environment(autoescape=True)
+from conftest import _env
 
 
 # ---------------------------------------------------------------------------
