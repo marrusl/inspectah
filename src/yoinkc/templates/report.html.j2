@@ -2321,6 +2321,69 @@ var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
 })();
 
 
+{% if fleet_meta %}
+/* Fleet: toggle fraction/percentage on prevalence labels */
+document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
+  label.addEventListener('click', function(e) {
+    e.stopPropagation();
+    var bar = this.closest('.fleet-bar');
+    if (!bar) return;
+    var count = parseInt(bar.getAttribute('data-count'), 10);
+    var total = parseInt(bar.getAttribute('data-total'), 10);
+    var showing = this.getAttribute('data-showing') || 'fraction';
+    if (showing === 'fraction') {
+      var pct = total > 0 ? Math.round(count * 100 / total) : 100;
+      this.textContent = pct + '%';
+      this.setAttribute('data-showing', 'percent');
+    } else {
+      this.textContent = count + '/' + total;
+      this.setAttribute('data-showing', 'fraction');
+    }
+  });
+});
+
+/* Fleet: host list popover on bar click */
+var activePopover = null;
+document.querySelectorAll('.fleet-bar').forEach(function(bar) {
+  bar.addEventListener('click', function(e) {
+    if (activePopover) {
+      activePopover.remove();
+      activePopover = null;
+    }
+    var hosts = this.getAttribute('data-hosts');
+    var popover = document.createElement('div');
+    popover.className = 'fleet-popover';
+    if (!hosts) {
+      popover.textContent = 'Host list not available';
+    } else {
+      var ul = document.createElement('ul');
+      hosts.split(', ').forEach(function(h) {
+        if (h.trim()) {
+          var li = document.createElement('li');
+          li.textContent = h.trim();
+          ul.appendChild(li);
+        }
+      });
+      if (ul.children.length === 0) {
+        popover.textContent = 'Host list not available';
+      } else {
+        popover.appendChild(ul);
+      }
+    }
+    this.style.position = 'relative';
+    this.appendChild(popover);
+    activePopover = popover;
+  });
+});
+
+/* Close popover on click outside */
+document.addEventListener('click', function(e) {
+  if (activePopover && !e.target.closest('.fleet-bar')) {
+    activePopover.remove();
+    activePopover = null;
+  }
+});
+{% endif %}
 </script>
 </body>
 </html>
