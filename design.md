@@ -524,6 +524,114 @@ SSH authorized keys are never embedded in the image — they always appear as a 
 
 The generated README includes an opinionated strategy guide explaining the trade-offs between provisioning approaches.
 
+## 6. Renderers
+
+Renderers consume the complete `InspectionSnapshot` and produce the output artifacts that operators actually work with. Each renderer is a module in `src/yoinkc/renderers/` with a `render(snapshot, env, output_dir)` function that takes the snapshot, a Jinja2 `Environment`, and the output directory.
+
+### Orchestration
+
+`renderers/__init__.py:run_all()` is the single entry point. It creates the output directory, sets up the Jinja2 environment, and calls each renderer in sequence:
+
+1. `render_containerfile` — writes `Containerfile` and `config/` tree
+2. `render_audit_report` — writes `audit-report.md`
+3. `render_html_report` — writes `report.html`
+4. `render_readme` — writes `README.md`
+5. `render_kickstart` — writes `kickstart-suggestion.ks`
+6. `render_secrets_review` — writes `secrets-review.md`
+
+Order matters: the Containerfile renderer runs first because subsequent renderers read from the generated `Containerfile` (e.g., extracting FIXME counts, embedding the Containerfile content in the HTML report).
+
+### Jinja2 Setup
+
+`run_all()` creates a single `Environment` with `FileSystemLoader` pointing to `src/yoinkc/templates/` and `autoescape=True`. This environment is passed to every renderer. The HTML report renderer adds a custom `fleet_color` filter for fleet prevalence color bars. If a renderer is called directly (e.g., in tests) without a loader, it sets one up from the package's templates directory.
+
+### Containerfile Renderer (`containerfile.py`)
+
+Produces two outputs: the `Containerfile` itself and a `config/` directory tree containing all files referenced by `COPY` directives.
+
+**Layer ordering.** The Containerfile is structured in a deliberate layer order to maximize cache efficiency — layers that change infrequently appear first so that rebuilds after minor config changes don't invalidate the package installation layer:
+
+```
+repos → packages → services → firewall → scheduled tasks → configs →
+non-RPM software → quadlets → users → kernel → SELinux → network → tmpfiles.d
+```
+
+Each section has comments explaining what was detected and why it was included. `# FIXME` comments mark anything that needs human review. Every generated Containerfile ends with `RUN bootc container lint`, which validates that the image is bootc-compatible at build time.
+
+**Input sanitization.** All values interpolated into `RUN` shell commands are validated against a character allow-list (alphanumerics plus a controlled set of shell-safe characters). This is a safety net against corrupted snapshots producing malformed Containerfiles, not a security boundary — the data comes from RPM databases and systemd on an operator-controlled host.
+
+**Tool package detection.** The Non-RPM Software section checks whether tool packages needed by non-RPM items (e.g., `npm`/`nodejs` for lockfile installs, `python3-pip` for pip requirements) are already in the `dnf install` block. If not, a prerequisite `RUN dnf install` is emitted before the non-RPM directives.
+
+**Firewall handling.** Firewall zone XML files and direct rules are written to the config tree and included in the consolidated `COPY config/etc/ /etc/` block. The Containerfile section for firewall is comments-only, referencing the audit report for `firewall-offline-cmd` equivalents per zone.
+
+**Config tree.** `_write_config_tree()` writes all captured config files, repo files, GPG keys, firewall zone XMLs, systemd timer units, quadlet units, sysusers drop-ins, SELinux modules, and tuned profiles to `output_dir/config/`, preserving the original path hierarchy so that `COPY config/etc/ /etc/` places everything correctly.
+
+### Audit Report Renderer (`audit_report.py`)
+
+Produces `audit-report.md`, a markdown document for version control and quick terminal reference. Organized as:
+
+1. **Executive Summary**: triage breakdown (automatic / FIXME / manual), counts of packages, configs, containers, redactions.
+2. **Per-section findings**: RPM analysis, service state changes, configuration changes, network configuration, storage migration plan, scheduled tasks, container workloads, non-RPM software, kernel/boot, SELinux, users/groups — each rendered only when the corresponding snapshot section is non-`None`.
+3. **Data Migration Plan**: `/var` analysis with mount points mapped to recommended approaches (PVC, volume mount, tmpfiles.d).
+4. **Environment-specific considerations**: advisory subsections rendered only when relevant (custom alternatives, raw nftables, complex network topologies, identity provider integration, NTP/chrony, rsyslog forwarding).
+5. **Items requiring manual intervention**: consolidated list from all inspectors.
+
+### HTML Report Renderer (`html_report.py` + `report.html.j2`)
+
+Produces `report.html`, a single self-contained HTML file (inline CSS/JS, no external dependencies) that can be opened in any browser. The renderer builds a context dict from the snapshot and delegates to the Jinja2 template.
+
+**Context building.** `_build_context()` pre-computes several derived data structures:
+- Summary counts per section
+- Triage breakdown (automatic/FIXME/manual) via `_triage.py`
+- File browser tree HTML (pre-rendered `Markup`)
+- Config file diffs (pre-rendered HTML with syntax highlighting)
+- Container mount/network summaries
+- Fleet variant grouping (for fleet-aggregated snapshots)
+- Embedded PatternFly 6 CSS (read from `templates/patternfly.css` and inlined)
+- Embedded snapshot JSON (for the interactive refine UI)
+
+**Template architecture.** The `report.html.j2` template is 2,556 lines — a known complexity hotspot (see Future Work). It uses PatternFly 6 CSS for the component library and adds custom overrides for report-specific styling. The layout uses PF6's page structure: a sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
+
+**Fleet-aware rendering.** The template conditionally renders fleet-specific elements when `fleet_meta` is present in the context: a fleet banner showing host count and prevalence threshold, prevalence color bars (blue/gold/red) on individual items, fraction/percentage toggle, host list popovers, and content variant grouping for config files, quadlet units, and service drop-ins.
+
+### README Renderer (`readme.py`)
+
+Produces `README.md` with:
+- Summary of findings (packages, configs, services, FIXMEs, warnings)
+- Exact `podman build` command
+- Exact `bootc switch` or `bootc install` command with the right flags for the detected scenario
+- List of FIXME items requiring resolution
+- Artifacts table describing each output file
+- User provisioning strategy guide (opinionated explanation of sysusers vs. useradd vs. kickstart vs. blueprint trade-offs)
+
+The README renderer reads back the generated Containerfile to extract FIXME items, creating a cross-reference between the two artifacts.
+
+### Kickstart Renderer (`kickstart.py`)
+
+Produces `kickstart-suggestion.ks` containing deploy-time provisioning suggestions:
+- DHCP network interfaces (`network --bootproto=dhcp ...`)
+- Hostname (`network --hostname=...`)
+- Site-specific DNS
+- NFS mount credentials
+- User provisioning directives for kickstart-strategy users (`user --name=...`)
+- Deployment-specific environment variables referenced in configs
+
+The file is clearly marked as a **suggestion** — it needs review and adaptation for the target environment.
+
+### Secrets Review Renderer (`secrets_review.py`)
+
+Produces `secrets-review.md`, a standalone report listing all redacted items. Each entry includes the file path, the pattern that matched, the redacted line, and a suggested remediation approach (e.g., "use a Kubernetes secret", "use a systemd credential"). This complements the redaction machinery in Secret Handling (below) by giving operators a single checklist of items that need manual attention.
+
+### Shared Triage Computation (`_triage.py`)
+
+The `_triage` module provides two functions used by both the audit report and HTML report renderers:
+
+- **`compute_triage(snapshot, output_dir)`** classifies all inspected items into three buckets: **automatic** (items the Containerfile handles without intervention), **FIXME** (items with `# FIXME` comments in the Containerfile that need review), and **manual** (warnings, redacted secrets, SSH key references). The FIXME count is computed by scanning the already-generated Containerfile for `# FIXME` comment lines — this is why the Containerfile renderer must run first.
+
+- **`compute_triage_detail(snapshot, output_dir)`** returns a per-category breakdown for the readiness panel, with each entry carrying a label, count, target tab, and status. Only categories with non-zero counts are included.
+
+Both functions filter by `.include` on item models, so excluded items (toggled off via the refine UI or fleet merge) don't inflate the counts.
+
 ## Secret Handling
 
 A dedicated redaction pass runs over all captured file contents **before any output is written or any git operations occur**. This ordering is critical — the redaction pass is not a separate stage that can be skipped, it's a gate that all content must pass through.
@@ -565,76 +673,6 @@ Pushing to GitHub means network egress from a container with read access to the 
 
 ## Output Artifacts
 
-### Containerfile
-
-Structured in a deliberate layer order to maximize cache efficiency:
-
-```dockerfile
-# === Base Image ===
-FROM quay.io/centos-bootc/centos-bootc:stream9
-
-# === Repository Configuration ===
-COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/
-COPY config/etc/yum.repos.d/ /etc/yum.repos.d/
-
-# === Packages (4 leaf, 23 auto-dependencies) ===
-RUN dnf install -y httpd postgresql-server mod_ssl certbot && dnf clean all
-
-# === Services ===
-RUN systemctl enable httpd && systemctl disable kdump
-
-# === Firewall (zone files baked into image via config tree) ===
-# See audit-report.md for firewall-offline-cmd equivalents per zone.
-
-# === Scheduled Tasks (cron → systemd timers) ===
-COPY config/etc/systemd/system/backup-daily.timer /etc/systemd/system/
-RUN systemctl enable backup-daily.timer
-
-# === Config Files (consolidated) ===
-# Modified: httpd.conf (MaxClients, SSLProtocol), sshd_config (PermitRoot)
-# Added: logrotate.d/myapp, rsyslog.d/remote.conf
-COPY config/etc/ /etc/
-
-# === Non-RPM Software ===
-RUN pip install flask==2.3.2
-# FIXME: unknown provenance binary
-COPY config/usr/local/bin/mytool /usr/local/bin/mytool
-
-# === Containers (Quadlet) ===
-COPY quadlet/ /etc/containers/systemd/
-
-# === Users (sysusers for service accounts) ===
-COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/
-# FIXME: human user 'appuser' (uid 1001) — provision via kickstart or identity provider
-
-# === Kernel Arguments (bootc-native kargs.d) ===
-RUN mkdir -p /usr/lib/bootc/kargs.d
-COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/
-
-# === SELinux ===
-COPY config/selinux/ /tmp/selinux/
-RUN semodule -i /tmp/selinux/myapp.pp && rm -rf /tmp/selinux/
-RUN setsebool -P httpd_can_network_connect on
-
-# === Network ===
-COPY config/etc/NetworkManager/system-connections/ /etc/NetworkManager/system-connections/
-# FIXME: DHCP interfaces → kickstart
-
-# === tmpfiles.d ===
-COPY config/etc/tmpfiles.d/app-dirs.conf /etc/tmpfiles.d/
-
-# === Validate bootc compatibility ===
-RUN bootc container lint
-```
-
-Each section has comments explaining what was detected and why it was included. `FIXME` comments mark anything that needs human review. See the README for the complete layer ordering documentation.
-
-Every generated Containerfile ends with `RUN bootc container lint`, which validates that the image is bootc-compatible (correct ostree structure, no conflicting state). This catches structural problems at build time rather than at deployment.
-
-**Tool package detection.** The Non-RPM Software section of the Containerfile checks whether tool packages needed by non-RPM items are already present in the `dnf install` block. If `npm`/`nodejs` or `python3-pip` are needed (for npm lockfile installs or pip requirements, respectively) but not in the added package set, a prerequisite `RUN dnf install` is emitted before the non-RPM directives. This avoids build failures when a package like `nodejs` wasn't on the source host but npm lockfile items need it.
-
-**Firewall handling.** Firewall zone XML files and direct rules are written to the config tree and included in the consolidated `COPY config/etc/ /etc/` block. The Containerfile section for firewall is comments-only, referencing the audit report for `firewall-offline-cmd` equivalents per zone. The zone files themselves are the source of truth for `firewalld` — the command equivalents are informational.
-
 ### Building on Non-RHEL Hosts
 
 When the Containerfile's `FROM` line references `registry.redhat.io`, the `dnf install` step requires RHEL subscription entitlement certificates. On a RHEL host, podman handles this automatically. For non-RHEL build hosts (a developer laptop, CI runner, etc.), `yoinkc-build` searches for certificates in a priority cascade: bundled in the yoinkc output (placed there by yoinkc's entitlement bundling step) → host-local (`/etc/pki/entitlement`) → `./entitlement/` in the current directory → the `YOINKC_ENTITLEMENT` environment variable. Found certificates are bind-mounted into the build container transparently. Certificate expiry is validated via `openssl x509 -checkend` so the operator gets a clear warning before a build fails due to stale credentials.
@@ -662,72 +700,6 @@ When the Containerfile's `FROM` line references `registry.redhat.io`, the `dnf i
 ├── report.html                # interactive HTML report (open in browser)
 └── inspection-snapshot.json   # raw inspector output, for re-rendering
 ```
-
-### README.md
-
-Includes:
-- Summary of what was found on the source system (counts of packages, configs, services, FIXMEs, warnings)
-- Exact `podman build` command to build the image
-- Exact `bootc switch` or `bootc install` command to deploy (with the right flags for the detected scenario)
-- List of `FIXME` items that need resolution before the image is production-ready
-- Link to the audit report for full details
-
-### Audit Report (audit-report.md)
-
-A markdown document for version control and quick terminal reference. For the interactive view, see [HTML Report](#html-report-reporthtml) below.
-
-Organized as:
-
-1. **Executive Summary**: counts of packages added, new-from-base-image, configs modified, containers found, secrets redacted, issues flagged. A clear triage: X items handled automatically, Y items handled with FIXME, Z items need manual intervention.
-
-2. **Per-Inspector Sections** (each with tables):
-   - RPM analysis (added packages, base-image-only packages, modified configs)
-   - Service state changes
-   - Configuration changes (RPM-owned modified, unowned files)
-   - Network configuration (what's baked vs. what should be kickstart)
-   - Storage migration plan (mount points → recommended approach)
-   - Scheduled tasks (existing timers by source, cron → timer conversions, at jobs)
-   - Container workloads (quadlet units with images, compose files with service-to-image mappings)
-   - Non-RPM software (compiled binaries with language/linking classification, venvs, git repos, unknown provenance items with confidence ratings)
-   - Kernel and boot configuration (non-default modules, non-default sysctl values with source attribution)
-   - SELinux customizations (custom modules, non-default booleans)
-   - Users and groups
-
-3. **Data Migration Plan** (`/var` problem): dedicated section listing everything found under `/var/lib`, `/var/log`, `/var/data` that looks like application state — databases, app data directories, log directories — with explicit notes on what can be seeded in the image (deployed only at initial bootstrap, never updated by bootc afterward) vs. what needs a separate migration strategy. The Containerfile generates `systemd-tmpfiles.d` snippets to ensure expected directory structures exist on every boot.
-
-4. **Environment-specific considerations**: advisory subsections rendered only when relevant data is present. Flags: custom alternatives selections (packages may not reproduce the same default), raw nftables rules outside firewalld (potential conflict), complex network topologies (bond/vlan/bridge/team connections need physical-topology-aware kickstart), identity provider integration (SSSD/Kerberos keytabs are machine-specific and must be regenerated after deployment), NTP/chrony config (NTP server addresses are often site-specific), and rsyslog forwarding rules (log target addresses are site-specific). Always ends with a note on bootc's 3-way `/etc` merge strategy and a link to the bootc filesystem documentation.
-
-5. **Items Requiring Manual Intervention**: consolidated list pulled from all inspectors, prioritized by risk.
-
-### HTML Report (report.html)
-
-A single self-contained HTML file (inline CSS/JS, no external dependencies) that provides an interactive view of the inspection results. This is the primary artifact operators will use to understand what the tool found and what work remains.
-
-**Layout:**
-
-The report opens to a **dashboard view** with:
-
-- **Status banner**: hostname, OS version, inspection timestamp, overall health with triage breakdown (X automatic, Y FIXME, Z manual).
-- **Warning panel** (prominently placed, always visible at the top): all warnings, FIXMEs, and errors from the run, color-coded by severity (red for "needs manual intervention", amber for "handled with FIXME", blue for informational). Each warning is individually dismissable (dismissed warnings remain in the warnings tab). Dismiss All button collapses the panel. Warning count in status banner updates as warnings are dismissed.
-- **Migration readiness panel** (in the Summary tab): three columns — Automatic (green), Needs review (amber), Manual (red) — each listing per-category item counts as clickable links that navigate to the relevant tab.
-- **Tab navigation** in three rows: overview (Summary, Audit, Warnings, Containerfile), primary inspection categories (Packages, Config, Services, Users/Groups, Containers, Non-RPM, File browser), and secondary categories (Scheduled, Kernel/Boot, SELinux, Network, Storage, Secrets).
-
-**Drill-down:**
-
-Clicking any tab navigates to the full detail view for that inspector:
-
-- **Packages**: table of added packages (with version info), base-image-only packages (new from base image), and modified configs.
-- **Services**: table of state changes with columns for service name, current state, default state, and action taken in Containerfile.
-- **Config files**: list of unowned and modified files. For modified RPM-owned files: if `--config-diffs` was used, shows the diff against the package default with syntax highlighting; otherwise, shows the full file with `rpm -Va` verification flags.
-- **Network**: connections table with color-coded Deployment column (green "Bake into image" for static, yellow "Kickstart at deploy" for DHCP). Firewall zones with services, ports, rich rules, and direct rules. resolv.conf provenance with action guidance. Static routes and policy routing rules.
-- **Non-RPM software**: compiled binaries with language badges (Go/Rust) and linking type. Python venvs with package lists and system-site-packages warnings. Git-managed directories with remote URLs. Unknown provenance items highlighted.
-- **Secrets**: summary of all redacted items with file paths, pattern types, and remediation suggestions.
-
-**Warnings section:**
-
-Accessible both from the top-level warning panel and as a dedicated tab. Displays all warnings in a flat, searchable list with severity, source inspector, description, affected resource, and suggested action.
-
-**Implementation:** Generated from `inspection-snapshot.json` by the renderer. The entire report is a single `.html` file (typically < 2MB) that can be opened in any browser, emailed, or served statically. No server required.
 
 ### Interactive Refinement (yoinkc-refine)
 
@@ -760,18 +732,6 @@ The sticky footer toolbar reflects three states:
 On startup, the JavaScript probes `http://localhost:{port}/api/health` (with retries) to detect whether yoinkc-refine is running and whether re-rendering is available (i.e., podman or docker was found).
 
 Podman or Docker is required for re-rendering. The include/exclude checkboxes and tarball download work without it.
-
-### Kickstart Suggestion File
-
-A `kickstart-suggestion.ks` file containing suggested kickstart snippets for settings that belong at deploy time rather than in the image:
-- DHCP network interfaces (`network --bootproto=dhcp ...`)
-- Hostname (`network --hostname=...`)
-- Site-specific DNS
-- NFS mount credentials
-- User provisioning directives for kickstart-strategy users (`user --name=...`)
-- Any deployment-specific environment variables referenced in configs
-
-This file is clearly marked as a **suggestion** — it needs to be reviewed and adapted for the target environment.
 
 ## The `/var` Handling — Explicitly Documented
 
