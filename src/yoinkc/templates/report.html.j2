@@ -213,6 +213,73 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .text-status-danger  { color: var(--pf-t--global--text--color--status--danger--default); }
 .text-status-info    { color: var(--pf-t--global--text--color--status--info--default); }
 
+{% if fleet_meta %}
+/* Fleet prevalence badges */
+.fleet-prevalence {
+  width: 90px;
+  min-width: 90px;
+}
+.fleet-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.fleet-bar-track {
+  width: 60px;
+  height: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.fleet-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+.fleet-bar-fill.pf-m-blue {
+  background: var(--pf-v6-global--palette--blue-300, #0066cc);
+}
+.fleet-bar-fill.pf-m-gold {
+  background: var(--pf-v6-global--palette--gold-400, #f0ab00);
+}
+.fleet-bar-fill.pf-m-red {
+  background: var(--pf-v6-global--palette--red-100, #c9190b);
+}
+.fleet-bar-label {
+  font-size: 11px;
+  color: var(--pf-v6-global--Color--200, #6a6e73);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.fleet-banner {
+  border-left: 4px solid var(--pf-v6-global--palette--blue-300, #0066cc);
+}
+/* Fleet popover */
+.fleet-popover {
+  position: absolute;
+  z-index: 1000;
+  background: var(--pf-v6-global--BackgroundColor--100, #fff);
+  border: 1px solid var(--pf-v6-global--BorderColor--100, #d2d2d2);
+  border-radius: 4px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  font-size: 13px;
+  max-width: 300px;
+}
+.fleet-popover ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fleet-popover li {
+  padding: 2px 0;
+}
+/* Fleet variant grouping */
+.fleet-variant-children {
+  display: none;
+}
+{% endif %}
 
 </style>
 </head>
