@@ -1,7 +1,7 @@
 # Design Doc Refresh + Backlog
 
 **Date:** 2026-03-15
-**Status:** Approved (pending spec review)
+**Status:** Approved
 
 ## Problem
 
@@ -62,7 +62,9 @@ Contents:
 
 Contents:
 - Verify against actual argument parser and update
-- All entry points: `yoinkc`, `yoinkc-fleet`, `yoinkc-refine`, `yoinkc-build`
+- All current entry points: `yoinkc`, `yoinkc-fleet`, `yoinkc-refine`,
+  `yoinkc-build` (future entry points like `yoinkc-render` are documented
+  in section 10, not here)
 - Environment variables (`YOINKC_HOSTNAME`, `YOINKC_IMAGE`, `YOINKC_DEBUG`)
 - Wrapper scripts (`run-yoinkc.sh`, `run-yoinkc-fleet.sh`)
 
@@ -138,13 +140,15 @@ Contents:
 **Existing content, mostly unchanged.**
 
 Contents:
-- Redaction patterns and layers
-- GitHub push guardrails
-- Verify still accurate against current `redact.py`
+- Redaction patterns and layers (verify patterns in `redact.py` still match)
+- GitHub push guardrails (verify `git_github.py` pre-push checks)
+- Both subsystems need a read-through against current code
 
 ### 10. Future Work & Backlog
 
-**Refreshed.** Remove completed items, add new items from this review.
+**Refreshed.** Remove completed items. Source material for this section is
+the Prioritized Backlog and Tech Debt sections of this spec — they become
+the new Future Work content in `design.md`.
 
 ---
 
