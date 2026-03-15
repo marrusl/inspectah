@@ -11,6 +11,7 @@ from yoinkc.baseline import (
     load_baseline_packages_file,
 )
 from yoinkc.executor import RunResult
+from yoinkc.schema import PackageEntry
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -123,6 +124,40 @@ def test_load_baseline_packages_file():
 
 def test_load_baseline_packages_file_missing(tmp_path):
     assert load_baseline_packages_file(tmp_path / "nope.txt") is None
+
+
+class TestBaselineNevraFormat:
+    """Auto-detection of NEVRA vs names-only baseline files."""
+
+    def test_load_nevra_format(self):
+        result = load_baseline_packages_file(FIXTURES / "base_image_packages_nevra.txt")
+        assert result is not None
+        assert isinstance(result, dict)
+        assert "bash.x86_64" in result
+        pkg = result["bash.x86_64"]
+        assert isinstance(pkg, PackageEntry)
+        assert pkg.name == "bash"
+        assert pkg.version == "5.1.8"
+        assert pkg.release == "9.el9"
+        assert pkg.arch == "x86_64"
+
+    def test_load_names_only_format(self):
+        result = load_baseline_packages_file(FIXTURES / "base_image_packages.txt")
+        assert result is not None
+        assert isinstance(result, dict)
+        assert "bash" in result
+        pkg = result["bash"]
+        assert isinstance(pkg, PackageEntry)
+        assert pkg.name == "bash"
+        assert pkg.version == ""
+        assert pkg.arch == ""
+
+    def test_load_names_only_name_set(self):
+        result = load_baseline_packages_file(FIXTURES / "base_image_packages.txt")
+        assert result is not None
+        name_set = {p.name for p in result.values()}
+        assert "bash" in name_set
+        assert "glibc" in name_set
 
 
 # ---------------------------------------------------------------------------

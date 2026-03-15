@@ -2,8 +2,8 @@
 Baseline generation by querying the target bootc base image.
 
 Detects the host OS from /etc/os-release, maps to the corresponding bootc
-base image, and runs ``podman run --rm <image> rpm -qa --queryformat '%{NAME}\n'``
-to get the concrete package list.  The diff against host packages produces
+base image, and runs ``podman run --rm <image> rpm -qa --queryformat '<NEVRA>\n'``
+to get the concrete package list (full epoch:name-version-release.arch).  The diff against host packages produces
 exactly the ``dnf install`` list the Containerfile needs.
 
 When running inside a container (the normal case), podman is not available
@@ -14,10 +14,11 @@ the host's namespaces.  This requires ``--pid=host`` on the outer container.
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .preflight import in_user_namespace
 from ._util import debug as _debug_fn
+from .schema import PackageEntry
 
 
 def _debug(msg: str) -> None:
@@ -103,8 +104,15 @@ def base_image_for_snapshot(snapshot: "InspectionSnapshot") -> str:
     return _DEFAULT_FALLBACK_IMAGE
 
 
-def load_baseline_packages_file(path: Path) -> Optional[Set[str]]:
-    """Read a newline-separated package name list from *path*."""
+def load_baseline_packages_file(path: Path) -> Optional[Dict[str, PackageEntry]]:
+    """Read a baseline package list from *path*.
+
+    Auto-detects format:
+    - NEVRA lines (epoch:name-version-release.arch) → Dict keyed by name.arch
+    - Names-only lines → Dict keyed by name, with empty version fields
+    """
+    from .inspectors.rpm import _parse_nevr
+
     path = Path(path)
     if not path.exists():
         _debug(f"baseline packages file not found: {path}")
@@ -114,9 +122,31 @@ def load_baseline_packages_file(path: Path) -> Optional[Set[str]]:
     except (PermissionError, OSError) as exc:
         _debug(f"cannot read baseline packages file: {exc}")
         return None
-    names = {line.strip() for line in text.splitlines() if line.strip()}
-    _debug(f"loaded {len(names)} baseline package names from {path}")
-    return names
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        _debug("baseline packages file is empty")
+        return None
+
+    # Auto-detect: if the first non-empty line contains ":" and "-", treat as NEVRA
+    is_nevra = ":" in lines[0] and "-" in lines[0]
+
+    result: Dict[str, PackageEntry] = {}
+    if is_nevra:
+        for line in lines:
+            pkg = _parse_nevr(line)
+            if pkg:
+                key = f"{pkg.name}.{pkg.arch}"
+                result[key] = pkg
+        _debug(f"loaded {len(result)} baseline packages (NEVRA format) from {path}")
+    else:
+        for line in lines:
+            result[line] = PackageEntry(
+                name=line, epoch="0", version="", release="", arch="",
+            )
+        _debug(f"loaded {len(result)} baseline package names from {path}")
+
+    return result
 
 
 # ---------------------------------------------------------------------------
