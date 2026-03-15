@@ -323,6 +323,62 @@ class TestVersionChangesHtmlReport:
         assert "Version Changes" not in html
 
 
+class TestVersionChangesAuditReport:
+    """Version drift summary in the audit report."""
+
+    def test_audit_report_shows_version_drift(self):
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, RpmSection, PackageEntry,
+            VersionChange, VersionChangeDirection,
+        )
+        from yoinkc.renderers.audit_report import render as render_audit
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4.57", release="5.el9", arch="x86_64"),
+                ],
+                version_changes=[
+                    VersionChange(
+                        name="bash", arch="x86_64",
+                        host_version="5.2.15-2.el9", base_version="5.1.8-9.el9",
+                        direction=VersionChangeDirection.DOWNGRADE,
+                    ),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit(snapshot, _env(), Path(tmp))
+            report = (Path(tmp) / "audit-report.md").read_text()
+        assert "Version" in report
+        assert "bash" in report
+        assert "downgrade" in report.lower()
+
+    def test_audit_report_no_version_drift_when_empty(self):
+        from yoinkc.schema import InspectionSnapshot, OsRelease, RpmSection, PackageEntry
+        from yoinkc.renderers.audit_report import render as render_audit
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4.57", release="5.el9", arch="x86_64"),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit(snapshot, _env(), Path(tmp))
+            report = (Path(tmp) / "audit-report.md").read_text()
+        assert "Version Changes" not in report
+
+
 class TestPythonVersionMap:
 
     def test_rhel10_uses_python312(self):

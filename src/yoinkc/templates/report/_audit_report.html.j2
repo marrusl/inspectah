@@ -55,6 +55,17 @@
     {%- endif %}
   </tbody></table>
   {%- endif %}
+  {%- if snapshot.rpm and snapshot.rpm.version_changes %}
+  <h4>Version Changes ({{ snapshot.rpm.version_changes|length }})</h4>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Package</th><th scope="col">Host Version</th><th scope="col">Base Version</th><th scope="col">Direction</th></tr></thead><tbody>
+    {%- for vc in snapshot.rpm.version_changes[:30] %}
+    <tr><td>{{ vc.name }}</td><td>{{ vc.host_version }}</td><td>{{ vc.base_version }}</td><td>{{ vc.direction.value }}</td></tr>
+    {%- endfor %}
+    {%- if snapshot.rpm.version_changes|length > 30 %}
+    <tr><td colspan="4"><em>+{{ snapshot.rpm.version_changes|length - 30 }} more — see Packages tab</em></td></tr>
+    {%- endif %}
+  </tbody></table>
+  {%- endif %}
 </details>
 {%- endif %}
 

@@ -125,6 +125,25 @@ def render(
             for p in snapshot.rpm.base_image_only:
                 lines.append(f"- {p.name}")
             lines.append("")
+        if snapshot.rpm.version_changes:
+            lines.append("### Version Changes")
+            lines.append("")
+            downgrades = [vc for vc in snapshot.rpm.version_changes
+                          if vc.direction.value == "downgrade"]
+            upgrades = [vc for vc in snapshot.rpm.version_changes
+                        if vc.direction.value == "upgrade"]
+            if downgrades:
+                lines.append(f"**{len(downgrades)} downgrade(s)** — base image has older version than host:")
+                lines.append("")
+                for vc in downgrades:
+                    lines.append(f"- [WARNING] **{vc.name}** ({vc.arch}): {vc.host_version} → {vc.base_version}")
+                lines.append("")
+            if upgrades:
+                lines.append(f"**{len(upgrades)} upgrade(s)** — base image has newer version than host:")
+                lines.append("")
+                for vc in upgrades:
+                    lines.append(f"- {vc.name} ({vc.arch}): {vc.host_version} → {vc.base_version}")
+                lines.append("")
         if snapshot.rpm.rpm_va:
             lines.append("### Modified file details (rpm -Va)")
             for e in snapshot.rpm.rpm_va:
