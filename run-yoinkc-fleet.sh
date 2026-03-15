@@ -30,7 +30,7 @@ echo "Image: $IMAGE"
 echo "=== Running yoinkc-fleet ==="
 podman run --rm --pull=always \
     -w /output \
-    -v "$INPUT_DIR":/input:ro \
+    -v "$INPUT_DIR":/input:ro,z \
     -v "$OUTPUT_DIR":/output \
     --entrypoint yoinkc-fleet \
     "$IMAGE" aggregate /input -o "/output/${DIR_NAME}.tar.gz" "$@"
