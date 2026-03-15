@@ -261,3 +261,16 @@ class TestVersionChangeDetection:
         for bio in section.base_image_only:
             if bio.version:
                 assert bio.release, f"Package {bio.name} has version but no release"
+
+
+def test_downgrade_warning_generated(host_root, fixture_executor):
+    """Downgrades should produce a warning in the warnings list."""
+    from yoinkc.inspectors.rpm import run as run_rpm
+    warnings = []
+    section = run_rpm(host_root, fixture_executor, warnings=warnings)
+    downgrade_count = sum(1 for vc in section.version_changes
+                         if vc.direction.value == "downgrade")
+    assert downgrade_count > 0, "Expected at least one downgrade from NEVRA fixture"
+    warning_msgs = [w.get("message", "") for w in warnings]
+    assert any("downgraded" in m for m in warning_msgs), \
+        f"Expected downgrade warning, got: {warning_msgs}"

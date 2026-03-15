@@ -828,6 +828,13 @@ def run(
                     section.version_changes.sort(
                         key=lambda vc: (0 if vc.direction == VersionChangeDirection.DOWNGRADE else 1, vc.name)
                     )
+                    if n_down > 0 and warnings is not None:
+                        warnings.append(make_warning(
+                            "rpm",
+                            f"{n_down} package(s) will be downgraded by the base image — "
+                            "review the Version Changes section.",
+                            "warning",
+                        ))
         else:
             section.baseline_package_names = None
             for p in installed:
