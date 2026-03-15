@@ -23,11 +23,13 @@ from yoinkc.executor import RunResult
 from yoinkc.inspectors import run_all as run_all_inspectors
 from yoinkc.redact import redact_snapshot
 from yoinkc.renderers import run_all as run_all_renderers
+from yoinkc.renderers import html_report
 from yoinkc.renderers.containerfile import render as render_containerfile
 from yoinkc.renderers.html_report import render as render_html_report
 from yoinkc.renderers.audit_report import render as render_audit_report
 from yoinkc.renderers.kickstart import render as render_kickstart
 from yoinkc.renderers.readme import render as render_readme
+from yoinkc.schema import FleetPrevalence
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -1409,3 +1411,40 @@ def test_nonrpm_no_nodejs_prereq_when_already_in_packages():
 
     # The prerequisite block must not appear (nodejs is already in the dnf install)
     assert "Tool prerequisites not in the dnf install block" not in cf
+
+
+# ===========================================================================
+# Fleet prevalence UI tests (Chunk 1)
+# ===========================================================================
+
+class TestFleetColor:
+    """Tests for the _fleet_color Jinja2 filter."""
+
+    def test_full_prevalence_returns_blue(self):
+        from yoinkc.renderers.html_report import _fleet_color
+        fleet = FleetPrevalence(count=3, total=3)
+        assert _fleet_color(fleet) == "pf-m-blue"
+
+    def test_majority_prevalence_returns_gold(self):
+        from yoinkc.renderers.html_report import _fleet_color
+        fleet = FleetPrevalence(count=2, total=3)
+        assert _fleet_color(fleet) == "pf-m-gold"
+
+    def test_fifty_percent_returns_gold(self):
+        from yoinkc.renderers.html_report import _fleet_color
+        fleet = FleetPrevalence(count=50, total=100)
+        assert _fleet_color(fleet) == "pf-m-gold"
+
+    def test_minority_prevalence_returns_red(self):
+        from yoinkc.renderers.html_report import _fleet_color
+        fleet = FleetPrevalence(count=1, total=3)
+        assert _fleet_color(fleet) == "pf-m-red"
+
+    def test_none_returns_blue(self):
+        from yoinkc.renderers.html_report import _fleet_color
+        assert _fleet_color(None) == "pf-m-blue"
+
+    def test_zero_total_returns_blue(self):
+        from yoinkc.renderers.html_report import _fleet_color
+        fleet = FleetPrevalence(count=0, total=0)
+        assert _fleet_color(fleet) == "pf-m-blue"

@@ -20,6 +20,19 @@ from ._triage import _QUADLET_PREFIX, _config_file_count
 _MAX_FILE_CONTENT = 100 * 1024
 
 
+def _fleet_color(fleet) -> str:
+    """Jinja2 filter: return PF6 color class based on fleet prevalence."""
+    if not fleet or fleet.total == 0:
+        return "pf-m-blue"
+    pct = fleet.count * 100 // fleet.total
+    if pct >= 100:
+        return "pf-m-blue"
+    elif pct >= 50:
+        return "pf-m-gold"
+    else:
+        return "pf-m-red"
+
+
 # ---------------------------------------------------------------------------
 # File browser helpers  (produce pre-rendered Markup)
 # ---------------------------------------------------------------------------
@@ -604,6 +617,8 @@ def render(
     if env.loader is None:
         templates_dir = Path(__file__).resolve().parent.parent / "templates"
         env = env.overlay(loader=FileSystemLoader(str(templates_dir)))
+
+    env.filters["fleet_color"] = _fleet_color
 
     ctx = _build_context(snapshot, output_dir, env)
     template = env.get_template("report.html.j2")
