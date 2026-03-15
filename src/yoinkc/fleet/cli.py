@@ -30,7 +30,19 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         type=Path,
         default=None,
         metavar="FILE",
-        help="Output path for merged snapshot (default: <input-dir>/fleet-snapshot.json)",
+        help="Output path for tarball (or JSON with --json-only; default: auto-named in CWD)",
+    )
+    agg.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="Write rendered files to a directory instead of tarball",
+    )
+    agg.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Write merged JSON only, skip rendering",
     )
     agg.add_argument(
         "--no-hosts",

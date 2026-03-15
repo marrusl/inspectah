@@ -39,7 +39,7 @@ def save_snapshot(snapshot: InspectionSnapshot, path: Path) -> None:
 def run_pipeline(
     *,
     host_root: Path,
-    run_inspectors: Callable[[Path], InspectionSnapshot],
+    run_inspectors: Optional[Callable[[Path], InspectionSnapshot]],
     run_renderers: Callable[[InspectionSnapshot, Path], None],
     from_snapshot_path: Optional[Path] = None,
     inspect_only: bool = False,
@@ -65,6 +65,7 @@ def run_pipeline(
         snapshot = load_snapshot(from_snapshot_path)
         snapshot = redact_snapshot(snapshot)
     else:
+        assert run_inspectors is not None, "run_inspectors required when not loading from snapshot"
         snapshot = run_inspectors(host_root)
         snapshot = redact_snapshot(snapshot)
 
