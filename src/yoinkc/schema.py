@@ -53,6 +53,23 @@ class PackageState(str, Enum):
     MODIFIED = "modified"
 
 
+class VersionChangeDirection(str, Enum):
+    UPGRADE = "upgrade"      # base image has newer version than host
+    DOWNGRADE = "downgrade"  # base image has older version than host
+
+
+class VersionChange(BaseModel):
+    """A package whose version differs between host and base image."""
+
+    name: str
+    arch: str = ""
+    host_version: str        # e.g. "2.4.57-5.el9"
+    base_version: str        # e.g. "2.4.53-11.el9"
+    host_epoch: str = "0"
+    base_epoch: str = "0"
+    direction: VersionChangeDirection
+
+
 class PackageEntry(BaseModel):
     """Single package from rpm -qa or baseline diff."""
 
@@ -94,6 +111,7 @@ class RpmSection(BaseModel):
     repo_files: List[RepoFile] = Field(default_factory=list)
     gpg_keys: List[RepoFile] = Field(default_factory=list)
     dnf_history_removed: List[str] = Field(default_factory=list)  # package names
+    version_changes: List["VersionChange"] = Field(default_factory=list)
     leaf_packages: Optional[List[str]] = None
     auto_packages: Optional[List[str]] = None
     leaf_dep_tree: Optional[dict] = None  # {leaf_name: [auto_names_it_pulls_in]}
@@ -490,7 +508,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class InspectionSnapshot(BaseModel):

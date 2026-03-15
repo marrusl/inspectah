@@ -194,6 +194,49 @@ class TestDeepVersionPatterns:
             assert pat in DEEP_VERSION_PATTERNS
 
 
+class TestVersionChangeSchema:
+    """VersionChange model and RpmSection.version_changes field."""
+
+    def test_version_change_model(self):
+        from yoinkc.schema import VersionChange, VersionChangeDirection
+        vc = VersionChange(
+            name="httpd",
+            arch="x86_64",
+            host_version="2.4.57-5.el9",
+            base_version="2.4.53-11.el9",
+            host_epoch="0",
+            base_epoch="0",
+            direction=VersionChangeDirection.DOWNGRADE,
+        )
+        assert vc.name == "httpd"
+        assert vc.direction == VersionChangeDirection.DOWNGRADE
+        d = vc.model_dump()
+        assert d["direction"] == "downgrade"
+        vc2 = VersionChange.model_validate(d)
+        assert vc2.direction == VersionChangeDirection.DOWNGRADE
+
+    def test_version_changes_on_rpm_section(self):
+        from yoinkc.schema import RpmSection, VersionChange, VersionChangeDirection
+        section = RpmSection()
+        assert section.version_changes == []
+        section.version_changes.append(VersionChange(
+            name="curl", arch="x86_64",
+            host_version="7.76.1-29.el9", base_version="7.76.1-26.el9",
+            direction=VersionChangeDirection.DOWNGRADE,
+        ))
+        assert len(section.version_changes) == 1
+
+    def test_version_changes_empty_by_default_roundtrip(self):
+        from yoinkc.schema import RpmSection
+        data = {"packages_added": [], "base_image_only": []}
+        section = RpmSection.model_validate(data)
+        assert section.version_changes == []
+
+    def test_schema_version_bumped(self):
+        from yoinkc.schema import SCHEMA_VERSION
+        assert SCHEMA_VERSION >= 7
+
+
 class TestPythonVersionMap:
 
     def test_rhel10_uses_python312(self):
