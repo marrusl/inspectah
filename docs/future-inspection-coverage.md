@@ -119,6 +119,10 @@ Custom loop mounts, ISO mounts, device-mapper setups outside LVM. Niche.
 ### Printer/CUPS Configuration
 Print queue and driver setup. Niche but operationally important when present.
 
+## Cleanup Tasks
+
+- **Remove podman prerequisite detection:** bootc depends on podman, so checking for it is redundant. Remove "podman not found" error messages, auto-install logic in `run-yoinkc.sh`, and `YOINKC_EXCLUDE_PREREQS` handling. Keep the `podman` vs `docker` binary selection logic (some environments may have docker instead).
+
 ## Naming Standardization
 
 - **"entitlements" → "subscriptions"**: Standardize terminology across the codebase. Use "subscriptions" everywhere instead of "entitlements" or "entitlement certs."
