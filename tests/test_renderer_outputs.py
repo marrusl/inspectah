@@ -29,7 +29,13 @@ from yoinkc.renderers.html_report import render as render_html_report
 from yoinkc.renderers.audit_report import render as render_audit_report
 from yoinkc.renderers.kickstart import render as render_kickstart
 from yoinkc.renderers.readme import render as render_readme
-from yoinkc.schema import FleetPrevalence
+from yoinkc.schema import (
+    FleetPrevalence,
+    InspectionSnapshot,
+    OsRelease,
+    PackageEntry,
+    RpmSection,
+)
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -1448,3 +1454,61 @@ class TestFleetColor:
         from yoinkc.renderers.html_report import _fleet_color
         fleet = FleetPrevalence(count=0, total=0)
         assert _fleet_color(fleet) == "pf-m-blue"
+
+
+class TestFleetBanner:
+    """Tests for fleet banner rendering."""
+
+    def _render_with_fleet_meta(self, tmp_path):
+        """Render a snapshot with fleet metadata and return HTML."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 67,
+                }
+            },
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4.57", release="1.el9", arch="x86_64",
+                                 fleet=FleetPrevalence(count=3, total=3, hosts=["web-01", "web-02", "web-03"])),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        return (tmp_path / "report.html").read_text()
+
+    def test_fleet_banner_present(self, tmp_path):
+        html = self._render_with_fleet_meta(tmp_path)
+        assert "Fleet Analysis" in html
+        assert "3 hosts merged" in html
+        assert "67%" in html
+        assert "web-01" in html
+        assert "web-02" in html
+        assert "web-03" in html
+        assert "included" in html
+
+    def test_fleet_banner_absent(self, tmp_path):
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4.57", release="1.el9", arch="x86_64"),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "Fleet Analysis" not in html

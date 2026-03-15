@@ -12,7 +12,7 @@ from typing import List
 from jinja2 import Environment
 from markupsafe import Markup
 
-from ..schema import ConfigFileKind, InspectionSnapshot
+from ..schema import ConfigFileKind, FleetMeta, InspectionSnapshot
 from .._util import make_warning
 from ._triage import _QUADLET_PREFIX, _config_file_count
 
@@ -446,6 +446,20 @@ def _build_context(
     from ._triage import compute_triage, compute_triage_detail
 
     counts = _summary_counts(snapshot)
+
+    fleet_raw = (snapshot.meta or {}).get("fleet")
+    fleet_meta = FleetMeta(**fleet_raw) if fleet_raw else None
+
+    # Aggregate included/excluded counts across key sections for the fleet banner.
+    _inc_items = []
+    if snapshot.rpm:
+        _inc_items.extend(snapshot.rpm.packages_added or [])
+        _inc_items.extend(snapshot.rpm.base_image_only or [])
+    if snapshot.config:
+        _inc_items.extend(snapshot.config.files or [])
+    counts["n_included"] = sum(1 for i in _inc_items if getattr(i, "include", True))
+    counts["n_excluded"] = sum(1 for i in _inc_items if not getattr(i, "include", True))
+
     triage = compute_triage(snapshot, output_dir)
     triage_detail = compute_triage_detail(snapshot, output_dir)
     os_desc = (snapshot.os_release.pretty_name or snapshot.os_release.name
@@ -572,6 +586,7 @@ def _build_context(
         "snapshot_json": snapshot_json,
         "patternfly_css": Markup(patternfly_css),
         "counts": counts,
+        "fleet_meta": fleet_meta,
         "triage": triage,
         "os_desc": os_desc,
         "os_id": snapshot.os_release.id if snapshot.os_release else "",
