@@ -1,6 +1,7 @@
 {% from "report/_macros.html.j2" import section with context -%}
 {% if refine_mode %}
 {% include "report/_editor.html.j2" %}
+{% include "report/_new_file_modal.html.j2" %}
 {% else %}
 {# ── File browser (read-only, static reports) ────────────────────────────── #}
 {% call section("output_files", "File browser") %}

@@ -1,0 +1,88 @@
+{% if refine_mode %}
+<div id="new-file-modal" role="dialog" aria-modal="true" aria-label="Create new file" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:9999;">
+  <div style="position:absolute; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5);" onclick="closeNewFileModal()"></div>
+  <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:var(--pf-t--global--background--color--primary--default); border-radius:8px; width:560px; box-shadow:0 4px 24px rgba(0,0,0,0.3);">
+
+    <div style="padding:20px 24px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center;">
+      <h2 class="pf-v6-c-title pf-m-xl" style="margin:0;">Create new file</h2>
+      <button class="pf-v6-c-button pf-m-plain" onclick="closeNewFileModal()" aria-label="Close">&times;</button>
+    </div>
+
+    <div style="padding:24px;">
+      <div style="margin-bottom:20px;">
+        <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>File type</strong></label>
+        <div style="display:flex; gap:24px;">
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="radio" name="new-file-type" value="config" checked onchange="updateNewFileForm()"> Config file
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="radio" name="new-file-type" value="quadlet" onchange="updateNewFileForm()"> Quadlet unit
+          </label>
+          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+            <input type="radio" name="new-file-type" value="dropin" onchange="updateNewFileForm()"> Systemd drop-in
+          </label>
+        </div>
+      </div>
+
+      <div id="nf-config-fields">
+        <div style="margin-bottom:20px;">
+          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>File path</strong></label>
+          <div style="font-size:13px; color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Absolute path on the target system</div>
+          <input id="nf-config-path" class="pf-v6-c-form-control" type="text" placeholder="/etc/myapp/custom.conf" oninput="validateNewFileForm()" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
+          <div id="nf-config-error" style="color:var(--pf-t--global--danger--color--200); font-size:13px; margin-top:4px; display:none;"></div>
+        </div>
+      </div>
+
+      <div id="nf-quadlet-fields" style="display:none;">
+        <div style="margin-bottom:20px;">
+          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Scope</strong></label>
+          <select id="nf-quadlet-scope" class="pf-v6-c-form-control" onchange="updateNewFilePath()" style="width:100%;">
+            <option value="system">System (root)</option>
+            {%- for user in (snapshot.users_groups.users or []) if user.get('home') %}
+            <option value="{{ user.name }}">User &mdash; {{ user.name }}</option>
+            {%- endfor %}
+          </select>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Unit name</strong></label>
+          <div style="font-size:13px; color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">e.g. myapp.container</div>
+          <input id="nf-quadlet-name" class="pf-v6-c-form-control" type="text" placeholder="myapp.container" oninput="updateNewFilePath(); validateNewFileForm();" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
+          <div id="nf-quadlet-error" style="color:var(--pf-t--global--danger--color--200); font-size:13px; margin-top:4px; display:none;"></div>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Full path</strong></label>
+          <div id="nf-quadlet-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:13px;"></div>
+        </div>
+      </div>
+
+      <div id="nf-dropin-fields" style="display:none;">
+        <div style="margin-bottom:20px;">
+          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Service</strong></label>
+          <div style="font-size:13px; color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Select from services discovered on this host</div>
+          <select id="nf-dropin-service" class="pf-v6-c-form-control" onchange="updateNewFilePath()" style="width:100%;">
+            {%- if snapshot.services and snapshot.services.state_changes %}
+            {%- for sc in snapshot.services.state_changes %}
+            <option value="{{ sc.unit }}">{{ sc.unit }}</option>
+            {%- endfor %}
+            {%- endif %}
+          </select>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Override filename</strong></label>
+          <input id="nf-dropin-filename" class="pf-v6-c-form-control" type="text" value="override.conf" oninput="updateNewFilePath(); validateNewFileForm();" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
+          <div id="nf-dropin-error" style="color:var(--pf-t--global--danger--color--200); font-size:13px; margin-top:4px; display:none;"></div>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Full path</strong></label>
+          <div id="nf-dropin-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:13px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="padding:16px 24px; border-top:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:flex-end; gap:8px;">
+      <button class="pf-v6-c-button pf-m-secondary" onclick="closeNewFileModal()">Cancel</button>
+      <button class="pf-v6-c-button pf-m-primary" id="btn-create-file" onclick="createNewFile()" disabled>Create &amp; edit</button>
+    </div>
+  </div>
+</div>
+{% endif %}

@@ -100,3 +100,20 @@ class TestEditorTab:
         html = _render(refine_mode=False, with_content=True)
         assert 'View &amp; edit in editor' not in html
         assert 'navigateToEditor' not in html
+
+    def test_new_file_modal_in_refine_mode(self):
+        html = _render(refine_mode=True)
+        assert 'new-file-modal' in html
+        assert 'Create new file' in html
+        assert 'createNewFile' in html
+        assert 'validateNewFileForm' in html
+
+    def test_no_new_file_modal_in_static_mode(self):
+        html = _render(refine_mode=False)
+        assert 'new-file-modal' not in html
+        assert 'createNewFile' not in html
+
+    def test_new_file_modal_service_dropdown(self):
+        """Drop-in service dropdown populated from snapshot."""
+        html = _render(refine_mode=True, with_content=True)
+        assert 'nf-dropin-service' in html

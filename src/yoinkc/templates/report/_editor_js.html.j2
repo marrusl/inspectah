@@ -331,6 +331,115 @@
     selectFile(section, list, index, path);
   };
 
+  // --- New File Modal ---
+  var newFileBtn = document.getElementById('btn-new-file');
+  if (newFileBtn) {
+    newFileBtn.addEventListener('click', function() {
+      var modal = document.getElementById('new-file-modal');
+      if (modal) { modal.style.display = ''; updateNewFileForm(); }
+    });
+  }
+
+  window.closeNewFileModal = function() {
+    var modal = document.getElementById('new-file-modal');
+    if (modal) modal.style.display = 'none';
+  };
+
+  window.updateNewFileForm = function() {
+    var type = (document.querySelector('input[name="new-file-type"]:checked') || {}).value || 'config';
+    var cfFields = document.getElementById('nf-config-fields');
+    var qFields = document.getElementById('nf-quadlet-fields');
+    var dFields = document.getElementById('nf-dropin-fields');
+    if (cfFields) cfFields.style.display = type === 'config' ? '' : 'none';
+    if (qFields) qFields.style.display = type === 'quadlet' ? '' : 'none';
+    if (dFields) dFields.style.display = type === 'dropin' ? '' : 'none';
+    updateNewFilePath();
+    validateNewFileForm();
+  };
+
+  window.updateNewFilePath = function() {
+    var type = (document.querySelector('input[name="new-file-type"]:checked') || {}).value || 'config';
+    if (type === 'quadlet') {
+      var scope = (document.getElementById('nf-quadlet-scope') || {}).value || 'system';
+      var name = (document.getElementById('nf-quadlet-name') || {}).value || 'unit.container';
+      var base = scope === 'system' ? '/etc/containers/systemd/' : '/home/' + scope + '/.config/containers/systemd/';
+      var preview = document.getElementById('nf-quadlet-path-preview');
+      if (preview) preview.innerHTML = escapeHtml(base) + '<strong>' + escapeHtml(name) + '</strong>';
+    } else if (type === 'dropin') {
+      var svc = (document.getElementById('nf-dropin-service') || {}).value || '';
+      var fname = (document.getElementById('nf-dropin-filename') || {}).value || 'override.conf';
+      var preview = document.getElementById('nf-dropin-path-preview');
+      if (preview) preview.innerHTML = '/etc/systemd/system/<strong>' + escapeHtml(svc) + '</strong>.d/<strong>' + escapeHtml(fname) + '</strong>';
+    }
+  };
+
+  window.validateNewFileForm = function() {
+    var type = (document.querySelector('input[name="new-file-type"]:checked') || {}).value || 'config';
+    var valid = true;
+    var quadletExts = ['.container', '.volume', '.network', '.kube', '.image'];
+
+    if (type === 'config') {
+      var path = ((document.getElementById('nf-config-path') || {}).value || '').trim();
+      var errEl = document.getElementById('nf-config-error');
+      if (!path) { valid = false; if (errEl) errEl.style.display = 'none'; }
+      else if (!path.startsWith('/')) { valid = false; if (errEl) { errEl.textContent = 'Path must be absolute (start with /).'; errEl.style.display = ''; } }
+      else if (findFileInSnapshot(path)) { valid = false; if (errEl) { errEl.textContent = 'File already exists.'; errEl.style.display = ''; } }
+      else { if (errEl) errEl.style.display = 'none'; }
+    } else if (type === 'quadlet') {
+      var name = ((document.getElementById('nf-quadlet-name') || {}).value || '').trim();
+      var errEl = document.getElementById('nf-quadlet-error');
+      if (!name) { valid = false; if (errEl) errEl.style.display = 'none'; }
+      else if (!quadletExts.some(function(ext) { return name.endsWith(ext); })) {
+        valid = false; if (errEl) { errEl.textContent = 'Must end with ' + quadletExts.join(', '); errEl.style.display = ''; }
+      } else { if (errEl) errEl.style.display = 'none'; }
+    } else if (type === 'dropin') {
+      var fname = ((document.getElementById('nf-dropin-filename') || {}).value || '').trim();
+      var errEl = document.getElementById('nf-dropin-error');
+      if (!fname) { valid = false; if (errEl) errEl.style.display = 'none'; }
+      else if (!fname.endsWith('.conf')) { valid = false; if (errEl) { errEl.textContent = 'Must end with .conf'; errEl.style.display = ''; } }
+      else { if (errEl) errEl.style.display = 'none'; }
+    }
+
+    var createBtn = document.getElementById('btn-create-file');
+    if (createBtn) createBtn.disabled = !valid;
+    return valid;
+  };
+
+  window.createNewFile = function() {
+    if (!validateNewFileForm()) return;
+    var type = (document.querySelector('input[name="new-file-type"]:checked') || {}).value || 'config';
+    var entry, section, list, path;
+
+    if (type === 'config') {
+      path = (document.getElementById('nf-config-path').value || '').trim();
+      entry = {path: path, kind: 'UNOWNED', content: '', include: true, fleet: null, rpm_va_flags: null, package: null, diff_against_rpm: null};
+      section = 'config'; list = 'files';
+    } else if (type === 'quadlet') {
+      var scope = (document.getElementById('nf-quadlet-scope') || {}).value || 'system';
+      var name = (document.getElementById('nf-quadlet-name').value || '').trim();
+      var base = scope === 'system' ? '/etc/containers/systemd/' : '/home/' + scope + '/.config/containers/systemd/';
+      path = base + name;
+      entry = {path: path, name: name, content: '', image: '', include: true, fleet: null};
+      section = 'containers'; list = 'quadlet_units';
+    } else if (type === 'dropin') {
+      var svc = (document.getElementById('nf-dropin-service') || {}).value || '';
+      var fname = (document.getElementById('nf-dropin-filename').value || '').trim();
+      path = 'etc/systemd/system/' + svc + '.d/' + fname;
+      entry = {path: path, unit: svc, content: '', include: true, fleet: null};
+      section = 'services'; list = 'drop_ins';
+    }
+
+    if (!snapshot[section]) snapshot[section] = {};
+    if (!snapshot[section][list]) snapshot[section][list] = [];
+    snapshot[section][list].push(entry);
+
+    closeNewFileModal();
+    buildTree();
+    var index = snapshot[section][list].length - 1;
+    selectFile(section, list, index, path);
+    enterEditMode();
+  };
+
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's' && editorState.editMode) {
       e.preventDefault();
