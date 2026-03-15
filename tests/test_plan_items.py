@@ -862,7 +862,7 @@ def test_all_features_render_together():
 class TestSanitizeShellValue:
 
     def _sanitize(self, value, context="test"):
-        from yoinkc.renderers.containerfile import _sanitize_shell_value
+        from yoinkc.renderers.containerfile._helpers import _sanitize_shell_value
         return _sanitize_shell_value(value, context)
 
     def test_safe_package_name(self):
