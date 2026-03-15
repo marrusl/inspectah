@@ -216,3 +216,48 @@ class TestCompareEvr:
         a = self._pkg(epoch="0")
         b = self._pkg(epoch="0")
         assert _compare_evr(a, b) == 0
+
+
+class TestVersionChangeDetection:
+    """Integration tests for version change detection in RPM inspector."""
+
+    def test_version_changes_populated(self, host_root, fixture_executor):
+        from yoinkc.inspectors.rpm import run as run_rpm
+        from yoinkc.schema import VersionChangeDirection
+        section = run_rpm(host_root, fixture_executor)
+        assert section.version_changes is not None
+        bash_changes = [vc for vc in section.version_changes if vc.name == "bash"]
+        assert len(bash_changes) == 1, \
+            f"Expected bash version change, got: {[vc.name for vc in section.version_changes]}"
+        vc = bash_changes[0]
+        assert vc.direction == VersionChangeDirection.DOWNGRADE
+        assert "5.2.15" in vc.host_version
+        assert "5.1.8" in vc.base_version
+
+    def test_no_version_changes_with_names_only_baseline(self, host_root, fixture_executor):
+        from yoinkc.inspectors.rpm import run as run_rpm
+        from yoinkc.baseline import load_baseline_packages_file
+        baseline_pkgs = load_baseline_packages_file(FIXTURES / "base_image_packages.txt")
+        preflight = (baseline_pkgs, "test-image:latest", False)
+        section = run_rpm(host_root, fixture_executor, preflight_baseline=preflight)
+        assert section.version_changes == []
+
+    def test_version_changes_sorted_downgrades_first(self, host_root, fixture_executor):
+        from yoinkc.inspectors.rpm import run as run_rpm
+        from yoinkc.schema import VersionChangeDirection
+        section = run_rpm(host_root, fixture_executor)
+        if len(section.version_changes) >= 2:
+            directions = [vc.direction for vc in section.version_changes]
+            downgrade_indices = [i for i, d in enumerate(directions)
+                                 if d == VersionChangeDirection.DOWNGRADE]
+            upgrade_indices = [i for i, d in enumerate(directions)
+                               if d == VersionChangeDirection.UPGRADE]
+            if downgrade_indices and upgrade_indices:
+                assert max(downgrade_indices) < min(upgrade_indices)
+
+    def test_base_image_only_has_nevra(self, host_root, fixture_executor):
+        from yoinkc.inspectors.rpm import run as run_rpm
+        section = run_rpm(host_root, fixture_executor)
+        for bio in section.base_image_only:
+            if bio.version:
+                assert bio.release, f"Package {bio.name} has version but no release"
