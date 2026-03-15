@@ -121,6 +121,33 @@
     }
 
     updateEditToolbar();
+    setupDirtyTracking();
+  }
+
+  function setupDirtyTracking() {
+    if (editorState.cmView && window.CMEditor) {
+      // CM6 doesn't expose an onChange callback through our bundle API,
+      // so we poll on blur/keyup as a pragmatic alternative.
+      var cmDom = document.querySelector('#editor-cm-container .cm-editor');
+      if (cmDom) {
+        cmDom.addEventListener('keyup', function() {
+          if (!editorState.currentFile) return;
+          editorState.dirtyFiles.set(editorState.currentFile.path, CMEditor.getContent(editorState.cmView));
+          updateEditToolbar();
+          updateStateLabels();
+        });
+      }
+    } else {
+      var ta = document.getElementById('editor-textarea-fallback');
+      if (ta) {
+        ta.addEventListener('input', function() {
+          if (!editorState.currentFile) return;
+          editorState.dirtyFiles.set(editorState.currentFile.path, ta.value);
+          updateEditToolbar();
+          updateStateLabels();
+        });
+      }
+    }
   }
 
   function updateEditToolbar() {
@@ -143,10 +170,13 @@
     actionsEl.innerHTML =
       (created ? '<button class="pf-v6-c-button pf-m-danger pf-m-small" id="btn-delete" style="margin-right:8px;">Delete</button>' : '') +
       '<button class="pf-v6-c-button pf-m-secondary pf-m-small" id="btn-revert">Revert</button> ' +
+      '<button class="pf-v6-c-button pf-m-secondary pf-m-small" id="btn-save-all">Save All</button> ' +
       '<button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-save">Save</button>';
 
     var saveBtn = document.getElementById('btn-save');
     if (saveBtn) saveBtn.addEventListener('click', editorSave);
+    var saveAllBtn = document.getElementById('btn-save-all');
+    if (saveAllBtn) saveAllBtn.addEventListener('click', editorSaveAll);
     var revertBtn = document.getElementById('btn-revert');
     if (revertBtn) revertBtn.addEventListener('click', editorRevert);
     var deleteBtn = document.getElementById('btn-delete');
@@ -208,6 +238,39 @@
     updateChangedCount();
   }
 
+  function findFileInSnapshot(path) {
+    var sections = [
+      {section: 'config', list: 'files'},
+      {section: 'containers', list: 'quadlet_units'},
+      {section: 'services', list: 'drop_ins'},
+    ];
+    for (var i = 0; i < sections.length; i++) {
+      var s = sections[i];
+      var items = (snapshot[s.section] && snapshot[s.section][s.list]) || [];
+      for (var j = 0; j < items.length; j++) {
+        if (items[j].path === path) return {section: s.section, list: s.list, index: j};
+      }
+    }
+    return null;
+  }
+
+  function editorSaveAll() {
+    if (editorState.currentFile && editorState.editMode) {
+      editorState.dirtyFiles.set(editorState.currentFile.path, getEditorContent());
+    }
+    editorState.dirtyFiles.forEach(function(content, path) {
+      var loc = findFileInSnapshot(path);
+      if (loc) {
+        snapshot[loc.section][loc.list][loc.index].content = content;
+        editorState.savedFiles.add(path);
+      }
+    });
+    editorState.dirtyFiles.clear();
+    updateEditToolbar();
+    updateStateLabels();
+    updateChangedCount();
+  }
+
   function escapeHtml(s) {
     var d = document.createElement('div');
     d.textContent = s;
@@ -258,6 +321,13 @@
     var countEl = document.getElementById('editor-changed-count');
     if (countEl) countEl.textContent = editorState.savedFiles.size;
   }
+
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 's' && editorState.editMode) {
+      e.preventDefault();
+      editorSave();
+    }
+  });
 
   if (typeof refineMode !== 'undefined' && refineMode) {
     buildTree();

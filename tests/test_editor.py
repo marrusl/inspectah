@@ -54,3 +54,16 @@ class TestEditorTab:
         """Static mode does not include the CM6 bundle."""
         html = _render(refine_mode=False)
         assert 'CMEditor' not in html
+
+    def test_editor_save_all_exists(self):
+        html = _render(refine_mode=True)
+        assert 'editorSaveAll' in html
+        assert 'findFileInSnapshot' in html
+
+    def test_editor_ctrl_s_shortcut(self):
+        html = _render(refine_mode=True)
+        assert "e.key === 's'" in html
+
+    def test_editor_dirty_tracking(self):
+        html = _render(refine_mode=True)
+        assert 'setupDirtyTracking' in html
