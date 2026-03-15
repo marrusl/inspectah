@@ -85,7 +85,7 @@
       var name = path.split('/').pop();
       pathEl.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">' + escapeHtml(dir) + '</span>' +
                          '<strong>' + escapeHtml(name) + '</strong>' +
-                         ' <span class="pf-v6-c-label pf-m-compact" style="font-size:12px;">read-only</span>';
+                         ' <span class="pf-v6-c-label pf-m-compact">read-only</span>';
     }
 
     var actionsEl = document.getElementById('editor-actions');
@@ -115,7 +115,7 @@
     } else if (cmContainer) {
       var ta = document.createElement('textarea');
       ta.value = content;
-      ta.style.cssText = 'width:100%; height:100%; font-family:var(--pf-t--global--font--family--mono); font-size:14px; border:none; resize:none; padding:8px;';
+      ta.style.cssText = 'width:100%; height:100%; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm); border:none; resize:none; padding:8px;';
       ta.id = 'editor-textarea-fallback';
       cmContainer.appendChild(ta);
     }
@@ -301,10 +301,10 @@
 
   function getStateLabel(path) {
     if (editorState.dirtyFiles.has(path)) {
-      return '<span class="pf-v6-c-label pf-m-compact" style="background:var(--pf-t--global--danger--color--100); color:var(--pf-t--global--danger--color--200); font-size:12px;">unsaved</span>';
+      return '<span class="pf-v6-c-label pf-m-compact pf-m-danger">unsaved</span>';
     }
     if (editorState.savedFiles.has(path)) {
-      return '<span class="pf-v6-c-label pf-m-compact" style="background:var(--pf-t--global--info--color--100); color:var(--pf-t--global--info--color--200); font-size:12px;">not rendered</span>';
+      return '<span class="pf-v6-c-label pf-m-compact pf-m-blue">not rendered</span>';
     }
     return '';
   }

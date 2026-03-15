@@ -27,9 +27,9 @@
       <div id="nf-config-fields">
         <div style="margin-bottom:20px;">
           <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>File path</strong></label>
-          <div style="font-size:13px; color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Absolute path on the target system</div>
+          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Absolute path on the target system</div>
           <input id="nf-config-path" class="pf-v6-c-form-control" type="text" placeholder="/etc/myapp/custom.conf" oninput="validateNewFileForm()" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
-          <div id="nf-config-error" style="color:var(--pf-t--global--danger--color--200); font-size:13px; margin-top:4px; display:none;"></div>
+          <div id="nf-config-error" style="color:var(--pf-t--global--danger--color--200); font-size:var(--pf-t--global--font--size--sm); margin-top:4px; display:none;"></div>
         </div>
       </div>
 
@@ -45,20 +45,20 @@
         </div>
         <div style="margin-bottom:20px;">
           <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Unit name</strong></label>
-          <div style="font-size:13px; color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">e.g. myapp.container</div>
+          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">e.g. myapp.container</div>
           <input id="nf-quadlet-name" class="pf-v6-c-form-control" type="text" placeholder="myapp.container" oninput="updateNewFilePath(); validateNewFileForm();" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
-          <div id="nf-quadlet-error" style="color:var(--pf-t--global--danger--color--200); font-size:13px; margin-top:4px; display:none;"></div>
+          <div id="nf-quadlet-error" style="color:var(--pf-t--global--danger--color--200); font-size:var(--pf-t--global--font--size--sm); margin-top:4px; display:none;"></div>
         </div>
         <div style="margin-bottom:20px;">
           <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Full path</strong></label>
-          <div id="nf-quadlet-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:13px;"></div>
+          <div id="nf-quadlet-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);"></div>
         </div>
       </div>
 
       <div id="nf-dropin-fields" style="display:none;">
         <div style="margin-bottom:20px;">
           <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Service</strong></label>
-          <div style="font-size:13px; color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Select from services discovered on this host</div>
+          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Select from services discovered on this host</div>
           <select id="nf-dropin-service" class="pf-v6-c-form-control" onchange="updateNewFilePath()" style="width:100%;">
             {%- if snapshot.services and snapshot.services.state_changes %}
             {%- for sc in snapshot.services.state_changes %}
@@ -70,11 +70,11 @@
         <div style="margin-bottom:20px;">
           <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Override filename</strong></label>
           <input id="nf-dropin-filename" class="pf-v6-c-form-control" type="text" value="override.conf" oninput="updateNewFilePath(); validateNewFileForm();" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
-          <div id="nf-dropin-error" style="color:var(--pf-t--global--danger--color--200); font-size:13px; margin-top:4px; display:none;"></div>
+          <div id="nf-dropin-error" style="color:var(--pf-t--global--danger--color--200); font-size:var(--pf-t--global--font--size--sm); margin-top:4px; display:none;"></div>
         </div>
         <div style="margin-bottom:20px;">
           <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Full path</strong></label>
-          <div id="nf-dropin-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:13px;"></div>
+          <div id="nf-dropin-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);"></div>
         </div>
       </div>
     </div>
