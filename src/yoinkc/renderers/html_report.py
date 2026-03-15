@@ -631,6 +631,13 @@ def _build_context(
     if pf_css_path.exists():
         patternfly_css = pf_css_path.read_text()
 
+    # Load CodeMirror 6 JS for inline embedding in refine-mode reports
+    codemirror_js = ""
+    if refine_mode:
+        cm_js_path = Path(__file__).resolve().parent.parent / "static" / "codemirror" / "codemirror.min.js"
+        if cm_js_path.exists():
+            codemirror_js = cm_js_path.read_text()
+
     config_files = _prepare_config_files(snapshot)
 
     if fleet_meta:
@@ -652,6 +659,7 @@ def _build_context(
         "original_snapshot_json": original_snapshot_json,
         "refine_mode": refine_mode,
         "patternfly_css": Markup(patternfly_css),
+        "codemirror_js": Markup(codemirror_js),
         "counts": counts,
         "fleet_meta": fleet_meta,
         "triage": triage,

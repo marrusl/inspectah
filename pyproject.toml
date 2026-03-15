@@ -33,7 +33,7 @@ yoinkc-fleet = "yoinkc.fleet.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-yoinkc = ["templates/*.j2", "templates/*.css"]
+yoinkc = ["templates/*.j2", "templates/*.css", "static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
