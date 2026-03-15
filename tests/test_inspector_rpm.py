@@ -3,7 +3,8 @@
 from pathlib import Path
 
 from yoinkc.executor import RunResult
-from yoinkc.inspectors.rpm import _parse_nevr, _parse_rpm_qa, _parse_rpm_va
+from yoinkc.inspectors.rpm import _compare_evr, _parse_nevr, _parse_rpm_qa, _parse_rpm_va, _rpmvercmp
+from yoinkc.schema import PackageEntry
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -126,3 +127,92 @@ def test_source_repo_populated_via_dnf_repoquery(host_root, fixture_executor):
     httpd = next((p for p in section.packages_added if p.name == "httpd"), None)
     assert httpd is not None, "httpd must be in packages_added"
     assert httpd.source_repo == "baseos"
+
+
+class TestRpmvercmp:
+    """Pure-Python rpmvercmp algorithm tests."""
+
+    def test_equal(self):
+        assert _rpmvercmp("1.0", "1.0") == 0
+
+    def test_numeric_greater(self):
+        assert _rpmvercmp("1.1", "1.0") > 0
+
+    def test_numeric_less(self):
+        assert _rpmvercmp("1.0", "1.1") < 0
+
+    def test_longer_numeric(self):
+        assert _rpmvercmp("1.0.1", "1.0") > 0
+
+    def test_alpha_comparison(self):
+        assert _rpmvercmp("1.0a", "1.0b") < 0
+
+    def test_numeric_beats_alpha(self):
+        assert _rpmvercmp("1.1", "1.a") > 0
+
+    def test_leading_zeros(self):
+        assert _rpmvercmp("01", "1") == 0
+
+    def test_tilde_sorts_before_everything(self):
+        assert _rpmvercmp("1.0~rc1", "1.0") < 0
+
+    def test_tilde_both(self):
+        assert _rpmvercmp("1.0~rc1", "1.0~rc2") < 0
+
+    def test_caret_sorts_after(self):
+        assert _rpmvercmp("1.0^git1", "1.0") > 0
+
+    def test_caret_both(self):
+        assert _rpmvercmp("1.0^git1", "1.0^git2") < 0
+
+    def test_tilde_before_caret(self):
+        assert _rpmvercmp("1.0~rc1", "1.0^git1") < 0
+
+    def test_real_world_el9(self):
+        assert _rpmvercmp("5.2.15", "5.1.8") > 0
+
+    def test_release_comparison(self):
+        assert _rpmvercmp("2.el9", "1.el9") > 0
+
+    def test_empty_equal(self):
+        assert _rpmvercmp("", "") == 0
+
+    def test_one_empty(self):
+        assert _rpmvercmp("1.0", "") > 0
+        assert _rpmvercmp("", "1.0") < 0
+
+
+class TestCompareEvr:
+    """EVR comparison combining epoch, version, release."""
+
+    def _pkg(self, epoch="0", version="1.0", release="1.el9"):
+        return PackageEntry(name="x", epoch=epoch, version=version,
+                            release=release, arch="x86_64")
+
+    def test_equal(self):
+        assert _compare_evr(self._pkg(), self._pkg()) == 0
+
+    def test_epoch_wins(self):
+        a = self._pkg(epoch="1", version="1.0")
+        b = self._pkg(epoch="0", version="99.0")
+        assert _compare_evr(a, b) > 0
+
+    def test_version_diff(self):
+        a = self._pkg(version="2.4.57")
+        b = self._pkg(version="2.4.53")
+        assert _compare_evr(a, b) > 0
+
+    def test_release_diff(self):
+        a = self._pkg(release="5.el9")
+        b = self._pkg(release="3.el9")
+        assert _compare_evr(a, b) > 0
+
+    def test_version_then_release(self):
+        a = self._pkg(version="2.4.57", release="5.el9")
+        b = self._pkg(version="2.4.57", release="3.el9")
+        assert _compare_evr(a, b) > 0
+
+    def test_epoch_none_treated_as_zero(self):
+        a = self._pkg(epoch="0")
+        b = self._pkg(epoch="0")
+        assert _compare_evr(a, b) == 0

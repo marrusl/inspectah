@@ -121,6 +121,108 @@ def _parse_rpm_va(stdout: str) -> List[RpmVaEntry]:
     return entries
 
 
+def _rpmvercmp(a: str, b: str) -> int:
+    """Compare two RPM version/release strings using the rpmvercmp algorithm.
+
+    Returns negative if a < b, 0 if equal, positive if a > b.
+    Handles ~(pre-release) and ^(post-release snapshot) markers.
+    Pure-Python implementation of RPM's rpmvercmp (see lib/rpmvercmp.c).
+    """
+    if a == b:
+        return 0
+
+    i, j = 0, 0
+    while i < len(a) or j < len(b):
+        # Skip non-alphanumeric, non-tilde, non-caret separators
+        while i < len(a) and not a[i].isalnum() and a[i] not in ("~", "^"):
+            i += 1
+        while j < len(b) and not b[j].isalnum() and b[j] not in ("~", "^"):
+            j += 1
+
+        if i >= len(a) and j >= len(b):
+            return 0
+        if i >= len(a):
+            return -1 if b[j] == "^" else (1 if b[j] == "~" else -1)
+        if j >= len(b):
+            return 1 if a[i] == "^" else (-1 if a[i] == "~" else 1)
+
+        # Tilde sorts before everything (pre-release)
+        if a[i] == "~":
+            if b[j] != "~":
+                return -1
+            i += 1
+            j += 1
+            continue
+        if b[j] == "~":
+            return 1
+
+        # Caret sorts after empty but before any alphanumeric
+        if a[i] == "^":
+            if b[j] != "^":
+                return 1 if j >= len(b) or not b[j].isalnum() else -1
+            i += 1
+            j += 1
+            continue
+        if b[j] == "^":
+            return -1 if i >= len(a) or not a[i].isalnum() else 1
+
+        # Extract contiguous digit or alpha segment
+        if a[i].isdigit():
+            si = i
+            while i < len(a) and a[i].isdigit():
+                i += 1
+            seg_a = a[si:i]
+
+            sj = j
+            if j < len(b) and b[j].isdigit():
+                while j < len(b) and b[j].isdigit():
+                    j += 1
+                seg_b = b[sj:j]
+            else:
+                return 1  # numeric > alpha
+
+            na = int(seg_a) if seg_a else 0
+            nb = int(seg_b) if seg_b else 0
+            if na != nb:
+                return 1 if na > nb else -1
+        else:
+            si = i
+            while i < len(a) and a[i].isalpha():
+                i += 1
+            seg_a = a[si:i]
+
+            sj = j
+            if j < len(b) and b[j].isalpha():
+                while j < len(b) and b[j].isalpha():
+                    j += 1
+                seg_b = b[sj:j]
+            else:
+                return -1  # alpha < numeric
+
+            if seg_a != seg_b:
+                return 1 if seg_a > seg_b else -1
+
+    return 0
+
+
+def _compare_evr(host_pkg: "PackageEntry", base_pkg: "PackageEntry") -> int:
+    """Compare epoch:version-release between two PackageEntry objects.
+
+    Returns negative if host < base, 0 if equal, positive if host > base.
+    Pure-Python implementation of RPM's EVR comparison (see lib/rpmvercmp.c).
+    """
+    h_epoch = int(host_pkg.epoch or "0")
+    b_epoch = int(base_pkg.epoch or "0")
+    if h_epoch != b_epoch:
+        return 1 if h_epoch > b_epoch else -1
+
+    vc = _rpmvercmp(host_pkg.version, base_pkg.version)
+    if vc != 0:
+        return vc
+
+    return _rpmvercmp(host_pkg.release, base_pkg.release)
+
+
 def _read_os_id_version(host_root: Path) -> tuple[str, str]:
     """Read ID and VERSION_ID from host os-release. Returns (id, version_id) or ('', '')."""
     os_release = host_root / "etc" / "os-release"
