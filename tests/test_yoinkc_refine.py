@@ -491,6 +491,35 @@ class TestServer:
         assert new_html.encode() in body
         assert "html" in headers.get("Content-Type", "")
 
+    def test_post_rerender_wrapper_format(self, live_server, refine):
+        """Re-render accepts the {"snapshot": ..., "original": ...} wrapper."""
+        url, output_dir = live_server
+        new_html = "<html>wrapper-rerender</html>"
+
+        def _fake_run(cmd, **kwargs):
+            for i, arg in enumerate(cmd):
+                if arg == "-v" and ":/output" in cmd[i + 1]:
+                    new_out = Path(cmd[i + 1].split(":")[0])
+                    break
+            (new_out / "report.html").write_text(new_html)
+            (new_out / "inspection-snapshot.json").write_text("{}")
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = r.stderr = ""
+            return r
+
+        wrapper = json.dumps({
+            "snapshot": {"schema_version": 5},
+            "original": {"schema_version": 5, "meta": {"hostname": "orig"}},
+        }).encode()
+
+        with patch.object(refine, "_find_runtime", return_value="podman"), \
+             patch("subprocess.run", side_effect=_fake_run):
+            status, body, headers = _post(url + "/api/re-render", wrapper)
+
+        assert status == 200
+        assert new_html.encode() in body
+
     def test_post_rerender_empty_body_returns_400(self, live_server):
         url, _ = live_server
         status, _, _ = _post(url + "/api/re-render", b"")

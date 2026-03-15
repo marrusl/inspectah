@@ -160,7 +160,11 @@ def _count_excluded(snapshot: dict) -> int:
     return count
 
 
-def _re_render(snapshot_data: bytes, output_dir: Path) -> tuple[bool, str]:
+def _re_render(
+    snapshot_data: bytes,
+    output_dir: Path,
+    original_data: bytes | None = None,
+) -> tuple[bool, str]:
     """
     Run yoinkc in a container to re-render from the modified snapshot.
 
@@ -182,10 +186,18 @@ def _re_render(snapshot_data: bytes, output_dir: Path) -> tuple[bool, str]:
         new_output = tmp_path / "output"
         new_output.mkdir()
 
-        cmd = [
-            runtime, "run", "--rm",
+        volumes = [
             "-v", f"{snap_file}:/input/snapshot.json:ro",
             "-v", f"{new_output}:/output",
+        ]
+        if original_data:
+            orig_file = tmp_path / "original-snapshot.json"
+            orig_file.write_bytes(original_data)
+            volumes += ["-v", f"{orig_file}:/input/original-snapshot.json:ro"]
+
+        cmd = [
+            runtime, "run", "--rm",
+            *volumes,
             _IMAGE,
             "--from-snapshot", "/input/snapshot.json",
             "--output-dir", "/output",
@@ -348,15 +360,25 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(400, "Empty request body")
                 return
             try:
-                snapshot = json.loads(body)
+                payload = json.loads(body)
             except json.JSONDecodeError as exc:
                 self._send(400, f"Invalid JSON: {exc}")
                 return
 
-            excluded = _count_excluded(snapshot)
+            # Support both wrapper format and legacy bare snapshot
+            if isinstance(payload, dict) and "snapshot" in payload and "original" in payload:
+                snapshot_data = payload["snapshot"]
+                original_data = payload["original"]
+            else:
+                snapshot_data = payload
+                original_data = None
+
+            excluded = _count_excluded(snapshot_data)
             _log(f"re-rendering... ({excluded} item{'s' if excluded != 1 else ''} excluded)")
 
-            ok, result = _re_render(body, output_dir)
+            snapshot_bytes = json.dumps(snapshot_data).encode()
+            original_bytes = json.dumps(original_data).encode() if original_data else None
+            ok, result = _re_render(snapshot_bytes, output_dir, original_bytes)
             if ok:
                 self._send(200, result, "text/html; charset=utf-8")
             else:
