@@ -632,6 +632,151 @@ The `_triage` module provides two functions used by both the audit report and HT
 
 Both functions filter by `.include` on item models, so excluded items (toggled off via the refine UI or fleet merge) don't inflate the counts.
 
+## 7. Fleet Analysis
+
+Inspecting one host at a time doesn't scale. When migrating a fleet of similar hosts (same OS, same base image, same role), the fleet analysis subsystem finds common ground — producing a single merged snapshot that captures what's shared across hosts and flags what varies.
+
+### Architecture
+
+The fleet pipeline is: **loader** → **merge engine** → **standard renderers**. The merge engine produces an `InspectionSnapshot` with fleet metadata attached, then feeds it through the same renderer pipeline used for single-host inspection. This means fleet output gets Containerfile generation, HTML reports, and all other renderers for free.
+
+```
+discover_snapshots()  →  validate_snapshots()  →  merge_snapshots()  →  run_pipeline()
+     (loader.py)            (loader.py)             (merge.py)         (reuse existing)
+```
+
+The entry point is `yoinkc-fleet aggregate <input_dir>`, implemented in `fleet/__main__.py`. It calls the loader, validates compatibility, merges, and delegates to `run_pipeline()` for rendering and tarball packaging.
+
+### Loader (`fleet/loader.py`)
+
+`discover_snapshots(input_dir)` scans a directory for `.tar.gz` tarballs and `.json` files, returning a list of `InspectionSnapshot` objects:
+
+- **Tarballs:** extracts `inspection-snapshot.json` from the tar archive (supports both `<prefix>/inspection-snapshot.json` and bare `inspection-snapshot.json` paths). Invalid tarballs are skipped with a warning.
+- **JSON files:** loaded directly via Pydantic's `InspectionSnapshot(**data)` constructor. Invalid JSON is skipped with a warning.
+- Other file types are silently ignored. Files are processed in sorted order for deterministic output.
+
+`validate_snapshots(snapshots)` enforces merge compatibility:
+
+- Minimum 2 snapshots required.
+- All snapshots must share the same `schema_version`.
+- All must have `os_release` present, with matching `id` and `version_id`.
+- All must have matching `base_image` (in their RPM sections).
+- Duplicate hostnames produce a warning (re-inspected hosts are valid, not an error).
+
+### Merge Engine (`fleet/merge.py`)
+
+`merge_snapshots(snapshots, min_prevalence, fleet_name, include_hosts)` is the core algorithm. It builds a union of all items across hosts, counts how many hosts have each item, and applies a prevalence threshold to set `include` flags.
+
+#### Identity Merge
+
+Items that are matched by a simple identity key. The Containerfile installs packages by name and enables services by unit name, so content differences across hosts (e.g., different package versions) don't matter — the identity is what counts.
+
+| Section | List | Identity Key |
+|---|---|---|
+| `rpm` | `packages_added` | `name` |
+| `rpm` | `base_image_only` | `name` |
+| `rpm` | `repo_files` | `path` |
+| `rpm` | `gpg_keys` | `path` |
+| `services` | `state_changes` | `unit` + `action` |
+| `network` | `firewall_zones` | `name` |
+| `scheduled_tasks` | `generated_timer_units` | `name` |
+| `scheduled_tasks` | `cron_jobs` | `path` |
+
+For identity-only items, the merged entry takes field values from the first host encountered. Each item gets a `FleetPrevalence` object recording count, total, and (optionally) host list.
+
+#### Content Merge
+
+Items where the same identity (path) can have different content across hosts. Each unique (identity, variant) pair becomes a separate entry in the merged snapshot, with its own prevalence count.
+
+| Section | List | Identity Key | Variant Key |
+|---|---|---|---|
+| `config` | `files` | `path` | SHA-256 hash of `content` |
+| `containers` | `quadlet_units` | `path` | SHA-256 hash of `content` |
+| `services` | `drop_ins` | `path` | SHA-256 hash of `content` |
+| `containers` | `compose_files` | `path` | Hash of sorted `(service, image)` tuples |
+
+For example, if `/etc/httpd/conf/httpd.conf` exists in 3 content variants across 100 hosts, the merged snapshot has 3 `ConfigFileEntry` items for that path — one per variant, each with its own prevalence. The user sees all variants in the HTML report and can pick the right one.
+
+#### Prevalence Threshold
+
+The `-p` / `--min-prevalence` flag (integer 1-100, default 100) controls which items get `include: true`:
+
+```
+include = (count * 100) >= (min_prevalence * total)
+```
+
+At 100% (default), only items present on **every** host are included — a strict intersection. At lower values (e.g., `-p 90`), the tool absorbs fleet drift by including items on 90%+ of hosts. Below-threshold items remain in the snapshot with `include: false` — they're visible in the HTML report and can be re-included during refinement.
+
+#### Per-Field Dispositions
+
+Beyond identity and content merge, each field in each section has a specific disposition:
+
+- **Merge:** identity or content merge with prevalence tracking (described above).
+- **Deduplicate:** union by value, preserving first-seen order. Used for `dnf_history_removed`, `enabled_units`, `disabled_units`, `systemd_timers`, `sudoers_rules`.
+- **Pass-through:** taken from the first snapshot (must be identical across all, enforced by validation). Used for `base_image`, `baseline_package_names`, `no_baseline`.
+- **Omit:** set to empty/None in the merged snapshot. Used for host-specific data like `rpm_va`, `connections`, `static_routes`, `running_containers`, `ssh_authorized_keys_refs`, `passwd_entries`, `shadow_entries`.
+
+**Special handling for leaf/auto packages:** `leaf_packages` and `auto_packages` are unioned (deduplicated) rather than omitted. If a package is leaf on any host, it's marked leaf in the fleet snapshot. This preserves dep-solving intelligence — the Containerfile can install leaf packages and let `dnf` pull in auto dependencies. `leaf_dep_tree` maps are also merged (union of all dependency mappings).
+
+**Users/groups** are `List[dict]` (not typed Pydantic models), so they cannot receive a typed `fleet` field. They are deduplicated by `name` key, with prevalence stored as a plain `"fleet"` dict key injected into each entry.
+
+**Warnings and redactions** are collected from all input snapshots and deduplicated.
+
+**Sections omitted entirely** in the merged snapshot: `kernel_boot`, `selinux`, `non_rpm_software`, `storage`. These are host-specific and not meaningful in a fleet context.
+
+#### Fleet Metadata
+
+The merged snapshot carries `meta["fleet"]` with a `FleetMeta` structure:
+
+- `host_count`: number of input snapshots
+- `hostnames`: list of all hostnames
+- `threshold`: the `--min-prevalence` value used
+- `merged_at`: ISO 8601 timestamp
+
+Individual items carry a `FleetPrevalence` field with `count`, `total`, and (unless `--no-hosts`) `hosts` list.
+
+### Fleet UI
+
+The HTML report template detects fleet data via `fleet_meta` in the template context and conditionally renders fleet-specific elements:
+
+- **Fleet banner:** displayed at the top of the report showing host count, prevalence threshold, hostnames, and include/exclude summary counts.
+- **Prevalence color bars:** each item gets a colored bar indicating prevalence. Blue for items above threshold (included), gold for items below threshold but on multiple hosts, red for items on very few hosts. The bar width is proportional to the prevalence percentage.
+- **Fraction/percentage toggle:** a JavaScript toggle switches prevalence display between fraction form (e.g., "95/100") and percentage form (e.g., "95%").
+- **Host list popovers:** clicking a prevalence bar shows a PatternFly 6 popover listing which specific hosts have that item (unless `--no-hosts` was used).
+- **Content variant grouping:** for config files, quadlet units, and service drop-ins, items sharing the same path are grouped together with an expandable UI showing each content variant and its prevalence. Groups with a single item render as normal rows. Compose files render as separate cards (no grouping needed since cards are visually distinct).
+
+In non-fleet mode, none of these elements appear — the template renders exactly as it does for single-host inspection.
+
+### CLI (`fleet/cli.py`)
+
+The `yoinkc-fleet` command uses a subcommand structure with `aggregate` as the primary (and currently only) subcommand:
+
+```
+yoinkc-fleet aggregate <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json-only] [--no-hosts]
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `input_dir` | required | Directory containing `.tar.gz` and/or `.json` snapshots |
+| `-p`, `--min-prevalence` | `100` | Include items on >= PCT% of hosts (range: 1-100) |
+| `-o`, `--output` | auto | Output tarball path (or JSON path with `--json-only`) |
+| `--output-dir` | off | Write rendered files to a directory instead of tarball |
+| `--json-only` | off | Write merged JSON only, skip rendering |
+| `--no-hosts` | off | Omit per-item host lists from fleet metadata |
+
+Default output is a tarball containing Containerfile, HTML report, and merged snapshot — matching the single-host output format.
+
+### Container Wrapper (`run-yoinkc-fleet.sh`)
+
+For zero-install workstation use, `run-yoinkc-fleet.sh` runs the fleet aggregation inside the yoinkc container image. It:
+
+1. Requires `podman` (does not auto-install).
+2. Bind-mounts the input directory read-only and a temp directory for output.
+3. Runs `yoinkc-fleet aggregate` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
+4. Copies the result tarball to `YOINKC_OUTPUT_DIR` (default: current working directory).
+
+Usage: `./run-yoinkc-fleet.sh ./snapshots/ -p 80 --no-hosts`
+
 ## Secret Handling
 
 A dedicated redaction pass runs over all captured file contents **before any output is written or any git operations occur**. This ordering is critical — the redaction pass is not a separate stage that can be skipped, it's a gate that all content must pass through.
