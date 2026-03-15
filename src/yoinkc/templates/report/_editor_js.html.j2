@@ -159,7 +159,16 @@
     if (cmContainer) { cmContainer.style.display = ''; cmContainer.innerHTML = ''; }
 
     if (window.CMEditor && cmContainer) {
-      editorState.cmView = CMEditor.create(cmContainer, content);
+      editorState.cmView = CMEditor.create(cmContainer, content, function(newContent) {
+        if (editorState.currentFile) {
+          editorState.dirtyFiles.set(editorState.currentFile.path, newContent);
+          updateEditToolbar();
+          updateStateLabels();
+        }
+      });
+      if (localStorage.getItem('yoinkc-vim-mode') === 'on') {
+        CMEditor.enableVim(editorState.cmView);
+      }
     } else if (cmContainer) {
       var ta = document.createElement('textarea');
       ta.value = content;
@@ -173,19 +182,9 @@
   }
 
   function setupDirtyTracking() {
-    if (editorState.cmView && window.CMEditor) {
-      // CM6 doesn't expose an onChange callback through our bundle API,
-      // so we poll on blur/keyup as a pragmatic alternative.
-      var cmDom = document.querySelector('#editor-cm-container .cm-editor');
-      if (cmDom) {
-        cmDom.addEventListener('keyup', function() {
-          if (!editorState.currentFile) return;
-          editorState.dirtyFiles.set(editorState.currentFile.path, CMEditor.getContent(editorState.cmView));
-          updateEditToolbar();
-          updateStateLabels();
-        });
-      }
-    } else {
+    // CM6 dirty tracking is handled via the onChange callback passed to
+    // CMEditor.create(). This function only covers the textarea fallback.
+    if (!editorState.cmView || !window.CMEditor) {
       var ta = document.getElementById('editor-textarea-fallback');
       if (ta) {
         ta.addEventListener('input', function() {
@@ -215,7 +214,9 @@
     var actionsEl = document.getElementById('editor-actions');
     if (!actionsEl) return;
     var created = isOperatorCreated(f.path);
+    var vimLabel = localStorage.getItem('yoinkc-vim-mode') === 'on' ? 'Vim: On' : 'Vim: Off';
     actionsEl.innerHTML =
+      (window.CMEditor && window.CMEditor.enableVim ? '<button class="pf-v6-c-button pf-m-plain pf-m-small" id="btn-vim-toggle" style="margin-right:8px;">' + vimLabel + '</button>' : '') +
       (created ? '<button class="pf-v6-c-button pf-m-danger pf-m-small" id="btn-delete" style="margin-right:8px;">Delete</button>' : '') +
       '<button class="pf-v6-c-button pf-m-secondary pf-m-small" id="btn-revert">Revert</button> ' +
       '<button class="pf-v6-c-button pf-m-secondary pf-m-small" id="btn-save-all">Save All</button> ' +
@@ -229,6 +230,8 @@
     if (revertBtn) revertBtn.addEventListener('click', editorRevert);
     var deleteBtn = document.getElementById('btn-delete');
     if (deleteBtn) deleteBtn.addEventListener('click', editorDeleteFile);
+    var vimBtn = document.getElementById('btn-vim-toggle');
+    if (vimBtn) vimBtn.addEventListener('click', toggleVim);
   }
 
   function editorSave() {
@@ -512,6 +515,19 @@
         showEditorError(err.message);
       });
     });
+  }
+
+  function toggleVim() {
+    if (!editorState.cmView || !window.CMEditor || !window.CMEditor.enableVim) return;
+    var isOn = localStorage.getItem('yoinkc-vim-mode') === 'on';
+    if (isOn) {
+      CMEditor.disableVim(editorState.cmView);
+      localStorage.setItem('yoinkc-vim-mode', 'off');
+    } else {
+      CMEditor.enableVim(editorState.cmView);
+      localStorage.setItem('yoinkc-vim-mode', 'on');
+    }
+    updateEditToolbar();
   }
 
   function showEditorError(message) {

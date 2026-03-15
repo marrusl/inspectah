@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Build a minimal CodeMirror 6 bundle for yoinkc's config editor.
+# Build a CodeMirror 6 bundle for yoinkc's config editor.
 #
 # Produces a single IIFE bundle exposing window.CMEditor with:
-#   CMEditor.create(parent, content) → EditorView
+#   CMEditor.create(parent, content, onChange) → EditorView
 #   CMEditor.getContent(view) → string
 #   CMEditor.setContent(view, content)
+#   CMEditor.enableVim(view)
+#   CMEditor.disableVim(view)
 #
 # Requirements: node ≥18, npm
 # Output: src/yoinkc/static/codemirror/codemirror.min.js
@@ -19,25 +21,35 @@ trap 'rm -rf "$WORK"' EXIT
 
 cd "$WORK"
 npm init -y --silent >/dev/null 2>&1
-npm install --silent codemirror @codemirror/view @codemirror/state 2>&1 | tail -1
+npm install --silent codemirror @codemirror/view @codemirror/state @replit/codemirror-vim 2>&1 | tail -1
 
 cat > build.mjs << 'ENTRY'
 import {basicSetup} from "codemirror";
 import {EditorView} from "@codemirror/view";
-import {EditorState} from "@codemirror/state";
+import {EditorState, Compartment} from "@codemirror/state";
+import {vim} from "@replit/codemirror-vim";
 
-export function create(parent, content) {
+var vimCompartment = new Compartment();
+
+export function create(parent, content, onChange) {
+  var extensions = [
+    basicSetup,
+    EditorView.lineWrapping,
+    EditorView.theme({
+      "&": {height: "100%", fontSize: "14px"},
+      ".cm-scroller": {overflow: "auto"},
+    }),
+    vimCompartment.of([]),
+  ];
+  if (typeof onChange === "function") {
+    extensions.push(EditorView.updateListener.of(function(update) {
+      if (update.docChanged) onChange(update.state.doc.toString());
+    }));
+  }
   return new EditorView({
     state: EditorState.create({
       doc: content || "",
-      extensions: [
-        basicSetup,
-        EditorView.lineWrapping,
-        EditorView.theme({
-          "&": {height: "100%", fontSize: "14px"},
-          ".cm-scroller": {overflow: "auto"},
-        }),
-      ],
+      extensions: extensions,
     }),
     parent: parent,
   });
@@ -51,6 +63,14 @@ export function setContent(view, content) {
   view.dispatch({
     changes: {from: 0, to: view.state.doc.length, insert: content},
   });
+}
+
+export function enableVim(view) {
+  view.dispatch({effects: vimCompartment.reconfigure(vim())});
+}
+
+export function disableVim(view) {
+  view.dispatch({effects: vimCompartment.reconfigure([])});
 }
 ENTRY
 

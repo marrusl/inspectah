@@ -151,7 +151,15 @@ class TestEditorTab:
     def test_no_alert_in_rerender(self):
         """Re-render error path uses PF6 banner, not alert()."""
         html = _render(refine_mode=True)
-        assert 'alert(' not in html
+        assert 'showEditorError' in html
+        # The editor JS itself should not call alert(); the CM6 bundle may
+        # contain alert() from third-party extensions (vim), so we check
+        # only the editor_js template output.
+        editor_js_start = html.find('function buildTree')
+        editor_js_end = html.find('buildTree();\n  }', editor_js_start)
+        if editor_js_start >= 0 and editor_js_end >= 0:
+            editor_js = html[editor_js_start:editor_js_end]
+            assert 'alert(' not in editor_js
 
 
 class TestEditorIntegration:
