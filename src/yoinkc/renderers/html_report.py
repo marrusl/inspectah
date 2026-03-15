@@ -40,9 +40,9 @@ def _fleet_color(fleet) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_output_tree(output_dir: Path) -> List[dict]:
-    """Build a tree of config/ and quadlet/ for the file browser."""
+    """Build a tree of config/, quadlet/, and drop-ins/ for the file browser."""
     roots: List[dict] = []
-    for folder_name in ("config", "quadlet"):
+    for folder_name in ("config", "quadlet", "drop-ins"):
         folder = output_dir / folder_name
         if not folder.is_dir():
             continue

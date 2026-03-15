@@ -11,6 +11,8 @@ from yoinkc.schema import (
     ConfigSection,
     InspectionSnapshot,
     OsRelease,
+    ServiceSection,
+    SystemdDropIn,
 )
 
 
@@ -106,6 +108,26 @@ class TestHtmlReport:
             html = (Path(tmp) / "report.html").read_text()
 
         assert "var refineMode = true" in html
+
+    def test_output_tree_includes_dropins(self):
+        """File browser tree includes drop-ins folder when drop-ins exist."""
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            services=ServiceSection(drop_ins=[
+                SystemdDropIn(
+                    unit="postgresql.service",
+                    path="etc/systemd/system/postgresql.service.d/override.conf",
+                    content="[Service]\nLimitNOFILE=65536\n",
+                ),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            html = (Path(tmp) / "report.html").read_text()
+
+        assert "drop-ins" in html
+        assert "override.conf" in html
 
 
 class TestHtmlStructure:
