@@ -127,6 +127,32 @@ class TestEditorTab:
         html = _render(refine_mode=False)
         assert 'id="btn-re-render"' not in html
 
+    def test_unsaved_changes_modal_in_refine_mode(self):
+        html = _render(refine_mode=True)
+        assert 'unsaved-changes-modal' in html
+        assert 'showUnsavedModal' in html
+        assert 'unsaved-btn-save' in html
+        assert 'unsaved-btn-discard' in html
+
+    def test_no_unsaved_modal_in_static_mode(self):
+        html = _render(refine_mode=False)
+        assert 'unsaved-changes-modal' not in html
+
+    def test_error_banner_in_refine_mode(self):
+        html = _render(refine_mode=True)
+        assert 'editor-error-banner' in html
+        assert 'showEditorError' in html
+        assert 'dismissEditorError' in html
+
+    def test_no_error_banner_in_static_mode(self):
+        html = _render(refine_mode=False)
+        assert 'editor-error-banner' not in html
+
+    def test_no_alert_in_rerender(self):
+        """Re-render error path uses PF6 banner, not alert()."""
+        html = _render(refine_mode=True)
+        assert 'alert(' not in html
+
 
 class TestEditorIntegration:
     """End-to-end tests verifying the complete editor feature set."""
@@ -136,6 +162,8 @@ class TestEditorIntegration:
         html = _render(refine_mode=False, with_content=True)
         assert 'id="editor-tab"' not in html
         assert 'new-file-modal' not in html
+        assert 'unsaved-changes-modal' not in html
+        assert 'editor-error-banner' not in html
         assert 'CMEditor' not in html
         assert 'editorSave' not in html
         assert 'id="btn-re-render"' not in html
@@ -166,6 +194,12 @@ class TestEditorIntegration:
         assert 'new-file-modal' in html
         assert 'createNewFile' in html
         assert 'validateNewFileForm' in html
+        # Unsaved changes modal
+        assert 'unsaved-changes-modal' in html
+        assert 'showUnsavedModal' in html
+        # Error banner
+        assert 'editor-error-banner' in html
+        assert 'showEditorError' in html
         # Re-render button
         assert 'id="btn-re-render"' in html
         assert 'editor-changed-count' in html

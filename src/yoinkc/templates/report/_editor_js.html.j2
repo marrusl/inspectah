@@ -57,12 +57,60 @@
     });
   }
 
-  function selectFile(section, list, index, path) {
-    if (editorState.editMode && editorState.currentFile && editorState.dirtyFiles.has(editorState.currentFile.path)) {
-      if (!confirm('You have unsaved changes. Discard them?')) return;
-      editorState.dirtyFiles.delete(editorState.currentFile.path);
+  // Pending navigation target — set when the unsaved-changes modal is shown,
+  // consumed by the modal button handlers.
+  var pendingNav = null;
+
+  function showUnsavedModal(filename, onSave, onDiscard, onCancel) {
+    var modal = document.getElementById('unsaved-changes-modal');
+    var msg = document.getElementById('unsaved-changes-message');
+    if (!modal) { onDiscard(); return; }
+    if (msg) msg.innerHTML = 'You have unsaved changes to <code>' + escapeHtml(filename) + '</code>.';
+    modal.style.display = '';
+
+    var saveBtn = document.getElementById('unsaved-btn-save');
+    var discardBtn = document.getElementById('unsaved-btn-discard');
+    var cancelBtn = document.getElementById('unsaved-btn-cancel');
+
+    function cleanup() {
+      modal.style.display = 'none';
+      if (saveBtn) saveBtn.replaceWith(saveBtn.cloneNode(true));
+      if (discardBtn) discardBtn.replaceWith(discardBtn.cloneNode(true));
+      if (cancelBtn) cancelBtn.replaceWith(cancelBtn.cloneNode(true));
     }
 
+    if (saveBtn) saveBtn.addEventListener('click', function() { cleanup(); onSave(); });
+    if (discardBtn) discardBtn.addEventListener('click', function() { cleanup(); onDiscard(); });
+    if (cancelBtn) cancelBtn.addEventListener('click', function() { cleanup(); onCancel(); });
+  }
+
+  function selectFile(section, list, index, path) {
+    if (editorState.editMode && editorState.currentFile && editorState.dirtyFiles.has(editorState.currentFile.path)) {
+      var dirtyPath = editorState.currentFile.path;
+      pendingNav = {section: section, list: list, index: index, path: path};
+      showUnsavedModal(
+        dirtyPath.split('/').pop(),
+        function onSave() {
+          editorSave();
+          doSelectFile(pendingNav.section, pendingNav.list, pendingNav.index, pendingNav.path);
+          pendingNav = null;
+        },
+        function onDiscard() {
+          editorState.dirtyFiles.delete(dirtyPath);
+          updateStateLabels();
+          doSelectFile(pendingNav.section, pendingNav.list, pendingNav.index, pendingNav.path);
+          pendingNav = null;
+        },
+        function onCancel() {
+          pendingNav = null;
+        }
+      );
+      return;
+    }
+    doSelectFile(section, list, index, path);
+  }
+
+  function doSelectFile(section, list, index, path) {
     editorState.currentFile = {section: section, list: list, index: index, path: path};
     editorState.editMode = false;
 
@@ -459,12 +507,24 @@
         document.write(html);
         document.close();
       }).catch(function(err) {
-        reRenderBtn.textContent = 'Re-render (failed)';
+        reRenderBtn.innerHTML = 'Re-render (<span id="editor-changed-count">' + editorState.savedFiles.size + '</span> files changed)';
         reRenderBtn.disabled = false;
-        alert('Re-render failed: ' + err.message);
+        showEditorError(err.message);
       });
     });
   }
+
+  function showEditorError(message) {
+    var banner = document.getElementById('editor-error-banner');
+    var msgEl = document.getElementById('editor-error-message');
+    if (banner) { banner.style.display = ''; }
+    if (msgEl) { msgEl.textContent = message; }
+  }
+
+  window.dismissEditorError = function() {
+    var banner = document.getElementById('editor-error-banner');
+    if (banner) banner.style.display = 'none';
+  };
 
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's' && editorState.editMode) {
