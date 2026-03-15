@@ -11,7 +11,7 @@ yoinkc inspects package-based RHEL, CentOS Stream, and Fedora hosts and produces
 **Companion tools.** Three companion entry points complete the workflow:
 
 - **`yoinkc-refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
-- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL entitlement handling for building on non-RHEL hosts.
+- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling for building on non-RHEL hosts.
 - **`yoinkc-fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
 
 ## 2. Architecture
@@ -31,7 +31,7 @@ __main__.py  →  pipeline.run_pipeline()
                     └── create_tarball() or copy to output_dir
 ```
 
-`__main__.py` parses CLI arguments, runs preflight privilege checks, then calls `run_pipeline()` with two callables: `run_inspectors` (wrapping `inspectors.run_all()` with CLI args) and `run_renderers` (wrapping `renderers.run_all()`). The pipeline either runs inspectors or loads a previously saved snapshot (`--from-snapshot`), applies secret redaction, renders output, bundles RHEL entitlement certs if present, and packages the result as a tarball or directory.
+`__main__.py` parses CLI arguments, runs preflight privilege checks, then calls `run_pipeline()` with two callables: `run_inspectors` (wrapping `inspectors.run_all()` with CLI args) and `run_renderers` (wrapping `renderers.run_all()`). The pipeline either runs inspectors or loads a previously saved snapshot (`--from-snapshot`), applies secret redaction, renders output, bundles RHEL subscription certs if present, and packages the result as a tarball or directory.
 
 The central data structure is `InspectionSnapshot` (defined in `schema.py`), a Pydantic model with typed fields for each inspection category. Every inspector populates its section of the snapshot; every renderer reads the complete snapshot. The snapshot is serialized to `inspection-snapshot.json` in the output, enabling offline re-rendering and fleet aggregation.
 
@@ -45,7 +45,7 @@ This is clean — no contamination of the source system, no installation require
 
 During inspection, the tool emits styled progress output to stderr using ANSI colours and step counters (e.g., `── [1/11] Packages ──`, `── [2/11] Config files ──`). Colours are suppressed automatically when stderr is not a TTY. The renderer phase emits a `Rendering output…` / `Done.` pair.
 
-The default output is a tarball (`HOSTNAME-YYYYMMDD-HHMMSS.tar.gz`) containing the Containerfile, config tree, reports, snapshot, and RHEL entitlement certs (if present on the inspected host). Use `--output-dir` for unpacked directory output, which is required for `--validate` and `--push-to-github`.
+The default output is a tarball (`HOSTNAME-YYYYMMDD-HHMMSS.tar.gz`) containing the Containerfile, config tree, reports, snapshot, and RHEL subscription certs (if present on the inspected host). Use `--output-dir` for unpacked directory output, which is required for `--validate` and `--push-to-github`.
 
 The tool itself ships as a container: `ghcr.io/marrusl/yoinkc:latest`.
 
@@ -125,7 +125,7 @@ yoinkc-fleet = "yoinkc.fleet.__main__:main"
 Two additional entry points are described in the design but not yet implemented:
 
 - **`yoinkc-refine`** — interactive HTML-based editor for snapshots (see [Interactive Refinement](#interactive-refinement-yoinkc-refine)).
-- **`yoinkc-build`** — builds a bootc container image from yoinkc output with automatic RHEL entitlement handling (see [Building on Non-RHEL Hosts](#building-on-non-rhel-hosts)).
+- **`yoinkc-build`** — builds a bootc container image from yoinkc output with automatic RHEL subscription cert handling (see [Building on Non-RHEL Hosts](#building-on-non-rhel-hosts)).
 
 ### `yoinkc` — Host Inspection
 
@@ -151,7 +151,7 @@ Inspects a RHEL/CentOS/Fedora host mounted at `--host-root` and produces a tarba
 |---|---|---|
 | `-o FILE` | auto | Write tarball to FILE. Default: `HOSTNAME-TIMESTAMP.tar.gz` in the current directory. |
 | `--output-dir DIR` | off | Write files to a directory instead of producing a tarball. Required for `--validate` and `--push-to-github`. |
-| `--no-entitlement` | off | Skip bundling RHEL entitlement certs into the output. |
+| `--no-subscription` | off | Skip bundling RHEL subscription certs into the output. |
 
 #### Target Image Flags
 
@@ -807,8 +807,8 @@ The pipeline orchestrator in `pipeline.py` ties inspection, redaction, rendering
 
 After the snapshot is ready, the pipeline branches:
 
-- **`--inspect-only`**: saves the snapshot to `inspection-snapshot.json` in the working directory and returns immediately. No rendering, no packaging, no entitlement bundling. Useful for capturing raw data to process later.
-- **Normal flow**: renders all output artifacts into a temporary directory (snapshot JSON, Containerfile, reports, config tree), bundles entitlement certificates (unless suppressed), and packages the result.
+- **`--inspect-only`**: saves the snapshot to `inspection-snapshot.json` in the working directory and returns immediately. No rendering, no packaging, no subscription cert bundling. Useful for capturing raw data to process later.
+- **Normal flow**: renders all output artifacts into a temporary directory (snapshot JSON, Containerfile, reports, config tree), bundles subscription certificates (unless suppressed), and packages the result.
 
 ### Output Modes
 
@@ -844,18 +844,18 @@ HOSTNAME-YYYYMMDD-HHMMSS/
 ├── kickstart-suggestion.ks     # suggested kickstart snippet for deploy-time settings
 ├── report.html                # interactive HTML report (open in browser)
 ├── inspection-snapshot.json   # raw inspector output, for re-rendering
-├── entitlement/               # RHEL entitlement .pem files (if bundled)
+├── entitlement/               # RHEL subscription .pem files (if bundled)
 └── rhsm/                     # RHSM config tree (if bundled)
 ```
 
-### Entitlement Certificate Bundling
+### Subscription Certificate Bundling
 
-RHEL hosts require subscription entitlement certificates to install packages from `registry.redhat.io` base images. `bundle_entitlement_certs()` in `entitlement.py` copies these into the tarball so the Containerfile can be built on any host:
+RHEL hosts require subscription certificates to install packages from `registry.redhat.io` base images. `bundle_subscription_certs()` in `subscription.py` copies these into the tarball so the Containerfile can be built on any host:
 
-- `.pem` files from `{host_root}/etc/pki/entitlement/` are copied to `entitlement/` in the output.
+- `.pem` files from `{host_root}/etc/pki/entitlement/` (Red Hat's path) are copied to `entitlement/` in the output.
 - The entire `{host_root}/etc/rhsm/` tree is copied to `rhsm/` in the output.
 - Both steps silently skip if the source paths don't exist (non-RHEL hosts, or hosts without active subscriptions).
-- Bundling is skipped in `--from-snapshot` mode (the host filesystem isn't mounted) and when `--no-entitlement` is passed.
+- Bundling is skipped in `--from-snapshot` mode (the host filesystem isn't mounted) and when `--no-subscription` is passed.
 
 When building the Containerfile, `yoinkc-build` searches for certificates in a priority cascade: bundled in the yoinkc output (placed there by this step) → host-local (`/etc/pki/entitlement`) → `./entitlement/` in the current directory → the `YOINKC_ENTITLEMENT` environment variable. Found certificates are bind-mounted into the build container transparently. Certificate expiry is validated via `openssl x509 -checkend` so the operator gets a clear warning before a build fails due to stale credentials.
 

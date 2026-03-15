@@ -1,6 +1,6 @@
 """
 Pipeline orchestrator: run inspectors (or load snapshot), redact, optionally
-bundle entitlement certs, then produce a tarball or write to a directory.
+bundle subscription certs, then produce a tarball or write to a directory.
 """
 
 import json
@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable, Optional
 
-from .entitlement import bundle_entitlement_certs
+from .subscription import bundle_subscription_certs
 from .packaging import create_tarball, get_output_stamp
 from .redact import redact_snapshot
 from .schema import InspectionSnapshot, SCHEMA_VERSION
@@ -45,7 +45,7 @@ def run_pipeline(
     inspect_only: bool = False,
     output_file: Optional[Path] = None,
     output_dir: Optional[Path] = None,
-    no_entitlement: bool = False,
+    no_subscription: bool = False,
     cwd: Optional[Path] = None,
 ) -> InspectionSnapshot:
     """Run the yoinkc pipeline.
@@ -80,10 +80,10 @@ def run_pipeline(
         save_snapshot(snapshot, tmp_dir / "inspection-snapshot.json")
         run_renderers(snapshot, tmp_dir)
 
-        # Bundle entitlement certs (skip in --from-snapshot mode where
+        # Bundle subscription certs (skip in --from-snapshot mode where
         # host filesystem may not be mounted)
-        if not no_entitlement and from_snapshot_path is None:
-            bundle_entitlement_certs(host_root, tmp_dir)
+        if not no_subscription and from_snapshot_path is None:
+            bundle_subscription_certs(host_root, tmp_dir)
 
         # Output: tarball or directory
         if output_dir is not None:

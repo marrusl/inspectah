@@ -16,7 +16,7 @@ def test_defaults():
     assert args.host_root == Path("/host")
     assert args.output_file is None
     assert args.output_dir is None
-    assert args.no_entitlement is False
+    assert args.no_subscription is False
     assert args.from_snapshot is None
     assert args.inspect_only is False
     assert args.baseline_packages is None
@@ -71,9 +71,9 @@ def test_output_file_and_output_dir_mutually_exclusive():
         parse_args(["-o", "/tmp/out.tar.gz", "--output-dir", "/tmp/outdir"])
 
 
-def test_no_entitlement_flag():
-    args = parse_args(["--no-entitlement"])
-    assert args.no_entitlement is True
+def test_no_subscription_flag():
+    args = parse_args(["--no-subscription"])
+    assert args.no_subscription is True
 
 
 def test_validate_requires_output_dir():

@@ -90,7 +90,7 @@ def main(argv: Optional[list] = None) -> int:
             inspect_only=args.inspect_only,
             output_file=args.output_file,
             output_dir=args.output_dir,
-            no_entitlement=args.no_entitlement,
+            no_subscription=args.no_subscription,
         )
         # --validate and --push-to-github require --output-dir (enforced by CLI)
         if args.output_dir and not args.inspect_only:

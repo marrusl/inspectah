@@ -10,7 +10,7 @@ Run yoinkc on any supported host. The wrapper script installs podman if needed, 
 curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
 ```
 
-That's it. The tarball (e.g. `webserver01-20260312-143000.tar.gz`) contains everything: Containerfile, config tree, reports, snapshot, and RHEL entitlement certs (if present). Pass it to `yoinkc-refine` for interactive editing or `yoinkc-build` to build the image.
+That's it. The tarball (e.g. `webserver01-20260312-143000.tar.gz`) contains everything: Containerfile, config tree, reports, snapshot, and RHEL subscription certs (if present). Pass it to `yoinkc-refine` for interactive editing or `yoinkc-build` to build the image.
 
 All yoinkc flags pass through the wrapper:
 
@@ -43,7 +43,7 @@ A core design principle is **baseline subtraction**: wherever possible, the tool
 Three companion tools complete the workflow:
 
 - **`yoinkc-refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live. See [Interactive refinement](#interactive-refinement).
-- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL entitlement handling for building on non-RHEL hosts. See [Building the image](#building-the-image).
+- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling for building on non-RHEL hosts. See [Building the image](#building-the-image).
 - **`yoinkc-fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations. See [Fleet analysis](#fleet-analysis).
 
 ---
@@ -116,8 +116,8 @@ yoinkc --inspect-only
 # Render from existing snapshot
 yoinkc --from-snapshot ./inspection-snapshot.json
 
-# Skip bundling RHEL entitlement certs (e.g. when sharing publicly)
-yoinkc --no-entitlement
+# Skip bundling RHEL subscription certs (e.g. when sharing publicly)
+yoinkc --no-subscription
 ```
 
 ---
@@ -282,14 +282,14 @@ The server runs entirely locally. It extracts the tarball into a temporary direc
 
 ## Building the image
 
-`yoinkc-build` wraps `podman build` (or `docker build`) with automatic RHEL entitlement handling and image tagging. Point it at a yoinkc tarball or output directory:
+`yoinkc-build` wraps `podman build` (or `docker build`) with automatic RHEL subscription cert handling and image tagging. Point it at a yoinkc tarball or output directory:
 
 ```bash
 ./yoinkc-build hostname-20260312-143000.tar.gz my-bootc-image:latest
 ./yoinkc-build ./output-dir/ my-bootc-image:v1.0
 ```
 
-For RHEL base images (`registry.redhat.io`), it searches for subscription certificates in this order: bundled in the yoinkc output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, entitlement is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
+For RHEL base images (`registry.redhat.io`), it searches for subscription certificates in this order: bundled in the yoinkc output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, cert access is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
 
 Push directly after building:
 
@@ -360,7 +360,7 @@ yoinkc-fleet aggregate ./web-servers/ --output-dir ./fleet-output/
 | `--host-root PATH` | Root path for host inspection (default: `/host`) |
 | `-o FILE` | Write tarball to FILE (default: `HOSTNAME-TIMESTAMP.tar.gz` in current directory) |
 | `--output-dir DIR` | Write files to a directory instead of producing a tarball. Mutually exclusive with `-o`. |
-| `--no-entitlement` | Skip bundling RHEL entitlement certs into the output |
+| `--no-subscription` | Skip bundling RHEL subscription certs into the output |
 | `--from-snapshot PATH` | Skip inspection; load snapshot from file and run renderers only. Mutually exclusive with `--inspect-only`. |
 | `--inspect-only` | Run inspectors and save snapshot to current directory; do not run renderers. Mutually exclusive with `--from-snapshot`. |
 

@@ -35,9 +35,9 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Write files to a directory instead of producing a tarball",
     )
     parser.add_argument(
-        "--no-entitlement",
+        "--no-subscription",
         action="store_true",
-        help="Skip bundling RHEL entitlement certs into the output",
+        help="Skip bundling RHEL subscription certs into the output",
     )
 
     # Snapshot load/save

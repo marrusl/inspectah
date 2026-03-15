@@ -111,8 +111,8 @@ def test_inspect_only_saves_snapshot_to_cwd():
         renderer.assert_not_called()
 
 
-def test_entitlement_bundling_in_tarball(tmp_path):
-    """Entitlement certs from host_root are included in tarball."""
+def test_subscription_bundling_in_tarball(tmp_path):
+    """Subscription certs from host_root are included in tarball."""
     host_root = tmp_path / "host"
     ent_dir = host_root / "etc" / "pki" / "entitlement"
     ent_dir.mkdir(parents=True)
@@ -130,8 +130,8 @@ def test_entitlement_bundling_in_tarball(tmp_path):
         assert len(cert_entries) == 1
 
 
-def test_no_entitlement_skips_bundling(tmp_path):
-    """--no-entitlement suppresses cert bundling."""
+def test_no_subscription_skips_bundling(tmp_path):
+    """--no-subscription suppresses cert bundling."""
     host_root = tmp_path / "host"
     ent_dir = host_root / "etc" / "pki" / "entitlement"
     ent_dir.mkdir(parents=True)
@@ -143,15 +143,15 @@ def test_no_entitlement_skips_bundling(tmp_path):
         run_inspectors=lambda hr: _make_snapshot(),
         run_renderers=_tracking_renderer([]),
         output_file=tarball_path,
-        no_entitlement=True,
+        no_subscription=True,
     )
     with tarfile.open(tarball_path, "r:gz") as tf:
         cert_entries = [n for n in tf.getnames() if "entitlement" in n]
         assert len(cert_entries) == 0
 
 
-def test_from_snapshot_skips_entitlement_bundling(tmp_path):
-    """--from-snapshot mode silently skips entitlement bundling (host may not be mounted)."""
+def test_from_snapshot_skips_subscription_bundling(tmp_path):
+    """--from-snapshot mode silently skips subscription bundling (host may not be mounted)."""
     snapshot = _make_snapshot()
     snap_path = tmp_path / "snap.json"
     save_snapshot(snapshot, snap_path)

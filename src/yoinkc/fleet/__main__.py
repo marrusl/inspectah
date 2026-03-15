@@ -71,7 +71,7 @@ def main(argv: Optional[list[str]] = None, cwd: Optional[Path] = None) -> int:
             inspect_only=False,
             output_file=args.output,
             output_dir=args.output_dir,
-            no_entitlement=True,
+            no_subscription=True,
             cwd=cwd,
         )
     finally:

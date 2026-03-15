@@ -1,15 +1,15 @@
-"""Tests for entitlement cert detection and bundling."""
+"""Tests for subscription cert detection and bundling."""
 
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from yoinkc.entitlement import bundle_entitlement_certs
+from yoinkc.subscription import bundle_subscription_certs
 
 
 def _make_host_root_with_certs(root: Path) -> None:
-    """Create a fake host root with entitlement certs and rhsm config."""
+    """Create a fake host root with subscription certs and rhsm config."""
     ent_dir = root / "etc" / "pki" / "entitlement"
     ent_dir.mkdir(parents=True)
     (ent_dir / "123456.pem").write_text("cert-data")
@@ -20,14 +20,14 @@ def _make_host_root_with_certs(root: Path) -> None:
 
 
 def test_bundles_certs_when_present():
-    """Entitlement certs and rhsm dir are copied to output."""
+    """Subscription certs and rhsm dir are copied to output."""
     with tempfile.TemporaryDirectory() as tmp:
         host_root = Path(tmp) / "host"
         output_dir = Path(tmp) / "output"
         output_dir.mkdir()
         _make_host_root_with_certs(host_root)
 
-        bundle_entitlement_certs(host_root, output_dir)
+        bundle_subscription_certs(host_root, output_dir)
 
         assert (output_dir / "entitlement" / "123456.pem").read_text() == "cert-data"
         assert (output_dir / "entitlement" / "123456-key.pem").read_text() == "key-data"
@@ -35,14 +35,14 @@ def test_bundles_certs_when_present():
 
 
 def test_skips_silently_when_no_certs():
-    """No error or output when entitlement certs do not exist."""
+    """No error or output when subscription certs do not exist."""
     with tempfile.TemporaryDirectory() as tmp:
         host_root = Path(tmp) / "host"
         host_root.mkdir()
         output_dir = Path(tmp) / "output"
         output_dir.mkdir()
 
-        bundle_entitlement_certs(host_root, output_dir)
+        bundle_subscription_certs(host_root, output_dir)
 
         assert not (output_dir / "entitlement").exists()
         assert not (output_dir / "rhsm").exists()
@@ -55,13 +55,13 @@ def test_skips_silently_when_host_root_missing():
         output_dir = Path(tmp) / "output"
         output_dir.mkdir()
 
-        bundle_entitlement_certs(host_root, output_dir)
+        bundle_subscription_certs(host_root, output_dir)
 
         assert not (output_dir / "entitlement").exists()
 
 
 def test_copies_only_pem_files():
-    """Only .pem files from the entitlement dir are copied, not other files."""
+    """Only .pem files from the subscription dir are copied, not other files."""
     with tempfile.TemporaryDirectory() as tmp:
         host_root = Path(tmp) / "host"
         ent_dir = host_root / "etc" / "pki" / "entitlement"
@@ -71,14 +71,14 @@ def test_copies_only_pem_files():
         output_dir = Path(tmp) / "output"
         output_dir.mkdir()
 
-        bundle_entitlement_certs(host_root, output_dir)
+        bundle_subscription_certs(host_root, output_dir)
 
         assert (output_dir / "entitlement" / "cert.pem").exists()
         assert not (output_dir / "entitlement" / "README").exists()
 
 
-def test_bundles_rhsm_without_entitlement():
-    """rhsm dir is bundled even if entitlement certs are absent."""
+def test_bundles_rhsm_without_subscription_certs():
+    """rhsm dir is bundled even if subscription certs are absent."""
     with tempfile.TemporaryDirectory() as tmp:
         host_root = Path(tmp) / "host"
         rhsm_dir = host_root / "etc" / "rhsm"
@@ -87,7 +87,7 @@ def test_bundles_rhsm_without_entitlement():
         output_dir = Path(tmp) / "output"
         output_dir.mkdir()
 
-        bundle_entitlement_certs(host_root, output_dir)
+        bundle_subscription_certs(host_root, output_dir)
 
         assert not (output_dir / "entitlement").exists()
         assert (output_dir / "rhsm" / "rhsm.conf").exists()
