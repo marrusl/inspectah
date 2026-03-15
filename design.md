@@ -101,6 +101,18 @@ In this mode, the Containerfile includes all installed packages rather than just
 
 The primary baseline is always the target bootc base image.
 
+### `/var` Handling
+
+bootc's contract is that `/var` content from the image is written to disk at initial bootstrap, but is **never updated by subsequent image deployments**. It becomes fully mutable state from that point forward. This means you *can* seed `/var` with initial directory structures and default data in the image, but anything that lives there is the operator's responsibility to manage, back up, and migrate going forward — bootc won't touch it again.
+
+This has practical implications for the tool's output:
+
+- `tmpfiles.d` snippets are generated to create expected directory structures (these run on every boot and are the right mechanism for ensuring directories exist).
+- Small, static seed data (e.g., default config databases) *can* be included in the image and will land in `/var` on first install, but this is flagged with a `# NOTE: only deployed on initial bootstrap, not updated by bootc` comment.
+- Application databases, runtime state, and log directories with significant data are **not** embedded. These appear in the audit report's "Data Migration Plan" section with explicit notes that they need a separate migration strategy.
+
+This is called out prominently in the audit report's "Data Migration Plan" section, comments in the Containerfile, and the README's deployment instructions.
+
 ## 3. CLI Reference
 
 Two entry points are registered in `pyproject.toml`:
@@ -306,7 +318,7 @@ Fleet-aggregated snapshots carry additional metadata at two levels:
 
 The source code (`schema.py`) is the authoritative reference for individual field names and types.
 
-### Inspector Modules
+## 5. Inspectors
 
 #### RPM Inspector
 
@@ -590,7 +602,7 @@ Produces `report.html`, a single self-contained HTML file (inline CSS/JS, no ext
 - Embedded PatternFly 6 CSS (read from `templates/patternfly.css` and inlined)
 - Embedded snapshot JSON (for the interactive refine UI)
 
-**Template architecture.** The `report.html.j2` template is 2,556 lines — a known complexity hotspot (see Future Work). It uses PatternFly 6 CSS for the component library and adds custom overrides for report-specific styling. The layout uses PF6's page structure: a sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
+**Template architecture.** The `report.html.j2` template is 2,556 lines — a known complexity hotspot (see Tech Debt). It uses PatternFly 6 CSS for the component library and adds custom overrides for report-specific styling. The layout uses PF6's page structure: a sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
 
 **Fleet-aware rendering.** The template conditionally renders fleet-specific elements when `fleet_meta` is present in the context: a fleet banner showing host count and prevalence threshold, prevalence color bars (blue/gold/red) on individual items, fraction/percentage toggle, host list popovers, and content variant grouping for config files, quadlet units, and service drop-ins.
 
@@ -940,36 +952,36 @@ Pushing to GitHub means network egress from a container with read access to the 
 3. **Redaction verification**: The push step re-scans the entire output tree for known secret patterns as a second pass. If anything is found that the first pass missed, the push is aborted with an error.
 4. **Private repo default**: If creating a new repo, it defaults to private. Creating a public repo requires `--public` flag.
 
-## The `/var` Handling — Explicitly Documented
+## 10. Future Work & Backlog
 
-bootc's contract is that `/var` content from the image is written to disk at initial bootstrap, but is **never updated by subsequent image deployments**. It becomes fully mutable state from that point forward. This means you *can* seed `/var` with initial directory structures and default data in the image, but anything that lives there is the operator's responsibility to manage, back up, and migrate going forward — bootc won't touch it again.
+### High Priority
 
-This has practical implications for the tool's output:
+**Cross-stream targeting.** The spec at `docs/specs/proposed/2026-03-13-cross-stream-targeting-design.md` is paused at "propose approaches" with 6 open questions. Most impactful unbuilt feature — unlocks RHEL 9→10 upgrades, CentOS→RHEL lateral moves, Fedora→CentOS targeting. Infrastructure partially ready: `baseline.py` has OS→image mapping, schema has `os_release` metadata.
 
-- `tmpfiles.d` snippets are generated to create expected directory structures (these run on every boot and are the right mechanism for ensuring directories exist).
-- Small, static seed data (e.g., default config databases) *can* be included in the image and will land in `/var` on first install, but this is flagged with a `# NOTE: only deployed on initial bootstrap, not updated by bootc` comment.
-- Application databases, runtime state, and log directories with significant data are **not** embedded. These appear in the audit report's "Data Migration Plan" section with explicit notes that they need a separate migration strategy.
+**CI integration.** GitHub Actions workflow: driftify → yoinkc → validate output on CentOS Stream 9, 10, and Fedora. Catches regressions unit tests can't.
 
-This is called out prominently in:
+**Containerless re-rendering.** `yoinkc-render` entry point: takes snapshot JSON, produces artifacts using only Python. Rendering pipeline is already pure Python — mostly CLI/packaging exercise.
 
-1. The audit report's "Data Migration Plan" section
-2. Comments in the Containerfile
-3. The README's deployment instructions
+### Medium Priority
 
-## Future Work
+**Fleet drift variations.** True within-profile variation in driftify for more realistic fleet test data.
 
-The following are out of scope for the POC and v1 but represent the natural evolution of the tool:
+**Enhanced cron-to-timer conversion.** `MAILTO` → journal notifications, `@reboot` handling, environment variable preservation.
 
-**In-place migration.** The logical endpoint is a mode where the tool doesn't just generate artifacts — it applies them. The operational model is: run the tool against one representative host from a pool of identically-configured machines, generate and refine the Containerfile, build the image, then deploy that single image across the fleet via `bootc install-to-filesystem` or `system-reinstall-bootc`. The tool does not need to run against every host — that would produce a separate image per host, which defeats the purpose of image-based management. One image per role, deployed to many hosts, is the bootc model. Host-specific configuration (hostname, network, credentials) is applied at deploy time via kickstart or provisioning tooling. This is deliberately excluded from v1 because the tool's current value proposition is *safe and read-only* — it never touches the source system, which is what makes it trustworthy enough to run against production. The in-place migration mode should only be built once the read-only tool has been used across enough real systems to establish confidence in the accuracy of the generated Containerfiles.
+**/var size estimation.** Use `du` via executor instead of Python file iteration.
 
-**Fleet analysis mode.** For environments where hosts in the same role have drifted from each other over time, a mode that ingests multiple snapshots from the same nominal role, identifies the common base, and highlights per-host deviations. This helps operators decide which host is the most representative to use as the source for the golden image, and flags hosts that have diverged in ways that need reconciliation before fleet-wide deployment.
+### Lower Priority
 
-**Snapshot diffing and drift detection.** The structured inspection snapshot is independently valuable beyond migration. Diffing snapshots across hosts or across time enables configuration drift detection, compliance auditing, and fleet-wide inventory. A stable, well-documented snapshot schema is the foundation for this.
+**In-place migration.** Run yoinkc on one host, refine, apply across fleet.
 
-**Distribution support.** RHEL 9, RHEL 10, CentOS Stream 9, CentOS Stream 10, and Fedora are supported. Future distro additions (e.g., RHEL 11) require only adding entries to the data-driven mapping tables in `baseline.py`.
+**Snapshot diffing.** Compare snapshots across hosts or time for compliance auditing.
 
-**Enhanced cron-to-timer conversion.** Deeper semantic analysis of cron jobs to handle edge cases: `MAILTO` conversion to systemd journal notifications, `@reboot` entries mapped to oneshot services, `%` character handling, and environment variable inheritance differences.
+**Cross-family migration.** Ubuntu/Debian → RPM bootc. Separate project.
 
-**Lightweight local re-rendering.** A Python-only Containerfile regeneration path in `yoinkc-refine` that does not require a container runtime. Currently, re-rendering from a modified snapshot requires podman or docker to run a fresh yoinkc container. A pure-Python renderer invocation would allow tarball-only workflows on machines where no container runtime is available.
+### Tech Debt
 
-**`/var` size estimation improvement.** The storage inspector currently estimates directory sizes via Python-level file iteration, which is slow for large trees. Using `du` via the executor would be significantly faster and avoid Python-level I/O overhead.
+**`containerfile.py` (1,293 lines).** Split by section similar to inspector structure.
+
+**`report.html.j2` (2,556 lines).** Split into Jinja2 include partials.
+
+**Large test files.** `test_renderer_outputs.py` (1,764), `test_plan_items.py` (1,463), `test_inspectors.py` (1,208). Split by component.
