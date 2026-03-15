@@ -1,6 +1,41 @@
 # Tool Design: yoinkc
 
-## Runtime Model
+## 1. Overview & Principles
+
+yoinkc inspects package-based RHEL, CentOS Stream, and Fedora hosts and produces bootc migration artifacts: a Containerfile, a config tree mirroring operator-modified files, human-readable reports (markdown audit report, interactive HTML report, secrets review), and a structured JSON inspection snapshot that preserves every finding for re-rendering and fleet aggregation.
+
+**Baseline subtraction.** The tool's output should represent operator intent, not system state. Wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the Containerfile and reports. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there. Items that reflect hardware-specific or host-specific state (autoloaded kernel modules, DHCP interfaces) are flagged as deploy-time concerns rather than baked into the image.
+
+**Pipeline concept.** The tool follows a three-phase pipeline: **inspect** (inspectors query the host and produce structured data), **schema** (findings are merged into an `InspectionSnapshot` Pydantic model), and **render** (renderers consume the snapshot and produce output artifacts). This separation means you can re-render from a saved snapshot without re-running against the host, and you can test renderers in isolation.
+
+**Companion tools.** Three companion entry points complete the workflow:
+
+- **`yoinkc-refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
+- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL entitlement handling for building on non-RHEL hosts.
+- **`yoinkc-fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
+
+## 2. Architecture
+
+### Module Map
+
+The tool is structured as a pipeline orchestrated by `pipeline.py`:
+
+```
+__main__.py  →  pipeline.run_pipeline()
+                    ├── inspectors.run_all(host_root) → InspectionSnapshot
+                    │     └── 11 inspector modules, each populating a section
+                    ├── redact_snapshot(snapshot)
+                    ├── renderers.run_all(snapshot, output_dir)
+                    │     └── 6 renderers: containerfile, audit_report,
+                    │        html_report, readme, kickstart, secrets_review
+                    └── create_tarball() or copy to output_dir
+```
+
+`__main__.py` parses CLI arguments, runs preflight privilege checks, then calls `run_pipeline()` with two callables: `run_inspectors` (wrapping `inspectors.run_all()` with CLI args) and `run_renderers` (wrapping `renderers.run_all()`). The pipeline either runs inspectors or loads a previously saved snapshot (`--from-snapshot`), applies secret redaction, renders output, bundles RHEL entitlement certs if present, and packages the result as a tarball or directory.
+
+The central data structure is `InspectionSnapshot` (defined in `schema.py`), a Pydantic model with typed fields for each inspection category. Every inspector populates its section of the snapshot; every renderer reads the complete snapshot. The snapshot is serialized to `inspection-snapshot.json` in the output, enabling offline re-rendering and fleet aggregation.
+
+### Runtime Model
 
 A container run with `--pid=host --privileged --security-opt label=disable -v /:/host:ro` that inspects the host via `/host` and produces a hostname-stamped tarball. The user's current directory is mounted at `/output` (`-w /output -v $(pwd):/output`) so the tarball lands directly where the user ran the command. The container is a packaging convenience — the tool needs full read access to the host filesystem, so SELinux label enforcement is disabled. No `:z` volume flag — `--security-opt label=disable` makes it unnecessary, and relabeling the user's CWD would risk corrupting host SELinux contexts.
 
@@ -14,11 +49,57 @@ The default output is a tarball (`HOSTNAME-YYYYMMDD-HHMMSS.tar.gz`) containing t
 
 The tool itself ships as a container: `ghcr.io/marrusl/yoinkc:latest`.
 
-## Architecture
+### Executor
 
-The tool is structured as a pipeline of **inspectors** that each produce structured JSON, fed into **renderers** that produce the output artifacts. That separation is important — it means you can re-render from a saved inspection snapshot without re-running against the host, and you can test renderers in isolation.
+Inspectors never call `subprocess` directly. All command execution goes through the `Executor` protocol (`executor.py`), which defines a callable taking a command list and optional `cwd`, returning a `RunResult` (stdout, stderr, returncode).
 
-**Baseline subtraction.** The tool's output should represent operator intent, not system state. Wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the Containerfile and reports. This principle applies across all inspectors: packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there. Items that reflect hardware-specific or host-specific state (autoloaded kernel modules, DHCP interfaces) are flagged as deploy-time concerns rather than baked into the image.
+The default implementation, `subprocess_executor`, runs commands via `subprocess.run` with a 300-second timeout, capturing stdout and stderr. `make_executor(host_root)` creates an executor pre-configured with `host_root` as the default working directory.
+
+This abstraction exists primarily for testability: test suites inject fixture-based executors that return canned output instead of running real commands, allowing inspectors to be tested without a live host or container privileges.
+
+### Baseline Generation
+
+The tool generates its package baseline by querying the target bootc base image directly. This answers the exact question the Containerfile needs to express: "what packages do I need to add to the base image to reproduce this system?"
+
+**How it works:**
+
+1. **Detect host identity.** Read `/host/etc/os-release` to determine distribution (RHEL, CentOS Stream, Fedora) and version.
+2. **Select the target base image.** Map the detected host to the corresponding bootc base image:
+   - RHEL 9.x → `registry.redhat.io/rhel9/rhel-bootc:{version}` (clamped to 9.6 minimum)
+   - RHEL 10.x → `registry.redhat.io/rhel10/rhel-bootc:{version}`
+   - CentOS Stream 9 → `quay.io/centos-bootc/centos-bootc:stream9`
+   - CentOS Stream 10 → `quay.io/centos-bootc/centos-bootc:stream10`
+   - Fedora → `quay.io/fedora/fedora-bootc:{major}` (clamped to 41 minimum)
+3. **Verify registry credentials.** For `registry.redhat.io` images, run `podman login --get-login` via nsenter to verify the host has valid credentials before attempting the pull. On failure, emit an actionable error instructing the operator to run `sudo podman login registry.redhat.io` or provide `--baseline-packages FILE`. This prevents cryptic pull failures and gives a clear fix.
+4. **Query the base image package list.** Run `podman run --rm --cgroups=disabled <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete set of packages in the base image. Since the tool runs inside a container, it uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces (this is why `--pid=host` and `--privileged` are required on the outer container). `--cgroups=disabled` avoids cgroup permission issues in the nsenter context. This is the authoritative baseline — it's the actual content of the image the Containerfile's `FROM` line references.
+5. **Diff against host.** Compare the host's installed package names against the base image's package list. Packages on the host but not in the base image are "added" (go into `dnf install`). Packages in the base image but not on the host are "base-image-only" — they will be present after migration. These are noted in the audit report as "new from base image."
+6. **Cache in the snapshot.** The base image package list is stored in `inspection-snapshot.json` so re-renders via `--from-snapshot` don't need to pull the image again.
+
+**Source/target version separation:** The source host version can differ from the target image version. `--target-version` overrides the auto-detected version (e.g., migrating a RHEL 9.4 host to a 9.6 image), and `--target-image` overrides the base image reference entirely (useful for custom base images or testing). Cross-major migrations (e.g., RHEL 9 host → RHEL 10 image) produce a warning since package sets may differ significantly. RHEL images require `podman login registry.redhat.io` on the host before running the tool.
+
+**Why this is better than comps XML:**
+
+- **No dependency resolution needed.** Both sides are concrete package lists from real RPM databases. No comps XML parsing, no group resolution, no transitive dependency graphs.
+- **No profile detection needed.** The baseline is the base image, not the install profile. It doesn't matter whether the host was originally installed as `@minimal` or `@server` — what matters is what's in the target image.
+- **Directly answers the Containerfile question.** The diff produces exactly the `dnf install` list the Containerfile needs.
+- **Always accurate.** The base image IS the baseline, by definition. No drift between a manifest and reality.
+- **Works offline.** If the base image is already pulled (which it must be to build the Containerfile anyway), no network access is required for the baseline query.
+
+**Service baseline:** Systemd preset files from the base image establish which services are enabled or disabled by default. These are queried from the same `podman run` or extracted from the image filesystem.
+
+**Fallback:**
+
+If the base image cannot be pulled or queried (air-gapped without a pre-pulled image, registry auth failure), the tool degrades gracefully:
+
+```
+WARNING: Could not query base image package list.
+No baseline available — all installed packages will be included in the Containerfile.
+To reduce image size, pull the base image first or provide a package list via --baseline-packages.
+```
+
+In this mode, the Containerfile includes all installed packages rather than just the delta. The tool still performs all other inspection — config files, services, containers, non-RPM software, etc. — so it remains useful even without a baseline. The `--baseline-packages` flag accepts a path to a newline-separated list of package names for environments where `podman run` isn't available but the package list can be obtained by other means.
+
+The primary baseline is always the target bootc base image.
 
 ### Inspector Modules
 
@@ -235,50 +316,6 @@ Default assignment: service → `sysusers`, human → `kickstart`, ambiguous →
 SSH authorized keys are never embedded in the image — they always appear as a `# FIXME: provision SSH keys via cloud-init, kickstart, or identity provider` comment. Baking SSH keys into an image is an anti-pattern for fleet management.
 
 The generated README includes an opinionated strategy guide explaining the trade-offs between provisioning approaches.
-
-### Baseline Generation
-
-The tool generates its package baseline by querying the target bootc base image directly. This answers the exact question the Containerfile needs to express: "what packages do I need to add to the base image to reproduce this system?"
-
-**How it works:**
-
-1. **Detect host identity.** Read `/host/etc/os-release` to determine distribution (RHEL, CentOS Stream, Fedora) and version.
-2. **Select the target base image.** Map the detected host to the corresponding bootc base image:
-   - RHEL 9.x → `registry.redhat.io/rhel9/rhel-bootc:{version}` (clamped to 9.6 minimum)
-   - RHEL 10.x → `registry.redhat.io/rhel10/rhel-bootc:{version}`
-   - CentOS Stream 9 → `quay.io/centos-bootc/centos-bootc:stream9`
-   - CentOS Stream 10 → `quay.io/centos-bootc/centos-bootc:stream10`
-   - Fedora → `quay.io/fedora/fedora-bootc:{major}` (clamped to 41 minimum)
-3. **Verify registry credentials.** For `registry.redhat.io` images, run `podman login --get-login` via nsenter to verify the host has valid credentials before attempting the pull. On failure, emit an actionable error instructing the operator to run `sudo podman login registry.redhat.io` or provide `--baseline-packages FILE`. This prevents cryptic pull failures and gives a clear fix.
-4. **Query the base image package list.** Run `podman run --rm --cgroups=disabled <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete set of packages in the base image. Since the tool runs inside a container, it uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces (this is why `--pid=host` and `--privileged` are required on the outer container). `--cgroups=disabled` avoids cgroup permission issues in the nsenter context. This is the authoritative baseline — it's the actual content of the image the Containerfile's `FROM` line references.
-5. **Diff against host.** Compare the host's installed package names against the base image's package list. Packages on the host but not in the base image are "added" (go into `dnf install`). Packages in the base image but not on the host are "base-image-only" — they will be present after migration. These are noted in the audit report as "new from base image."
-6. **Cache in the snapshot.** The base image package list is stored in `inspection-snapshot.json` so re-renders via `--from-snapshot` don't need to pull the image again.
-
-**Source/target version separation:** The source host version can differ from the target image version. `--target-version` overrides the auto-detected version (e.g., migrating a RHEL 9.4 host to a 9.6 image), and `--target-image` overrides the base image reference entirely (useful for custom base images or testing). Cross-major migrations (e.g., RHEL 9 host → RHEL 10 image) produce a warning since package sets may differ significantly. RHEL images require `podman login registry.redhat.io` on the host before running the tool.
-
-**Why this is better than comps XML:**
-
-- **No dependency resolution needed.** Both sides are concrete package lists from real RPM databases. No comps XML parsing, no group resolution, no transitive dependency graphs.
-- **No profile detection needed.** The baseline is the base image, not the install profile. It doesn't matter whether the host was originally installed as `@minimal` or `@server` — what matters is what's in the target image.
-- **Directly answers the Containerfile question.** The diff produces exactly the `dnf install` list the Containerfile needs.
-- **Always accurate.** The base image IS the baseline, by definition. No drift between a manifest and reality.
-- **Works offline.** If the base image is already pulled (which it must be to build the Containerfile anyway), no network access is required for the baseline query.
-
-**Service baseline:** Systemd preset files from the base image establish which services are enabled or disabled by default. These are queried from the same `podman run` or extracted from the image filesystem.
-
-**Fallback:**
-
-If the base image cannot be pulled or queried (air-gapped without a pre-pulled image, registry auth failure), the tool degrades gracefully:
-
-```
-WARNING: Could not query base image package list.
-No baseline available — all installed packages will be included in the Containerfile.
-To reduce image size, pull the base image first or provide a package list via --baseline-packages.
-```
-
-In this mode, the Containerfile includes all installed packages rather than just the delta. The tool still performs all other inspection — config files, services, containers, non-RPM software, etc. — so it remains useful even without a baseline. The `--baseline-packages` flag accepts a path to a newline-separated list of package names for environments where `podman run` isn't available but the package list can be obtained by other means.
-
-The primary baseline is always the target bootc base image.
 
 ## Secret Handling
 
