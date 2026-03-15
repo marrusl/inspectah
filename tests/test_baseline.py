@@ -198,7 +198,7 @@ def test_get_baseline_with_file():
     )
     assert no_baseline is False
     assert names is not None
-    assert "bash" in names
+    assert any(p.name == "bash" for p in names.values())
     assert base_image == "quay.io/centos-bootc/centos-bootc:stream9"
 
 
@@ -220,7 +220,7 @@ def test_get_baseline_no_executor_no_file():
 def test_resolver_with_podman(_mock_userns):
     """Resolver queries podman when probe succeeds."""
     host_root = FIXTURES / "host_etc"
-    pkg_list = (FIXTURES / "base_image_packages.txt").read_text()
+    pkg_list = (FIXTURES / "base_image_packages_nevra.txt").read_text()
 
     def podman_handler(cmd):
         if "rpm" in cmd:
@@ -233,8 +233,8 @@ def test_resolver_with_podman(_mock_userns):
     )
     assert no_baseline is False
     assert names is not None
-    assert "bash" in names
-    assert "glibc" in names
+    assert any(p.name == "bash" for p in names.values())
+    assert any(p.name == "glibc" for p in names.values())
 
 
 @patch.object(baseline_mod, "in_user_namespace", return_value=False)
@@ -325,7 +325,7 @@ def test_resolve_target_image_with_file():
     assert no_baseline is False
     assert image == "my-registry.example.com/custom:latest"
     assert names is not None
-    assert "bash" in names
+    assert any(p.name == "bash" for p in names.values())
 
 
 def test_resolve_target_image_no_executor():
@@ -343,7 +343,7 @@ def test_resolve_target_image_no_executor():
 @patch.object(baseline_mod, "in_user_namespace", return_value=False)
 def test_resolve_target_image_with_executor(_mock_userns):
     """resolve() with --target-image and an executor queries podman."""
-    pkg_list = (FIXTURES / "base_image_packages.txt").read_text()
+    pkg_list = (FIXTURES / "base_image_packages_nevra.txt").read_text()
 
     def podman_handler(cmd):
         if "rpm" in cmd:
@@ -358,7 +358,7 @@ def test_resolve_target_image_with_executor(_mock_userns):
     assert no_baseline is False
     assert image == "quay.io/centos-bootc/centos-bootc:stream9"
     assert names is not None
-    assert "bash" in names
+    assert any(p.name == "bash" for p in names.values())
 
 
 def test_resolve_delegates_to_get_baseline_packages():
@@ -370,7 +370,7 @@ def test_resolve_delegates_to_get_baseline_packages():
     )
     assert no_baseline is False
     assert base_image == "quay.io/centos-bootc/centos-bootc:stream9"
-    assert "bash" in names
+    assert any(p.name == "bash" for p in names.values())
 
 
 # ---------------------------------------------------------------------------

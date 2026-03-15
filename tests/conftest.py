@@ -73,7 +73,7 @@ def _make_executor(pkg_list: Optional[str] = None):
 
 
 def _build_snapshot(with_baseline: bool):
-    pkg_list = (FIXTURES / "base_image_packages.txt").read_text() if with_baseline else None
+    pkg_list = (FIXTURES / "base_image_packages_nevra.txt").read_text() if with_baseline else None
     with patch.object(preflight_mod, "in_user_namespace", return_value=False):
         snapshot = run_all_inspectors(
             FIXTURES / "host_etc",
@@ -115,7 +115,7 @@ def _fixture_executor(cmd, cwd=None):
     if "podman" in cmd and "image" in cmd and "exists" in cmd:
         return RunResult(stdout="", stderr="", returncode=0)
     if "podman" in cmd and "rpm" in cmd and "-qa" in cmd:
-        return RunResult(stdout=(FIXTURES / "base_image_packages.txt").read_text(), stderr="", returncode=0)
+        return RunResult(stdout=(FIXTURES / "base_image_packages_nevra.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-qa" in cmd:
         return RunResult(stdout=(FIXTURES / "rpm_qa_output.txt").read_text(), stderr="", returncode=0)
     if "rpm" in cmd and "-Va" in cmd:

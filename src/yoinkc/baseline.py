@@ -402,10 +402,10 @@ class BaselineResolver:
         baseline_packages_file: Optional[Path] = None,
         target_version: Optional[str] = None,
         target_image: Optional[str] = None,
-    ) -> Tuple[Optional[Set[str]], Optional[str], bool]:
+    ) -> Tuple[Optional[Dict[str, PackageEntry]], Optional[str], bool]:
         """Resolve the full baseline, handling both ``--target-image`` and auto-detection.
 
-        Returns ``(package_names, base_image_ref, no_baseline)``.
+        Returns ``(baseline_packages, base_image_ref, no_baseline)``.
         """
         if target_image:
             if baseline_packages_file:
@@ -429,10 +429,10 @@ class BaselineResolver:
         version_id: str,
         baseline_packages_file: Optional[Path] = None,
         target_version: Optional[str] = None,
-    ) -> Tuple[Optional[Set[str]], Optional[str], bool]:
+    ) -> Tuple[Optional[Dict[str, PackageEntry]], Optional[str], bool]:
         """Resolve the baseline package set.
 
-        Returns ``(package_names, base_image_ref, no_baseline)``.
+        Returns ``(baseline_packages, base_image_ref, no_baseline)``.
 
         Strategy (in priority order):
         1. ``--baseline-packages FILE`` — load from file (air-gapped).

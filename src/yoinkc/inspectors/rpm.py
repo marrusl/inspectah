@@ -6,7 +6,7 @@ Baseline is the target bootc base image package list (or --baseline-packages fil
 import os
 import re
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from .._util import debug as _debug_fn, make_warning, run_rpm_query as _util_run_rpm_query, _RPM_LOCK_DEFINE as _UTIL_RPM_LOCK_DEFINE
 
@@ -676,7 +676,7 @@ def run(
     resolver: Optional[BaselineResolver] = None,
     target_version: Optional[str] = None,
     target_image: Optional[str] = None,
-    preflight_baseline: Optional[Tuple[Optional[Set[str]], Optional[str], bool]] = None,
+    preflight_baseline: Optional[Tuple[Optional[Dict[str, "PackageEntry"]], Optional[str], bool]] = None,
 ) -> RpmSection:
     """Run RPM inspection.
 
@@ -709,7 +709,7 @@ def run(
         installed = []
 
     # 2) Baseline from base image (or file, or fallback)
-    baseline_names: Optional[Set[str]] = None
+    baseline_packages: Optional[Dict[str, "PackageEntry"]] = None
     section.no_baseline = False
 
     if preflight_baseline is not None:
@@ -717,9 +717,9 @@ def run(
         section.base_image = base_image
         if no_baseline:
             section.no_baseline = True
-            baseline_names = set()
+            baseline_packages = {}
         else:
-            baseline_names = baseline_set
+            baseline_packages = baseline_set
     else:
         id_val, version_id = _read_os_id_version(host_root)
         if id_val and version_id:
@@ -743,46 +743,91 @@ def run(
                 section.base_image = base_image
             if no_baseline:
                 section.no_baseline = True
-                baseline_names = set()
+                baseline_packages = {}
             else:
-                baseline_names = baseline_set
+                baseline_packages = baseline_set
         else:
             section.no_baseline = True
-            baseline_names = set()
+            baseline_packages = {}
 
     if installed:
         installed_names = {p.name for p in installed}
         _debug(f"installed package count: {len(installed_names)}")
-        # Exclude tool prerequisites installed by run-yoinkc.sh so they don't
-        # appear in the migration output or the generated Containerfile.
         _prereq_exclude: Set[str] = set()
         _prereq_raw = os.environ.get("YOINKC_EXCLUDE_PREREQS", "").split()
         if _prereq_raw:
             _prereq_exclude = set(_prereq_raw)
             _debug(f"YOINKC_EXCLUDE_PREREQS: will exclude tool prerequisites: {sorted(_prereq_exclude)}")
-        if baseline_names is not None and not section.no_baseline:
-            added_names = installed_names - baseline_names
+        if baseline_packages is not None and not section.no_baseline:
+            baseline_name_set = {p.name for p in baseline_packages.values()}
+            added_names = installed_names - baseline_name_set
             if _prereq_exclude:
                 _excluded = added_names & _prereq_exclude
                 if _excluded:
                     _debug(f"excluded tool prerequisites from added set: {sorted(_excluded)}")
                     added_names -= _excluded
-            base_only_names = baseline_names - installed_names
-            matched_names = installed_names & baseline_names
-            _debug(f"baseline has {len(baseline_names)} names, "
+            base_only_names = baseline_name_set - installed_names
+            matched_names = installed_names & baseline_name_set
+            _debug(f"baseline has {len(baseline_name_set)} names, "
                    f"installed has {len(installed_names)} names")
             _debug(f"matched={len(matched_names)}, "
                    f"added (installed-baseline, after prereq exclusion)={len(added_names)}, "
                    f"base-image-only (baseline-installed)={len(base_only_names)}")
-            section.baseline_package_names = sorted(baseline_names)
+            section.baseline_package_names = sorted(baseline_name_set)
             for p in installed:
                 if p.name in added_names:
                     p.state = PackageState.ADDED
                     section.packages_added.append(p)
+
+            # Populate base_image_only with full NEVRA from baseline when available
+            baseline_by_name: dict = {}
+            for bp in baseline_packages.values():
+                if bp.name not in baseline_by_name:
+                    baseline_by_name[bp.name] = bp
             for name in sorted(base_only_names):
-                section.base_image_only.append(
-                    PackageEntry(name=name, epoch="0", version="", release="", arch="noarch", state=PackageState.BASE_IMAGE_ONLY)
-                )
+                bio_pkg = baseline_by_name.get(name)
+                if bio_pkg and bio_pkg.version:
+                    section.base_image_only.append(
+                        PackageEntry(name=bio_pkg.name, epoch=bio_pkg.epoch,
+                                     version=bio_pkg.version, release=bio_pkg.release,
+                                     arch=bio_pkg.arch, state=PackageState.BASE_IMAGE_ONLY)
+                    )
+                else:
+                    section.base_image_only.append(
+                        PackageEntry(name=name, epoch="0", version="", release="",
+                                     arch="noarch", state=PackageState.BASE_IMAGE_ONLY)
+                    )
+
+            # Version comparison for matched packages (only with NEVRA baseline)
+            _has_nevra = any(p.version for p in baseline_packages.values())
+            if _has_nevra:
+                from ..schema import VersionChange, VersionChangeDirection
+                installed_by_key = {f"{p.name}.{p.arch}": p for p in installed}
+                matched_keys = installed_by_key.keys() & baseline_packages.keys()
+                for key in sorted(matched_keys):
+                    host_pkg = installed_by_key[key]
+                    base_pkg = baseline_packages[key]
+                    cmp = _compare_evr(host_pkg, base_pkg)
+                    if cmp != 0:
+                        direction = (VersionChangeDirection.DOWNGRADE if cmp > 0
+                                     else VersionChangeDirection.UPGRADE)
+                        section.version_changes.append(VersionChange(
+                            name=host_pkg.name,
+                            arch=host_pkg.arch,
+                            host_version=f"{host_pkg.version}-{host_pkg.release}",
+                            base_version=f"{base_pkg.version}-{base_pkg.release}",
+                            host_epoch=host_pkg.epoch,
+                            base_epoch=base_pkg.epoch,
+                            direction=direction,
+                        ))
+                if section.version_changes:
+                    n_down = sum(1 for vc in section.version_changes
+                                 if vc.direction == VersionChangeDirection.DOWNGRADE)
+                    n_up = len(section.version_changes) - n_down
+                    _debug(f"version changes: {n_down} downgrades, {n_up} upgrades")
+                    section.version_changes.sort(
+                        key=lambda vc: (0 if vc.direction == VersionChangeDirection.DOWNGRADE else 1, vc.name)
+                    )
         else:
             section.baseline_package_names = None
             for p in installed:
