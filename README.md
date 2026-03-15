@@ -130,6 +130,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 
 - Full package inventory via `rpm -qa` with epoch/version/release/arch
 - Baseline from the target **bootc base image** — queries the image directly via `podman run` to get its package list, then diffs against installed packages to identify what the operator added
+- **Version drift detection**: compares package versions between host and base image. Downgrades (host has newer version that would be reverted) are flagged as warnings; upgrades (base image is newer) are noted as informational. Gracefully skipped when using names-only baseline files.
 - Leaf/auto classification: `dnf repoquery --userinstalled` identifies packages the operator explicitly installed vs those pulled in as dependencies. Only leaf packages appear in the Containerfile's `dnf install` line. Falls back to dependency graph analysis (`dnf repoquery --recursive` or `rpm -qR`) when `--userinstalled` is unavailable. This is more accurate than pure graph-based classification — it correctly handles packages like `git` that the operator installed but which other added packages also depend on.
 - Source repo tracking per package via `dnf repoquery --installed`, with repo-grouped display in the HTML report and audit report
 - GPG key handling: parses `gpgkey=file:///...` from repo files (including INI-style continuation lines), resolves `$releasever` and `$basearch` variables, and COPYs key files into the image before `dnf install`
@@ -229,8 +230,8 @@ hostname-20260312-143000.tar.gz
 └── hostname-20260312-143000/
     ├── Containerfile                 # Layered image definition (cache-optimized layer order)
     ├── README.md                     # Build/deploy commands, FIXME checklist
-    ├── audit-report.md               # Detailed findings with storage migration plan
-    ├── report.html                   # Self-contained interactive HTML dashboard
+    ├── audit-report.md               # Detailed findings with storage migration plan, version drift summary
+    ├── report.html                   # Self-contained interactive HTML dashboard with Version Changes table
     ├── secrets-review.md             # Redacted sensitive content for operator review
     ├── kickstart-suggestion.ks       # Deploy-time config (conditional)
     ├── inspection-snapshot.json      # Raw structured data (re-renderable via --from-snapshot)

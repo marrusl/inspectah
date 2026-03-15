@@ -71,7 +71,7 @@ The tool generates its package baseline by querying the target bootc base image 
    - CentOS Stream 10 → `quay.io/centos-bootc/centos-bootc:stream10`
    - Fedora → `quay.io/fedora/fedora-bootc:{major}` (clamped to 41 minimum)
 3. **Verify registry credentials.** For `registry.redhat.io` images, run `podman login --get-login` via nsenter to verify the host has valid credentials before attempting the pull. On failure, emit an actionable error instructing the operator to run `sudo podman login registry.redhat.io` or provide `--baseline-packages FILE`. This prevents cryptic pull failures and gives a clear fix.
-4. **Query the base image package list.** Run `podman run --rm --cgroups=disabled <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete set of packages in the base image. Since the tool runs inside a container, it uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces (this is why `--pid=host` and `--privileged` are required on the outer container). `--cgroups=disabled` avoids cgroup permission issues in the nsenter context. This is the authoritative baseline — it's the actual content of the image the Containerfile's `FROM` line references.
+4. **Query the base image package list.** Run `podman run --rm --cgroups=disabled <base-image> rpm -qa --queryformat '%{NAME}\n'` to get the concrete set of packages in the base image. Since the tool runs inside a container, it uses `nsenter -t 1 -m -u -i -n` to execute `podman` in the host's namespaces (this is why `--pid=host` and `--privileged` are required on the outer container). `--cgroups=disabled` is passed because the query runs inside an already-containerized environment (via nsenter): cgroup v2 delegation is typically unavailable in the outer container's cgroup namespace, and the short-lived `rpm -qa` command needs no resource limits or cgroup tracking. `query_packages()` now captures full NEVRA (`epoch:name-version-release.arch`) and returns `Dict[str, PackageEntry]` keyed by `name.arch` for multi-arch correctness. `load_baseline_packages_file()` auto-detects NEVRA vs names-only format; when names-only baseline files are used, version comparison is gracefully skipped. This is the authoritative baseline — it's the actual content of the image the Containerfile's `FROM` line references.
 5. **Diff against host.** Compare the host's installed package names against the base image's package list. Packages on the host but not in the base image are "added" (go into `dnf install`). Packages in the base image but not on the host are "base-image-only" — they will be present after migration. These are noted in the audit report as "new from base image."
 6. **Cache in the snapshot.** The base image package list is stored in `inspection-snapshot.json` so re-renders via `--from-snapshot` don't need to pull the image again.
 
@@ -288,7 +288,7 @@ The schema (`schema.py`) is the contract between inspectors and renderers. Inspe
 
 ### Schema Versioning
 
-The `SCHEMA_VERSION` integer constant (currently **6**) is embedded in every serialized snapshot. When `pipeline.py:load_snapshot()` deserializes a snapshot, it compares the file's `schema_version` against the running code's `SCHEMA_VERSION`. A mismatch raises a `ValueError` with a clear message instructing the user to re-run the inspection. This prevents silent data corruption when the schema evolves — old snapshots cannot be loaded by new code or vice versa.
+The `SCHEMA_VERSION` integer constant (currently **7**) is embedded in every serialized snapshot. When `pipeline.py:load_snapshot()` deserializes a snapshot, it compares the file's `schema_version` against the running code's `SCHEMA_VERSION`. A mismatch raises a `ValueError` with a clear message instructing the user to re-run the inspection. This prevents silent data corruption when the schema evolves — old snapshots cannot be loaded by new code or vice versa.
 
 ### Model Hierarchy
 
@@ -298,9 +298,9 @@ All models use **Pydantic v2** `BaseModel`, giving automatic validation on const
 
 2. **Section models — one per inspector.** `RpmSection`, `ConfigSection`, `ServiceSection`, `NetworkSection`, `StorageSection`, `ScheduledTaskSection`, `ContainerSection`, `NonRpmSoftwareSection`, `KernelBootSection`, `SelinuxSection`, `UserGroupSection`. Each section contains lists of item models and any inspector-specific metadata (e.g., `RpmSection.baseline_package_names`, `RpmSection.leaf_packages`).
 
-3. **Item models — the individual findings.** `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, `ComposeFile`, and others. Many item models carry an `include: bool` field that controls whether the item appears in the Containerfile (toggled by the interactive refine UI or fleet merge).
+3. **Item models — the individual findings.** `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, `ComposeFile`, `VersionChange`, and others. Many item models carry an `include: bool` field that controls whether the item appears in the Containerfile (toggled by the interactive refine UI or fleet merge).
 
-Two enums define controlled vocabularies: `PackageState` (`added`, `base_image_only`, `modified`) and `ConfigFileKind` (`rpm_owned_modified`, `unowned`, `orphaned`).
+Three enums define controlled vocabularies: `PackageState` (`added`, `base_image_only`, `modified`), `ConfigFileKind` (`rpm_owned_modified`, `unowned`, `orphaned`), and `VersionChangeDirection` (`upgrade`, `downgrade`).
 
 ### Key Design Choices
 
@@ -323,6 +323,8 @@ The source code (`schema.py`) is the authoritative reference for individual fiel
 #### RPM Inspector
 
 `rpm -qa --queryformat` to get the full package list with epoch/version/release/arch, then diff against the package set from the target bootc base image (see [Baseline Generation](#baseline-generation)). Identifies: added packages (present on host but not in base image), base-image-only packages (present in base image but not on host — will be present after migration, shown as "new from base image"), and modified package configs via `rpm -Va`.
+
+**Version drift detection.** For packages present in both the host and the base image, the inspector compares epoch:version-release using a pure-Python implementation of RPM's `rpmvercmp` algorithm (tilde pre-release and caret post-release markers supported). Packages where the host has a newer version than the base image are flagged as **downgrades** (regression risk — the base image would silently revert to the older version). Packages where the base image is newer are flagged as **upgrades** (usually benign). Results are stored in `RpmSection.version_changes` as `VersionChange` entries. Downgrades generate a warning for the warnings panel. When the baseline comes from a `--baseline-packages` file in names-only format (no NEVRA data), version comparison is gracefully skipped.
 
 Also captures repo definitions from `/host/etc/yum.repos.d/` and `/host/etc/dnf/`. GPG key files referenced by `gpgkey=file:///...` in repo configs are parsed and collected — the parser handles comma-separated URLs, INI-style continuation lines (indented lines following `gpgkey=`), and variable substitution (`$releasever`, `$releasever_major`, `$basearch` resolved from os-release and platform). `https://` URLs are skipped since dnf fetches those at build time. Collected key files are written to the config tree and COPYed into the image before `dnf install` so that package signature verification succeeds.
 
@@ -585,7 +587,7 @@ Each section has comments explaining what was detected and why it was included. 
 Produces `audit-report.md`, a markdown document for version control and quick terminal reference. Organized as:
 
 1. **Executive Summary**: triage breakdown (automatic / FIXME / manual), counts of packages, configs, containers, redactions.
-2. **Per-section findings**: RPM analysis, service state changes, configuration changes, network configuration, storage migration plan, scheduled tasks, container workloads, non-RPM software, kernel/boot, SELinux, users/groups — each rendered only when the corresponding snapshot section is non-`None`.
+2. **Per-section findings**: RPM analysis (including version drift summary — downgrades with warning prefix, upgrades as informational — when version changes exist), service state changes, configuration changes, network configuration, storage migration plan, scheduled tasks, container workloads, non-RPM software, kernel/boot, SELinux, users/groups — each rendered only when the corresponding snapshot section is non-`None`.
 3. **Data Migration Plan**: `/var` analysis with mount points mapped to recommended approaches (PVC, volume mount, tmpfiles.d).
 4. **Environment-specific considerations**: advisory subsections rendered only when relevant (custom alternatives, raw nftables, complex network topologies, identity provider integration, NTP/chrony, rsyslog forwarding).
 5. **Items requiring manual intervention**: consolidated list from all inspectors.
@@ -601,10 +603,11 @@ Produces `report.html`, a single self-contained HTML file (inline CSS/JS, no ext
 - Config file diffs (pre-rendered HTML with syntax highlighting)
 - Container mount/network summaries
 - Fleet variant grouping (for fleet-aggregated snapshots)
+- Repo-grouped dependency tree entries with version display
 - Embedded PatternFly 6 CSS (read from `templates/patternfly.css` and inlined)
 - Embedded snapshot JSON (for the interactive refine UI)
 
-**Template architecture.** `report.html.j2` is a ~66-line skeleton of Jinja2 `{% include %}` directives; the content lives in 23 partials under `templates/report/`. Macros (`section`, `fleet_cell`, `data_table`) are defined in `_macros.html.j2` and imported via `{% from ... import ... with context %}` in each partial that needs them. CSS and JS each have their own partial (`_css.html.j2`, `_js.html.j2`). Content sections map one-to-one to partials — packages, services, config, non-RPM software, containers, users/groups, scheduled jobs, kernel/boot, SELinux, secrets, network, storage, warnings, and audit report. The rendered output is unchanged: a single self-contained HTML file. The template uses PatternFly 6 CSS with custom overrides, and PF6's page structure: sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
+**Template architecture.** `report.html.j2` is a ~66-line skeleton of Jinja2 `{% include %}` directives; the content lives in 23 partials under `templates/report/`. Macros (`section`, `fleet_cell`, `data_table`) are defined in `_macros.html.j2` and imported via `{% from ... import ... with context %}` in each partial that needs them. CSS and JS each have their own partial (`_css.html.j2`, `_js.html.j2`). Content sections map one-to-one to partials — packages, services, config, non-RPM software, containers, users/groups, scheduled jobs, kernel/boot, SELinux, secrets, network, storage, warnings, and audit report. The packages partial includes an optional "Version Changes" subsection with PF6 color-coded labels (red for downgrades, blue for upgrades), shown only when `version_changes` is non-empty. The rendered output is unchanged: a single self-contained HTML file. The template uses PatternFly 6 CSS with custom overrides, and PF6's page structure: sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
 
 **Fleet-aware rendering.** The template conditionally renders fleet-specific elements when `fleet_meta` is present in the context: a fleet banner showing host count and prevalence threshold, prevalence color bars (blue/gold/red) on individual items, fraction/percentage toggle, host list popovers, and content variant grouping for config files, quadlet units, and service drop-ins.
 
@@ -965,6 +968,8 @@ Pushing to GitHub means network egress from a container with read access to the 
 **Containerless re-rendering.** `yoinkc-render` entry point: takes snapshot JSON, produces artifacts using only Python. Rendering pipeline is already pure Python — mostly CLI/packaging exercise.
 
 ### Medium Priority
+
+**Fleet-aware version comparison.** `VersionChange` does not currently carry a `fleet` field — version drift is per-host only. Fleet merge could aggregate version changes across hosts, showing which downgrades affect the entire fleet vs individual outliers.
 
 **Fleet drift variations.** True within-profile variation in driftify for more realistic fleet test data.
 
