@@ -557,9 +557,11 @@ Order matters: the Containerfile renderer runs first because subsequent renderer
 
 `run_all()` creates a single `Environment` with `FileSystemLoader` pointing to `src/yoinkc/templates/` and `autoescape=True`. This environment is passed to every renderer. The HTML report renderer adds a custom `fleet_color` filter for fleet prevalence color bars. If a renderer is called directly (e.g., in tests) without a loader, it sets one up from the package's templates directory.
 
-### Containerfile Renderer (`containerfile.py`)
+### Containerfile Renderer (`renderers/containerfile/`)
 
 Produces two outputs: the `Containerfile` itself and a `config/` directory tree containing all files referenced by `COPY` directives.
+
+The renderer is a package of 14 modules. `_core.py` is the orchestrator — it calls domain modules in layer order and assembles their output. Each domain module exports a `section_lines(snapshot, ...) -> list[str]` function, making sections independently testable. Shared utilities live in `_helpers.py`; config-tree file-writing lives in `_config_tree.py`. Domain modules mirror the inspectors structure: `packages.py`, `services.py`, `config.py`, `scheduled_tasks.py`, `non_rpm_software.py`, `containers.py`, `users_groups.py`, `kernel_boot.py`, `selinux.py`, `network.py` (firewall + NM). `__init__.py` re-exports `render()` for a stable public interface.
 
 **Layer ordering.** The Containerfile is structured in a deliberate layer order to maximize cache efficiency — layers that change infrequently appear first so that rebuilds after minor config changes don't invalidate the package installation layer:
 
@@ -576,7 +578,7 @@ Each section has comments explaining what was detected and why it was included. 
 
 **Firewall handling.** Firewall zone XML files and direct rules are written to the config tree and included in the consolidated `COPY config/etc/ /etc/` block. The Containerfile section for firewall is comments-only, referencing the audit report for `firewall-offline-cmd` equivalents per zone.
 
-**Config tree.** `_write_config_tree()` writes all captured config files, repo files, GPG keys, firewall zone XMLs, systemd timer units, quadlet units, sysusers drop-ins, SELinux modules, and tuned profiles to `output_dir/config/`, preserving the original path hierarchy so that `COPY config/etc/ /etc/` places everything correctly.
+**Config tree.** `write_config_tree()` (in `_config_tree.py`) writes all captured config files, repo files, GPG keys, firewall zone XMLs, systemd timer units, quadlet units, sysusers drop-ins, SELinux modules, and tuned profiles to `output_dir/config/`, preserving the original path hierarchy so that `COPY config/etc/ /etc/` places everything correctly.
 
 ### Audit Report Renderer (`audit_report.py`)
 
@@ -602,7 +604,7 @@ Produces `report.html`, a single self-contained HTML file (inline CSS/JS, no ext
 - Embedded PatternFly 6 CSS (read from `templates/patternfly.css` and inlined)
 - Embedded snapshot JSON (for the interactive refine UI)
 
-**Template architecture.** The `report.html.j2` template is 2,556 lines — a known complexity hotspot (see Tech Debt). It uses PatternFly 6 CSS for the component library and adds custom overrides for report-specific styling. The layout uses PF6's page structure: a sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
+**Template architecture.** `report.html.j2` is a ~66-line skeleton of Jinja2 `{% include %}` directives; the content lives in 23 partials under `templates/report/`. Macros (`section`, `fleet_cell`, `data_table`) are defined in `_macros.html.j2` and imported via `{% from ... import ... with context %}` in each partial that needs them. CSS and JS each have their own partial (`_css.html.j2`, `_js.html.j2`). Content sections map one-to-one to partials — packages, services, config, non-RPM software, containers, users/groups, scheduled jobs, kernel/boot, SELinux, secrets, network, storage, warnings, and audit report. The rendered output is unchanged: a single self-contained HTML file. The template uses PatternFly 6 CSS with custom overrides, and PF6's page structure: sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
 
 **Fleet-aware rendering.** The template conditionally renders fleet-specific elements when `fleet_meta` is present in the context: a fleet banner showing host count and prevalence threshold, prevalence color bars (blue/gold/red) on individual items, fraction/percentage toggle, host list popovers, and content variant grouping for config files, quadlet units, and service drop-ins.
 
@@ -980,8 +982,4 @@ Pushing to GitHub means network egress from a container with read access to the 
 
 ### Tech Debt
 
-**`containerfile.py` (1,293 lines).** Split by section similar to inspector structure.
-
-**`report.html.j2` (2,556 lines).** Split into Jinja2 include partials.
-
-**Large test files.** `test_renderer_outputs.py` (1,764), `test_plan_items.py` (1,463), `test_inspectors.py` (1,208). Split by component.
+All identified tech debt items have been addressed: `containerfile.py` was split into the `renderers/containerfile/` package (14 modules), `report.html.j2` was split into 23 include partials under `templates/report/`, and the three large test files were split into 13 focused files plus a shared `conftest.py`.
