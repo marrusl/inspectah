@@ -440,6 +440,32 @@
     enterEditMode();
   };
 
+  // --- Re-render from editor ---
+  var reRenderBtn = document.getElementById('btn-re-render');
+  if (reRenderBtn) {
+    reRenderBtn.addEventListener('click', function() {
+      editorSaveAll();
+      reRenderBtn.textContent = 'Re-rendering\u2026';
+      reRenderBtn.disabled = true;
+      fetch(window.location.origin + '/api/re-render', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({snapshot: snapshot, original: originalSnapshot}),
+      }).then(function(r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      }).then(function(html) {
+        document.open();
+        document.write(html);
+        document.close();
+      }).catch(function(err) {
+        reRenderBtn.textContent = 'Re-render (failed)';
+        reRenderBtn.disabled = false;
+        alert('Re-render failed: ' + err.message);
+      });
+    });
+  }
+
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's' && editorState.editMode) {
       e.preventDefault();

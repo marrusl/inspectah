@@ -117,3 +117,12 @@ class TestEditorTab:
         """Drop-in service dropdown populated from snapshot."""
         html = _render(refine_mode=True, with_content=True)
         assert 'nf-dropin-service' in html
+
+    def test_rerender_button_in_refine_mode(self):
+        html = _render(refine_mode=True)
+        assert 'id="btn-re-render"' in html
+        assert 'editor-changed-count' in html
+
+    def test_no_editor_rerender_button_in_static_mode(self):
+        html = _render(refine_mode=False)
+        assert 'id="btn-re-render"' not in html
