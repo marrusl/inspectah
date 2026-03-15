@@ -1,0 +1,267 @@
+{% if refine_mode %}
+<script>
+(function() {
+  var editorState = {
+    currentFile: null,
+    cmView: null,
+    editMode: false,
+    dirtyFiles: new Map(),
+    savedFiles: new Set(),
+  };
+
+  function buildTree() {
+    var treeEl = document.getElementById('editor-tree-list');
+    if (!treeEl) return;
+    treeEl.innerHTML = '';
+
+    var sections = [
+      {section: 'config', list: 'files', label: 'config'},
+      {section: 'containers', list: 'quadlet_units', label: 'quadlet'},
+      {section: 'services', list: 'drop_ins', label: 'drop-ins'},
+    ];
+
+    sections.forEach(function(sec) {
+      var items = snapshot[sec.section] && snapshot[sec.section][sec.list];
+      if (!items || items.length === 0) return;
+
+      var folder = document.createElement('div');
+      folder.className = 'editor-tree-dir';
+      folder.textContent = '\u25BE ' + sec.label + '/';
+      folder.style.cssText = 'font-weight:600; padding:6px 0; cursor:pointer;';
+      treeEl.appendChild(folder);
+
+      items.forEach(function(item, idx) {
+        var entry = document.createElement('div');
+        entry.className = 'editor-tree-file';
+        entry.style.cssText = 'padding:6px 8px 6px 24px; display:flex; align-items:center; justify-content:space-between; cursor:pointer; border-radius:4px;';
+        entry.dataset.section = sec.section;
+        entry.dataset.list = sec.list;
+        entry.dataset.index = idx;
+        entry.dataset.path = item.path;
+
+        var nameSpan = document.createElement('span');
+        nameSpan.textContent = item.path.split('/').pop();
+        nameSpan.title = item.path;
+        entry.appendChild(nameSpan);
+
+        var labelSpan = document.createElement('span');
+        labelSpan.className = 'editor-state-label';
+        entry.appendChild(labelSpan);
+
+        entry.addEventListener('click', function() {
+          selectFile(sec.section, sec.list, idx, item.path);
+        });
+
+        treeEl.appendChild(entry);
+      });
+    });
+  }
+
+  function selectFile(section, list, index, path) {
+    if (editorState.editMode && editorState.currentFile && editorState.dirtyFiles.has(editorState.currentFile.path)) {
+      if (!confirm('You have unsaved changes. Discard them?')) return;
+      editorState.dirtyFiles.delete(editorState.currentFile.path);
+    }
+
+    editorState.currentFile = {section: section, list: list, index: index, path: path};
+    editorState.editMode = false;
+
+    document.querySelectorAll('.editor-tree-file').forEach(function(el) {
+      el.style.background = '';
+    });
+    var sel = 'div.editor-tree-file[data-section="' + section + '"][data-list="' + list + '"][data-index="' + index + '"]';
+    var activeEntry = document.querySelector(sel);
+    if (activeEntry) activeEntry.style.background = 'var(--pf-t--global--background--color--primary--hover)';
+
+    var content = snapshot[section][list][index].content || '';
+    var readonlyEl = document.getElementById('editor-readonly-content');
+    var cmContainer = document.getElementById('editor-cm-container');
+    if (readonlyEl) { readonlyEl.textContent = content; readonlyEl.style.display = ''; }
+    if (cmContainer) cmContainer.style.display = 'none';
+
+    var pathEl = document.getElementById('editor-file-path');
+    if (pathEl) {
+      var dir = path.substring(0, path.lastIndexOf('/') + 1);
+      var name = path.split('/').pop();
+      pathEl.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">' + escapeHtml(dir) + '</span>' +
+                         '<strong>' + escapeHtml(name) + '</strong>' +
+                         ' <span class="pf-v6-c-label pf-m-compact" style="font-size:12px;">read-only</span>';
+    }
+
+    var actionsEl = document.getElementById('editor-actions');
+    if (actionsEl) actionsEl.innerHTML = '<button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-edit">Edit</button>';
+    var editBtn = document.getElementById('btn-edit');
+    if (editBtn) editBtn.addEventListener('click', enterEditMode);
+
+    updateStateLabels();
+  }
+
+  function enterEditMode() {
+    if (!editorState.currentFile) return;
+    editorState.editMode = true;
+
+    var f = editorState.currentFile;
+    var content = editorState.dirtyFiles.has(f.path)
+      ? editorState.dirtyFiles.get(f.path)
+      : (snapshot[f.section][f.list][f.index].content || '');
+
+    var readonlyEl = document.getElementById('editor-readonly-content');
+    var cmContainer = document.getElementById('editor-cm-container');
+    if (readonlyEl) readonlyEl.style.display = 'none';
+    if (cmContainer) { cmContainer.style.display = ''; cmContainer.innerHTML = ''; }
+
+    if (window.CMEditor && cmContainer) {
+      editorState.cmView = CMEditor.create(cmContainer, content);
+    } else if (cmContainer) {
+      var ta = document.createElement('textarea');
+      ta.value = content;
+      ta.style.cssText = 'width:100%; height:100%; font-family:var(--pf-t--global--font--family--mono); font-size:14px; border:none; resize:none; padding:8px;';
+      ta.id = 'editor-textarea-fallback';
+      cmContainer.appendChild(ta);
+    }
+
+    updateEditToolbar();
+  }
+
+  function updateEditToolbar() {
+    var f = editorState.currentFile;
+    if (!f) return;
+
+    var pathEl = document.getElementById('editor-file-path');
+    if (pathEl) {
+      var dir = f.path.substring(0, f.path.lastIndexOf('/') + 1);
+      var name = f.path.split('/').pop();
+      var label = getStateLabel(f.path);
+      pathEl.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">' + escapeHtml(dir) + '</span>' +
+                         '<strong>' + escapeHtml(name) + '</strong>' +
+                         (label ? ' ' + label : '');
+    }
+
+    var actionsEl = document.getElementById('editor-actions');
+    if (!actionsEl) return;
+    var created = isOperatorCreated(f.path);
+    actionsEl.innerHTML =
+      (created ? '<button class="pf-v6-c-button pf-m-danger pf-m-small" id="btn-delete" style="margin-right:8px;">Delete</button>' : '') +
+      '<button class="pf-v6-c-button pf-m-secondary pf-m-small" id="btn-revert">Revert</button> ' +
+      '<button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-save">Save</button>';
+
+    var saveBtn = document.getElementById('btn-save');
+    if (saveBtn) saveBtn.addEventListener('click', editorSave);
+    var revertBtn = document.getElementById('btn-revert');
+    if (revertBtn) revertBtn.addEventListener('click', editorRevert);
+    var deleteBtn = document.getElementById('btn-delete');
+    if (deleteBtn) deleteBtn.addEventListener('click', editorDeleteFile);
+  }
+
+  function editorSave() {
+    var f = editorState.currentFile;
+    if (!f) return;
+    var content = getEditorContent();
+    snapshot[f.section][f.list][f.index].content = content;
+    editorState.dirtyFiles.delete(f.path);
+    editorState.savedFiles.add(f.path);
+    updateEditToolbar();
+    updateStateLabels();
+    updateChangedCount();
+  }
+
+  function editorRevert() {
+    var f = editorState.currentFile;
+    if (!f) return;
+    var origItems = (originalSnapshot[f.section] && originalSnapshot[f.section][f.list]) || [];
+    var origItem = origItems.find(function(item) { return item.path === f.path; });
+    var origContent = origItem ? (origItem.content || '') : '';
+
+    snapshot[f.section][f.list][f.index].content = origContent;
+    editorState.dirtyFiles.delete(f.path);
+    editorState.savedFiles.add(f.path);
+
+    if (window.CMEditor && editorState.cmView) {
+      CMEditor.setContent(editorState.cmView, origContent);
+    } else {
+      var ta = document.getElementById('editor-textarea-fallback');
+      if (ta) ta.value = origContent;
+    }
+    updateEditToolbar();
+    updateStateLabels();
+    updateChangedCount();
+  }
+
+  function editorDeleteFile() {
+    var f = editorState.currentFile;
+    if (!f) return;
+    if (!confirm('Delete ' + f.path + '?')) return;
+    snapshot[f.section][f.list].splice(f.index, 1);
+    editorState.dirtyFiles.delete(f.path);
+    editorState.savedFiles.delete(f.path);
+    editorState.currentFile = null;
+    editorState.editMode = false;
+    buildTree();
+    var readonlyEl = document.getElementById('editor-readonly-content');
+    var cmContainer = document.getElementById('editor-cm-container');
+    if (readonlyEl) { readonlyEl.textContent = ''; readonlyEl.style.display = ''; }
+    if (cmContainer) cmContainer.style.display = 'none';
+    var pathEl = document.getElementById('editor-file-path');
+    if (pathEl) pathEl.innerHTML = '';
+    var actionsEl = document.getElementById('editor-actions');
+    if (actionsEl) actionsEl.innerHTML = '';
+    updateChangedCount();
+  }
+
+  function escapeHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function getEditorContent() {
+    if (editorState.cmView && window.CMEditor) {
+      return CMEditor.getContent(editorState.cmView);
+    }
+    var ta = document.getElementById('editor-textarea-fallback');
+    return ta ? ta.value : '';
+  }
+
+  function isOperatorCreated(path) {
+    var checks = [
+      {section: 'config', list: 'files'},
+      {section: 'containers', list: 'quadlet_units'},
+      {section: 'services', list: 'drop_ins'},
+    ];
+    for (var i = 0; i < checks.length; i++) {
+      var c = checks[i];
+      var origItems = (originalSnapshot[c.section] && originalSnapshot[c.section][c.list]) || [];
+      if (origItems.some(function(item) { return item.path === path; })) return false;
+    }
+    return true;
+  }
+
+  function getStateLabel(path) {
+    if (editorState.dirtyFiles.has(path)) {
+      return '<span class="pf-v6-c-label pf-m-compact" style="background:var(--pf-t--global--danger--color--100); color:var(--pf-t--global--danger--color--200); font-size:12px;">unsaved</span>';
+    }
+    if (editorState.savedFiles.has(path)) {
+      return '<span class="pf-v6-c-label pf-m-compact" style="background:var(--pf-t--global--info--color--100); color:var(--pf-t--global--info--color--200); font-size:12px;">not rendered</span>';
+    }
+    return '';
+  }
+
+  function updateStateLabels() {
+    document.querySelectorAll('.editor-tree-file').forEach(function(el) {
+      var path = el.dataset.path;
+      var labelEl = el.querySelector('.editor-state-label');
+      if (labelEl) labelEl.innerHTML = getStateLabel(path);
+    });
+  }
+
+  function updateChangedCount() {
+    var countEl = document.getElementById('editor-changed-count');
+    if (countEl) countEl.textContent = editorState.savedFiles.size;
+  }
+
+  if (typeof refineMode !== 'undefined' && refineMode) {
+    buildTree();
+  }
+})();
+</script>
+{% endif %}

@@ -62,6 +62,9 @@
 
 {% include "report/_toolbar.html.j2" -%}
 {% if refine_mode and codemirror_js %}
+{# Safe to inline: the CM6 bundle contains no </script> sequences.
+   Unlike snapshot_json, we cannot apply </→<\/ escaping to arbitrary JS
+   (it would break regex/string literals). Verified at bundle build time. #}
 <script>{{ codemirror_js }}</script>
 {% endif %}
 {% include "report/_js.html.j2" -%}

@@ -38,3 +38,19 @@ class TestEditorTab:
     def test_static_mode_sidebar_says_file_browser(self):
         html = _render(refine_mode=False)
         assert 'File browser</a>' in html
+
+    def test_editor_tree_built_from_snapshot(self):
+        """Editor tree JS builds file entries from snapshot sections."""
+        html = _render(refine_mode=True)
+        assert 'buildTree' in html
+        assert "section: 'config'" in html or 'section: "config"' in html
+
+    def test_editor_has_codemirror(self):
+        """Refine mode embeds the CM6 bundle inline."""
+        html = _render(refine_mode=True)
+        assert 'CMEditor' in html
+
+    def test_static_mode_no_codemirror(self):
+        """Static mode does not include the CM6 bundle."""
+        html = _render(refine_mode=False)
+        assert 'CMEditor' not in html
