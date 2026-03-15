@@ -3,6 +3,7 @@
 
 import io
 import json
+import re
 import tarfile
 from pathlib import Path
 
@@ -11,9 +12,9 @@ import pytest
 from yoinkc.schema import InspectionSnapshot, OsRelease, RpmSection, PackageEntry
 
 
-def _make_tarball(tmp_path, hostname, packages):
-    """Create a test tarball with the given packages."""
-    snap = InspectionSnapshot(
+def _make_snapshot(hostname, packages):
+    """Create a minimal InspectionSnapshot for testing."""
+    return InspectionSnapshot(
         meta={"hostname": hostname},
         os_release=OsRelease(name="RHEL", version_id="9.4", id="rhel"),
         rpm=RpmSection(
@@ -24,6 +25,11 @@ def _make_tarball(tmp_path, hostname, packages):
             base_image="quay.io/centos-bootc/centos-bootc:stream9",
         ),
     )
+
+
+def _make_tarball(tmp_path, hostname, packages):
+    """Create a test tarball with the given packages."""
+    snap = _make_snapshot(hostname, packages)
     tarball_path = tmp_path / f"{hostname}.tar.gz"
     with tarfile.open(tarball_path, "w:gz") as tar:
         data = snap.model_dump_json().encode()
@@ -31,6 +37,14 @@ def _make_tarball(tmp_path, hostname, packages):
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))
     return tarball_path
+
+
+def _make_snapshot_json(tmp_path, hostname, packages):
+    """Write a minimal test snapshot as a JSON file."""
+    snap = _make_snapshot(hostname, packages)
+    path = tmp_path / f"{hostname}.json"
+    path.write_text(snap.model_dump_json())
+    return path
 
 
 class TestFleetCliParsing:
@@ -68,6 +82,16 @@ class TestFleetCliParsing:
         with pytest.raises(SystemExit):
             parse_args(["aggregate", str(tmp_path), "-p", "101"])
 
+    def test_json_only_flag(self, tmp_path):
+        from yoinkc.fleet.cli import parse_args
+        args = parse_args(["aggregate", str(tmp_path), "--json-only"])
+        assert args.json_only is True
+
+    def test_output_dir_flag(self, tmp_path):
+        from yoinkc.fleet.cli import parse_args
+        args = parse_args(["aggregate", str(tmp_path), "--output-dir", str(tmp_path)])
+        assert args.output_dir == tmp_path
+
 
 class TestFleetEndToEnd:
     def test_aggregate_produces_valid_snapshot(self, tmp_path):
@@ -76,7 +100,7 @@ class TestFleetEndToEnd:
         _make_tarball(tmp_path, "web-02", ["httpd", "mod_ssl"])
 
         output = tmp_path / "merged.json"
-        exit_code = main(["aggregate", str(tmp_path), "-o", str(output), "-p", "50"])
+        exit_code = main(["aggregate", str(tmp_path), "-o", str(output), "-p", "50", "--json-only"])
         assert exit_code == 0
 
         data = json.loads(output.read_text())
@@ -96,7 +120,7 @@ class TestFleetEndToEnd:
         _make_tarball(tmp_path, "web-01", ["httpd"])
         _make_tarball(tmp_path, "web-02", ["httpd"])
 
-        exit_code = main(["aggregate", str(tmp_path)])
+        exit_code = main(["aggregate", str(tmp_path), "--json-only"])
         assert exit_code == 0
         assert (tmp_path / "fleet-snapshot.json").exists()
 
@@ -110,3 +134,70 @@ class TestFleetEndToEnd:
         from yoinkc.fleet.__main__ import main
         with pytest.raises(SystemExit):
             main(["aggregate", str(tmp_path)])
+
+    def test_fleet_tarball_output(self, tmp_path):
+        from yoinkc.fleet.__main__ import main
+        _make_snapshot_json(tmp_path, "srv-01", ["nginx"])
+        _make_snapshot_json(tmp_path, "srv-02", ["nginx", "curl"])
+
+        tarball = tmp_path / "fleet.tar.gz"
+        exit_code = main(["aggregate", str(tmp_path), "-o", str(tarball)])
+        assert exit_code == 0
+        assert tarball.exists()
+
+        with tarfile.open(tarball, "r:gz") as tf:
+            names = tf.getnames()
+        assert any("Containerfile" in n for n in names)
+        assert any("report.html" in n for n in names)
+        assert any("inspection-snapshot.json" in n for n in names)
+
+    def test_fleet_json_only(self, tmp_path):
+        from yoinkc.fleet.__main__ import main
+        _make_snapshot_json(tmp_path, "db-01", ["postgresql"])
+        _make_snapshot_json(tmp_path, "db-02", ["postgresql", "pg_dump"])
+
+        exit_code = main(["aggregate", str(tmp_path), "--json-only"])
+        assert exit_code == 0
+        assert (tmp_path / "fleet-snapshot.json").exists()
+        assert not list(tmp_path.glob("*.tar.gz"))
+
+    def test_fleet_output_dir(self, tmp_path):
+        from yoinkc.fleet.__main__ import main
+        _make_snapshot_json(tmp_path, "app-01", ["java"])
+        _make_snapshot_json(tmp_path, "app-02", ["java", "tomcat"])
+
+        out_dir = tmp_path / "rendered"
+        out_dir.mkdir()
+        exit_code = main(["aggregate", str(tmp_path), "--output-dir", str(out_dir)])
+        assert exit_code == 0
+        assert (out_dir / "Containerfile").exists()
+        assert (out_dir / "report.html").exists()
+
+    def test_output_and_output_dir_mutually_exclusive(self, tmp_path):
+        from yoinkc.fleet.__main__ import main
+        _make_snapshot_json(tmp_path, "mx-01", ["postfix"])
+        _make_snapshot_json(tmp_path, "mx-02", ["postfix"])
+
+        with pytest.raises(SystemExit):
+            main(["aggregate", str(tmp_path), "-o", "out.tar.gz", "--output-dir", str(tmp_path / "out")])
+
+    def test_json_only_and_output_dir_mutually_exclusive(self, tmp_path):
+        from yoinkc.fleet.__main__ import main
+        _make_snapshot_json(tmp_path, "mx-03", ["postfix"])
+        _make_snapshot_json(tmp_path, "mx-04", ["postfix"])
+
+        with pytest.raises(SystemExit):
+            main(["aggregate", str(tmp_path), "--json-only", "--output-dir", str(tmp_path / "out")])
+
+    def test_fleet_tarball_naming(self, tmp_path, monkeypatch):
+        from yoinkc.fleet.__main__ import main
+        _make_snapshot_json(tmp_path, "cache-01", ["redis"])
+        _make_snapshot_json(tmp_path, "cache-02", ["redis", "memcached"])
+
+        monkeypatch.chdir(tmp_path)
+        exit_code = main(["aggregate", str(tmp_path)])
+        assert exit_code == 0
+
+        tarballs = list(tmp_path.glob("*.tar.gz"))
+        assert len(tarballs) == 1
+        assert re.search(r".+-\d{8}-\d{6}\.tar\.gz", tarballs[0].name)
