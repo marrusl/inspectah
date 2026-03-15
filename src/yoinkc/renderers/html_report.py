@@ -381,6 +381,7 @@ def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
             "diff_html": _render_diff_html(f.diff_against_rpm or ""),
             "snap_index": idx,
             "include": f.include,
+            "fleet": f.fleet,
         })
     return result
 

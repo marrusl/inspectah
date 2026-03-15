@@ -30,6 +30,9 @@ from yoinkc.renderers.audit_report import render as render_audit_report
 from yoinkc.renderers.kickstart import render as render_kickstart
 from yoinkc.renderers.readme import render as render_readme
 from yoinkc.schema import (
+    ConfigFileEntry,
+    ConfigFileKind,
+    ConfigSection,
     FleetPrevalence,
     InspectionSnapshot,
     OsRelease,
@@ -1512,3 +1515,57 @@ class TestFleetBanner:
         html_report.render(snap, env, tmp_path)
         html = (tmp_path / "report.html").read_text()
         assert "Fleet Analysis" not in html
+
+
+class TestFleetConfigPassthrough:
+    """Test that _prepare_config_files preserves fleet data."""
+
+    def test_fleet_field_preserved(self):
+        from yoinkc.renderers.html_report import _prepare_config_files
+        fleet = FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"])
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/httpd/conf/httpd.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="ServerName localhost",
+                        include=True,
+                        fleet=fleet,
+                    ),
+                ],
+            ),
+        )
+        result = _prepare_config_files(snap)
+        assert len(result) == 1
+        assert result[0]["fleet"] is not None
+        assert result[0]["fleet"].count == 2
+        assert result[0]["fleet"].total == 3
+
+    def test_fleet_field_none_when_absent(self):
+        from yoinkc.renderers.html_report import _prepare_config_files
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/httpd/conf/httpd.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="ServerName localhost",
+                        include=True,
+                    ),
+                ],
+            ),
+        )
+        result = _prepare_config_files(snap)
+        assert len(result) == 1
+        assert result[0]["fleet"] is None
