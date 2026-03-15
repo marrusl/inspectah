@@ -322,6 +322,15 @@
     if (countEl) countEl.textContent = editorState.savedFiles.size;
   }
 
+  window.navigateToEditor = function(linkEl) {
+    var section = linkEl.dataset.section;
+    var list = linkEl.dataset.list;
+    var index = parseInt(linkEl.dataset.index, 10);
+    var path = linkEl.dataset.path;
+    if (typeof show === 'function') show('output_files');
+    selectFile(section, list, index, path);
+  };
+
   document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 's' && editorState.editMode) {
       e.preventDefault();

@@ -61,7 +61,7 @@
           <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if d.include else '' }}/></span></td>
           <td>{{ d.unit }}</td>
           <td><code>{{ d.path }}</code></td>
-          <td>{%- if d.content.strip() %}<details><summary>show</summary><pre class="content-preview">{{ d.content }}</pre></details>{%- endif %}</td>
+          <td>{%- if d.content.strip() %}{% if refine_mode %}<a href="#" class="edit-in-editor-link" data-section="services" data-list="drop_ins" data-index="{{ variants[0].snap_index }}" data-path="{{ d.path }}" onclick="navigateToEditor(this); return false;">View &amp; edit in editor &rarr;</a>{% else %}<details><summary>show</summary><pre class="content-preview">{{ d.content }}</pre></details>{% endif %}{%- endif %}</td>
           {{ fleet_cell(d) }}
         </tr>
       {%- endif %}
@@ -74,9 +74,13 @@
         <td><code>{{ d.path }}</code></td>
         <td>
           {%- if d.content.strip() %}
+          {% if refine_mode %}
+          <a href="#" class="edit-in-editor-link" data-section="services" data-list="drop_ins" data-index="{{ loop.index0 }}" data-path="{{ d.path }}" onclick="navigateToEditor(this); return false;">View &amp; edit in editor &rarr;</a>
+          {% else %}
           <details><summary>show</summary>
             <pre class="content-preview">{{ d.content }}</pre>
           </details>
+          {% endif %}
           {%- endif %}
         </td>
         {{ fleet_cell(d) }}

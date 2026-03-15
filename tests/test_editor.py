@@ -4,14 +4,35 @@ import tempfile
 from pathlib import Path
 
 from yoinkc.renderers import run_all as run_all_renderers
-from yoinkc.schema import InspectionSnapshot, OsRelease
+from yoinkc.schema import (
+    ConfigFileEntry,
+    ConfigFileKind,
+    ConfigSection,
+    ContainerSection,
+    InspectionSnapshot,
+    OsRelease,
+    QuadletUnit,
+    ServiceSection,
+    SystemdDropIn,
+)
 
 
-def _render(refine_mode=False):
-    snapshot = InspectionSnapshot(
+def _render(refine_mode=False, with_content=False):
+    kwargs = dict(
         meta={"host_root": "/host"},
         os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
     )
+    if with_content:
+        kwargs["config"] = ConfigSection(files=[
+            ConfigFileEntry(path="/etc/myapp/app.conf", kind=ConfigFileKind.RPM_OWNED_MODIFIED, content="key=val"),
+        ])
+        kwargs["containers"] = ContainerSection(quadlet_units=[
+            QuadletUnit(path="/etc/containers/systemd/myapp.container", name="myapp.container", content="[Container]\nImage=ghcr.io/myapp:latest"),
+        ])
+        kwargs["services"] = ServiceSection(drop_ins=[
+            SystemdDropIn(unit="postgresql.service", path="etc/systemd/system/postgresql.service.d/override.conf", content="[Service]\nLimitNOFILE=65536"),
+        ])
+    snapshot = InspectionSnapshot(**kwargs)
     with tempfile.TemporaryDirectory() as tmp:
         run_all_renderers(snapshot, Path(tmp), refine_mode=refine_mode)
         return (Path(tmp) / "report.html").read_text()
@@ -67,3 +88,15 @@ class TestEditorTab:
     def test_editor_dirty_tracking(self):
         html = _render(refine_mode=True)
         assert 'setupDirtyTracking' in html
+
+    def test_edit_in_editor_links_refine_mode(self):
+        """Refine mode shows 'View & edit in editor' links for content sections."""
+        html = _render(refine_mode=True, with_content=True)
+        assert 'View &amp; edit in editor' in html
+        assert 'navigateToEditor' in html
+
+    def test_no_edit_links_static_mode(self):
+        """Static mode keeps content pulldowns, no editor links."""
+        html = _render(refine_mode=False, with_content=True)
+        assert 'View &amp; edit in editor' not in html
+        assert 'navigateToEditor' not in html
