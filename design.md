@@ -101,6 +101,175 @@ In this mode, the Containerfile includes all installed packages rather than just
 
 The primary baseline is always the target bootc base image.
 
+## 3. CLI Reference
+
+Two entry points are registered in `pyproject.toml`:
+
+```
+yoinkc       = "yoinkc.__main__:main"
+yoinkc-fleet = "yoinkc.fleet.__main__:main"
+```
+
+Two additional entry points are described in the design but not yet implemented:
+
+- **`yoinkc-refine`** — interactive HTML-based editor for snapshots (see [Interactive Refinement](#interactive-refinement-yoinkc-refine)).
+- **`yoinkc-build`** — builds a bootc container image from yoinkc output with automatic RHEL entitlement handling (see [Building on Non-RHEL Hosts](#building-on-non-rhel-hosts)).
+
+### `yoinkc` — Host Inspection
+
+```
+yoinkc [flags]
+```
+
+Inspects a RHEL/CentOS/Fedora host mounted at `--host-root` and produces a tarball (default) or directory of migration artifacts.
+
+#### Core Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--host-root PATH` | `/host` | Root path for host inspection. |
+| `--skip-preflight` | off | Skip container privilege checks (rootful, `--pid=host`, `--privileged`, SELinux). |
+| `--yes` | off | Skip interactive confirmation prompts (for automation). |
+
+#### Output Flags
+
+`-o` and `--output-dir` are mutually exclusive.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `-o FILE` | auto | Write tarball to FILE. Default: `HOSTNAME-TIMESTAMP.tar.gz` in the current directory. |
+| `--output-dir DIR` | off | Write files to a directory instead of producing a tarball. Required for `--validate` and `--push-to-github`. |
+| `--no-entitlement` | off | Skip bundling RHEL entitlement certs into the output. |
+
+#### Target Image Flags
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--target-version VERSION` | auto-detected | Target bootc image version (e.g. 9.6, 10.2). Default: source host version, clamped to minimum bootc-supported release. |
+| `--target-image IMAGE` | auto-selected | Full target bootc base image reference (e.g. `registry.redhat.io/rhel10/rhel-bootc:10.2`). Overrides `--target-version` and all automatic mapping. |
+
+#### Baseline Flags
+
+`--no-baseline` and `--baseline-packages` are mutually exclusive.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--baseline-packages FILE` | off | Path to a newline-separated list of package names for air-gapped environments where the base image cannot be queried via podman. |
+| `--no-baseline` | off | Run without base image comparison — all installed packages will be included in the Containerfile. Use when the base image cannot be queried and `--baseline-packages` is unavailable. |
+
+#### Inspection Depth Flags
+
+The default run is optimized for speed. These opt-in flags enable deeper inspection at the cost of time and resources.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--config-diffs` | off | Extract RPM defaults via `rpm2cpio` and generate line-by-line diffs for modified config files. Requires RPMs to be in local cache or downloadable from repos. |
+| `--deep-binary-scan` | off | Run full `strings` scan on unknown binaries in `/opt` and `/usr/local` for version detection. Slow on large statically-linked binaries. |
+| `--query-podman` | off | Connect to the podman socket to enumerate running containers and runtime state beyond what's in unit/compose files. |
+| `--user-strategy STRATEGY` | auto | Override user creation strategy for all users. Valid: `sysusers`, `blueprint`, `useradd`, `kickstart`. Default: auto-assigned per classification (service -> sysusers, human -> kickstart, ambiguous -> useradd). |
+
+#### Snapshot Flags
+
+`--from-snapshot` and `--inspect-only` are mutually exclusive.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--from-snapshot PATH` | off | Skip inspection; load a previously saved snapshot from PATH and run renderers only. |
+| `--inspect-only` | off | Run inspectors and save snapshot to output; do not run renderers. |
+
+#### Build Validation (`--validate`)
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--validate` | off | After generating output, run `podman build` against the Containerfile to verify it builds successfully. Requires `--output-dir`. |
+
+When enabled, the tool runs `podman build` against the generated Containerfile after all output artifacts are written. This catches a large class of errors before the operator spends time on manual review:
+
+- Missing dependencies (a package referenced in `RUN dnf install` that doesn't exist in the configured repos)
+- Broken COPY paths (a config file referenced in the Containerfile that wasn't written to the `config/` tree)
+- Syntax errors in generated systemd units, timer files, or SELinux policy modules
+- Base image pull failures (registry auth issues, wrong tag)
+
+The build runs with `--no-cache` to ensure a clean test. On success, the tool reports the image ID and size. On failure, it captures the build log, appends a `build-errors.log` to the output, and adds a summary of failures to the HTML report's warning panel and the audit report.
+
+The resulting image is not pushed or deployed — it's a local build test only. The operator is expected to review, refine, and rebuild before deployment.
+
+Note: validation requires access to the host's podman (via `nsenter`, same mechanism as baseline generation). It also requires network access to pull the base image and install packages, so it won't work in fully air-gapped runs without a pre-pulled base image.
+
+When podman is not installed, `--validate` reports failure with an explanatory warning rather than silently claiming success.
+
+#### GitHub Push (`--push-to-github`)
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--push-to-github REPO` | off | Push output to a GitHub repository (e.g. `owner/repo`). Requires `--output-dir` and confirmation (or `--yes`). Shows total data size before push. |
+| `--github-token TOKEN` | `GITHUB_TOKEN` env | GitHub personal access token for repo creation. Falls back to the `GITHUB_TOKEN` environment variable. |
+| `--public` | off | When creating a new GitHub repo, make it public instead of private. |
+
+### `yoinkc-fleet` — Fleet Aggregation
+
+```
+yoinkc-fleet aggregate <input_dir> [flags]
+```
+
+Merges multiple yoinkc inspection snapshots into a single fleet-level snapshot with prevalence metadata. Produces a tarball (default) containing a Containerfile, HTML report, and merged snapshot.
+
+| Flag | Default | Effect |
+|---|---|---|
+| `input_dir` (positional) | required | Directory containing yoinkc tarballs (`.tar.gz`) and/or JSON snapshot files. |
+| `-p`, `--min-prevalence PCT` | `100` | Include items present on >= PCT% of hosts. Range: 1-100. |
+| `-o`, `--output FILE` | auto | Output path for tarball (or JSON with `--json-only`). Default: auto-named in CWD. |
+| `--output-dir DIR` | off | Write rendered files to a directory instead of tarball. |
+| `--json-only` | off | Write merged JSON only, skip rendering. |
+| `--no-hosts` | off | Omit per-item host lists from fleet metadata. |
+
+### Environment Variables
+
+| Variable | Used by | Effect |
+|---|---|---|
+| `YOINKC_DEBUG` | `yoinkc` (Python), `run-yoinkc.sh` | When set, prints full Python tracebacks on error instead of a one-line summary. The wrapper script forwards it into the container as `YOINKC_DEBUG=1`. |
+| `YOINKC_HOSTNAME` | `run-yoinkc.sh`, inspectors | Overrides hostname detection. The wrapper defaults to `$(hostname -s)` and passes it into the container. Inside the container, the inspector reads this as the top-priority hostname source (above `/etc/hostname` and the kernel hostname). |
+| `YOINKC_IMAGE` | `run-yoinkc.sh`, `run-yoinkc-fleet.sh` | Container image to use. Default: `ghcr.io/marrusl/yoinkc:latest`. |
+| `YOINKC_HOST_CWD` | `run-yoinkc.sh`, pipeline | The host's working directory, passed into the container by the wrapper. Used by the pipeline to name output files relative to the host filesystem. |
+| `YOINKC_EXCLUDE_PREREQS` | `run-yoinkc.sh`, RPM inspector | Space-separated list of packages that the wrapper installed as prerequisites (e.g. `podman`). The RPM inspector excludes these from the "operator-added" package list so they don't end up in the Containerfile. |
+| `YOINKC_OUTPUT_DIR` | `run-yoinkc-fleet.sh` | Destination directory for fleet output tarball. Default: current working directory. |
+| `GITHUB_TOKEN` | `yoinkc` (Python) | Fallback for `--github-token` when pushing to GitHub. |
+
+### Wrapper Scripts
+
+#### `run-yoinkc.sh`
+
+A self-contained shell script (POSIX `sh`) for running yoinkc on a host without any prior installation. It:
+
+1. Installs `podman` via `dnf` or `yum` if not already present
+2. Tracks just-installed packages in `YOINKC_EXCLUDE_PREREQS` so they are excluded from inspection results
+3. Checks/prompts for `registry.redhat.io` login when using RHEL base images
+4. Launches the yoinkc container with the required privileges (`--pid=host`, `--privileged`, `--security-opt label=disable`)
+5. Forwards all extra arguments to the `yoinkc` entry point
+
+Usage:
+
+```
+curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
+curl -fsSL ... | sudo YOINKC_HOSTNAME=webserver01 sh -s -- --inspect-only
+```
+
+#### `run-yoinkc-fleet.sh`
+
+A Bash wrapper for running `yoinkc-fleet aggregate` inside the yoinkc container. It:
+
+1. Requires `podman` to be already installed (does not auto-install)
+2. Bind-mounts the input directory read-only and a temp directory for output
+3. Copies the result tarball to `YOINKC_OUTPUT_DIR` (default: CWD)
+
+Usage:
+
+```
+./run-yoinkc-fleet.sh ./snapshots/
+./run-yoinkc-fleet.sh ./snapshots/ -p 80 --no-hosts
+YOINKC_OUTPUT_DIR=/tmp/fleet ./run-yoinkc-fleet.sh ./snapshots/
+```
+
 ### Inspector Modules
 
 #### RPM Inspector
@@ -581,49 +750,6 @@ This is called out prominently in:
 1. The audit report's "Data Migration Plan" section
 2. Comments in the Containerfile
 3. The README's deployment instructions
-
-## CLI Flags Summary
-
-The default run is optimized for speed — it covers the vast majority of systems well without expensive operations. Opt-in flags enable deeper inspection at the cost of time and resources.
-
-| Flag | Default | Effect |
-|---|---|---|
-| `-o FILE` | auto | Write tarball to FILE. Default: `HOSTNAME-TIMESTAMP.tar.gz` in the current directory. |
-| `--output-dir DIR` | off | Write files to a directory instead of producing a tarball. Required for `--validate` and `--push-to-github`. Mutually exclusive with `-o`. |
-| `--no-entitlement` | off | Skip bundling RHEL entitlement certs into the output. |
-| `--baseline-packages FILE` | off | Path to a newline-separated list of package names for air-gapped environments where the base image cannot be queried via podman. |
-| `--validate` | off | After generating output, run `podman build` against the Containerfile to verify it builds successfully. Requires `--output-dir`. |
-| `--config-diffs` | off | Extract RPM defaults via `rpm2cpio` and generate line-by-line diffs for modified config files. Requires RPMs to be in local cache or downloadable from repos. |
-| `--deep-binary-scan` | off | Run full `strings` scan on unknown binaries in `/opt` and `/usr/local` for version detection. Slow on large statically-linked binaries. |
-| `--query-podman` | off | Connect to the podman socket to enumerate running containers and runtime state beyond what's in unit/compose files. |
-| `--push-to-github REPO` | off | Push output to a GitHub repository. Requires `--output-dir` and confirmation (or `--yes`). Shows total data size before push. |
-| `--public` | off | When creating a new GitHub repo, make it public instead of private. |
-| `--yes` | off | Skip interactive confirmation prompts (for automation). |
-| `--user-strategy STRATEGY` | off | Override user creation strategy for all users. Valid: sysusers, blueprint, useradd, kickstart. Default: auto-assigned per classification. |
-| `--host-root PATH` | `/host` | Root path for host inspection. |
-| `--from-snapshot PATH` | off | Skip inspection, load a previously saved snapshot and render only. Mutually exclusive with `--inspect-only`. |
-| `--inspect-only` | off | Run inspectors only, save snapshot, skip renderers. Mutually exclusive with `--from-snapshot`. |
-| `--target-version VERSION` | auto-detected | Target bootc image version (clamped to minimum supported version per distro). |
-| `--target-image IMAGE` | auto-selected | Full target base image reference (overrides `--target-version`). |
-| `--skip-preflight` | off | Skip container privilege checks. |
-| `--github-token TOKEN` | `GITHUB_TOKEN` env | GitHub PAT for repo creation (falls back to `GITHUB_TOKEN` environment variable). |
-
-### Build Validation (`--validate`)
-
-When enabled, the tool runs `podman build` against the generated Containerfile after all output artifacts are written. This catches a large class of errors before the operator spends time on manual review:
-
-- Missing dependencies (a package referenced in `RUN dnf install` that doesn't exist in the configured repos)
-- Broken COPY paths (a config file referenced in the Containerfile that wasn't written to the `config/` tree)
-- Syntax errors in generated systemd units, timer files, or SELinux policy modules
-- Base image pull failures (registry auth issues, wrong tag)
-
-The build runs with `--no-cache` to ensure a clean test. On success, the tool reports the image ID and size. On failure, it captures the build log, appends a `build-errors.log` to the output, and adds a summary of failures to the HTML report's warning panel and the audit report.
-
-The resulting image is not pushed or deployed — it's a local build test only. The operator is expected to review, refine, and rebuild before deployment.
-
-Note: validation requires access to the host's podman (via `nsenter`, same mechanism as baseline generation). It also requires network access to pull the base image and install packages, so it won't work in fully air-gapped runs without a pre-pulled base image.
-
-When podman is not installed, `--validate` reports failure with an explanatory warning rather than silently claiming success.
 
 ## Implementation Language
 
