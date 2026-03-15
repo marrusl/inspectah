@@ -2,7 +2,7 @@
 // Apply saved theme immediately so re-rendered pages don't flash
 (function(){ var t = localStorage.getItem('yoinkc-theme'); if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark'); })();
 var snapshot = {{ snapshot_json|safe }};
-var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
+var originalSnapshot = {{ original_snapshot_json|safe }};
 (function(){
   var sections = document.querySelectorAll('.section');
   var navLinks = document.querySelectorAll('.pf-v6-c-nav__link[data-tab]');

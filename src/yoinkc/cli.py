@@ -151,6 +151,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Skip interactive confirmation prompts",
     )
 
+    parser.add_argument(
+        "--original-snapshot",
+        type=Path,
+        metavar="PATH",
+        help="Path to unmodified original snapshot for editor diff/reset support "
+             "(set by yoinkc-refine during re-render)",
+    )
+
     args = parser.parse_args(argv)
 
     if args.from_snapshot and args.inspect_only:

@@ -195,12 +195,18 @@ def _re_render(
             orig_file.write_bytes(original_data)
             volumes += ["-v", f"{orig_file}:/input/original-snapshot.json:ro"]
 
+        yoinkc_args = [
+            "--from-snapshot", "/input/snapshot.json",
+            "--output-dir", "/output",
+        ]
+        if original_data:
+            yoinkc_args += ["--original-snapshot", "/input/original-snapshot.json"]
+
         cmd = [
             runtime, "run", "--rm",
             *volumes,
             _IMAGE,
-            "--from-snapshot", "/input/snapshot.json",
-            "--output-dir", "/output",
+            *yoinkc_args,
         ]
         _log(f"running: {' '.join(cmd)}")
         t0 = time.monotonic()

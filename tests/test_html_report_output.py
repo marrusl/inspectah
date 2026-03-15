@@ -62,9 +62,33 @@ class TestHtmlReport:
         assert "disabled" in html.split('id="btn-reset"')[1].split(">")[0]
 
     def test_original_snapshot_embedded(self, outputs_with_baseline):
-        """Page JS should deep-copy the snapshot for reset support."""
+        """originalSnapshot should be embedded separately, not deep-copied."""
         html = self._html(outputs_with_baseline)
-        assert "var originalSnapshot = JSON.parse(JSON.stringify(snapshot));" in html
+        assert "var snapshot" in html
+        assert "var originalSnapshot" in html
+        assert "JSON.parse(JSON.stringify(snapshot))" not in html
+
+    def test_original_snapshot_from_file(self):
+        """When --original-snapshot is provided, it should be embedded instead of a copy."""
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host", "hostname": "edited-host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        original = InspectionSnapshot(
+            meta={"host_root": "/host", "hostname": "original-host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            orig_path = Path(tmp) / "original-snapshot.json"
+            orig_path.write_text(original.model_dump_json())
+            run_all_renderers(
+                snapshot, Path(tmp),
+                original_snapshot_path=orig_path,
+            )
+            html = (Path(tmp) / "report.html").read_text()
+
+        assert "original-host" in html
+        assert "edited-host" in html
 
 
 class TestHtmlStructure:

@@ -5,6 +5,7 @@ CLI entry point. Parses args and delegates to pipeline.
 import os
 import sys
 import traceback
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
@@ -30,11 +31,15 @@ def _run_inspectors(host_root: Path, args) -> InspectionSnapshot:
     )
 
 
-def _run_renderers(snapshot: InspectionSnapshot, output_dir: Path) -> None:
+def _run_renderers(
+    snapshot: InspectionSnapshot,
+    output_dir: Path,
+    original_snapshot_path: Optional[Path] = None,
+) -> None:
     """Run all renderers."""
     from .renderers import run_all
 
-    run_all(snapshot, output_dir)
+    run_all(snapshot, output_dir, original_snapshot_path=original_snapshot_path)
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -66,10 +71,15 @@ def main(argv: Optional[list] = None) -> int:
         def run_inspectors(host_root: Path):
             return _run_inspectors(host_root, args)
 
+        renderers = partial(
+            _run_renderers,
+            original_snapshot_path=args.original_snapshot,
+        )
+
         snapshot = run_pipeline(
             host_root=args.host_root,
             run_inspectors=run_inspectors,
-            run_renderers=_run_renderers,
+            run_renderers=renderers,
             from_snapshot_path=args.from_snapshot,
             inspect_only=args.inspect_only,
             output_file=args.output_file,
