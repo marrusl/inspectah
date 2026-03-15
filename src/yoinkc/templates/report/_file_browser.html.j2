@@ -1,5 +1,8 @@
 {% from "report/_macros.html.j2" import section with context -%}
-{# ── File browser ─────────────────────────────────────────────────────────── #}
+{% if refine_mode %}
+{% include "report/_editor.html.j2" %}
+{% else %}
+{# ── File browser (read-only, static reports) ────────────────────────────── #}
 {% call section("output_files", "File browser") %}
 <p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
 <div class="pf-v6-l-flex pf-m-nowrap mt-md" style="gap:1rem">
@@ -15,4 +18,4 @@
 </div>
 {{ file_content_snippets_html|safe }}
 {% endcall %}
-
+{% endif %}
