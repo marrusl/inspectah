@@ -379,6 +379,33 @@ class TestVersionChangesAuditReport:
         assert "Version Changes" not in report
 
 
+class TestVersionChangeRoundtrip:
+
+    def test_version_changes_survive_json_roundtrip(self):
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, RpmSection,
+            VersionChange, VersionChangeDirection,
+        )
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                version_changes=[
+                    VersionChange(
+                        name="bash", arch="x86_64",
+                        host_version="5.2.15-2.el9", base_version="5.1.8-9.el9",
+                        direction=VersionChangeDirection.DOWNGRADE,
+                    ),
+                ],
+            ),
+        )
+        json_str = snapshot.model_dump_json()
+        loaded = InspectionSnapshot.model_validate_json(json_str)
+        assert len(loaded.rpm.version_changes) == 1
+        assert loaded.rpm.version_changes[0].name == "bash"
+        assert loaded.rpm.version_changes[0].direction == VersionChangeDirection.DOWNGRADE
+
+
 class TestPythonVersionMap:
 
     def test_rhel10_uses_python312(self):
