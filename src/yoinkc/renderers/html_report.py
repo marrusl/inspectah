@@ -6,6 +6,7 @@ Markup for the file-browser tree and audit report.
 """
 
 import re
+from collections import OrderedDict
 from pathlib import Path
 from typing import List
 
@@ -436,6 +437,35 @@ def _prepare_non_rpm(snapshot: InspectionSnapshot) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Fleet variant grouping
+# ---------------------------------------------------------------------------
+
+def _variant_prevalence(item):
+    """Extract prevalence count for sorting. Returns 0 if no fleet data."""
+    fleet = item.get("fleet") if isinstance(item, dict) else getattr(item, "fleet", None)
+    return fleet.count if fleet else 0
+
+
+def _group_variants(items, path_key="path"):
+    """Group items by path for variant display.
+
+    Returns OrderedDict[path, list[dict]] where each entry has
+    {"item": item_or_dict, "snap_index": int}. Variants within each
+    group are sorted by prevalence (highest first).
+    """
+    groups: OrderedDict = OrderedDict()
+    for idx, item in enumerate(items):
+        path = item[path_key] if isinstance(item, dict) else getattr(item, path_key)
+        if path not in groups:
+            groups[path] = []
+        groups[path].append({"item": item, "snap_index": idx})
+
+    for path, variants in groups.items():
+        variants.sort(key=lambda v: _variant_prevalence(v["item"]), reverse=True)
+    return groups
+
+
+# ---------------------------------------------------------------------------
 # Context builder
 # ---------------------------------------------------------------------------
 
@@ -583,6 +613,21 @@ def _build_context(
     if pf_css_path.exists():
         patternfly_css = pf_css_path.read_text()
 
+    config_files = _prepare_config_files(snapshot)
+
+    if fleet_meta:
+        config_variant_groups = _group_variants(config_files, path_key="path")
+        quadlet_variant_groups = _group_variants(
+            snapshot.containers.quadlet_units, path_key="path"
+        ) if snapshot.containers and snapshot.containers.quadlet_units else OrderedDict()
+        dropin_variant_groups = _group_variants(
+            snapshot.services.drop_ins, path_key="path"
+        ) if snapshot.services and snapshot.services.drop_ins else OrderedDict()
+    else:
+        config_variant_groups = None
+        quadlet_variant_groups = None
+        dropin_variant_groups = None
+
     return {
         "snapshot": snapshot,
         "snapshot_json": snapshot_json,
@@ -602,7 +647,10 @@ def _build_context(
         "tree_html": Markup(tree_html),
         "file_content_snippets_html": Markup("".join(file_content_snippets)),
         "audit_html": Markup(audit_html),
-        "config_files_rendered": _prepare_config_files(snapshot),
+        "config_files_rendered": config_files,
+        "config_variant_groups": config_variant_groups,
+        "quadlet_variant_groups": quadlet_variant_groups,
+        "dropin_variant_groups": dropin_variant_groups,
         "containers_data": _prepare_containers(snapshot),
         "non_rpm_data": _prepare_non_rpm(snapshot),
         "triage_detail": triage_detail,

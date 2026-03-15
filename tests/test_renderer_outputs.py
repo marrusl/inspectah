@@ -1662,3 +1662,103 @@ class TestFleetConfigPassthrough:
         result = _prepare_config_files(snap)
         assert len(result) == 1
         assert result[0]["fleet"] is None
+
+
+class TestFleetVariantGrouping:
+    """Tests for content variant grouping in fleet mode."""
+
+    def test_variant_grouping_renders_expand_toggle(self, tmp_path):
+        """Config items sharing a path render as a grouped row with expand toggle."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 67,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/httpd/conf/httpd.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="ServerName web-01",
+                        include=True,
+                        fleet=FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"]),
+                    ),
+                    ConfigFileEntry(
+                        path="/etc/httpd/conf/httpd.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="ServerName web-03",
+                        include=False,
+                        fleet=FleetPrevalence(count=1, total=3, hosts=["web-03"]),
+                    ),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "2 variants" in html
+        assert "fleet-variant-group" in html
+
+    def test_no_grouping_without_fleet(self, tmp_path):
+        """Without fleet data, config files render as individual rows."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/httpd/conf/httpd.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="ServerName localhost",
+                        include=True,
+                    ),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "fleet-variant-group" not in html
+
+    def test_single_item_path_not_grouped(self, tmp_path):
+        """A config path with only one item renders as a normal row."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01"],
+                    "total_hosts": 1,
+                    "min_prevalence": 100,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/httpd/conf/httpd.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="ServerName localhost",
+                        include=True,
+                        fleet=FleetPrevalence(count=1, total=1),
+                    ),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "fleet-variant-group" not in html
