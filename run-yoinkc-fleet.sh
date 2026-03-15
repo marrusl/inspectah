@@ -13,7 +13,7 @@ if [ $# -eq 0 ]; then
     echo "" >&2
     echo "Environment:" >&2
     echo "  YOINKC_IMAGE        Container image  (default: $IMAGE)" >&2
-    echo "  YOINKC_OUTPUT_DIR   Output directory (default: CWD)" >&2
+    echo "  YOINKC_OUTPUT_DIR   Destination directory for output tarball (default: CWD)" >&2
     exit 1
 fi
 
@@ -26,15 +26,19 @@ INPUT_DIR="$(cd "$1" && pwd)"
 DIR_NAME="$(basename "$INPUT_DIR")"
 shift
 
+TEMP_OUT="$(mktemp -d)"
+trap 'rm -rf "$TEMP_OUT"' EXIT
+
 echo "Image: $IMAGE"
 echo "=== Running yoinkc-fleet ==="
 podman run --rm --pull=always \
     --security-opt label=disable \
     -w /output \
     -v "$INPUT_DIR":/input:ro \
-    -v "$OUTPUT_DIR":/output \
+    -v "$TEMP_OUT":/output \
     --entrypoint yoinkc-fleet \
     "$IMAGE" aggregate /input -o "/output/${DIR_NAME}.tar.gz" "$@"
 
+cp "$TEMP_OUT/${DIR_NAME}.tar.gz" "$OUTPUT_DIR/"
 echo ""
 echo "Output: $OUTPUT_DIR/${DIR_NAME}.tar.gz"
