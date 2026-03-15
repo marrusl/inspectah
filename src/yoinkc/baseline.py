@@ -323,19 +323,22 @@ class BaselineResolver:
         _debug(f"registry.redhat.io auth OK (logged in as {result.stdout.strip()})")
         return True
 
-    def query_packages(self, base_image: str) -> Optional[Set[str]]:
+    def query_packages(self, base_image: str) -> Optional[Dict[str, PackageEntry]]:
         """Run ``podman run --rm <base_image> rpm -qa`` via nsenter.
 
         Pulls the image first if it is not already cached, so progress is
-        visible to the user.  Returns the set of package names, or None on failure.
+        visible to the user.  Returns a dict of ``name.arch → PackageEntry``,
+        or None on failure.
         """
+        from .inspectors.rpm import _parse_nevr, RPM_QA_QUERYFORMAT
+
         if not self._check_registry_auth(base_image):
             return None
         if not self.pull_image(base_image):
             return None
         cmd = [
             "podman", "run", "--rm", "--cgroups=disabled", base_image,
-            "rpm", "-qa", "--queryformat", r"%{NAME}\n",
+            "rpm", "-qa", "--queryformat", RPM_QA_QUERYFORMAT + r"\n",
         ]
         _debug(f"querying base image: {' '.join(cmd)}")
         result = self._run_on_host(cmd)
@@ -345,13 +348,17 @@ class BaselineResolver:
             _debug(f"podman run failed (rc={result.returncode}): "
                    f"{result.stderr.strip()[:800]}")
             return None
-        names: Set[str] = set()
+        packages: Dict[str, PackageEntry] = {}
         for line in result.stdout.splitlines():
-            name = line.strip()
-            if name:
-                names.add(name)
-        _debug(f"base image has {len(names)} packages")
-        return names
+            line = line.strip()
+            if not line:
+                continue
+            pkg = _parse_nevr(line)
+            if pkg:
+                key = f"{pkg.name}.{pkg.arch}"
+                packages[key] = pkg
+        _debug(f"base image has {len(packages)} packages")
+        return packages
 
     def query_presets(self, base_image: str) -> Optional[str]:
         """Dump all systemd preset content from the base image via nsenter.

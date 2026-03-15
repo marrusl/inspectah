@@ -160,6 +160,30 @@ class TestBaselineNevraFormat:
         assert "glibc" in name_set
 
 
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_query_packages_returns_nevra_dict(_mock_userns):
+    """query_packages() returns Dict[str, PackageEntry] with full NEVRA."""
+    nevra_output = (
+        "0:bash-5.1.8-9.el9.x86_64\n"
+        "0:glibc-2.34-100.el9.x86_64\n"
+        "(none):setup-2.13.7-10.el9.noarch\n"
+    )
+
+    def podman_handler(cmd):
+        if "rpm" in cmd:
+            return RunResult(stdout=nevra_output, stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    resolver = BaselineResolver(_make_executor(podman_result=podman_handler))
+    result = resolver.query_packages("test-image:latest")
+    assert result is not None
+    assert isinstance(result, dict)
+    assert "bash.x86_64" in result
+    assert result["bash.x86_64"].version == "5.1.8"
+    assert "setup.noarch" in result
+    assert result["setup.noarch"].epoch == "0"
+
+
 # ---------------------------------------------------------------------------
 # BaselineResolver.get_baseline_packages — file and no-executor paths
 # ---------------------------------------------------------------------------
