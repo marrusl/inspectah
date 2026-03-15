@@ -55,7 +55,7 @@
       {%- set f = variants[0].item %}
       <tr{% if not f.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ f.snap_index }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if f.include else '' }}/></span></td>
-        <td><code>{{ f.path }}</code></td>
+        <td><code>{{ f.path }}</code>{% if refine_mode %} <a href="#" class="edit-in-editor-link" data-section="config" data-list="files" data-index="{{ f.snap_index }}" data-path="{{ f.path }}" onclick="navigateToEditor(this); return false;" style="margin-left:8px;">View &amp; edit in editor &rarr;</a>{% endif %}</td>
         <td>{{ f.kind }}</td>
         <td>{% if f.flags %}<code>{{ f.flags }}</code>{% endif %}</td>
         <td>{{ f.diff_html|safe }}</td>
@@ -67,7 +67,7 @@
     {%- for item in config_files_rendered %}
     <tr{% if not item.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
       <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if item.include else '' }}/></span></td>
-      <td><code>{{ item.path }}</code></td>
+      <td><code>{{ item.path }}</code>{% if refine_mode %} <a href="#" class="edit-in-editor-link" data-section="config" data-list="files" data-index="{{ item.snap_index }}" data-path="{{ item.path }}" onclick="navigateToEditor(this); return false;" style="margin-left:8px;">View &amp; edit in editor &rarr;</a>{% endif %}</td>
       <td>{{ item.kind }}</td>
       <td>{% if item.flags %}<code>{{ item.flags }}</code>{% endif %}</td>
       <td>{{ item.diff_html|safe }}</td>

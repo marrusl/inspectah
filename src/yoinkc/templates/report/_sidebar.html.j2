@@ -8,7 +8,7 @@
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link pf-m-current" data-tab="summary" href="#">Summary</a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="audit" href="#">Audit report</a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="warnings" href="#">Warnings <span class="pf-v6-c-badge pf-m-unread" id="nav-warning-badge">{{ warnings|length }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="output_files" href="#">File browser</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="output_files" href="#">{{ "Editor" if refine_mode else "File browser" }}</a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containerfile" href="#">Containerfile</a></li>
         </ul>
       </section>

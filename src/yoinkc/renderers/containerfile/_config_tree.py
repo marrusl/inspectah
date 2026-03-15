@@ -83,14 +83,19 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text(tp.content or "")
 
-    # Systemd drop-in overrides
+    # Systemd drop-in overrides — write to both config/ (for Containerfile COPY)
+    # and drop-ins/ (for the file browser tree to show them as a dedicated section)
     if snapshot.services and snapshot.services.drop_ins:
+        dropins_dir = output_dir / "drop-ins"
         for di in snapshot.services.drop_ins:
             if not di.include:
                 continue
             dest = config_dir / di.path
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(di.content or "")
+            dropin_dest = dropins_dir / di.path
+            dropin_dest.parent.mkdir(parents=True, exist_ok=True)
+            dropin_dest.write_text(di.content or "")
 
     # Systemd timer units: cron-generated and existing local timers
     st = snapshot.scheduled_tasks

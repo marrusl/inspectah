@@ -1,0 +1,29 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Editor tab — refine mode only ───────────────────────────────────────── #}
+{% call section("output_files", "Editor") %}
+<p>Browse and edit config files, quadlet units, and systemd drop-ins. Click a file to view, then Edit to modify.</p>
+<div id="editor-tab" style="display:flex; height:calc(100vh - 200px); border:1px solid var(--pf-t--global--border--color--default);">
+
+  {# --- Tree pane --- #}
+  <div id="editor-tree" style="width:300px; border-right:1px solid var(--pf-t--global--border--color--default); background:var(--pf-t--global--background--color--secondary--default); display:flex; flex-direction:column; overflow:hidden;">
+    <div style="padding:12px 16px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center;">
+      <span class="pf-v6-c-title pf-m-lg">Files</span>
+      <button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-new-file" type="button">+ New File</button>
+    </div>
+    <div id="editor-tree-list" style="padding:8px; overflow-y:auto; flex:1;"></div>
+  </div>
+
+  {# --- Content pane --- #}
+  <div id="editor-content" style="flex:1; display:flex; flex-direction:column;">
+    <div id="editor-toolbar" style="padding:8px 16px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center; min-height:48px;">
+      <div id="editor-file-path" style="font-family:var(--pf-t--global--font--family--mono);"></div>
+      <div id="editor-actions"></div>
+    </div>
+    <div id="editor-view" style="flex:1; overflow:auto; padding:16px;">
+      <pre id="editor-readonly-content" style="margin:0; white-space:pre-wrap; font-family:var(--pf-t--global--font--family--mono); font-size:14px;"></pre>
+      <div id="editor-cm-container" style="display:none; height:100%;"></div>
+    </div>
+  </div>
+
+</div>
+{% endcall %}

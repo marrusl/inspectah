@@ -5,10 +5,11 @@ templates/report.html.j2 via Jinja2.  A few helpers produce pre-rendered
 Markup for the file-browser tree and audit report.
 """
 
+import logging
 import re
 from collections import OrderedDict
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from jinja2 import Environment
 from markupsafe import Markup
@@ -39,9 +40,9 @@ def _fleet_color(fleet) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_output_tree(output_dir: Path) -> List[dict]:
-    """Build a tree of config/ and quadlet/ for the file browser."""
+    """Build a tree of config/, quadlet/, and drop-ins/ for the file browser."""
     roots: List[dict] = []
-    for folder_name in ("config", "quadlet"):
+    for folder_name in ("config", "quadlet", "drop-ins"):
         folder = output_dir / folder_name
         if not folder.is_dir():
             continue
@@ -473,6 +474,8 @@ def _build_context(
     snapshot: InspectionSnapshot,
     output_dir: Path,
     env: Environment,
+    refine_mode: bool = False,
+    original_snapshot_path: Optional[Path] = None,
 ) -> dict:
     from ._triage import compute_triage, compute_triage_detail
 
@@ -607,12 +610,33 @@ def _build_context(
     # Escape "</" so a value containing "</script>" cannot terminate the
     # enclosing <script> block (standard JSON-in-HTML XSS prevention).
     snapshot_json = snapshot.model_dump_json().replace("</", "<\\/")
+    # On re-render the server passes the true original via --original-snapshot;
+    # at initial render both are identical.
+    if original_snapshot_path and original_snapshot_path.exists():
+        try:
+            original_snapshot_json = original_snapshot_path.read_text().replace("</", "<\\/")
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Could not read original snapshot from %s; "
+                "editor reset-to-original will use the current snapshot instead",
+                original_snapshot_path,
+            )
+            original_snapshot_json = snapshot_json
+    else:
+        original_snapshot_json = snapshot_json
 
     # Load PatternFly 6 CSS for inline embedding (self-contained report)
     pf_css_path = Path(__file__).resolve().parent.parent / "templates" / "patternfly.css"
     patternfly_css = ""
     if pf_css_path.exists():
         patternfly_css = pf_css_path.read_text()
+
+    # Load CodeMirror 6 JS for inline embedding in refine-mode reports
+    codemirror_js = ""
+    if refine_mode:
+        cm_js_path = Path(__file__).resolve().parent.parent / "static" / "codemirror" / "codemirror.min.js"
+        if cm_js_path.exists():
+            codemirror_js = cm_js_path.read_text()
 
     config_files = _prepare_config_files(snapshot)
 
@@ -632,7 +656,10 @@ def _build_context(
     return {
         "snapshot": snapshot,
         "snapshot_json": snapshot_json,
+        "original_snapshot_json": original_snapshot_json,
+        "refine_mode": refine_mode,
         "patternfly_css": Markup(patternfly_css),
+        "codemirror_js": Markup(codemirror_js),
         "counts": counts,
         "fleet_meta": fleet_meta,
         "triage": triage,
@@ -671,6 +698,8 @@ def render(
     snapshot: InspectionSnapshot,
     env: Environment,
     output_dir: Path,
+    refine_mode: bool = False,
+    original_snapshot_path: Optional[Path] = None,
 ) -> None:
     """Render report.html by building a context dict and invoking the Jinja2 template."""
     from jinja2 import FileSystemLoader
@@ -686,7 +715,11 @@ def render(
 
     env.filters["fleet_color"] = _fleet_color
 
-    ctx = _build_context(snapshot, output_dir, env)
+    ctx = _build_context(
+        snapshot, output_dir, env,
+        refine_mode=refine_mode,
+        original_snapshot_path=original_snapshot_path,
+    )
     template = env.get_template("report.html.j2")
     html = template.render(ctx)
     (output_dir / "report.html").write_text(html)

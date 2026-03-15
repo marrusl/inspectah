@@ -48,7 +48,7 @@
           <td>{{ u.name }}</td>
           <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
           <td><code>{{ u.path }}</code></td>
-          <td>{%- if u.content and u.content.strip() %}<details><summary>show</summary><pre class="content-preview">{{ u.content }}</pre></details>{%- endif %}</td>
+          <td>{%- if u.content and u.content.strip() %}{% if refine_mode %}<a href="#" class="edit-in-editor-link" data-section="containers" data-list="quadlet_units" data-index="{{ variants[0].snap_index }}" data-path="{{ u.path }}" onclick="navigateToEditor(this); return false;">View &amp; edit in editor &rarr;</a>{% else %}<details><summary>show</summary><pre class="content-preview">{{ u.content }}</pre></details>{% endif %}{%- endif %}</td>
           {{ fleet_cell(u) }}
         </tr>
       {%- endif %}
@@ -62,9 +62,13 @@
         <td><code>{{ u.path }}</code></td>
         <td>
           {%- if u.content and u.content.strip() %}
+          {% if refine_mode %}
+          <a href="#" class="edit-in-editor-link" data-section="containers" data-list="quadlet_units" data-index="{{ loop.index0 }}" data-path="{{ u.path }}" onclick="navigateToEditor(this); return false;">View &amp; edit in editor &rarr;</a>
+          {% else %}
           <details><summary>show</summary>
             <pre class="content-preview">{{ u.content }}</pre>
           </details>
+          {% endif %}
           {%- endif %}
         </td>
         {{ fleet_cell(u) }}

@@ -11,6 +11,8 @@ from yoinkc.schema import (
     ConfigSection,
     InspectionSnapshot,
     OsRelease,
+    ServiceSection,
+    SystemdDropIn,
 )
 
 
@@ -62,9 +64,70 @@ class TestHtmlReport:
         assert "disabled" in html.split('id="btn-reset"')[1].split(">")[0]
 
     def test_original_snapshot_embedded(self, outputs_with_baseline):
-        """Page JS should deep-copy the snapshot for reset support."""
+        """originalSnapshot should be embedded separately, not deep-copied."""
         html = self._html(outputs_with_baseline)
-        assert "var originalSnapshot = JSON.parse(JSON.stringify(snapshot));" in html
+        assert "var snapshot" in html
+        assert "var originalSnapshot" in html
+        assert "JSON.parse(JSON.stringify(snapshot))" not in html
+
+    def test_original_snapshot_from_file(self):
+        """When --original-snapshot is provided, it should be embedded instead of a copy."""
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host", "hostname": "edited-host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        original = InspectionSnapshot(
+            meta={"host_root": "/host", "hostname": "original-host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            orig_path = Path(tmp) / "original-snapshot.json"
+            orig_path.write_text(original.model_dump_json())
+            run_all_renderers(
+                snapshot, Path(tmp),
+                original_snapshot_path=orig_path,
+            )
+            html = (Path(tmp) / "report.html").read_text()
+
+        assert "original-host" in html
+        assert "edited-host" in html
+
+    def test_refine_mode_defaults_to_false(self, outputs_with_baseline):
+        """Static report has refine_mode=False embedded as JS variable."""
+        html = self._html(outputs_with_baseline)
+        assert "var refineMode = false" in html
+
+    def test_refine_mode_true_renders_correctly(self):
+        """When refine_mode=True, the JS variable should be true."""
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp), refine_mode=True)
+            html = (Path(tmp) / "report.html").read_text()
+
+        assert "var refineMode = true" in html
+
+    def test_output_tree_includes_dropins(self):
+        """File browser tree includes drop-ins folder when drop-ins exist."""
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            services=ServiceSection(drop_ins=[
+                SystemdDropIn(
+                    unit="postgresql.service",
+                    path="etc/systemd/system/postgresql.service.d/override.conf",
+                    content="[Service]\nLimitNOFILE=65536\n",
+                ),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            html = (Path(tmp) / "report.html").read_text()
+
+        assert "drop-ins" in html
+        assert "override.conf" in html
 
 
 class TestHtmlStructure:

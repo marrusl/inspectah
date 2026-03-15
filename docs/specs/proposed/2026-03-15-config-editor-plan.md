@@ -1,47 +1,85 @@
 # Config Editor Implementation Plan
 
-> **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status: IMPLEMENTED** on branch `feature/config-editor-chunk1` (13 commits, 604 tests passing).
 
 **Goal:** Transform the read-only file browser into an interactive config editor in yoinkc-refine mode, allowing operators to edit/create config files, quadlet units, and systemd drop-ins with changes flowing through re-render into export-ready output.
 
-**Architecture:** Client-side snapshot editing with CodeMirror 6. The browser holds `snapshot` (mutable) and `originalSnapshot` (immutable) JS objects. Save writes to `snapshot` instantly. Re-render POSTs both to `/api/re-render`, which runs yoinkc and returns new HTML. yoinkc-refine serves CodeMirror as static assets and injects a `refine_mode` template variable.
+**Architecture:** Client-side snapshot editing with CodeMirror 6. The browser holds `snapshot` (mutable) and `originalSnapshot` (immutable) JS objects. Save writes to `snapshot` instantly. Re-render POSTs both to `/api/re-render`, which runs yoinkc and returns new HTML. The `--refine-mode` CLI flag controls editor UI rendering; CodeMirror 6 is inlined in the report HTML (same pattern as PatternFly CSS) rather than served as separate static assets. The `--original-snapshot` CLI flag enables the original to survive re-render page replacements.
 
-**Tech Stack:** Python 3.9+, Jinja2 templates, CodeMirror 6 (vendored), vanilla ES5 JavaScript, PatternFly 6 CSS, pytest.
+**Tech Stack:** Python 3.11+, Jinja2 templates, CodeMirror 6 (vendored, inlined), ES6 JavaScript, PatternFly 6 CSS, pytest.
 
 **Spec:** `docs/specs/proposed/2026-03-15-config-editor-design.md`
 
 ---
 
-## File Structure
+## Implementation Deviations
+
+The following changes were made during implementation to fix bugs, improve architecture, or correct inaccuracies in the original plan:
+
+1. **CodeMirror served inline, not as static assets.** yoinkc-refine is a standalone script with no access to the source tree. Serving from `src/yoinkc/static/` would break in production. Instead, CM6 is read from the package's `static/` directory by `_build_context()` and inlined in a `<script>` tag, matching the PatternFly CSS pattern. No `/static/` route was added to yoinkc-refine.
+
+2. **`--original-snapshot` CLI flag added.** The original plan mounted `original-snapshot.json` into the container but had no code to read it. The implementation adds `--original-snapshot` as a CLI flag, threads it through the render pipeline, and reads it in `_build_context()`. Without this, the "reset to original" capability was silently lost after the first re-render.
+
+3. **`--refine-mode` CLI flag** threads through `cli.py` -> `__main__.py` (via `functools.partial`) -> `run_all()` -> `render()` -> `_build_context()`. The original plan was vague about this plumbing.
+
+4. **`@codemirror/basic-setup` corrected to `codemirror`.** The `codemirror` meta-package is the current entry point. A reproducible build script (`scripts/build-codemirror.sh`) is committed alongside the vendored bundle.
+
+5. **No `codemirror.min.css`.** CM6 themes are JS-based; there is no separate CSS file to vendor.
+
+6. **ES6, not ES5.** The editor JS uses `Map()`, `Set()`, `.find()`, template literals, and arrow-style callbacks. The existing report JS already used ES6 features, so the spec's "vanilla ES5" claim was inaccurate.
+
+7. **`snapshot.services.services` does not exist.** The new file modal's service dropdown uses `snapshot.services.state_changes` (each entry has a `.unit` field).
+
+8. **`editorRevert()` uses path-based lookup.** The plan used index-based access into `originalSnapshot`, which breaks after `splice()` and crashes on operator-created files. Changed to `.find()` by path.
+
+9. **`selectFile()` clears dirty buffer on discard.** Without this, "discarded" edits would silently reappear when navigating back to the file.
+
+10. **`editorRevert()` writes through to snapshot.** The plan only updated the editor view; the implementation also writes `origContent` to `snapshot[...].content` and marks the file as needing re-render.
+
+11. **`run_all()` reads original snapshot once.** The parsed `InspectionSnapshot` object is passed to both `html_report.render()` and `audit_report.render()`, avoiding redundant file reads.
+
+12. **New file tests merged into `test_editor.py`.** The plan called for a separate `tests/test_new_file.py` but the tests fit naturally alongside the other editor tests.
+
+13. **`pyproject.toml` updated** with `static/**/*` in `[tool.setuptools.package-data]` so the vendored CM6 bundle is included in the installed package.
+
+---
+
+## File Structure (as implemented)
 
 ### New Files
 
 | File | Responsibility |
 |------|----------------|
 | `src/yoinkc/templates/report/_editor.html.j2` | Editor tab: two-pane layout (tree + content), read-only and edit modes |
-| `src/yoinkc/templates/report/_editor_js.html.j2` | Editor JavaScript: CodeMirror init, save/revert/state tracking, new file modal |
+| `src/yoinkc/templates/report/_editor_js.html.j2` | Editor JavaScript: tree, file selection, CM6 edit mode, save/revert/delete, dirty tracking, new file modal logic, cross-tab navigation, re-render |
 | `src/yoinkc/templates/report/_new_file_modal.html.j2` | PF6 modal for creating new files (config/quadlet/drop-in) |
-| `src/yoinkc/static/codemirror/codemirror.min.js` | Vendored CodeMirror 6 bundle (basic setup) |
-| `src/yoinkc/static/codemirror/codemirror.min.css` | Vendored CodeMirror 6 styles |
-| `tests/test_editor.py` | Editor-specific tests: refine mode rendering, editor tab, state labels |
-| `tests/test_new_file.py` | New file creation tests: snapshot mutation, validation, path assembly |
+| `src/yoinkc/static/codemirror/codemirror.min.js` | Vendored CodeMirror 6 bundle (~373KB, IIFE exporting `CMEditor`) |
+| `scripts/build-codemirror.sh` | Reproducible build script for the CM6 bundle |
+| `tests/test_editor.py` | Editor tests: tab rendering, CM6 embedding, dirty tracking, cross-tab links, new file modal, re-render button, integration |
 
 ### Modified Files
 
 | File | Changes |
 |------|---------|
-| `yoinkc-refine` | Wrapper request format, static asset serving, `refine_mode` injection, `original_snapshot_json` passthrough |
-| `src/yoinkc/renderers/html_report.py` | `_build_context()`: add `refine_mode`, `original_snapshot_json`. `_build_output_tree()`: add drop-ins folder |
-| `src/yoinkc/templates/report/_js.html.j2` | Snapshot init from two variables (not deep copy), re-render sends wrapper, editor JS include |
-| `src/yoinkc/templates/report/_file_browser.html.j2` | Conditional: show editor (refine) or read-only browser (static) |
-| `src/yoinkc/templates/report/_config.html.j2` | Replace content pulldowns with "View & edit in editor →" links in refine mode |
-| `src/yoinkc/templates/report/_containers.html.j2` | Same: "View & edit in editor →" links in refine mode |
-| `src/yoinkc/templates/report/_services.html.j2` | Same: "View & edit in editor →" links for drop-ins in refine mode |
-| `src/yoinkc/templates/report/_toolbar.html.j2` | Re-render button with changed-file count |
-| `src/yoinkc/templates/report/_sidebar.html.j2` | Tab name: "Editor" (refine) vs "Files" (static) |
-| `src/yoinkc/renderers/audit_report.py` | Modifications section: edited/added file lists |
-| `tests/test_html_report_output.py` | Tests for refine_mode=False preserving existing behavior |
-| `tests/test_audit_report_output.py` | Tests for modifications section |
+| `yoinkc-refine` | Wrapper request format `{snapshot, original}`, `_re_render()` accepts `original_data`, mounts original-snapshot.json, passes `--refine-mode` and `--original-snapshot` to container |
+| `src/yoinkc/renderers/html_report.py` | `_build_context()`: `refine_mode`, `original_snapshot_json` (read from file), `codemirror_js` (inlined). `_build_output_tree()`: add `drop-ins/` folder |
+| `src/yoinkc/renderers/__init__.py` | `run_all()`: accepts `refine_mode` + `original_snapshot_path`, reads original snapshot once, passes to html_report and audit_report |
+| `src/yoinkc/renderers/audit_report.py` | `_compute_modifications()` + Modifications section in audit-report.md |
+| `src/yoinkc/renderers/containerfile/_config_tree.py` | Drop-ins dual-write to `config/` and `drop-ins/` |
+| `src/yoinkc/cli.py` | `--refine-mode` and `--original-snapshot` CLI flags |
+| `src/yoinkc/__main__.py` | `functools.partial` to thread refine_mode + original_snapshot_path through pipeline |
+| `src/yoinkc/templates/report.html.j2` | Conditional inline `<script>{{ codemirror_js }}</script>` |
+| `src/yoinkc/templates/report/_js.html.j2` | `originalSnapshot` from context (not deep-copy), `refineMode` variable, wrapper fetch body, editor JS include |
+| `src/yoinkc/templates/report/_file_browser.html.j2` | Conditional: editor (refine) or read-only browser (static), includes new file modal |
+| `src/yoinkc/templates/report/_config.html.j2` | "View & edit in editor" links in refine mode |
+| `src/yoinkc/templates/report/_containers.html.j2` | "View & edit in editor" links replacing content `<details>` in refine mode |
+| `src/yoinkc/templates/report/_services.html.j2` | Same for drop-in content |
+| `src/yoinkc/templates/report/_toolbar.html.j2` | Refine-mode re-render button with changed-file count |
+| `src/yoinkc/templates/report/_sidebar.html.j2` | Tab name: "Editor" (refine) vs "File browser" (static) |
+| `pyproject.toml` | Added `static/**/*` to package-data |
+| `tests/test_html_report_output.py` | Tests for original snapshot embedding, refine_mode, drop-ins tree |
+| `tests/test_audit_report_output.py` | Tests for audit modifications section |
+| `tests/test_yoinkc_refine.py` | Test for wrapper format re-render |
 
 ---
 
@@ -1717,14 +1755,14 @@ git commit -m "test: integration tests for editor feature completeness"
 
 ---
 
-## Notes for Implementer
+## Post-Implementation Notes
 
-1. **`_editor_js.html.j2` will be large** (~300+ lines). This is acceptable for initial implementation since it's all closely related editor logic. If it becomes unwieldy during development, consider splitting into `_editor_tree.html.j2` and `_editor_actions.html.j2`.
+1. **`_editor_js.html.j2` is ~350 lines.** All closely related editor logic in one IIFE. Splitting is possible but not yet needed.
 
-2. **`confirmNavigation()` uses `confirm()`** as a deliberate simplification. Replace with a PF6 modal (save/discard/cancel) in a follow-up task.
+2. **`confirmNavigation()` uses `confirm()`** — deliberate simplification. Replace with a PF6 modal (save/discard/cancel) in a follow-up.
 
-3. **`triggerReRender()` uses `alert()`** for error display. The spec calls for a PF6 error banner. Implement the banner if straightforward; otherwise use `alert()` as a placeholder.
+3. **`triggerReRender()` uses `alert()`** for errors — deliberate simplification. Replace with a PF6 error banner in a follow-up.
 
-4. **Template context**: The `snapshot` Python object is available in Jinja2 templates for iteration (e.g., service lists, user lists in the new file modal). The `snapshot_json` string is what gets embedded in `<script>` tags for JavaScript. Don't confuse the two.
+4. **Dirty tracking uses keyup polling for CM6** rather than CM6's built-in `updateListener` extension. The bundle API (`CMEditor.create/getContent/setContent`) doesn't expose an onChange callback. A future improvement could extend the bundle's `build.mjs` to accept a callback parameter.
 
-5. **Cross-chunk dependency**: Task 1 changes the re-render fetch body format. Task 12 also touches the re-render fetch. Verify consistency after implementing both.
+5. **Cross-chunk re-render consistency verified.** Both `_js.html.j2` (existing re-render) and `_editor_js.html.j2` (editor re-render) send the `{snapshot, original}` wrapper format.
