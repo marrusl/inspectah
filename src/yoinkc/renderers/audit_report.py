@@ -1,6 +1,7 @@
 """Markdown audit report renderer."""
 
 from pathlib import Path
+from typing import List, Optional, Tuple
 
 from jinja2 import Environment
 
@@ -42,10 +43,44 @@ def _storage_recommendation(mount_point: str, fstype: str, device: str) -> str:
     return "review — determine if data is mutable or static"
 
 
+def _compute_modifications(
+    snapshot: InspectionSnapshot,
+    original: InspectionSnapshot,
+) -> Tuple[List[str], List[str]]:
+    """Compare snapshot against original to find edited and added files.
+
+    Returns (edited_paths, added_paths).
+    """
+    edited: List[str] = []
+    added: List[str] = []
+
+    pairs = [
+        (snapshot.config.files if snapshot.config else [],
+         original.config.files if original.config else []),
+        (snapshot.containers.quadlet_units if snapshot.containers else [],
+         original.containers.quadlet_units if original.containers else []),
+        (snapshot.services.drop_ins if snapshot.services else [],
+         original.services.drop_ins if original.services else []),
+    ]
+
+    for current_items, orig_items in pairs:
+        orig_by_path = {item.path: (item.content or "") for item in orig_items}
+        for item in current_items:
+            p = item.path
+            c = item.content or ""
+            if p not in orig_by_path:
+                added.append(p)
+            elif c != orig_by_path[p]:
+                edited.append(p)
+
+    return edited, added
+
+
 def render(
     snapshot: InspectionSnapshot,
     env: Environment,
     output_dir: Path,
+    original_snapshot: Optional[InspectionSnapshot] = None,
 ) -> None:
     output_dir = Path(output_dir)
     lines = ["# Audit Report", ""]
@@ -870,5 +905,25 @@ def render(
         for r in snapshot.redactions:
             lines.append(f"- **{r.get('path') or ''}**: {r.get('pattern') or ''} — {r.get('remediation') or ''}")
         lines.append("")
+
+    if original_snapshot:
+        edited, added_files = _compute_modifications(snapshot, original_snapshot)
+        if edited or added_files:
+            lines.append("## Modifications")
+            lines.append("")
+            lines.append("Changes made by the operator during refinement.")
+            lines.append("")
+            if edited:
+                lines.append("### Edited")
+                lines.append("")
+                for p in sorted(edited):
+                    lines.append(f"- `{p}`")
+                lines.append("")
+            if added_files:
+                lines.append("### Added")
+                lines.append("")
+                for p in sorted(added_files):
+                    lines.append(f"- `{p}`")
+                lines.append("")
 
     (output_dir / "audit-report.md").write_text("\n".join(lines))

@@ -32,9 +32,19 @@ def run_all(
         loader=FileSystemLoader(str(templates_dir)),
         autoescape=True,
     )
+    # Read the original snapshot once for both html_report and audit_report
+    original_snapshot = None
+    if original_snapshot_path and original_snapshot_path.exists():
+        try:
+            original_snapshot = InspectionSnapshot.model_validate_json(
+                original_snapshot_path.read_text()
+            )
+        except Exception:
+            pass
+
     _status_fn("Rendering output…")
     render_containerfile(snapshot, env, output_dir)
-    render_audit_report(snapshot, env, output_dir)
+    render_audit_report(snapshot, env, output_dir, original_snapshot=original_snapshot)
     render_html_report(
         snapshot, env, output_dir,
         refine_mode=refine_mode,

@@ -9,6 +9,7 @@ from yoinkc.renderers.containerfile import render as render_containerfile
 from yoinkc.renderers.audit_report import render as render_audit_report
 from yoinkc.renderers.kickstart import render as render_kickstart
 from yoinkc.renderers.readme import render as render_readme
+from yoinkc.schema import InspectionSnapshot, OsRelease
 
 
 class TestAuditReport:
@@ -234,6 +235,64 @@ class TestReadme:
         """README should contain a FIXME checklist or mention FIXMEs."""
         readme = self._readme(outputs_with_baseline)
         assert "FIXME" in readme or "checklist" in readme.lower() or "TODO" in readme
+
+
+class TestAuditModifications:
+    """Tests for the operator modifications section."""
+
+    def test_modifications_section_with_edits(self):
+        """Audit report includes Modifications section when files are edited."""
+        from yoinkc.schema import ConfigFileEntry, ConfigFileKind, ConfigSection
+        original = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(path="/etc/myapp/app.conf", kind=ConfigFileKind.RPM_OWNED_MODIFIED, content="original"),
+            ]),
+        )
+        modified = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(path="/etc/myapp/app.conf", kind=ConfigFileKind.RPM_OWNED_MODIFIED, content="changed"),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit_report(modified, Environment(), Path(tmp), original_snapshot=original)
+            md = (Path(tmp) / "audit-report.md").read_text()
+        assert "## Modifications" in md
+        assert "Edited" in md
+        assert "/etc/myapp/app.conf" in md
+
+    def test_modifications_section_with_added_files(self):
+        from yoinkc.schema import ConfigFileEntry, ConfigFileKind, ConfigSection
+        original = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        modified = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            config=ConfigSection(files=[
+                ConfigFileEntry(path="/etc/new.conf", kind=ConfigFileKind.UNOWNED, content="new"),
+            ]),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit_report(modified, Environment(), Path(tmp), original_snapshot=original)
+            md = (Path(tmp) / "audit-report.md").read_text()
+        assert "## Modifications" in md
+        assert "Added" in md
+        assert "/etc/new.conf" in md
+
+    def test_no_modifications_section_when_unchanged(self):
+        snap = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit_report(snap, Environment(), Path(tmp), original_snapshot=snap)
+            md = (Path(tmp) / "audit-report.md").read_text()
+        assert "## Modifications" not in md
 
 
 class TestSecretsReview:
