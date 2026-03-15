@@ -270,6 +270,42 @@ Usage:
 YOINKC_OUTPUT_DIR=/tmp/fleet ./run-yoinkc-fleet.sh ./snapshots/
 ```
 
+## 4. Schema
+
+The schema (`schema.py`) is the contract between inspectors and renderers. Inspectors produce data that conforms to it; renderers consume it; fleet merge operates on it. Every inspector writes into a typed section of the schema, every renderer reads the complete snapshot, and the JSON serialization of the schema (`inspection-snapshot.json`) is the durable artifact that enables offline re-rendering, fleet aggregation, and snapshot-based workflows like `--from-snapshot`.
+
+### Schema Versioning
+
+The `SCHEMA_VERSION` integer constant (currently **6**) is embedded in every serialized snapshot. When `pipeline.py:load_snapshot()` deserializes a snapshot, it compares the file's `schema_version` against the running code's `SCHEMA_VERSION`. A mismatch raises a `ValueError` with a clear message instructing the user to re-run the inspection. This prevents silent data corruption when the schema evolves — old snapshots cannot be loaded by new code or vice versa.
+
+### Model Hierarchy
+
+All models use **Pydantic v2** `BaseModel`, giving automatic validation on construction, `model_dump_json()` for serialization, and `model_validate()` for deserialization. The hierarchy has three layers:
+
+1. **Root model — `InspectionSnapshot`.** Contains `schema_version`, `meta` (hostname, timestamp, profile), `os_release` (from `/etc/os-release`), `warnings`, `redactions`, and 11 optional section fields — one per inspector.
+
+2. **Section models — one per inspector.** `RpmSection`, `ConfigSection`, `ServiceSection`, `NetworkSection`, `StorageSection`, `ScheduledTaskSection`, `ContainerSection`, `NonRpmSoftwareSection`, `KernelBootSection`, `SelinuxSection`, `UserGroupSection`. Each section contains lists of item models and any inspector-specific metadata (e.g., `RpmSection.baseline_package_names`, `RpmSection.leaf_packages`).
+
+3. **Item models — the individual findings.** `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, `ComposeFile`, and others. Many item models carry an `include: bool` field that controls whether the item appears in the Containerfile (toggled by the interactive refine UI or fleet merge).
+
+Two enums define controlled vocabularies: `PackageState` (`added`, `base_image_only`, `modified`) and `ConfigFileKind` (`rpm_owned_modified`, `unowned`, `orphaned`).
+
+### Key Design Choices
+
+- **Optional sections.** Every section field on `InspectionSnapshot` is `Optional[...Section] = None`. If an inspector did not run (e.g., `--skip-network`), its field is `None` rather than an empty section. Renderers check for `None` and skip the corresponding output.
+- **Round-trip fidelity.** `model_dump_json()` and `model_validate()` round-trip cleanly — the serialized JSON is the single source of truth for a snapshot. The `model_config = {"extra": "ignore"}` setting on the root model ensures forward compatibility: fields added in newer schema versions are silently dropped when loading into older code (though the version check prevents this in practice).
+- **Flat item lists.** Sections contain flat lists of item models rather than nested hierarchies. This makes fleet merge straightforward (union lists, deduplicate by key fields) and keeps Jinja2 templates simple (iterate and render).
+
+### Fleet Metadata
+
+Fleet-aggregated snapshots carry additional metadata at two levels:
+
+- **`FleetMeta`** on `InspectionSnapshot.meta` — contains `source_hosts` (list of hostnames), `total_hosts`, and `min_prevalence` (the `--min-prevalence` threshold used during aggregation).
+
+- **`FleetPrevalence`** on individual item models — contains `count` (how many hosts had this item), `total` (total hosts in the fleet), and `hosts` (list of hostnames). Exactly **10 item models** carry an `Optional[FleetPrevalence]` field: `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, and `ComposeFile`. These are the models that support deduplication and prevalence tracking during fleet merge. The `fleet` field is `None` in single-host snapshots and populated only by `yoinkc-fleet aggregate`.
+
+The source code (`schema.py`) is the authoritative reference for individual field names and types.
+
 ### Inspector Modules
 
 #### RPM Inspector
