@@ -1,0 +1,40 @@
+{# ── Section wrapper macro ─────────────────────────────────────────────── #}
+{% macro section(id, title, visible=false) -%}
+<div id="section-{{ id }}" class="section{% if visible %} visible{% endif %}">
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h2>{{ title }}</h2></div></div>
+    <div class="pf-v6-c-card__body">
+    {{- caller() }}
+    </div>
+  </div>
+</div>
+{%- endmacro %}
+
+{# ── Fleet prevalence cell macro ─────────────────────────────────────── #}
+{% macro fleet_cell(item) %}
+{% if fleet_meta %}
+<td class="fleet-prevalence">
+  {% if item.fleet %}
+  <div class="fleet-bar"
+       data-count="{{ item.fleet.count }}"
+       data-total="{{ item.fleet.total }}"
+       data-hosts="{{ item.fleet.hosts | join(', ') }}">
+    <div class="fleet-bar-track">
+      <div class="fleet-bar-fill {{ item.fleet | fleet_color }}"
+           style="width: {{ (item.fleet.count * 100 // item.fleet.total) if item.fleet.total > 0 else 100 }}%"></div>
+    </div>
+    <span class="fleet-bar-label">{{ item.fleet.count }}/{{ item.fleet.total }}</span>
+  </div>
+  {% endif %}
+</td>
+{% endif %}
+{% endmacro %}
+
+{# ── Simple data table macro ────────────────────────────────────────────── #}
+{% macro data_table(headers) %}
+<table class="pf-v6-c-table"><thead><tr>
+  {%- for h in headers %}<th scope="col">{{ h }}</th>{% endfor -%}
+</tr></thead><tbody>
+{{ caller() }}
+</tbody></table>
+{% endmacro %}

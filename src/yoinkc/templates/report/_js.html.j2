@@ -1,0 +1,656 @@
+<script>
+// Apply saved theme immediately so re-rendered pages don't flash
+(function(){ var t = localStorage.getItem('yoinkc-theme'); if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark'); })();
+var snapshot = {{ snapshot_json|safe }};
+var originalSnapshot = JSON.parse(JSON.stringify(snapshot));
+(function(){
+  var sections = document.querySelectorAll('.section');
+  var navLinks = document.querySelectorAll('.pf-v6-c-nav__link[data-tab]');
+  function show(id) {
+    if (!id) return;
+    sections.forEach(function(s){ s.classList.remove('visible'); });
+    var el = document.getElementById('section-' + id);
+    if (el) el.classList.add('visible');
+    navLinks.forEach(function(link){
+      link.classList.toggle('pf-m-current', link.getAttribute('data-tab') === id);
+    });
+  }
+  window.show = show;
+  navLinks.forEach(function(link){
+    link.addEventListener('click', function(e){ e.preventDefault(); show(link.getAttribute('data-tab')); });
+  });
+  show('summary');
+
+  // --- Warning dismiss + badge ---
+  var bannerCount = document.getElementById('banner-warning-count');
+  var warningBadge = document.getElementById('nav-warning-badge');
+
+  function updateWarningBadge() {
+    var total = document.querySelectorAll('#warnings-list .warning-row:not(.dismissed)').length;
+    if (bannerCount) bannerCount.textContent = total;
+    if (warningBadge) {
+      warningBadge.textContent = total;
+      warningBadge.classList.toggle('pf-m-unread', total > 0);
+      warningBadge.classList.toggle('pf-m-read', total === 0);
+    }
+  }
+
+  document.querySelectorAll('#warnings-list .warning-row-dismiss').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      this.closest('.warning-row').classList.add('dismissed');
+      updateWarningBadge();
+    });
+  });
+  var dismissAll = document.getElementById('warning-dismiss-all');
+  if (dismissAll) {
+    dismissAll.addEventListener('click', function(){
+      document.querySelectorAll('#warnings-list .warning-row').forEach(function(row){
+        row.classList.add('dismissed');
+      });
+      updateWarningBadge();
+    });
+  }
+  updateWarningBadge();
+
+  var search = document.getElementById('warn-search');
+  if (search) {
+    search.addEventListener('input', function(){
+      var q = (this.value || '').toLowerCase();
+      document.querySelectorAll('#warnings-list .warning-row').forEach(function(row){
+        var isDismissed = row.classList.contains('dismissed');
+        var matches = q === '' || (row.textContent || '').toLowerCase().indexOf(q) >= 0;
+        row.style.display = (!isDismissed && matches) ? '' : 'none';
+      });
+    });
+  }
+  document.querySelectorAll('.pf-v6-c-tree-view__node:not(.file-entry)').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var li = this.closest('.pf-v6-c-tree-view__list-item');
+      if (!li) return;
+      var expanded = li.classList.toggle('pf-m-expanded');
+      li.setAttribute('aria-expanded', expanded);
+    });
+  });
+  document.querySelectorAll('.file-entry').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = this.getAttribute('data-content-id');
+      var path = this.getAttribute('data-path');
+      var pathEl = document.getElementById('file-viewer-path');
+      var contentEl = document.getElementById('file-viewer-content');
+      var src = id ? document.getElementById(id) : null;
+      if (pathEl) pathEl.textContent = path || 'Click a file';
+      if (contentEl) contentEl.innerHTML = src ? src.innerHTML : '';
+      document.querySelectorAll('.file-entry.pf-m-current').forEach(function(n){ n.classList.remove('pf-m-current'); });
+      this.classList.add('pf-m-current');
+    });
+  });
+
+  // --- Interactive item exclusion ---
+  var toolbar = document.getElementById('exclude-toolbar');
+  var statusTextEl = document.getElementById('toolbar-status-text');
+  var toast = document.getElementById('toast');
+  var rerenderBtn = document.getElementById('btn-rerender');
+  var tarballBtn = document.getElementById('btn-tarball');
+  var downloadSnapshotBtn = document.getElementById('btn-download-snapshot');
+  var resetBtn = document.getElementById('btn-reset');
+  var helperAvailable = false;
+  var dirty = false;
+
+  var includeBaseline = {};
+  var strategyBaseline = {};
+  function buildBaseline() {
+    includeBaseline = {};
+    strategyBaseline = {};
+    document.querySelectorAll('.include-cb').forEach(function(cb) {
+      var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = tr.getAttribute('data-snap-index');
+      if (section && list && idx !== null) {
+        includeBaseline[section + '/' + list + '/' + idx] = cb.checked;
+      }
+    });
+    document.querySelectorAll('.strategy-select').forEach(function(sel) {
+      var tr = sel.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      strategyBaseline[key] = sel.value;
+    });
+  }
+  function isSnapshotClean() {
+    var clean = true;
+    document.querySelectorAll('.include-cb').forEach(function(cb) {
+      var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = tr.getAttribute('data-snap-index');
+      if (section && list && idx !== null) {
+        if (cb.checked !== includeBaseline[section + '/' + list + '/' + idx]) {
+          clean = false;
+        }
+      }
+    });
+    document.querySelectorAll('.strategy-select').forEach(function(sel) {
+      var tr = sel.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      if (sel.value !== strategyBaseline[key]) clean = false;
+    });
+    return clean;
+  }
+  buildBaseline();
+
+  function setDirty(isDirty) {
+    dirty = isDirty;
+    if (tarballBtn) tarballBtn.disabled = isDirty;
+    if (rerenderBtn) rerenderBtn.disabled = !isDirty;
+  }
+
+  function showToast(msg, ms) {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.classList.add('visible');
+    setTimeout(function(){ toast.classList.remove('visible'); }, ms || 4000);
+  }
+
+  function updateToolbar() {
+    var n = document.querySelectorAll('.include-cb:not(:checked)').length;
+    var strategyChanges = 0;
+    document.querySelectorAll('.strategy-select').forEach(function(sel) {
+      var tr = sel.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      if (sel.value !== strategyBaseline[key]) strategyChanges++;
+    });
+    var changed = !isSnapshotClean();
+    var isHelper = toolbar && toolbar.classList.contains('helper-active');
+
+    if (changed) {
+      var parts = [];
+      if (n > 0) parts.push(n + ' item(s) excluded');
+      if (strategyChanges > 0) parts.push(strategyChanges + ' strategy change(s)');
+      if (parts.length === 0) parts.push('Snapshot modified');
+      if (statusTextEl) { statusTextEl.textContent = parts.join(', '); statusTextEl.style.color = ''; }
+      if (rerenderBtn) rerenderBtn.disabled = false;
+      if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = false;
+    } else if (isHelper) {
+      if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--pf-t--global--text--color--subtle)'; }
+      if (rerenderBtn) rerenderBtn.disabled = true;
+      if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = true;
+    } else {
+      if (statusTextEl) { statusTextEl.textContent = ''; statusTextEl.style.color = ''; }
+    }
+    if (resetBtn) resetBtn.disabled = !changed;
+
+    if (toolbar && !isHelper) {
+      toolbar.classList.toggle('visible', n > 0 || changed);
+    }
+  }
+
+  function resolveSnapshotRef(section, list) {
+    if (!snapshot) return null;
+    var sec = snapshot[section];
+    if (!sec) return null;
+    return sec[list] || null;
+  }
+
+  document.querySelectorAll('.include-cb').forEach(function(cb){
+    cb.addEventListener('change', function(){
+      var tr = this.closest('tr[data-snap-section]') || this.closest('[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
+      if (section && list && !isNaN(idx) && idx >= 0) {
+        var arr = resolveSnapshotRef(section, list);
+        if (arr && arr[idx] !== undefined) {
+          arr[idx].include = this.checked;
+        }
+      }
+      tr.classList.toggle('excluded', !this.checked);
+      updateToolbar();
+      setDirty(!isSnapshotClean());
+    });
+  });
+
+  // --- Strategy select handler ---
+  document.querySelectorAll('.strategy-select').forEach(function(sel){
+    sel.addEventListener('change', function(){
+      var tr = this.closest('tr[data-snap-section]');
+      if (!tr) return;
+      var section = tr.getAttribute('data-snap-section');
+      var list = tr.getAttribute('data-snap-list');
+      var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
+      if (section && list && !isNaN(idx) && idx >= 0) {
+        var arr = resolveSnapshotRef(section, list);
+        if (arr && arr[idx] !== undefined) {
+          arr[idx].strategy = this.value;
+        }
+      }
+      setDirty(!isSnapshotClean());
+      updateToolbar();
+    });
+  });
+
+  // --- Apply strategy to all users/groups ---
+  function applyStrategyToAll(btnId, selectId, listName) {
+    var btn = document.getElementById(btnId);
+    var sel = document.getElementById(selectId);
+    if (!btn || !sel) return;
+    btn.addEventListener('click', function() {
+      var val = sel.value;
+      var arr = resolveSnapshotRef('users_groups', listName);
+      if (!arr) return;
+      document.querySelectorAll('tr[data-snap-section="users_groups"][data-snap-list="' + listName + '"] .strategy-select').forEach(function(s) {
+        s.value = val;
+        var idx = parseInt(s.closest('tr').getAttribute('data-snap-index'), 10);
+        if (!isNaN(idx) && arr[idx] !== undefined) arr[idx].strategy = val;
+      });
+      setDirty(!isSnapshotClean());
+      updateToolbar();
+    });
+  }
+  applyStrategyToAll('btn-strategy-apply-all', 'strategy-apply-all', 'users');
+  applyStrategyToAll('btn-strategy-apply-all-groups', 'strategy-apply-all-groups', 'groups');
+
+  // --- Package leaf/auto-dep cascade ---
+  var pkgDepTree = (snapshot.rpm && snapshot.rpm.leaf_dep_tree) || {};
+  var pkgAutoNames = new Set((snapshot.rpm && snapshot.rpm.auto_packages) || []);
+
+  function getPkgIdx(name) {
+    var pkgs = (snapshot.rpm && snapshot.rpm.packages_added) || [];
+    for (var i = 0; i < pkgs.length; i++) {
+      if (pkgs[i] && pkgs[i].name === name) return i;
+    }
+    return -1;
+  }
+
+  function recomputeAutoDeps() {
+    var covered = new Set();
+    document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+      var cb = row.querySelector('.leaf-cb');
+      if (cb && cb.checked) {
+        (pkgDepTree[row.getAttribute('data-leaf')] || []).forEach(function(d) { covered.add(d); });
+      }
+    });
+    pkgAutoNames.forEach(function(dep) {
+      var i = getPkgIdx(dep);
+      if (i >= 0 && snapshot.rpm && snapshot.rpm.packages_added[i]) {
+        snapshot.rpm.packages_added[i].include = covered.has(dep);
+      }
+    });
+  }
+
+  function updatePkgBanner() {
+    var bannerText = document.getElementById('pkg-selection-text');
+    if (!bannerText) return;
+    var leafRows = document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]');
+    if (!leafRows.length) return;
+    var total = leafRows.length;
+    var selected = 0;
+    var covered = new Set();
+    leafRows.forEach(function(row) {
+      var cb = row.querySelector('.leaf-cb');
+      if (cb && cb.checked) {
+        selected++;
+        (pkgDepTree[row.getAttribute('data-leaf')] || []).forEach(function(d) { covered.add(d); });
+      }
+    });
+    bannerText.innerHTML = '<strong>' + selected + ' of ' + total + ' leaf package' + (total !== 1 ? 's' : '') + ' selected</strong>'
+      + ', pulling in <strong>' + covered.size + ' dependenc' + (covered.size !== 1 ? 'ies' : 'y') + '</strong>'
+      + ' \u2014 only leaf packages appear in the Containerfile\u2019s <code>dnf\u00a0install</code> line.';
+  }
+
+  document.querySelectorAll('.pkg-dep-tree-group .leaf-cb, #pkg-dep-tree .leaf-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      recomputeAutoDeps();
+      updatePkgBanner();
+    });
+  });
+
+  updatePkgBanner();
+
+  // --- Repo cascade: unchecking a repo cascades to its leaf packages ---
+  function parseRepoSectionIds(content) {
+    var ids = [];
+    if (!content) return ids;
+    var lines = content.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var m = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
+      if (m) ids.push(m[1]);
+    }
+    return ids;
+  }
+
+  function applyRepoCascade(repoCb) {
+    var tr = repoCb.closest('tr[data-snap-index]');
+    if (!tr) return;
+    var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
+    var repos = (snapshot.rpm && snapshot.rpm.repo_files) || [];
+    if (idx < 0 || idx >= repos.length) return;
+    var repoIds = new Set(parseRepoSectionIds(repos[idx].content));
+    if (!repoIds.size) return;
+    var checked = repoCb.checked;
+
+    document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+      var leafName = row.getAttribute('data-leaf');
+      var pkgIdx = parseInt(row.getAttribute('data-snap-index'), 10);
+      if (pkgIdx < 0) return;
+      var pkg = snapshot.rpm.packages_added[pkgIdx];
+      if (!pkg || !repoIds.has(pkg.source_repo)) return;
+
+      var leafCb = row.querySelector('.leaf-cb');
+      if (!leafCb) return;
+
+      if (!checked) {
+        leafCb.checked = false;
+        leafCb.disabled = true;
+        pkg.include = false;
+        row.classList.add('excluded');
+      } else {
+        leafCb.checked = true;
+        leafCb.disabled = false;
+        pkg.include = true;
+        row.classList.remove('excluded');
+      }
+    });
+    recomputeAutoDeps();
+    updatePkgBanner();
+  }
+
+  function resetToOriginal() {
+    document.querySelectorAll('[data-snap-section]').forEach(function(el) {
+      var section = el.getAttribute('data-snap-section');
+      var list = el.getAttribute('data-snap-list');
+      var idx = parseInt(el.getAttribute('data-snap-index'), 10);
+      if (!section || !list || isNaN(idx) || idx < 0) return;
+
+      var origSection = originalSnapshot[section];
+      if (!origSection) return;
+      var origList = origSection[list];
+      if (!origList || !origList[idx]) return;
+      var origItem = origList[idx];
+
+      var liveSection = snapshot[section];
+      if (liveSection && liveSection[list] && liveSection[list][idx] !== undefined) {
+        if (origItem.include !== undefined) {
+          liveSection[list][idx].include = origItem.include;
+        }
+        if (origItem.strategy !== undefined) {
+          liveSection[list][idx].strategy = origItem.strategy;
+        }
+      }
+
+      var cb = el.querySelector('.include-cb');
+      if (cb) {
+        var shouldCheck = origItem.include !== undefined ? origItem.include : true;
+        cb.checked = shouldCheck;
+        if (cb.classList.contains('leaf-cb')) {
+          cb.disabled = false;
+        }
+      }
+
+      var sel = el.querySelector('.strategy-select');
+      if (sel && origItem.strategy !== undefined) {
+        sel.value = origItem.strategy;
+      }
+
+      var shouldExclude = origItem.include !== undefined ? !origItem.include : false;
+      el.classList.toggle('excluded', shouldExclude);
+    });
+
+    document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
+      applyRepoCascade(cb);
+    });
+
+    recomputeAutoDeps();
+    updatePkgBanner();
+    updateToolbar();
+    setDirty(false);
+    showToast('Selections reset to initial state');
+  }
+
+  document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
+    cb.addEventListener('change', function() {
+      applyRepoCascade(this);
+      updateToolbar();
+      setDirty(!isSnapshotClean());
+    });
+  });
+
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function() {
+      if (confirm('Reset all selections to their initial state? This cannot be undone.')) {
+        resetToOriginal();
+      }
+    });
+  }
+
+  // --- Download modified snapshot ---
+  downloadSnapshotBtn.addEventListener('click', function(){
+    if (!dirty) return;
+    var json = JSON.stringify(snapshot, null, 2);
+    var blob = new Blob([json], {type: 'application/json'});
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'modified-snapshot.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // --- Re-render ---
+  rerenderBtn.addEventListener('click', function(){
+    if (!helperAvailable) return;
+    if (!dirty) return;
+    var origText = rerenderBtn.innerHTML;
+    rerenderBtn.innerHTML = '<span class="spinner"></span>Re-rendering...';
+    rerenderBtn.disabled = true;
+    fetch(window.location.origin + '/api/re-render', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(snapshot),
+    }).then(function(r){
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function(html){
+      setDirty(false);
+      document.open();
+      document.write(html);
+      document.close();
+    }).catch(function(err){
+      showToast('Re-render failed: ' + err.message, 5000);
+      rerenderBtn.innerHTML = origText;
+      rerenderBtn.disabled = false;
+    });
+  });
+
+  // --- Download tarball ---
+  tarballBtn.addEventListener('click', function(){
+    if (!helperAvailable) return;
+    window.location.href = window.location.origin + '/api/tarball';
+  });
+
+  // --- Helper script detection with retry ---
+  function enableHelperButtons(reRenderAvailable) {
+    helperAvailable = true;
+    document.querySelectorAll('.include-cb-wrap').forEach(function(el){ el.style.display = 'inline-grid'; });
+    if (toolbar) {
+      toolbar.style.display = '';
+      toolbar.classList.remove('visible');
+      toolbar.classList.add('helper-active');
+    }
+    if (reRenderAvailable !== false) {
+      rerenderBtn.disabled = false;
+      rerenderBtn.title = 'Re-render with excluded items removed';
+    } else {
+      rerenderBtn.title = 'Re-render requires podman or docker — not found on this system';
+    }
+    tarballBtn.disabled = false;
+    tarballBtn.title = 'Download current output as tar.gz';
+    updateToolbar();
+  }
+
+  function checkHelperAvailable(attempt) {
+    fetch(window.location.origin + '/api/health')
+      .then(function(r) { return r.ok ? r.json() : Promise.reject(new Error('not ok')); })
+      .then(function(d) {
+        if (d && d.status === 'ok') {
+          enableHelperButtons(d.re_render !== false);
+        } else {
+          retryOrGiveUp(attempt);
+        }
+      })
+      .catch(function() { retryOrGiveUp(attempt); });
+  }
+
+  function retryOrGiveUp(attempt) {
+    if (attempt < 3) {
+      setTimeout(function() { checkHelperAvailable(attempt + 1); }, 2000);
+    } else {
+      console.log('yoinkc-refine not detected');
+    }
+  }
+
+  checkHelperAvailable(0);
+  updateToolbar();
+
+  // --- Theme toggle ---
+  (function() {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    function applyTheme(theme) {
+      if (theme === 'dark') {
+        document.documentElement.classList.add('pf-v6-theme-dark');
+      } else {
+        document.documentElement.classList.remove('pf-v6-theme-dark');
+      }
+      btn.textContent = theme === 'light' ? '\u263D' : '\u2600';
+      btn.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+      localStorage.setItem('yoinkc-theme', theme);
+    }
+    applyTheme(localStorage.getItem('yoinkc-theme') || 'dark');
+    btn.addEventListener('click', function() {
+      var isDark = document.documentElement.classList.contains('pf-v6-theme-dark');
+      applyTheme(isDark ? 'light' : 'dark');
+    });
+  })();
+
+  // --- Copy Containerfile to clipboard ---
+  (function() {
+    var btn = document.getElementById('btn-copy-cf');
+    if (!btn) return;
+    var pre = document.getElementById('containerfile-pre');
+    function flash() {
+      btn.textContent = 'Copied!';
+      btn.classList.remove('pf-m-secondary');
+      btn.classList.add('pf-m-primary');
+      setTimeout(function() {
+        btn.textContent = 'Copy';
+        btn.classList.remove('pf-m-primary');
+        btn.classList.add('pf-m-secondary');
+      }, 1500);
+    }
+    function fallback(text) {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch(e) {}
+      document.body.removeChild(ta);
+      if (ok) { flash(); } else { showToast('Clipboard not available in this context', 3000); }
+    }
+    btn.addEventListener('click', function() {
+      var text = pre ? pre.textContent : '';
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(flash).catch(function() { fallback(text); });
+      } else {
+        fallback(text);
+      }
+    });
+  })();
+})();
+
+
+{% if fleet_meta %}
+/* Fleet: toggle fraction/percentage on prevalence labels */
+document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
+  label.addEventListener('click', function(e) {
+    e.stopPropagation();
+    var bar = this.closest('.fleet-bar');
+    if (!bar) return;
+    var count = parseInt(bar.getAttribute('data-count'), 10);
+    var total = parseInt(bar.getAttribute('data-total'), 10);
+    var showing = this.getAttribute('data-showing') || 'fraction';
+    if (showing === 'fraction') {
+      var pct = total > 0 ? Math.round(count * 100 / total) : 100;
+      this.textContent = pct + '%';
+      this.setAttribute('data-showing', 'percent');
+    } else {
+      this.textContent = count + '/' + total;
+      this.setAttribute('data-showing', 'fraction');
+    }
+  });
+});
+
+/* Fleet: host list popover on bar click */
+var activePopover = null;
+document.querySelectorAll('.fleet-bar').forEach(function(bar) {
+  bar.addEventListener('click', function(e) {
+    if (activePopover) {
+      activePopover.remove();
+      activePopover = null;
+    }
+    var hosts = this.getAttribute('data-hosts');
+    var popover = document.createElement('div');
+    popover.className = 'fleet-popover';
+    if (!hosts) {
+      popover.textContent = 'Host list not available';
+    } else {
+      var ul = document.createElement('ul');
+      hosts.split(', ').forEach(function(h) {
+        if (h.trim()) {
+          var li = document.createElement('li');
+          li.textContent = h.trim();
+          ul.appendChild(li);
+        }
+      });
+      if (ul.children.length === 0) {
+        popover.textContent = 'Host list not available';
+      } else {
+        popover.appendChild(ul);
+      }
+    }
+    this.style.position = 'relative';
+    this.appendChild(popover);
+    activePopover = popover;
+  });
+});
+
+/* Close popover on click outside */
+document.addEventListener('click', function(e) {
+  if (activePopover && !e.target.closest('.fleet-bar')) {
+    activePopover.remove();
+    activePopover = null;
+  }
+});
+
+/* Fleet: variant group expand/collapse */
+document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
+  badge.addEventListener('click', function() {
+    var childRow = this.closest('tr').nextElementSibling;
+    if (childRow && childRow.classList.contains('fleet-variant-children')) {
+      if (childRow.style.display === 'table-row') {
+        childRow.style.display = '';
+      } else {
+        childRow.style.display = 'table-row';
+      }
+    }
+  });
+});
+{% endif %}
+</script>

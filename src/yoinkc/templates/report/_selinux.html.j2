@@ -1,0 +1,79 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── SELinux ──────────────────────────────────────────────────────────────── #}
+{% call section("selinux", "SELinux / Security") %}
+  {%- set se = snapshot.selinux %}
+  {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode or se.port_labels or se.fcontext_rules or se.pam_configs) %}
+
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Overview</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <dl class="pf-v6-c-description-list pf-m-horizontal">
+      {%- if se.mode %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">Mode</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.mode }}</div></dd></div>
+      {%- endif %}
+      {%- if se.fips_mode %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">FIPS mode</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">enabled</div></dd></div>
+      {%- endif %}
+      {%- if se.audit_rules %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">Audit rule files</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.audit_rules|length }}</div></dd></div>
+      {%- endif %}
+      {%- if se.pam_configs %}
+      <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">PAM configs</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.pam_configs|length }}</div></dd></div>
+      {%- endif %}
+    </dl>
+    </div>
+  </div>
+
+  {%- if se.custom_modules %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Custom Policy Modules</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <ul>{%- for m in se.custom_modules %}<li><code>{{ m }}</code></li>{%- endfor %}</ul>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- set non_default = se.boolean_overrides|selectattr('non_default')|list %}
+  {%- set unchanged_count = (se.boolean_overrides|length) - (non_default|length) %}
+  {%- if non_default %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Non-Default Booleans</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Boolean</th><th scope="col">Current</th><th scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
+      {%- for b in non_default %}
+      {%- set cur = b.get('current', '?') %}
+      <tr>
+        <td><code>{{ b.get('name', '?') }}</code></td>
+        <td class="{{ 'text-status-success' if cur == 'on' else 'text-status-danger' }} text-bold">{{ cur }}</td>
+        <td>{{ b.get('default', '?') }}</td>
+        <td>{{ b.get('description', '') }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- if unchanged_count > 0 %}<p>{{ unchanged_count }} boolean(s) at default values (not shown).</p>{%- endif %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if se.port_labels %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Custom Port Labels</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Protocol</th><th scope="col">Port</th><th scope="col">SELinux type</th></tr></thead><tbody>
+      {%- for pl in se.port_labels %}
+      <tr>
+        <td><code>{{ pl.protocol }}</code></td>
+        <td><code>{{ pl.port }}</code></td>
+        <td><code>{{ pl.type }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- else %}
+  <p>No SELinux/security customizations detected.</p>
+  {%- endif %}
+{% endcall %}
+

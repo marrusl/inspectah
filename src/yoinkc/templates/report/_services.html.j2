@@ -1,0 +1,91 @@
+{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{# ── Services ────────────────────────────────────────────────────────────── #}
+{% call section("services", "Services") %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Service State Changes</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if snapshot.services and snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list %}
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Unit</th><th scope="col">Current</th><th scope="col">Default</th><th scope="col">Action</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+      {%- for s in snapshot.services.state_changes %}
+      {%- if s.action != 'unchanged' %}
+      <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td>{{ fleet_cell(s) }}</tr>
+      {%- endif %}
+      {%- endfor %}
+    </tbody></table>
+    {%- else %}
+    <p>No service changes.</p>
+    {%- endif %}
+    </div>
+  </div>
+
+  {%- if snapshot.services and snapshot.services.drop_ins %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Drop-in Overrides ({{ snapshot.services.drop_ins|length }})</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Parent unit</th><th scope="col">Drop-in path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+    {% if fleet_meta and dropin_variant_groups %}
+      {%- for path, variants in dropin_variant_groups.items() %}
+      {%- if variants | length > 1 %}
+        {%- set primary = variants[0] %}
+        <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}"
+            data-snap-section="services" data-snap-list="drop_ins"
+            data-snap-index="{{ primary.snap_index }}">
+          <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if primary.item.include else '' }}/></span></td>
+          <td colspan="2">
+            <code>{{ path }}</code>
+            <span class="pf-v6-c-label pf-m-compact pf-m-outline fleet-variant-toggle" style="margin-left: 8px; cursor: pointer;">
+              <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
+            </span>
+          </td>
+          <td></td>
+          {{ fleet_cell(primary.item) }}
+        </tr>
+        <tr class="fleet-variant-children">
+          <td colspan="10">
+            <table class="pf-v6-c-table pf-m-compact" style="margin: 0;">
+              {%- for v in variants %}
+              <tr{% if not v.item.include %} class="excluded"{% endif %}
+                  data-snap-section="services" data-snap-list="drop_ins"
+                  data-snap-index="{{ v.snap_index }}">
+                <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if v.item.include else '' }}/></span></td>
+                <td><code>{{ path }}</code> <span style="color: var(--pf-v6-global--Color--200);">(variant {{ loop.index }})</span></td>
+                {{ fleet_cell(v.item) }}
+              </tr>
+              {%- endfor %}
+            </table>
+          </td>
+        </tr>
+      {%- else %}
+        {%- set d = variants[0].item %}
+        <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ variants[0].snap_index }}">
+          <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if d.include else '' }}/></span></td>
+          <td>{{ d.unit }}</td>
+          <td><code>{{ d.path }}</code></td>
+          <td>{%- if d.content.strip() %}<details><summary>show</summary><pre class="content-preview">{{ d.content }}</pre></details>{%- endif %}</td>
+          {{ fleet_cell(d) }}
+        </tr>
+      {%- endif %}
+      {%- endfor %}
+    {% else %}
+      {%- for d in snapshot.services.drop_ins %}
+      <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if d.include else '' }}/></span></td>
+        <td>{{ d.unit }}</td>
+        <td><code>{{ d.path }}</code></td>
+        <td>
+          {%- if d.content.strip() %}
+          <details><summary>show</summary>
+            <pre class="content-preview">{{ d.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+        {{ fleet_cell(d) }}
+      </tr>
+      {%- endfor %}
+    {% endif %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+{% endcall %}
+

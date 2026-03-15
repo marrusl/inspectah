@@ -1,0 +1,249 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Audit report ─────────────────────────────────────────────────────────── #}
+{% call section("audit", "Audit report") %}
+<p>Consolidated view of all inspection findings. Expand sections for details; individual tabs have the full information.</p>
+<div class="audit-section">
+
+{# ── 1. Executive Summary ── #}
+<h3>Executive Summary</h3>
+<dl class="pf-v6-c-description-list">
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Packages added</dt><dd class="pf-v6-c-description-list__description">{{ counts.packages_added }}</dd></div>
+  {%- if counts.base_image_only %}
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Base-image-only</dt><dd class="pf-v6-c-description-list__description">{{ counts.base_image_only }}</dd></div>
+  {%- endif %}
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Config files</dt><dd class="pf-v6-c-description-list__description">{{ counts.config_files }}</dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Containers / quadlets</dt><dd class="pf-v6-c-description-list__description">{{ counts.containers }}</dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Secrets redacted</dt><dd class="pf-v6-c-description-list__description">{{ counts.redactions }}</dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Triage</dt><dd class="pf-v6-c-description-list__description"><span class="text-status-success">{{ triage.automatic }} automatic</span> · <span class="text-status-warning">{{ triage.fixme }} FIXME</span> · <span class="text-status-danger">{{ triage.manual }} manual</span></dd></div>
+</dl>
+
+{# ── 2. Packages ── #}
+{%- set _audit_leaf = leaf_packages_sorted %}
+{%- set _audit_pkgs = snapshot.rpm.packages_added if snapshot.rpm else [] %}
+{%- set _audit_bio = snapshot.rpm.base_image_only if snapshot.rpm else [] %}
+{%- if _audit_leaf or _audit_pkgs or _audit_bio %}
+<details class="audit-expand">
+  <summary>Packages</summary>
+  {%- if _audit_leaf %}
+  <h4>Explicitly installed ({{ _audit_leaf|length }})</h4>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Name</th><th scope="col">Version</th><th scope="col">Repo</th></tr></thead><tbody>
+    {%- for lf in _audit_leaf %}
+    {%- for p in snapshot.rpm.packages_added if p.name == lf %}
+    <tr><td>{{ p.name }}</td><td>{{ p.version }}-{{ p.release }}</td><td>{{ p.source_repo or '' }}</td></tr>
+    {%- endfor %}
+    {%- endfor %}
+  </tbody></table>
+  {%- elif _audit_pkgs %}
+  <h4>Packages added ({{ _audit_pkgs|length }})</h4>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Name</th><th scope="col">Version</th><th scope="col">Arch</th></tr></thead><tbody>
+    {%- for p in _audit_pkgs[:50] %}
+    <tr><td>{{ p.name }}</td><td>{{ p.version }}-{{ p.release }}</td><td>{{ p.arch }}</td></tr>
+    {%- endfor %}
+    {%- if _audit_pkgs|length > 50 %}
+    <tr><td colspan="3"><em>+{{ _audit_pkgs|length - 50 }} more — see Packages tab</em></td></tr>
+    {%- endif %}
+  </tbody></table>
+  {%- endif %}
+  {%- if _audit_bio %}
+  <h4>In target image only ({{ _audit_bio|length }})</h4>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Package</th></tr></thead><tbody>
+    {%- for p in _audit_bio[:30] %}
+    <tr><td>{{ p.name }}</td></tr>
+    {%- endfor %}
+    {%- if _audit_bio|length > 30 %}
+    <tr><td><em>+{{ _audit_bio|length - 30 }} more — see Packages tab</em></td></tr>
+    {%- endif %}
+  </tbody></table>
+  {%- endif %}
+</details>
+{%- endif %}
+
+{# ── 3. Services ── #}
+{%- set _audit_svc = snapshot.services.state_changes|selectattr('action', 'ne', 'unchanged')|list if snapshot.services and snapshot.services.state_changes else [] %}
+{%- if _audit_svc %}
+<details class="audit-expand">
+  <summary>Services ({{ _audit_svc|length }})</summary>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Unit</th><th scope="col">Current</th><th scope="col">Default</th><th scope="col">Action</th></tr></thead><tbody>
+    {%- for s in _audit_svc %}
+    <tr><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- if snapshot.services.drop_ins %}
+  <p class="mt-sm">{{ snapshot.services.drop_ins|length }} systemd drop-in override(s).</p>
+  {%- endif %}
+</details>
+{%- endif %}
+
+{# ── 4. Configuration Files ── #}
+{%- if config_files_rendered %}
+<details class="audit-expand">
+  <summary>Configuration Files ({{ config_files_rendered|length }})</summary>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Kind</th></tr></thead><tbody>
+    {%- for item in config_files_rendered %}
+    <tr><td><code>{{ item.path }}</code></td><td>{{ item.kind }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+</details>
+{%- endif %}
+
+{# ── 5. Network ── #}
+{%- set _net = snapshot.network %}
+{%- if _net and (_net.connections or _net.firewall_zones or _net.resolv_provenance) %}
+<details class="audit-expand">
+  <summary>Network</summary>
+  {%- if _net.connections %}
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Connection</th><th scope="col">Method</th><th scope="col">Type</th></tr></thead><tbody>
+    {%- for c in _net.connections %}
+    <tr><td><code>{{ c.name }}</code></td><td>{{ c.method }}</td><td>{{ c.type }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+  {%- if _net.firewall_zones %}
+  <p class="mt-sm"><strong>Firewall zones:</strong>
+    {%- for z in _net.firewall_zones %}
+    {{ z.name }}{% if z.services %} ({{ z.services|join(', ') }}){% endif %}{% if z.ports %} [{{ z.ports|join(', ') }}]{% endif %}{% if not loop.last %};{% endif %}
+    {%- endfor %}
+  </p>
+  {%- endif %}
+  {%- if _net.resolv_provenance %}
+  <p><strong>DNS:</strong> {{ _net.resolv_provenance }}</p>
+  {%- endif %}
+</details>
+{%- endif %}
+
+{# ── 6. Storage ── #}
+{%- if snapshot.storage and snapshot.storage.fstab_entries %}
+<details class="audit-expand">
+  <summary>Storage ({{ snapshot.storage.fstab_entries|length }} fstab entries)</summary>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Device</th><th scope="col">Mount</th><th scope="col">Type</th></tr></thead><tbody>
+    {%- for e in snapshot.storage.fstab_entries %}
+    <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+</details>
+{%- endif %}
+
+{# ── 7. Scheduled Tasks ── #}
+{%- set _st = snapshot.scheduled_tasks %}
+{%- if _st and (_st.systemd_timers or _st.generated_timer_units or _st.cron_jobs or _st.at_jobs) %}
+<details class="audit-expand">
+  <summary>Scheduled Tasks</summary>
+  {%- set _local_timers = [] %}
+  {%- for t in _st.systemd_timers %}{% if t.source == 'local' %}{% set _ = _local_timers.append(t) %}{% endif %}{%- endfor %}
+  {%- if _local_timers %}
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Timer</th><th scope="col">Schedule</th></tr></thead><tbody>
+    {%- for t in _local_timers %}
+    <tr><td>{{ t.name }}</td><td>{{ t.on_calendar }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+  {%- if _st.generated_timer_units %}<p>{{ _st.generated_timer_units|length }} cron-converted timer(s).</p>{%- endif %}
+  {%- if _st.at_jobs %}<p>{{ _st.at_jobs|length }} at job(s).</p>{%- endif %}
+</details>
+{%- endif %}
+
+{# ── 8. Container Workloads ── #}
+{%- set _ct = snapshot.containers %}
+{%- if _ct and (_ct.quadlet_units or _ct.compose_files) %}
+<details class="audit-expand">
+  <summary>Container Workloads</summary>
+  {%- if _ct.quadlet_units %}
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th></tr></thead><tbody>
+    {%- for u in _ct.quadlet_units %}
+    <tr><td>{{ u.name }}</td><td>{% if u.image %}<code>{{ u.image }}</code>{% endif %}</td><td><code>{{ u.path }}</code></td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+  {%- if _ct.compose_files %}
+  <p class="mt-sm">Compose files:
+    {%- for c in _ct.compose_files %} <code>{{ c.path }}</code>{% if not loop.last %},{% endif %}{%- endfor %}
+  </p>
+  {%- endif %}
+</details>
+{%- endif %}
+
+{# ── 9. Non-RPM Software ── #}
+{%- set _nd = non_rpm_data %}
+{%- if _nd.elf or _nd.venv or _nd.git or _nd.pip %}
+<details class="audit-expand">
+  <summary>Non-RPM Software</summary>
+  <dl class="pf-v6-c-description-list">
+    {%- if _nd.elf %}
+    <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Compiled binaries</dt><dd class="pf-v6-c-description-list__description">{{ _nd.elf|length }} ({%- for group in _nd.elf|groupby('lang') %}{{ group.list|length }}&nbsp;{{ group.grouper }}{% if not loop.last %}, {% endif %}{%- endfor %})</dd></div>
+    {%- endif %}
+    {%- if _nd.venv %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Python venvs</dt><dd class="pf-v6-c-description-list__description">{{ _nd.venv|length }}</dd></div>{%- endif %}
+    {%- if _nd.git %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Git repos</dt><dd class="pf-v6-c-description-list__description">{{ _nd.git|length }}</dd></div>{%- endif %}
+    {%- if _nd.pip %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">System pip packages</dt><dd class="pf-v6-c-description-list__description">{{ _nd.pip|length }}</dd></div>{%- endif %}
+  </dl>
+</details>
+{%- endif %}
+
+{# ── 10. Kernel / Boot ── #}
+{%- set _kb = snapshot.kernel_boot %}
+{%- if _kb and (_kb.sysctl_overrides or _kb.modules_load_d or _kb.modprobe_d or _kb.dracut_conf or _kb.tuned_active) %}
+<details class="audit-expand">
+  <summary>Kernel / Boot</summary>
+  <dl class="pf-v6-c-description-list">
+    {%- if _kb.sysctl_overrides %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Sysctl overrides</dt><dd class="pf-v6-c-description-list__description">{{ _kb.sysctl_overrides|length }}</dd></div>{%- endif %}
+    {%- if _kb.modules_load_d %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">modules-load.d</dt><dd class="pf-v6-c-description-list__description">{{ _kb.modules_load_d|length }} file(s)</dd></div>{%- endif %}
+    {%- if _kb.modprobe_d %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">modprobe.d</dt><dd class="pf-v6-c-description-list__description">{{ _kb.modprobe_d|length }} file(s)</dd></div>{%- endif %}
+    {%- if _kb.dracut_conf %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">dracut.conf.d</dt><dd class="pf-v6-c-description-list__description">{{ _kb.dracut_conf|length }} file(s)</dd></div>{%- endif %}
+    {%- if _kb.tuned_active %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Tuned profile</dt><dd class="pf-v6-c-description-list__description">{{ _kb.tuned_active }}</dd></div>{%- endif %}
+  </dl>
+</details>
+{%- endif %}
+
+{# ── 11. SELinux ── #}
+{%- set _se = snapshot.selinux %}
+{%- if _se and (_se.mode or _se.custom_modules or _se.boolean_overrides or _se.audit_rules) %}
+<details class="audit-expand">
+  <summary>SELinux</summary>
+  <dl class="pf-v6-c-description-list">
+    {%- if _se.mode %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Mode</dt><dd class="pf-v6-c-description-list__description">{{ _se.mode }}</dd></div>{%- endif %}
+    {%- if _se.custom_modules %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Custom modules</dt><dd class="pf-v6-c-description-list__description">{{ _se.custom_modules|length }}</dd></div>{%- endif %}
+    {%- set _se_nd = _se.boolean_overrides|selectattr('non_default')|list %}
+    {%- if _se_nd %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Non-default booleans</dt><dd class="pf-v6-c-description-list__description">{{ _se_nd|length }}</dd></div>{%- endif %}
+    {%- if _se.audit_rules %}<div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Audit rules</dt><dd class="pf-v6-c-description-list__description">{{ _se.audit_rules|length }}</dd></div>{%- endif %}
+  </dl>
+</details>
+{%- endif %}
+
+{# ── 12. Users / Groups ── #}
+{%- set _ug = snapshot.users_groups %}
+{%- if _ug and (_ug.users or _ug.groups) %}
+<details class="audit-expand">
+  <summary>Users / Groups</summary>
+  {%- if _ug.users %}
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">User</th><th scope="col">UID</th><th scope="col">Type</th><th scope="col">Strategy</th></tr></thead><tbody>
+    {%- for u in _ug.users %}
+    <tr><td>{{ u.name }}</td><td>{{ u.uid }}</td><td>{{ u.classification or '?' }}</td><td>{{ u.strategy or '' }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+  {%- if _ug.groups %}
+  <table class="pf-v6-c-table mt-sm"><thead><tr><th scope="col">Group</th><th scope="col">GID</th><th scope="col">Members</th></tr></thead><tbody>
+    {%- for g in _ug.groups %}
+    <tr><td>{{ g.name }}</td><td>{{ g.gid }}</td><td>{{ (g.members or [])|join(', ') or '—' }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- endif %}
+</details>
+{%- endif %}
+
+{# ── 13. Items Requiring Manual Intervention ── #}
+{%- if warnings %}
+<h3>Items Requiring Manual Intervention</h3>
+<ul style="margin:0.25rem 0 0;padding-left:1.5rem;font-size:0.9rem">
+  {%- for w in warnings[:20] %}
+  {%- set msg = w.message or w.detail or '—' %}
+  <li>{{ msg }}</li>
+  {%- endfor %}
+  {%- if warnings|length > 20 %}
+  <li><em>+{{ warnings|length - 20 }} more — see Warnings tab.</em></li>
+  {%- endif %}
+</ul>
+{%- endif %}
+
+</div>{# /.audit-section #}
+{% endcall %}
+

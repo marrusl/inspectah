@@ -1,0 +1,18 @@
+{# ── Containerfile ────────────────────────────────────────────────────────── #}
+<div id="section-containerfile" class="section">
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <div class="pf-v6-c-card__title">
+        <div class="section-heading-row">
+          <h2>Containerfile</h2>
+          <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small btn-copy-cf" id="btn-copy-cf">Copy</button>
+        </div>
+      </div>
+    </div>
+    <div class="pf-v6-c-card__body">
+      <p>Generated image definition. Build with <code>podman build -t my-image .</code></p>
+      <pre class="containerfile-pre" id="containerfile-pre">{{ containerfile_html|safe }}</pre>
+    </div>
+  </div>
+</div>
+

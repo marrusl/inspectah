@@ -1,0 +1,91 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Kernel / Boot ────────────────────────────────────────────────────────── #}
+{% call section("kernel_boot", "Kernel and boot") %}
+  {%- set kb = snapshot.kernel_boot %}
+  {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf or kb.tuned_active or kb.tuned_custom_profiles) %}
+
+  {%- if kb.cmdline or kb.non_default_modules %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Kernel Command Line</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if kb.cmdline %}
+    <div class="pf-v6-c-code-block"><div class="pf-v6-c-code-block__content"><pre class="pf-v6-c-code-block__pre"><code class="pf-v6-c-code-block__code">{{ kb.cmdline[:300] }}</code></pre></div></div>
+    {%- endif %}
+    {%- if kb.non_default_modules %}
+    <p>{{ kb.non_default_modules|length }} kernel module(s) loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.</p>
+    {%- endif %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if kb.sysctl_overrides %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Sysctl Overrides</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Key</th><th scope="col">Runtime</th><th scope="col">Default</th><th scope="col">Source</th></tr></thead><tbody>
+      {%- for s in kb.sysctl_overrides %}
+      <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
+        <td><code>{{ s.key }}</code></td>
+        <td class="text-status-warning text-bold">{{ s.runtime }}</td>
+        <td>{{ s.default or '—' }}</td>
+        <td><code>{{ s.source }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if kb.modules_load_d or kb.modprobe_d or kb.dracut_conf %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Module and Dracut Configuration</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- set modconf_sections =
+          ([("modules-load.d", kb.modules_load_d)] if kb.modules_load_d else []) +
+          ([("modprobe.d", kb.modprobe_d)] if kb.modprobe_d else []) +
+          ([("dracut.conf.d", kb.dracut_conf)] if kb.dracut_conf else [])
+    %}
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Content</th></tr></thead><tbody>
+      {%- for label, items in modconf_sections %}
+      <tr><th colspan="2" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ label }}</th></tr>
+      {%- for cfg in items %}
+      <tr>
+        <td><code>{{ cfg.path }}</code></td>
+        <td>
+          {%- if cfg.content and cfg.content.strip() %}
+          <details><summary>show</summary>
+            <pre class="content-preview">{{ cfg.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if kb.tuned_active or kb.tuned_custom_profiles %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Tuned Profile</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if kb.tuned_active %}<p>Active profile: <strong>{{ kb.tuned_active }}</strong></p>{%- endif %}
+    {%- if kb.tuned_custom_profiles %}
+    <p>Custom profiles ({{ kb.tuned_custom_profiles|length }}):</p>
+    <ul>
+      {%- for tp in kb.tuned_custom_profiles %}
+      <li><code>{{ tp.path }}</code></li>
+      {%- endfor %}
+    </ul>
+    {%- endif %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- else %}
+  <p>No kernel/boot customizations detected.</p>
+  {%- endif %}
+{% endcall %}
+

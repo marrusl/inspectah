@@ -1,0 +1,220 @@
+<style>
+/* ═══════════════════════════════════════════════════════════════════════
+   yoinkc report – custom overrides on top of PatternFly 6
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* OS icon theme-aware colours */
+.os-icon { vertical-align: middle; margin-right: 6px; }
+.os-icon-rhel   { color: #ffffff; }
+.os-icon-fedora { color: #79B8FF; }
+.os-icon-centos { color: #c678dd; }
+.os-icon-rocky  { color: #73BA25; }
+.os-icon-alma   { color: #ff4649; }
+html:not(.pf-v6-theme-dark) .os-icon-rhel   { color: #EE0000; }
+html:not(.pf-v6-theme-dark) .os-icon-fedora { color: #294172; }
+html:not(.pf-v6-theme-dark) .os-icon-centos { color: #932279; }
+html:not(.pf-v6-theme-dark) .os-icon-rocky  { color: #10B981; }
+html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
+
+/* Page padding – toolbar lives at the bottom */
+body { padding-bottom: 70px; }
+
+/* Inline alert banners – wrap content in .pf-v6-c-alert__title to land in the
+   grid's "title" area; nowrap + overflow-x keeps stats on a single line. */
+.os-status-banner { margin-bottom: 1rem; }
+.os-status-banner .pf-v6-c-alert__title,
+#pkg-selection-banner .pf-v6-c-alert__title { white-space: nowrap; overflow-x: auto; }
+
+/* Section show/hide for nav switching */
+.section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); }
+.section.visible { display: block; animation: fadeIn .15s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Sidebar nav */
+.pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+
+
+/* Warning dismiss */
+.warning-row.dismissed { display: none; }
+#warnings-list { max-height: 400px; overflow-y: auto; }
+
+/* Readiness panel */
+.readiness-panel { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.readiness-col { border-radius: 8px; padding: 1rem; }
+.readiness-col.readiness-auto   { border-left: 4px solid var(--pf-t--global--color--status--success--default); }
+.readiness-col.readiness-fixme  { border-left: 4px solid var(--pf-t--global--color--status--warning--default); }
+.readiness-col.readiness-manual { border-left: 4px solid var(--pf-t--global--color--status--danger--default); }
+.readiness-header { font-weight: 600; margin-bottom: 0.5rem; }
+.readiness-count  { font-size: 1.3rem; margin-right: 0.25rem; }
+.readiness-col.readiness-auto   .readiness-count { color: var(--pf-t--global--text--color--status--success--default); }
+.readiness-col.readiness-fixme  .readiness-count { color: var(--pf-t--global--text--color--status--warning--default); }
+.readiness-col.readiness-manual .readiness-count { color: var(--pf-t--global--text--color--status--danger--default); }
+.readiness-col ul { list-style: none; padding: 0; margin: 0; }
+.readiness-col li { padding: 0.2rem 0; }
+.readiness-link { background: none; border: none; color: var(--pf-t--global--text--color--link--default); cursor: pointer; padding: 0; font-size: 0.9rem; text-align: left; }
+.readiness-link:hover { text-decoration: underline; }
+
+/* Summary */
+.summary-hero { font-size: 1.1rem; margin-bottom: 1.5rem; }
+.summary-next { margin-top: 1.5rem; padding-top: 1rem; }
+
+/* Diff view */
+.diff-view { max-height: 300px; overflow: auto; font-size: 0.85em; line-height: 1.5; padding: 0.5rem; border-radius: 4px; }
+.diff-add  { color: var(--pf-t--global--text--color--status--success--default); background: var(--pf-t--global--color--status--success--100); display: block; border-left: 3px solid var(--pf-t--global--color--status--success--default); padding-left: 0.5rem; }
+.diff-del  { color: var(--pf-t--global--text--color--status--danger--default); background: var(--pf-t--global--color--status--danger--100); display: block; border-left: 3px solid var(--pf-t--global--color--status--danger--default); padding-left: 0.5rem; }
+.diff-hdr  { color: var(--pf-t--global--text--color--subtle); display: block; font-weight: bold; }
+.diff-hunk { color: var(--pf-t--global--text--color--status--info--default); display: block; }
+
+/* Containerfile code block */
+.containerfile-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
+.section-heading-row { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
+.section-heading-row h2 { margin: 0; }
+
+/* Repo content preview */
+.repo-content-pre { border-radius: 4px; padding: 0.75rem; font-size: 0.8rem; max-height: 300px; overflow: auto; margin: 0.25rem 0 0; white-space: pre; }
+
+/* File browser */
+.fb-tree { flex: 0 1 280px; min-width: 200px; max-width: 280px; max-height: 70vh; overflow-y: auto; overflow-x: hidden; }
+.fb-tree .pf-v6-c-tree-view__node-text { overflow-wrap: anywhere; word-break: break-all; }
+.fb-viewer { flex: 1 1 400px; min-height: 200px; }
+.fb-viewer .pf-v6-c-code-block__pre { max-height: 65vh; overflow: auto; }
+.file-content-hidden { display: none; }
+
+/* Excluded rows */
+tr.excluded td { text-decoration: line-through; opacity: 0.45; }
+tr.excluded td:first-child { text-decoration: none; opacity: 1; }
+div.excluded { text-decoration: line-through; opacity: 0.45; }
+
+/* Include checkbox – hidden until yoinkc-refine helper is active */
+.pf-v6-c-check.pf-m-standalone.include-cb-wrap { display: none; }
+/* Vertically center checkbox cells without overriding all table cells globally */
+.pf-v6-c-table .pf-v6-c-table__check { vertical-align: middle; }
+
+/* Gap between stacked inner cards inside a card body */
+.pf-v6-c-card__body > .pf-v6-c-card + .pf-v6-c-card { margin-top: var(--pf-v6-global--spacer--md, 1rem); }
+
+
+/* Details/summary disclosure styling */
+details > summary { cursor: pointer; color: var(--pf-t--global--text--color--link--default); font-size: 0.85em; padding: 0.25rem 0; list-style: none; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before { content: "▸ "; font-size: 0.75em; }
+details[open] > summary::before { content: "▾ "; }
+details > summary:hover { text-decoration: underline; }
+details[open] > summary { margin-bottom: 0.25rem; }
+
+/* Inline semantic labels now use native PF6 variants */
+
+/* Audit */
+.audit-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
+.audit-table { margin: 0.5rem 0; }
+.audit-section { max-height: 70vh; overflow-y: auto; padding: 0 0.25rem; }
+details.audit-expand > summary { font-size: 1em; font-weight: 600; color: inherit; padding: 0.6rem 0 0.2rem; }
+details.audit-expand { margin-bottom: 0.25rem; }
+
+/* Sticky toolbar */
+#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
+#exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
+#exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
+
+/* Utility classes */
+.content-preview { border-radius: 4px; padding: var(--pf-t--global--spacer--sm); font-size: 0.8rem; max-height: 200px; overflow: auto; margin: var(--pf-t--global--spacer--xs) 0; }
+.table-group-header { font-weight: var(--pf-t--global--font--weight--body--bold); padding-bottom: var(--pf-t--global--spacer--xs); padding-top: var(--pf-t--global--spacer--md); border-top: 1px solid var(--pf-t--global--border--color--default); }
+.text-sm { font-size: var(--pf-t--global--font--size--body--sm); }
+.text-bold { font-weight: var(--pf-t--global--font--weight--body--bold); }
+.mt-sm { margin-top: var(--pf-t--global--spacer--sm); }
+.mt-md { margin-top: var(--pf-t--global--spacer--md); }
+.mt-lg { margin-top: var(--pf-t--global--spacer--lg); }
+.mb-md { margin-bottom: var(--pf-t--global--spacer--md); }
+.table-group-header-first { border-top: none; padding-top: var(--pf-t--global--spacer--sm); }
+.deps-list { margin: var(--pf-t--global--spacer--xs) 0; padding-left: 1.5rem; }
+.card-actions-layout { display: flex; align-items: center; gap: var(--pf-t--global--spacer--sm); flex-wrap: nowrap; }
+
+/* Toast */
+.toast { position: fixed; top: 1rem; right: 1rem; z-index: 2000; display: none; }
+.toast.visible { display: block; }
+
+/* Spinner (for re-render button) */
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Form controls in table cells – reduce margins for compact rows */
+.pf-v6-c-table td .pf-v6-c-form-control {
+  margin: 0;
+  padding: 0.25rem 0;
+}
+
+/* Status text/background utility classes — theme-aware via PF6 tokens */
+.text-status-success { color: var(--pf-t--global--text--color--status--success--default); }
+.text-status-warning { color: var(--pf-t--global--text--color--status--warning--default); }
+.text-status-danger  { color: var(--pf-t--global--text--color--status--danger--default); }
+.text-status-info    { color: var(--pf-t--global--text--color--status--info--default); }
+
+{% if fleet_meta %}
+/* Fleet prevalence badges */
+.fleet-prevalence {
+  width: 90px;
+  min-width: 90px;
+}
+.fleet-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.fleet-bar-track {
+  width: 60px;
+  height: 6px;
+  background: #e0e0e0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.fleet-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+.fleet-bar-fill.pf-m-blue {
+  background: var(--pf-v6-global--palette--blue-300, #0066cc);
+}
+.fleet-bar-fill.pf-m-gold {
+  background: var(--pf-v6-global--palette--gold-400, #f0ab00);
+}
+.fleet-bar-fill.pf-m-red {
+  background: var(--pf-v6-global--palette--red-100, #c9190b);
+}
+.fleet-bar-label {
+  font-size: 11px;
+  color: var(--pf-v6-global--Color--200, #6a6e73);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+.fleet-banner {
+  border-left: 4px solid var(--pf-v6-global--palette--blue-300, #0066cc);
+}
+/* Fleet popover */
+.fleet-popover {
+  position: absolute;
+  z-index: 1000;
+  background: var(--pf-v6-global--BackgroundColor--100, #fff);
+  border: 1px solid var(--pf-v6-global--BorderColor--100, #d2d2d2);
+  border-radius: 4px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  font-size: 13px;
+  max-width: 300px;
+}
+.fleet-popover ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fleet-popover li {
+  padding: 2px 0;
+}
+/* Fleet variant grouping */
+.fleet-variant-children {
+  display: none;
+}
+{% endif %}
+
+</style>

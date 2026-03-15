@@ -1,0 +1,14 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Storage ─────────────────────────────────────────────────────────────── #}
+{% call section("storage", "Storage") %}
+  {%- if snapshot.storage and snapshot.storage.fstab_entries %}
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Device</th><th scope="col">Mount</th><th scope="col">Type</th></tr></thead><tbody>
+    {%- for e in snapshot.storage.fstab_entries[:30] %}
+    <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
+    {%- endfor %}
+  </tbody></table>
+  {%- else %}
+  <p>No fstab entries.</p>
+  {%- endif %}
+{% endcall %}
+

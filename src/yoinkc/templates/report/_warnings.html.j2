@@ -1,0 +1,28 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Warnings ─────────────────────────────────────────────────────────────── #}
+{% call section("warnings", "Warnings") %}
+<div class="pf-v6-c-text-input-group mb-md">
+  <div class="pf-v6-c-text-input-group__main">
+    <input type="text" class="pf-v6-c-text-input-group__text-input" id="warn-search" placeholder="Search warnings..."/>
+  </div>
+</div>
+<div style="display:flex;justify-content:flex-end;margin-bottom:0.5rem">
+  <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" id="warning-dismiss-all">Dismiss All</button>
+</div>
+<div class="pf-v6-c-alert-group" id="warnings-list">
+  {%- for w in warnings %}
+  {%- set msg = w.message or w.detail or '—' %}
+  {%- set detail = w.detail or '' %}
+  <div class="pf-v6-c-alert pf-m-warning pf-m-inline warning-row" data-warning-idx="{{ loop.index0 }}">
+    <div class="pf-v6-c-alert__title">{{ msg }}</div>
+    {%- if detail and detail != msg %}
+    <div class="pf-v6-c-alert__description">{{ detail }}</div>
+    {%- endif %}
+    <div class="pf-v6-c-alert__action">
+      <button type="button" class="pf-v6-c-button pf-m-plain warning-row-dismiss" aria-label="Dismiss">&times;</button>
+    </div>
+  </div>
+  {%- endfor %}
+</div>
+{% endcall %}
+

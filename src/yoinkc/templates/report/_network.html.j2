@@ -1,0 +1,127 @@
+{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{# ── Network ─────────────────────────────────────────────────────────────── #}
+{% call section("network", "Network") %}
+  {%- set net = snapshot.network %}
+  {%- if net and (net.connections or net.firewall_zones or net.firewall_direct_rules or net.ip_routes or net.ip_rules or net.resolv_provenance) %}
+
+  {%- if net.connections %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Connections</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Name</th><th scope="col">Method</th><th scope="col">Type</th><th scope="col">Deployment</th></tr></thead><tbody>
+      {%- for c in net.connections %}
+      <tr>
+        <td><code>{{ c.name }}</code></td>
+        <td>{{ c.method }}</td>
+        <td>{{ c.type }}</td>
+        <td>
+          {%- if c.method == 'static' -%}
+          <span class="text-status-success text-bold">Bake into image</span>
+          {%- elif c.method == 'dhcp' -%}
+          <span class="text-status-warning text-bold">Kickstart at deploy</span>
+          {%- else -%}
+          <span>Review</span>
+          {%- endif -%}
+        </td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if net.firewall_zones %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Zone</th><th scope="col">Services</th><th scope="col">Ports</th><th scope="col">Rich Rules</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+      {%- for z in net.firewall_zones %}
+      <tr{% if not z.include %} class="excluded"{% endif %} data-snap-section="network" data-snap-list="firewall_zones" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if z.include else '' }}/></span></td>
+        <td><strong>{{ z.name }}</strong></td>
+        <td>{{ z.services|join(', ') or '—' }}</td>
+        <td>{{ z.ports|join(', ') or '—' }}</td>
+        <td>
+          {%- if z.rich_rules %}
+          <details><summary>{{ z.rich_rules|length }} rule{{ 's' if z.rich_rules|length != 1 else '' }}</summary>
+            <ul class="deps-list">
+              {%- for r in z.rich_rules %}<li><code>{{ r[:300] }}</code></li>{%- endfor %}
+            </ul>
+          </details>
+          {%- else %}—{%- endif %}
+        </td>
+        {{ fleet_cell(z) }}
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if net.firewall_direct_rules %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Direct Rules</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">IPv</th><th scope="col">Table</th><th scope="col">Chain</th><th scope="col">Args</th></tr></thead><tbody>
+      {%- for r in net.firewall_direct_rules %}
+      <tr{% if not r.include %} class="excluded"{% endif %} data-snap-section="network" data-snap-list="firewall_direct_rules" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if r.include else '' }}/></span></td>
+        <td>{{ r.ipv }}</td>
+        <td>{{ r.table }}</td>
+        <td>{{ r.chain }}</td>
+        <td><code>{{ r.args }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if net.resolv_provenance %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>DNS</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <p>resolv.conf provenance:
+      {%- if net.resolv_provenance == 'networkmanager' %}
+      <span class="text-status-warning text-bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
+      {%- elif net.resolv_provenance == 'systemd-resolved' %}
+      <span class="text-status-warning text-bold">systemd-resolved</span> — system resolver — kickstart at deploy time
+      {%- else %}
+      <span class="text-status-success text-bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
+      {%- endif %}
+    </p>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if net.ip_routes %}
+  {%- set static_rt = [] %}
+  {%- for r in net.ip_routes %}{% if 'proto static' in r %}{% set _ = static_rt.append(r) %}{% endif %}{%- endfor %}
+  {%- if static_rt %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Static Routes</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <ul>
+      {%- for r in static_rt %}<li><code>{{ r }}</code></li>{%- endfor %}
+    </ul>
+    </div>
+  </div>
+  {%- endif %}
+  {%- endif %}
+
+  {%- if net.ip_rules %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Policy Routing</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <ul>
+      {%- for r in net.ip_rules %}<li><code>{{ r }}</code></li>{%- endfor %}
+    </ul>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- else %}
+  <p>No network config captured.</p>
+  {%- endif %}
+{% endcall %}
+

@@ -1,0 +1,102 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Users / Groups ───────────────────────────────────────────────────────── #}
+{% call section("users_groups", "Users and groups") %}
+  {%- if snapshot.users_groups and snapshot.users_groups.users %}
+  {%- set ug = snapshot.users_groups %}
+  {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart"] %}
+
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <div class="pf-v6-c-card__title"><h3>Users</h3></div>
+      <div class="pf-v6-c-card__actions card-actions-layout">
+        <span>Apply to all:</span>
+        <span class="pf-v6-c-form-control"><select id="strategy-apply-all">
+          {%- for s in strategies %}
+          <option value="{{ s }}">{{ s }}</option>
+          {%- endfor %}
+        </select></span>
+        <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all">Apply</button>
+      </div>
+    </div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table">
+      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">User</th><th scope="col">UID/GID</th><th scope="col">Shell</th><th scope="col">Home</th><th scope="col">Type</th><th scope="col">Strategy</th><th scope="col">Notes</th></tr></thead>
+      <tbody>
+      {%- for u in ug.users %}
+      {%- set cls = u.classification or '?' %}
+      {%- set cls_lbl = 'pf-m-green' if cls == 'service' else 'pf-m-blue' if cls == 'human' else 'pf-m-orange' %}
+      <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.get('include', true) else '' }}/></span></td>
+        <td><strong>{{ u.name }}</strong></td>
+        <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
+        <td><code>{{ u.shell }}</code></td>
+        <td><code>{{ u.home }}</code></td>
+        <td><span class="pf-v6-c-label pf-m-filled {{ cls_lbl }}">{{ cls }}</span></td>
+        <td>
+          <span class="pf-v6-c-form-control"><select class="strategy-select">
+            {%- for s in strategies %}
+            <option value="{{ s }}" {{ 'selected' if s == u.strategy else '' }}>{{ s }}</option>
+            {%- endfor %}
+          </select></span>
+        </td>
+        <td class="text-sm">
+          {%- set notes = [] %}
+          {%- if u.name in (ug.ssh_authorized_keys_refs or [])|map(attribute='user')|list %}
+            {%- set _ = notes.append('SSH keys') %}
+            <span class="pf-v6-c-label pf-m-filled pf-m-orange" title="authorized_keys found on source but not included in image">SSH KEYS</span>
+          {%- endif %}
+          {%- if cls == 'ambiguous' %}
+            <span class="pf-v6-c-label pf-m-filled pf-m-orange" title="Classification uncertain — verify intent">ambiguous</span>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  {%- if ug.groups %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <div class="pf-v6-c-card__title"><h3>Groups</h3></div>
+      <div class="pf-v6-c-card__actions card-actions-layout">
+        <span>Apply to all:</span>
+        <span class="pf-v6-c-form-control"><select id="strategy-apply-all-groups">
+          {%- for s in strategies %}
+          <option value="{{ s }}">{{ s }}</option>
+          {%- endfor %}
+        </select></span>
+        <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all-groups">Apply</button>
+      </div>
+    </div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table">
+      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Group</th><th scope="col">GID</th><th scope="col">Strategy</th><th scope="col">Members</th></tr></thead>
+      <tbody>
+      {%- for g in ug.groups %}
+      <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if g.get('include', true) else '' }}/></span></td>
+        <td>{{ g.name }}</td>
+        <td>{{ g.gid }}</td>
+        <td>
+          <span class="pf-v6-c-form-control"><select class="strategy-select">
+            {%- for s in strategies %}
+            <option value="{{ s }}" {{ 'selected' if s == g.strategy else '' }}>{{ s }}</option>
+            {%- endfor %}
+          </select></span>
+        </td>
+        <td>{{ (g.members or [])|join(', ') or '—' }}</td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- else %}
+  <p>No non-system users/groups.</p>
+  {%- endif %}
+{% endcall %}
+

@@ -1,0 +1,18 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── File browser ─────────────────────────────────────────────────────────── #}
+{% call section("output_files", "File browser") %}
+<p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
+<div class="pf-v6-l-flex pf-m-nowrap mt-md" style="gap:1rem">
+  <div class="fb-tree">{{ tree_html|safe }}</div>
+  <div class="fb-viewer">
+    <div class="pf-v6-c-code-block">
+      <div class="pf-v6-c-code-block__header"><span id="file-viewer-path">Click a file</span></div>
+      <div class="pf-v6-c-code-block__content">
+        <pre class="pf-v6-c-code-block__pre"><code class="pf-v6-c-code-block__code" id="file-viewer-content"></code></pre>
+      </div>
+    </div>
+  </div>
+</div>
+{{ file_content_snippets_html|safe }}
+{% endcall %}
+

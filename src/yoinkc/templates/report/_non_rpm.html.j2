@@ -1,0 +1,138 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Non-RPM software ────────────────────────────────────────────────────── #}
+{% call section("non_rpm", "Non-RPM software") %}
+  {%- set nr = snapshot.non_rpm_software %}
+  {%- if nr and nr.items %}
+  {%- set nd = non_rpm_data %}
+
+  {%- if nd.elf %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compiled Binaries</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col">Language</th><th scope="col">Linking</th><th scope="col">Shared Libraries</th></tr></thead><tbody>
+      {%- for i in nd.elf %}
+      {%- set lang = i.lang %}
+      {%- set lang_lbl = {'go': 'pf-m-teal', 'rust': 'pf-m-orange', 'c/c++': 'pf-m-purple'} %}
+      {%- set linking = 'static' if i.static else 'dynamic' %}
+      {%- set nr_idx = namespace(val=-1) %}
+      {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
+      <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
+        <td><code>{{ i.path }}</code></td>
+        <td><span class="pf-v6-c-label pf-m-filled {{ lang_lbl.get(lang, 'pf-m-grey') }}">{{ lang }}</span></td>
+        <td><span class="pf-v6-c-label pf-m-filled {{ 'pf-m-green' if i.static else 'pf-m-orange' }}">{{ linking }}</span></td>
+        <td class="text-sm">{{ i.shared_libs[:5]|join(', ') or '' }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if nd.venv %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Python Virtual Environments</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- for v in nd.venv %}
+    {%- set ssp = v.system_site_packages %}
+    <div class="mt-md" style="display:flex;align-items:center;gap:var(--pf-t--global--spacer--sm)">
+      <code>{{ v.path }}</code>
+      {%- if ssp %} <span class="pf-v6-c-label pf-m-filled pf-m-red">system-site-packages</span>
+      {%- else %} <span class="pf-v6-c-label pf-m-filled pf-m-green">isolated</span>
+      {%- endif %}
+    </div>
+    {%- set pkgs = v.packages %}
+    {%- if pkgs %}
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Package</th><th scope="col">Version</th></tr></thead><tbody>
+      {%- for p in pkgs[:20] %}
+      <tr><td>{{ p.name }}</td><td>{{ p.version }}</td></tr>
+      {%- endfor %}
+      {%- if pkgs|length > 20 %}
+      <tr><td colspan="2"><em>+{{ pkgs|length - 20 }} more</em></td></tr>
+      {%- endif %}
+    </tbody></table>
+    {%- else %}
+    <p>No packages found.</p>
+    {%- endif %}
+    {%- endfor %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if nd.git %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Git Repositories</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Remote</th><th scope="col">Branch</th><th scope="col">Commit</th></tr></thead><tbody>
+      {%- for i in nd.git %}
+      <tr>
+        <td><code>{{ i.path }}</code></td>
+        <td><code>{{ i.git_remote }}</code></td>
+        <td>{{ i.git_branch }}</td>
+        <td><code>{{ i.git_commit[:12] }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if nd.pip %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>System Pip Packages</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Package</th><th scope="col">Version</th><th scope="col">Path</th></tr></thead><tbody>
+      {%- for i in nd.pip[:20] %}
+      {%- set nr_idx = namespace(val=-1) %}
+      {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
+      <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if i.include else '' }}/></span></td>
+        <td>{{ i.name }}</td>
+        <td>{{ i.version }}</td>
+        <td><code>{{ i.path }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if nd.other %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Other Items</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Confidence</th><th scope="col">Method</th></tr></thead><tbody>
+      {%- for i in nd.other[:20] %}
+      <tr>
+        <td><code>{{ i.path or i.name }}</code></td>
+        <td>{{ i.confidence }}</td>
+        <td>{{ i.method }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if nr and nr.env_files %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Dotenv / Secret Files</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <p>These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Status</th></tr></thead><tbody>
+      {%- for ef in nr.env_files %}
+      <tr>
+        <td><code>{{ ef.path }}</code></td>
+        <td>captured &amp; redacted</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- else %}
+  <p>No non-RPM software.</p>
+  {%- endif %}
+{% endcall %}
+

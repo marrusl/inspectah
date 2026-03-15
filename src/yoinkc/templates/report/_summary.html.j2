@@ -1,0 +1,38 @@
+{% from "report/_macros.html.j2" import section with context -%}
+{# ── Summary ────────────────────────────────────────────────────────────── #}
+{% call section("summary", "Summary", visible=true) %}
+<p class="summary-hero">Inspection overview and run metadata. Use the sidebar navigation to drill into any category.</p>
+<p class="text-sm">This report is self-contained and portable: all content (Containerfile, audit, config/ and quadlet/ file browser) is embedded. You can copy or share <code>report.html</code> alone.</p>
+<dl class="pf-v6-c-description-list summary-meta">
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Host root</dt><dd class="pf-v6-c-description-list__description"><code>{{ meta.host_root|default('') }}</code></dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Hostname</dt><dd class="pf-v6-c-description-list__description">{{ meta.hostname|default('—') }}</dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">Inspection time (UTC)</dt><dd class="pf-v6-c-description-list__description">{{ meta.timestamp|default('—') }}</dd></div>
+  <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term">OS</dt><dd class="pf-v6-c-description-list__description">{{ os_desc }}</dd></div>
+</dl>
+<h3>Migration readiness</h3>
+<div class="readiness-panel">
+  {%- set auto_items = triage_detail|selectattr('status', 'equalto', 'automatic')|list %}
+  {%- set fixme_items = triage_detail|selectattr('status', 'equalto', 'fixme')|list %}
+  {%- set manual_items = triage_detail|selectattr('status', 'equalto', 'manual')|list %}
+  <div class="pf-v6-c-card readiness-col readiness-auto">
+    <div class="readiness-header"><span class="readiness-count">{{ triage.automatic }}</span> Automatic</div>
+    <ul>{%- for item in auto_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
+  </div>
+  {%- if fixme_items %}
+  <div class="pf-v6-c-card readiness-col readiness-fixme">
+    <div class="readiness-header"><span class="readiness-count">{{ triage.fixme }}</span> Needs review</div>
+    <ul>{%- for item in fixme_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
+  </div>
+  {%- endif %}
+  {%- if manual_items %}
+  <div class="pf-v6-c-card readiness-col readiness-manual">
+    <div class="readiness-header"><span class="readiness-count">{{ triage.manual }}</span> Manual</div>
+    <ul>{%- for item in manual_items %}<li><button type="button" class="readiness-link" onclick="show('{{ item.tab }}');return false">{{ item.count }} {{ item.label }}</button></li>{%- endfor %}</ul>
+  </div>
+  {%- endif %}
+</div>
+<div class="summary-next">
+  <p><strong>Next steps:</strong> Review the <strong>Audit report</strong> tab, fix any FIXMEs in the Containerfile, run <code>podman build -t my-image .</code>, then deploy with <code>bootc switch my-image:latest</code>.</p>
+</div>
+{% endcall %}
+

@@ -1,0 +1,139 @@
+{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{# ── Containers ──────────────────────────────────────────────────────────── #}
+{% call section("containers", "Containers") %}
+  {%- set ct = snapshot.containers %}
+  {%- if ct and (ct.quadlet_units or ct.compose_files or ct.running_containers) %}
+
+  {%- if ct.quadlet_units %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Quadlet Units</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+    {% if fleet_meta and quadlet_variant_groups %}
+      {%- for path, variants in quadlet_variant_groups.items() %}
+      {%- if variants | length > 1 %}
+        {%- set primary = variants[0] %}
+        <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}"
+            data-snap-section="containers" data-snap-list="quadlet_units"
+            data-snap-index="{{ primary.snap_index }}">
+          <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if primary.item.include else '' }}/></span></td>
+          <td colspan="3">
+            <code>{{ path }}</code>
+            <span class="pf-v6-c-label pf-m-compact pf-m-outline fleet-variant-toggle" style="margin-left: 8px; cursor: pointer;">
+              <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
+            </span>
+          </td>
+          <td></td>
+          {{ fleet_cell(primary.item) }}
+        </tr>
+        <tr class="fleet-variant-children">
+          <td colspan="10">
+            <table class="pf-v6-c-table pf-m-compact" style="margin: 0;">
+              {%- for v in variants %}
+              <tr{% if not v.item.include %} class="excluded"{% endif %}
+                  data-snap-section="containers" data-snap-list="quadlet_units"
+                  data-snap-index="{{ v.snap_index }}">
+                <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if v.item.include else '' }}/></span></td>
+                <td>{{ v.item.name }} <span style="color: var(--pf-v6-global--Color--200);">(variant {{ loop.index }})</span></td>
+                {{ fleet_cell(v.item) }}
+              </tr>
+              {%- endfor %}
+            </table>
+          </td>
+        </tr>
+      {%- else %}
+        {%- set u = variants[0].item %}
+        <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ variants[0].snap_index }}">
+          <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
+          <td>{{ u.name }}</td>
+          <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
+          <td><code>{{ u.path }}</code></td>
+          <td>{%- if u.content and u.content.strip() %}<details><summary>show</summary><pre class="content-preview">{{ u.content }}</pre></details>{%- endif %}</td>
+          {{ fleet_cell(u) }}
+        </tr>
+      {%- endif %}
+      {%- endfor %}
+    {% else %}
+      {%- for u in ct.quadlet_units %}
+      <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="quadlet_units" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
+        <td>{{ u.name }}</td>
+        <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
+        <td><code>{{ u.path }}</code></td>
+        <td>
+          {%- if u.content and u.content.strip() %}
+          <details><summary>show</summary>
+            <pre class="content-preview">{{ u.content }}</pre>
+          </details>
+          {%- endif %}
+        </td>
+        {{ fleet_cell(u) }}
+      </tr>
+      {%- endfor %}
+    {% endif %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if ct.compose_files %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compose Files</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- for c in ct.compose_files %}
+    <div{% if not c.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
+    <label><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if c.include else '' }}/></span></label>
+    <span class="text-bold"><code>{{ c.path }}</code></span>
+    {% if fleet_meta and c.fleet %}
+    <div class="fleet-prevalence" style="display: inline-block; margin-left: 8px;">
+      <div class="fleet-bar"
+           data-count="{{ c.fleet.count }}"
+           data-total="{{ c.fleet.total }}"
+           data-hosts="{{ c.fleet.hosts | join(', ') }}">
+        <div class="fleet-bar-track">
+          <div class="fleet-bar-fill {{ c.fleet | fleet_color }}"
+               style="width: {{ (c.fleet.count * 100 // c.fleet.total) if c.fleet.total > 0 else 100 }}%"></div>
+        </div>
+        <span class="fleet-bar-label">{{ c.fleet.count }}/{{ c.fleet.total }}</span>
+      </div>
+    </div>
+    {% endif %}
+    {%- if c.images %}
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Service</th><th scope="col">Image</th></tr></thead><tbody>
+      {%- for img in c.images %}
+      <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- else %}
+    <p>No image references found.</p>
+    {%- endif %}
+    </div>
+    {%- endfor %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if ct.running_containers %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Running Containers</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Name</th><th scope="col">Image</th><th scope="col">Status</th><th scope="col">Mounts</th><th scope="col">Networks</th></tr></thead><tbody>
+      {%- for item in containers_data.running %}
+      <tr>
+        <td><strong>{{ item.name }}</strong></td>
+        <td><code>{{ item.image }}</code></td>
+        <td>{{ item.status }}</td>
+        <td class="text-sm">{{ item.mount_summary|safe }}</td>
+        <td class="text-sm">{{ item.net_summary or '' }}</td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- else %}
+  <p>No container workloads.</p>
+  {%- endif %}
+{% endcall %}
+

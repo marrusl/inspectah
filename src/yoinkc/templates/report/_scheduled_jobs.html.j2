@@ -1,0 +1,100 @@
+{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{# ── Scheduled jobs ───────────────────────────────────────────────────────── #}
+{% call section("scheduled_tasks", "Scheduled jobs") %}
+  {%- set st = snapshot.scheduled_tasks %}
+  {%- if st and (st.cron_jobs or st.systemd_timers or st.generated_timer_units or st.at_jobs) %}
+
+  {%- set local_timers = [] %}{%- set vendor_timers = [] %}
+  {%- for t in st.systemd_timers %}
+    {%- if t.source == 'local' %}{% set _ = local_timers.append(t) %}
+    {%- elif t.source == 'vendor' %}{% set _ = vendor_timers.append(t) %}
+    {%- endif %}
+  {%- endfor %}
+
+  {%- if local_timers or vendor_timers %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Systemd Timers</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if vendor_timers %}
+    <p class="text-sm">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
+    {%- endif %}
+    {%- if local_timers %}
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Timer</th><th scope="col">Schedule</th><th scope="col">ExecStart</th></tr></thead><tbody>
+      {%- for t in local_timers %}
+      <tr>
+        <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>
+        <td><code>{{ t.exec_start }}</code></td>
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    {%- endif %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if st.generated_timer_units %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron-Converted Timers</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Cron Expression</th><th scope="col">Source File</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+      {%- for u in st.generated_timer_units %}
+      <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
+        <td>{{ u.name }}</td>
+        <td><code>{{ u.cron_expr }}</code></td>
+        <td><code>{{ u.source_path }}</code></td>
+        {{ fleet_cell(u) }}
+      </tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- set rpm_cron_count = st.cron_jobs | selectattr('rpm_owned') | list | length %}
+  {%- if st.cron_jobs %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron Jobs</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    {%- if rpm_cron_count %}
+    <p class="text-sm">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
+    {%- endif %}
+    {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
+    <table class="pf-v6-c-table"><thead>
+      <tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col">Source</th><th scope="col">Action</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+      {%- for j in st.cron_jobs %}
+      {%- if not j.rpm_owned %}
+      <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if j.include else '' }}/></span></td>
+        <td><code>{{ j.path }}</code></td>
+        <td>{{ j.source }}</td>
+        <td>Convert to systemd timer</td>
+        {{ fleet_cell(j) }}
+      </tr>
+      {%- endif %}
+      {%- endfor %}
+    </tbody></table>
+    {%- endif %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if st.at_jobs %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>At Jobs</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">File</th><th scope="col">User</th><th scope="col">Command</th></tr></thead><tbody>
+      {%- for a in st.at_jobs %}
+      {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
+      <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
+      {%- endfor %}
+    </tbody></table>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- else %}
+  <p>No scheduled tasks.</p>
+  {%- endif %}
+{% endcall %}
+

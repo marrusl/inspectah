@@ -1,0 +1,22 @@
+{# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
+<div id="exclude-toolbar" class="pf-v6-c-toolbar">
+  <span class="toolbar-status" id="toolbar-status-text"></span>
+  <button id="btn-reset" class="pf-v6-c-button pf-m-link pf-m-danger" type="button" disabled title="Reset all selections to their initial state">Reset</button>
+  <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
+  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start yoinkc-refine to enable live re-render">Re-render</button>
+  <button id="btn-tarball" class="pf-v6-c-button pf-m-secondary" type="button" disabled title="Start yoinkc-refine to enable tarball download">Download Tarball</button>
+</div>
+<div id="toast" class="pf-v6-c-alert pf-m-danger toast"></div>
+
+{# ══════════════════════════════════════════════════════════════════════════
+   JavaScript
+   ─────────────────────────────────────────────────────────────────────────
+   Nav selectors: .pf-v6-c-nav__link[data-tab] for sidebar navigation.
+   Active state: pf-m-current toggled on the .pf-v6-c-nav__link element.
+   Theme toggle: pf-v6-theme-dark class on <html>.
+   Button state: disabled HTML attribute for btn-reset / btn-rerender / btn-tarball.
+   All other JS-targeted classes preserved: .section, .visible, .include-cb,
+   .include-cb-wrap, .strategy-select, .leaf-cb, .repo-cb, .warning-row,
+   .warning-row-dismiss, .dismissed, .btn-copy-cf, tr.excluded,
+   #exclude-toolbar, .helper-active, .toolbar-status, .spinner, .toast
+   ══════════════════════════════════════════════════════════════════════════ #}

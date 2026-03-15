@@ -1,0 +1,43 @@
+{# ── Sidebar navigation ─────────────────────────────────────────────────── #}
+<div class="pf-v6-c-page__sidebar">
+  <div class="pf-v6-c-page__sidebar-body">
+    <nav class="pf-v6-c-nav" id="report-nav" aria-label="Report sections">
+      <section class="pf-v6-c-nav__section">
+        <h2 class="pf-v6-c-nav__section-title">Overview</h2>
+        <ul class="pf-v6-c-nav__list">
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link pf-m-current" data-tab="summary" href="#">Summary</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="audit" href="#">Audit report</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="warnings" href="#">Warnings <span class="pf-v6-c-badge pf-m-unread" id="nav-warning-badge">{{ warnings|length }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="output_files" href="#">File browser</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containerfile" href="#">Containerfile</a></li>
+        </ul>
+      </section>
+      <section class="pf-v6-c-nav__section">
+        <h2 class="pf-v6-c-nav__section-title">Inspectors</h2>
+        <ul class="pf-v6-c-nav__list">
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="config" href="#">Config</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="services" href="#">Services</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="users_groups" href="#">Users/Groups</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containers" href="#">Containers</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="non_rpm" href="#">Non-RPM</a></li>
+        </ul>
+      </section>
+      <section class="pf-v6-c-nav__section">
+        <h2 class="pf-v6-c-nav__section-title">System</h2>
+        <ul class="pf-v6-c-nav__list">
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="scheduled_tasks" href="#">Scheduled</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="kernel_boot" href="#">Kernel/Boot</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="selinux" href="#">SELinux</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="network" href="#">Network</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="storage" href="#">Storage</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="secrets" href="#">Secrets</a></li>
+        </ul>
+      </section>
+    </nav>
+  </div>
+</div>
+
+<main class="pf-v6-c-page__main">
+<section class="pf-v6-c-page__main-section">
+
