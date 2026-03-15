@@ -523,6 +523,7 @@ def _build_context(
                 "deps": dep_tree.get(lf, []),
                 "snap_index": snap_idx,
                 "include": pkg.include if pkg else True,
+                "fleet": pkg.fleet if pkg else None,
             })
         # Sort groups: known repos alphabetically, "(unknown)" last
         sorted_groups = []

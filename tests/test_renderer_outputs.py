@@ -1496,7 +1496,7 @@ class TestFleetBanner:
         assert "web-01" in html
         assert "web-02" in html
         assert "web-03" in html
-        assert "included" in html
+        assert "included" in html  # include/exclude summary
 
     def test_fleet_banner_absent(self, tmp_path):
         snap = InspectionSnapshot(
@@ -1515,6 +1515,99 @@ class TestFleetBanner:
         html_report.render(snap, env, tmp_path)
         html = (tmp_path / "report.html").read_text()
         assert "Fleet Analysis" not in html
+
+
+class TestFleetPrevalenceBadge:
+    """Tests for fleet prevalence badges on item rows."""
+
+    def _render_fleet_snapshot(self, tmp_path):
+        """Render a fleet snapshot with prevalence data on items."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 67,
+                }
+            },
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4.57", release="1.el9", arch="x86_64",
+                                 fleet=FleetPrevalence(count=3, total=3, hosts=["web-01", "web-02", "web-03"])),
+                    PackageEntry(name="debug-tools", version="1.0", release="1.el9", arch="x86_64",
+                                 include=False,
+                                 fleet=FleetPrevalence(count=1, total=3, hosts=["web-03"])),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        return (tmp_path / "report.html").read_text()
+
+    def test_prevalence_bar_present(self, tmp_path):
+        html = self._render_fleet_snapshot(tmp_path)
+        assert "fleet-bar" in html
+        assert 'data-count="3"' in html
+        assert 'data-total="3"' in html
+
+    def test_prevalence_bar_absent_without_fleet(self, tmp_path):
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4.57", release="1.el9", arch="x86_64"),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "fleet-bar" not in html
+        assert "fleet-prevalence" not in html
+
+    def test_color_class_applied(self, tmp_path):
+        html = self._render_fleet_snapshot(tmp_path)
+        assert "pf-m-blue" in html   # 3/3 = 100%
+        assert "pf-m-red" in html    # 1/3 = 33%
+
+    def test_hosts_in_data_attribute(self, tmp_path):
+        html = self._render_fleet_snapshot(tmp_path)
+        assert "web-01, web-02, web-03" in html
+
+    def test_empty_hosts_renders_empty_data_attr(self, tmp_path):
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01"],
+                    "total_hosts": 1,
+                    "min_prevalence": 100,
+                }
+            },
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", version="2.4.57", release="1.el9", arch="x86_64",
+                                 fleet=FleetPrevalence(count=1, total=1, hosts=[])),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert 'data-hosts=""' in html
 
 
 class TestFleetConfigPassthrough:
