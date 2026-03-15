@@ -481,6 +481,18 @@ def main(argv: list[str] | None = None) -> None:
     else:
         _ensure_image(runtime)
 
+    # Initial re-render with --refine-mode so the served report has the
+    # editor UI from the first page load. The original tarball's report.html
+    # was generated without --refine-mode (static report).
+    if re_render_available and snapshot_path.exists():
+        _log("re-rendering with editor UI enabled…")
+        snap_bytes = snapshot_path.read_bytes()
+        ok, result = _re_render(snap_bytes, output_dir, original_data=snap_bytes)
+        if ok:
+            _log("editor UI ready")
+        else:
+            _log(f"warning: initial re-render failed, serving static report: {result[:200]}")
+
     try:
         port = _find_free_port()
     except RuntimeError as exc:
