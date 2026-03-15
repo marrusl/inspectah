@@ -34,12 +34,17 @@ def _run_inspectors(host_root: Path, args) -> InspectionSnapshot:
 def _run_renderers(
     snapshot: InspectionSnapshot,
     output_dir: Path,
+    refine_mode: bool = False,
     original_snapshot_path: Optional[Path] = None,
 ) -> None:
     """Run all renderers."""
     from .renderers import run_all
 
-    run_all(snapshot, output_dir, original_snapshot_path=original_snapshot_path)
+    run_all(
+        snapshot, output_dir,
+        refine_mode=refine_mode,
+        original_snapshot_path=original_snapshot_path,
+    )
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -73,6 +78,7 @@ def main(argv: Optional[list] = None) -> int:
 
         renderers = partial(
             _run_renderers,
+            refine_mode=args.refine_mode,
             original_snapshot_path=args.original_snapshot,
         )
 

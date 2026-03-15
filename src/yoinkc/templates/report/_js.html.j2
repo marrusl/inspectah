@@ -3,6 +3,7 @@
 (function(){ var t = localStorage.getItem('yoinkc-theme'); if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark'); })();
 var snapshot = {{ snapshot_json|safe }};
 var originalSnapshot = {{ original_snapshot_json|safe }};
+var refineMode = {{ 'true' if refine_mode else 'false' }};
 (function(){
   var sections = document.querySelectorAll('.section');
   var navLinks = document.querySelectorAll('.pf-v6-c-nav__link[data-tab]');

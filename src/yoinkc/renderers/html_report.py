@@ -474,6 +474,7 @@ def _build_context(
     snapshot: InspectionSnapshot,
     output_dir: Path,
     env: Environment,
+    refine_mode: bool = False,
     original_snapshot_path: Optional[Path] = None,
 ) -> dict:
     from ._triage import compute_triage, compute_triage_detail
@@ -649,6 +650,7 @@ def _build_context(
         "snapshot": snapshot,
         "snapshot_json": snapshot_json,
         "original_snapshot_json": original_snapshot_json,
+        "refine_mode": refine_mode,
         "patternfly_css": Markup(patternfly_css),
         "counts": counts,
         "fleet_meta": fleet_meta,
@@ -688,6 +690,7 @@ def render(
     snapshot: InspectionSnapshot,
     env: Environment,
     output_dir: Path,
+    refine_mode: bool = False,
     original_snapshot_path: Optional[Path] = None,
 ) -> None:
     """Render report.html by building a context dict and invoking the Jinja2 template."""
@@ -704,7 +707,11 @@ def render(
 
     env.filters["fleet_color"] = _fleet_color
 
-    ctx = _build_context(snapshot, output_dir, env, original_snapshot_path=original_snapshot_path)
+    ctx = _build_context(
+        snapshot, output_dir, env,
+        refine_mode=refine_mode,
+        original_snapshot_path=original_snapshot_path,
+    )
     template = env.get_template("report.html.j2")
     html = template.render(ctx)
     (output_dir / "report.html").write_text(html)

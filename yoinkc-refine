@@ -198,6 +198,7 @@ def _re_render(
         yoinkc_args = [
             "--from-snapshot", "/input/snapshot.json",
             "--output-dir", "/output",
+            "--refine-mode",
         ]
         if original_data:
             yoinkc_args += ["--original-snapshot", "/input/original-snapshot.json"]

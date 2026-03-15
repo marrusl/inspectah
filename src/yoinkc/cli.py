@@ -152,6 +152,11 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--refine-mode",
+        action="store_true",
+        help="Enable editor UI in rendered report (set by yoinkc-refine)",
+    )
+    parser.add_argument(
         "--original-snapshot",
         type=Path,
         metavar="PATH",

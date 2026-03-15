@@ -21,6 +21,7 @@ from .secrets_review import render as render_secrets_review
 def run_all(
     snapshot: InspectionSnapshot,
     output_dir: Path,
+    refine_mode: bool = False,
     original_snapshot_path: Optional[Path] = None,
 ) -> None:
     """Run all renderers. output_dir is created if it does not exist."""
@@ -34,7 +35,11 @@ def run_all(
     _status_fn("Rendering output…")
     render_containerfile(snapshot, env, output_dir)
     render_audit_report(snapshot, env, output_dir)
-    render_html_report(snapshot, env, output_dir, original_snapshot_path=original_snapshot_path)
+    render_html_report(
+        snapshot, env, output_dir,
+        refine_mode=refine_mode,
+        original_snapshot_path=original_snapshot_path,
+    )
     render_readme(snapshot, env, output_dir)
     render_kickstart(snapshot, env, output_dir)
     render_secrets_review(snapshot, env, output_dir)

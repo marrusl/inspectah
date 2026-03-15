@@ -90,6 +90,23 @@ class TestHtmlReport:
         assert "original-host" in html
         assert "edited-host" in html
 
+    def test_refine_mode_defaults_to_false(self, outputs_with_baseline):
+        """Static report has refine_mode=False embedded as JS variable."""
+        html = self._html(outputs_with_baseline)
+        assert "var refineMode = false" in html
+
+    def test_refine_mode_true_renders_correctly(self):
+        """When refine_mode=True, the JS variable should be true."""
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp), refine_mode=True)
+            html = (Path(tmp) / "report.html").read_text()
+
+        assert "var refineMode = true" in html
+
 
 class TestHtmlStructure:
 
