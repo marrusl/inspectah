@@ -237,6 +237,92 @@ class TestVersionChangeSchema:
         assert SCHEMA_VERSION >= 7
 
 
+class TestVersionChangesHtmlReport:
+    """Version Changes subsection in the HTML packages tab."""
+
+    def _render_html(self, snapshot):
+        """Helper: render HTML report and return the HTML string."""
+        from yoinkc.renderers.html_report import render as render_html
+        from jinja2 import Environment, FileSystemLoader
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "Containerfile").write_text("FROM test")
+            templates_dir = Path(__file__).parent.parent / "src" / "yoinkc" / "templates"
+            env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
+            render_html(snapshot, env, tmp_path)
+            return (tmp_path / "report.html").read_text()
+
+    def test_version_changes_table_present(self):
+        from yoinkc.schema import (
+            InspectionSnapshot, OsRelease, RpmSection, PackageEntry,
+            VersionChange, VersionChangeDirection,
+        )
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4.57", release="5.el9", arch="x86_64"),
+                ],
+                version_changes=[
+                    VersionChange(
+                        name="bash", arch="x86_64",
+                        host_version="5.2.15-2.el9", base_version="5.1.8-9.el9",
+                        direction=VersionChangeDirection.DOWNGRADE,
+                    ),
+                    VersionChange(
+                        name="curl", arch="x86_64",
+                        host_version="7.76.1-26.el9", base_version="7.76.1-29.el9",
+                        direction=VersionChangeDirection.UPGRADE,
+                    ),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+            ),
+        )
+        html = self._render_html(snapshot)
+        assert "Version Changes" in html
+        assert "bash" in html
+        assert "5.2.15-2.el9" in html
+        assert "5.1.8-9.el9" in html
+        assert "downgrade" in html.lower()
+        assert "upgrade" in html.lower()
+
+    def test_version_column_on_dependency_tree(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4.57", release="5.el9", arch="x86_64"),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+                leaf_dep_tree={"httpd": []},
+            ),
+        )
+        html = self._render_html(snapshot)
+        assert "2.4.57-5.el9" in html
+
+    def test_version_changes_absent_when_empty(self):
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+            rpm=RpmSection(
+                base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="2.4.57", release="5.el9", arch="x86_64"),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+            ),
+        )
+        html = self._render_html(snapshot)
+        assert "Version Changes" not in html
+
+
 class TestPythonVersionMap:
 
     def test_rhel10_uses_python312(self):

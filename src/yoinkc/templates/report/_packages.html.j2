@@ -51,14 +51,15 @@
     <div class="pf-v6-c-card__body">
     {%- if repo_groups %}
     <table class="pf-v6-c-table pkg-dep-tree-group">
-      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead>
+      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Leaf Package</th><th scope="col">Version</th><th scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead>
       <tbody>
       {%- for repo_name, entries in repo_groups.items() %}
-      <tr><th colspan="{{ 5 if fleet_meta else 4 }}" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</th></tr>
+      <tr><th colspan="{{ 6 if fleet_meta else 5 }}" class="table-group-header{{ ' table-group-header-first' if loop.first else '' }}">{{ repo_name }} ({{ entries|length }} package{{ 's' if entries|length != 1 else '' }})</th></tr>
       {%- for entry in entries %}
       <tr{% if not entry.include %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
         <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb leaf-cb" {{ 'checked' if entry.include else '' }}/></span></td>
         <td><strong>{{ entry.name }}</strong></td>
+        <td class="text-sm">{{ entry.version }}</td>
         <td>{{ entry.deps|length }}</td>
         <td>
           {%- if entry.deps %}
@@ -165,6 +166,36 @@
 
   {%- else %}
   <p>No added packages.</p>
+  {%- endif %}
+
+  {# ── Version Changes ──────────────────────────────────────────────────── #}
+  {%- if snapshot.rpm and snapshot.rpm.version_changes %}
+  <div class="pf-v6-c-card" id="pkg-version-changes">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Version Changes ({{ snapshot.rpm.version_changes|length }})</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <p class="text-sm">Packages present on both host and base image with different versions. Downgrades may indicate regressions.</p>
+    <table class="pf-v6-c-table" id="pkg-version-table">
+      <thead><tr><th scope="col">Package</th><th scope="col">Arch</th><th scope="col">Host Version</th><th scope="col">Base Image Version</th><th scope="col">Direction</th></tr></thead>
+      <tbody>
+      {%- for vc in snapshot.rpm.version_changes %}
+      <tr>
+        <td>{{ vc.name }}</td>
+        <td>{{ vc.arch }}</td>
+        <td>{% if vc.host_epoch != "0" %}{{ vc.host_epoch }}:{% endif %}{{ vc.host_version }}</td>
+        <td>{% if vc.base_epoch != "0" %}{{ vc.base_epoch }}:{% endif %}{{ vc.base_version }}</td>
+        <td>
+          {%- if vc.direction.value == "downgrade" %}
+          <span class="pf-v6-c-label pf-m-compact pf-m-red"><span class="pf-v6-c-label__content">downgrade</span></span>
+          {%- else %}
+          <span class="pf-v6-c-label pf-m-compact pf-m-blue"><span class="pf-v6-c-label__content">upgrade</span></span>
+          {%- endif %}
+        </td>
+      </tr>
+      {%- endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
   {%- endif %}
 {% endcall %}
 

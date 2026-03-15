@@ -550,6 +550,7 @@ def _build_context(
                     break
             repo_groups.setdefault(repo, []).append({
                 "name": lf,
+                "version": f"{pkg.version}-{pkg.release}" if pkg and pkg.version else "",
                 "deps": dep_tree.get(lf, []),
                 "snap_index": snap_idx,
                 "include": pkg.include if pkg else True,
