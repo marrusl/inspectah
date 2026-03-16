@@ -2,7 +2,7 @@
 {# ── Config ──────────────────────────────────────────────────────────────── #}
 {% call section("config", "Configuration files") %}
   {%- if snapshot.config and snapshot.config.files %}
-  <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Kind</th><th class="pf-m-fit-content" scope="col">Category</th><th class="pf-m-fit-content" scope="col">rpm -Va flags</th><th scope="col">Diff</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Kind</th><th class="pf-m-fit-content" scope="col">Category</th><th class="pf-m-fit-content" scope="col">rpm -Va flags</th><th scope="col">Diff</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}{% if refine_mode %}<th class="pf-m-fit-content" scope="col"></th>{% endif %}</tr></thead><tbody>
   {% if fleet_meta and config_variant_groups %}
     {%- for path, variants in config_variant_groups.items() %}
     {%- if variants | length > 1 %}
@@ -27,6 +27,7 @@
         </td>
         <td></td><td></td><td></td><td></td>
         {{ fleet_cell(primary.item) }}
+        {% if refine_mode %}<td></td>{% endif %}
       </tr>
       <tr class="fleet-variant-children">
         <td colspan="10">
@@ -59,6 +60,7 @@
                   <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn{% if not group_has_selected %} pf-m-disabled{% endif %}"{% if not group_has_selected %} disabled{% endif %}>Compare</button>
                 {% endif %}
               </td>
+              {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="{% if v.item.include %}Edit in editor{% else %}View in editor (read-only){% endif %}" data-section="config" data-list="files" data-index="{{ v.item.snap_index }}" data-path="{{ path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
             </tr>
             {%- endfor %}
           </table>
@@ -68,12 +70,13 @@
       {%- set f = variants[0].item %}
       <tr{% if not f.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ f.snap_index }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if f.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
-        <td><code>{{ f.path }}</code>{% if refine_mode %} <a href="#" class="edit-in-editor-link" data-section="config" data-list="files" data-index="{{ f.snap_index }}" data-path="{{ f.path }}" onclick="navigateToEditor(this); return false;" style="margin-left:8px;">View &amp; edit in editor &rarr;</a>{% endif %}</td>
+        <td><code>{{ f.path }}</code></td>
         <td>{{ f.kind }}</td>
         <td>{{ f.category | replace('_', ' ') | title }}</td>
         <td>{% if f.flags %}<code>{{ f.flags }}</code>{% endif %}</td>
         <td>{{ f.diff_html|safe }}</td>
         {{ fleet_cell(f) }}
+        {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="config" data-list="files" data-index="{{ f.snap_index }}" data-path="{{ f.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
       </tr>
     {%- endif %}
     {%- endfor %}
@@ -81,12 +84,13 @@
     {%- for item in config_files_rendered %}
     <tr{% if not item.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
       <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
-      <td><code>{{ item.path }}</code>{% if refine_mode %} <a href="#" class="edit-in-editor-link" data-section="config" data-list="files" data-index="{{ item.snap_index }}" data-path="{{ item.path }}" onclick="navigateToEditor(this); return false;" style="margin-left:8px;">View &amp; edit in editor &rarr;</a>{% endif %}</td>
+      <td><code>{{ item.path }}</code></td>
       <td>{{ item.kind }}</td>
       <td>{{ item.category | replace('_', ' ') | title }}</td>
       <td>{% if item.flags %}<code>{{ item.flags }}</code>{% endif %}</td>
       <td>{{ item.diff_html|safe }}</td>
       {{ fleet_cell(item) }}
+      {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="config" data-list="files" data-index="{{ item.snap_index }}" data-path="{{ item.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
     </tr>
     {%- endfor %}
   {% endif %}
