@@ -90,16 +90,18 @@ class TestEditorTab:
         assert 'setupDirtyTracking' in html
 
     def test_edit_in_editor_links_refine_mode(self):
-        """Refine mode shows 'View & edit in editor' links for content sections."""
+        """Refine mode shows pencil icon editor buttons for content sections."""
         html = _render(refine_mode=True, with_content=True)
-        assert 'View &amp; edit in editor' in html
+        assert 'class="pf-v6-c-button pf-m-plain editor-icon"' in html
         assert 'navigateToEditor' in html
+        assert 'View &amp; edit in editor' not in html
 
     def test_no_edit_links_static_mode(self):
-        """Static mode keeps content pulldowns, no editor links."""
+        """Static mode keeps content pulldowns, no editor links or pencil icons."""
         html = _render(refine_mode=False, with_content=True)
-        assert 'View &amp; edit in editor' not in html
+        assert 'class="pf-v6-c-button pf-m-plain editor-icon"' not in html
         assert 'navigateToEditor' not in html
+        assert 'View &amp; edit in editor' not in html
 
     def test_new_file_modal_in_refine_mode(self):
         html = _render(refine_mode=True)
@@ -175,7 +177,7 @@ class TestEditorIntegration:
         assert 'CMEditor' not in html
         assert 'editorSave' not in html
         assert 'id="btn-re-render"' not in html
-        assert 'View &amp; edit in editor' not in html
+        assert 'class="pf-v6-c-button pf-m-plain editor-icon"' not in html
         assert 'navigateToEditor' not in html
         # Existing file browser is intact
         assert 'id="file-viewer-content"' in html
@@ -211,8 +213,8 @@ class TestEditorIntegration:
         # Re-render button
         assert 'id="btn-re-render"' in html
         assert 'editor-changed-count' in html
-        # Cross-tab links
-        assert 'View &amp; edit in editor' in html
+        # Cross-tab editor buttons (pencil icon)
+        assert 'class="pf-v6-c-button pf-m-plain editor-icon"' in html
         assert 'navigateToEditor' in html
         # Keyboard shortcut
         assert "e.key === 's'" in html

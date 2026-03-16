@@ -8,7 +8,7 @@
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Quadlet Units</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}{% if refine_mode %}<th class="pf-m-fit-content" scope="col"></th>{% endif %}</tr></thead><tbody>
     {% if fleet_meta and quadlet_variant_groups %}
       {%- for path, variants in quadlet_variant_groups.items() %}
       {%- if variants | length > 1 %}
@@ -26,6 +26,7 @@
           </td>
           <td></td>
           {{ fleet_cell(primary.item) }}
+          {% if refine_mode %}<td></td>{% endif %}
         </tr>
         <tr class="fleet-variant-children">
           <td colspan="10">
@@ -45,6 +46,7 @@
                     <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn{% if not group_has_selected %} pf-m-disabled{% endif %}"{% if not group_has_selected %} disabled{% endif %}>Compare</button>
                   {% endif %}
                 </td>
+                {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="{% if v.item.include %}Edit in editor{% else %}View in editor (read-only){% endif %}" data-section="containers" data-list="quadlet_units" data-index="{{ v.snap_index }}" data-path="{{ path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
               </tr>
               {%- endfor %}
             </table>
@@ -57,8 +59,9 @@
           <td>{{ u.name }}</td>
           <td>{% if u.image %}<code>{{ u.image }}</code>{% else %}<em>none</em>{% endif %}</td>
           <td><code>{{ u.path }}</code></td>
-          <td>{%- if u.content and u.content.strip() %}{% if refine_mode %}<a href="#" class="edit-in-editor-link" data-section="containers" data-list="quadlet_units" data-index="{{ variants[0].snap_index }}" data-path="{{ u.path }}" onclick="navigateToEditor(this); return false;">View &amp; edit in editor &rarr;</a>{% else %}<details><summary>show</summary><pre class="content-preview">{{ u.content }}</pre></details>{% endif %}{%- endif %}</td>
+          <td>{%- if u.content and u.content.strip() %}<details><summary>show</summary><pre class="content-preview">{{ u.content }}</pre></details>{%- endif %}</td>
           {{ fleet_cell(u) }}
+          {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="containers" data-list="quadlet_units" data-index="{{ variants[0].snap_index }}" data-path="{{ u.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
         </tr>
       {%- endif %}
       {%- endfor %}
@@ -71,16 +74,13 @@
         <td><code>{{ u.path }}</code></td>
         <td>
           {%- if u.content and u.content.strip() %}
-          {% if refine_mode %}
-          <a href="#" class="edit-in-editor-link" data-section="containers" data-list="quadlet_units" data-index="{{ loop.index0 }}" data-path="{{ u.path }}" onclick="navigateToEditor(this); return false;">View &amp; edit in editor &rarr;</a>
-          {% else %}
           <details><summary>show</summary>
             <pre class="content-preview">{{ u.content }}</pre>
           </details>
-          {% endif %}
           {%- endif %}
         </td>
         {{ fleet_cell(u) }}
+        {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="containers" data-list="quadlet_units" data-index="{{ loop.index0 }}" data-path="{{ u.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
       </tr>
       {%- endfor %}
     {% endif %}
