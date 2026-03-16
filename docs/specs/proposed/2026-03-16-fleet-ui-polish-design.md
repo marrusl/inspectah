@@ -79,7 +79,7 @@ Add `pf-m-fit-content` to `<th>` elements for columns containing fixed-width or 
 | `_users_groups.html.j2` (Users) | checkbox, UID/GID, Type, Strategy |
 | `_users_groups.html.j2` (Groups) | checkbox, GID, Strategy |
 | `_config.html.j2` | checkbox, Kind, Category, rpm-Va flags |
-| `_packages.html.j2` (dep tree) | checkbox, Version, Dependencies, Arch |
+| `_packages.html.j2` (dep tree) | checkbox, Version, Dep count, Arch |
 | `_packages.html.j2` (repos) | checkbox, Source |
 | `_non_rpm.html.j2` (ELF) | checkbox, Language, Linking |
 | `_non_rpm.html.j2` (pip/npm) | checkbox, Version |
