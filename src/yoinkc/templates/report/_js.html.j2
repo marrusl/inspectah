@@ -873,6 +873,7 @@ function switchVariant(ctx) {
   updateToolbar();
   setDirty(!isSnapshotClean());
   if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
+  if (typeof editorRefreshTree === 'function') editorRefreshTree();
 }
 
 function updateCompareButtons(group) {

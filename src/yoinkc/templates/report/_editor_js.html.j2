@@ -127,19 +127,36 @@
             stateSpan.className = 'editor-state-label';
             row.appendChild(stateSpan);
 
-            var pill = document.createElement('span');
             if (isSelected) {
-              pill.className = 'variant-pill selected-pill';
-              pill.textContent = 'selected';
+              var badge = document.createElement('span');
+              badge.className = 'pf-v6-c-badge pf-m-read selected-badge';
+              badge.textContent = 'selected';
+              row.appendChild(badge);
             } else {
-              pill.className = 'variant-pill switch-pill';
-              pill.textContent = 'use this variant';
-              pill.addEventListener('click', function(ev) {
+              var groupHasSelected = entries.some(function(s) { return s.item.include === true; });
+
+              var compareBtn = document.createElement('button');
+              compareBtn.className = 'pf-v6-c-button pf-m-small pf-m-link editor-compare-btn';
+              compareBtn.textContent = 'Compare';
+              if (!groupHasSelected) {
+                compareBtn.disabled = true;
+                compareBtn.classList.add('pf-m-disabled');
+              }
+              compareBtn.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                compareFromEditor(this);
+              });
+              row.appendChild(compareBtn);
+
+              var switchBtn = document.createElement('button');
+              switchBtn.className = 'pf-v6-c-button pf-m-small pf-m-secondary switch-btn';
+              switchBtn.textContent = 'Use this variant';
+              switchBtn.addEventListener('click', function(ev) {
                 ev.stopPropagation();
                 switchVariantFromEditor(this);
               });
+              row.appendChild(switchBtn);
             }
-            row.appendChild(pill);
 
             row.addEventListener('click', function() {
               selectFile(sec.section, sec.list, e.idx, path);
@@ -216,8 +233,8 @@
     });
   }
 
-  function switchVariantFromEditor(pill) {
-    var row = pill.closest('.editor-variant-row');
+  function switchVariantFromEditor(btn) {
+    var row = btn.closest('.editor-variant-row');
     if (!row) return;
     var section = row.dataset.section;
     var list = row.dataset.list;
@@ -242,6 +259,28 @@
       setDirty(!isSnapshotClean());
     }
     if (typeof updateToolbar === 'function') updateToolbar();
+  }
+
+  function compareFromEditor(btn) {
+    var row = btn.closest('.editor-variant-row');
+    if (!row) return;
+    var section = row.dataset.section;
+    var list = row.dataset.list;
+    var idx = parseInt(row.dataset.index, 10);
+    var arr = resolveSnapshotRef(section, list);
+    if (!arr || !arr[idx]) return;
+    var comparisonItem = arr[idx];
+    var path = comparisonItem.path;
+
+    var selectedItem = null;
+    findSiblingVariants(section, list, path).forEach(function(s) {
+      if (s.item.include === true) selectedItem = s.item;
+    });
+    if (!selectedItem) return;
+
+    if (typeof showCompareModal === 'function') {
+      showCompareModal(path, selectedItem, comparisonItem);
+    }
   }
 
   // Pending navigation target — set when the unsaved-changes modal is shown,
@@ -777,6 +816,17 @@
       editorSave();
     }
   });
+
+  window.editorRefreshTree = function() {
+    buildTree();
+    if (editorState.currentFile) {
+      var f = editorState.currentFile;
+      var editorSection = document.getElementById('section-output_files');
+      if (editorSection && editorSection.classList.contains('visible')) {
+        doSelectFile(f.section, f.list, f.index, f.path);
+      }
+    }
+  };
 
   if (typeof refineMode !== 'undefined' && refineMode) {
     buildTree();
