@@ -9,7 +9,7 @@
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compiled Binaries</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col">Language</th><th scope="col">Linking</th><th scope="col">Shared Libraries</th></tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Language</th><th class="pf-m-fit-content" scope="col">Linking</th><th scope="col">Shared Libraries</th></tr></thead><tbody>
       {%- for i in nd.elf %}
       {%- set lang = i.lang %}
       {%- set lang_lbl = {'go': 'pf-m-teal', 'rust': 'pf-m-orange', 'c/c++': 'pf-m-purple'} %}
@@ -81,7 +81,7 @@
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>System Pip Packages</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Package</th><th scope="col">Version</th><th scope="col">Path</th></tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Package</th><th class="pf-m-fit-content" scope="col">Version</th><th scope="col">Path</th></tr></thead><tbody>
       {%- for i in nd.pip[:20] %}
       {%- set nr_idx = namespace(val=-1) %}
       {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}

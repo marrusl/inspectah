@@ -3,7 +3,7 @@
 {# ── Storage ─────────────────────────────────────────────────────────────── #}
 {% call section("storage", "Storage") %}
   {%- if snapshot.storage and snapshot.storage.fstab_entries %}
-  <table class="pf-v6-c-table"><thead><tr><th scope="col">Device</th><th scope="col">Mount</th><th scope="col">Type</th></tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th scope="col">Device</th><th scope="col">Mount</th><th class="pf-m-fit-content" scope="col">Type</th></tr></thead><tbody>
     {%- for e in snapshot.storage.fstab_entries[:30] %}
     <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
     {%- endfor %}

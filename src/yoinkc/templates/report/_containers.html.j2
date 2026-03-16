@@ -8,7 +8,7 @@
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Quadlet Units</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
     {% if fleet_meta and quadlet_variant_groups %}
       {%- for path, variants in quadlet_variant_groups.items() %}
       {%- if variants | length > 1 %}

@@ -36,7 +36,7 @@
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron-Converted Timers</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Cron Expression</th><th scope="col">Source File</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Name</th><th scope="col">Cron Expression</th><th scope="col">Source File</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
       {%- for u in st.generated_timer_units %}
       <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if u.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
@@ -61,7 +61,7 @@
     {%- endif %}
     {%- if st.cron_jobs | selectattr('rpm_owned', 'equalto', false) | list %}
     <table class="pf-v6-c-table"><thead>
-      <tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col">Source</th><th scope="col">Action</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+      <tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Source</th><th class="pf-m-fit-content" scope="col">Action</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
       {%- for j in st.cron_jobs %}
       {%- if not j.rpm_owned %}
       <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
@@ -83,7 +83,7 @@
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>At Jobs</h3></div></div>
     <div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th scope="col">File</th><th scope="col">User</th><th scope="col">Command</th></tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">File</th><th class="pf-m-fit-content" scope="col">User</th><th scope="col">Command</th></tr></thead><tbody>
       {%- for a in st.at_jobs %}
       {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
       <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
