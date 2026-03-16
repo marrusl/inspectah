@@ -40,7 +40,7 @@ class ConfigCategory(str, Enum):
 
 Add `category: ConfigCategory = ConfigCategory.OTHER` to `ConfigFileEntry`. Defaults to `OTHER` so existing snapshots deserialize without breaking.
 
-`SCHEMA_VERSION` bumps from 7 to 8.
+`SCHEMA_VERSION` bumps from 7 to 8 (single bump covers both Part A and Part B changes).
 
 ### Classification Logic
 
