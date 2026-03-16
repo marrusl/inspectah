@@ -102,7 +102,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   function buildBaseline() {
     includeBaseline = {};
     strategyBaseline = {};
-    document.querySelectorAll('.include-cb').forEach(function(cb) {
+    document.querySelectorAll('.include-toggle').forEach(function(cb) {
       var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
       if (!tr) return;
       var section = tr.getAttribute('data-snap-section');
@@ -121,7 +121,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   }
   function isSnapshotClean() {
     var clean = true;
-    document.querySelectorAll('.include-cb').forEach(function(cb) {
+    document.querySelectorAll('.include-toggle').forEach(function(cb) {
       var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
       if (!tr) return;
       var section = tr.getAttribute('data-snap-section');
@@ -157,7 +157,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   }
 
   function updateToolbar() {
-    var n = document.querySelectorAll('.include-cb:not(:checked)').length;
+    var n = document.querySelectorAll('.include-toggle:not(:checked)').length;
     var strategyChanges = 0;
     document.querySelectorAll('.strategy-select').forEach(function(sel) {
       var tr = sel.closest('tr[data-snap-section]');
@@ -197,7 +197,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
     return sec[list] || null;
   }
 
-  document.querySelectorAll('.include-cb').forEach(function(cb){
+  document.querySelectorAll('.include-toggle').forEach(function(cb){
     cb.addEventListener('change', function(){
       var tr = this.closest('tr[data-snap-section]') || this.closest('[data-snap-section]');
       if (!tr) return;
@@ -384,7 +384,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
         }
       }
 
-      var cb = el.querySelector('.include-cb');
+      var cb = el.querySelector('.include-toggle');
       if (cb) {
         var shouldCheck = origItem.include !== undefined ? origItem.include : true;
         cb.checked = shouldCheck;
@@ -476,7 +476,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   // --- Helper script detection with retry ---
   function enableHelperButtons(reRenderAvailable) {
     helperAvailable = true;
-    document.querySelectorAll('.include-cb-wrap').forEach(function(el){ el.style.display = 'inline-grid'; });
+    document.querySelectorAll('.include-toggle-wrap').forEach(function(el){ el.style.display = 'inline-grid'; });
     if (toolbar) {
       toolbar.style.display = '';
       toolbar.classList.remove('visible');
