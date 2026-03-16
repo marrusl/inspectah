@@ -17,7 +17,7 @@ html:not(.pf-v6-theme-dark) .os-icon-rocky  { color: #10B981; }
 html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 
 /* Page padding – toolbar lives at the bottom */
-body { padding-bottom: 70px; }
+body { padding-bottom: 3.5rem; }
 
 /* Inline alert banners – wrap content in .pf-v6-c-alert__title to land in the
    grid's "title" area; nowrap + overflow-x keeps stats on a single line. */
@@ -125,7 +125,7 @@ details.audit-expand > summary { font-size: 1em; font-weight: 600; color: inheri
 details.audit-expand { margin-bottom: 0.25rem; }
 
 /* Sticky toolbar */
-#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: 0.6rem 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
+#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: var(--pf-t--global--spacer--sm) 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
 #exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
 #exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
 
