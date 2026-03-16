@@ -794,6 +794,67 @@ function showCompareModal(path, selectedItem, comparisonItem) {
   });
 }
 
+function switchVariant(ctx) {
+  var group = ctx.path;
+
+  var rows = document.querySelectorAll('[data-variant-group="' + group + '"]');
+  rows.forEach(function(row) {
+    var section = row.getAttribute('data-snap-section');
+    var list = row.getAttribute('data-snap-list');
+    var idx = parseInt(row.getAttribute('data-snap-index'), 10);
+    if (!section || !list || isNaN(idx)) return;
+    var arr = resolveSnapshotRef(section, list);
+    if (!arr || !arr[idx]) return;
+
+    var isTarget = (arr[idx] === ctx.comparisonItem);
+    arr[idx].include = isTarget;
+
+    var cb = row.querySelector('.include-toggle');
+    if (cb) cb.checked = isTarget;
+    row.classList.toggle('excluded', !isTarget);
+
+    var actionCell = row.querySelector('.variant-action-cell');
+    if (actionCell) {
+      if (isTarget) {
+        actionCell.innerHTML = '<span style="font-size:0.75rem;color:var(--pf-t--global--text--color--subtle);">selected</span>';
+      } else {
+        actionCell.innerHTML = '<button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn">Compare</button>';
+      }
+    }
+  });
+
+  // Sync parent group header row toggle
+  var parentRows = document.querySelectorAll('.fleet-variant-group');
+  parentRows.forEach(function(parentRow) {
+    var parentIdx = parseInt(parentRow.getAttribute('data-snap-index'), 10);
+    var section = parentRow.getAttribute('data-snap-section');
+    var list = parentRow.getAttribute('data-snap-list');
+    if (!section || !list || isNaN(parentIdx)) return;
+    var arr = resolveSnapshotRef(section, list);
+    if (!arr || !arr[parentIdx]) return;
+
+    // Only match parent rows in the same section/list group
+    var childRows = document.querySelectorAll('[data-variant-group="' + group + '"]');
+    var matchesGroup = false;
+    childRows.forEach(function(child) {
+      if (child.getAttribute('data-snap-section') === section
+          && child.getAttribute('data-snap-list') === list
+          && parseInt(child.getAttribute('data-snap-index'), 10) === parentIdx) {
+        matchesGroup = true;
+      }
+    });
+    if (!matchesGroup) return;
+
+    var parentCb = parentRow.querySelector('.include-toggle');
+    if (parentCb) parentCb.checked = arr[parentIdx].include;
+    parentRow.classList.toggle('excluded', !arr[parentIdx].include);
+  });
+
+  updateToolbar();
+  setDirty(!isSnapshotClean());
+  if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
+}
+
 /* Fleet: toggle fraction/percentage on prevalence labels */
 document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
   label.addEventListener('click', function(e) {
