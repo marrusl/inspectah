@@ -19,9 +19,9 @@ Current popover is a plain `<ul><li>` host list in a dynamically created `<div>`
 ┌─────────────────────────┐
 │ 3 of 5 hosts    [Copy▾] │
 │─────────────────────────│
-│ host-01                  │
-│ host-02                  │
-│ host-03                  │
+│ host-01                 │
+│ host-02                 │
+│ host-03                 │
 └─────────────────────────┘
 ```
 
