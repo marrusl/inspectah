@@ -1,7 +1,7 @@
 # Fleet Popover: Copy Host List
 
 **Date:** 2026-03-15
-**Status:** Proposed
+**Status:** Implemented
 
 ## Problem
 

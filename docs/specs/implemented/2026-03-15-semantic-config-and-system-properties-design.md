@@ -1,7 +1,7 @@
 # Semantic Config Labels & System Properties
 
 **Date:** 2026-03-15
-**Status:** Proposed
+**Status:** Implemented
 
 ## Problem
 
