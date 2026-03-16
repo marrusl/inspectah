@@ -40,18 +40,20 @@ Each modal migrates to this PF6 skeleton:
 
 ```html
 <div class="pf-v6-c-backdrop" style="display:none;" id="xxx-modal">
-  <div class="pf-v6-c-modal-box pf-m-sm" role="dialog" aria-modal="true" aria-label="...">
-    <div class="pf-v6-c-modal-box__close">
-      <button class="pf-v6-c-button pf-m-plain" aria-label="Close">&times;</button>
-    </div>
-    <div class="pf-v6-c-modal-box__header">
-      <h2 class="pf-v6-c-modal-box__title">Title</h2>
-    </div>
-    <div class="pf-v6-c-modal-box__body">
-      <!-- content -->
-    </div>
-    <div class="pf-v6-c-modal-box__footer">
-      <!-- buttons with existing pf-v6-c-button classes -->
+  <div class="pf-v6-c-bullseye">
+    <div class="pf-v6-c-modal-box pf-m-sm" role="dialog" aria-modal="true" aria-label="...">
+      <div class="pf-v6-c-modal-box__close">
+        <button class="pf-v6-c-button pf-m-plain" aria-label="Close">&times;</button>
+      </div>
+      <div class="pf-v6-c-modal-box__header">
+        <h2 class="pf-v6-c-modal-box__title">Title</h2>
+      </div>
+      <div class="pf-v6-c-modal-box__body">
+        <!-- content -->
+      </div>
+      <div class="pf-v6-c-modal-box__footer">
+        <!-- buttons with existing pf-v6-c-button classes -->
+      </div>
     </div>
   </div>
 </div>
@@ -60,11 +62,12 @@ Each modal migrates to this PF6 skeleton:
 Key points:
 
 - `pf-v6-c-backdrop` replaces the custom `rgba(0,0,0,0.5)` overlay div
-- `pf-v6-c-modal-box` replaces all centering, shadow, border-radius
-  inline styles
+  (provides fixed positioning and overlay color, but not centering)
+- `pf-v6-c-bullseye` wraps the modal-box to provide flex centering
+  (backdrop alone does not center its children)
+- `pf-v6-c-modal-box` handles shadow, border-radius, max-width
 - Size modifiers: `pf-m-sm` for unsaved/delete, `pf-m-md` for
   new-file/compare
-- `pf-m-danger` modifier on the delete modal for red title accent
 - `pf-v6-c-modal-box__title` replaces `pf-v6-c-title pf-m-xl`
 - Only inline style retained: `display:none` for initial hidden state
 
@@ -82,7 +85,8 @@ Key points:
 
 - Same structural swap as unsaved changes
 - Size: `pf-m-sm`
-- Modifier: `pf-m-danger` on `pf-v6-c-modal-box`
+- No `pf-m-danger` modifier (it only colors a title icon element, which
+  we don't use; the Delete button already uses `pf-m-danger`)
 - No close (×) button — actions are Cancel / Delete
 - No JS changes
 
