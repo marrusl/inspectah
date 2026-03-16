@@ -54,7 +54,7 @@ Note: `pf-m-standalone` is dropped — it is a `pf-v6-c-check` modifier that doe
 
 **Secondary classes must be preserved.** Some checkboxes carry additional classes used by JS:
 - `_packages.html.j2`: inputs have `include-cb leaf-cb` or `include-cb repo-cb`. These become `include-toggle leaf-cb` and `include-toggle repo-cb`. The `leaf-cb` and `repo-cb` classes are referenced by 7+ JS selectors and must not be dropped.
-- `_packages.html.j2`: default repo checkboxes have `disabled title="Default distribution repository -- cannot be excluded"`. This `disabled` attribute carries forward to the switch input. PF6 switch disabled styling (muted track/knob) applies automatically.
+- `_packages.html.j2`: default repo checkboxes have `disabled title="Default distribution repository — cannot be excluded"`. This `disabled` attribute carries forward to the switch input. PF6 switch disabled styling (muted track/knob) applies automatically.
 
 Affected templates under `src/yoinkc/templates/report/`:
 
