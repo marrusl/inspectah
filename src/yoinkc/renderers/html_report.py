@@ -654,6 +654,24 @@ def _build_context(
         quadlet_variant_groups = None
         dropin_variant_groups = None
 
+    variant_summary = []
+    if fleet_meta:
+        for label, groups, tab in [
+            ("Config files", config_variant_groups, "config"),
+            ("Drop-ins", dropin_variant_groups, "drop_ins"),
+            ("Quadlet units", quadlet_variant_groups, "containers"),
+        ]:
+            if not groups:
+                continue
+            multi = {path: vs for path, vs in groups.items() if len(vs) > 1}
+            if multi:
+                variant_summary.append({
+                    "label": label,
+                    "tab": tab,
+                    "files": len(multi),
+                    "variants": sum(len(v) for v in multi.values()),
+                })
+
     return {
         "snapshot": snapshot,
         "snapshot_json": snapshot_json,
@@ -680,6 +698,7 @@ def _build_context(
         "config_variant_groups": config_variant_groups,
         "quadlet_variant_groups": quadlet_variant_groups,
         "dropin_variant_groups": dropin_variant_groups,
+        "variant_summary": variant_summary,
         "containers_data": _prepare_containers(snapshot),
         "non_rpm_data": _prepare_non_rpm(snapshot),
         "triage_detail": triage_detail,
