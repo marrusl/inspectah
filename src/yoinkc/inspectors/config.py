@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from ..executor import Executor
-from ..schema import ConfigFileEntry, ConfigFileKind, ConfigSection, RpmSection
+from ..schema import ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection, RpmSection
 from .._util import debug as _debug_fn, make_warning, run_rpm_query as _run_rpm_query
 
 
@@ -210,6 +210,29 @@ _UNOWNED_EXCLUDE_GLOBS: List[str] = [
 ]
 
 
+_CATEGORY_RULES: list[tuple[ConfigCategory, list[str]]] = [
+    (ConfigCategory.TMPFILES, ["/etc/tmpfiles.d/"]),
+    (ConfigCategory.ENVIRONMENT, ["/etc/environment", "/etc/profile.d/"]),
+    (ConfigCategory.AUDIT, ["/etc/audit/rules.d/"]),
+    (ConfigCategory.LIBRARY_PATH, ["/etc/ld.so.conf.d/"]),
+    (ConfigCategory.JOURNAL, ["/etc/systemd/journald.conf.d/"]),
+    (ConfigCategory.LOGROTATE, ["/etc/logrotate.d/"]),
+    (ConfigCategory.AUTOMOUNT, ["/etc/auto.master", "/etc/auto."]),
+    (ConfigCategory.SYSCTL, ["/etc/sysctl.d/", "/etc/sysctl.conf"]),
+]
+
+
+def classify_config_path(path: str) -> ConfigCategory:
+    """Classify a config file path into a semantic category."""
+    for category, prefixes in _CATEGORY_RULES:
+        for prefix in prefixes:
+            if path == prefix:
+                return category
+            if prefix.endswith(("/", ".")) and path.startswith(prefix):
+                return category
+    return ConfigCategory.OTHER
+
+
 def _is_excluded_unowned(path: str) -> bool:
     """Return True if path matches the system-generated exclusion list."""
     if path in _UNOWNED_EXCLUDE_EXACT:
@@ -403,6 +426,7 @@ def run(
             ConfigFileEntry(
                 path=path,
                 kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                category=classify_config_path(path),
                 content=content,
                 rpm_va_flags=entry.flags,
                 package=entry.package,
@@ -441,6 +465,7 @@ def run(
             ConfigFileEntry(
                 path=path_str,
                 kind=ConfigFileKind.UNOWNED,
+                category=classify_config_path(path_str),
                 content=content,
                 rpm_va_flags=None,
                 package=None,
@@ -474,6 +499,7 @@ def run(
                             ConfigFileEntry(
                                 path=path_str,
                                 kind=ConfigFileKind.ORPHANED,
+                                category=classify_config_path(path_str),
                                 content=content,
                                 rpm_va_flags=None,
                                 package=pkg_name,

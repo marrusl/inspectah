@@ -131,11 +131,25 @@ class ConfigFileKind(str, Enum):
     ORPHANED = "orphaned"  # from removed package
 
 
+class ConfigCategory(str, Enum):
+    """Semantic category derived from config file path."""
+    TMPFILES = "tmpfiles"
+    ENVIRONMENT = "environment"
+    AUDIT = "audit"
+    LIBRARY_PATH = "library_path"
+    JOURNAL = "journal"
+    LOGROTATE = "logrotate"
+    AUTOMOUNT = "automount"
+    SYSCTL = "sysctl"
+    OTHER = "other"
+
+
 class ConfigFileEntry(BaseModel):
     """A config file captured by the Config inspector."""
 
     path: str
     kind: ConfigFileKind
+    category: ConfigCategory = ConfigCategory.OTHER
     content: str = ""
     rpm_va_flags: Optional[str] = None  # if rpm-owned modified
     package: Optional[str] = None
@@ -454,6 +468,14 @@ class KernelModule(BaseModel):
     include: bool = True
 
 
+class AlternativeEntry(BaseModel):
+    """A system alternative (update-alternatives entry)."""
+
+    name: str
+    path: str
+    status: str  # "auto" or "manual"
+
+
 class KernelBootSection(BaseModel):
     """Output of the Kernel/Boot inspector."""
 
@@ -467,6 +489,9 @@ class KernelBootSection(BaseModel):
     non_default_modules: List[KernelModule] = Field(default_factory=list)
     tuned_active: str = ""
     tuned_custom_profiles: List[ConfigSnippet] = Field(default_factory=list)
+    locale: Optional[str] = None
+    timezone: Optional[str] = None
+    alternatives: List[AlternativeEntry] = Field(default_factory=list)
 
 
 class SelinuxPortLabel(BaseModel):
@@ -508,7 +533,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class InspectionSnapshot(BaseModel):

@@ -2,7 +2,7 @@
 {# ── Kernel / Boot ────────────────────────────────────────────────────────── #}
 {% call section("kernel_boot", "Kernel and boot") %}
   {%- set kb = snapshot.kernel_boot %}
-  {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf or kb.tuned_active or kb.tuned_custom_profiles) %}
+  {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf or kb.tuned_active or kb.tuned_custom_profiles or kb.locale or kb.timezone or kb.alternatives) %}
 
   {%- if kb.cmdline or kb.non_default_modules %}
   <div class="pf-v6-c-card">
@@ -80,6 +80,52 @@
       {%- endfor %}
     </ul>
     {%- endif %}
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if kb.locale or kb.timezone %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>System Properties</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <dl class="pf-v6-c-description-list pf-m-horizontal">
+      {%- if kb.locale %}
+      <div class="pf-v6-c-description-list__group">
+        <dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">Locale</span></dt>
+        <dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ kb.locale }}</div></dd>
+      </div>
+      {%- endif %}
+      {%- if kb.timezone %}
+      <div class="pf-v6-c-description-list__group">
+        <dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">Timezone</span></dt>
+        <dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ kb.timezone }}</div></dd>
+      </div>
+      {%- endif %}
+    </dl>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if kb.alternatives %}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Alternatives</h3></div></div>
+    <div class="pf-v6-c-card__body">
+    <table class="pf-v6-c-table pf-m-compact" role="grid">
+      <thead><tr>
+        <th scope="col">Name</th>
+        <th scope="col">Path</th>
+        <th scope="col">Status</th>
+      </tr></thead>
+      <tbody>
+        {%- for alt in kb.alternatives %}
+        <tr>
+          <td>{{ alt.name }}</td>
+          <td><code>{{ alt.path }}</code></td>
+          <td><span class="pf-v6-c-label{{ ' pf-m-blue' if alt.status == 'manual' else '' }}">{{ alt.status }}</span></td>
+        </tr>
+        {%- endfor %}
+      </tbody>
+    </table>
     </div>
   </div>
   {%- endif %}

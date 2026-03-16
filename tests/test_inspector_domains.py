@@ -334,3 +334,125 @@ def test_env_files_are_redacted(host_root, fixture_executor):
     assert "sk-fakekeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234" not in myapp_env.content
     assert "REDACTED_" in myapp_env.content
     assert any("myapp/.env" in r["path"] for r in redacted.redactions)
+
+
+# ---------------------------------------------------------------------------
+# System properties detection (locale, timezone, alternatives)
+# ---------------------------------------------------------------------------
+
+
+def test_detect_locale(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    locale_conf = tmp_path / "etc" / "locale.conf"
+    locale_conf.parent.mkdir(parents=True)
+    locale_conf.write_text("LANG=en_US.UTF-8\n")
+
+    result = run(host_root=tmp_path, executor=None)
+    assert result.locale == "en_US.UTF-8"
+
+
+def test_detect_locale_missing(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    (tmp_path / "etc").mkdir(parents=True)
+    result = run(host_root=tmp_path, executor=None)
+    assert result.locale is None
+
+
+def test_detect_locale_quoted(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    locale_conf = tmp_path / "etc" / "locale.conf"
+    locale_conf.parent.mkdir(parents=True)
+    locale_conf.write_text('LANG="C.UTF-8"\nLC_MESSAGES=POSIX\n')
+
+    result = run(host_root=tmp_path, executor=None)
+    assert result.locale == "C.UTF-8"
+
+
+def test_detect_timezone(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    etc = tmp_path / "etc"
+    etc.mkdir(parents=True)
+    zoneinfo = tmp_path / "usr" / "share" / "zoneinfo" / "America" / "New_York"
+    zoneinfo.parent.mkdir(parents=True)
+    zoneinfo.write_text("")
+    localtime = etc / "localtime"
+    localtime.symlink_to(zoneinfo)
+
+    result = run(host_root=tmp_path, executor=None)
+    assert result.timezone == "America/New_York"
+
+
+def test_detect_timezone_relative_symlink(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    etc = tmp_path / "etc"
+    etc.mkdir(parents=True)
+    zoneinfo = tmp_path / "usr" / "share" / "zoneinfo" / "America" / "Los_Angeles"
+    zoneinfo.parent.mkdir(parents=True)
+    zoneinfo.write_text("")
+    localtime = etc / "localtime"
+    localtime.symlink_to("../../usr/share/zoneinfo/America/Los_Angeles")
+
+    result = run(host_root=tmp_path, executor=None)
+    assert result.timezone == "America/Los_Angeles"
+
+
+def test_detect_timezone_missing(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    (tmp_path / "etc").mkdir(parents=True)
+    result = run(host_root=tmp_path, executor=None)
+    assert result.timezone is None
+
+
+def test_detect_alternatives_auto(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    alt_dir = tmp_path / "etc" / "alternatives"
+    alt_dir.mkdir(parents=True)
+    target = tmp_path / "usr" / "bin" / "java-17"
+    target.parent.mkdir(parents=True)
+    target.write_text("")
+    (alt_dir / "java").symlink_to(target)
+
+    var_alt = tmp_path / "var" / "lib" / "alternatives"
+    var_alt.mkdir(parents=True)
+    (var_alt / "java").write_text("auto\n/usr/bin/java\n")
+
+    result = run(host_root=tmp_path, executor=None)
+    assert len(result.alternatives) == 1
+    assert result.alternatives[0].name == "java"
+    assert result.alternatives[0].status == "auto"
+    assert str(target) in result.alternatives[0].path
+
+
+def test_detect_alternatives_manual(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    alt_dir = tmp_path / "etc" / "alternatives"
+    alt_dir.mkdir(parents=True)
+    target = tmp_path / "usr" / "bin" / "python3.11"
+    target.parent.mkdir(parents=True)
+    target.write_text("")
+    (alt_dir / "python3").symlink_to(target)
+
+    var_alt = tmp_path / "var" / "lib" / "alternatives"
+    var_alt.mkdir(parents=True)
+    (var_alt / "python3").write_text("manual\n/usr/bin/python3\n")
+
+    result = run(host_root=tmp_path, executor=None)
+    assert len(result.alternatives) == 1
+    assert result.alternatives[0].name == "python3"
+    assert result.alternatives[0].status == "manual"
+
+
+def test_detect_alternatives_empty(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run
+
+    (tmp_path / "etc").mkdir(parents=True)
+    result = run(host_root=tmp_path, executor=None)
+    assert result.alternatives == []

@@ -3,12 +3,13 @@
 File-based under host_root, plus ``lsmod`` via executor.
 """
 
+import os
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from ..executor import Executor
 from ..schema import (
-    KernelBootSection, ConfigSnippet, SysctlOverride, KernelModule,
+    AlternativeEntry, KernelBootSection, ConfigSnippet, SysctlOverride, KernelModule,
 )
 from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning
 
@@ -188,6 +189,68 @@ def _diff_sysctl(
 
 
 # ---------------------------------------------------------------------------
+# System property detection (locale, timezone, alternatives)
+# ---------------------------------------------------------------------------
+
+
+def _detect_locale(host_root: Path) -> Optional[str]:
+    locale_conf = host_root / "etc" / "locale.conf"
+    if not locale_conf.is_file():
+        return None
+    try:
+        for line in locale_conf.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("LANG="):
+                return line.split("=", 1)[1].strip('"').strip("'")
+    except (PermissionError, OSError):
+        pass
+    return None
+
+
+def _detect_timezone(host_root: Path) -> Optional[str]:
+    localtime = host_root / "etc" / "localtime"
+    if not localtime.is_symlink():
+        return None
+    try:
+        target = os.readlink(str(localtime))
+        marker = "/usr/share/zoneinfo/"
+        idx = target.find(marker)
+        if idx < 0:
+            return None
+        return target[idx + len(marker):]
+    except (PermissionError, OSError):
+        pass
+    return None
+
+
+def _detect_alternatives(host_root: Path) -> List[AlternativeEntry]:
+    alt_dir = host_root / "etc" / "alternatives"
+    var_dir = host_root / "var" / "lib" / "alternatives"
+    if not alt_dir.is_dir():
+        return []
+    entries: List[AlternativeEntry] = []
+    try:
+        for link in sorted(alt_dir.iterdir()):
+            if not link.is_symlink():
+                continue
+            name = link.name
+            path = os.readlink(str(link))
+            status = "auto"
+            status_file = var_dir / name
+            if status_file.is_file():
+                try:
+                    first_line = status_file.read_text().splitlines()[0].strip()
+                    if first_line in ("auto", "manual"):
+                        status = first_line
+                except (IndexError, PermissionError, OSError):
+                    pass
+            entries.append(AlternativeEntry(name=name, path=path, status=status))
+    except (PermissionError, OSError):
+        pass
+    return entries
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -291,5 +354,10 @@ def run(
                 )
         except Exception:
             pass
+
+    # --- system properties ---
+    section.locale = _detect_locale(host_root)
+    section.timezone = _detect_timezone(host_root)
+    section.alternatives = _detect_alternatives(host_root)
 
     return section

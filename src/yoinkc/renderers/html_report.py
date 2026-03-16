@@ -379,6 +379,7 @@ def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
         result.append({
             "path": f.path,
             "kind": f.kind.value,
+            "category": f.category.value,
             "flags": f.rpm_va_flags or "",
             "diff_html": _render_diff_html(f.diff_against_rpm or ""),
             "snap_index": idx,

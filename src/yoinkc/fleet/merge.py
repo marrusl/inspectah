@@ -352,6 +352,13 @@ def merge_snapshots(
             sudoers_rules=sudoers,
         )
 
+    # --- Kernel/Boot (first-snapshot pass-through) ---
+    # locale and timezone use first-wins. No deep merge yet.
+    # TODO: union merge alternatives when kernel_boot gets full fleet support
+    kernel_boot_section = next(
+        (s.kernel_boot for s in snapshots if s.kernel_boot), None,
+    )
+
     # --- Warnings / Redactions ---
     warnings_merged = _deduplicate_warning_dicts(
         [s.warnings for s in snapshots]
@@ -382,6 +389,7 @@ def merge_snapshots(
         network=network_section,
         scheduled_tasks=sched_section,
         containers=containers_section,
+        kernel_boot=kernel_boot_section,
         users_groups=ug_section,
         warnings=warnings_merged,
         redactions=redactions_merged,
