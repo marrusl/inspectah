@@ -1,0 +1,19 @@
+{# --- Compare variants modal (fleet mode) --- #}
+{% if snapshot.meta and snapshot.meta.fleet %}
+<div class="pf-v6-c-backdrop" id="variant-compare-modal" style="display:none;" onclick="closeCompareModal()">
+  <div class="pf-v6-l-bullseye">
+    <div class="pf-v6-c-modal-box pf-m-md" role="dialog" aria-modal="true" aria-label="Compare variants" onclick="event.stopPropagation()">
+      <div class="pf-v6-c-modal-box__close">
+        <button class="pf-v6-c-button pf-m-plain" onclick="closeCompareModal()" aria-label="Close">&times;</button>
+      </div>
+      <div class="pf-v6-c-modal-box__header">
+        <h2 class="pf-v6-c-modal-box__title" id="compare-modal-title">Compare variants</h2>
+      </div>
+      <div class="pf-v6-c-modal-box__body" id="compare-modal-body">
+      </div>
+      <div class="pf-v6-c-modal-box__footer" id="compare-modal-footer">
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
