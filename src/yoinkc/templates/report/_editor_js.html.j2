@@ -9,10 +9,24 @@
     savedFiles: new Set(),
   };
 
+  function pathParts(p) {
+    var i = p.lastIndexOf('/');
+    return {dir: p.substring(0, i + 1), name: p.substring(i + 1)};
+  }
+
+  function pathHtml(p) {
+    var pp = pathParts(p);
+    return '<span style="color:var(--pf-t--global--text--color--subtle);">' +
+      escapeHtml(pp.dir) + '</span><strong>' + escapeHtml(pp.name) + '</strong>';
+  }
+
   function buildTree() {
     var treeEl = document.getElementById('editor-tree-list');
     if (!treeEl) return;
     treeEl.innerHTML = '';
+
+    var root = document.createElement('ul');
+    root.className = 'pf-v6-c-tree-view';
 
     var sections = [
       {section: 'config', list: 'files', label: 'config'},
@@ -24,47 +38,131 @@
       var items = snapshot[sec.section] && snapshot[sec.section][sec.list];
       if (!items || items.length === 0) return;
 
-      var folder = document.createElement('div');
-      folder.className = 'editor-tree-dir';
-      folder.textContent = '\u25BE ' + sec.label + '/';
-      folder.style.cssText = 'font-weight:600; padding:6px 0; cursor:pointer;';
-      treeEl.appendChild(folder);
+      var catLi = document.createElement('li');
+      catLi.className = 'pf-v6-c-tree-view__list-item pf-m-expanded';
+      var catDiv = document.createElement('div');
+      catDiv.className = 'pf-v6-c-tree-view__content';
+      var catBtn = document.createElement('button');
+      catBtn.className = 'pf-v6-c-tree-view__node';
+      catBtn.textContent = sec.label + '/';
+      catDiv.appendChild(catBtn);
+      catLi.appendChild(catDiv);
 
-      var sorted = items.map(function(item, idx) { return {item: item, idx: idx}; });
-      sorted.sort(function(a, b) { return a.item.path.localeCompare(b.item.path); });
+      var catUl = document.createElement('ul');
+      catUl.className = 'pf-v6-c-tree-view__list';
 
-      sorted.forEach(function(entry) {
-        var item = entry.item;
-        var idx = entry.idx;
-        var entryEl = document.createElement('div');
-        entryEl.className = 'editor-tree-file';
-        entryEl.style.cssText = 'padding:6px 8px 6px 24px; display:flex; align-items:center; justify-content:space-between; cursor:pointer; border-radius:4px;';
-        entryEl.dataset.section = sec.section;
-        entryEl.dataset.list = sec.list;
-        entryEl.dataset.index = idx;
-        entryEl.dataset.path = item.path;
-
-        var nameSpan = document.createElement('span');
-        nameSpan.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0;';
-        var lastSlash = item.path.lastIndexOf('/');
-        var dir = item.path.substring(0, lastSlash + 1);
-        var fname = item.path.substring(lastSlash + 1);
-        nameSpan.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">'
-          + escapeHtml(dir) + '</span><strong>' + escapeHtml(fname) + '</strong>';
-        nameSpan.title = item.path;
-        entryEl.appendChild(nameSpan);
-
-        var labelSpan = document.createElement('span');
-        labelSpan.className = 'editor-state-label';
-        entryEl.appendChild(labelSpan);
-
-        entryEl.addEventListener('click', function() {
-          selectFile(sec.section, sec.list, idx, item.path);
-        });
-
-        treeEl.appendChild(entryEl);
+      // Group items by path, preserving original indices
+      var groups = {};
+      var groupOrder = [];
+      items.forEach(function(item, idx) {
+        if (!groups[item.path]) {
+          groups[item.path] = [];
+          groupOrder.push(item.path);
+        }
+        groups[item.path].push({item: item, idx: idx});
       });
+      groupOrder.sort();
+
+      groupOrder.forEach(function(path) {
+        var entries = groups[path];
+
+        if (entries.length === 1) {
+          // Leaf node — single item (or no fleet data)
+          var e = entries[0];
+          var li = document.createElement('li');
+          li.className = 'pf-v6-c-tree-view__list-item';
+          var div = document.createElement('div');
+          div.className = 'pf-v6-c-tree-view__content';
+          var btn = document.createElement('button');
+          btn.className = 'pf-v6-c-tree-view__node';
+          btn.dataset.section = sec.section;
+          btn.dataset.list = sec.list;
+          btn.dataset.index = e.idx;
+          btn.dataset.path = path;
+          btn.innerHTML = pathHtml(path);
+          btn.title = path;
+
+          var stateSpan = document.createElement('span');
+          stateSpan.className = 'editor-state-label';
+          stateSpan.style.marginLeft = '8px';
+          btn.appendChild(stateSpan);
+
+          btn.addEventListener('click', function() {
+            selectFile(sec.section, sec.list, e.idx, path);
+          });
+          div.appendChild(btn);
+          li.appendChild(div);
+          catUl.appendChild(li);
+        } else {
+          // Multi-variant group — expandable parent with variant children
+          entries.sort(function(a, b) {
+            var ac = (a.item.fleet && a.item.fleet.count) || 0;
+            var bc = (b.item.fleet && b.item.fleet.count) || 0;
+            return bc - ac;
+          });
+
+          var parentLi = document.createElement('li');
+          parentLi.className = 'pf-v6-c-tree-view__list-item pf-m-expanded';
+          var parentDiv = document.createElement('div');
+          parentDiv.className = 'pf-v6-c-tree-view__content';
+          var parentBtn = document.createElement('button');
+          parentBtn.className = 'pf-v6-c-tree-view__node';
+          parentBtn.innerHTML = pathHtml(path) +
+            ' <span class="pf-v6-c-badge pf-m-read">' + entries.length + '</span>';
+          parentBtn.title = path;
+          parentDiv.appendChild(parentBtn);
+          parentLi.appendChild(parentDiv);
+
+          var childUl = document.createElement('ul');
+          childUl.className = 'pf-v6-c-tree-view__list';
+
+          entries.forEach(function(e, variantNum) {
+            var item = e.item;
+            var childLi = document.createElement('li');
+            childLi.className = 'pf-v6-c-tree-view__list-item';
+            var childDiv = document.createElement('div');
+            childDiv.className = 'pf-v6-c-tree-view__content';
+            var childBtn = document.createElement('button');
+            childBtn.className = 'pf-v6-c-tree-view__node';
+            childBtn.dataset.section = sec.section;
+            childBtn.dataset.list = sec.list;
+            childBtn.dataset.index = e.idx;
+            childBtn.dataset.path = path;
+
+            var label = 'variant ' + (variantNum + 1);
+            var html = escapeHtml(label);
+            if (item.include === true) {
+              html += ' <span class="pf-v6-c-label pf-m-compact pf-m-success"><span class="pf-v6-c-label__content">selected</span></span>';
+            }
+            if (item.fleet) {
+              html += ' <span class="pf-v6-c-label pf-m-compact"><span class="pf-v6-c-label__content">' +
+                item.fleet.count + '/' + item.fleet.total + ' hosts</span></span>';
+            }
+            childBtn.innerHTML = html;
+
+            var stateSpan = document.createElement('span');
+            stateSpan.className = 'editor-state-label';
+            stateSpan.style.marginLeft = '8px';
+            childBtn.appendChild(stateSpan);
+
+            childBtn.addEventListener('click', function() {
+              selectFile(sec.section, sec.list, e.idx, path);
+            });
+            childDiv.appendChild(childBtn);
+            childLi.appendChild(childDiv);
+            childUl.appendChild(childLi);
+          });
+
+          parentLi.appendChild(childUl);
+          catUl.appendChild(parentLi);
+        }
+      });
+
+      catLi.appendChild(catUl);
+      root.appendChild(catLi);
     });
+
+    treeEl.appendChild(root);
   }
 
   // Pending navigation target — set when the unsaved-changes modal is shown,
@@ -120,16 +218,26 @@
     doSelectFile(section, list, index, path);
   }
 
+  function findSiblingVariants(section, list, path) {
+    var items = (snapshot[section] && snapshot[section][list]) || [];
+    var siblings = [];
+    items.forEach(function(item, idx) {
+      if (item.path === path) siblings.push({item: item, idx: idx});
+    });
+    return siblings;
+  }
+
   function doSelectFile(section, list, index, path) {
     editorState.currentFile = {section: section, list: list, index: index, path: path};
     editorState.editMode = false;
 
-    document.querySelectorAll('.editor-tree-file').forEach(function(el) {
-      el.style.background = '';
+    // Clear previous pf-m-current from all tree-view nodes
+    document.querySelectorAll('.pf-v6-c-tree-view__node.pf-m-current').forEach(function(el) {
+      el.classList.remove('pf-m-current');
     });
-    var sel = 'div.editor-tree-file[data-section="' + section + '"][data-list="' + list + '"][data-index="' + index + '"]';
-    var activeEntry = document.querySelector(sel);
-    if (activeEntry) activeEntry.style.background = 'var(--pf-t--global--background--color--primary--hover)';
+    var sel = 'button.pf-v6-c-tree-view__node[data-section="' + section + '"][data-list="' + list + '"][data-index="' + index + '"]';
+    var activeBtn = document.querySelector(sel);
+    if (activeBtn) activeBtn.classList.add('pf-m-current');
 
     var content = snapshot[section][list][index].content || '';
     var readonlyEl = document.getElementById('editor-readonly-content');
@@ -138,17 +246,31 @@
     if (cmContainer) cmContainer.style.display = 'none';
 
     var pathEl = document.getElementById('editor-file-path');
-    if (pathEl) {
-      var dir = path.substring(0, path.lastIndexOf('/') + 1);
-      var name = path.split('/').pop();
-      pathEl.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">' + escapeHtml(dir) + '</span>' +
-                         '<strong>' + escapeHtml(name) + '</strong>';
-    }
+    if (pathEl) pathEl.innerHTML = pathHtml(path);
 
+    var item = snapshot[section][list][index];
     var actionsEl = document.getElementById('editor-actions');
-    if (actionsEl) actionsEl.innerHTML = '<button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-edit">Edit</button>';
-    var editBtn = document.getElementById('btn-edit');
-    if (editBtn) editBtn.addEventListener('click', enterEditMode);
+    if (actionsEl) {
+      if (item.include === false && item.fleet) {
+        actionsEl.innerHTML = '<button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-switch-variant">Switch to this variant</button>';
+        var switchBtn = document.getElementById('btn-switch-variant');
+        if (switchBtn) switchBtn.addEventListener('click', function() {
+          var siblings = findSiblingVariants(section, list, path);
+          siblings.forEach(function(s) { s.item.include = false; });
+          item.include = true;
+          buildTree();
+          doSelectFile(section, list, index, path);
+          if (typeof setDirty === 'function' && typeof isSnapshotClean === 'function') {
+            setDirty(!isSnapshotClean());
+          }
+          if (typeof updateToolbar === 'function') updateToolbar();
+        });
+      } else {
+        actionsEl.innerHTML = '<button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-edit">Edit</button>';
+        var editBtn = document.getElementById('btn-edit');
+        if (editBtn) editBtn.addEventListener('click', enterEditMode);
+      }
+    }
 
     updateStateLabels();
   }
@@ -212,12 +334,8 @@
 
     var pathEl = document.getElementById('editor-file-path');
     if (pathEl) {
-      var dir = f.path.substring(0, f.path.lastIndexOf('/') + 1);
-      var name = f.path.split('/').pop();
       var label = getStateLabel(f.path);
-      pathEl.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">' + escapeHtml(dir) + '</span>' +
-                         '<strong>' + escapeHtml(name) + '</strong>' +
-                         (label ? ' ' + label : '');
+      pathEl.innerHTML = pathHtml(f.path) + (label ? ' ' + label : '');
     }
 
     var actionsEl = document.getElementById('editor-actions');
@@ -384,9 +502,9 @@
   }
 
   function updateStateLabels() {
-    document.querySelectorAll('.editor-tree-file').forEach(function(el) {
-      var path = el.dataset.path;
-      var labelEl = el.querySelector('.editor-state-label');
+    document.querySelectorAll('button.pf-v6-c-tree-view__node[data-path]').forEach(function(btn) {
+      var path = btn.dataset.path;
+      var labelEl = btn.querySelector('.editor-state-label');
       if (labelEl) labelEl.innerHTML = getStateLabel(path);
     });
   }
