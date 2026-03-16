@@ -331,14 +331,15 @@ Replace the existing `buildTree()` (lines ~23–220) with a new implementation. 
          onclick="selectFile('config','files',0,'/etc/ssh/sshd_config')">
       <div class="prevalence-bar"><div class="fill majority" style="width:67%"></div></div>
       <span class="host-chips"><!-- chips or count --></span>
-      <span class="variant-pill selected-pill">selected</span>
+      <span class="pf-v6-c-badge pf-m-read selected-badge">selected</span>
     </div>
     <div class="editor-variant-row"
          data-section="config" data-list="files" data-index="1"
          onclick="selectFile('config','files',1,'/etc/ssh/sshd_config')">
       <div class="prevalence-bar"><div class="fill minority" style="width:33%"></div></div>
       <span class="host-chips"><!-- chips or count --></span>
-      <span class="variant-pill switch-pill" onclick="event.stopPropagation(); switchVariantFromEditor(this)">use this variant</span>
+      <button class="pf-v6-c-button pf-m-small pf-m-link editor-compare-btn" onclick="event.stopPropagation(); compareFromEditor(this)">Compare</button>
+      <button class="pf-v6-c-button pf-m-small pf-m-secondary switch-btn" onclick="event.stopPropagation(); switchVariantFromEditor(this)">Use this variant</button>
     </div>
   </div>
 </div>
@@ -410,7 +411,32 @@ function switchVariantFromEditor(pill) {
 }
 ```
 
-- [ ] **Step 4: Add CSS for the accordion**
+- [ ] **Step 4: Add compareFromEditor() function**
+
+This function navigates to the config tab and triggers the compare modal for the clicked variant.
+
+```javascript
+function compareFromEditor(btn) {
+  var row = btn.closest('.editor-variant-row');
+  var section = row.getAttribute('data-section');
+  var list = row.getAttribute('data-list');
+  var idx = parseInt(row.getAttribute('data-index'), 10);
+  var path = resolveSnapshotRef(section, list)[idx].path;
+
+  /* Switch to config tab */
+  show('config_files');
+
+  /* Find and click the compare button for this variant on the config tab */
+  var configRow = document.querySelector(
+    '[data-variant-group="' + path + '"][data-snap-index="' + idx + '"] .variant-compare-btn'
+  );
+  if (configRow && !configRow.disabled) {
+    configRow.click();
+  }
+}
+```
+
+- [ ] **Step 5: Add CSS for the accordion**
 
 Add styles to the `<style>` block in `_editor.html.j2` (this file contains the editor sidebar markup and existing editor styles):
 
@@ -456,16 +482,16 @@ Add styles to the `<style>` block in `_editor.html.j2` (this file contains the e
 }
 .host-count { font-size: 11px; color: #ccaa66; }
 
-.variant-pill {
-  margin-left: auto; padding: 1px 6px;
-  border-radius: 10px; font-size: 10px; white-space: nowrap;
+.selected-badge {
+  margin-left: auto; font-size: 10px;
 }
-.selected-pill { background: #1a7a3a; color: #fff; }
-.switch-pill {
-  background: #0066cc; color: #fff; cursor: pointer;
+
+.editor-variant-row .switch-btn {
   opacity: 0; transition: opacity 0.15s;
 }
-.editor-variant-row:hover .switch-pill { opacity: 1; }
+.editor-variant-row:hover .switch-btn { opacity: 1; }
+
+.editor-compare-btn { margin-left: auto; }
 
 /* Single-variant flat entry */
 .editor-single-file {

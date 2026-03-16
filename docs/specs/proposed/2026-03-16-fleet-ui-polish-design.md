@@ -37,19 +37,21 @@ Render as collapsible accordion groups:
 - Host chips — individual hostname labels when they fit the available row width. Falls back to "N hosts" text when chips would overflow. Individual chips get `max-width: 80px` with `text-overflow: ellipsis` as a defensive measure against very long hostnames.
 - **Selected variant** (`include === true`):
   - Highlighted row background with blue left border (3px solid `#0066cc`)
-  - Green "selected" pill, right-aligned, same rounded shape as PF6 compact labels
+  - Green "selected" **badge** (`pf-v6-c-badge pf-m-read` or compact label), right-aligned — this is a status indicator, not interactive
 - **Non-selected variants:**
   - Default row background (no highlight)
-  - "use this variant" pill appears on hover — same shape/position as "selected" pill, blue (`#0066cc`), fades in (CSS transition ~150ms)
-  - `stopPropagation` on pill click to prevent triggering row click
-  - **Discoverability tradeoff:** the hover-to-reveal pattern means users must discover that non-selected rows are interactive. The "selected" pill primes the eye to see that position as a status label. Mitigated by: (a) cursor changes to pointer on row hover, (b) the pill fade-in draws attention, (c) row click to view is the primary action and works without discovering the pill. If user testing reveals discoverability issues, an alternative is always-visible-but-muted pills on non-selected rows.
+  - "Use this variant" **button** (`pf-v6-c-button pf-m-small pf-m-secondary`) appears on hover, right-aligned in the same position as the selected badge. Fades in (CSS transition ~150ms).
+  - "Compare" **button** (`pf-v6-c-button pf-m-small pf-m-link`) — always visible on non-selected rows. Clicking navigates to the config tab and scrolls to the variant group, opening the compare modal for this variant against the selected one. Disabled when no variant is selected (same guard as Part C).
+  - `stopPropagation` on both buttons to prevent triggering row click
+  - **Design rationale:** badge vs button distinguishes status (selected) from actions (switch, compare). The button shape makes the action affordance immediately clear without needing to discover hover behavior.
 
 ### Interaction model
 
 | Action | Behavior |
 |--------|----------|
 | Click row (any variant) | Load variant content in editor pane. Selected variant opens editable; non-selected opens read-only. |
-| Click "use this variant" pill | Switch selection: set `include=true` on this variant, `false` on siblings. Update pills. Cross-tab sync with config tab radio buttons. |
+| Click "Use this variant" button | Switch selection: set `include=true` on this variant, `false` on siblings. Update badge/buttons. Cross-tab sync with config tab radio buttons. |
+| Click "Compare" button | Navigate to config tab, scroll to the variant group, open compare modal for this variant vs the selected variant. |
 | Click accordion header | Toggle expand/collapse of variant children |
 
 ### Cross-tab sync
