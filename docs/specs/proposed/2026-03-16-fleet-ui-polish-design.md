@@ -3,20 +3,25 @@
 **Date:** 2026-03-16
 **Status:** Proposed
 **Supersedes:** Editor file list section of `2026-03-16-editor-fleet-variants-design.md`
+**Implementation note:** Parts A, B, and C are independently implementable. B and C are small, mechanical changes that can ship without waiting for A.
 
 ## Problem
 
 Three visual/interaction issues in the fleet-mode report:
 
 1. **Editor variant list** — fleet config variants are listed flat in a row with no grouping, no indication of which is selected, and no host provenance. Users can't quickly see which variant they're editing or where it came from.
-2. **Table column widths** — columns containing short content (dropdowns, checkboxes, numeric values, labels) stretch to fill available space, pushing adjacent content columns off-screen. Most visible in Groups table (Strategy column consumes the entire row).
+2. **Table column widths** — columns containing short content (dropdowns, include toggles, numeric values, labels) stretch to fill available space, pushing adjacent content columns off-screen. Most visible in Groups table (Strategy column consumes the entire row).
 3. **Compare button** — silently fails when no variant is selected (no `include === true` in the group). The JS handler returns without feedback, leaving users confused.
 
 ## Part A: Editor Variant Accordion
 
+### Why not the PF6 tree-view
+
+The editor file list was recently built using PF6 `pf-v6-c-tree-view` (see `2026-03-16-editor-fleet-variants-design.md` in `implemented/`). In practice, the tree-view renders variants as flat sibling nodes without visual grouping — there's no indication which variant is selected, which hosts each came from, or how to switch between them. The tree-view component is designed for deep navigational hierarchies (file browsers, org charts), not for a shallow 2-level structure with rich inline controls (prevalence bars, host chips, action pills). Cramming these into tree-view nodes fights the component's layout model. A custom accordion using PF6 design tokens gives us the right visual density and interaction surface without fighting the framework.
+
 ### Design
 
-Custom accordion in the editor sidebar using PF6 design tokens (colors, spacing, border-radius, font sizes) but not a PF6 component. The PF6 tree-view is designed for deep hierarchies; our structure is always exactly 2 levels (file → variants) with rich inline controls that don't fit tree-view nodes.
+Custom accordion in the editor sidebar using PF6 design tokens (colors, spacing, border-radius, font sizes) but not a PF6 component.
 
 ### Multi-variant files
 
@@ -29,7 +34,7 @@ Render as collapsible accordion groups:
 
 **Variant rows** (indented children):
 - Mini prevalence bar — blue (`#0066cc`) for majority, gold (`#cc8800`) for minority. Same color language as the config tab fleet bars.
-- Host chips — individual hostname labels when they fit the available row width. Falls back to "N hosts" text when chips would overflow.
+- Host chips — individual hostname labels when they fit the available row width. Falls back to "N hosts" text when chips would overflow. Individual chips get `max-width: 80px` with `text-overflow: ellipsis` as a defensive measure against very long hostnames.
 - **Selected variant** (`include === true`):
   - Highlighted row background with blue left border (3px solid `#0066cc`)
   - Green "selected" pill, right-aligned, same rounded shape as PF6 compact labels
@@ -37,6 +42,7 @@ Render as collapsible accordion groups:
   - Default row background (no highlight)
   - "use this variant" pill appears on hover — same shape/position as "selected" pill, blue (`#0066cc`), fades in (CSS transition ~150ms)
   - `stopPropagation` on pill click to prevent triggering row click
+  - **Discoverability tradeoff:** the hover-to-reveal pattern means users must discover that non-selected rows are interactive. The "selected" pill primes the eye to see that position as a status label. Mitigated by: (a) cursor changes to pointer on row hover, (b) the pill fade-in draws attention, (c) row click to view is the primary action and works without discovering the pill. If user testing reveals discoverability issues, an alternative is always-visible-but-muted pills on non-selected rows.
 
 ### Interaction model
 
@@ -45,6 +51,12 @@ Render as collapsible accordion groups:
 | Click row (any variant) | Load variant content in editor pane. Selected variant opens editable; non-selected opens read-only. |
 | Click "use this variant" pill | Switch selection: set `include=true` on this variant, `false` on siblings. Update pills. Cross-tab sync with config tab radio buttons. |
 | Click accordion header | Toggle expand/collapse of variant children |
+
+### Cross-tab sync
+
+Inherits the lazy sync model from the superseded spec: both the editor and config tab read/write `include` directly on the shared `snapshot` object. The pill click mutates `snapshot[section][list][index].include` — when the user switches to the config tab, the radio buttons reflect the current state because they read from the same object. No explicit event dispatch or DOM manipulation across tabs is needed.
+
+The pill click must also call the existing `setDirty()` function and update compare button state (see Part C interaction below).
 
 ### Single-variant files
 
@@ -72,26 +84,42 @@ Every `<table class="pf-v6-c-table">` across all report template partials.
 
 Add `pf-m-fit-content` to `<th>` elements for columns containing fixed-width or short content. Leave name/path/description/content columns at default width so they stretch to fill available space.
 
+**Note on include toggle column:** The toggle switches spec (2026-03-15) renames the checkbox column to a PF6 toggle switch. The `pf-m-fit-content` treatment applies regardless of whether the column contains a checkbox or toggle. The inventory below uses "include toggle" to be generic.
+
 ### Column inventory
 
 | Template | Columns getting `pf-m-fit-content` |
 |----------|-------------------------------------|
-| `_users_groups.html.j2` (Users) | checkbox, UID/GID, Type, Strategy |
-| `_users_groups.html.j2` (Groups) | checkbox, GID, Strategy |
-| `_config.html.j2` | checkbox, Kind, Category, rpm-Va flags |
-| `_packages.html.j2` (dep tree) | checkbox, Version, Dep count, Arch |
-| `_packages.html.j2` (repos) | checkbox, Source |
-| `_non_rpm.html.j2` (ELF) | checkbox, Language, Linking |
-| `_non_rpm.html.j2` (pip/npm) | checkbox, Version |
-| `_network.html.j2` (iptables) | checkbox, IPv, Table, Chain |
-| `_network.html.j2` (firewall) | checkbox |
-| `_containers.html.j2` | checkbox |
-| `_selinux.html.j2` | Current, Default |
+| `_users_groups.html.j2` (Users) | include toggle, UID/GID, Type, Strategy |
+| `_users_groups.html.j2` (Groups) | include toggle, GID, Strategy |
+| `_config.html.j2` | include toggle, Kind, Category, rpm-Va flags |
+| `_packages.html.j2` (dep tree) | include toggle, Version, Dep count, Arch |
+| `_packages.html.j2` (repos) | include toggle, Source |
+| `_non_rpm.html.j2` (ELF) | include toggle, Language, Linking |
+| `_non_rpm.html.j2` (pip/npm) | include toggle, Version |
+| `_network.html.j2` (iptables) | include toggle, IPv, Table, Chain |
+| `_network.html.j2` (firewall) | include toggle |
+| `_containers.html.j2` | include toggle |
+| `_services.html.j2` (state changes) | include toggle, Current, Default, Action |
+| `_services.html.j2` (drop-ins) | include toggle |
+| `_scheduled_jobs.html.j2` (cron-converted) | include toggle |
+| `_scheduled_jobs.html.j2` (cron jobs) | include toggle, Source, Action |
+| `_scheduled_jobs.html.j2` (at jobs) | User |
+| `_kernel_boot.html.j2` (sysctl) | include toggle, Runtime, Default |
+| `_selinux.html.j2` (booleans) | Current, Default |
 | `_storage.html.j2` | Type |
+
+**Templates reviewed with no fit-content candidates:**
+- `_secrets.html.j2` — no tables (renders as card list)
+- `_audit_report.html.j2` — read-only summary tables; columns are all variable-width content (Name, Version, Package, etc.). Direction column in version changes table could qualify but is a compact label already sized by its content.
+- `_scheduled_jobs.html.j2` (systemd timers) — Timer, Schedule, ExecStart are all variable-width
+- `_kernel_boot.html.j2` (module/dracut config) — Path, Content are variable-width
+
+**Note on SELinux:** If the Fleet Merge Completeness spec adds include toggles to SELinux tables, those columns would also need `pf-m-fit-content`. The implementer should check the current state of `_selinux.html.j2` at implementation time.
 
 ### Columns left at default width
 
-Name, Path, Description, Details, Members, Diff content, Shared Libraries, Dependencies list, Rich Rules, Services, Ports, Args, Notes — anything that benefits from stretching.
+Name, Path, Description, Details, Members, Diff content, Shared Libraries, Dependencies list, Rich Rules, Services, Ports, Args, Notes, Content, Schedule, Command, Key, Cron Expression — anything that benefits from stretching.
 
 ## Part C: Compare Button Guard
 
@@ -111,6 +139,15 @@ Disable compare buttons when no variant is selected, both at render time and dyn
 
 **JS (compare handler):** Keep the existing `if (!selectedItem) return;` as a defensive safety net, but the button should never be clickable in that state.
 
+### Part A / Part C interaction
+
+Part A's "use this variant" pill is a new selection trigger. The pill click mutates `snapshot[section][list][index].include` on the shared snapshot object. The compare button enable/disable logic should key off the snapshot state (check if any variant in the group has `include === true`), not off a specific UI event. This means:
+- The pill click in Part A calls a shared `updateCompareButtons(group)` function after mutating the snapshot
+- The existing radio button change handler in the config tab calls the same function
+- Reset calls the same function
+
+This avoids coupling Part C's logic to Part A's specific DOM elements.
+
 ## Out of Scope
 
 - "View & edit in editor →" link redesign (separate spec)
@@ -121,6 +158,6 @@ Disable compare buttons when no variant is selected, both at render time and dyn
 
 ## Testing
 
-- **Part A:** Verify multi-variant files render as accordion groups. Verify host chips display or fall back to count. Verify row click opens correct variant (editable vs read-only). Verify pill click switches selection and syncs with config tab. Verify single-variant files render flat.
-- **Part B:** Visual verification that Strategy, checkbox, and other short columns no longer stretch. Spot-check each template.
-- **Part C:** Verify compare buttons are disabled when no variant selected. Verify they enable after selecting a variant. Verify reset re-disables them.
+- **Part A:** Verify multi-variant files render as accordion groups. Verify host chips display or fall back to count. Verify long hostnames truncate with ellipsis. Verify row click opens correct variant (editable vs read-only). Verify pill click switches selection and syncs with config tab. Verify single-variant files render flat.
+- **Part B:** Visual verification that Strategy, include toggle, and other short columns no longer stretch. Spot-check each template listed in the inventory.
+- **Part C:** Verify compare buttons are disabled when no variant selected. Verify they enable after selecting a variant via radio button OR editor pill. Verify reset re-disables them.
