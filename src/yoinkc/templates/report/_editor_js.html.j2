@@ -523,6 +523,10 @@
       editorSaveAll();
       reRenderBtn.textContent = 'Re-rendering\u2026';
       reRenderBtn.disabled = true;
+      var sliderEl = document.getElementById('prevalence-slider');
+      if (snapshot.meta && snapshot.meta.fleet && sliderEl) {
+        snapshot.meta.fleet.min_prevalence = parseInt(sliderEl.value, 10);
+      }
       fetch(window.location.origin + '/api/re-render', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
