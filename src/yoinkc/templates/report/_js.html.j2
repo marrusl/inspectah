@@ -477,30 +477,32 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   });
 
   // --- Re-render ---
-  rerenderBtn.addEventListener('click', function(){
-    if (!helperAvailable) return;
-    if (!dirty) return;
-    var origText = rerenderBtn.innerHTML;
-    rerenderBtn.innerHTML = '<span class="spinner"></span>Re-rendering...';
-    rerenderBtn.disabled = true;
-    fetch(window.location.origin + '/api/re-render', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({snapshot: snapshot, original: originalSnapshot}),
-    }).then(function(r){
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.text();
-    }).then(function(html){
-      setDirty(false);
-      document.open();
-      document.write(html);
-      document.close();
-    }).catch(function(err){
-      showToast('Re-render failed: ' + err.message, 5000);
-      rerenderBtn.innerHTML = origText;
-      rerenderBtn.disabled = false;
+  if (rerenderBtn) {
+    rerenderBtn.addEventListener('click', function(){
+      if (!helperAvailable) return;
+      if (!dirty) return;
+      var origText = rerenderBtn.innerHTML;
+      rerenderBtn.innerHTML = '<span class="spinner"></span>Re-rendering...';
+      rerenderBtn.disabled = true;
+      fetch(window.location.origin + '/api/re-render', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({snapshot: snapshot, original: originalSnapshot}),
+      }).then(function(r){
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.text();
+      }).then(function(html){
+        setDirty(false);
+        document.open();
+        document.write(html);
+        document.close();
+      }).catch(function(err){
+        showToast('Re-render failed: ' + err.message, 5000);
+        rerenderBtn.innerHTML = origText;
+        rerenderBtn.disabled = false;
+      });
     });
-  });
+  }
 
   // --- Download tarball ---
   tarballBtn.addEventListener('click', function(){
@@ -517,11 +519,13 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
       toolbar.classList.remove('visible');
       toolbar.classList.add('helper-active');
     }
-    if (reRenderAvailable !== false) {
-      rerenderBtn.disabled = false;
-      rerenderBtn.title = 'Re-render with excluded items removed';
-    } else {
-      rerenderBtn.title = 'Re-render requires podman or docker — not found on this system';
+    if (rerenderBtn) {
+      if (reRenderAvailable !== false) {
+        rerenderBtn.disabled = false;
+        rerenderBtn.title = 'Re-render with excluded items removed';
+      } else {
+        rerenderBtn.title = 'Re-render requires podman or docker — not found on this system';
+      }
     }
     tarballBtn.disabled = false;
     tarballBtn.title = 'Download current output as tar.gz';
