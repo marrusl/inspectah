@@ -33,7 +33,8 @@
             {%- for v in variants %}
             <tr{% if not v.item.include %} class="excluded"{% endif %}
                 data-snap-section="config" data-snap-list="files"
-                data-snap-index="{{ v.item.snap_index }}">
+                data-snap-index="{{ v.item.snap_index }}"
+                data-variant-group="{{ path }}">
               <td class="pf-v6-c-table__check">
                 <label class="pf-v6-c-switch include-toggle-wrap">
                   <input type="checkbox" class="pf-v6-c-switch__input include-toggle"

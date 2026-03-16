@@ -46,7 +46,8 @@
               {%- for v in variants %}
               <tr{% if not v.item.include %} class="excluded"{% endif %}
                   data-snap-section="services" data-snap-list="drop_ins"
-                  data-snap-index="{{ v.snap_index }}">
+                  data-snap-index="{{ v.snap_index }}"
+                  data-variant-group="{{ path }}">
                 <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if v.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
                 <td><code>{{ path }}</code> <span style="color: var(--pf-v6-global--Color--200);">(variant {{ loop.index }})</span></td>
                 {{ fleet_cell(v.item) }}
