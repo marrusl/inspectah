@@ -855,6 +855,38 @@ function switchVariant(ctx) {
   if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
 }
 
+/* Fleet: Compare button click delegation */
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('.variant-compare-btn');
+  if (!btn) return;
+
+  var row = btn.closest('[data-variant-group]');
+  if (!row) return;
+
+  var group = row.getAttribute('data-variant-group');
+  var section = row.getAttribute('data-snap-section');
+  var list = row.getAttribute('data-snap-list');
+  var idx = parseInt(row.getAttribute('data-snap-index'), 10);
+  if (!section || !list || isNaN(idx)) return;
+
+  var arr = resolveSnapshotRef(section, list);
+  if (!arr || !arr[idx]) return;
+  var comparisonItem = arr[idx];
+
+  var selectedItem = null;
+  document.querySelectorAll('[data-variant-group="' + group + '"]').forEach(function(sibling) {
+    var sibIdx = parseInt(sibling.getAttribute('data-snap-index'), 10);
+    var sibArr = resolveSnapshotRef(sibling.getAttribute('data-snap-section'), sibling.getAttribute('data-snap-list'));
+    if (sibArr && sibArr[sibIdx] && sibArr[sibIdx].include) {
+      selectedItem = sibArr[sibIdx];
+    }
+  });
+
+  if (!selectedItem) return;
+
+  showCompareModal(group, selectedItem, comparisonItem);
+});
+
 /* Fleet: toggle fraction/percentage on prevalence labels */
 document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
   label.addEventListener('click', function(e) {

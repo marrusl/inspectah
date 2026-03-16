@@ -51,6 +51,13 @@
                   {{ v.item.diff_html|safe }}
                 {% endif %}
               </td>
+              <td class="variant-action-cell">
+                {% if v.item.include %}
+                  <span style="font-size:0.75rem;color:var(--pf-t--global--text--color--subtle);">selected</span>
+                {% else %}
+                  <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn">Compare</button>
+                {% endif %}
+              </td>
             </tr>
             {%- endfor %}
           </table>

@@ -51,6 +51,13 @@
                 <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if v.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
                 <td><code>{{ path }}</code> <span style="color: var(--pf-v6-global--Color--200);">(variant {{ loop.index }})</span></td>
                 {{ fleet_cell(v.item) }}
+                <td class="variant-action-cell">
+                  {% if v.item.include %}
+                    <span style="font-size:0.75rem;color:var(--pf-t--global--text--color--subtle);">selected</span>
+                  {% else %}
+                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn">Compare</button>
+                  {% endif %}
+                </td>
               </tr>
               {%- endfor %}
             </table>

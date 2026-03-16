@@ -318,7 +318,7 @@ class TestFleetVariantGrouping:
         env = Environment(autoescape=True)
         html_report.render(snap, env, tmp_path)
         html = (tmp_path / "report.html").read_text()
-        assert "fleet-variant-group" not in html
+        assert 'class="fleet-variant-group' not in html
 
     def test_single_item_path_not_grouped(self, tmp_path):
         """A config path with only one item renders as a normal row."""
@@ -350,4 +350,4 @@ class TestFleetVariantGrouping:
         env = Environment(autoescape=True)
         html_report.render(snap, env, tmp_path)
         html = (tmp_path / "report.html").read_text()
-        assert "fleet-variant-group" not in html
+        assert 'class="fleet-variant-group' not in html
