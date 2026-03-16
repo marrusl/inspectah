@@ -39,17 +39,20 @@ Current behavior:
 - Stays in edit mode (`editorState.editMode` remains `true`)
 
 New behavior:
-- Restore original content (unchanged)
+- Restore original content in both the editor buffer AND the snapshot
+  array (`snapshot[section][list][index].content`) from
+  `originalSnapshot` — this undoes any prior save, not just unsaved
+  buffer changes
 - Do NOT add to `savedFiles` — content matches original, nothing to
-  re-render
+  re-render. Remove from `savedFiles` if previously saved.
 - Remove from `dirtyFiles` if present
 - Set `editorState.editMode = false`
 - Tear down CodeMirror / textarea (same cleanup path as `doSelectFile`)
 - Re-render the file in read-only view mode
-- Update toolbar and state labels
+- Update toolbar, state labels, and changed count
 
-Revert = "undo my edits and go back to viewing." If the user wants to
-edit again from clean, they click Edit.
+Revert = "undo ALL my edits (saved or not) and go back to viewing." If
+the user wants to edit again from clean, they click Edit.
 
 ## Fix 2: File list ordering and path display
 
@@ -85,6 +88,8 @@ Implementation:
 - Directory prefix: `color:var(--pf-t--global--text--color--subtle)`
 - Filename: `<strong>filename</strong>`
 - Sort by full path (which naturally groups files in the same directory)
+- No truncation — long paths handled by CSS `overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap` on the file entry element
 
 ## Fix 3: Re-render button activation
 
