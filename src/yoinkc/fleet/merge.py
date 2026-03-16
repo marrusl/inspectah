@@ -8,6 +8,7 @@ from ..schema import (
     InspectionSnapshot, FleetPrevalence, FleetMeta,
     RpmSection, ConfigSection, ServiceSection, NetworkSection,
     ScheduledTaskSection, ContainerSection, UserGroupSection,
+    NonRpmSoftwareSection, SelinuxSection,
     PackageEntry, RepoFile, ConfigFileEntry,
     ServiceStateChange, SystemdDropIn,
     FirewallZone, GeneratedTimerUnit, CronJob,
@@ -331,6 +332,26 @@ def merge_snapshots(
             compose_files=compose_files,
         )
 
+    # --- Non-RPM Software ---
+    non_rpm_section = None
+    has_non_rpm = any(s.non_rpm_software for s in snapshots)
+    if has_non_rpm:
+        non_rpm_items = _merge_identity_items(
+            _collect_section_lists(snapshots, "non_rpm_software", "items"),
+            key_fn=lambda i: i.path,
+            total=total, min_prevalence=min_prevalence, host_names=host_names,
+        )
+        non_rpm_env_files = _merge_content_items(
+            _collect_section_lists(snapshots, "non_rpm_software", "env_files"),
+            identity_fn=lambda f: f.path,
+            variant_fn=lambda f: _content_hash(f.content),
+            total=total, min_prevalence=min_prevalence, host_names=host_names,
+        )
+        non_rpm_section = NonRpmSoftwareSection(
+            items=non_rpm_items,
+            env_files=non_rpm_env_files,
+        )
+
     # --- Users/Groups ---
     ug_section = None
     has_ug = any(s.users_groups for s in snapshots)
@@ -389,6 +410,7 @@ def merge_snapshots(
         network=network_section,
         scheduled_tasks=sched_section,
         containers=containers_section,
+        non_rpm_software=non_rpm_section,
         kernel_boot=kernel_boot_section,
         users_groups=ug_section,
         warnings=warnings_merged,

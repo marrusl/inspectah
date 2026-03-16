@@ -298,6 +298,72 @@ class TestMergeLeafAutoPackages:
         assert merged.rpm.leaf_dep_tree["nginx"] == ["openssl"]
 
 
+from yoinkc.schema import NonRpmItem, NonRpmSoftwareSection
+
+
+class TestMergeNonRpmSoftware:
+    def test_non_rpm_items_merged_by_path(self):
+        """Non-RPM items with same path across hosts are deduplicated."""
+        from yoinkc.fleet.merge import merge_snapshots
+        item = NonRpmItem(path="/opt/app/bin/myapp", name="myapp", method="elf")
+        s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[item]))
+        s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[item]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert merged.non_rpm_software is not None
+        assert len(merged.non_rpm_software.items) == 1
+        assert merged.non_rpm_software.items[0].fleet.count == 2
+        assert merged.non_rpm_software.items[0].fleet.total == 2
+        assert merged.non_rpm_software.items[0].include is True
+
+    def test_non_rpm_different_items_both_preserved(self):
+        """Different non-RPM items on different hosts are both in merged output."""
+        from yoinkc.fleet.merge import merge_snapshots
+        i1 = NonRpmItem(path="/opt/app1/bin/app1", name="app1", method="elf")
+        i2 = NonRpmItem(path="/opt/app2/bin/app2", name="app2", method="pip")
+        s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[i1]))
+        s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[i2]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.non_rpm_software.items) == 2
+        paths = {i.path for i in merged.non_rpm_software.items}
+        assert paths == {"/opt/app1/bin/app1", "/opt/app2/bin/app2"}
+
+    def test_non_rpm_prevalence_threshold(self):
+        """Items below min_prevalence get include=False."""
+        from yoinkc.fleet.merge import merge_snapshots
+        item_common = NonRpmItem(path="/opt/common/bin/app", name="common", method="elf")
+        item_rare = NonRpmItem(path="/opt/rare/bin/app", name="rare", method="elf")
+        s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[item_common, item_rare]))
+        s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[item_common]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        by_path = {i.path: i for i in merged.non_rpm_software.items}
+        assert by_path["/opt/common/bin/app"].include is True
+        assert by_path["/opt/rare/bin/app"].include is False
+
+    def test_non_rpm_env_files_content_variants(self):
+        """env_files with same path but different content produce variants."""
+        from yoinkc.fleet.merge import merge_snapshots
+        ef1 = ConfigFileEntry(path="/opt/app/.env", kind="unowned", content="DB_HOST=db1.example.com")
+        ef2 = ConfigFileEntry(path="/opt/app/.env", kind="unowned", content="DB_HOST=db2.example.com")
+        s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[], env_files=[ef1]))
+        s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[], env_files=[ef2]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.non_rpm_software.env_files) == 2
+        for ef in merged.non_rpm_software.env_files:
+            assert ef.fleet.count == 1
+            assert ef.include is False
+
+    def test_non_rpm_env_files_identical_deduped(self):
+        """env_files with same path and content are deduplicated with correct prevalence."""
+        from yoinkc.fleet.merge import merge_snapshots
+        ef = ConfigFileEntry(path="/opt/app/.env", kind="unowned", content="DB_HOST=db.example.com")
+        s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[], env_files=[ef]))
+        s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[], env_files=[ef]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.non_rpm_software.env_files) == 1
+        assert merged.non_rpm_software.env_files[0].fleet.count == 2
+        assert merged.non_rpm_software.env_files[0].include is True
+
+
 class TestNoHostsMode:
     def test_strip_host_lists(self):
         from yoinkc.fleet.merge import merge_snapshots
