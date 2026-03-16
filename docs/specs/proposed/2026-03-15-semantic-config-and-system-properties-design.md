@@ -7,7 +7,7 @@
 
 yoinkc detects config files but only classifies them by RPM lifecycle (`rpm_owned_modified`, `unowned`, `orphaned`). Files like `/etc/audit/rules.d/custom.rules` or `/etc/tmpfiles.d/myapp.conf` appear as generic entries with no semantic meaning. Users — especially those unfamiliar with what's on their systems — can't quickly identify what category of configuration they're looking at.
 
-Additionally, several system properties (locale, timezone, kernel command line, alternatives) aren't captured at all. These are simple to detect and important for migration correctness.
+Additionally, several system properties (locale, timezone, alternatives) aren't captured at all. These are simple to detect and important for migration correctness.
 
 ## Scope
 
@@ -15,9 +15,11 @@ Additionally, several system properties (locale, timezone, kernel command line, 
 
 Add a `category` field to `ConfigFileEntry` that classifies files by semantic meaning based on their path. This is a path-based label, not semantic analysis of file contents.
 
-### Part B: System Properties (4 items)
+### Part B: System Properties (3 items)
 
-Extend the kernel_boot inspector to detect locale, timezone, kernel command line, and alternatives. Render in the Kernel/Boot tab. This is a temporary home — a dedicated "System Properties" tab is planned for the future, but building a new inspector/tab/schema section for 4 items that will move is over-engineering.
+Extend the kernel_boot inspector to detect locale, timezone, and alternatives. Render in the Kernel/Boot tab. This is a temporary home — a dedicated "System Properties" tab is planned for the future, but building a new inspector/tab/schema section for 3 items that will move is over-engineering.
+
+Note: kernel command line (`/proc/cmdline`) and GRUB defaults are already captured by the kernel_boot inspector as `cmdline` and `grub_defaults` fields. No duplication needed.
 
 ## Part A: Config File Categories
 
@@ -96,7 +98,6 @@ Add to `KernelBootSection`:
 ```python
 locale: Optional[str] = None
 timezone: Optional[str] = None
-kernel_cmdline: Optional[str] = None
 alternatives: list[AlternativeEntry] = []
 ```
 
@@ -110,8 +111,7 @@ yoinkc runs inside a container with the host filesystem mounted at `host_root`. 
 |----------|--------|--------|
 | Locale | `{host_root}/etc/locale.conf` | Parse `LANG=` line |
 | Timezone | `{host_root}/etc/localtime` | Read symlink target, strip `/usr/share/zoneinfo/` prefix |
-| Kernel cmdline | `{host_root}/proc/cmdline` | Read entire file. Also check `{host_root}/etc/kernel/cmdline` and `{host_root}/etc/default/grub` for persistent config |
-| Alternatives | `{host_root}/etc/alternatives/` | Read symlinks in directory, resolve targets. Parse name from symlink name, derive status from whether a manual override exists |
+| Alternatives | `{host_root}/etc/alternatives/` + `{host_root}/var/lib/alternatives/` | Read symlinks in `/etc/alternatives/` for name→path. Read corresponding file in `/var/lib/alternatives/<name>` to determine auto vs manual status (first line is `auto` or `manual`) |
 
 All detection is best-effort — missing files produce `None`/empty list, not errors.
 
@@ -122,13 +122,14 @@ All detection is best-effort — missing files produce `None`/empty list, not er
 1. **System Properties** — description list or small table:
    - Locale: value
    - Timezone: value
-   - Kernel Command Line: value
    - Only renders if at least one property is present
 
 2. **Alternatives** — table with columns: Name, Path, Status
    - Only renders if alternatives list is non-empty
 
 Both subsections are informational — no include/exclude toggles, no triage interaction.
+
+Render in `_kernel_boot.html.j2` (the existing Kernel/Boot tab partial).
 
 ### Containerfile Impact
 
@@ -139,7 +140,7 @@ None. System properties are informational context. The Containerfile generator d
 - **Config inspector detection logic** — same three detection strategies (RPM-owned modified, unowned, orphaned). Category is layered on top.
 - **Config file exclusion list** — the 210 hardcoded exclusions are unchanged.
 - **Triage sidebar** — config categories don't affect triage counts. System properties aren't triage items.
-- **Fleet analysis** — `category` serializes to JSON and will be present in fleet snapshots, but no fleet-specific handling needed.
+- **Fleet analysis** — `category` on `ConfigFileEntry` passes through unchanged in fleet merge (same path = same category, no special handling). For `KernelBootSection`: `locale` and `timezone` use first-wins merge (fleet reports diversity via prevalence, not by merging values). `alternatives` uses union merge (collect all unique name+path+status tuples across hosts).
 
 ## Alternatives Considered
 
