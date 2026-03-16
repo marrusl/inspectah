@@ -16,8 +16,8 @@
 
     var sections = [
       {section: 'config', list: 'files', label: 'config'},
-      {section: 'containers', list: 'quadlet_units', label: 'quadlet'},
       {section: 'services', list: 'drop_ins', label: 'drop-ins'},
+      {section: 'containers', list: 'quadlet_units', label: 'quadlet'},
     ];
 
     sections.forEach(function(sec) {
@@ -30,29 +30,39 @@
       folder.style.cssText = 'font-weight:600; padding:6px 0; cursor:pointer;';
       treeEl.appendChild(folder);
 
-      items.forEach(function(item, idx) {
-        var entry = document.createElement('div');
-        entry.className = 'editor-tree-file';
-        entry.style.cssText = 'padding:6px 8px 6px 24px; display:flex; align-items:center; justify-content:space-between; cursor:pointer; border-radius:4px;';
-        entry.dataset.section = sec.section;
-        entry.dataset.list = sec.list;
-        entry.dataset.index = idx;
-        entry.dataset.path = item.path;
+      var sorted = items.map(function(item, idx) { return {item: item, idx: idx}; });
+      sorted.sort(function(a, b) { return a.item.path.localeCompare(b.item.path); });
+
+      sorted.forEach(function(entry) {
+        var item = entry.item;
+        var idx = entry.idx;
+        var entryEl = document.createElement('div');
+        entryEl.className = 'editor-tree-file';
+        entryEl.style.cssText = 'padding:6px 8px 6px 24px; display:flex; align-items:center; justify-content:space-between; cursor:pointer; border-radius:4px;';
+        entryEl.dataset.section = sec.section;
+        entryEl.dataset.list = sec.list;
+        entryEl.dataset.index = idx;
+        entryEl.dataset.path = item.path;
 
         var nameSpan = document.createElement('span');
-        nameSpan.textContent = item.path.split('/').pop();
+        nameSpan.style.cssText = 'overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0;';
+        var lastSlash = item.path.lastIndexOf('/');
+        var dir = item.path.substring(0, lastSlash + 1);
+        var fname = item.path.substring(lastSlash + 1);
+        nameSpan.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">'
+          + escapeHtml(dir) + '</span><strong>' + escapeHtml(fname) + '</strong>';
         nameSpan.title = item.path;
-        entry.appendChild(nameSpan);
+        entryEl.appendChild(nameSpan);
 
         var labelSpan = document.createElement('span');
         labelSpan.className = 'editor-state-label';
-        entry.appendChild(labelSpan);
+        entryEl.appendChild(labelSpan);
 
-        entry.addEventListener('click', function() {
+        entryEl.addEventListener('click', function() {
           selectFile(sec.section, sec.list, idx, item.path);
         });
 
-        treeEl.appendChild(entry);
+        treeEl.appendChild(entryEl);
       });
     });
   }
