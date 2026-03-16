@@ -324,6 +324,12 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .fleet-variant-children {
   display: none;
 }
+/* Fleet variant comparison diff */
+.diff-line-same { padding: 0 16px; white-space: pre; color: var(--pf-t--global--text--color--subtle); }
+.diff-line-add { padding: 0 16px; white-space: pre; background: rgba(77, 171, 247, 0.12); color: var(--pf-t--global--text--color--regular); }
+.diff-line-remove { padding: 0 16px; white-space: pre; background: rgba(201, 25, 11, 0.12); color: var(--pf-t--global--text--color--regular); }
+.diff-legend-selected { color: #c9190b; margin-right: 4px; }
+.diff-legend-comparison { color: #4dabf7; margin-right: 4px; }
 {% endif %}
 
 {% if refine_mode %}

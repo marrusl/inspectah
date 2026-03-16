@@ -700,6 +700,100 @@ function lineDiff(oldText, newText) {
   return result;
 }
 
+function escapeHtml(str) {
+  var div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function closeCompareModal() {
+  var modal = document.getElementById('variant-compare-modal');
+  if (modal) modal.remove();
+}
+
+function showCompareModal(path, selectedItem, comparisonItem) {
+  var existing = document.getElementById('variant-compare-modal');
+  if (existing) existing.remove();
+
+  var hasContent = !!(selectedItem.content || comparisonItem.content);
+  var diff = hasContent ? lineDiff(selectedItem.content || '', comparisonItem.content || '') : null;
+
+  var modal = document.createElement('div');
+  modal.id = 'variant-compare-modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  modal.setAttribute('aria-label', 'Compare variants');
+  modal.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:9999;';
+
+  var backdrop = document.createElement('div');
+  backdrop.style.cssText = 'position:absolute;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);';
+  backdrop.addEventListener('click', closeCompareModal);
+  modal.appendChild(backdrop);
+
+  var box = document.createElement('div');
+  box.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);'
+    + 'background:var(--pf-t--global--background--color--primary--default);'
+    + 'border-radius:8px;width:680px;max-height:80vh;display:flex;flex-direction:column;'
+    + 'box-shadow:0 4px 24px rgba(0,0,0,0.3);';
+
+  // Header
+  var header = document.createElement('div');
+  header.style.cssText = 'padding:16px 20px;border-bottom:1px solid var(--pf-t--global--border--color--default);display:flex;justify-content:space-between;align-items:center;';
+  header.innerHTML = '<h2 class="pf-v6-c-title pf-m-lg" style="margin:0;">Compare variants</h2>'
+    + '<button class="pf-v6-c-button pf-m-plain" aria-label="Close">&times;</button>';
+  header.querySelector('button').addEventListener('click', closeCompareModal);
+  box.appendChild(header);
+
+  // Subtitle with host info and legend
+  var subtitle = document.createElement('div');
+  subtitle.style.cssText = 'padding:8px 20px;font-size:0.8rem;color:var(--pf-t--global--text--color--subtle);border-bottom:1px solid var(--pf-t--global--border--color--default);';
+  var selHosts = selectedItem.fleet ? selectedItem.fleet.hosts.join(', ') : '';
+  var selCount = selectedItem.fleet ? selectedItem.fleet.count + '/' + selectedItem.fleet.total : '';
+  var cmpHosts = comparisonItem.fleet ? comparisonItem.fleet.hosts.join(', ') : '';
+  var cmpCount = comparisonItem.fleet ? comparisonItem.fleet.count + '/' + comparisonItem.fleet.total : '';
+  subtitle.innerHTML = '<code style="font-size:0.8rem;">' + escapeHtml(path) + '</code><br>'
+    + '<span class="diff-legend-selected">&#9632;</span> Selected (' + selCount + ' hosts: ' + escapeHtml(selHosts) + ')<br>'
+    + '<span class="diff-legend-comparison">&#9632;</span> This variant (' + cmpCount + ' hosts: ' + escapeHtml(cmpHosts) + ')';
+  box.appendChild(subtitle);
+
+  // Diff body
+  var body = document.createElement('div');
+  body.style.cssText = 'padding:0;overflow-y:auto;flex:1;font-family:monospace;font-size:0.75rem;line-height:1.6;';
+
+  if (!hasContent) {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--pf-t--global--text--color--subtle);">No content available for comparison.</div>';
+  } else if (diff === null) {
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:var(--pf-t--global--text--color--subtle);">File too large to diff (over 5000 lines)</div>';
+  } else {
+    var html = '';
+    diff.forEach(function(line) {
+      var cls = line.type === 'add' ? 'diff-line-add' : line.type === 'remove' ? 'diff-line-remove' : 'diff-line-same';
+      var prefix = line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' ';
+      html += '<div class="' + cls + '">' + prefix + ' ' + escapeHtml(line.text) + '</div>';
+    });
+    body.innerHTML = html;
+  }
+  box.appendChild(body);
+
+  // Footer
+  var footer = document.createElement('div');
+  footer.style.cssText = 'padding:12px 20px;border-top:1px solid var(--pf-t--global--border--color--default);display:flex;justify-content:flex-end;gap:8px;';
+  footer.innerHTML = '<button class="pf-v6-c-button pf-m-secondary" data-action="close">Close</button>'
+    + '<button class="pf-v6-c-button pf-m-primary" data-action="switch">Switch to this variant</button>';
+  footer.querySelector('[data-action="close"]').addEventListener('click', closeCompareModal);
+  box.appendChild(footer);
+
+  modal.appendChild(box);
+  document.body.appendChild(modal);
+
+  modal._comparisonContext = { path: path, selectedItem: selectedItem, comparisonItem: comparisonItem };
+
+  footer.querySelector('[data-action="switch"]').addEventListener('click', function() {
+    switchVariant(modal._comparisonContext);
+    closeCompareModal();
+  });
+}
+
 /* Fleet: toggle fraction/percentage on prevalence labels */
 document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
   label.addEventListener('click', function(e) {
