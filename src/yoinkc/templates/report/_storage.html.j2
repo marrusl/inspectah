@@ -1,3 +1,4 @@
+{% if not fleet_meta %}
 {% from "report/_macros.html.j2" import section with context -%}
 {# ── Storage ─────────────────────────────────────────────────────────────── #}
 {% call section("storage", "Storage") %}
@@ -11,4 +12,5 @@
   <p>No fstab entries.</p>
   {%- endif %}
 {% endcall %}
+{% endif %}
 
