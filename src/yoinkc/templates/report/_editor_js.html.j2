@@ -133,7 +133,7 @@
       var name = path.split('/').pop();
       pathEl.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">' + escapeHtml(dir) + '</span>' +
                          '<strong>' + escapeHtml(name) + '</strong>' +
-                         ' <span class="pf-v6-c-label pf-m-compact">read-only</span>';
+                         ' <span class="pf-v6-c-label pf-m-compact"><span class="pf-v6-c-label__content">read-only</span></span>';
     }
 
     var actionsEl = document.getElementById('editor-actions');
@@ -371,10 +371,10 @@
 
   function getStateLabel(path) {
     if (editorState.dirtyFiles.has(path)) {
-      return '<span class="pf-v6-c-label pf-m-compact pf-m-danger">unsaved</span>';
+      return '<span class="pf-v6-c-label pf-m-compact pf-m-danger"><span class="pf-v6-c-label__content">unsaved</span></span>';
     }
     if (editorState.savedFiles.has(path)) {
-      return '<span class="pf-v6-c-label pf-m-compact pf-m-blue">not rendered</span>';
+      return '<span class="pf-v6-c-label pf-m-compact pf-m-info"><span class="pf-v6-c-label__content">not rendered</span></span>';
     }
     return '';
   }
