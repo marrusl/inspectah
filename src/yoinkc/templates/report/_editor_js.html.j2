@@ -394,6 +394,8 @@
   function updateChangedCount() {
     var countEl = document.getElementById('editor-changed-count');
     if (countEl) countEl.textContent = editorState.savedFiles.size;
+    var reRenderBtn = document.getElementById('btn-re-render');
+    if (reRenderBtn) reRenderBtn.disabled = (editorState.savedFiles.size === 0);
   }
 
   window.navigateToEditor = function(linkEl) {
