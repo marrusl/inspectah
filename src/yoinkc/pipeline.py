@@ -103,12 +103,14 @@ def run_pipeline(
                 output_file = working_dir / f"{stamp}.tar.gz"
             create_tarball(tmp_dir, output_file, prefix=stamp)
             name = output_file.name
-            scp_host = stamp.rsplit("-", 2)[0]
-            host_cwd = os.environ.get("YOINKC_HOST_CWD")
-            scp_path = f"{host_cwd}/{name}" if host_cwd else name
+            is_fleet = "fleet" in snapshot.meta
             print(f"\nOutput: {name}\n")
             print("Next steps:")
-            print(f"  Copy to workstation:    scp {scp_host}:{scp_path} .")
+            if not is_fleet:
+                scp_host = meta_hostname or "TARGET_HOST"
+                host_cwd = os.environ.get("YOINKC_HOST_CWD")
+                scp_path = f"{host_cwd}/{name}" if host_cwd else name
+                print(f"  Copy to workstation:    scp {scp_host}:{scp_path} .")
             print(f"  Interactive refinement: ./yoinkc-refine {name}")
             print(f"  Build the image:        ./yoinkc-build {name} my-image:latest")
     except Exception:
