@@ -72,7 +72,8 @@ Behavior:
 - **Apply** (existing): commits the threshold, updates
   `data-current-threshold`, hides both Apply and Cancel.
 - **Cancel** (new): resets slider value to `data-current-threshold`,
-  updates the prevalence display text, hides both Apply and Cancel.
+  updates the prevalence display text, clears the preview span
+  (`prevalence-preview`), hides both Apply and Cancel.
 
 Both buttons disappear after either action.
 
@@ -81,10 +82,27 @@ Both buttons disappear after either action.
 **File:** `src/yoinkc/templates/report/_js.html.j2` — Apply click
 handler (lines ~1127-1180)
 
-After `applyPrevalenceThreshold()` recalculates includes, call the
-existing toolbar update function (`recalc()` or equivalent) that drives
-the toolbar's changed count and pending state. This is the same
-mechanism that individual checkbox toggles use.
+The Apply handler's Phase 3 already calls `setDirty(!isSnapshotClean())`
+which compares current checkbox states against `includeBaseline`.
+Since Apply modifies checkboxes, `isSnapshotClean()` should return
+false, and `setDirty(true)` should fire.
+
+However, `setDirty()` toggles `rerenderBtn` which is `btn-rerender`
+(the non-refine placeholder). In refine mode, that button is now
+hidden (per the duplicate re-render button fix). The refine-mode
+button (`btn-re-render`) is toggled by `updateChangedCount()` in the
+editor JS, which tracks `savedFiles` not include changes.
+
+The fix: `setDirty()` should also toggle `btn-re-render` if it exists.
+Add to `setDirty()`:
+
+```js
+var editorReRenderBtn = document.getElementById('btn-re-render');
+if (editorReRenderBtn) editorReRenderBtn.disabled = !isDirty;
+```
+
+This ensures Apply (and any other include/strategy change) enables the
+correct re-render button in refine mode.
 
 After Apply, the toolbar shows pending changes, signaling that a
 re-render will reflect the new prevalence threshold in the
