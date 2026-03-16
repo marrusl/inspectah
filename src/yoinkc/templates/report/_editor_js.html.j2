@@ -25,9 +25,6 @@
     if (!treeEl) return;
     treeEl.innerHTML = '';
 
-    var root = document.createElement('ul');
-    root.className = 'pf-v6-c-tree-view';
-
     var sections = [
       {section: 'config', list: 'files', label: 'config'},
       {section: 'services', list: 'drop_ins', label: 'drop-ins'},
@@ -38,20 +35,11 @@
       var items = snapshot[sec.section] && snapshot[sec.section][sec.list];
       if (!items || items.length === 0) return;
 
-      var catLi = document.createElement('li');
-      catLi.className = 'pf-v6-c-tree-view__list-item pf-m-expanded';
-      var catDiv = document.createElement('div');
-      catDiv.className = 'pf-v6-c-tree-view__content';
-      var catBtn = document.createElement('button');
-      catBtn.className = 'pf-v6-c-tree-view__node';
-      catBtn.textContent = sec.label + '/';
-      catDiv.appendChild(catBtn);
-      catLi.appendChild(catDiv);
+      var header = document.createElement('div');
+      header.className = 'editor-section-header';
+      header.textContent = sec.label + '/';
+      treeEl.appendChild(header);
 
-      var catUl = document.createElement('ul');
-      catUl.className = 'pf-v6-c-tree-view__list';
-
-      // Group items by path, preserving original indices
       var groups = {};
       var groupOrder = [];
       items.forEach(function(item, idx) {
@@ -67,102 +55,193 @@
         var entries = groups[path];
 
         if (entries.length === 1) {
-          // Leaf node — single item (or no fleet data)
           var e = entries[0];
-          var li = document.createElement('li');
-          li.className = 'pf-v6-c-tree-view__list-item';
-          var div = document.createElement('div');
-          div.className = 'pf-v6-c-tree-view__content';
-          var btn = document.createElement('button');
-          btn.className = 'pf-v6-c-tree-view__node';
-          btn.dataset.section = sec.section;
-          btn.dataset.list = sec.list;
-          btn.dataset.index = e.idx;
-          btn.dataset.path = path;
-          btn.innerHTML = pathHtml(path);
-          btn.title = path;
-
+          var row = document.createElement('div');
+          row.className = 'editor-single-file';
+          row.dataset.section = sec.section;
+          row.dataset.list = sec.list;
+          row.dataset.index = e.idx;
+          row.dataset.path = path;
+          row.innerHTML = pathHtml(path);
+          row.title = path;
           var stateSpan = document.createElement('span');
           stateSpan.className = 'editor-state-label';
           stateSpan.style.marginLeft = '8px';
-          btn.appendChild(stateSpan);
-
-          btn.addEventListener('click', function() {
+          row.appendChild(stateSpan);
+          row.addEventListener('click', function() {
             selectFile(sec.section, sec.list, e.idx, path);
           });
-          div.appendChild(btn);
-          li.appendChild(div);
-          catUl.appendChild(li);
+          treeEl.appendChild(row);
         } else {
-          // Multi-variant group — expandable parent with variant children
           entries.sort(function(a, b) {
             var ac = (a.item.fleet && a.item.fleet.count) || 0;
             var bc = (b.item.fleet && b.item.fleet.count) || 0;
             return bc - ac;
           });
 
-          var parentLi = document.createElement('li');
-          parentLi.className = 'pf-v6-c-tree-view__list-item pf-m-expanded';
-          var parentDiv = document.createElement('div');
-          parentDiv.className = 'pf-v6-c-tree-view__content';
-          var parentBtn = document.createElement('button');
-          parentBtn.className = 'pf-v6-c-tree-view__node';
-          parentBtn.innerHTML = pathHtml(path) +
-            ' <span class="pf-v6-c-badge pf-m-read">' + entries.length + '</span>';
-          parentBtn.title = path;
-          parentDiv.appendChild(parentBtn);
-          parentLi.appendChild(parentDiv);
+          var group = document.createElement('div');
+          group.className = 'editor-variant-group';
 
-          var childUl = document.createElement('ul');
-          childUl.className = 'pf-v6-c-tree-view__list';
+          var pp = pathParts(path);
+          var headerDiv = document.createElement('div');
+          headerDiv.className = 'editor-variant-header';
+          headerDiv.innerHTML = '<span class="chevron">\u25BC</span>' +
+            '<span class="path-dir">' + escapeHtml(pp.dir) + '</span>' +
+            '<span class="path-file">' + escapeHtml(pp.name) + '</span>' +
+            ' <span class="pf-v6-c-badge pf-m-read">' + entries.length + ' variants</span>';
+          headerDiv.addEventListener('click', function() { toggleAccordion(this); });
+          group.appendChild(headerDiv);
 
-          entries.forEach(function(e, variantNum) {
+          var children = document.createElement('div');
+          children.className = 'editor-variant-children';
+
+          entries.forEach(function(e) {
             var item = e.item;
-            var childLi = document.createElement('li');
-            childLi.className = 'pf-v6-c-tree-view__list-item';
-            var childDiv = document.createElement('div');
-            childDiv.className = 'pf-v6-c-tree-view__content';
-            var childBtn = document.createElement('button');
-            childBtn.className = 'pf-v6-c-tree-view__node';
-            childBtn.dataset.section = sec.section;
-            childBtn.dataset.list = sec.list;
-            childBtn.dataset.index = e.idx;
-            childBtn.dataset.path = path;
+            var isSelected = item.include === true;
+            var row = document.createElement('div');
+            row.className = 'editor-variant-row' + (isSelected ? ' selected' : '');
+            row.dataset.section = sec.section;
+            row.dataset.list = sec.list;
+            row.dataset.index = e.idx;
+            row.dataset.path = path;
 
-            var label = 'variant ' + (variantNum + 1);
-            var html = escapeHtml(label);
-            if (item.include === true) {
-              html += ' <span class="pf-v6-c-label pf-m-compact pf-m-success"><span class="pf-v6-c-label__content">selected</span></span>';
-            }
             if (item.fleet) {
-              html += ' <span class="pf-v6-c-label pf-m-compact"><span class="pf-v6-c-label__content">' +
-                item.fleet.count + '/' + item.fleet.total + ' hosts</span></span>';
+              var pct = Math.round((item.fleet.count / item.fleet.total) * 100);
+              var barDiv = document.createElement('div');
+              barDiv.className = 'prevalence-bar';
+              var fillDiv = document.createElement('div');
+              fillDiv.className = 'fill ' + (pct > 50 ? 'majority' : 'minority');
+              fillDiv.style.width = pct + '%';
+              barDiv.appendChild(fillDiv);
+              row.appendChild(barDiv);
             }
-            childBtn.innerHTML = html;
+
+            if (item.fleet && item.fleet.hosts) {
+              var chipSpan = document.createElement('span');
+              chipSpan.className = 'host-chips';
+              chipSpan.setAttribute('data-hosts', item.fleet.hosts.join(','));
+              row.appendChild(chipSpan);
+            }
 
             var stateSpan = document.createElement('span');
             stateSpan.className = 'editor-state-label';
-            stateSpan.style.marginLeft = '8px';
-            childBtn.appendChild(stateSpan);
+            row.appendChild(stateSpan);
 
-            childBtn.addEventListener('click', function() {
+            var pill = document.createElement('span');
+            if (isSelected) {
+              pill.className = 'variant-pill selected-pill';
+              pill.textContent = 'selected';
+            } else {
+              pill.className = 'variant-pill switch-pill';
+              pill.textContent = 'use this variant';
+              pill.addEventListener('click', function(ev) {
+                ev.stopPropagation();
+                switchVariantFromEditor(this);
+              });
+            }
+            row.appendChild(pill);
+
+            row.addEventListener('click', function() {
               selectFile(sec.section, sec.list, e.idx, path);
             });
-            childDiv.appendChild(childBtn);
-            childLi.appendChild(childDiv);
-            childUl.appendChild(childLi);
+            children.appendChild(row);
           });
 
-          parentLi.appendChild(childUl);
-          catUl.appendChild(parentLi);
+          group.appendChild(children);
+          treeEl.appendChild(group);
+          measureHostChips(children);
         }
       });
-
-      catLi.appendChild(catUl);
-      root.appendChild(catLi);
     });
+  }
 
-    treeEl.appendChild(root);
+  function toggleAccordion(header) {
+    var children = header.nextElementSibling;
+    var chevron = header.querySelector('.chevron');
+    if (children.style.display === 'none') {
+      children.style.display = '';
+      if (chevron) chevron.textContent = '\u25BC';
+    } else {
+      children.style.display = 'none';
+      if (chevron) chevron.textContent = '\u25BA';
+    }
+  }
+
+  function measureHostChips(container) {
+    container.querySelectorAll('.host-chips').forEach(function(chipSpan) {
+      var hostsStr = chipSpan.getAttribute('data-hosts');
+      if (!hostsStr) return;
+      var hosts = hostsStr.split(',');
+      var rowEl = chipSpan.closest('.editor-variant-row');
+      var availableWidth = (rowEl ? rowEl.offsetWidth : 200) - 120;
+
+      var testSpan = document.createElement('span');
+      testSpan.style.cssText = 'visibility:hidden;position:absolute;white-space:nowrap;font-size:10px;';
+      document.body.appendChild(testSpan);
+      var totalWidth = 0;
+      hosts.forEach(function(h) {
+        testSpan.textContent = h;
+        totalWidth += Math.min(testSpan.offsetWidth + 12, 92);
+      });
+      document.body.removeChild(testSpan);
+
+      if (totalWidth <= availableWidth && availableWidth > 0) {
+        hosts.forEach(function(h) {
+          var chip = document.createElement('span');
+          chip.className = 'host-chip';
+          chip.textContent = h;
+          chip.title = h;
+          chipSpan.appendChild(chip);
+        });
+      } else {
+        var countSpan = document.createElement('span');
+        countSpan.className = 'host-count';
+        countSpan.textContent = hosts.length + ' hosts';
+        chipSpan.appendChild(countSpan);
+      }
+    });
+  }
+
+  function syncConfigTabVariants(section, list, path) {
+    document.querySelectorAll('[data-variant-group="' + path + '"]').forEach(function(row) {
+      var rSection = row.getAttribute('data-snap-section');
+      var rList = row.getAttribute('data-snap-list');
+      var rIdx = parseInt(row.getAttribute('data-snap-index'), 10);
+      if (rSection !== section || rList !== list) return;
+      var rArr = resolveSnapshotRef(rSection, rList);
+      if (!rArr || !rArr[rIdx]) return;
+      var cb = row.querySelector('.include-toggle');
+      if (cb) cb.checked = rArr[rIdx].include;
+      row.classList.toggle('excluded', !rArr[rIdx].include);
+    });
+  }
+
+  function switchVariantFromEditor(pill) {
+    var row = pill.closest('.editor-variant-row');
+    if (!row) return;
+    var section = row.dataset.section;
+    var list = row.dataset.list;
+    var idx = parseInt(row.dataset.index, 10);
+    var arr = resolveSnapshotRef(section, list);
+    if (!arr || !arr[idx]) return;
+    var item = arr[idx];
+    var path = item.path;
+
+    var siblings = findSiblingVariants(section, list, path);
+    siblings.forEach(function(s) { s.item.include = false; });
+    item.include = true;
+
+    syncConfigTabVariants(section, list, path);
+    if (typeof updateCompareButtons === 'function') updateCompareButtons(path);
+    if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
+
+    buildTree();
+    doSelectFile(section, list, idx, path);
+
+    if (typeof setDirty === 'function' && typeof isSnapshotClean === 'function') {
+      setDirty(!isSnapshotClean());
+    }
+    if (typeof updateToolbar === 'function') updateToolbar();
   }
 
   // Pending navigation target — set when the unsaved-changes modal is shown,
@@ -231,13 +310,13 @@
     editorState.currentFile = {section: section, list: list, index: index, path: path};
     editorState.editMode = false;
 
-    // Clear previous pf-m-current from all tree-view nodes
-    document.querySelectorAll('.pf-v6-c-tree-view__node.pf-m-current').forEach(function(el) {
+    document.querySelectorAll('.editor-variant-row.pf-m-current, .editor-single-file.pf-m-current').forEach(function(el) {
       el.classList.remove('pf-m-current');
     });
-    var sel = 'button.pf-v6-c-tree-view__node[data-section="' + section + '"][data-list="' + list + '"][data-index="' + index + '"]';
-    var activeBtn = document.querySelector(sel);
-    if (activeBtn) activeBtn.classList.add('pf-m-current');
+    var sel = '.editor-variant-row[data-section="' + section + '"][data-list="' + list + '"][data-index="' + index + '"], ' +
+              '.editor-single-file[data-section="' + section + '"][data-list="' + list + '"][data-index="' + index + '"]';
+    var activeEl = document.querySelector(sel);
+    if (activeEl) activeEl.classList.add('pf-m-current');
 
     var content = snapshot[section][list][index].content || '';
     var readonlyEl = document.getElementById('editor-readonly-content');
@@ -258,6 +337,9 @@
           var siblings = findSiblingVariants(section, list, path);
           siblings.forEach(function(s) { s.item.include = false; });
           item.include = true;
+          syncConfigTabVariants(section, list, path);
+          if (typeof updateCompareButtons === 'function') updateCompareButtons(path);
+          if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
           buildTree();
           doSelectFile(section, list, index, path);
           if (typeof setDirty === 'function' && typeof isSnapshotClean === 'function') {
@@ -502,9 +584,9 @@
   }
 
   function updateStateLabels() {
-    document.querySelectorAll('button.pf-v6-c-tree-view__node[data-path]').forEach(function(btn) {
-      var path = btn.dataset.path;
-      var labelEl = btn.querySelector('.editor-state-label');
+    document.querySelectorAll('.editor-variant-row[data-path], .editor-single-file[data-path]').forEach(function(el) {
+      var path = el.dataset.path;
+      var labelEl = el.querySelector('.editor-state-label');
       if (labelEl) labelEl.innerHTML = getStateLabel(path);
     });
   }
