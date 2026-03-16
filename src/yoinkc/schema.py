@@ -433,6 +433,7 @@ class NonRpmItem(BaseModel):
     files: Optional[dict] = None
     # pip requirements.txt / raw content
     content: str = ""
+    fleet: Optional[FleetPrevalence] = None
 
 
 class NonRpmSoftwareSection(BaseModel):
@@ -500,6 +501,8 @@ class SelinuxPortLabel(BaseModel):
     protocol: str  # "tcp" or "udp"
     port: str      # port number or range, e.g. "2222" or "8080-8090"
     type: str      # SELinux type, e.g. "ssh_port_t"
+    include: bool = True
+    fleet: Optional[FleetPrevalence] = None
 
 
 class SelinuxSection(BaseModel):
@@ -533,7 +536,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class InspectionSnapshot(BaseModel):
