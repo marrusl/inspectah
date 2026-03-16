@@ -152,6 +152,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 - Unowned files in `/etc` (hand-placed configs) with extensible exclusion list for system-generated artifacts
 - Orphaned configs from removed packages
 - Sensitive content detection and automatic redaction
+- Semantic categories assigned by path (tmpfiles, environment, audit, library_path, journal, logrotate, automount, sysctl) — displayed as a sortable "Category" column in the HTML report
 - Optional `--config-diffs`: retrieves RPM defaults from local cache or downloads from repos, generates unified diffs
 
 ### Network
@@ -201,6 +202,7 @@ Each inspector examines one aspect of the host and contributes a section to the 
 - `lsmod` parsing with module classification: default (from `modules-load.d`), configured, dependency, or non-default
 - Runtime sysctl values from `/proc/sys` diffed against shipped defaults in `/usr/lib/sysctl.d` with source attribution
 - `modules-load.d`, `modprobe.d`, and `dracut.conf.d` config capture and COPY into image
+- Locale, timezone, and alternatives detection via file-based methods (container-compatible): rendered in the Kernel/Boot tab as a system properties description list and alternatives table
 
 ### SELinux
 
@@ -322,7 +324,7 @@ Use `--no-cache` for a clean rebuild without layer caching.
    ./run-yoinkc-fleet.sh ./web-servers/ -p 80
    ```
 
-The fleet tarball contains a Containerfile, HTML report, and snapshot — same structure as single-host output. The HTML report includes fleet-specific UI: a summary banner, prevalence color bars on every item (showing how many hosts have it), click-to-toggle fraction/percentage display, host list popovers, and grouped content variants for config files with differences across hosts.
+The fleet tarball contains a Containerfile, HTML report, and snapshot — same structure as single-host output. The HTML report includes fleet-specific UI: a summary banner, prevalence color bars on every item (showing how many hosts have it), click-to-toggle fraction/percentage display, host list popovers with a split Copy button (one-per-line, comma-separated, or space-separated formats), and grouped content variants for config files with differences across hosts.
 
 **Prevalence threshold (`-p`):** Controls what gets included. `-p 100` (default) means strict intersection — only items on every host. `-p 80` includes items on 80%+ of hosts. Items below threshold are still visible in the report (as unchecked), just not included in the Containerfile.
 

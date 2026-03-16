@@ -288,7 +288,7 @@ The schema (`schema.py`) is the contract between inspectors and renderers. Inspe
 
 ### Schema Versioning
 
-The `SCHEMA_VERSION` integer constant (currently **7**) is embedded in every serialized snapshot. When `pipeline.py:load_snapshot()` deserializes a snapshot, it compares the file's `schema_version` against the running code's `SCHEMA_VERSION`. A mismatch raises a `ValueError` with a clear message instructing the user to re-run the inspection. This prevents silent data corruption when the schema evolves — old snapshots cannot be loaded by new code or vice versa.
+The `SCHEMA_VERSION` integer constant (currently **8**) is embedded in every serialized snapshot. When `pipeline.py:load_snapshot()` deserializes a snapshot, it compares the file's `schema_version` against the running code's `SCHEMA_VERSION`. A mismatch raises a `ValueError` with a clear message instructing the user to re-run the inspection. This prevents silent data corruption when the schema evolves — old snapshots cannot be loaded by new code or vice versa.
 
 ### Model Hierarchy
 
@@ -369,6 +369,12 @@ The exclusion list is defined as two data structures (exact paths and glob patte
 Quadlet unit files captured under `/etc/containers/systemd/` are excluded from the config file display in both the HTML report and audit report. They appear in the Config inspector's snapshot data and are written to the output, but their dedicated home is the Containers section where they are shown with image references and unit type context. The Containerfile renders them via `COPY quadlet/ /etc/containers/systemd/` rather than the consolidated `COPY config/etc/ /etc/` block, so writing them to the config tree would duplicate them in the image.
 
 When custom CA certificates are found under `/etc/pki/ca-trust/source/anchors/` (captured as unowned configs), the Containerfile renderer emits `RUN update-ca-trust` immediately after the consolidated COPY block. Without this, copied certificates would not be added to the system trust store and TLS connections to internal services would silently fail.
+
+**Config file categories:**
+
+Every `ConfigFileEntry` carries a `category` field (a `ConfigCategory` enum) assigned at creation time by `classify_config_path()`. Classification is path-prefix matching — the same pattern as the exclusion list. Eight semantic categories are defined: `tmpfiles` (`/etc/tmpfiles.d/`), `environment` (`/etc/environment`, `/etc/profile.d/`), `audit` (`/etc/audit/rules.d/`), `library_path` (`/etc/ld.so.conf.d/`), `journal` (`/etc/systemd/journald.conf.d/`), `logrotate` (`/etc/logrotate.d/`), `automount` (`/etc/auto.master`, `/etc/auto.*`), and `sysctl` (`/etc/sysctl.d/`, `/etc/sysctl.conf`). Files matching none of these rules default to `other`. All three detection paths (RPM-owned modified, unowned, orphaned) assign the category at `ConfigFileEntry` construction.
+
+Category is informational only — the Containerfile copies files regardless of category. In the HTML report, the config files table has a "Category" column with PF6 label styling that is sortable. No structural change to the table layout.
 
 **Diff against RPM defaults (opt-in: `--config-diffs`):**
 
@@ -498,6 +504,7 @@ If pip packages with C extensions are detected (identified by `.so` files in `*.
 - Sysctl settings: reads runtime values from `/proc/sys/`, reads shipped defaults from `/usr/lib/sysctl.d/*.conf` (sorted by filename, matching systemd precedence), reads operator overrides from `/etc/sysctl.d/*.conf` and `/etc/sysctl.conf`. Only values where runtime differs from shipped default appear in output, with source attribution.
 - Dracut configuration: `/etc/dracut.conf.d/`
 - Tuned profiles: reads the active profile name from `/etc/tuned/active_profile` (falls back to `tuned-adm active` via executor). Scans `/etc/tuned/` for subdirectories containing a `tuned.conf` and captures them as custom profiles. Custom profiles are written to the config tree and the Containerfile emits `RUN tuned-adm profile <name>` in the Kernel section. Tuned profile files are excluded from the unowned-file list to avoid double-reporting.
+- **System properties** (locale, timezone, alternatives): detected via file-based methods (container-compatible — no `localectl` or similar host commands). Locale is read from `{host_root}/etc/locale.conf` (`LANG=` line). Timezone is derived from the `{host_root}/etc/localtime` symlink target, stripping the `/usr/share/zoneinfo/` prefix. Alternatives are enumerated from symlinks in `{host_root}/etc/alternatives/`, with auto/manual status read from the corresponding file in `{host_root}/var/lib/alternatives/<name>` (first line is `auto` or `manual`). All detection is best-effort — missing files produce `None`/empty list, not errors. These fields (`locale`, `timezone`, `alternatives`) are added to `KernelBootSection` with optional/empty defaults so existing snapshots remain valid. Rendered in the Kernel/Boot tab: a description list for locale and timezone, and a table (Name, Path, Status) for alternatives. Both subsections are informational only — no include/exclude toggles, and the Containerfile is not affected (locale, timezone, and alternatives are host-level concerns, not image concerns).
 
 #### SELinux/Security Inspector
 
@@ -759,7 +766,7 @@ The HTML report template detects fleet data via `fleet_meta` in the template con
 - **Fleet banner:** displayed at the top of the report showing host count, prevalence threshold, hostnames, and include/exclude summary counts.
 - **Prevalence color bars:** each item gets a colored bar indicating prevalence. Blue for items above threshold (included), gold for items below threshold but on multiple hosts, red for items on very few hosts. The bar width is proportional to the prevalence percentage.
 - **Fraction/percentage toggle:** a JavaScript toggle switches prevalence display between fraction form (e.g., "95/100") and percentage form (e.g., "95%").
-- **Host list popovers:** clicking a prevalence bar shows a PatternFly 6 popover listing which specific hosts have that item (unless `--no-hosts` was used).
+- **Host list popovers:** clicking a prevalence bar shows a PatternFly 6 popover listing which specific hosts have that item (unless `--no-hosts` was used). The popover header shows the "N of M hosts" count and a split Copy button. The main Copy area copies the host list in the active format; the dropdown arrow expands a format menu (one per line, comma-separated, space-separated) with a blue checkmark (PF6 brand color) on the active choice. Clicking a format copies immediately in that format, updates the active choice, and closes the dropdown. The last-used format is remembered in a JS module-level variable for the duration of the page session (not persisted to `localStorage`). All interactive elements inside the popover call `e.stopPropagation()` to prevent the bar's click handler from tearing down the popover mid-action.
 - **Content variant grouping:** for config files, quadlet units, and service drop-ins, items sharing the same path are grouped together with an expandable UI showing each content variant and its prevalence. Groups with a single item render as normal rows. Compose files render as separate cards (no grouping needed since cards are visually distinct).
 
 In non-fleet mode, none of these elements appear — the template renders exactly as it does for single-host inspection.
