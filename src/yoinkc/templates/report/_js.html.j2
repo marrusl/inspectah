@@ -429,6 +429,22 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
     updatePkgBanner();
     updateToolbar();
     setDirty(false);
+
+    // Reset prevalence slider to original value
+    var slider = document.getElementById('prevalence-slider');
+    if (slider && originalSnapshot.meta && originalSnapshot.meta.fleet) {
+      var origThreshold = originalSnapshot.meta.fleet.min_prevalence;
+      slider.value = origThreshold;
+      slider.setAttribute('data-current-threshold', origThreshold);
+      var valueLabel = document.getElementById('prevalence-value');
+      if (valueLabel) valueLabel.textContent = origThreshold + '%';
+      var applyBtn = document.getElementById('btn-apply-prevalence');
+      if (applyBtn) applyBtn.style.display = 'none';
+      var preview = document.getElementById('prevalence-preview');
+      if (preview) preview.textContent = '';
+    }
+
+    recalcTriageCounts();
     showToast('Selections reset to initial state');
   }
 
@@ -555,9 +571,15 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
       sectionLists[sectionName].forEach(function(listName) {
         var items = sec[listName];
         if (!items) return;
-        items.forEach(function(item) {
-          if (item.include !== false) count++;
-        });
+        if (sectionName === 'services' && listName === 'state_changes') {
+          items.forEach(function(item) {
+            if (item.include !== false && item.action !== 'unchanged') count++;
+          });
+        } else {
+          items.forEach(function(item) {
+            if (item.include !== false) count++;
+          });
+        }
       });
       var el = document.querySelector('.triage-count[data-triage-section="' + sectionName + '"]');
       if (el) el.textContent = count;
