@@ -126,7 +126,11 @@ def _deduplicate_dicts(
     result = []
     for entry in seen.values():
         item = entry["item"]
-        item["fleet"] = {"count": len(entry["hosts"]), "total": total}
+        item["fleet"] = {
+            "count": len(entry["hosts"]),
+            "total": total,
+            "hosts": list(entry["hosts"]),
+        }
         result.append(item)
     return result
 
@@ -465,7 +469,8 @@ def merge_snapshots(
 def _strip_host_lists(snapshot: InspectionSnapshot) -> None:
     """Remove per-item host lists from fleet metadata (privacy mode)."""
     for section_name in ["rpm", "config", "services", "network",
-                         "scheduled_tasks", "containers"]:
+                         "scheduled_tasks", "containers",
+                         "selinux", "non_rpm_software", "users_groups"]:
         section = getattr(snapshot, section_name, None)
         if section is None:
             continue
@@ -476,3 +481,7 @@ def _strip_host_lists(snapshot: InspectionSnapshot) -> None:
             for item in items:
                 if hasattr(item, "fleet") and item.fleet is not None:
                     item.fleet.hosts = []
+                elif isinstance(item, dict) and "fleet" in item:
+                    fleet = item["fleet"]
+                    if isinstance(fleet, dict) and "hosts" in fleet:
+                        fleet["hosts"] = []

@@ -449,6 +449,19 @@ class TestMergeSelinux:
         assert merged.selinux.mode == "enforcing"
 
 
+class TestDeduplicateDictsHosts:
+    def test_deduplicate_dicts_includes_hosts(self):
+        """Dict-based fleet prevalence includes host list."""
+        from yoinkc.fleet.merge import merge_snapshots
+        b1 = {"name": "httpd_can_network_connect", "current": "on", "default": "off"}
+        s1 = _snap("host1", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
+        s2 = _snap("host2", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        fleet = merged.selinux.boolean_overrides[0]["fleet"]
+        assert "hosts" in fleet
+        assert set(fleet["hosts"]) == {"host1", "host2"}
+
+
 class TestNoHostsMode:
     def test_strip_host_lists(self):
         from yoinkc.fleet.merge import merge_snapshots
@@ -461,3 +474,48 @@ class TestNoHostsMode:
         merged = merge_snapshots([s1, s2], min_prevalence=100, include_hosts=False)
         assert merged.rpm.packages_added[0].fleet.hosts == []
         assert merged.rpm.packages_added[0].fleet.count == 2
+
+    def test_strip_host_lists_selinux(self):
+        """--no-hosts strips host lists from selinux port_labels."""
+        from yoinkc.fleet.merge import merge_snapshots
+        pl = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
+        s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
+        s2 = _snap("host2", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
+        merged = merge_snapshots([s1, s2], include_hosts=False)
+        assert merged.selinux.port_labels[0].fleet.hosts == []
+        assert merged.selinux.port_labels[0].fleet.count == 2
+
+    def test_strip_host_lists_non_rpm(self):
+        """--no-hosts strips host lists from non_rpm_software items."""
+        from yoinkc.fleet.merge import merge_snapshots
+        item = NonRpmItem(path="/opt/app/bin/myapp", name="myapp", method="elf")
+        s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[item]))
+        s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[item]))
+        merged = merge_snapshots([s1, s2], include_hosts=False)
+        assert merged.non_rpm_software.items[0].fleet.hosts == []
+        assert merged.non_rpm_software.items[0].fleet.count == 2
+
+    def test_strip_host_lists_users_groups(self):
+        """--no-hosts strips host lists from users_groups (drive-by fix)."""
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("host1", users_groups=UserGroupSection(
+            users=[{"name": "appuser", "uid": 1001}],
+        ))
+        s2 = _snap("host2", users_groups=UserGroupSection(
+            users=[{"name": "appuser", "uid": 1001}],
+        ))
+        merged = merge_snapshots([s1, s2], include_hosts=False)
+        assert merged.users_groups.users[0]["fleet"]["hosts"] == []
+        assert merged.users_groups.users[0]["fleet"]["count"] == 2
+
+
+class TestStorageSuppression:
+    def test_storage_suppressed_in_fleet_report(self):
+        """Storage section is not merged — remains None in fleet snapshot."""
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.schema import StorageSection, FstabEntry
+        fstab = FstabEntry(device="/dev/sda1", mount_point="/", fstype="xfs", options="defaults")
+        s1 = _snap("host1", storage=StorageSection(fstab_entries=[fstab]))
+        s2 = _snap("host2", storage=StorageSection(fstab_entries=[fstab]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert merged.storage is None
