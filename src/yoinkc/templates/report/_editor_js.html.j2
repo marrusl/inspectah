@@ -252,18 +252,13 @@
     var origItem = origItems.find(function(item) { return item.path === f.path; });
     var origContent = origItem ? (origItem.content || '') : '';
 
+    // Restore snapshot content from original (undoes any prior save)
     snapshot[f.section][f.list][f.index].content = origContent;
     editorState.dirtyFiles.delete(f.path);
-    editorState.savedFiles.add(f.path);
+    editorState.savedFiles.delete(f.path);
 
-    if (window.CMEditor && editorState.cmView) {
-      CMEditor.setContent(editorState.cmView, origContent);
-    } else {
-      var ta = document.getElementById('editor-textarea-fallback');
-      if (ta) ta.value = origContent;
-    }
-    updateEditToolbar();
-    updateStateLabels();
+    // Exit edit mode and re-render read-only view
+    doSelectFile(f.section, f.list, f.index, f.path);
     updateChangedCount();
   }
 
