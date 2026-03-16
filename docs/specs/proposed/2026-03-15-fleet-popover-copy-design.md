@@ -46,7 +46,7 @@ Current popover is a plain `<ul><li>` host list in a dynamically created `<div>`
 - Blue checkmark (PF6 brand color `--pf-t--global--icon--color--brand--default`) on the active format
 - Non-active items indented to align with checkmark width
 - Clicking a format: copies immediately in that format, updates the active format, closes the dropdown, shows "Copied!" feedback
-- Dropdown closes on click-outside
+- Dropdown closes on click-outside (scoped: clicking inside the popover but outside the dropdown closes only the dropdown, not the popover)
 
 ## Copy Formats
 
@@ -83,6 +83,14 @@ Reuse the existing clipboard pattern from the Containerfile copy button (`_js.ht
 | `src/yoinkc/templates/report/_css.html.j2` | Add styles: split button, dropdown menu, active item checkmark, "Copied!" state |
 
 No template changes. No schema changes. No Python changes. Purely JS + CSS in the report.
+
+## Event Propagation
+
+The popover is a child of `.fleet-bar`. The bar's click handler destroys and recreates the popover on every click. Without care, clicking the Copy button or dropdown items will bubble up to the bar handler, destroying the popover mid-action.
+
+**All interactive elements inside the popover must call `e.stopPropagation()`**: the Copy button, the dropdown arrow, and each dropdown menu item. This prevents the bar click handler from tearing down the popover. The existing fleet label click handler already uses this pattern.
+
+**Dropdown vs. popover close scoping**: the document-level click-outside handler closes the popover when `!e.target.closest('.fleet-bar')`. Dropdown close needs its own check: if click is inside the popover but outside the dropdown menu, close only the dropdown. If click is outside the popover entirely, the existing handler closes the popover (which removes the dropdown with it).
 
 ## What Does NOT Change
 
