@@ -217,4 +217,13 @@ details.audit-expand { margin-bottom: 0.25rem; }
 }
 {% endif %}
 
+{% if refine_mode %}
+/* CodeMirror gutter: use PF6 variables so dark/light mode is respected */
+.cm-gutters {
+  background-color: var(--pf-t--global--background--color--secondary--default) !important;
+  color: var(--pf-t--global--text--color--subtle) !important;
+  border-right: 1px solid var(--pf-t--global--border--color--default) !important;
+}
+{% endif %}
+
 </style>
