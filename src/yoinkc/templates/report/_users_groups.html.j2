@@ -20,7 +20,7 @@
     </div>
     <div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table">
-      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">User</th><th scope="col">UID/GID</th><th scope="col">Shell</th><th scope="col">Home</th><th scope="col">Type</th><th scope="col">Strategy</th><th scope="col">Notes</th></tr></thead>
+      <thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">User</th><th class="pf-m-fit-content" scope="col">UID/GID</th><th scope="col">Shell</th><th scope="col">Home</th><th class="pf-m-fit-content" scope="col">Type</th><th class="pf-m-fit-content" scope="col">Strategy</th><th scope="col">Notes</th></tr></thead>
       <tbody>
       {%- for u in ug.users %}
       {%- set cls = u.classification or '?' %}
@@ -72,7 +72,7 @@
     </div>
     <div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table">
-      <thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Group</th><th scope="col">GID</th><th scope="col">Strategy</th><th scope="col">Members</th></tr></thead>
+      <thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Group</th><th class="pf-m-fit-content" scope="col">GID</th><th class="pf-m-fit-content" scope="col">Strategy</th><th scope="col">Members</th></tr></thead>
       <tbody>
       {%- for g in ug.groups %}
       <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">

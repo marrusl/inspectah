@@ -2,7 +2,7 @@
 {# ── Config ──────────────────────────────────────────────────────────────── #}
 {% call section("config", "Configuration files") %}
   {%- if snapshot.config and snapshot.config.files %}
-  <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Path</th><th scope="col">Kind</th><th scope="col">Category</th><th scope="col">rpm -Va flags</th><th scope="col">Diff</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+  <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Kind</th><th class="pf-m-fit-content" scope="col">Category</th><th class="pf-m-fit-content" scope="col">rpm -Va flags</th><th scope="col">Diff</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
   {% if fleet_meta and config_variant_groups %}
     {%- for path, variants in config_variant_groups.items() %}
     {%- if variants | length > 1 %}
