@@ -9,7 +9,7 @@
     <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Kernel Command Line</h3></div></div>
     <div class="pf-v6-c-card__body">
     {%- if kb.cmdline %}
-    <div class="pf-v6-c-code-block"><div class="pf-v6-c-code-block__content"><pre class="pf-v6-c-code-block__pre"><code class="pf-v6-c-code-block__code">{{ kb.cmdline[:300] }}</code></pre></div></div>
+    <div class="pf-v6-c-code-block" style="margin-bottom:var(--pf-t--global--spacer--md);"><div class="pf-v6-c-code-block__content"><pre class="pf-v6-c-code-block__pre"><code class="pf-v6-c-code-block__code">{{ kb.cmdline[:300] }}</code></pre></div></div>
     {%- endif %}
     {%- if kb.non_default_modules %}
     <p>{{ kb.non_default_modules|length }} kernel module(s) loaded at inspection time (hardware-specific, not included in the image). See modules-load.d entries below for explicitly configured modules.</p>
