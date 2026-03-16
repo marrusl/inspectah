@@ -664,6 +664,42 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
 
 
 {% if fleet_meta %}
+function lineDiff(oldText, newText) {
+  var oldLines = (oldText || '').split('\n');
+  var newLines = (newText || '').split('\n');
+  var m = oldLines.length, n = newLines.length;
+
+  if (m > 5000 || n > 5000) return null;
+
+  // LCS table
+  var dp = [];
+  for (var i = 0; i <= m; i++) {
+    dp[i] = [];
+    for (var j = 0; j <= n; j++) {
+      if (i === 0 || j === 0) dp[i][j] = 0;
+      else if (oldLines[i - 1] === newLines[j - 1]) dp[i][j] = dp[i - 1][j - 1] + 1;
+      else dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+
+  var result = [];
+  var i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+      result.push({ type: 'same', text: oldLines[i - 1] });
+      i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      result.push({ type: 'add', text: newLines[j - 1] });
+      j--;
+    } else {
+      result.push({ type: 'remove', text: oldLines[i - 1] });
+      i--;
+    }
+  }
+  result.reverse();
+  return result;
+}
+
 /* Fleet: toggle fraction/percentage on prevalence labels */
 document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
   label.addEventListener('click', function(e) {
