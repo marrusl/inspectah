@@ -1,14 +1,15 @@
 {% if refine_mode %}
-<div id="new-file-modal" role="dialog" aria-modal="true" aria-label="Create new file" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; z-index:9999;">
-  <div style="position:absolute; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5);" onclick="closeNewFileModal()"></div>
-  <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); background:var(--pf-t--global--background--color--primary--default); border-radius:8px; width:560px; box-shadow:0 4px 24px rgba(0,0,0,0.3);">
+<div class="pf-v6-c-backdrop" id="new-file-modal" style="display:none;" onclick="closeNewFileModal()">
+  <div class="pf-v6-l-bullseye">
+    <div class="pf-v6-c-modal-box pf-m-md" role="dialog" aria-modal="true" aria-label="Create new file" onclick="event.stopPropagation()">
+      <div class="pf-v6-c-modal-box__close">
+        <button class="pf-v6-c-button pf-m-plain" onclick="closeNewFileModal()" aria-label="Close">&times;</button>
+      </div>
+      <div class="pf-v6-c-modal-box__header">
+        <h2 class="pf-v6-c-modal-box__title">Create new file</h2>
+      </div>
 
-    <div style="padding:20px 24px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center;">
-      <h2 class="pf-v6-c-title pf-m-xl" style="margin:0;">Create new file</h2>
-      <button class="pf-v6-c-button pf-m-plain" onclick="closeNewFileModal()" aria-label="Close">&times;</button>
-    </div>
-
-    <div style="padding:24px;">
+      <div class="pf-v6-c-modal-box__body">
       <div style="margin-bottom:20px;">
         <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>File type</strong></label>
         <div style="display:flex; gap:24px;">
@@ -79,9 +80,10 @@
       </div>
     </div>
 
-    <div style="padding:16px 24px; border-top:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:flex-end; gap:8px;">
-      <button class="pf-v6-c-button pf-m-secondary" onclick="closeNewFileModal()">Cancel</button>
-      <button class="pf-v6-c-button pf-m-primary" id="btn-create-file" onclick="createNewFile()" disabled>Create &amp; edit</button>
+      <div class="pf-v6-c-modal-box__footer">
+        <button class="pf-v6-c-button pf-m-secondary" onclick="closeNewFileModal()">Cancel</button>
+        <button class="pf-v6-c-button pf-m-primary" id="btn-create-file" onclick="createNewFile()" disabled>Create &amp; edit</button>
+      </div>
     </div>
   </div>
 </div>
