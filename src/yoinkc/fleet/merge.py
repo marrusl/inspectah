@@ -352,6 +352,44 @@ def merge_snapshots(
             env_files=non_rpm_env_files,
         )
 
+    # --- SELinux ---
+    selinux_section = None
+    has_selinux = any(s.selinux for s in snapshots)
+    if has_selinux:
+        port_labels = _merge_identity_items(
+            _collect_section_lists(snapshots, "selinux", "port_labels"),
+            key_fn=lambda p: f"{p.protocol}/{p.port}",
+            total=total, min_prevalence=min_prevalence, host_names=host_names,
+        )
+        custom_modules = _deduplicate_strings(
+            _collect_section_lists(snapshots, "selinux", "custom_modules"),
+        )
+        fcontext_rules = _deduplicate_strings(
+            _collect_section_lists(snapshots, "selinux", "fcontext_rules"),
+        )
+        audit_rules = _deduplicate_strings(
+            _collect_section_lists(snapshots, "selinux", "audit_rules"),
+        )
+        pam_configs = _deduplicate_strings(
+            _collect_section_lists(snapshots, "selinux", "pam_configs"),
+        )
+        boolean_overrides = _deduplicate_dicts(
+            _collect_section_lists(snapshots, "selinux", "boolean_overrides"),
+            key_field="name",
+            total=total, host_names=host_names,
+        )
+        first_se = next(s.selinux for s in snapshots if s.selinux)
+        selinux_section = SelinuxSection(
+            mode=first_se.mode,
+            fips_mode=first_se.fips_mode,
+            port_labels=port_labels,
+            custom_modules=custom_modules,
+            fcontext_rules=fcontext_rules,
+            audit_rules=audit_rules,
+            pam_configs=pam_configs,
+            boolean_overrides=boolean_overrides,
+        )
+
     # --- Users/Groups ---
     ug_section = None
     has_ug = any(s.users_groups for s in snapshots)
@@ -411,6 +449,7 @@ def merge_snapshots(
         scheduled_tasks=sched_section,
         containers=containers_section,
         non_rpm_software=non_rpm_section,
+        selinux=selinux_section,
         kernel_boot=kernel_boot_section,
         users_groups=ug_section,
         warnings=warnings_merged,

@@ -364,6 +364,91 @@ class TestMergeNonRpmSoftware:
         assert merged.non_rpm_software.env_files[0].include is True
 
 
+from yoinkc.schema import SelinuxPortLabel, SelinuxSection
+
+
+class TestMergeSelinux:
+    def test_selinux_port_labels_merged(self):
+        """Port labels with same protocol/port are deduplicated across hosts."""
+        from yoinkc.fleet.merge import merge_snapshots
+        pl = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
+        s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
+        s2 = _snap("host2", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert merged.selinux is not None
+        assert len(merged.selinux.port_labels) == 1
+        assert merged.selinux.port_labels[0].fleet.count == 2
+        assert merged.selinux.port_labels[0].fleet.total == 2
+        assert merged.selinux.port_labels[0].include is True
+
+    def test_selinux_different_ports_preserved(self):
+        """Different protocol/port combinations are all preserved."""
+        from yoinkc.fleet.merge import merge_snapshots
+        pl1 = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
+        pl2 = SelinuxPortLabel(protocol="tcp", port="9090", type="http_port_t")
+        s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl1], mode="enforcing"))
+        s2 = _snap("host2", selinux=SelinuxSection(port_labels=[pl2], mode="enforcing"))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.selinux.port_labels) == 2
+        ports = {pl.port for pl in merged.selinux.port_labels}
+        assert ports == {"8080", "9090"}
+
+    def test_selinux_port_labels_prevalence(self):
+        """Port labels below threshold get include=False."""
+        from yoinkc.fleet.merge import merge_snapshots
+        pl = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
+        s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
+        s2 = _snap("host2", selinux=SelinuxSection(port_labels=[], mode="enforcing"))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.selinux.port_labels) == 1
+        assert merged.selinux.port_labels[0].include is False
+        assert merged.selinux.port_labels[0].fleet.count == 1
+
+    def test_selinux_boolean_overrides_deduped(self):
+        """Boolean overrides are deduplicated by name with fleet prevalence."""
+        from yoinkc.fleet.merge import merge_snapshots
+        b1 = {"name": "httpd_can_network_connect", "current": "on", "default": "off"}
+        s1 = _snap("host1", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
+        s2 = _snap("host2", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.selinux.boolean_overrides) == 1
+        assert merged.selinux.boolean_overrides[0]["fleet"]["count"] == 2
+
+    def test_selinux_string_lists_unioned(self):
+        """String list fields are unioned across hosts."""
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("host1", selinux=SelinuxSection(
+            custom_modules=["mymod1"], fcontext_rules=["/opt/app(/.*)? system_u:object_r:httpd_sys_content_t:s0"],
+            mode="enforcing",
+        ))
+        s2 = _snap("host2", selinux=SelinuxSection(
+            custom_modules=["mymod2"], fcontext_rules=["/srv/data(/.*)? system_u:object_r:httpd_sys_content_t:s0"],
+            mode="enforcing",
+        ))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert set(merged.selinux.custom_modules) == {"mymod1", "mymod2"}
+        assert len(merged.selinux.fcontext_rules) == 2
+
+    def test_selinux_scalars_first_snapshot(self):
+        """Scalar fields (mode, fips_mode) pass through from first snapshot."""
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("host1", selinux=SelinuxSection(mode="enforcing", fips_mode=True))
+        s2 = _snap("host2", selinux=SelinuxSection(mode="permissive", fips_mode=False))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert merged.selinux.mode == "enforcing"
+        assert merged.selinux.fips_mode is True
+
+    def test_selinux_mode_disagreement_merges(self):
+        """Hosts with different SELinux modes still produce a valid merged section."""
+        from yoinkc.fleet.merge import merge_snapshots
+        s1 = _snap("host1", selinux=SelinuxSection(mode="enforcing"))
+        s2 = _snap("host2", selinux=SelinuxSection(mode="disabled"))
+        s3 = _snap("host3", selinux=SelinuxSection(mode="enforcing"))
+        merged = merge_snapshots([s1, s2, s3], min_prevalence=100)
+        assert merged.selinux is not None
+        assert merged.selinux.mode == "enforcing"
+
+
 class TestNoHostsMode:
     def test_strip_host_lists(self):
         from yoinkc.fleet.merge import merge_snapshots
