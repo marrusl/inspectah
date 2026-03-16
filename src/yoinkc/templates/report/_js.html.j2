@@ -7,6 +7,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
 (function(){
   var sections = document.querySelectorAll('.section');
   var navLinks = document.querySelectorAll('.pf-v6-c-nav__link[data-tab]');
+  var fromPopstate = false;
   function show(id) {
     if (!id) return;
     sections.forEach(function(s){ s.classList.remove('visible'); });
@@ -15,12 +16,30 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
     navLinks.forEach(function(link){
       link.classList.toggle('pf-m-current', link.getAttribute('data-tab') === id);
     });
+    if (!fromPopstate) {
+      history.pushState({tab: id}, '', '#' + id);
+    }
   }
   window.show = show;
   navLinks.forEach(function(link){
     link.addEventListener('click', function(e){ e.preventDefault(); show(link.getAttribute('data-tab')); });
   });
-  show('summary');
+  window.addEventListener('popstate', function(e) {
+    if (e.state && e.state.tab) {
+      fromPopstate = true;
+      show(e.state.tab);
+      fromPopstate = false;
+    }
+  });
+  // On page load: honour a hash URL (bookmarks/shared links), then seed history with replaceState
+  (function() {
+    var hash = location.hash ? location.hash.slice(1) : '';
+    var initialTab = (hash && document.getElementById('section-' + hash)) ? hash : 'summary';
+    fromPopstate = true;
+    show(initialTab);
+    fromPopstate = false;
+    history.replaceState({tab: initialTab}, '', '#' + initialTab);
+  })();
 
   // --- Warning dismiss + badge ---
   var bannerCount = document.getElementById('banner-warning-count');
