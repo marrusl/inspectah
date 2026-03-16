@@ -40,7 +40,7 @@ Each modal migrates to this PF6 skeleton:
 
 ```html
 <div class="pf-v6-c-backdrop" style="display:none;" id="xxx-modal">
-  <div class="pf-v6-c-bullseye">
+  <div class="pf-v6-l-bullseye">
     <div class="pf-v6-c-modal-box pf-m-sm" role="dialog" aria-modal="true" aria-label="...">
       <div class="pf-v6-c-modal-box__close">
         <button class="pf-v6-c-button pf-m-plain" aria-label="Close">&times;</button>
@@ -63,7 +63,7 @@ Key points:
 
 - `pf-v6-c-backdrop` replaces the custom `rgba(0,0,0,0.5)` overlay div
   (provides fixed positioning and overlay color, but not centering)
-- `pf-v6-c-bullseye` wraps the modal-box to provide flex centering
+- `pf-v6-l-bullseye` wraps the modal-box to provide flex centering
   (backdrop alone does not center its children)
 - `pf-v6-c-modal-box` handles shadow, border-radius, max-width
 - Size modifiers: `pf-m-sm` for unsaved/delete, `pf-m-md` for
@@ -108,7 +108,7 @@ Key points:
 - Include the partial in the report skeleton
 - JS `showCompareModal()`: gut DOM-creation code, replace with
   `getElementById` + `innerHTML` for body/footer population +
-  `style.display = 'flex'`
+  `style.display = ''`
 - JS `closeCompareModal()`: replace `el.remove()` with
   `style.display = 'none'` + clear innerHTML
 - Backdrop click-to-close on the `pf-v6-c-backdrop` div
