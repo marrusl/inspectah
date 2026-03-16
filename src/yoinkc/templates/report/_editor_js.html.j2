@@ -132,8 +132,7 @@
       var dir = path.substring(0, path.lastIndexOf('/') + 1);
       var name = path.split('/').pop();
       pathEl.innerHTML = '<span style="color:var(--pf-t--global--text--color--subtle);">' + escapeHtml(dir) + '</span>' +
-                         '<strong>' + escapeHtml(name) + '</strong>' +
-                         ' <span class="pf-v6-c-label pf-m-compact"><span class="pf-v6-c-label__content">read-only</span></span>';
+                         '<strong>' + escapeHtml(name) + '</strong>';
     }
 
     var actionsEl = document.getElementById('editor-actions');
