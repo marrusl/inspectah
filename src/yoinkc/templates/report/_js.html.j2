@@ -610,32 +610,149 @@ document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
 
 /* Fleet: host list popover on bar click */
 var activePopover = null;
+var copyFormat = 'newline';
+
+function fleetCopyHosts(hostList, btnEl) {
+  var sep = copyFormat === 'comma' ? ',' : (copyFormat === 'space' ? ' ' : '\n');
+  var text = hostList.join(sep);
+  function flash() {
+    btnEl.textContent = 'Copied!';
+    btnEl.classList.add('fleet-popover-copy-btn--copied');
+    setTimeout(function() {
+      btnEl.textContent = 'Copy';
+      btnEl.classList.remove('fleet-popover-copy-btn--copied');
+    }, 1500);
+  }
+  function fallback(t) {
+    var ta = document.createElement('textarea');
+    ta.value = t;
+    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch(ex) {}
+    document.body.removeChild(ta);
+    if (ok) { flash(); } else { showToast('Clipboard not available in this context', 3000); }
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(flash).catch(function() { fallback(text); });
+  } else {
+    fallback(text);
+  }
+}
+
 document.querySelectorAll('.fleet-bar').forEach(function(bar) {
   bar.addEventListener('click', function(e) {
     if (activePopover) {
       activePopover.remove();
       activePopover = null;
     }
-    var hosts = this.getAttribute('data-hosts');
+    var hostsAttr = this.getAttribute('data-hosts');
+    var count = parseInt(this.getAttribute('data-count'), 10) || 0;
+    var total = parseInt(this.getAttribute('data-total'), 10) || 0;
     var popover = document.createElement('div');
     popover.className = 'fleet-popover';
-    if (!hosts) {
+    /* Stop clicks inside popover from bubbling to the bar handler.
+       Also close the dropdown if the click was outside it. */
+    popover.addEventListener('click', function(ev) {
+      ev.stopPropagation();
+      if (!ev.target.closest('.fleet-popover-dropdown') && !ev.target.closest('.fleet-popover-drop-arrow')) {
+        var dd = popover.querySelector('.fleet-popover-dropdown');
+        if (dd) dd.style.display = 'none';
+      }
+    });
+
+    if (!hostsAttr) {
       popover.textContent = 'Host list not available';
     } else {
-      var ul = document.createElement('ul');
-      hosts.split(', ').forEach(function(h) {
-        if (h.trim()) {
-          var li = document.createElement('li');
-          li.textContent = h.trim();
-          ul.appendChild(li);
-        }
-      });
-      if (ul.children.length === 0) {
+      var hostList = hostsAttr.split(', ').map(function(h) { return h.trim(); }).filter(Boolean);
+      if (hostList.length === 0) {
         popover.textContent = 'Host list not available';
       } else {
+        var header = document.createElement('div');
+        header.className = 'fleet-popover-header';
+
+        var countLabel = document.createElement('span');
+        countLabel.className = 'fleet-popover-count';
+        countLabel.textContent = count + ' of ' + total + ' hosts';
+        header.appendChild(countLabel);
+
+        var splitBtn = document.createElement('div');
+        splitBtn.className = 'fleet-popover-split-btn';
+
+        var copyBtn = document.createElement('button');
+        copyBtn.className = 'fleet-popover-copy-btn';
+        copyBtn.type = 'button';
+        copyBtn.textContent = 'Copy';
+        copyBtn.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          fleetCopyHosts(hostList, copyBtn);
+        });
+
+        var dropdown = document.createElement('div');
+        dropdown.className = 'fleet-popover-dropdown';
+        dropdown.style.display = 'none';
+
+        var dropArrow = document.createElement('button');
+        dropArrow.className = 'fleet-popover-drop-arrow';
+        dropArrow.type = 'button';
+        dropArrow.setAttribute('aria-label', 'Choose copy format');
+        dropArrow.textContent = '▾';
+        dropArrow.addEventListener('click', function(ev) {
+          ev.stopPropagation();
+          dropdown.style.display = dropdown.style.display === 'none' ? 'block' : 'none';
+        });
+
+        var fmtDefs = [
+          { key: 'newline', label: 'One per line' },
+          { key: 'comma',   label: 'Comma-separated' },
+          { key: 'space',   label: 'Space-separated' }
+        ];
+        fmtDefs.forEach(function(fmt) {
+          var item = document.createElement('button');
+          item.className = 'fleet-popover-fmt-item';
+          item.type = 'button';
+          item.setAttribute('data-fmt', fmt.key);
+
+          var check = document.createElement('span');
+          check.className = 'fleet-popover-fmt-check';
+          check.textContent = copyFormat === fmt.key ? '✓' : '';
+
+          var lbl = document.createElement('span');
+          lbl.textContent = fmt.label;
+
+          item.appendChild(check);
+          item.appendChild(lbl);
+          item.addEventListener('click', function(ev) {
+            ev.stopPropagation();
+            copyFormat = fmt.key;
+            fleetCopyHosts(hostList, copyBtn);
+            dropdown.querySelectorAll('.fleet-popover-fmt-check').forEach(function(c) {
+              var row = c.closest('[data-fmt]');
+              c.textContent = row && row.getAttribute('data-fmt') === copyFormat ? '✓' : '';
+            });
+            dropdown.style.display = 'none';
+          });
+          dropdown.appendChild(item);
+        });
+
+        splitBtn.appendChild(copyBtn);
+        splitBtn.appendChild(dropArrow);
+        splitBtn.appendChild(dropdown);
+        header.appendChild(splitBtn);
+        popover.appendChild(header);
+
+        var ul = document.createElement('ul');
+        hostList.forEach(function(h) {
+          var li = document.createElement('li');
+          li.textContent = h;
+          ul.appendChild(li);
+        });
         popover.appendChild(ul);
       }
     }
+
     this.style.position = 'relative';
     this.appendChild(popover);
     activePopover = popover;
