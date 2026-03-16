@@ -210,9 +210,28 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
           arr[idx].include = this.checked;
         }
       }
+      // Variant radio-group: deselect siblings when enabling one variant
+      var variantGroup = tr.getAttribute('data-variant-group');
+      if (variantGroup && this.checked) {
+        document.querySelectorAll('[data-variant-group="' + variantGroup + '"]').forEach(function(sibling) {
+          if (sibling === tr) return;
+          var sibSection = sibling.getAttribute('data-snap-section');
+          var sibList = sibling.getAttribute('data-snap-list');
+          var sibIdx = parseInt(sibling.getAttribute('data-snap-index'), 10);
+          if (!sibSection || !sibList || isNaN(sibIdx)) return;
+          var sibArr = resolveSnapshotRef(sibSection, sibList);
+          if (sibArr && sibArr[sibIdx] !== undefined) {
+            sibArr[sibIdx].include = false;
+          }
+          var sibCb = sibling.querySelector('.include-toggle');
+          if (sibCb) sibCb.checked = false;
+          sibling.classList.add('excluded');
+        });
+      }
       tr.classList.toggle('excluded', !this.checked);
       updateToolbar();
       setDirty(!isSnapshotClean());
+      recalcTriageCounts();
     });
   });
 
@@ -517,6 +536,34 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   checkHelperAvailable(0);
   updateToolbar();
 
+  // --- Sidebar triage count recalculation ---
+  function recalcTriageCounts() {
+    var sectionLists = {
+      'rpm':              ['packages_added'],
+      'config':           ['files'],
+      'services':         ['state_changes', 'drop_ins'],
+      'network':          ['firewall_zones'],
+      'selinux':          ['port_labels'],
+      'non_rpm_software': ['items'],
+      'containers':       ['quadlet_units', 'compose_files'],
+      'scheduled_tasks':  ['generated_timer_units', 'cron_jobs'],
+    };
+    Object.keys(sectionLists).forEach(function(sectionName) {
+      var sec = snapshot[sectionName];
+      if (!sec) return;
+      var count = 0;
+      sectionLists[sectionName].forEach(function(listName) {
+        var items = sec[listName];
+        if (!items) return;
+        items.forEach(function(item) {
+          if (item.include !== false) count++;
+        });
+      });
+      var el = document.querySelector('.triage-count[data-triage-section="' + sectionName + '"]');
+      if (el) el.textContent = count;
+    });
+  }
+
   // --- Theme toggle ---
   (function() {
     var btn = document.getElementById('theme-toggle');
@@ -584,6 +631,13 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
       }
     });
   })();
+
+  // Expose helpers needed by the fleet refine IIFE (outside this closure)
+  window.updateToolbar = updateToolbar;
+  window.setDirty = setDirty;
+  window.isSnapshotClean = isSnapshotClean;
+  window.resolveSnapshotRef = resolveSnapshotRef;
+  window.recalcTriageCounts = recalcTriageCounts;
 })();
 
 
@@ -780,6 +834,122 @@ document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
     }
   });
 });
+{% endif %}
+
+{% if fleet_meta and refine_mode %}
+(function() {
+  var slider = document.getElementById('prevalence-slider');
+  var valueLabel = document.getElementById('prevalence-value');
+  var preview = document.getElementById('prevalence-preview');
+  var applyBtn = document.getElementById('btn-apply-prevalence');
+  if (!slider) return;
+
+  // Store current threshold on the slider element for cross-scope access (reset)
+  slider.setAttribute('data-current-threshold', '{{ fleet_meta.min_prevalence }}');
+
+  function prevalenceInclude(count, total, minPrev) {
+    return (count * 100) >= (minPrev * total);
+  }
+
+  function countAtThreshold(threshold) {
+    // Count from snapshot data, not DOM, to avoid double-counting
+    // from variant group headers that share snap_index with first child
+    var included = 0, excluded = 0;
+    var sections = ['rpm', 'config', 'services', 'network', 'selinux',
+                    'non_rpm_software', 'containers', 'scheduled_tasks'];
+    sections.forEach(function(secName) {
+      var sec = snapshot[secName];
+      if (!sec) return;
+      Object.keys(sec).forEach(function(listName) {
+        var items = sec[listName];
+        if (!Array.isArray(items)) return;
+        items.forEach(function(item) {
+          if (!item.fleet) return;
+          if (prevalenceInclude(item.fleet.count, item.fleet.total, threshold)) {
+            included++;
+          } else {
+            excluded++;
+          }
+        });
+      });
+    });
+    return { included: included, excluded: excluded };
+  }
+
+  slider.addEventListener('input', function() {
+    var val = parseInt(this.value, 10);
+    var currentThreshold = parseInt(slider.getAttribute('data-current-threshold'), 10);
+    valueLabel.textContent = val + '%';
+    var counts = countAtThreshold(val);
+    preview.textContent = '(' + counts.included + ' included, ' + counts.excluded + ' excluded)';
+    applyBtn.style.display = (val !== currentThreshold) ? '' : 'none';
+  });
+
+  applyBtn.addEventListener('click', function() {
+    var val = parseInt(slider.value, 10);
+    applyPrevalenceThreshold(val);
+    slider.setAttribute('data-current-threshold', val);
+    applyBtn.style.display = 'none';
+    preview.textContent = '';
+  });
+
+  function applyPrevalenceThreshold(threshold) {
+    // Phase 1: Recalculate all include values based on threshold
+    document.querySelectorAll('[data-snap-section]').forEach(function(el) {
+      var section = el.getAttribute('data-snap-section');
+      var list = el.getAttribute('data-snap-list');
+      var idx = parseInt(el.getAttribute('data-snap-index'), 10);
+      if (!section || !list || isNaN(idx) || idx < 0) return;
+      var arr = resolveSnapshotRef(section, list);
+      if (!arr || !arr[idx] || !arr[idx].fleet) return;
+      var f = arr[idx].fleet;
+      var shouldInclude = prevalenceInclude(f.count, f.total, threshold);
+      arr[idx].include = shouldInclude;
+      var cb = el.querySelector('.include-toggle');
+      if (cb) cb.checked = shouldInclude;
+      el.classList.toggle('excluded', !shouldInclude);
+    });
+
+    // Phase 2: Apply variant radio constraint — keep only the most prevalent included variant per group
+    var groups = {};
+    document.querySelectorAll('[data-variant-group]').forEach(function(el) {
+      var group = el.getAttribute('data-variant-group');
+      if (!groups[group]) groups[group] = [];
+      var section = el.getAttribute('data-snap-section');
+      var list = el.getAttribute('data-snap-list');
+      var idx = parseInt(el.getAttribute('data-snap-index'), 10);
+      var arr = resolveSnapshotRef(section, list);
+      if (!arr || !arr[idx]) return;
+      groups[group].push({ el: el, item: arr[idx], section: section, list: list, idx: idx });
+    });
+
+    Object.keys(groups).forEach(function(group) {
+      var variants = groups[group];
+      variants.sort(function(a, b) {
+        var ac = a.item.fleet ? a.item.fleet.count : 0;
+        var bc = b.item.fleet ? b.item.fleet.count : 0;
+        return bc - ac;
+      });
+      var foundIncluded = false;
+      variants.forEach(function(v) {
+        if (v.item.include && !foundIncluded) {
+          foundIncluded = true;
+        } else if (v.item.include) {
+          v.item.include = false;
+          var cb = v.el.querySelector('.include-toggle');
+          if (cb) cb.checked = false;
+          v.el.classList.add('excluded');
+        }
+      });
+    });
+
+    // Phase 3: Update UI
+    updateToolbar();
+    setDirty(!isSnapshotClean());
+    recalcTriageCounts();
+  }
+
+})();
 {% endif %}
 </script>
 {% include "report/_editor_js.html.j2" %}
