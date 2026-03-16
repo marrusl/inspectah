@@ -33,6 +33,19 @@ body { padding-bottom: 70px; }
 /* Sidebar nav */
 .pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 
+/* Sticky sidebar – only at desktop widths where the sidebar is always shown.
+   transform:none is required because any CSS transform creates a new containing
+   block that prevents position:sticky from working. */
+@media (min-width: 75rem) {
+  .pf-v6-c-page__sidebar {
+    transform: none;
+    position: sticky;
+    top: 0;
+    max-height: 100vh;
+    align-self: start;
+  }
+}
+
 
 /* Warning dismiss */
 .warning-row.dismissed { display: none; }
