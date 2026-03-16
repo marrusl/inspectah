@@ -25,7 +25,7 @@
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Key</th><th scope="col">Runtime</th><th scope="col">Default</th><th scope="col">Source</th></tr></thead><tbody>
       {%- for s in kb.sysctl_overrides %}
       <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">
-        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if s.include else '' }}/></span></td>
+        <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if s.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td><code>{{ s.key }}</code></td>
         <td class="text-status-warning text-bold">{{ s.runtime }}</td>
         <td>{{ s.default or '—' }}</td>

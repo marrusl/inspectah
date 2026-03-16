@@ -39,7 +39,7 @@
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check" scope="col"></th><th scope="col">Name</th><th scope="col">Cron Expression</th><th scope="col">Source File</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
       {%- for u in st.generated_timer_units %}
       <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
-        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.include else '' }}/></span></td>
+        <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if u.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td>{{ u.name }}</td>
         <td><code>{{ u.cron_expr }}</code></td>
         <td><code>{{ u.source_path }}</code></td>
@@ -65,7 +65,7 @@
       {%- for j in st.cron_jobs %}
       {%- if not j.rpm_owned %}
       <tr{% if not j.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="cron_jobs" data-snap-index="{{ loop.index0 }}">
-        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if j.include else '' }}/></span></td>
+        <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if j.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td><code>{{ j.path }}</code></td>
         <td>{{ j.source }}</td>
         <td>Convert to systemd timer</td>

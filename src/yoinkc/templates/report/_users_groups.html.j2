@@ -26,7 +26,7 @@
       {%- set cls = u.classification or '?' %}
       {%- set cls_lbl = 'pf-m-green' if cls == 'service' else 'pf-m-blue' if cls == 'human' else 'pf-m-orange' %}
       <tr{% if not u.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="users" data-snap-index="{{ loop.index0 }}">
-        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if u.get('include', true) else '' }}/></span></td>
+        <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if u.get('include', true) else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td><strong>{{ u.name }}</strong></td>
         <td>{{ u.uid }}:{{ u.gid or '?' }}</td>
         <td><code>{{ u.shell }}</code></td>
@@ -76,7 +76,7 @@
       <tbody>
       {%- for g in ug.groups %}
       <tr{% if not g.get('include', true) %} class="excluded"{% endif %} data-snap-section="users_groups" data-snap-list="groups" data-snap-index="{{ loop.index0 }}">
-        <td class="pf-v6-c-table__check"><span class="pf-v6-c-check pf-m-standalone include-cb-wrap"><input type="checkbox" class="pf-v6-c-check__input include-cb" {{ 'checked' if g.get('include', true) else '' }}/></span></td>
+        <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if g.get('include', true) else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td>{{ g.name }}</td>
         <td>{{ g.gid }}</td>
         <td>
