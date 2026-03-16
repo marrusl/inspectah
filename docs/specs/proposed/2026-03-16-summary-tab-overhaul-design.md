@@ -83,6 +83,7 @@ Each row shows:
 
 Data source: existing `triage_detail` context variable (list of
 `{label, count, tab, status}` dicts from `compute_triage_detail()`).
+Already filtered by `.include` — use as-is, no re-filtering needed.
 
 ### Fleet Overview (fleet mode only)
 
@@ -92,7 +93,8 @@ Rendered only when `fleet_meta` is present (`{% if fleet_meta %}`).
 (`--pf-t--global--color--status--info--default`).
 
 **Header:** "Fleet Overview" with subtitle showing host count and
-prevalence threshold (e.g., "3 hosts · 60% threshold").
+prevalence threshold (e.g., "3 hosts · 60% threshold"). Use
+`fleet_meta.total_hosts` and `fleet_meta.min_prevalence`.
 
 **Body:**
 - Include/exclude counts as compact description list
@@ -106,20 +108,25 @@ prevalence threshold (e.g., "3 hosts · 60% threshold").
 
 ```python
 variant_summary = []
-for label, groups, tab in [
-    ("Config files", config_variant_groups, "config"),
-    ("Drop-ins", dropin_variant_groups, "drop_ins"),
-    ("Quadlet units", quadlet_variant_groups, "containers"),
-]:
-    multi = {path: vs for path, vs in groups.items() if len(vs) > 1}
-    if multi:
-        variant_summary.append({
-            "label": label,
-            "tab": tab,
-            "files": len(multi),
-            "variants": sum(len(v) for v in multi.values()),
-        })
+if fleet_meta:
+    for label, groups, tab in [
+        ("Config files", config_variant_groups, "config"),
+        ("Drop-ins", dropin_variant_groups, "drop_ins"),
+        ("Quadlet units", quadlet_variant_groups, "containers"),
+    ]:
+        if not groups:
+            continue
+        multi = {path: vs for path, vs in groups.items() if len(vs) > 1}
+        if multi:
+            variant_summary.append({
+                "label": label,
+                "tab": tab,
+                "files": len(multi),
+                "variants": sum(len(v) for v in multi.values()),
+            })
 ```
+
+Add `"variant_summary": variant_summary` to the returned context dict.
 
 Only categories with multi-variant files appear in the list. If no
 variants exist, the "Categories with variants" section is hidden.
