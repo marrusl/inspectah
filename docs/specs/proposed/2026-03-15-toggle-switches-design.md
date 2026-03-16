@@ -93,7 +93,7 @@ div.excluded { opacity: 0.6; }
 
 - Rename all `.include-cb` → `.include-toggle` and `.include-cb-wrap` → `.include-toggle-wrap` across all selectors. There are 6+ occurrences of `.include-cb` in `_js.html.j2` (change event listener, refine-mode activation, toolbar counting, reset button, and others). All must be renamed — grep to confirm none are missed.
 - Event handler logic unchanged — `change` event, snapshot mutation, `classList.toggle('excluded')`, `updateToolbar()`, `setDirty()`
-- Refine-mode activation sets `display: ''` on `.include-toggle-wrap` elements. Verify the computed display value — PF6 switch uses `inline-flex` internally, so the activation may need `el.style.display = 'inline-flex'` rather than the current `inline-grid`. Test during implementation.
+- Refine-mode activation sets `display: ''` on `.include-toggle-wrap` elements. PF6 switch uses `display: inline-grid` (same as `pf-v6-c-check.pf-m-standalone`), so the existing `el.style.display = 'inline-grid'` activation is already correct — no change needed.
 
 ## What Does NOT Change
 
@@ -109,7 +109,7 @@ The `pf-v6-c-switch` component is already available in the bundled `patternfly.c
 
 - Checked state: blue track (`--pf-t--global--color--brand--default`), white knob
 - Unchecked state: grey track, subtle knob
-- Disabled state: muted colors (not used in this design, but available if needed later)
+- Disabled state: muted colors (used for default distribution repo switches that cannot be excluded)
 - Focus state: blue outline
 - Accessible: keyboard-operable, ARIA semantics built in
 
