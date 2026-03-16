@@ -15,21 +15,21 @@
       <section class="pf-v6-c-nav__section">
         <h2 class="pf-v6-c-nav__section-title">Inspectors</h2>
         <ul class="pf-v6-c-nav__list">
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="config" href="#">Config</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="services" href="#">Services</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages<span class="triage-count" data-triage-section="rpm">{{ counts.packages_added }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="config" href="#">Config<span class="triage-count" data-triage-section="config">{{ counts.config_files }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="services" href="#">Services<span class="triage-count" data-triage-section="services">{{ ((snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list | length) + (snapshot.services.drop_ins | length)) if snapshot.services else 0 }}</span></a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="users_groups" href="#">Users/Groups</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containers" href="#">Containers</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="non_rpm" href="#">Non-RPM</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containers" href="#">Containers<span class="triage-count" data-triage-section="containers">{{ counts.containers }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="non_rpm" href="#">Non-RPM<span class="triage-count" data-triage-section="non_rpm_software">{{ counts.non_rpm }}</span></a></li>
         </ul>
       </section>
       <section class="pf-v6-c-nav__section">
         <h2 class="pf-v6-c-nav__section-title">System</h2>
         <ul class="pf-v6-c-nav__list">
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="scheduled_tasks" href="#">Scheduled</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="scheduled_tasks" href="#">Scheduled<span class="triage-count" data-triage-section="scheduled_tasks">{{ counts.scheduled_tasks }}</span></a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="kernel_boot" href="#">Kernel/Boot</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="selinux" href="#">SELinux</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="network" href="#">Network</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="selinux" href="#">SELinux<span class="triage-count" data-triage-section="selinux">{{ (snapshot.selinux.port_labels | length) if snapshot.selinux else 0 }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="network" href="#">Network<span class="triage-count" data-triage-section="network">{{ (snapshot.network.firewall_zones | length) if snapshot.network else 0 }}</span></a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="storage" href="#">Storage</a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="secrets" href="#">Secrets</a></li>
         </ul>

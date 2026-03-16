@@ -129,6 +129,20 @@ details.audit-expand { margin-bottom: 0.25rem; }
 #exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
 #exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
 
+/* Fleet prevalence slider (fleet+refine mode) */
+.toolbar-divider { border-left: 1px solid var(--pf-t--global--border--color--default); height: 24px; }
+.fleet-slider-group { display: flex; align-items: center; gap: 0.5rem; }
+.fleet-slider-label { font-weight: 600; font-size: 0.8rem; white-space: nowrap; }
+.fleet-slider { width: 120px; cursor: pointer; }
+.fleet-slider-value { font-weight: 600; min-width: 2.5rem; text-align: right; }
+.fleet-slider-preview { font-size: 0.75rem; color: var(--pf-t--global--text--color--subtle); white-space: nowrap; }
+.fleet-slider-apply { font-size: 0.75rem !important; padding: 0.2rem 0.6rem !important; }
+
+/* Sidebar triage counts */
+.triage-count { font-size: 0.75rem; opacity: 0.7; margin-left: 0.25rem; }
+.triage-count::before { content: "("; }
+.triage-count::after { content: ")"; }
+
 /* Utility classes */
 .content-preview { border-radius: 4px; padding: var(--pf-t--global--spacer--sm); font-size: 0.8rem; max-height: 200px; overflow: auto; margin: var(--pf-t--global--spacer--xs) 0; }
 .table-group-header { font-weight: var(--pf-t--global--font--weight--body--bold); padding-bottom: var(--pf-t--global--spacer--xs); padding-top: var(--pf-t--global--spacer--md); border-top: 1px solid var(--pf-t--global--border--color--default); }
