@@ -322,6 +322,20 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .diff-legend-comparison { color: #4dabf7; margin-right: 4px; }
 {% endif %}
 
+/* Pencil editor icon column */
+.editor-icon {
+  font-size: 14px;
+  cursor: pointer;
+  filter: grayscale(1);
+  transition: filter 0.15s;
+  background: none;
+  border: none;
+  padding: 2px;
+}
+.editor-icon:hover {
+  filter: grayscale(0);
+}
+
 {% if refine_mode %}
 /* CodeMirror gutter: use PF6 variables so dark/light mode is respected */
 .cm-gutters {
