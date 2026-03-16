@@ -538,6 +538,16 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
     });
   })();
 
+  // --- Collapsible section toggles ---
+  document.querySelectorAll('.section-collapse-toggle').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var expandable = this.closest('.pf-v6-c-expandable-section');
+      if (!expandable) return;
+      var expanded = expandable.classList.toggle('pf-m-expanded');
+      this.setAttribute('aria-expanded', expanded);
+    });
+  });
+
   // --- Copy Containerfile to clipboard ---
   (function() {
     var btn = document.getElementById('btn-copy-cf');
