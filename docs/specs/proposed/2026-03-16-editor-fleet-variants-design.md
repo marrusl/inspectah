@@ -79,13 +79,13 @@ Replace the current custom DOM in `buildTree()` with PF6's
         </div>
         <ul class="pf-v6-c-tree-view__list">
 
-          <!-- Variant 1 (selected) -->
-          <li class="pf-v6-c-tree-view__list-item pf-m-current">
+          <!-- Variant 1 (selected, currently viewed) -->
+          <li class="pf-v6-c-tree-view__list-item">
             <div class="pf-v6-c-tree-view__content">
-              <button class="pf-v6-c-tree-view__node">
+              <button class="pf-v6-c-tree-view__node pf-m-current">
                 variant 1
-                <span class="pf-v6-c-label pf-m-compact pf-m-success">selected</span>
-                <span class="pf-v6-c-label pf-m-compact">2/3 hosts</span>
+                <span class="pf-v6-c-label pf-m-compact pf-m-success"><span class="pf-v6-c-label__content">selected</span></span>
+                <span class="pf-v6-c-label pf-m-compact"><span class="pf-v6-c-label__content">2/3 hosts</span></span>
               </button>
             </div>
           </li>
@@ -95,7 +95,7 @@ Replace the current custom DOM in `buildTree()` with PF6's
             <div class="pf-v6-c-tree-view__content">
               <button class="pf-v6-c-tree-view__node">
                 variant 2
-                <span class="pf-v6-c-label pf-m-compact">1/3 hosts</span>
+                <span class="pf-v6-c-label pf-m-compact"><span class="pf-v6-c-label__content">1/3 hosts</span></span>
               </button>
             </div>
           </li>
@@ -114,7 +114,9 @@ Replace the current custom DOM in `buildTree()` with PF6's
 - `pf-v6-c-badge pf-m-read` for variant count on parent nodes
 - `pf-v6-c-label pf-m-compact pf-m-success` for "selected" indicator
 - `pf-v6-c-label pf-m-compact` for host count (N/M hosts)
-- `pf-m-current` on the actively-viewed variant node
+- `pf-m-current` on the `pf-v6-c-tree-view__node` button (not the
+  `<li>`) for the actively-viewed variant
+- `pf-v6-c-label__content` inner span on all labels (PF6 convention)
 - Non-selected variant text uses subtle color
   (`--pf-t--global--text--color--subtle`)
 
@@ -132,6 +134,33 @@ Replace the current custom DOM in `buildTree()` with PF6's
 nodes (from earlier fix). Variant children show "variant N" only.
 
 ### Variant Interaction Behavior
+
+**Toolbar button decision:**
+`doSelectFile()` checks `snapshot[section][list][index].include` to
+determine which button to show. If `include === true` (or if no fleet
+data), show Edit. If `include === false`, show "Switch to this variant."
+
+**DOM selector updates:**
+The current `doSelectFile()` highlights the active entry using a
+selector on `.editor-tree-file[data-section=...][data-index=...]`.
+`updateStateLabels()` queries `.editor-state-label` elements. Both
+must be updated to work with the new PF6 tree-view DOM structure.
+Use `data-section`, `data-list`, and `data-index` attributes on the
+variant `<button>` elements to preserve the selector pattern.
+
+**Variant numbering:**
+Variants are sorted by `fleet.count` descending (most prevalent first)
+and numbered sequentially. This matches the config tab's display order.
+
+**New files:**
+Files created via the new-file modal have no `fleet` field and render
+as leaf nodes (no grouping). The grouping logic naturally handles this
+since they produce single-item groups.
+
+**All variants excluded:**
+If all variants of a path have `include === false`, the parent node
+stays visible with no "selected" label on any child. The file is
+omitted from the Containerfile on re-render (existing behavior).
 
 **Click a selected variant:**
 - Opens in read-only view (same as today)
