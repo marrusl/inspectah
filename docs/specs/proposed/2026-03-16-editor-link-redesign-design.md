@@ -18,7 +18,8 @@ Replace all "View & edit in editor →" text links with a pencil icon (✏️) i
 - **Transition:** smooth CSS transition (~150ms) between states
 - **Cursor:** pointer on hover
 - **Click:** calls existing `navigateToEditor(this)` — same JS function, no behavior change
-- **Element:** `<span>` (or `<button class="pf-v6-c-button pf-m-plain">`) with the same `data-section`, `data-list`, `data-index`, `data-path` attributes as the current `<a>` links
+- **Element:** `<button class="pf-v6-c-button pf-m-plain">` — keyboard focusable, semantic click target. Carries the same `data-section`, `data-list`, `data-index`, `data-path` attributes as the current `<a>` links
+- **Tooltip:** HTML `title` attribute (not PF6 tooltip component — simplest approach, sufficient for an icon hint)
 
 ## Scope
 
