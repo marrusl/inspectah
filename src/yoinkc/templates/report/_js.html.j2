@@ -231,8 +231,18 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
           arr[idx].include = this.checked;
         }
       }
-      // Variant radio-group: deselect siblings when enabling one variant
+      // Variant radio-group: deselect siblings when enabling one variant.
+      // Parent fleet rows do not carry data-variant-group because they point at
+      // the same snapshot item as the first child row.
       var variantGroup = tr.getAttribute('data-variant-group');
+      var compareGroup = variantGroup;
+      if (!compareGroup && tr.classList.contains('fleet-variant-group')) {
+        var childVariants = tr.nextElementSibling;
+        if (childVariants && childVariants.classList.contains('fleet-variant-children')) {
+          var firstVariantRow = childVariants.querySelector('[data-variant-group]');
+          if (firstVariantRow) compareGroup = firstVariantRow.getAttribute('data-variant-group');
+        }
+      }
       if (variantGroup && this.checked) {
         document.querySelectorAll('[data-variant-group="' + variantGroup + '"]').forEach(function(sibling) {
           if (sibling === tr) return;
@@ -250,6 +260,9 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
         });
       }
       tr.classList.toggle('excluded', !this.checked);
+      if (compareGroup && typeof updateCompareButtons === 'function') {
+        updateCompareButtons(compareGroup);
+      }
       updateToolbar();
       setDirty(!isSnapshotClean());
       recalcTriageCounts();
@@ -468,6 +481,13 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
     }
 
     recalcTriageCounts();
+    if (typeof updateCompareButtons === 'function') {
+      var seen = {};
+      document.querySelectorAll('[data-variant-group]').forEach(function(el) {
+        seen[el.getAttribute('data-variant-group')] = true;
+      });
+      Object.keys(seen).forEach(function(g) { updateCompareButtons(g); });
+    }
     showToast('Selections reset to initial state');
   }
 
@@ -853,6 +873,29 @@ function switchVariant(ctx) {
   updateToolbar();
   setDirty(!isSnapshotClean());
   if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
+}
+
+function updateCompareButtons(group) {
+  var rows = document.querySelectorAll('[data-variant-group="' + group + '"]');
+  var hasSelected = false;
+  rows.forEach(function(row) {
+    var section = row.getAttribute('data-snap-section');
+    var list = row.getAttribute('data-snap-list');
+    var idx = parseInt(row.getAttribute('data-snap-index'), 10);
+    var arr = resolveSnapshotRef(section, list);
+    if (arr && arr[idx] && arr[idx].include) hasSelected = true;
+  });
+  rows.forEach(function(row) {
+    var btn = row.querySelector('.variant-compare-btn');
+    if (!btn) return;
+    if (hasSelected) {
+      btn.removeAttribute('disabled');
+      btn.classList.remove('pf-m-disabled');
+    } else {
+      btn.setAttribute('disabled', '');
+      btn.classList.add('pf-m-disabled');
+    }
+  });
 }
 
 /* Fleet: Compare button click delegation */

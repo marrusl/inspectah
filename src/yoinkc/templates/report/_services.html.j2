@@ -27,6 +27,7 @@
       {%- for path, variants in dropin_variant_groups.items() %}
       {%- if variants | length > 1 %}
         {%- set primary = variants[0] %}
+        {%- set group_has_selected = variants | selectattr('item.include', 'equalto', true) | list | length > 0 %}
         <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}"
             data-snap-section="services" data-snap-list="drop_ins"
             data-snap-index="{{ primary.snap_index }}">
@@ -55,7 +56,7 @@
                   {% if v.item.include %}
                     <span style="font-size:0.75rem;color:var(--pf-t--global--text--color--subtle);">selected</span>
                   {% else %}
-                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn">Compare</button>
+                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn{% if not group_has_selected %} pf-m-disabled{% endif %}"{% if not group_has_selected %} disabled{% endif %}>Compare</button>
                   {% endif %}
                 </td>
               </tr>
