@@ -155,6 +155,173 @@ class TestMergeNoneSection:
         assert merged.rpm is None
 
 
+from yoinkc.schema import EnabledModuleStream, VersionLockEntry
+
+
+class TestMergeModuleStreams:
+    def test_same_stream_three_hosts_prevalence(self):
+        """Three hosts with the same module:stream → one entry, prevalence 3/3."""
+        from yoinkc.fleet.merge import merge_snapshots
+        ms = EnabledModuleStream(module_name="postgresql", stream="15")
+        snaps = [_snap(f"host-{i}", rpm=RpmSection(module_streams=[ms])) for i in range(3)]
+        merged = merge_snapshots(snaps, min_prevalence=100)
+        assert len(merged.rpm.module_streams) == 1
+        assert merged.rpm.module_streams[0].module_name == "postgresql"
+        assert merged.rpm.module_streams[0].stream == "15"
+        assert merged.rpm.module_streams[0].fleet.count == 3
+        assert merged.rpm.module_streams[0].fleet.total == 3
+        assert merged.rpm.module_streams[0].include is True
+
+    def test_different_streams_produce_separate_entries(self):
+        """2 hosts on stream 15, 1 host on stream 13 → two entries, each with own prevalence."""
+        from yoinkc.fleet.merge import merge_snapshots
+        ms15 = EnabledModuleStream(module_name="postgresql", stream="15")
+        ms13 = EnabledModuleStream(module_name="postgresql", stream="13")
+        snaps = [
+            _snap("host-0", rpm=RpmSection(module_streams=[ms15])),
+            _snap("host-1", rpm=RpmSection(module_streams=[ms15])),
+            _snap("host-2", rpm=RpmSection(module_streams=[ms13])),
+        ]
+        merged = merge_snapshots(snaps, min_prevalence=50)
+        assert len(merged.rpm.module_streams) == 2
+        by_stream = {e.stream: e for e in merged.rpm.module_streams}
+        assert by_stream["15"].fleet.count == 2
+        assert by_stream["13"].fleet.count == 1
+        assert by_stream["15"].include is True   # 2/3 ≥ 50%
+        assert by_stream["13"].include is False  # 1/3 < 50%
+
+    def test_profiles_unioned_across_hosts(self):
+        """Profiles from different hosts sharing the same stream are unioned."""
+        from yoinkc.fleet.merge import merge_snapshots
+        ms1 = EnabledModuleStream(module_name="nodejs", stream="18", profiles=["development"])
+        ms2 = EnabledModuleStream(module_name="nodejs", stream="18", profiles=["minimal", "development"])
+        ms3 = EnabledModuleStream(module_name="nodejs", stream="18", profiles=["default"])
+        snaps = [
+            _snap("host-0", rpm=RpmSection(module_streams=[ms1])),
+            _snap("host-1", rpm=RpmSection(module_streams=[ms2])),
+            _snap("host-2", rpm=RpmSection(module_streams=[ms3])),
+        ]
+        merged = merge_snapshots(snaps, min_prevalence=100)
+        assert len(merged.rpm.module_streams) == 1
+        assert set(merged.rpm.module_streams[0].profiles) == {"development", "minimal", "default"}
+
+    def test_conflicts_recomputed_and_rendered_in_fleet_mode(self):
+        """Fleet merge must recompute module stream conflicts for renderer warnings."""
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers.containerfile.packages import section_lines
+
+        conflict = "postgresql: host=15, base_image=13"
+        snaps = [
+            _snap(
+                "host-0",
+                rpm=RpmSection(
+                    base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                    baseline_module_streams={"postgresql": "13"},
+                    module_streams=[
+                        EnabledModuleStream(
+                            module_name="postgresql",
+                            stream="15",
+                            baseline_match=False,
+                        )
+                    ],
+                    module_stream_conflicts=[conflict],
+                ),
+            ),
+            _snap(
+                "host-1",
+                rpm=RpmSection(
+                    base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                    baseline_module_streams={"postgresql": "13"},
+                    module_streams=[
+                        EnabledModuleStream(
+                            module_name="postgresql",
+                            stream="15",
+                            baseline_match=False,
+                        )
+                    ],
+                    module_stream_conflicts=[conflict],
+                ),
+            ),
+        ]
+
+        merged = merge_snapshots(snaps, min_prevalence=100)
+
+        assert merged.rpm.baseline_module_streams == {"postgresql": "13"}
+        assert merged.rpm.module_stream_conflicts == [conflict]
+
+        rendered = "\n".join(
+            section_lines(
+                merged,
+                base="registry.redhat.io/rhel9/rhel-bootc:9.6",
+                c_ext_pip=[],
+                needs_multistage=False,
+            )
+        )
+        assert "# WARNING: postgresql: host=15, base_image=13" in rendered
+
+
+class TestMergeVersionLocks:
+    def test_same_version_three_hosts_prevalence(self):
+        """Three hosts locking the same package+version → one entry, prevalence 3/3."""
+        from yoinkc.fleet.merge import merge_snapshots
+        vl = VersionLockEntry(
+            raw_pattern="curl-7.76.1-26.el9.x86_64",
+            name="curl", epoch=0, version="7.76.1", release="26.el9", arch="x86_64",
+        )
+        snaps = [_snap(f"host-{i}", rpm=RpmSection(version_locks=[vl])) for i in range(3)]
+        merged = merge_snapshots(snaps, min_prevalence=100)
+        assert len(merged.rpm.version_locks) == 1
+        assert merged.rpm.version_locks[0].name == "curl"
+        assert merged.rpm.version_locks[0].fleet.count == 3
+        assert merged.rpm.version_locks[0].fleet.total == 3
+        assert merged.rpm.version_locks[0].include is True
+
+    def test_different_versions_produce_separate_entries(self):
+        """2 hosts on version A, 1 host on version B → two entries with own prevalence."""
+        from yoinkc.fleet.merge import merge_snapshots
+        vl_a = VersionLockEntry(
+            raw_pattern="curl-7.76.1-26.el9.x86_64",
+            name="curl", epoch=0, version="7.76.1", release="26.el9", arch="x86_64",
+        )
+        vl_b = VersionLockEntry(
+            raw_pattern="curl-7.79.1-2.el9.x86_64",
+            name="curl", epoch=0, version="7.79.1", release="2.el9", arch="x86_64",
+        )
+        snaps = [
+            _snap("host-0", rpm=RpmSection(version_locks=[vl_a])),
+            _snap("host-1", rpm=RpmSection(version_locks=[vl_a])),
+            _snap("host-2", rpm=RpmSection(version_locks=[vl_b])),
+        ]
+        merged = merge_snapshots(snaps, min_prevalence=50)
+        assert len(merged.rpm.version_locks) == 2
+        by_version = {e.version: e for e in merged.rpm.version_locks}
+        assert by_version["7.76.1"].fleet.count == 2
+        assert by_version["7.79.1"].fleet.count == 1
+        assert by_version["7.76.1"].include is True   # 2/3 ≥ 50%
+        assert by_version["7.79.1"].include is False  # 1/3 < 50%
+
+    def test_different_arch_stays_separate(self):
+        """curl.x86_64 and curl.i686 are separate entries even with same version."""
+        from yoinkc.fleet.merge import merge_snapshots
+        vl_x86 = VersionLockEntry(
+            raw_pattern="curl-7.76.1-26.el9.x86_64",
+            name="curl", epoch=0, version="7.76.1", release="26.el9", arch="x86_64",
+        )
+        vl_i686 = VersionLockEntry(
+            raw_pattern="curl-7.76.1-26.el9.i686",
+            name="curl", epoch=0, version="7.76.1", release="26.el9", arch="i686",
+        )
+        s1 = _snap("host-0", rpm=RpmSection(version_locks=[vl_x86, vl_i686]))
+        s2 = _snap("host-1", rpm=RpmSection(version_locks=[vl_x86, vl_i686]))
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+        assert len(merged.rpm.version_locks) == 2
+        by_arch = {e.arch: e for e in merged.rpm.version_locks}
+        assert by_arch["x86_64"].fleet.count == 2
+        assert by_arch["i686"].fleet.count == 2
+        assert by_arch["x86_64"].name == "curl"
+        assert by_arch["i686"].name == "curl"
+
+
 from yoinkc.schema import (
     ConfigSection, ConfigFileEntry, ContainerSection,
     QuadletUnit, ComposeFile, ComposeService,

@@ -54,6 +54,35 @@ def _merge_identity_items(
     return result
 
 
+def _merge_module_streams(
+    all_items: list[list],
+    total: int,
+    min_prevalence: int,
+    host_names: list[str],
+) -> list:
+    """Merge module streams: key is module_name:stream, union profiles across hosts."""
+    seen: dict[str, dict] = {}
+    for snapshot_idx, items in enumerate(all_items):
+        hostname = host_names[snapshot_idx]
+        for item in items:
+            k = f"{item.module_name}:{item.stream}"
+            if k not in seen:
+                seen[k] = {"item": item, "hosts": [hostname], "profiles": set(item.profiles)}
+            else:
+                seen[k]["hosts"].append(hostname)
+                seen[k]["profiles"].update(item.profiles)
+
+    result = []
+    for entry in seen.values():
+        item = entry["item"].model_copy()
+        item.profiles = sorted(entry["profiles"])
+        count = len(entry["hosts"])
+        item.fleet = FleetPrevalence(count=count, total=total, hosts=entry["hosts"])
+        item.include = _prevalence_include(count, total, min_prevalence)
+        result.append(item)
+    return result
+
+
 def _merge_content_items(
     all_items: list[list],
     identity_fn,
@@ -215,6 +244,16 @@ def merge_snapshots(
         dnf_removed = _deduplicate_strings(
             _collect_section_lists(snapshots, "rpm", "dnf_history_removed")
         )
+        module_streams = _merge_module_streams(
+            _collect_section_lists(snapshots, "rpm", "module_streams"),
+            total=total, min_prevalence=min_prevalence, host_names=host_names,
+        )
+        version_locks = _merge_content_items(
+            _collect_section_lists(snapshots, "rpm", "version_locks"),
+            identity_fn=lambda e: f"{e.name}.{e.arch}",
+            variant_fn=lambda e: f"{e.epoch}:{e.version}-{e.release}",
+            total=total, min_prevalence=min_prevalence, host_names=host_names,
+        )
         # Pass-through fields from first snapshot with rpm
         first_rpm = next(s.rpm for s in snapshots if s.rpm)
         # These three fields are set together: all None or all populated.
@@ -228,13 +267,27 @@ def merge_snapshots(
             repo_files=repo_files,
             gpg_keys=gpg_keys,
             dnf_history_removed=dnf_removed,
+            module_streams=module_streams,
+            version_locks=version_locks,
             base_image=first_rpm.base_image,
             baseline_package_names=first_rpm.baseline_package_names,
+            baseline_module_streams=first_rpm.baseline_module_streams,
             no_baseline=first_rpm.no_baseline,
             leaf_packages=_deduplicate_optional_strings(raw_leaf),
             auto_packages=_deduplicate_optional_strings(raw_auto),
             leaf_dep_tree=_merge_dep_trees(raw_dep_trees),
         )
+        if rpm_section.baseline_module_streams:
+            module_stream_conflicts = []
+            for ms in rpm_section.module_streams:
+                if ms.baseline_match:
+                    continue
+                base_stream = rpm_section.baseline_module_streams.get(ms.module_name)
+                if base_stream is not None and base_stream != ms.stream:
+                    module_stream_conflicts.append(
+                        f"{ms.module_name}: host={ms.stream}, base_image={base_stream}"
+                    )
+            rpm_section.module_stream_conflicts = module_stream_conflicts
 
     # --- Config ---
     config_section = None
