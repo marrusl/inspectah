@@ -57,6 +57,11 @@ def _summarise_diff(diff_text: str) -> List[str]:
 # so this is a safety net against corrupted snapshots, not a security boundary.
 _SHELL_UNSAFE_RE = re.compile(r'[\n\r;`|]|\$\(')
 
+# Valid tuned profile name: alphanumeric, hyphens, underscores only.
+# Stricter than _sanitize_shell_value because the name is interpolated directly
+# into an echo redirect; spaces or other printable chars would silently misbehave.
+_TUNED_PROFILE_RE = re.compile(r'^[a-zA-Z0-9_-]+$')
+
 
 def _sanitize_shell_value(value: str, context: str) -> Optional[str]:
     """Return *value* if it is safe to embed in a shell RUN command, else None.

@@ -740,3 +740,151 @@ def test_nonrpm_no_nodejs_prereq_when_already_in_packages():
         cf = (out / "Containerfile").read_text()
 
     assert "Tool prerequisites not in the dnf install block" not in cf
+
+
+class TestTunedProfile:
+    """Tuned profile rendering in the Containerfile."""
+
+    @staticmethod
+    def _render(snapshot) -> str:
+        from yoinkc.renderers.containerfile import render as render_containerfile
+        from jinja2 import Environment
+        with tempfile.TemporaryDirectory() as td:
+            render_containerfile(snapshot, Environment(), Path(td))
+            return (Path(td) / "Containerfile").read_text()
+
+    def test_active_profile_uses_echo_not_tuned_adm(self):
+        """Active profile → echo redirect and systemctl enable, never tuned-adm."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
+        )
+        cf = self._render(snap)
+        assert 'RUN echo "throughput-performance" > /etc/tuned/active_profile' in cf
+        assert "RUN systemctl enable tuned.service" in cf
+        assert "tuned-adm" not in cf
+
+    def test_custom_profiles_emit_copy(self):
+        """Custom profiles → dedicated COPY for /etc/tuned/ plus echo/systemctl."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection, ConfigSnippet
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(
+                tuned_active="throughput-performance",
+                tuned_custom_profiles=[
+                    ConfigSnippet(
+                        path="etc/tuned/my-profile/tuned.conf",
+                        content="[main]\nsummary=custom\n",
+                    ),
+                ],
+            ),
+        )
+        cf = self._render(snap)
+        assert "COPY config/etc/tuned/ /etc/tuned/" in cf
+        assert 'RUN echo "throughput-performance" > /etc/tuned/active_profile' in cf
+        assert "RUN systemctl enable tuned.service" in cf
+
+    def test_empty_active_profile_emits_nothing(self):
+        """No tuned_active → no tuned lines in the Containerfile."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active=""),
+        )
+        cf = self._render(snap)
+        assert "/etc/tuned/active_profile" not in cf
+        assert "tuned.service" not in cf
+
+    def test_default_vm_profile_is_still_emitted(self):
+        """virtual-guest profile is emitted even though it's a common default."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active="virtual-guest"),
+        )
+        cf = self._render(snap)
+        assert 'RUN echo "virtual-guest" > /etc/tuned/active_profile' in cf
+        assert "RUN systemctl enable tuned.service" in cf
+
+    def test_tuned_package_in_main_install_block(self):
+        """tuned appears inside the multi-package dnf install block, not standalone."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
+        )
+        cf = self._render(snap)
+        assert "RUN dnf install -y \\" in cf
+        install_block = cf[cf.index("RUN dnf install -y \\"):]
+        install_block = install_block[:install_block.index("&& dnf clean all")]
+        assert "tuned" in install_block
+        standalone = [
+            ln for ln in cf.splitlines()
+            if ln.strip() == "RUN dnf install -y tuned"
+        ]
+        assert standalone == [], (
+            f"Standalone 'RUN dnf install -y tuned' must not appear; got: {standalone}"
+        )
+
+    def test_tuned_not_duplicated_when_in_leaf_packages(self):
+        """tuned appears exactly once in the install block when already a leaf package."""
+        from yoinkc.schema import (
+            InspectionSnapshot, KernelBootSection, RpmSection,
+            PackageEntry, PackageState,
+        )
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="tuned", version="2.24", release="1.el9",
+                        arch="x86_64", state=PackageState.ADDED, include=True,
+                    ),
+                ],
+                leaf_packages=["tuned"],
+                baseline_package_names=["glibc"],
+            ),
+        )
+        cf = self._render(snap)
+        install_block = cf[cf.index("RUN dnf install -y \\"):]
+        install_block = install_block[:install_block.index("&& dnf clean all")]
+        tuned_count = install_block.split().count("tuned")
+        assert tuned_count == 1, (
+            f"Expected 'tuned' exactly once in install block, got {tuned_count}"
+        )
+
+    def test_kernel_boot_section_has_no_dnf_install(self):
+        """Kernel Configuration section must not contain any dnf install line."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
+        )
+        cf = self._render(snap)
+        kernel_start = cf.index("# === Kernel Configuration ===")
+        kernel_section = cf[kernel_start:]
+        assert "dnf install" not in kernel_section, (
+            "Kernel Configuration section must not contain 'dnf install'"
+        )
+
+    def test_detected_count_excludes_injected_tuned(self):
+        """# Detected comment reflects host-observed packages, not synthetic additions."""
+        from yoinkc.schema import (
+            InspectionSnapshot, KernelBootSection, RpmSection,
+            PackageEntry, PackageState,
+        )
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="httpd", version="2.4", release="1.el9",
+                        arch="x86_64", state=PackageState.ADDED, include=True,
+                    ),
+                ],
+                leaf_packages=["httpd"],
+                baseline_package_names=["glibc"],
+            ),
+        )
+        cf = self._render(snap)
+        assert "# Detected: 1 packages added beyond base image" in cf, (
+            "Detected count must reflect host-observed packages only (1), not include injected tuned"
+        )
+        install_block = cf[cf.index("RUN dnf install -y \\"):]
+        install_block = install_block[:install_block.index("&& dnf clean all")]
+        assert "tuned" in install_block, "tuned must still appear in the dnf install block"

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List
 
 from ...schema import InspectionSnapshot, VersionLockEntry
-from ._helpers import _sanitize_shell_value
+from ._helpers import _sanitize_shell_value, _TUNED_PROFILE_RE
 
 
 def _format_nevra(entry: VersionLockEntry) -> str:
@@ -199,8 +199,14 @@ def section_lines(
             lines.append(f"#   {key}")
         lines.append("")
 
+    # Determine if tuned needs to be injected as a prerequisite package
+    needs_tuned_pkg = bool(
+        snapshot.kernel_boot and snapshot.kernel_boot.tuned_active
+        and _TUNED_PROFILE_RE.match(snapshot.kernel_boot.tuned_active)
+    )
+
     # Package Installation
-    if has_pkgs or included_version_locks:
+    if has_pkgs or included_version_locks or needs_tuned_pkg:
         # Leaf/auto classification (only relevant when packages exist)
         install_names: List[str] = []
         auto_count = 0
@@ -231,15 +237,23 @@ def section_lines(
             else:
                 install_names = safe_names
 
+        # Snapshot-derived count, recorded before synthetic prerequisites are added,
+        # so the comment accurately reflects host-observed state.
+        observed_count = len(install_names)
+
+        if needs_tuned_pkg and "tuned" not in install_names:
+            install_names.append("tuned")
+            install_names.sort()
+
         lines.append("# === Package Installation ===")
         if has_pkgs:
             if getattr(rpm, "no_baseline", False):
                 lines.append("# No baseline — including all installed packages")
             elif auto_count:
-                lines.append(f"# Detected: {len(install_names)} explicitly installed packages "
+                lines.append(f"# Detected: {observed_count} explicitly installed packages "
                              f"(+{auto_count} dependencies pulled in automatically)")
             else:
-                lines.append(f"# Detected: {len(install_names)} packages added beyond base image")
+                lines.append(f"# Detected: {observed_count} packages added beyond base image")
 
         # Version lock content (fleet-pinned + FIXME, above the main dnf install)
         if included_version_locks:

@@ -1,7 +1,10 @@
 """Containerfile section: kernel configuration and boot arguments."""
 
 from ...schema import InspectionSnapshot
-from ._helpers import _is_bootloader_karg, _operator_kargs, _sanitize_shell_value
+from ._helpers import (
+    _is_bootloader_karg, _operator_kargs, _sanitize_shell_value,
+    _TUNED_PROFILE_RE,
+)
 
 
 def section_lines(snapshot: InspectionSnapshot) -> list[str]:
@@ -46,16 +49,20 @@ def section_lines(snapshot: InspectionSnapshot) -> list[str]:
     if included_sysctl:
         lines.append(f"# sysctl: {len(included_sysctl)} non-default value(s) — included in COPY config/etc/ above")
     if kb.tuned_active or kb.tuned_custom_profiles:
-        lines.append(f"# Tuned profile: {kb.tuned_active or '(none active)'}")
-        if kb.tuned_custom_profiles:
-            lines.append(f"# Custom tuned profiles ({len(kb.tuned_custom_profiles)}): "
-                         "included in COPY config/etc/ above")
         if kb.tuned_active:
-            safe_profile = _sanitize_shell_value(kb.tuned_active, "tuned-adm")
-            if safe_profile:
-                lines.append(f"RUN tuned-adm profile {safe_profile}")
+            if _TUNED_PROFILE_RE.match(kb.tuned_active):
+                if kb.tuned_custom_profiles:
+                    lines.append("COPY config/etc/tuned/ /etc/tuned/")
+                lines.append(f'RUN echo "{kb.tuned_active}" > /etc/tuned/active_profile')
+                lines.append("RUN systemctl enable tuned.service")
             else:
                 lines.append(f"# FIXME: tuned profile name contains unsafe characters: {kb.tuned_active!r}")
+                if kb.tuned_custom_profiles:
+                    lines.append(f"# Custom tuned profiles ({len(kb.tuned_custom_profiles)}): "
+                                 "included in COPY config/etc/ above")
+        elif kb.tuned_custom_profiles:
+            lines.append(f"# Custom tuned profiles ({len(kb.tuned_custom_profiles)}): "
+                         "included in COPY config/etc/ above")
     lines.append("")
 
     return lines
