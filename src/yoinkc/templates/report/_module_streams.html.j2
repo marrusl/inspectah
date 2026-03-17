@@ -1,0 +1,48 @@
+{% from "report/_macros.html.j2" import fleet_cell with context -%}
+{# ── DNF Module Streams ───────────────────────────────────────────────────── #}
+{%- if snapshot.rpm and snapshot.rpm.module_streams %}
+<div class="pf-v6-c-card">
+  <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>DNF Module Streams ({{ snapshot.rpm.module_streams|length }})</h3></div></div>
+  <div class="pf-v6-c-card__body">
+  <table class="pf-v6-c-table" id="pkg-module-streams-table">
+    <thead><tr>
+      <th scope="col">Module</th>
+      <th scope="col">Stream</th>
+      <th scope="col">Profiles</th>
+      <th scope="col">Status</th>
+      <th class="pf-v6-c-table__check pf-m-fit-content" scope="col">Include</th>
+      {% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {%- for ms in snapshot.rpm.module_streams %}
+    {%- set conflict = namespace(msg="") %}
+    {%- for c in snapshot.rpm.module_stream_conflicts %}
+      {%- if c.startswith(ms.module_name + ":") %}
+        {%- set conflict.msg = c %}
+      {%- endif %}
+    {%- endfor %}
+    <tr{% if not ms.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="module_streams" data-snap-index="{{ loop.index0 }}">
+      <td>
+        {{ ms.module_name }}
+        {%- if conflict.msg %}
+        <span class="text-status-warning" title="{{ conflict.msg }}" style="margin-left:0.35em;cursor:help">⚠</span>
+        {%- endif %}
+      </td>
+      <td>{{ ms.stream }}</td>
+      <td class="text-sm">{{ ms.profiles | join(", ") if ms.profiles else "—" }}</td>
+      <td>
+        {%- if ms.baseline_match %}
+        <span class="pf-v6-c-label pf-m-compact pf-m-green"><span class="pf-v6-c-label__content">Matches base</span></span>
+        {%- else %}
+        <span class="pf-v6-c-label pf-m-compact pf-m-blue"><span class="pf-v6-c-label__content">Needs enable</span></span>
+        {%- endif %}
+      </td>
+      <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if ms.include else '' }} data-snap-field="include"/><span class="pf-v6-c-switch__toggle"></span></label></td>
+      {{ fleet_cell(ms) }}
+    </tr>
+    {%- endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{%- endif %}

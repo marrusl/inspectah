@@ -606,7 +606,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   // --- Sidebar triage count recalculation ---
   function recalcTriageCounts() {
     var sectionLists = {
-      'rpm':              ['packages_added'],
+      'rpm':              ['packages_added', 'module_streams', 'version_locks'],
       'config':           ['files'],
       'services':         ['state_changes', 'drop_ins'],
       'network':          ['firewall_zones'],

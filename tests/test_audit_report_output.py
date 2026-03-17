@@ -237,6 +237,68 @@ class TestReadme:
         assert "FIXME" in readme or "checklist" in readme.lower() or "TODO" in readme
 
 
+class TestAuditRpmModuleStreamsVersionLocks:
+    """Audit report summarises module streams and version locks in the RPM section."""
+
+    def _build_snapshot(self):
+        from yoinkc.schema import (
+            RpmSection, EnabledModuleStream, VersionLockEntry,
+        )
+        return InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            rpm=RpmSection(
+                module_streams=[
+                    EnabledModuleStream(module_name="postgresql", stream="15",
+                                        baseline_match=True),
+                    EnabledModuleStream(module_name="nodejs", stream="18",
+                                        baseline_match=False),
+                    EnabledModuleStream(module_name="nginx", stream="1.24",
+                                        baseline_match=False),
+                ],
+                version_locks=[
+                    VersionLockEntry(raw_pattern="curl-7.76.1-26.el9.x86_64",
+                                     name="curl", version="7.76.1",
+                                     release="26.el9", arch="x86_64"),
+                    VersionLockEntry(raw_pattern="openssl-3.0.7-24.el9.x86_64",
+                                     name="openssl", version="3.0.7",
+                                     release="24.el9", arch="x86_64"),
+                ],
+                module_stream_conflicts=["postgresql: host=15, base_image=13"],
+            ),
+        )
+
+    def _render(self, snapshot):
+        with tempfile.TemporaryDirectory() as tmp:
+            render_audit_report(snapshot, Environment(), Path(tmp))
+            return (Path(tmp) / "audit-report.md").read_text()
+
+    def test_module_streams_summary_line(self):
+        md = self._render(self._build_snapshot())
+        # 3 enabled, 2 need enable (baseline_match=False)
+        assert "- Module Streams: 3 enabled (2 need enable in image)" in md
+
+    def test_version_locks_summary_line(self):
+        md = self._render(self._build_snapshot())
+        assert "- Version Locks: 2 packages pinned" in md
+
+    def test_module_stream_conflict_warning(self):
+        md = self._render(self._build_snapshot())
+        assert "[WARNING] Module stream conflict: postgresql: host=15, base_image=13" in md
+
+    def test_no_module_streams_section_when_empty(self):
+        """RPM section without module_streams must not emit the summary line."""
+        from yoinkc.schema import RpmSection
+        snap = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            rpm=RpmSection(),
+        )
+        md = self._render(snap)
+        assert "Module Streams:" not in md
+        assert "Version Locks:" not in md
+
+
 class TestAuditModifications:
     """Tests for the operator modifications section."""
 

@@ -192,6 +192,19 @@ def render(
             for name in snapshot.rpm.dnf_history_removed:
                 lines.append(f"- {name}")
             lines.append("")
+        if snapshot.rpm.module_streams:
+            n = len(snapshot.rpm.module_streams)
+            m = sum(1 for ms in snapshot.rpm.module_streams if not ms.baseline_match)
+            lines.append(f"- Module Streams: {n} enabled ({m} need enable in image)")
+            lines.append("")
+        if snapshot.rpm.version_locks:
+            n = len(snapshot.rpm.version_locks)
+            lines.append(f"- Version Locks: {n} packages pinned")
+            lines.append("")
+        if snapshot.rpm.module_stream_conflicts:
+            for conflict in snapshot.rpm.module_stream_conflicts:
+                lines.append(f"- [WARNING] Module stream conflict: {conflict}")
+            lines.append("")
 
     if snapshot.services and snapshot.services.state_changes:
         service_rows = [s for s in snapshot.services.state_changes if s.action != "unchanged"]

@@ -15,7 +15,7 @@
       <section class="pf-v6-c-nav__section">
         <h2 class="pf-v6-c-nav__section-title">Inspectors</h2>
         <ul class="pf-v6-c-nav__list">
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages<span class="triage-count" data-triage-section="rpm">{{ counts.packages_added }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages<span class="triage-count" data-triage-section="rpm">{{ counts.packages_added + ((snapshot.rpm.module_streams | selectattr('include') | list | length) if snapshot.rpm else 0) + ((snapshot.rpm.version_locks | selectattr('include') | list | length) if snapshot.rpm else 0) }}</span></a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="config" href="#">Config<span class="triage-count" data-triage-section="config">{{ counts.config_files }}</span></a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="services" href="#">Services<span class="triage-count" data-triage-section="services">{{ ((snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list | length) + (snapshot.services.drop_ins | length)) if snapshot.services else 0 }}</span></a></li>
           <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="users_groups" href="#">Users/Groups</a></li>
