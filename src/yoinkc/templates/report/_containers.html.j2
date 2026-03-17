@@ -1,13 +1,13 @@
-{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Containers ──────────────────────────────────────────────────────────── #}
 {% call section("containers", "Containers") %}
   {%- set ct = snapshot.containers %}
   {%- if ct and (ct.quadlet_units or ct.compose_files or ct.running_containers) %}
 
   {%- if ct.quadlet_units %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Quadlet Units</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-ct-quadlet-units", "Quadlet Units") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-ct-quadlet-units"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Unit</th><th scope="col">Image</th><th scope="col">Path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}{% if refine_mode %}<th class="pf-m-fit-content" scope="col"></th>{% endif %}</tr></thead><tbody>
     {% if fleet_meta and quadlet_variant_groups %}
       {%- for path, variants in quadlet_variant_groups.items() %}
@@ -85,14 +85,14 @@
       {%- endfor %}
     {% endif %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if ct.compose_files %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compose Files</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-ct-compose-files", "Compose Files") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-ct-compose-files"><div class="pf-v6-c-card__body">
     {%- for c in ct.compose_files %}
     <div{% if not c.include %} class="excluded"{% endif %} data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
     <label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if c.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label>
@@ -122,7 +122,7 @@
     {%- endif %}
     </div>
     {%- endfor %}
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 

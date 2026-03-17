@@ -3,6 +3,14 @@
    yoinkc report – custom overrides on top of PatternFly 6
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* Reduced-motion: must come first so it gates ALL animations/transitions below */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* OS icon theme-aware colours */
 .os-icon { vertical-align: middle; margin-right: 6px; }
 .os-icon-rhel   { color: #ffffff; }
@@ -27,8 +35,8 @@ body { padding-bottom: 3.5rem; }
 
 /* Section show/hide for nav switching */
 .section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); }
-.section.visible { display: block; animation: fadeIn .15s ease; }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.section.visible { display: block; opacity: 0; transition: opacity 150ms ease-in-out; }
+.section.visible.pf-m-current { opacity: 1; }
 
 /* Sidebar nav */
 .pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -344,5 +352,75 @@ details.audit-expand { margin-bottom: 0.25rem; }
   border-right: 1px solid var(--pf-t--global--border--color--default) !important;
 }
 {% endif %}
+
+/* ── Collapsible cards (Part B + D) ──────────────────────────────────────
+   These rules override PF6's CSS-variable-driven expandable section.
+   toggleCard() drives max-height via JS inline styles (scrollHeight-based),
+   so there is no arbitrary ceiling. pf-m-collapsed + pf-m-expanded are both
+   toggled in JS. The visibility delay keeps content in the a11y tree while
+   the height animation plays, then removes it after 200 ms. */
+.pf-v6-c-card.pf-v6-c-expandable-section .pf-v6-c-expandable-section__content {
+  overflow: hidden;
+  max-height: none; /* JS sets inline max-height during transitions */
+  opacity: 1;
+  /* visibility 0s 200ms: when collapsing, delay hiding until after the animation
+     completes so interactive content stays in the a11y tree while visible. */
+  transition: max-height 200ms ease-out, opacity 150ms ease-out, visibility 0s 200ms;
+}
+.pf-v6-c-card.pf-v6-c-expandable-section.pf-m-collapsed .pf-v6-c-expandable-section__content {
+  /* max-height is 0 via JS inline style — not set here to avoid specificity fights */
+  opacity: 0;
+  visibility: hidden;
+  padding-top: 0;
+  padding-bottom: 0;
+  /* visibility 0s (no delay): become visible immediately on expand */
+  transition: max-height 200ms ease-out, opacity 150ms ease-out, visibility 0s;
+}
+.pf-v6-c-card.pf-v6-c-expandable-section .pf-v6-c-expandable-section__toggle-icon {
+  transition: transform 200ms ease-out;
+}
+.pf-v6-c-card.pf-v6-c-expandable-section.pf-m-collapsed .pf-v6-c-expandable-section__toggle-icon {
+  transform: rotate(-90deg) !important;
+}
+
+/* ── Sidebar triage badge pulse ───────────────────────────────────────── */
+@keyframes badge-pulse {
+  0%   { transform: scale(1); }
+  50%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+.sidebar-badge-updated {
+  animation: badge-pulse 200ms ease-out;
+  display: inline-block;
+}
+
+/* ── Modal transitions ────────────────────────────────────────────────── */
+.pf-v6-c-backdrop {
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.pf-v6-c-backdrop.pf-m-open {
+  opacity: 1;
+}
+.pf-v6-c-backdrop .pf-v6-c-modal-box {
+  transform: scale(0.95);
+  opacity: 0;
+  transition: transform 150ms ease-out, opacity 150ms ease-out;
+}
+.pf-v6-c-backdrop.pf-m-open .pf-v6-c-modal-box {
+  transform: scale(1);
+  opacity: 1;
+}
+
+/* ── Mark-reviewed checkmark (Part A CSS — class ready, JS comes later) ─ */
+@keyframes check-appear {
+  0%   { transform: scale(0); opacity: 0; }
+  60%  { transform: scale(1.2); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.reviewed-checkmark {
+  display: inline-block;
+  animation: check-appear 250ms ease-out;
+}
 
 </style>

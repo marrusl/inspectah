@@ -1,9 +1,9 @@
-{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Services ────────────────────────────────────────────────────────────── #}
 {% call section("services", "Services") %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Service State Changes</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-svc-state-changes", "Service State Changes") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-svc-state-changes"><div class="pf-v6-c-card__body">
     {%- if snapshot.services and snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list %}
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Unit</th><th class="pf-m-fit-content" scope="col">Current</th><th class="pf-m-fit-content" scope="col">Default</th><th class="pf-m-fit-content" scope="col">Action</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
       {%- for s in snapshot.services.state_changes %}
@@ -15,13 +15,13 @@
     {%- else %}
     <p>No service changes.</p>
     {%- endif %}
-    </div>
+    </div></div>
   </div>
 
   {%- if snapshot.services and snapshot.services.drop_ins %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Drop-in Overrides ({{ snapshot.services.drop_ins|length }})</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-svc-drop-ins", "Drop-in Overrides (" ~ snapshot.services.drop_ins|length ~ ")") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-svc-drop-ins"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Parent unit</th><th scope="col">Drop-in path</th><th scope="col">Content</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}{% if refine_mode %}<th class="pf-m-fit-content" scope="col"></th>{% endif %}</tr></thead><tbody>
     {% if fleet_meta and dropin_variant_groups %}
       {%- for path, variants in dropin_variant_groups.items() %}
@@ -97,7 +97,7 @@
       {%- endfor %}
     {% endif %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 {% endcall %}

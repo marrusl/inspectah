@@ -1,9 +1,9 @@
-{% from "report/_macros.html.j2" import fleet_cell with context -%}
+{% from "report/_macros.html.j2" import fleet_cell, card_toggle with context -%}
 {# ── Version-Locked Packages ─────────────────────────────────────────────── #}
 {%- if snapshot.rpm and snapshot.rpm.version_locks %}
-<div class="pf-v6-c-card">
-  <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Version-Locked Packages ({{ snapshot.rpm.version_locks|length }})</h3></div></div>
-  <div class="pf-v6-c-card__body">
+<div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+  <div class="pf-v6-c-card__header">{{ card_toggle("card-pkg-version-locks", "Version-Locked Packages (" ~ snapshot.rpm.version_locks|length ~ ")") }}</div>
+  <div class="pf-v6-c-expandable-section__content" id="card-pkg-version-locks"><div class="pf-v6-c-card__body">
   <table class="pf-v6-c-table" id="pkg-version-locks-table">
     <thead><tr>
       <th scope="col">Package</th>
@@ -24,6 +24,6 @@
     {%- endfor %}
     </tbody>
   </table>
-  </div>
+  </div></div>
 </div>
 {%- endif %}

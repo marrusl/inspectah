@@ -1,13 +1,13 @@
-{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Network ─────────────────────────────────────────────────────────────── #}
 {% call section("network", "Network") %}
   {%- set net = snapshot.network %}
   {%- if net and (net.connections or net.firewall_zones or net.firewall_direct_rules or net.ip_routes or net.ip_rules or net.resolv_provenance) %}
 
   {%- if net.connections %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Connections</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-net-connections", "Connections") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-net-connections"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Name</th><th scope="col">Method</th><th scope="col">Type</th><th scope="col">Deployment</th></tr></thead><tbody>
       {%- for c in net.connections %}
       <tr>
@@ -26,14 +26,14 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if net.firewall_zones %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Zones</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-net-firewall-zones", "Firewall Zones") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-net-firewall-zones"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Zone</th><th scope="col">Services</th><th scope="col">Ports</th><th scope="col">Rich Rules</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
       {%- for z in net.firewall_zones %}
       <tr{% if not z.include %} class="excluded"{% endif %} data-snap-section="network" data-snap-list="firewall_zones" data-snap-index="{{ loop.index0 }}">
@@ -54,14 +54,14 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if net.firewall_direct_rules %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Firewall Direct Rules</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-net-firewall-direct", "Firewall Direct Rules") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-net-firewall-direct"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th class="pf-m-fit-content" scope="col">IPv</th><th class="pf-m-fit-content" scope="col">Table</th><th class="pf-m-fit-content" scope="col">Chain</th><th scope="col">Args</th></tr></thead><tbody>
       {%- for r in net.firewall_direct_rules %}
       <tr{% if not r.include %} class="excluded"{% endif %} data-snap-section="network" data-snap-list="firewall_direct_rules" data-snap-index="{{ loop.index0 }}">
@@ -73,14 +73,14 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if net.resolv_provenance %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>DNS</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-net-dns", "DNS") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-net-dns"><div class="pf-v6-c-card__body">
     <p>resolv.conf provenance:
       {%- if net.resolv_provenance == 'networkmanager' %}
       <span class="text-status-warning text-bold">NetworkManager-managed</span> — DHCP-assigned DNS — kickstart at deploy time
@@ -90,7 +90,7 @@
       <span class="text-status-success text-bold">hand-edited</span> — bake /etc/resolv.conf into image or manage at deploy
       {%- endif %}
     </p>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
@@ -98,25 +98,25 @@
   {%- set static_rt = [] %}
   {%- for r in net.ip_routes %}{% if 'proto static' in r %}{% set _ = static_rt.append(r) %}{% endif %}{%- endfor %}
   {%- if static_rt %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Static Routes</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-net-static-routes", "Static Routes") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-net-static-routes"><div class="pf-v6-c-card__body">
     <ul>
       {%- for r in static_rt %}<li><code>{{ r }}</code></li>{%- endfor %}
     </ul>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
   {%- endif %}
 
   {%- if net.ip_rules %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Policy Routing</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-net-policy-routing", "Policy Routing") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-net-policy-routing"><div class="pf-v6-c-card__body">
     <ul>
       {%- for r in net.ip_rules %}<li><code>{{ r }}</code></li>{%- endfor %}
     </ul>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 

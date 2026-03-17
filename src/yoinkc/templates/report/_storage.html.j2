@@ -1,13 +1,17 @@
 {% if not fleet_meta %}
-{% from "report/_macros.html.j2" import section with context -%}
+{% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── Storage ─────────────────────────────────────────────────────────────── #}
 {% call section("storage", "Storage") %}
   {%- if snapshot.storage and snapshot.storage.fstab_entries %}
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-storage-fstab", "Fstab Entries") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-storage-fstab"><div class="pf-v6-c-card__body">
   <table class="pf-v6-c-table"><thead><tr><th scope="col">Device</th><th scope="col">Mount</th><th class="pf-m-fit-content" scope="col">Type</th></tr></thead><tbody>
     {%- for e in snapshot.storage.fstab_entries[:30] %}
     <tr><td>{{ e.device }}</td><td>{{ e.mount_point }}</td><td>{{ e.fstype }}</td></tr>
     {%- endfor %}
   </tbody></table>
+  </div></div></div>
   {%- else %}
   <p>No fstab entries.</p>
   {%- endif %}

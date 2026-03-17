@@ -6,20 +6,25 @@ Last audited: 2026-03-17
 
 ---
 
-## Medium Effort
-
-### Triage Progress Indicator
-The summary banner shows counts but doesn't show progress. Add a "7 of 12 items reviewed" indicator or progress bar to help operators track their work through the triage process. Needs to define what "reviewed" means (toggled at least once? viewed?).
-
-### Section Collapse
-Large sections (packages, config, services) can be overwhelming on systems with hundreds of items. Wrap each section's content in a PF6 expandable section (`pf-v6-c-expandable-section`) so operators can collapse sections they've already reviewed. Default: expanded.
-
 ## Larger Features
 
 ### Search Across Files
 Ctrl+Shift+F to search content across all files in the editor tree. Search against snapshot content fields, highlight matches in the tree, show results in a panel. New UI component.
 
+### Keyboard Navigation Phase 2 — Screen Reader
+ARIA live regions for dynamic content (toast notifications, badge updates, re-render results). Role descriptions for custom components.
+
+### Keyboard Navigation Phase 3 — Shortcuts
+Power-user keyboard shortcuts: `1-9` for tabs, `j/k` for next/previous item, `/` for search, `r` for mark reviewed.
+
 ---
+
+## Specced (pending implementation)
+
+- **Triage progress indicator** — per-section "Mark reviewed" button, sidebar progress bar, checkmarks. Spec: `docs/specs/proposed/2026-03-17-visual-improvements-design.md` Part A
+- **Section collapse** — per-card PF6 expandable with chevron toggle. Spec: Part B
+- **Keyboard nav Phase 1** — tab order, skip link, modal focus trap, ARIA landmarks. Spec: Part C
+- **Animation/transitions polish** — tab fade, card expand/collapse, badge pulse, modal scale-up, reduced-motion guard. Spec: Part D
 
 ## Already Implemented (removed from backlog 2026-03-17)
 

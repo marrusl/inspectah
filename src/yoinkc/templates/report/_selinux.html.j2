@@ -1,12 +1,12 @@
-{% from "report/_macros.html.j2" import section with context -%}
+{% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── SELinux ──────────────────────────────────────────────────────────────── #}
 {% call section("selinux", "SELinux / Security") %}
   {%- set se = snapshot.selinux %}
   {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode or se.port_labels or se.fcontext_rules or se.pam_configs) %}
 
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Overview</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-se-overview", "Overview") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-se-overview"><div class="pf-v6-c-card__body">
     <dl class="pf-v6-c-description-list pf-m-horizontal">
       {%- if se.mode %}
       <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">Mode</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.mode }}</div></dd></div>
@@ -21,24 +21,24 @@
       <div class="pf-v6-c-description-list__group"><dt class="pf-v6-c-description-list__term"><span class="pf-v6-c-description-list__text">PAM configs</span></dt><dd class="pf-v6-c-description-list__description"><div class="pf-v6-c-description-list__text">{{ se.pam_configs|length }}</div></dd></div>
       {%- endif %}
     </dl>
-    </div>
+    </div></div>
   </div>
 
   {%- if se.custom_modules %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Custom Policy Modules</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-se-custom-modules", "Custom Policy Modules") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-se-custom-modules"><div class="pf-v6-c-card__body">
     <ul>{%- for m in se.custom_modules %}<li><code>{{ m }}</code></li>{%- endfor %}</ul>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- set non_default = se.boolean_overrides|selectattr('non_default')|list %}
   {%- set unchanged_count = (se.boolean_overrides|length) - (non_default|length) %}
   {%- if non_default %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Non-Default Booleans</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-se-booleans", "Non-Default Booleans") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-se-booleans"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Boolean</th><th class="pf-m-fit-content" scope="col">Current</th><th class="pf-m-fit-content" scope="col">Default</th><th scope="col">Description</th></tr></thead><tbody>
       {%- for b in non_default %}
       {%- set cur = b.get('current', '?') %}
@@ -51,14 +51,14 @@
       {%- endfor %}
     </tbody></table>
     {%- if unchanged_count > 0 %}<p>{{ unchanged_count }} boolean(s) at default values (not shown).</p>{%- endif %}
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if se.port_labels %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Custom Port Labels</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-se-port-labels", "Custom Port Labels") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-se-port-labels"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Protocol</th><th scope="col">Port</th><th scope="col">SELinux type</th></tr></thead><tbody>
       {%- for pl in se.port_labels %}
       <tr>
@@ -68,7 +68,7 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 

@@ -1,4 +1,4 @@
-{% from "report/_macros.html.j2" import section with context -%}
+{% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── Non-RPM software ────────────────────────────────────────────────────── #}
 {% call section("non_rpm", "Non-RPM software") %}
   {%- set nr = snapshot.non_rpm_software %}
@@ -6,9 +6,9 @@
   {%- set nd = non_rpm_data %}
 
   {%- if nd.elf %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Compiled Binaries</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-elf", "Compiled Binaries") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-elf"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Language</th><th class="pf-m-fit-content" scope="col">Linking</th><th scope="col">Shared Libraries</th></tr></thead><tbody>
       {%- for i in nd.elf %}
       {%- set lang = i.lang %}
@@ -25,14 +25,14 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if nd.venv %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Python Virtual Environments</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-venv", "Python Virtual Environments") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-venv"><div class="pf-v6-c-card__body">
     {%- for v in nd.venv %}
     {%- set ssp = v.system_site_packages %}
     <div class="mt-md" style="display:flex;align-items:center;gap:var(--pf-t--global--spacer--sm)">
@@ -55,14 +55,14 @@
     <p>No packages found.</p>
     {%- endif %}
     {%- endfor %}
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if nd.git %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Git Repositories</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-git", "Git Repositories") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-git"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Remote</th><th scope="col">Branch</th><th scope="col">Commit</th></tr></thead><tbody>
       {%- for i in nd.git %}
       <tr>
@@ -73,14 +73,14 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if nd.pip %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>System Pip Packages</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-pip", "System Pip Packages") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-pip"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Package</th><th class="pf-m-fit-content" scope="col">Version</th><th scope="col">Path</th></tr></thead><tbody>
       {%- for i in nd.pip[:20] %}
       {%- set nr_idx = namespace(val=-1) %}
@@ -93,14 +93,14 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if nd.other %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Other Items</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-other", "Other Items") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-other"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Confidence</th><th scope="col">Method</th></tr></thead><tbody>
       {%- for i in nd.other[:20] %}
       <tr>
@@ -110,14 +110,14 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if nr and nr.env_files %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Dotenv / Secret Files</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-env-files", "Dotenv / Secret Files") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-env-files"><div class="pf-v6-c-card__body">
     <p>These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
     <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Status</th></tr></thead><tbody>
       {%- for ef in nr.env_files %}
@@ -127,7 +127,7 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 

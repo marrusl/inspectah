@@ -1,4 +1,4 @@
-{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Packages ────────────────────────────────────────────────────────────── #}
 {% call section("packages", "Packages") %}
   {%- if snapshot.rpm and snapshot.rpm.no_baseline %}
@@ -44,9 +44,9 @@
   </div>
 
   {%- if snapshot.rpm.repo_files %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Repositories ({{ snapshot.rpm.repo_files|length }})</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-pkg-repos", "Repositories (" ~ snapshot.rpm.repo_files|length ~ ")") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-pkg-repos"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table" id="pkg-repo-table">
       <thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col"><span class="pf-v6-u-screen-reader">Source</span></th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead>
       <tbody>
@@ -71,15 +71,16 @@
       {%- endfor %}
       </tbody>
     </table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {% include "report/_module_streams.html.j2" %}
   {% include "report/_version_locks.html.j2" %}
 
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Dependency Tree</h3></div></div>
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-pkg-dep-tree", "Dependency Tree") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-pkg-dep-tree">
     <div class="pf-v6-c-card__body">
     {%- if repo_groups %}
     <table class="pf-v6-c-table pkg-dep-tree-group">
@@ -148,7 +149,7 @@
     </table>
     {%- endif %}
     </div>
-  </div>
+    </div></div>
 
   {%- set leaf_names = snapshot.rpm.leaf_packages %}
   {%- set auto_names = snapshot.rpm.auto_packages or [] %}
@@ -159,9 +160,9 @@
     {%- endif %}
   {%- endfor %}
   {%- if unclassified_pkgs %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Unclassified Packages ({{ unclassified_pkgs|length }})</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-pkg-unclassified", "Unclassified Packages (" ~ unclassified_pkgs|length ~ ")") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-pkg-unclassified"><div class="pf-v6-c-card__body">
     <p class="text-sm">These packages could not be classified as leaf or auto-dependency. They are included in the Containerfile by default.</p>
     <table class="pf-v6-c-table">
       <thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Name</th><th class="pf-m-fit-content" scope="col">Version</th><th class="pf-m-fit-content" scope="col">Arch</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead>
@@ -181,7 +182,7 @@
       {%- endfor %}
       </tbody>
     </table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
@@ -202,9 +203,9 @@
 
   {# ── Version Changes ──────────────────────────────────────────────────── #}
   {%- if snapshot.rpm and snapshot.rpm.version_changes %}
-  <div class="pf-v6-c-card" id="pkg-version-changes">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Version Changes ({{ snapshot.rpm.version_changes|length }})</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded" id="pkg-version-changes">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-pkg-version-changes", "Version Changes (" ~ snapshot.rpm.version_changes|length ~ ")") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-pkg-version-changes"><div class="pf-v6-c-card__body">
     <p class="text-sm">Packages present on both host and base image with different versions. Downgrades may indicate regressions.</p>
     <table class="pf-v6-c-table" id="pkg-version-table">
       <thead><tr><th scope="col">Package</th><th class="pf-m-fit-content" scope="col">Arch</th><th scope="col">Host Version</th><th scope="col">Base Image Version</th><th class="pf-m-fit-content" scope="col">Direction</th></tr></thead>
@@ -226,7 +227,7 @@
       {%- endfor %}
       </tbody>
     </table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 {% endcall %}

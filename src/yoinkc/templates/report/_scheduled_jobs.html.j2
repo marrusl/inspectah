@@ -1,4 +1,4 @@
-{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Scheduled jobs ───────────────────────────────────────────────────────── #}
 {% call section("scheduled_tasks", "Scheduled jobs") %}
   {%- set st = snapshot.scheduled_tasks %}
@@ -12,9 +12,9 @@
   {%- endfor %}
 
   {%- if local_timers or vendor_timers %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Systemd Timers</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-sched-timers", "Systemd Timers") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-sched-timers"><div class="pf-v6-c-card__body">
     {%- if vendor_timers %}
     <p class="text-sm">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
     {%- endif %}
@@ -28,14 +28,14 @@
       {%- endfor %}
     </tbody></table>
     {%- endif %}
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if st.generated_timer_units %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron-Converted Timers</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-sched-cron-timers", "Cron-Converted Timers") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-sched-cron-timers"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Name</th><th scope="col">Cron Expression</th><th scope="col">Source File</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
       {%- for u in st.generated_timer_units %}
       <tr{% if not u.include %} class="excluded"{% endif %} data-snap-section="scheduled_tasks" data-snap-list="generated_timer_units" data-snap-index="{{ loop.index0 }}">
@@ -47,15 +47,15 @@
       </tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- set rpm_cron_count = st.cron_jobs | selectattr('rpm_owned') | list | length %}
   {%- if st.cron_jobs %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>Cron Jobs</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-sched-cron-jobs", "Cron Jobs") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-sched-cron-jobs"><div class="pf-v6-c-card__body">
     {%- if rpm_cron_count %}
     <p class="text-sm">{{ rpm_cron_count }} package-owned cron job{{ 's' if rpm_cron_count != 1 else '' }} (base image defaults) not shown.</p>
     {%- endif %}
@@ -75,21 +75,21 @@
       {%- endfor %}
     </tbody></table>
     {%- endif %}
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 
   {%- if st.at_jobs %}
-  <div class="pf-v6-c-card">
-    <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>At Jobs</h3></div></div>
-    <div class="pf-v6-c-card__body">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-sched-at-jobs", "At Jobs") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-sched-at-jobs"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th scope="col">File</th><th class="pf-m-fit-content" scope="col">User</th><th scope="col">Command</th></tr></thead><tbody>
       {%- for a in st.at_jobs %}
       {%- set cmd = a.command[:117] ~ '...' if a.command|length > 120 else a.command %}
       <tr><td><code>{{ a.file }}</code></td><td>{{ a.user }}</td><td><code>{{ cmd }}</code></td></tr>
       {%- endfor %}
     </tbody></table>
-    </div>
+    </div></div>
   </div>
   {%- endif %}
 

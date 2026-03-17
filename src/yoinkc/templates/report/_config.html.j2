@@ -1,7 +1,10 @@
-{% from "report/_macros.html.j2" import section, fleet_cell with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Config ──────────────────────────────────────────────────────────────── #}
 {% call section("config", "Configuration files") %}
   {%- if snapshot.config and snapshot.config.files %}
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+    <div class="pf-v6-c-card__header">{{ card_toggle("card-config-files", "Configuration Files") }}</div>
+    <div class="pf-v6-c-expandable-section__content" id="card-config-files"><div class="pf-v6-c-card__body">
   <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Kind</th><th class="pf-m-fit-content" scope="col">Category</th><th class="pf-m-fit-content" scope="col">rpm -Va flags</th><th scope="col">Diff</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}{% if refine_mode %}<th class="pf-m-fit-content" scope="col"></th>{% endif %}</tr></thead><tbody>
   {% if fleet_meta and config_variant_groups %}
     {%- for path, variants in config_variant_groups.items() %}
@@ -95,6 +98,7 @@
     {%- endfor %}
   {% endif %}
   </tbody></table>
+  </div></div></div>
   {%- else %}
   <p>No config files.</p>
   {%- endif %}

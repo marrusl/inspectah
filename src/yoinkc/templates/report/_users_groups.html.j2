@@ -1,13 +1,13 @@
-{% from "report/_macros.html.j2" import section with context -%}
+{% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── Users / Groups ───────────────────────────────────────────────────────── #}
 {% call section("users_groups", "Users and groups") %}
   {%- if snapshot.users_groups and snapshot.users_groups.users %}
   {%- set ug = snapshot.users_groups %}
   {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart"] %}
 
-  <div class="pf-v6-c-card">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">
-      <div class="pf-v6-c-card__title"><h3>Users</h3></div>
+      {{ card_toggle("card-ug-users", "Users") }}
       <div class="pf-v6-c-card__actions card-actions-layout">
         <span>Apply to all:</span>
         <span class="pf-v6-c-form-control"><select id="strategy-apply-all">
@@ -18,7 +18,7 @@
         <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all">Apply</button>
       </div>
     </div>
-    <div class="pf-v6-c-card__body">
+    <div class="pf-v6-c-expandable-section__content" id="card-ug-users"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table">
       <thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">User</th><th class="pf-m-fit-content" scope="col">UID/GID</th><th scope="col">Shell</th><th scope="col">Home</th><th class="pf-m-fit-content" scope="col">Type</th><th class="pf-m-fit-content" scope="col">Strategy</th><th scope="col">Notes</th></tr></thead>
       <tbody>
@@ -53,13 +53,13 @@
       {%- endfor %}
       </tbody>
     </table>
-    </div>
+    </div></div>
   </div>
 
   {%- if ug.groups %}
-  <div class="pf-v6-c-card">
+  <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">
-      <div class="pf-v6-c-card__title"><h3>Groups</h3></div>
+      {{ card_toggle("card-ug-groups", "Groups") }}
       <div class="pf-v6-c-card__actions card-actions-layout">
         <span>Apply to all:</span>
         <span class="pf-v6-c-form-control"><select id="strategy-apply-all-groups">
@@ -70,6 +70,7 @@
         <button type="button" class="pf-v6-c-button pf-m-secondary" id="btn-strategy-apply-all-groups">Apply</button>
       </div>
     </div>
+    <div class="pf-v6-c-expandable-section__content" id="card-ug-groups">
     <div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table">
       <thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Group</th><th class="pf-m-fit-content" scope="col">GID</th><th class="pf-m-fit-content" scope="col">Strategy</th><th scope="col">Members</th></tr></thead>
@@ -91,6 +92,7 @@
       {%- endfor %}
       </tbody>
     </table>
+    </div>
     </div>
   </div>
   {%- endif %}

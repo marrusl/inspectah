@@ -10,9 +10,12 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
   var fromPopstate = false;
   function show(id) {
     if (!id) return;
-    sections.forEach(function(s){ s.classList.remove('visible'); });
+    sections.forEach(function(s){ s.classList.remove('visible', 'pf-m-current'); });
     var el = document.getElementById('section-' + id);
-    if (el) el.classList.add('visible');
+    if (el) {
+      el.classList.add('visible');
+      requestAnimationFrame(function() { el.classList.add('pf-m-current'); });
+    }
     navLinks.forEach(function(link){
       link.classList.toggle('pf-m-current', link.getAttribute('data-tab') === id);
     });
@@ -633,7 +636,18 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
         }
       });
       var el = document.querySelector('.triage-count[data-triage-section="' + sectionName + '"]');
-      if (el) el.textContent = count;
+      if (el) {
+        var oldText = el.textContent;
+        el.textContent = String(count);
+        if (el.textContent !== oldText) {
+          el.classList.remove('sidebar-badge-updated');
+          void el.offsetWidth; // force reflow to restart animation if already running
+          el.classList.add('sidebar-badge-updated');
+          el.addEventListener('animationend', function() {
+            el.classList.remove('sidebar-badge-updated');
+          }, { once: true });
+        }
+      }
     });
   }
 
@@ -704,6 +718,46 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
 })();
 
 
+function toggleCard(btn) {
+  var section = btn.closest('.pf-v6-c-expandable-section');
+  var expanded = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', String(!expanded));
+  if (!section) return;
+
+  // Keep pf-m-expanded in sync so PF6's icon-rotation CSS variable stays correct
+  section.classList.toggle('pf-m-expanded', !expanded);
+
+  var contentId = btn.getAttribute('aria-controls');
+  var content = contentId ? document.getElementById(contentId) : null;
+
+  if (expanded) {
+    // Collapsing: give the transition a concrete start value, then animate to 0.
+    // Setting scrollHeight inline then forcing a reflow commits that value as the
+    // "from" point before we drive it to 0px.
+    if (content) {
+      content.style.maxHeight = content.scrollHeight + 'px';
+      void content.offsetHeight; // force reflow to commit start value
+      content.style.maxHeight = '0px';
+    }
+    section.classList.add('pf-m-collapsed');
+  } else {
+    // Expanding: remove collapsed, animate from 0 to scrollHeight, then clear
+    // the inline cap so the content can grow freely in future.
+    section.classList.remove('pf-m-collapsed');
+    if (content) {
+      content.style.maxHeight = content.scrollHeight + 'px';
+      content.addEventListener('transitionend', function onExpand(e) {
+        if (e.propertyName !== 'max-height') return;
+        // Guard against a fast re-collapse cancelling this listener late
+        if (!section.classList.contains('pf-m-collapsed')) {
+          content.style.maxHeight = '';
+        }
+        content.removeEventListener('transitionend', onExpand);
+      });
+    }
+  }
+}
+
 {% if fleet_meta %}
 function lineDiff(oldText, newText) {
   var oldLines = (oldText || '').split('\n');
@@ -747,15 +801,20 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+var compareCloseTimer = null;
+
 function closeCompareModal() {
   var modal = document.getElementById('variant-compare-modal');
-  if (modal) {
+  if (!modal) return;
+  modal.classList.remove('pf-m-open');
+  compareCloseTimer = setTimeout(function() {
+    compareCloseTimer = null;
     modal.style.display = 'none';
     var body = document.getElementById('compare-modal-body');
     var footer = document.getElementById('compare-modal-footer');
     if (body) body.innerHTML = '';
     if (footer) footer.innerHTML = '';
-  }
+  }, 160);
 }
 
 function showCompareModal(path, selectedItem, comparisonItem) {
@@ -811,7 +870,9 @@ function showCompareModal(path, selectedItem, comparisonItem) {
     closeCompareModal();
   });
 
+  if (compareCloseTimer) { clearTimeout(compareCloseTimer); compareCloseTimer = null; }
   modal.style.display = '';
+  requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
 }
 
 function switchVariant(ctx) {

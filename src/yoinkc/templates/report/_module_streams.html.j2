@@ -1,9 +1,9 @@
-{% from "report/_macros.html.j2" import fleet_cell with context -%}
+{% from "report/_macros.html.j2" import fleet_cell, card_toggle with context -%}
 {# ── DNF Module Streams ───────────────────────────────────────────────────── #}
 {%- if snapshot.rpm and snapshot.rpm.module_streams %}
-<div class="pf-v6-c-card">
-  <div class="pf-v6-c-card__header"><div class="pf-v6-c-card__title"><h3>DNF Module Streams ({{ snapshot.rpm.module_streams|length }})</h3></div></div>
-  <div class="pf-v6-c-card__body">
+<div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
+  <div class="pf-v6-c-card__header">{{ card_toggle("card-pkg-module-streams", "DNF Module Streams (" ~ snapshot.rpm.module_streams|length ~ ")") }}</div>
+  <div class="pf-v6-c-expandable-section__content" id="card-pkg-module-streams"><div class="pf-v6-c-card__body">
   <table class="pf-v6-c-table" id="pkg-module-streams-table">
     <thead><tr>
       <th scope="col">Module</th>
@@ -43,6 +43,6 @@
     {%- endfor %}
     </tbody>
   </table>
-  </div>
+  </div></div>
 </div>
 {%- endif %}

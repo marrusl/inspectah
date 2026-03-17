@@ -293,21 +293,26 @@
     if (!modal) { onDiscard(); return; }
     if (msg) msg.innerHTML = 'You have unsaved changes to <code>' + escapeHtml(filename) + '</code>.';
     modal.style.display = '';
+    requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
 
     var saveBtn = document.getElementById('unsaved-btn-save');
     var discardBtn = document.getElementById('unsaved-btn-discard');
     var cancelBtn = document.getElementById('unsaved-btn-cancel');
 
-    function cleanup() {
-      modal.style.display = 'none';
+    function cleanup(callback) {
+      modal.classList.remove('pf-m-open');
       if (saveBtn) saveBtn.replaceWith(saveBtn.cloneNode(true));
       if (discardBtn) discardBtn.replaceWith(discardBtn.cloneNode(true));
       if (cancelBtn) cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+      setTimeout(function() {
+        modal.style.display = 'none';
+        if (callback) callback();
+      }, 160);
     }
 
-    if (saveBtn) saveBtn.addEventListener('click', function() { cleanup(); onSave(); });
-    if (discardBtn) discardBtn.addEventListener('click', function() { cleanup(); onDiscard(); });
-    if (cancelBtn) cancelBtn.addEventListener('click', function() { cleanup(); onCancel(); });
+    if (saveBtn) saveBtn.addEventListener('click', function() { cleanup(onSave); });
+    if (discardBtn) discardBtn.addEventListener('click', function() { cleanup(onDiscard); });
+    if (cancelBtn) cancelBtn.addEventListener('click', function() { cleanup(onCancel); });
   }
 
   function selectFile(section, list, index, path) {
@@ -520,34 +525,40 @@
     if (!modal) return;
     if (msg) msg.innerHTML = 'Delete <code>' + escapeHtml(f.path) + '</code>? This cannot be undone.';
     modal.style.display = '';
+    requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
 
     var confirmBtn = document.getElementById('delete-btn-confirm');
     var cancelBtn = document.getElementById('delete-btn-cancel');
 
-    function cleanup() {
-      modal.style.display = 'none';
+    function cleanup(callback) {
+      modal.classList.remove('pf-m-open');
       if (confirmBtn) confirmBtn.replaceWith(confirmBtn.cloneNode(true));
       if (cancelBtn) cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+      setTimeout(function() {
+        modal.style.display = 'none';
+        if (callback) callback();
+      }, 160);
     }
 
     if (cancelBtn) cancelBtn.addEventListener('click', function() { cleanup(); });
     if (confirmBtn) confirmBtn.addEventListener('click', function() {
-      cleanup();
-      snapshot[f.section][f.list].splice(f.index, 1);
-      editorState.dirtyFiles.delete(f.path);
-      editorState.savedFiles.delete(f.path);
-      editorState.currentFile = null;
-      editorState.editMode = false;
-      buildTree();
-      var readonlyEl = document.getElementById('editor-readonly-content');
-      var cmContainer = document.getElementById('editor-cm-container');
-      if (readonlyEl) { readonlyEl.textContent = ''; readonlyEl.style.display = ''; }
-      if (cmContainer) cmContainer.style.display = 'none';
-      var pathEl = document.getElementById('editor-file-path');
-      if (pathEl) pathEl.innerHTML = '';
-      var actionsEl = document.getElementById('editor-actions');
-      if (actionsEl) actionsEl.innerHTML = '';
-      updateChangedCount();
+      cleanup(function() {
+        snapshot[f.section][f.list].splice(f.index, 1);
+        editorState.dirtyFiles.delete(f.path);
+        editorState.savedFiles.delete(f.path);
+        editorState.currentFile = null;
+        editorState.editMode = false;
+        buildTree();
+        var readonlyEl = document.getElementById('editor-readonly-content');
+        var cmContainer = document.getElementById('editor-cm-container');
+        if (readonlyEl) { readonlyEl.textContent = ''; readonlyEl.style.display = ''; }
+        if (cmContainer) cmContainer.style.display = 'none';
+        var pathEl = document.getElementById('editor-file-path');
+        if (pathEl) pathEl.innerHTML = '';
+        var actionsEl = document.getElementById('editor-actions');
+        if (actionsEl) actionsEl.innerHTML = '';
+        updateChangedCount();
+      });
     });
   }
 
@@ -648,16 +659,27 @@
 
   // --- New File Modal ---
   var newFileBtn = document.getElementById('btn-new-file');
+  var newFileCloseTimer = null;
   if (newFileBtn) {
     newFileBtn.addEventListener('click', function() {
       var modal = document.getElementById('new-file-modal');
-      if (modal) { modal.style.display = ''; updateNewFileForm(); }
+      if (modal) {
+        if (newFileCloseTimer) { clearTimeout(newFileCloseTimer); newFileCloseTimer = null; }
+        modal.style.display = '';
+        updateNewFileForm();
+        requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
+      }
     });
   }
 
   window.closeNewFileModal = function() {
     var modal = document.getElementById('new-file-modal');
-    if (modal) modal.style.display = 'none';
+    if (!modal) return;
+    modal.classList.remove('pf-m-open');
+    newFileCloseTimer = setTimeout(function() {
+      newFileCloseTimer = null;
+      modal.style.display = 'none';
+    }, 160);
   };
 
   window.updateNewFileForm = function() {
