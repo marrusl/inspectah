@@ -1,11 +1,16 @@
 {# ── Section wrapper macro ─────────────────────────────────────────────── #}
-{% macro section(id, title, visible=false) -%}
+{% macro section(id, title, visible=false, triageable=false) -%}
 <div id="section-{{ id }}" class="section{% if visible %} visible{% endif %}">
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header">
       <div class="pf-v6-c-card__title"><h2>{{ title }}</h2></div>
     </div>
     <div class="pf-v6-c-card__body">
+    {%- if triageable %}
+    <div style="display: flex; justify-content: flex-end; margin-bottom: var(--pf-t--global--spacer--sm);">
+      <button class="pf-v6-c-button pf-m-secondary pf-m-small" onclick="toggleReviewed('{{ id }}', this)" data-tab-id="{{ id }}">Mark as reviewed</button>
+    </div>
+    {%- endif %}
     {{- caller() }}
     </div>
   </div>
@@ -17,7 +22,8 @@
 {% if fleet_meta %}
 <td class="fleet-prevalence">
   {% if item.fleet %}
-  <div class="fleet-bar"
+  <div class="fleet-bar" tabindex="0" role="button"
+       aria-label="{{ item.fleet.count }} of {{ item.fleet.total }} hosts"
        data-count="{{ item.fleet.count }}"
        data-total="{{ item.fleet.total }}"
        data-hosts="{{ item.fleet.hosts | join(', ') }}">

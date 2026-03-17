@@ -1,7 +1,7 @@
 {% if not fleet_meta %}
 {% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── Storage ─────────────────────────────────────────────────────────────── #}
-{% call section("storage", "Storage") %}
+{% call section("storage", "Storage", triageable=true) %}
   {%- if snapshot.storage and snapshot.storage.fstab_entries %}
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-storage-fstab", "Fstab Entries") }}</div>

@@ -4,10 +4,51 @@
 var snapshot = {{ snapshot_json|safe }};
 var originalSnapshot = {{ original_snapshot_json|safe }};
 var refineMode = {{ 'true' if refine_mode else 'false' }};
+
+var FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function activateOnKeydown(e) {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    e.currentTarget.click();
+  }
+}
+
+function trapFocus(modalElement, closeHandler) {
+  var previousFocus = document.activeElement;
+  var focusable = modalElement.querySelectorAll(FOCUSABLE_SELECTOR);
+  if (focusable.length) focusable[0].focus();
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (closeHandler) closeHandler();
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    var updated = modalElement.querySelectorAll(FOCUSABLE_SELECTOR);
+    if (!updated.length) return;
+    var first = updated[0];
+    var last = updated[updated.length - 1];
+    if (e.shiftKey) {
+      if (document.activeElement === first) { e.preventDefault(); last.focus(); }
+    } else {
+      if (document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }
+  modalElement.addEventListener('keydown', onKeydown);
+
+  return function releaseTrap() {
+    modalElement.removeEventListener('keydown', onKeydown);
+    if (previousFocus && previousFocus.focus) previousFocus.focus();
+  };
+}
+
 (function(){
   var sections = document.querySelectorAll('.section');
   var navLinks = document.querySelectorAll('.pf-v6-c-nav__link[data-tab]');
   var fromPopstate = false;
+  var initialLoad = true;
   function show(id) {
     if (!id) return;
     sections.forEach(function(s){ s.classList.remove('visible', 'pf-m-current'); });
@@ -17,10 +58,21 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
       requestAnimationFrame(function() { el.classList.add('pf-m-current'); });
     }
     navLinks.forEach(function(link){
-      link.classList.toggle('pf-m-current', link.getAttribute('data-tab') === id);
+      var isActive = link.getAttribute('data-tab') === id;
+      link.classList.toggle('pf-m-current', isActive);
+      if (isActive) {
+        link.setAttribute('aria-current', 'page');
+      } else {
+        link.removeAttribute('aria-current');
+      }
     });
     if (!fromPopstate) {
       history.pushState({tab: id}, '', '#' + id);
+    }
+    if (!initialLoad) {
+      var reviewBtn = el ? el.querySelector('[data-tab-id="' + id + '"]') : null;
+      var focusTarget = reviewBtn || document.getElementById('main-content');
+      if (focusTarget) focusTarget.focus();
     }
   }
   window.show = show;
@@ -43,6 +95,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
     fromPopstate = false;
     history.replaceState({tab: initialTab}, '', '#' + initialTab);
   })();
+  initialLoad = false;
 
   // --- Warning dismiss + badge ---
   var bannerCount = document.getElementById('banner-warning-count');
@@ -491,6 +544,7 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
       });
       Object.keys(seen).forEach(function(g) { updateCompareButtons(g); });
     }
+    resetReviewState();
     showToast('Selections reset to initial state');
   }
 
@@ -709,12 +763,90 @@ var refineMode = {{ 'true' if refine_mode else 'false' }};
     });
   })();
 
+  // --- Triage progress tracking ---
+  var reviewedSections = {};
+  // Build triageable tab list from the DOM so fleet reports (which omit Storage)
+  // automatically get the correct count without any hardcoded assumptions.
+  var TRIAGEABLE_TABS = (function() {
+    var tabs = [];
+    document.querySelectorAll('[data-tab-id]').forEach(function(btn) {
+      tabs.push(btn.getAttribute('data-tab-id'));
+    });
+    return tabs;
+  }());
+
+  function updateReviewProgress() {
+    var count = Object.keys(reviewedSections).length;
+    var total = TRIAGEABLE_TABS.length;
+    var pct = total > 0 ? Math.round(count * 100 / total) : 0;
+    var label = document.getElementById('review-progress-label');
+    var indicator = document.getElementById('review-progress-indicator');
+    var container = document.getElementById('review-progress');
+    var bar = container ? container.querySelector('.pf-v6-c-progress__bar') : null;
+    if (label) {
+      label.textContent = count === total ? 'All sections reviewed' : count + ' of ' + total + ' reviewed';
+    }
+    if (indicator) {
+      indicator.style.width = pct + '%';
+    }
+    if (bar) {
+      bar.setAttribute('aria-valuemax', String(total));
+      bar.setAttribute('aria-valuenow', String(count));
+    }
+    if (container) {
+      container.classList.toggle('pf-m-success', total > 0 && count === total);
+    }
+  }
+
+  // Initialise the label/aria-valuemax with the correct DOM-derived total.
+  updateReviewProgress();
+
+  function toggleReviewed(tabId, btn) {
+    if (reviewedSections[tabId]) {
+      delete reviewedSections[tabId];
+      btn.className = 'pf-v6-c-button pf-m-secondary pf-m-small';
+      btn.textContent = 'Mark as reviewed';
+    } else {
+      reviewedSections[tabId] = true;
+      btn.className = 'pf-v6-c-button pf-m-plain pf-m-small';
+      btn.innerHTML = '<span style="color: var(--pf-t--global--color--status--success--default);">✓ Reviewed</span>';
+    }
+    var check = document.getElementById('check-' + tabId);
+    if (check) {
+      check.style.display = reviewedSections[tabId] ? '' : 'none';
+      if (reviewedSections[tabId]) {
+        check.classList.remove('reviewed-checkmark');
+        void check.offsetWidth;
+        check.classList.add('reviewed-checkmark');
+      }
+    }
+    updateReviewProgress();
+  }
+
+  function resetReviewState() {
+    reviewedSections = {};
+    TRIAGEABLE_TABS.forEach(function(tabId) {
+      var check = document.getElementById('check-' + tabId);
+      if (check) {
+        check.style.display = 'none';
+        check.classList.remove('reviewed-checkmark');
+      }
+      var btn = document.querySelector('[data-tab-id="' + tabId + '"]');
+      if (btn) {
+        btn.className = 'pf-v6-c-button pf-m-secondary pf-m-small';
+        btn.textContent = 'Mark as reviewed';
+      }
+    });
+    updateReviewProgress();
+  }
+
   // Expose helpers needed by the fleet refine IIFE (outside this closure)
   window.updateToolbar = updateToolbar;
   window.setDirty = setDirty;
   window.isSnapshotClean = isSnapshotClean;
   window.resolveSnapshotRef = resolveSnapshotRef;
   window.recalcTriageCounts = recalcTriageCounts;
+  window.toggleReviewed = toggleReviewed;
 })();
 
 
@@ -802,10 +934,12 @@ function escapeHtml(str) {
 }
 
 var compareCloseTimer = null;
+var compareReleaseTrap = null;
 
 function closeCompareModal() {
   var modal = document.getElementById('variant-compare-modal');
   if (!modal) return;
+  if (compareReleaseTrap) { compareReleaseTrap(); compareReleaseTrap = null; }
   modal.classList.remove('pf-m-open');
   compareCloseTimer = setTimeout(function() {
     compareCloseTimer = null;
@@ -872,7 +1006,11 @@ function showCompareModal(path, selectedItem, comparisonItem) {
 
   if (compareCloseTimer) { clearTimeout(compareCloseTimer); compareCloseTimer = null; }
   modal.style.display = '';
-  requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
+  requestAnimationFrame(function() {
+    modal.classList.add('pf-m-open');
+    var dialog = modal.querySelector('.pf-v6-c-modal-box');
+    if (dialog) compareReleaseTrap = trapFocus(dialog, closeCompareModal);
+  });
 }
 
 function switchVariant(ctx) {
@@ -992,8 +1130,16 @@ document.addEventListener('click', function(e) {
   showCompareModal(group, selectedItem, comparisonItem);
 });
 
+/* Fleet: keyboard activation for fleet bars */
+document.querySelectorAll('.fleet-bar').forEach(function(bar) {
+  bar.addEventListener('keydown', activateOnKeydown);
+});
+
 /* Fleet: toggle fraction/percentage on prevalence labels */
 document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
+  label.setAttribute('tabindex', '0');
+  label.setAttribute('role', 'button');
+  label.setAttribute('aria-label', 'Toggle percentage display');
   label.addEventListener('click', function(e) {
     e.stopPropagation();
     var bar = this.closest('.fleet-bar');
@@ -1008,6 +1154,13 @@ document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
     } else {
       this.textContent = count + '/' + total;
       this.setAttribute('data-showing', 'fraction');
+    }
+  });
+  label.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      this.click();
     }
   });
 });
@@ -1049,6 +1202,7 @@ function fleetCopyHosts(hostList, btnEl) {
 document.querySelectorAll('.fleet-bar').forEach(function(bar) {
   bar.addEventListener('click', function(e) {
     if (activePopover) {
+      if (activePopover._releaseTrap) activePopover._releaseTrap();
       activePopover.remove();
       activePopover = null;
     }
@@ -1160,12 +1314,20 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
     this.style.position = 'relative';
     this.appendChild(popover);
     activePopover = popover;
+    activePopover._releaseTrap = trapFocus(popover, function() {
+      if (activePopover) {
+        if (activePopover._releaseTrap) activePopover._releaseTrap();
+        activePopover.remove();
+        activePopover = null;
+      }
+    });
   });
 });
 
 /* Close popover on click outside */
 document.addEventListener('click', function(e) {
   if (activePopover && !e.target.closest('.fleet-bar')) {
+    if (activePopover._releaseTrap) activePopover._releaseTrap();
     activePopover.remove();
     activePopover = null;
   }
@@ -1173,6 +1335,7 @@ document.addEventListener('click', function(e) {
 
 /* Fleet: variant group expand/collapse */
 document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
+  badge.addEventListener('keydown', activateOnKeydown);
   badge.addEventListener('click', function() {
     var childRow = this.closest('tr').nextElementSibling;
     if (childRow && childRow.classList.contains('fleet-variant-children')) {

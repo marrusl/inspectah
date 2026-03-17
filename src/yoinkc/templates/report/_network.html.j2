@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Network ─────────────────────────────────────────────────────────────── #}
-{% call section("network", "Network") %}
+{% call section("network", "Network", triageable=true) %}
   {%- set net = snapshot.network %}
   {%- if net and (net.connections or net.firewall_zones or net.firewall_direct_rules or net.ip_routes or net.ip_rules or net.resolv_provenance) %}
 

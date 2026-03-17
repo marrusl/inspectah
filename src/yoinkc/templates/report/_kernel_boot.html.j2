@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── Kernel / Boot ────────────────────────────────────────────────────────── #}
-{% call section("kernel_boot", "Kernel and boot") %}
+{% call section("kernel_boot", "Kernel and boot", triageable=true) %}
   {%- set kb = snapshot.kernel_boot %}
   {%- if kb and (kb.cmdline or kb.sysctl_overrides or kb.non_default_modules or kb.modules_load_d or kb.modprobe_d or kb.dracut_conf or kb.tuned_active or kb.tuned_custom_profiles or kb.locale or kb.timezone or kb.alternatives) %}
 

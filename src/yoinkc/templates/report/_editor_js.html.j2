@@ -58,6 +58,8 @@
           var e = entries[0];
           var row = document.createElement('div');
           row.className = 'editor-single-file';
+          row.tabIndex = 0;
+          row.setAttribute('role', 'button');
           row.dataset.section = sec.section;
           row.dataset.list = sec.list;
           row.dataset.index = e.idx;
@@ -71,6 +73,7 @@
           row.addEventListener('click', function() {
             selectFile(sec.section, sec.list, e.idx, path);
           });
+          row.addEventListener('keydown', activateOnKeydown);
           treeEl.appendChild(row);
         } else {
           entries.sort(function(a, b) {
@@ -85,11 +88,14 @@
           var pp = pathParts(path);
           var headerDiv = document.createElement('div');
           headerDiv.className = 'editor-variant-header';
+          headerDiv.tabIndex = 0;
+          headerDiv.setAttribute('role', 'button');
           headerDiv.innerHTML = '<span class="chevron">\u25BC</span>' +
             '<span class="path-dir">' + escapeHtml(pp.dir) + '</span>' +
             '<span class="path-file">' + escapeHtml(pp.name) + '</span>' +
             ' <span class="pf-v6-c-badge pf-m-read">' + entries.length + ' variants</span>';
           headerDiv.addEventListener('click', function() { toggleAccordion(this); });
+          headerDiv.addEventListener('keydown', activateOnKeydown);
           group.appendChild(headerDiv);
 
           var children = document.createElement('div');
@@ -100,6 +106,8 @@
             var isSelected = item.include === true;
             var row = document.createElement('div');
             row.className = 'editor-variant-row' + (isSelected ? ' selected' : '');
+            row.tabIndex = 0;
+            row.setAttribute('role', 'button');
             row.dataset.section = sec.section;
             row.dataset.list = sec.list;
             row.dataset.index = e.idx;
@@ -161,6 +169,7 @@
             row.addEventListener('click', function() {
               selectFile(sec.section, sec.list, e.idx, path);
             });
+            row.addEventListener('keydown', activateOnKeydown);
             children.appendChild(row);
           });
 
@@ -293,13 +302,19 @@
     if (!modal) { onDiscard(); return; }
     if (msg) msg.innerHTML = 'You have unsaved changes to <code>' + escapeHtml(filename) + '</code>.';
     modal.style.display = '';
-    requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
+    var unsavedRelease = null;
+    requestAnimationFrame(function() {
+      modal.classList.add('pf-m-open');
+      var dialog = modal.querySelector('.pf-v6-c-modal-box');
+      if (dialog) unsavedRelease = trapFocus(dialog, function() { cleanup(onCancel); });
+    });
 
     var saveBtn = document.getElementById('unsaved-btn-save');
     var discardBtn = document.getElementById('unsaved-btn-discard');
     var cancelBtn = document.getElementById('unsaved-btn-cancel');
 
     function cleanup(callback) {
+      if (unsavedRelease) { unsavedRelease(); unsavedRelease = null; }
       modal.classList.remove('pf-m-open');
       if (saveBtn) saveBtn.replaceWith(saveBtn.cloneNode(true));
       if (discardBtn) discardBtn.replaceWith(discardBtn.cloneNode(true));
@@ -525,12 +540,18 @@
     if (!modal) return;
     if (msg) msg.innerHTML = 'Delete <code>' + escapeHtml(f.path) + '</code>? This cannot be undone.';
     modal.style.display = '';
-    requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
+    var deleteRelease = null;
+    requestAnimationFrame(function() {
+      modal.classList.add('pf-m-open');
+      var dialog = modal.querySelector('.pf-v6-c-modal-box');
+      if (dialog) deleteRelease = trapFocus(dialog, function() { cleanup(); });
+    });
 
     var confirmBtn = document.getElementById('delete-btn-confirm');
     var cancelBtn = document.getElementById('delete-btn-cancel');
 
     function cleanup(callback) {
+      if (deleteRelease) { deleteRelease(); deleteRelease = null; }
       modal.classList.remove('pf-m-open');
       if (confirmBtn) confirmBtn.replaceWith(confirmBtn.cloneNode(true));
       if (cancelBtn) cancelBtn.replaceWith(cancelBtn.cloneNode(true));
@@ -660,6 +681,7 @@
   // --- New File Modal ---
   var newFileBtn = document.getElementById('btn-new-file');
   var newFileCloseTimer = null;
+  var newFileReleaseTrap = null;
   if (newFileBtn) {
     newFileBtn.addEventListener('click', function() {
       var modal = document.getElementById('new-file-modal');
@@ -667,7 +689,11 @@
         if (newFileCloseTimer) { clearTimeout(newFileCloseTimer); newFileCloseTimer = null; }
         modal.style.display = '';
         updateNewFileForm();
-        requestAnimationFrame(function() { modal.classList.add('pf-m-open'); });
+        requestAnimationFrame(function() {
+          modal.classList.add('pf-m-open');
+          var dialog = modal.querySelector('.pf-v6-c-modal-box');
+          if (dialog) newFileReleaseTrap = trapFocus(dialog, closeNewFileModal);
+        });
       }
     });
   }
@@ -675,6 +701,7 @@
   window.closeNewFileModal = function() {
     var modal = document.getElementById('new-file-modal');
     if (!modal) return;
+    if (newFileReleaseTrap) { newFileReleaseTrap(); newFileReleaseTrap = null; }
     modal.classList.remove('pf-m-open');
     newFileCloseTimer = setTimeout(function() {
       newFileCloseTimer = null;

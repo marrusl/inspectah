@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Scheduled jobs ───────────────────────────────────────────────────────── #}
-{% call section("scheduled_tasks", "Scheduled jobs") %}
+{% call section("scheduled_tasks", "Scheduled jobs", triageable=true) %}
   {%- set st = snapshot.scheduled_tasks %}
   {%- if st and (st.cron_jobs or st.systemd_timers or st.generated_timer_units or st.at_jobs) %}
 

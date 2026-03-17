@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── SELinux ──────────────────────────────────────────────────────────────── #}
-{% call section("selinux", "SELinux / Security") %}
+{% call section("selinux", "SELinux / Security", triageable=true) %}
   {%- set se = snapshot.selinux %}
   {%- if se and (se.mode or se.custom_modules or se.boolean_overrides or se.audit_rules or se.fips_mode or se.port_labels or se.fcontext_rules or se.pam_configs) %}
 

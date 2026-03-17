@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Packages ────────────────────────────────────────────────────────────── #}
-{% call section("packages", "Packages") %}
+{% call section("packages", "Packages", triageable=true) %}
   {%- if snapshot.rpm and snapshot.rpm.no_baseline %}
   <p><em>No baseline — showing all packages. Pull the base image or provide --baseline-packages.</em></p>
   {%- endif %}

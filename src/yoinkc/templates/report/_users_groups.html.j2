@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── Users / Groups ───────────────────────────────────────────────────────── #}
-{% call section("users_groups", "Users and groups") %}
+{% call section("users_groups", "Users and groups", triageable=true) %}
   {%- if snapshot.users_groups and snapshot.users_groups.users %}
   {%- set ug = snapshot.users_groups %}
   {%- set strategies = ["sysusers", "blueprint", "useradd", "kickstart"] %}

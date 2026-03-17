@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
 {# ── Config ──────────────────────────────────────────────────────────────── #}
-{% call section("config", "Configuration files") %}
+{% call section("config", "Configuration files", triageable=true) %}
   {%- if snapshot.config and snapshot.config.files %}
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-config-files", "Configuration Files") }}</div>
@@ -24,6 +24,7 @@
         <td>
           <code>{{ path }}</code>
           <span class="pf-v6-c-label pf-m-compact pf-m-outline fleet-variant-toggle"
+                tabindex="0" role="button" aria-label="Toggle variants"
                 style="margin-left: 8px; cursor: pointer;">
             <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
           </span>

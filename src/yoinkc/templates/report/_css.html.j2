@@ -328,6 +328,13 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .diff-line-remove { padding: 0 16px; white-space: pre; background: rgba(201, 25, 11, 0.12); color: var(--pf-t--global--text--color--regular); }
 .diff-legend-selected { color: #c9190b; margin-right: 4px; }
 .diff-legend-comparison { color: #4dabf7; margin-right: 4px; }
+/* Focus indicators for fleet-specific interactive elements */
+.fleet-bar:focus-visible,
+.fleet-bar-label:focus-visible,
+.fleet-variant-toggle:focus-visible {
+  outline: 2px solid var(--pf-t--global--icon--color--brand--default, #0066cc);
+  outline-offset: 2px;
+}
 {% endif %}
 
 /* Pencil editor icon column */
@@ -410,6 +417,29 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .pf-v6-c-backdrop.pf-m-open .pf-v6-c-modal-box {
   transform: scale(1);
   opacity: 1;
+}
+
+/* ── Focus indicators for custom interactive elements ───────────────────
+   PF6 buttons/links get :focus-visible for free. These rules cover
+   elements that are interactive via JS but aren't native <button>/<a>. */
+.editor-variant-row:focus-visible,
+.editor-variant-header:focus-visible,
+.editor-single-file:focus-visible,
+.editor-icon:focus-visible {
+  outline: 2px solid var(--pf-t--global--icon--color--brand--default, #0066cc);
+  outline-offset: 2px;
+}
+
+/* Skip link: PF6 provides built-in styles via .pf-v6-c-skip-to-content,
+   but ensure the outline is visible when focused. */
+.pf-v6-c-skip-to-content:focus {
+  outline: 2px solid var(--pf-t--global--icon--color--brand--default, #0066cc);
+  outline-offset: 2px;
+}
+
+/* Suppress the focus outline on the main-content target (receives programmatic focus) */
+#main-content:focus {
+  outline: none;
 }
 
 /* ── Mark-reviewed checkmark (Part A CSS — class ready, JS comes later) ─ */

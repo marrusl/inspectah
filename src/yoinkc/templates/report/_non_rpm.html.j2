@@ -1,6 +1,6 @@
 {% from "report/_macros.html.j2" import section, card_toggle with context -%}
 {# ── Non-RPM software ────────────────────────────────────────────────────── #}
-{% call section("non_rpm", "Non-RPM software") %}
+{% call section("non_rpm", "Non-RPM software", triageable=true) %}
   {%- set nr = snapshot.non_rpm_software %}
   {%- if nr and nr.items %}
   {%- set nd = non_rpm_data %}
