@@ -1,9 +1,45 @@
 """Containerfile section: configuration files (consolidated COPY)."""
 
+import re
 from pathlib import Path
 
-from ...schema import InspectionSnapshot
+from ...schema import ConfigCategory, InspectionSnapshot
 from ._config_tree import config_copy_roots, config_inventory_comment
+
+_CRYPTO_POLICY_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_:.-]*$")
+
+
+def _crypto_policy_lines(snapshot: InspectionSnapshot) -> list[str]:
+    """Emit ``update-crypto-policies --set`` after config COPYs."""
+    if not snapshot.config:
+        return []
+
+    policy_file = next(
+        (
+            f for f in snapshot.config.files
+            if f.category == ConfigCategory.CRYPTO_POLICY
+            and f.path == "/etc/crypto-policies/config"
+            and f.include
+        ),
+        None,
+    )
+    if policy_file is None:
+        return []
+
+    policy = policy_file.content.splitlines()[0].split("#", 1)[0].strip() if policy_file.content else ""
+    if not policy or policy == "DEFAULT":
+        return []
+    if not _CRYPTO_POLICY_NAME_RE.fullmatch(policy):
+        return [
+            f"# WARNING: crypto policy name contains unexpected characters, skipped: {policy!r}",
+            "",
+        ]
+
+    return [
+        f"# System crypto policy: {policy}",
+        f"RUN update-crypto-policies --set {policy}",
+        "",
+    ]
 
 
 def section_lines(
@@ -45,5 +81,7 @@ def section_lines(
         lines.append("# Custom CA certificates detected in /etc/pki/ca-trust/source/anchors/")
         lines.append("RUN update-ca-trust")
         lines.append("")
+
+    lines.extend(_crypto_policy_lines(snapshot))
 
     return lines

@@ -30,9 +30,11 @@ _EXCLUDED = [
     "/etc/ld.so.cache", "/etc/ld.so.conf", "/etc/mtab", "/etc/rpc",
     "/etc/udev/hwdb.bin",
     "/etc/tuned/active_profile", "/etc/tuned/profile_mode", "/etc/tuned/bootcmdline",
-    # PKI generated
+    # PKI generated / crypto-policy backends
     "/etc/pki/ca-trust/extracted/java/cacerts",
     "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+    "/etc/crypto-policies/back-ends/nss.config",
+    "/etc/crypto-policies/back-ends/opensslcnf.config",
     "/etc/pki/java/cacerts", "/etc/pki/tls/cert.pem",
     "/etc/pki/tls/certs/ca-bundle.crt", "/etc/pki/tls/certs/ca-bundle.trust.crt",
     "/etc/pki/product-default/69.pem",   # RHEL 9
