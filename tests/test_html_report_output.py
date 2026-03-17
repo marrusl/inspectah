@@ -306,6 +306,49 @@ class TestHtmlStructure:
             "The escaped form <\\/ must be present in the embedded JSON"
         )
 
+    def test_sidebar_packages_badge_filters_include_for_module_streams_and_version_locks(self):
+        """Server-rendered packages triage badge must count only include=True items.
+
+        Regression guard: an earlier version used raw list length, which inflated
+        the badge on initial render when some entries had been excluded in a refined
+        report.
+        """
+        from yoinkc.schema import EnabledModuleStream, RpmSection, VersionLockEntry
+
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+            rpm=RpmSection(
+                # No packages_added — keeps counts.packages_added at 0 so the only
+                # contribution to the badge comes from the new lists.
+                module_streams=[
+                    EnabledModuleStream(module_name="postgresql", stream="15", include=True),
+                    EnabledModuleStream(module_name="nodejs", stream="18", include=False),
+                ],
+                version_locks=[
+                    VersionLockEntry(raw_pattern="curl-7.76.1-26.el9.x86_64",
+                                     name="curl", version="7.76.1",
+                                     release="26.el9", arch="x86_64", include=True),
+                    VersionLockEntry(raw_pattern="openssl-3.0.7-24.el9.x86_64",
+                                     name="openssl", version="3.0.7",
+                                     release="24.el9", arch="x86_64", include=False),
+                ],
+            ),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            html = (Path(tmp) / "report.html").read_text()
+
+        m = re.search(r'data-triage-section="rpm">(\d+)<', html)
+        assert m is not None, "packages triage badge (data-triage-section='rpm') not found in HTML"
+        badge_value = int(m.group(1))
+        # 1 included module stream + 1 included version lock = 2
+        # The 2 excluded items must not inflate the count to 4.
+        assert badge_value == 2, (
+            f"expected badge=2 (1 included module stream + 1 included version lock), got {badge_value}; "
+            "excluded items must not be counted in the server-rendered triage badge"
+        )
+
     def test_readme_detailed(self, outputs_with_baseline):
         """README includes build command, deploy, findings summary, artifacts, FIXMEs."""
         readme = (outputs_with_baseline["dir"] / "README.md").read_text()
