@@ -4,6 +4,35 @@
   {%- if snapshot.rpm and snapshot.rpm.no_baseline %}
   <p><em>No baseline — showing all packages. Pull the base image or provide --baseline-packages.</em></p>
   {%- endif %}
+
+  {%- if snapshot.rpm and snapshot.rpm.multiarch_packages %}
+  <div class="pf-v6-c-alert pf-m-warning pf-m-inline mb-md">
+    <div class="pf-v6-c-alert__title">Multi-arch: {{ snapshot.rpm.multiarch_packages|length }} package variant(s) installed alongside another architecture</div>
+    <div class="pf-v6-c-alert__description">
+      <p>These non-native architecture variants may not be available in the base image repositories. Verify whether they are needed before building.</p>
+      <ul>
+        {%- for pkg_arch in snapshot.rpm.multiarch_packages %}
+        <li><code>{{ pkg_arch }}</code></li>
+        {%- endfor %}
+      </ul>
+    </div>
+  </div>
+  {%- endif %}
+
+  {%- if snapshot.rpm and snapshot.rpm.duplicate_packages %}
+  <div class="pf-v6-c-alert pf-m-warning pf-m-inline mb-md">
+    <div class="pf-v6-c-alert__title">Duplicates: {{ snapshot.rpm.duplicate_packages|length }} package(s) have multiple versions installed</div>
+    <div class="pf-v6-c-alert__description">
+      <p>The same <code>name.arch</code> is installed more than once with different versions. Resolve which version should be present before building.</p>
+      <ul>
+        {%- for key in snapshot.rpm.duplicate_packages %}
+        <li><code>{{ key }}</code></li>
+        {%- endfor %}
+      </ul>
+    </div>
+  </div>
+  {%- endif %}
+
   {%- if snapshot.rpm and snapshot.rpm.packages_added %}
 
   {%- if snapshot.rpm.leaf_packages is not none and snapshot.rpm.leaf_dep_tree is not none %}

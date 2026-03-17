@@ -11,6 +11,7 @@ from yoinkc.schema import (
     ConfigSection,
     InspectionSnapshot,
     OsRelease,
+    RpmSection,
     ServiceSection,
     SystemdDropIn,
 )
@@ -357,3 +358,42 @@ class TestHtmlStructure:
         assert "bootc switch" in readme
         assert "audit-report.md" in readme
         assert "FIXME" in readme
+
+
+class TestPackageWarningBanners:
+    """Regression tests for multi-arch and duplicate package warning banners in the HTML report."""
+
+    def _render(self, rpm: RpmSection) -> str:
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9", pretty_name="RHEL 9"),
+            rpm=rpm,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            return (Path(tmp) / "report.html").read_text()
+
+    def test_multiarch_banner_rendered(self):
+        html = self._render(RpmSection(
+            multiarch_packages=["zlib.i686", "glibc.i686"],
+        ))
+        assert 'pf-v6-c-alert pf-m-warning' in html
+        assert "Multi-arch" in html
+        assert "zlib.i686" in html
+        assert "glibc.i686" in html
+
+    def test_duplicate_banner_rendered(self):
+        html = self._render(RpmSection(
+            duplicate_packages=["curl.x86_64"],
+        ))
+        assert 'pf-v6-c-alert pf-m-warning' in html
+        assert "Duplicate" in html
+        assert "curl.x86_64" in html
+
+    def test_no_warning_banners_when_lists_empty(self):
+        html = self._render(RpmSection(
+            multiarch_packages=[],
+            duplicate_packages=[],
+        ))
+        assert "Multi-arch" not in html
+        assert "Duplicate" not in html
