@@ -171,6 +171,9 @@ class ConfigCategory(str, Enum):
     LOGROTATE = "logrotate"
     AUTOMOUNT = "automount"
     SYSCTL = "sysctl"
+    CRYPTO_POLICY = "crypto_policy"
+    IDENTITY = "identity"
+    LIMITS = "limits"
     OTHER = "other"
 
 

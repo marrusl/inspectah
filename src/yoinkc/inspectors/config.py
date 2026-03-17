@@ -219,6 +219,9 @@ _CATEGORY_RULES: list[tuple[ConfigCategory, list[str]]] = [
     (ConfigCategory.LOGROTATE, ["/etc/logrotate.d/"]),
     (ConfigCategory.AUTOMOUNT, ["/etc/auto.master", "/etc/auto."]),
     (ConfigCategory.SYSCTL, ["/etc/sysctl.d/", "/etc/sysctl.conf"]),
+    (ConfigCategory.CRYPTO_POLICY, ["/etc/crypto-policies/"]),
+    (ConfigCategory.IDENTITY, ["/etc/nsswitch.conf", "/etc/sssd/", "/etc/krb5.conf", "/etc/krb5.conf.d/", "/etc/ipa/"]),
+    (ConfigCategory.LIMITS, ["/etc/security/limits."]),
 ]
 
 
