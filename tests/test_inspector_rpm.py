@@ -274,3 +274,38 @@ def test_downgrade_warning_generated(host_root, fixture_executor):
     warning_msgs = [w.get("message", "") for w in warnings]
     assert any("downgraded" in m for m in warning_msgs), \
         f"Expected downgrade warning, got: {warning_msgs}"
+
+
+def test_multiarch_warning_deduplicated_per_package(tmp_path):
+    """Multi-arch warnings should be emitted once per affected package name."""
+    from yoinkc.inspectors.rpm import run as run_rpm
+
+    def executor(cmd, cwd=None):
+        cmd_str = " ".join(cmd)
+        if "rpm" in cmd_str and "-qa" in cmd_str:
+            return RunResult(
+                stdout=(
+                    "0:libfoo-1.0-1.el9.ppc64le\n"
+                    "0:libfoo-1.0-1.el9.s390x\n"
+                ),
+                stderr="",
+                returncode=0,
+            )
+        if "rpm" in cmd_str and "-Va" in cmd_str:
+            return RunResult(stdout="", stderr="", returncode=0)
+        if "dnf" in cmd_str and "history" in cmd_str:
+            return RunResult(stdout="", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    warnings = []
+    section = run_rpm(tmp_path, executor, warnings=warnings)
+    assert sorted(section.multiarch_packages) == ["libfoo.ppc64le", "libfoo.s390x"]
+
+    warning_msgs = [
+        w.get("message", "")
+        for w in warnings
+        if "installed in multiple architectures" in w.get("message", "")
+    ]
+    assert warning_msgs == [
+        "Package 'libfoo' is installed in multiple architectures — verify affected variants are needed."
+    ]

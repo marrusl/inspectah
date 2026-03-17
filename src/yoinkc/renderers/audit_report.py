@@ -201,6 +201,14 @@ def render(
             n = len(snapshot.rpm.version_locks)
             lines.append(f"- Version Locks: {n} packages pinned")
             lines.append("")
+        if snapshot.rpm.multiarch_packages:
+            n = len({pkg_arch.rsplit(".", 1)[0] for pkg_arch in snapshot.rpm.multiarch_packages})
+            lines.append(f"- Multi-arch: {n} package(s) have both 32-bit and 64-bit variants")
+            lines.append("")
+        if snapshot.rpm.duplicate_packages:
+            n = len(snapshot.rpm.duplicate_packages)
+            lines.append(f"- Duplicates: {n} package(s) have multiple versions installed")
+            lines.append("")
         if snapshot.rpm.module_stream_conflicts:
             for conflict in snapshot.rpm.module_stream_conflicts:
                 lines.append(f"- [WARNING] Module stream conflict: {conflict}")

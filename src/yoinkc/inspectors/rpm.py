@@ -103,6 +103,39 @@ def _parse_rpm_qa(stdout: str, warnings: Optional[list] = None) -> List[PackageE
     return packages
 
 
+def _detect_multiarch(installed: List[PackageEntry]) -> List[str]:
+    """Return actionable ``name.arch`` entries for packages installed in multiple architectures.
+
+    When a package has an ``x86_64`` build plus other architectures, only the
+    non-``x86_64`` variants are returned (for example ``zlib.i686``). If there
+    is no obvious native architecture in the group, return all affected
+    ``name.arch`` pairs so the operator sees the full picture.
+    """
+    packages_by_name: dict[str, list[PackageEntry]] = {}
+    for pkg in installed:
+        packages_by_name.setdefault(pkg.name, []).append(pkg)
+
+    flagged: set[str] = set()
+    for name, entries in packages_by_name.items():
+        arches = {pkg.arch for pkg in entries}
+        if len(arches) <= 1:
+            continue
+        if "x86_64" in arches:
+            flagged.update(f"{name}.{pkg.arch}" for pkg in entries if pkg.arch != "x86_64")
+            continue
+        flagged.update(f"{name}.{pkg.arch}" for pkg in entries)
+    return sorted(flagged)
+
+
+def _detect_duplicates(installed: List[PackageEntry]) -> List[str]:
+    """Return name.arch keys that have more than one version installed."""
+    counts: dict = {}
+    for pkg in installed:
+        key = f"{pkg.name}.{pkg.arch}"
+        counts[key] = counts.get(key, 0) + 1
+    return sorted(key for key, count in counts.items() if count > 1)
+
+
 def _parse_rpm_va(stdout: str) -> List[RpmVaEntry]:
     """Parse rpm -Va output. Format: flags type path (e.g. S.5....T.  c /etc/foo)."""
     entries = []
@@ -888,6 +921,26 @@ def run(
                      if p.name not in _VIRTUAL_PACKAGES]
     else:
         installed = []
+
+    # 1b) Detect multi-arch and duplicate packages on the full installed list
+    if installed:
+        section.multiarch_packages = _detect_multiarch(installed)
+        section.duplicate_packages = _detect_duplicates(installed)
+        multiarch_names = sorted({variant.rsplit(".", 1)[0] for variant in section.multiarch_packages})
+        for name in multiarch_names:
+            if warnings is not None:
+                warnings.append(make_warning(
+                    "rpm",
+                    f"Package '{name}' is installed in multiple architectures — verify affected variants are needed.",
+                    "warning",
+                ))
+        for key in section.duplicate_packages:
+            if warnings is not None:
+                warnings.append(make_warning(
+                    "rpm",
+                    f"Package '{key}' has multiple versions installed — possible upgrade inconsistency.",
+                    "warning",
+                ))
 
     # 2) Baseline from base image (or file, or fallback)
     baseline_packages: Optional[Dict[str, "PackageEntry"]] = None

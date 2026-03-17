@@ -146,6 +146,9 @@ class RpmSection(BaseModel):
     baseline_module_streams: Optional[Dict[str, str]] = None
     versionlock_command_output: Optional[str] = None
 
+    multiarch_packages: List[str] = Field(default_factory=list)
+    duplicate_packages: List[str] = Field(default_factory=list)
+
     # Baseline from target bootc base image (cached for --from-snapshot)
     base_image: Optional[str] = None  # e.g. "quay.io/centos-bootc/centos-bootc:stream9"
     baseline_package_names: Optional[List[str]] = None

@@ -184,6 +184,21 @@ def section_lines(
     included_version_locks = [vl for vl in (rpm.version_locks if rpm else []) if vl.include]
     has_pkgs = bool(rpm and rpm.packages_added)
 
+    if rpm and rpm.multiarch_packages:
+        lines.append("# FIXME: The following package variants are installed alongside another architecture.")
+        lines.append("# Verify whether these 32-bit or otherwise non-native variants are required; they may not be available")
+        lines.append("# in the base image repositories.")
+        for pkg_nevra in sorted(rpm.multiarch_packages):
+            lines.append(f"#   {pkg_nevra}")
+        lines.append("")
+
+    if rpm and rpm.duplicate_packages:
+        lines.append("# FIXME: The following packages have multiple versions installed (duplicate name.arch).")
+        lines.append("# Resolve which version should be installed before building the image.")
+        for key in sorted(rpm.duplicate_packages):
+            lines.append(f"#   {key}")
+        lines.append("")
+
     # Package Installation
     if has_pkgs or included_version_locks:
         # Leaf/auto classification (only relevant when packages exist)
