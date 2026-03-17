@@ -6,7 +6,7 @@ All inspectors produce data that fits into this schema; all renderers consume it
 """
 
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -84,6 +84,30 @@ class PackageEntry(BaseModel):
     fleet: Optional[FleetPrevalence] = None
 
 
+class EnabledModuleStream(BaseModel):
+    """A DNF module stream that is enabled or installed on the host."""
+
+    module_name: str
+    stream: str
+    profiles: List[str] = []
+    include: bool = True
+    baseline_match: bool = False
+    fleet: Optional[FleetPrevalence] = None
+
+
+class VersionLockEntry(BaseModel):
+    """A package version pin from /etc/dnf/plugins/versionlock.list."""
+
+    raw_pattern: str   # as written in the file
+    name: str
+    epoch: int = 0
+    version: str
+    release: str
+    arch: str
+    include: bool = True
+    fleet: Optional[FleetPrevalence] = None
+
+
 class RpmVaEntry(BaseModel):
     """Single line from rpm -Va: modified file with verification flags."""
 
@@ -115,6 +139,12 @@ class RpmSection(BaseModel):
     leaf_packages: Optional[List[str]] = None
     auto_packages: Optional[List[str]] = None
     leaf_dep_tree: Optional[dict] = None  # {leaf_name: [auto_names_it_pulls_in]}
+
+    module_streams: List[EnabledModuleStream] = Field(default_factory=list)
+    version_locks: List[VersionLockEntry] = Field(default_factory=list)
+    module_stream_conflicts: List[str] = Field(default_factory=list)
+    baseline_module_streams: Optional[Dict[str, str]] = None
+    versionlock_command_output: Optional[str] = None
 
     # Baseline from target bootc base image (cached for --from-snapshot)
     base_image: Optional[str] = None  # e.g. "quay.io/centos-bootc/centos-bootc:stream9"
@@ -536,7 +566,7 @@ class UserGroupSection(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class InspectionSnapshot(BaseModel):

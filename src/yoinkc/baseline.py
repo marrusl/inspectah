@@ -390,6 +390,38 @@ class BaselineResolver:
         _debug(f"base image presets: {len(text.splitlines())} lines")
         return result.stdout
 
+    def query_module_streams(self, image: str) -> Dict[str, str]:
+        """Return enabled module streams from the base image as ``{module_name: stream}``.
+
+        Runs ``podman run --rm <image> cat /etc/dnf/modules.d/*.module``.
+        Pulls the image first if not already cached (a no-op when called after
+        ``query_packages()``).  Returns an empty dict on any failure.
+        """
+        from .inspectors.rpm import _parse_module_ini
+
+        if not self._check_registry_auth(image):
+            return {}
+        if not self.pull_image(image):
+            return {}
+        cmd = [
+            "podman", "run", "--rm", "--cgroups=disabled", image,
+            "bash", "-c",
+            "cat /etc/dnf/modules.d/*.module 2>/dev/null || true",
+        ]
+        _debug(f"querying base image module streams: {' '.join(cmd)}")
+        result = self._run_on_host(cmd)
+        if result is None or result.returncode != 0:
+            _debug(f"query_module_streams failed "
+                   f"(rc={result.returncode if result else 'None'})")
+            return {}
+        text = result.stdout.strip()
+        if not text:
+            _debug("base image returned no module stream data")
+            return {}
+        streams = _parse_module_ini(text)
+        _debug(f"base image module streams: {streams}")
+        return streams
+
     # ------------------------------------------------------------------
     # Top-level entry points
     # ------------------------------------------------------------------

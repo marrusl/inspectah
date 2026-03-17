@@ -1,11 +1,79 @@
 """Containerfile section: packages (build stage, FROM, repos, GPG keys, dnf install)."""
 
+import functools
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import List
 
-from ...schema import InspectionSnapshot
+from ...schema import InspectionSnapshot, VersionLockEntry
 from ._helpers import _sanitize_shell_value
+
+
+def _format_nevra(entry: VersionLockEntry) -> str:
+    """Format a VersionLockEntry as an installable NEVRA string for dnf."""
+    ver_rel = f"{entry.version}-{entry.release}"
+    arch_suffix = f".{entry.arch}" if entry.arch and entry.arch != "*" else ""
+    if entry.epoch > 0:
+        return f"{entry.epoch}:{entry.name}-{ver_rel}{arch_suffix}"
+    return f"{entry.name}-{ver_rel}{arch_suffix}"
+
+
+def _partition_version_locks(
+    locks: List[VersionLockEntry],
+    min_prevalence: int,
+) -> tuple:
+    """Partition fleet version lock entries into ``(pinned, fixme)`` lists.
+
+    *pinned* — one winner per ``(name, arch)`` group that is above the
+    prevalence threshold; versioned install + versionlock add are emitted.
+    *fixme* — below threshold, no fleet data, or tied-out losers.
+    """
+    from ...inspectors.rpm import _rpmvercmp
+
+    def _evr_cmp(a: VersionLockEntry, b: VersionLockEntry) -> int:
+        ep_cmp = (a.epoch > b.epoch) - (a.epoch < b.epoch)
+        if ep_cmp != 0:
+            return ep_cmp
+        vc = _rpmvercmp(a.version, b.version)
+        if vc != 0:
+            return vc
+        return _rpmvercmp(a.release, b.release)
+
+    groups: dict = defaultdict(list)
+    for lock in locks:
+        groups[(lock.name, lock.arch)].append(lock)
+
+    pinned: List[VersionLockEntry] = []
+    fixme: List[VersionLockEntry] = []
+
+    for entries in groups.values():
+        no_fleet = [e for e in entries if e.fleet is None]
+        with_fleet = [e for e in entries if e.fleet is not None]
+        fixme.extend(no_fleet)
+
+        if not with_fleet:
+            continue
+
+        total = with_fleet[0].fleet.total
+        above = [e for e in with_fleet if e.fleet.count / total * 100 >= min_prevalence]
+        fixme.extend(e for e in with_fleet if e not in above)
+
+        if not above:
+            continue
+
+        if len(above) == 1:
+            pinned.append(above[0])
+            continue
+
+        # Multiple entries above threshold: highest count wins, tie-break newer EVR
+        max_count = max(e.fleet.count for e in above)
+        tied = [e for e in above if e.fleet.count == max_count]
+        winner = max(tied, key=functools.cmp_to_key(_evr_cmp))
+        pinned.append(winner)
+        fixme.extend(e for e in above if e is not winner)
+
+    return pinned, fixme
 
 
 def section_lines(
@@ -96,44 +164,93 @@ def section_lines(
             lines.append(f"COPY config/{d}/ /{d}/")
         lines.append("")
 
-    # Package Installation
-    if snapshot.rpm and snapshot.rpm.packages_added:
-        included_pkgs = [p for p in snapshot.rpm.packages_added if p.include]
-        raw_names = sorted(set(p.name for p in included_pkgs))
-        safe_names: List[str] = []
-        for n in raw_names:
-            if _sanitize_shell_value(n, "dnf install") is not None:
-                safe_names.append(n)
-            else:
-                lines.append(f"# FIXME: package name contains unsafe characters, skipped: {n!r}")
+    rpm = snapshot.rpm
 
-        # Use leaf/auto split if available
-        leaf_set = set(snapshot.rpm.leaf_packages) if snapshot.rpm.leaf_packages is not None else None
-        dep_tree = snapshot.rpm.leaf_dep_tree or {}
-        if leaf_set is not None and not getattr(snapshot.rpm, "no_baseline", False):
-            included_name_set = set(raw_names)
-            included_leaf_names = leaf_set & included_name_set
-            install_names = [n for n in safe_names if n in included_leaf_names]
-            if dep_tree:
-                remaining_auto = set()
-                for lf in included_leaf_names:
-                    remaining_auto.update(dep_tree.get(lf, []))
-                auto_count = len(remaining_auto)
+    # DNF Module Stream Enables (after repo COPYs, before dnf install)
+    if rpm and rpm.module_streams:
+        emit_streams = sorted(
+            [ms for ms in rpm.module_streams if ms.include and not ms.baseline_match],
+            key=lambda ms: ms.module_name,
+        )
+        if emit_streams:
+            stream_pairs = " ".join(f"{ms.module_name}:{ms.stream}" for ms in emit_streams)
+            lines.append("# --- Enabled DNF module streams ---")
+            lines.append(f"RUN dnf module enable -y {stream_pairs}")
+            for msg in (rpm.module_stream_conflicts or []):
+                lines.append(f"# WARNING: {msg}")
+            lines.append("")
+
+    # Compute included version locks (used below regardless of packages_added)
+    included_version_locks = [vl for vl in (rpm.version_locks if rpm else []) if vl.include]
+    has_pkgs = bool(rpm and rpm.packages_added)
+
+    # Package Installation
+    if has_pkgs or included_version_locks:
+        # Leaf/auto classification (only relevant when packages exist)
+        install_names: List[str] = []
+        auto_count = 0
+        if has_pkgs:
+            included_pkgs = [p for p in rpm.packages_added if p.include]
+            raw_names = sorted(set(p.name for p in included_pkgs))
+            safe_names: List[str] = []
+            for n in raw_names:
+                if _sanitize_shell_value(n, "dnf install") is not None:
+                    safe_names.append(n)
+                else:
+                    lines.append(f"# FIXME: package name contains unsafe characters, skipped: {n!r}")
+
+            leaf_set = set(rpm.leaf_packages) if rpm.leaf_packages is not None else None
+            dep_tree = rpm.leaf_dep_tree or {}
+            if leaf_set is not None and not getattr(rpm, "no_baseline", False):
+                included_name_set = set(raw_names)
+                included_leaf_names = leaf_set & included_name_set
+                install_names = [n for n in safe_names if n in included_leaf_names]
+                if dep_tree:
+                    remaining_auto: set = set()
+                    for lf in included_leaf_names:
+                        remaining_auto.update(dep_tree.get(lf, []))
+                    auto_count = len(remaining_auto)
+                else:
+                    all_auto = set(rpm.auto_packages) if rpm.auto_packages else set()
+                    auto_count = len(all_auto & included_name_set)
             else:
-                all_auto = set(snapshot.rpm.auto_packages) if snapshot.rpm.auto_packages else set()
-                auto_count = len(all_auto & included_name_set)
-        else:
-            install_names = safe_names
-            auto_count = 0
+                install_names = safe_names
 
         lines.append("# === Package Installation ===")
-        if getattr(snapshot.rpm, "no_baseline", False):
-            lines.append("# No baseline — including all installed packages")
-        elif auto_count:
-            lines.append(f"# Detected: {len(install_names)} explicitly installed packages "
-                         f"(+{auto_count} dependencies pulled in automatically)")
-        else:
-            lines.append(f"# Detected: {len(install_names)} packages added beyond base image")
+        if has_pkgs:
+            if getattr(rpm, "no_baseline", False):
+                lines.append("# No baseline — including all installed packages")
+            elif auto_count:
+                lines.append(f"# Detected: {len(install_names)} explicitly installed packages "
+                             f"(+{auto_count} dependencies pulled in automatically)")
+            else:
+                lines.append(f"# Detected: {len(install_names)} packages added beyond base image")
+
+        # Version lock content (fleet-pinned + FIXME, above the main dnf install)
+        if included_version_locks:
+            fleet_meta = snapshot.meta.get("fleet") if snapshot.meta else None
+            if fleet_meta:
+                pinned, fixme_locks = _partition_version_locks(
+                    included_version_locks, fleet_meta["min_prevalence"]
+                )
+            else:
+                pinned = []
+                fixme_locks = included_version_locks
+
+            if pinned:
+                for entry in sorted(pinned, key=lambda e: e.name):
+                    nevra = _format_nevra(entry)
+                    lines.append(f"RUN dnf install -y {nevra}")
+                    lines.append(f"RUN dnf versionlock add {nevra}")
+                lines.append("")
+
+            if fixme_locks:
+                lines.append("# FIXME: The following packages were version-locked on the source system.")
+                lines.append("# dnf install will pull the latest available version instead.")
+                for entry in sorted(fixme_locks, key=lambda e: e.name):
+                    lines.append(f"#   {_format_nevra(entry)}")
+                lines.append("")
+
         if install_names:
             lines.append("RUN dnf install -y \\")
             for n in install_names[:-1]:

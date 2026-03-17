@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 from yoinkc.schema import (
+    EnabledModuleStream,
+    FleetPrevalence,
     InspectionSnapshot,
     NonRpmItem,
     NonRpmSoftwareSection,
@@ -13,6 +15,7 @@ from yoinkc.schema import (
     PackageEntry,
     RepoFile,
     RpmSection,
+    VersionLockEntry,
 )
 from yoinkc.renderers.containerfile import render as render_containerfile
 from yoinkc.renderers.audit_report import render as render_audit
@@ -442,3 +445,178 @@ class TestPythonVersionMap:
             render_containerfile(snapshot, _env(), Path(tmp))
             cf = (Path(tmp) / "Containerfile").read_text()
         assert "python3.12" in cf
+
+
+# ---------------------------------------------------------------------------
+# Module stream renderer tests
+# ---------------------------------------------------------------------------
+
+def _pkg(name="httpd"):
+    return PackageEntry(name=name, epoch="0", version="2.4", release="1", arch="x86_64")
+
+
+def _render_cf(snapshot):
+    with tempfile.TemporaryDirectory() as tmp:
+        render_containerfile(snapshot, _env(), Path(tmp))
+        return (Path(tmp) / "Containerfile").read_text()
+
+
+def _snap_with_streams(module_streams, conflicts=None, no_baseline=False):
+    return InspectionSnapshot(
+        meta={},
+        os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+        rpm=RpmSection(
+            base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+            packages_added=[_pkg()],
+            module_streams=module_streams,
+            module_stream_conflicts=conflicts or [],
+            no_baseline=no_baseline,
+        ),
+    )
+
+
+class TestModuleStreamRenderer:
+
+    def test_two_streams_emitted(self):
+        streams = [
+            EnabledModuleStream(module_name="nodejs", stream="18"),
+            EnabledModuleStream(module_name="postgresql", stream="15"),
+        ]
+        cf = _render_cf(_snap_with_streams(streams))
+        assert "RUN dnf module enable -y" in cf
+        assert "nodejs:18" in cf
+        assert "postgresql:15" in cf
+
+    def test_alphabetical_order(self):
+        streams = [
+            EnabledModuleStream(module_name="postgresql", stream="15"),
+            EnabledModuleStream(module_name="nodejs", stream="18"),
+        ]
+        cf = _render_cf(_snap_with_streams(streams))
+        enable_line = next(l for l in cf.splitlines() if "dnf module enable" in l)
+        assert enable_line.index("nodejs") < enable_line.index("postgresql")
+
+    def test_baseline_match_true_skipped(self):
+        streams = [EnabledModuleStream(module_name="postgresql", stream="15", baseline_match=True)]
+        cf = _render_cf(_snap_with_streams(streams))
+        assert "dnf module enable" not in cf
+
+    def test_include_false_skipped(self):
+        streams = [EnabledModuleStream(module_name="postgresql", stream="15", include=False)]
+        cf = _render_cf(_snap_with_streams(streams))
+        assert "dnf module enable" not in cf
+
+    def test_no_streams_no_output(self):
+        cf = _render_cf(_snap_with_streams([]))
+        assert "dnf module enable" not in cf
+
+    def test_conflict_warning_comment(self):
+        streams = [EnabledModuleStream(module_name="postgresql", stream="15")]
+        conflicts = ["postgresql: host=15, base_image=13"]
+        cf = _render_cf(_snap_with_streams(streams, conflicts=conflicts))
+        assert "# WARNING: postgresql: host=15, base_image=13" in cf
+
+    def test_no_baseline_all_included_streams_emitted(self):
+        """--no-baseline: baseline_match stays False (default), so all included streams emit."""
+        streams = [
+            EnabledModuleStream(module_name="postgresql", stream="15"),
+            EnabledModuleStream(module_name="nodejs", stream="18"),
+        ]
+        cf = _render_cf(_snap_with_streams(streams, no_baseline=True))
+        assert "postgresql:15" in cf
+        assert "nodejs:18" in cf
+
+    def test_module_enable_appears_before_dnf_install(self):
+        streams = [EnabledModuleStream(module_name="nodejs", stream="18")]
+        cf = _render_cf(_snap_with_streams(streams))
+        enable_pos = cf.index("dnf module enable")
+        install_pos = cf.index("dnf install")
+        assert enable_pos < install_pos
+
+
+# ---------------------------------------------------------------------------
+# Version lock renderer tests
+# ---------------------------------------------------------------------------
+
+def _snap_with_locks(version_locks, fleet_meta=None):
+    meta = {"fleet": fleet_meta} if fleet_meta else {}
+    return InspectionSnapshot(
+        meta=meta,
+        os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
+        rpm=RpmSection(
+            base_image="registry.redhat.io/rhel9/rhel-bootc:9.6",
+            packages_added=[_pkg()],
+            version_locks=version_locks,
+        ),
+    )
+
+
+def _lock(name, version, release="1.el9", arch="x86_64", epoch=0, include=True, fleet=None):
+    return VersionLockEntry(
+        raw_pattern=f"{name}-{version}-{release}.{arch}",
+        name=name, version=version, release=release, arch=arch,
+        epoch=epoch, include=include, fleet=fleet,
+    )
+
+
+class TestVersionLockRendererSingleHost:
+
+    def test_fixme_block_present(self):
+        locks = [_lock("curl", "7.76.1", "26.el9")]
+        cf = _render_cf(_snap_with_locks(locks))
+        assert "FIXME: The following packages were version-locked on the source system." in cf
+        assert "curl-7.76.1-26.el9.x86_64" in cf
+
+    def test_include_false_skipped(self):
+        locks = [_lock("curl", "7.76.1", "26.el9", include=False)]
+        cf = _render_cf(_snap_with_locks(locks))
+        assert "version-locked on the source system" not in cf
+
+    def test_no_locks_no_version_lock_output(self):
+        cf = _render_cf(_snap_with_locks([]))
+        assert "version-locked" not in cf
+
+    def test_multiple_locks_all_listed(self):
+        locks = [_lock("curl", "7.76.1", "26.el9"), _lock("openssl", "3.0.7", "24.el9")]
+        cf = _render_cf(_snap_with_locks(locks))
+        assert "curl-7.76.1-26.el9.x86_64" in cf
+        assert "openssl-3.0.7-24.el9.x86_64" in cf
+
+
+class TestVersionLockRendererFleet:
+
+    def _fleet_meta(self, total=3, min_prev=67):
+        return {"source_hosts": [f"h{i}" for i in range(total)],
+                "total_hosts": total, "min_prevalence": min_prev}
+
+    def test_above_threshold_pinned(self):
+        locks = [_lock("sudo", "1.9.5p2", "10.el9",
+                        fleet=FleetPrevalence(count=3, total=3))]
+        cf = _render_cf(_snap_with_locks(locks, fleet_meta=self._fleet_meta()))
+        assert "RUN dnf install -y sudo-1.9.5p2-10.el9.x86_64" in cf
+        assert "RUN dnf versionlock add sudo-1.9.5p2-10.el9.x86_64" in cf
+        assert "FIXME: The following packages were version-locked" not in cf
+
+    def test_epoch_included_in_install_line(self):
+        locks = [_lock("curl", "7.76.1", "26.el9", epoch=1,
+                        fleet=FleetPrevalence(count=3, total=3))]
+        cf = _render_cf(_snap_with_locks(locks, fleet_meta=self._fleet_meta()))
+        assert "RUN dnf install -y 1:curl-7.76.1-26.el9.x86_64" in cf
+
+    def test_below_threshold_gets_fixme(self):
+        # 1/3 = 33%, below 67% threshold
+        locks = [_lock("curl", "7.76.1", "26.el9",
+                        fleet=FleetPrevalence(count=1, total=3))]
+        cf = _render_cf(_snap_with_locks(locks, fleet_meta=self._fleet_meta()))
+        assert "FIXME: The following packages were version-locked" in cf
+        assert "dnf versionlock add" not in cf
+
+    def test_tiebreak_newer_version_wins(self):
+        # Both at 50% prevalence (2/4), tie-broken by rpmvercmp
+        locks = [
+            _lock("curl", "7.76.1", "26.el9", fleet=FleetPrevalence(count=2, total=4)),
+            _lock("curl", "7.76.0", "20.el9", fleet=FleetPrevalence(count=2, total=4)),
+        ]
+        cf = _render_cf(_snap_with_locks(locks, fleet_meta=self._fleet_meta(total=4, min_prev=50)))
+        assert "RUN dnf install -y curl-7.76.1-26.el9.x86_64" in cf  # newer wins
+        assert "FIXME: The following packages were version-locked" in cf  # loser gets FIXME

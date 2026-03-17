@@ -18,11 +18,13 @@ def _debug(msg: str) -> None:
 from ..baseline import BaselineResolver, load_baseline_packages_file
 from ..executor import Executor
 from ..schema import (
+    EnabledModuleStream,
     PackageEntry,
     PackageState,
     RepoFile,
     RpmSection,
     RpmVaEntry,
+    VersionLockEntry,
 )
 
 
@@ -376,7 +378,7 @@ def _collect_repo_files(host_root: Path) -> List[RepoFile]:
         except (PermissionError, OSError):
             continue
         for f in entries:
-            if f.is_file() and (f.suffix in (".repo", ".conf") or subdir == "etc/dnf"):
+            if f.is_file() and f.suffix != ".module" and (f.suffix in (".repo", ".conf") or subdir == "etc/dnf"):
                 try:
                     content = f.read_text()
                 except Exception:
@@ -495,6 +497,159 @@ def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional
                         else:
                             removed.append(nevra.split("-")[0] if "-" in nevra else nevra)
     return removed
+
+
+def _parse_module_ini(text: str) -> Dict[str, str]:
+    """Parse concatenated module INI text and return ``{module_name: stream}``
+    for sections whose state is ``enabled`` or ``installed``.
+
+    Used by both the file-based inspector and the podman-based baseline query.
+    """
+    import configparser
+
+    parser = configparser.ConfigParser()
+    try:
+        parser.read_string(text)
+    except Exception as exc:
+        _debug(f"failed to parse module INI: {exc}")
+        return {}
+
+    result: Dict[str, str] = {}
+    for section in parser.sections():
+        state = parser.get(section, "state", fallback="").strip().lower()
+        if state not in ("enabled", "installed"):
+            continue
+        stream = parser.get(section, "stream", fallback="").strip()
+        if stream:
+            result[section] = stream
+    return result
+
+
+def _collect_module_streams(host_root: Path) -> List[EnabledModuleStream]:
+    """Parse enabled/installed DNF module streams from /etc/dnf/modules.d/*.module."""
+    import configparser
+
+    modules_dir = host_root / "etc" / "dnf" / "modules.d"
+    if not modules_dir.exists():
+        return []
+
+    try:
+        module_files = sorted(modules_dir.glob("*.module"))
+    except (PermissionError, OSError) as exc:
+        _debug(f"cannot read modules.d: {exc}")
+        return []
+
+    result: List[EnabledModuleStream] = []
+    for mf in module_files:
+        parser = configparser.ConfigParser()
+        try:
+            parser.read_string(mf.read_text())
+        except Exception as exc:
+            _debug(f"skipping malformed module file {mf.name}: {exc}")
+            continue
+
+        for section in parser.sections():
+            state = parser.get(section, "state", fallback="").strip().lower()
+            if state not in ("enabled", "installed"):
+                continue
+            stream = parser.get(section, "stream", fallback="").strip()
+            if not stream:
+                _debug(f"module section [{section}] in {mf.name} has no stream, skipping")
+                continue
+            profiles_raw = parser.get(section, "profiles", fallback="").strip()
+            profiles = [p.strip() for p in profiles_raw.split(",") if p.strip()] if profiles_raw else []
+            result.append(EnabledModuleStream(
+                module_name=section,
+                stream=stream,
+                profiles=profiles,
+            ))
+
+    return result
+
+
+def _parse_nevra_pattern(raw_line: str) -> VersionLockEntry:
+    """Parse a versionlock NEVRA pattern into a VersionLockEntry.
+
+    Handles: ``1:curl-7.76.1-26.el9.x86_64``, ``curl-7.76.1-26.el9.x86_64``,
+    ``curl-7.76.1-26.el9.*``, ``python3-urllib3-1.26.5-3.el9.noarch``.
+    """
+    s = raw_line.strip()
+
+    # Split arch at last dot
+    if "." in s:
+        rest, arch = s.rsplit(".", 1)
+    else:
+        rest, arch = s, ""
+
+    # Split epoch if a colon appears before the first dash
+    epoch = 0
+    colon_pos = rest.find(":")
+    dash_pos = rest.find("-")
+    if colon_pos != -1 and (dash_pos == -1 or colon_pos < dash_pos):
+        epoch = int(rest[:colon_pos])
+        rest = rest[colon_pos + 1:]
+
+    # Name/version boundary: first '-' followed immediately by a digit
+    match = re.search(r"-(\d)", rest)
+    if not match:
+        raise ValueError(f"cannot locate name/version boundary in {raw_line!r}")
+
+    name = rest[: match.start()]
+    ver_rel = rest[match.start() + 1:]
+
+    if "-" in ver_rel:
+        version, release = ver_rel.rsplit("-", 1)
+    else:
+        version, release = ver_rel, ""
+
+    return VersionLockEntry(
+        raw_pattern=s,
+        name=name,
+        epoch=epoch,
+        version=version,
+        release=release,
+        arch=arch,
+    )
+
+
+def _collect_version_locks(
+    executor: Optional[Executor],
+    host_root: Path,
+) -> tuple:
+    """Collect version-lock pins from versionlock.list and dnf versionlock list.
+
+    Returns ``(entries, command_output)`` where *entries* is a list of
+    :class:`VersionLockEntry` and *command_output* is the raw string from
+    ``dnf versionlock list`` (or ``None`` if unavailable).
+    """
+    dnf_path = host_root / "etc" / "dnf" / "plugins" / "versionlock.list"
+    yum_path = host_root / "etc" / "yum" / "pluginconf.d" / "versionlock.list"
+
+    lock_file = dnf_path if dnf_path.exists() else (yum_path if yum_path.exists() else None)
+
+    entries: List[VersionLockEntry] = []
+    if lock_file is not None:
+        try:
+            for line in lock_file.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                try:
+                    entries.append(_parse_nevra_pattern(line))
+                except ValueError as exc:
+                    _debug(f"skipping unparseable versionlock line {line!r}: {exc}")
+        except (PermissionError, OSError) as exc:
+            _debug(f"cannot read versionlock file {lock_file}: {exc}")
+
+    command_output: Optional[str] = None
+    if executor is not None:
+        result = executor(["dnf", "versionlock", "list"])
+        if result.returncode == 0:
+            command_output = result.stdout
+        else:
+            _debug(f"dnf versionlock list failed (rc={result.returncode})")
+
+    return entries, command_output
 
 
 def _run_rpm_query(executor: Executor, host_root: Path, args: List[str]):
@@ -666,6 +821,32 @@ def _classify_leaf_auto(
             leaf_dep_tree[lf] = sorted(reachable & auto_set)
 
     return leaf, auto, leaf_dep_tree
+
+
+def _apply_module_stream_baseline(
+    module_streams: List[EnabledModuleStream],
+    baseline_streams: Dict[str, str],
+    module_stream_conflicts: List[str],
+    warnings: Optional[list] = None,
+) -> None:
+    """Set ``baseline_match`` on each stream entry and populate conflict lists.
+
+    - Same stream as baseline → ``baseline_match = True``
+    - Module absent from baseline → ``baseline_match = False``
+    - Module present with different stream → conflict message added, ``baseline_match = False``
+    """
+    for ms in module_streams:
+        base_stream = baseline_streams.get(ms.module_name)
+        if base_stream is None:
+            ms.baseline_match = False
+        elif base_stream == ms.stream:
+            ms.baseline_match = True
+        else:
+            ms.baseline_match = False
+            msg = f"{ms.module_name}: host={ms.stream}, base_image={base_stream}"
+            module_stream_conflicts.append(msg)
+            if warnings is not None:
+                warnings.append(make_warning("rpm", msg, "warning"))
 
 
 def run(
@@ -882,6 +1063,30 @@ def run(
     # 5) Repo files
     section.repo_files = _collect_repo_files(host_root)
     section.gpg_keys = _collect_gpg_keys(host_root, section.repo_files)
+
+    # 5a) DNF module streams
+    section.module_streams = _collect_module_streams(host_root)
+    _debug(f"module streams: {len(section.module_streams)} enabled")
+
+    # 5a-compare) Module stream baseline comparison
+    if section.module_streams and not section.no_baseline and section.base_image and executor is not None:
+        _ms_resolver = resolver if resolver is not None else BaselineResolver(executor)
+        baseline_streams = _ms_resolver.query_module_streams(section.base_image)
+        section.baseline_module_streams = baseline_streams
+        _apply_module_stream_baseline(
+            section.module_streams,
+            baseline_streams,
+            section.module_stream_conflicts,
+            warnings=warnings,
+        )
+        _debug(f"module stream baseline: {sum(1 for ms in section.module_streams if ms.baseline_match)} matched, "
+               f"{len(section.module_stream_conflicts)} conflicts")
+
+    # 5b) Version locks
+    version_locks, vl_output = _collect_version_locks(executor, host_root)
+    section.version_locks = version_locks
+    section.versionlock_command_output = vl_output
+    _debug(f"version locks: {len(version_locks)} pins")
 
     # 6) dnf history removed
     if executor is not None:

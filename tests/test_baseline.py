@@ -377,6 +377,66 @@ def test_resolve_delegates_to_get_baseline_packages():
 # pull_image / _image_is_cached
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# BaselineResolver.query_module_streams
+# ---------------------------------------------------------------------------
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_query_module_streams_returns_dict(_mock_userns):
+    """query_module_streams() parses module INI output into {name: stream}."""
+    module_output = (
+        "[postgresql]\n"
+        "name=postgresql\n"
+        "stream=15\n"
+        "profiles=server\n"
+        "state=enabled\n"
+        "\n"
+        "[nodejs]\n"
+        "name=nodejs\n"
+        "stream=18\n"
+        "profiles=common\n"
+        "state=installed\n"
+        "\n"
+        "[nginx]\n"
+        "name=nginx\n"
+        "stream=mainline\n"
+        "state=disabled\n"
+    )
+
+    def podman_handler(cmd):
+        if "cat" in " ".join(cmd):
+            return RunResult(stdout=module_output, stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+
+    resolver = BaselineResolver(_make_executor(podman_result=podman_handler))
+    result = resolver.query_module_streams("test-image:latest")
+    assert result == {"postgresql": "15", "nodejs": "18"}
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_query_module_streams_empty_output(_mock_userns):
+    """Empty podman output returns an empty dict (no module streams in image)."""
+    def podman_handler(cmd):
+        return RunResult(stdout="", stderr="", returncode=0)
+
+    resolver = BaselineResolver(_make_executor(podman_result=podman_handler))
+    result = resolver.query_module_streams("test-image:latest")
+    assert result == {}
+
+
+@patch.object(baseline_mod, "in_user_namespace", return_value=False)
+def test_query_module_streams_podman_failure(_mock_userns):
+    """Podman command failure returns an empty dict, not an exception."""
+    def podman_handler(cmd):
+        if "cat" in " ".join(cmd):
+            return RunResult(stdout="", stderr="Error: no such container", returncode=1)
+        return RunResult(stdout="", stderr="", returncode=0)
+
+    resolver = BaselineResolver(_make_executor(podman_result=podman_handler))
+    result = resolver.query_module_streams("test-image:latest")
+    assert result == {}
+
+
 @patch.object(baseline_mod, "in_user_namespace", return_value=False)
 def test_pull_image_skipped_when_cached(_mock_userns):
     """pull_image() returns True immediately when the image is already cached."""
