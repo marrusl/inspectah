@@ -54,7 +54,7 @@ body { padding-bottom: 3.5rem; }
   .pf-v6-c-page__sidebar {
     position: sticky;
     top: 0;
-    max-height: 100vh;
+    max-height: calc(100vh - 3.5rem);
     align-self: start;
   }
 }
@@ -128,7 +128,7 @@ details.audit-expand > summary { font-size: 1em; font-weight: 600; color: inheri
 details.audit-expand { margin-bottom: 0.25rem; }
 
 /* Sticky toolbar */
-#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: var(--pf-t--global--spacer--sm) 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; }
+#exclude-toolbar { position: fixed; bottom: 0; left: 0; right: 0; padding: var(--pf-t--global--spacer--sm) 1.5rem; display: none; align-items: center; gap: 1rem; z-index: 1000; background-color: var(--pf-t--global--background--color--primary--default); border-top: 1px solid var(--pf-t--global--border--color--default); }
 #exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
 #exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
 
