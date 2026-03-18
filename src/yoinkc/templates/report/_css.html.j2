@@ -41,12 +41,17 @@ body { padding-bottom: 3.5rem; }
 /* Sidebar nav */
 .pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 
-/* Sticky sidebar – only at desktop widths where the sidebar is always shown.
+/* Sidebar – always visible. PF6 defaults sidebar to opacity:0 / translateX:-100%
+   for responsive mobile-first behaviour, but this report has no hamburger toggle,
+   so force the sidebar visible at all viewport sizes and motion preferences.
    transform:none is required because any CSS transform creates a new containing
    block that prevents position:sticky from working. */
+.pf-v6-c-page__sidebar {
+  opacity: 1 !important;
+  transform: none !important;
+}
 @media (min-width: 75rem) {
   .pf-v6-c-page__sidebar {
-    transform: none;
     position: sticky;
     top: 0;
     max-height: 100vh;
