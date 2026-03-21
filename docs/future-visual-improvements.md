@@ -6,6 +6,11 @@ Last audited: 2026-03-17
 
 ---
 
+## Quick Fixes
+
+- **Compare button text cramped** — "Compare" label barely fits in fleet variant compare buttons. Needs `white-space: nowrap` and adequate padding.
+- **Re-render button typo** — extra space after opening parenthesis: `( 0 files changed)` should be `(0 files changed)`.
+
 ## Larger Features
 
 ### Search Across Files

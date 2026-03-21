@@ -663,10 +663,11 @@
   }
 
   function updateChangedCount() {
-    var countEl = document.getElementById('editor-changed-count');
-    if (countEl) countEl.textContent = editorState.savedFiles.size;
     var reRenderBtn = document.getElementById('btn-re-render');
-    if (reRenderBtn) reRenderBtn.disabled = (editorState.savedFiles.size === 0);
+    if (reRenderBtn) {
+      reRenderBtn.textContent = 'Re-render (' + editorState.savedFiles.size + ' files changed)';
+      reRenderBtn.disabled = (editorState.savedFiles.size === 0);
+    }
   }
 
   window.navigateToEditor = function(linkEl) {
@@ -827,7 +828,7 @@
         document.write(html);
         document.close();
       }).catch(function(err) {
-        reRenderBtn.innerHTML = 'Re-render (<span id="editor-changed-count">' + editorState.savedFiles.size + '</span> files changed)';
+        reRenderBtn.textContent = 'Re-render (' + editorState.savedFiles.size + ' files changed)';
         reRenderBtn.disabled = false;
         showEditorError(err.message);
       });
