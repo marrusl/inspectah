@@ -1,7 +1,7 @@
 # Visual Improvements Batch
 
 **Date:** 2026-03-17
-**Status:** Proposed
+**Status:** Implemented
 **Implementation note:** Parts A-D are independently implementable. Part D's collapsible animation depends on Part B's DOM structure but can be implemented in the same pass.
 
 ## Problem
