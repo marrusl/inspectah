@@ -1399,6 +1399,7 @@ document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
     var changed = val !== currentThreshold;
     applyBtn.style.display = changed ? '' : 'none';
     if (cancelBtn) cancelBtn.style.display = changed ? '' : 'none';
+    if (statusTextEl) statusTextEl.style.display = changed ? 'none' : '';
   });
 
   applyBtn.addEventListener('click', function() {
@@ -1407,6 +1408,7 @@ document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
     slider.setAttribute('data-current-threshold', val);
     applyBtn.style.display = 'none';
     if (cancelBtn) cancelBtn.style.display = 'none';
+    if (statusTextEl) statusTextEl.style.display = '';
     preview.textContent = '';
   });
 
@@ -1418,6 +1420,7 @@ document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
       preview.textContent = '';
       applyBtn.style.display = 'none';
       cancelBtn.style.display = 'none';
+      if (statusTextEl) statusTextEl.style.display = '';
     });
   }
 
