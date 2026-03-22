@@ -40,11 +40,11 @@ Environment variables for customization:
 
 A core design principle is **baseline subtraction**: wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the output. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there.
 
-Three companion tools complete the workflow:
+Two subcommands and one companion tool complete the workflow:
 
 - **`yoinkc refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live. See [Interactive refinement](#interactive-refinement).
-- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling for building on non-RHEL hosts. See [Building the image](#building-the-image).
 - **`yoinkc fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations. See [Fleet analysis](#fleet-analysis).
+- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling for building on non-RHEL hosts. See [Building the image](#building-the-image).
 
 ---
 
