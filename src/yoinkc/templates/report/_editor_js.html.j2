@@ -693,11 +693,23 @@
 
   function updateChangedCount() {
     var reRenderBtn = document.getElementById('btn-re-render');
-    if (reRenderBtn) {
-      reRenderBtn.textContent = 'Re-render (' + editorState.savedFiles.size + ' files changed)';
-      reRenderBtn.disabled = (editorState.savedFiles.size === 0);
+    if (!reRenderBtn) return;
+    var edits = editorState.savedFiles.size;
+    var toggles = (typeof countToggleChanges === 'function') ? countToggleChanges().total : 0;
+    var parts = [];
+    if (edits > 0) parts.push(edits + (edits === 1 ? ' edit' : ' edits'));
+    if (toggles > 0) parts.push(toggles + (toggles === 1 ? ' toggle' : ' toggles'));
+    if (parts.length === 0) {
+      reRenderBtn.textContent = 'Re-render';
+    } else {
+      reRenderBtn.textContent = 'Re-render (' + parts.join(', ') + ')';
     }
+    // Enable when there are changes AND re-render is available
+    var canReRender = (typeof isReRenderEnabled === 'function') ? isReRenderEnabled() : true;
+    var hasChanges = edits > 0 || toggles > 0;
+    reRenderBtn.disabled = !(hasChanges && canReRender);
   }
+  window.updateChangedCount = updateChangedCount;
 
   window.navigateToEditor = function(linkEl) {
     var section = linkEl.dataset.section;
@@ -857,7 +869,7 @@
         document.write(html);
         document.close();
       }).catch(function(err) {
-        reRenderBtn.textContent = 'Re-render (' + editorState.savedFiles.size + ' files changed)';
+        updateChangedCount();
         reRenderBtn.disabled = false;
         showEditorError(err.message);
       });

@@ -170,6 +170,7 @@ function trapFocus(modalElement, closeHandler) {
   var downloadSnapshotBtn = document.getElementById('btn-download-snapshot');
   var resetBtn = document.getElementById('btn-reset');
   var helperAvailable = false;
+  var reRenderEnabled = false;
   var dirty = false;
 
   var includeBaseline = {};
@@ -221,9 +222,11 @@ function trapFocus(modalElement, closeHandler) {
   function setDirty(isDirty) {
     dirty = isDirty;
     if (tarballBtn) tarballBtn.disabled = isDirty;
-    if (rerenderBtn) rerenderBtn.disabled = !isDirty;
+    // Re-render buttons respect both dirty state AND re-render availability
+    var canReRender = isDirty && reRenderEnabled;
+    if (rerenderBtn) rerenderBtn.disabled = !canReRender;
     var editorReRenderBtn = document.getElementById('btn-re-render');
-    if (editorReRenderBtn) editorReRenderBtn.disabled = !isDirty;
+    if (editorReRenderBtn) editorReRenderBtn.disabled = !canReRender;
   }
 
   function showToast(msg, ms) {
@@ -233,25 +236,41 @@ function trapFocus(modalElement, closeHandler) {
     setTimeout(function(){ toast.classList.remove('visible'); }, ms || 4000);
   }
 
-  function updateToolbar() {
-    var n = document.querySelectorAll('.include-toggle:not(:checked)').length;
-    var strategyChanges = 0;
+  function countToggleChanges() {
+    var includes = 0;
+    document.querySelectorAll('.include-toggle').forEach(function(cb) {
+      var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
+      if (!tr) return;
+      // Skip fleet variant parent rows — they mirror the first child and share the same snap-index
+      if (tr.classList.contains('fleet-variant-group')) return;
+      var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      if (cb.checked !== includeBaseline[key]) includes++;
+    });
+    var strategies = 0;
     document.querySelectorAll('.strategy-select').forEach(function(sel) {
       var tr = sel.closest('tr[data-snap-section]');
       if (!tr) return;
       var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
-      if (sel.value !== strategyBaseline[key]) strategyChanges++;
+      if (sel.value !== strategyBaseline[key]) strategies++;
     });
+    return { includes: includes, strategies: strategies, total: includes + strategies };
+  }
+  window.countToggleChanges = countToggleChanges;
+
+  function updateToolbar() {
+    var counts = countToggleChanges();
+    var n = counts.includes;
+    var strategyChanges = counts.strategies;
     var changed = !isSnapshotClean();
     var isHelper = toolbar && toolbar.classList.contains('helper-active');
 
     if (changed) {
       var parts = [];
-      if (n > 0) parts.push(n + ' item(s) excluded');
+      if (n > 0) parts.push(n + ' toggle change' + (n > 1 ? 's' : ''));
       if (strategyChanges > 0) parts.push(strategyChanges + ' strategy change(s)');
       if (parts.length === 0) parts.push('Snapshot modified');
       if (statusTextEl) { statusTextEl.textContent = parts.join(', '); statusTextEl.style.color = ''; }
-      if (rerenderBtn) rerenderBtn.disabled = false;
+      if (rerenderBtn) rerenderBtn.disabled = !reRenderEnabled;
       if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = false;
     } else if (isHelper) {
       if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--pf-t--global--text--color--subtle)'; }
@@ -265,6 +284,8 @@ function trapFocus(modalElement, closeHandler) {
     if (toolbar && !isHelper) {
       toolbar.classList.toggle('visible', n > 0 || changed);
     }
+    // Update the editor re-render button label with combined change counts
+    if (typeof updateChangedCount === 'function') updateChangedCount();
   }
 
   function resolveSnapshotRef(section, list) {
@@ -623,8 +644,9 @@ function trapFocus(modalElement, closeHandler) {
       toolbar.classList.remove('visible');
       toolbar.classList.add('helper-active');
     }
+    reRenderEnabled = (reRenderAvailable !== false);
     if (rerenderBtn) {
-      if (reRenderAvailable !== false) {
+      if (reRenderEnabled) {
         rerenderBtn.disabled = false;
         rerenderBtn.title = 'Re-render with excluded items removed';
       } else {
@@ -844,6 +866,7 @@ function trapFocus(modalElement, closeHandler) {
   window.updateToolbar = updateToolbar;
   window.setDirty = setDirty;
   window.isSnapshotClean = isSnapshotClean;
+  window.isReRenderEnabled = function() { return reRenderEnabled; };
   window.resolveSnapshotRef = resolveSnapshotRef;
   window.recalcTriageCounts = recalcTriageCounts;
   window.toggleReviewed = toggleReviewed;
