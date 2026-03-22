@@ -4,6 +4,17 @@ set -eu
 IMAGE="${YOINKC_IMAGE:-ghcr.io/marrusl/yoinkc:latest}"
 OUTPUT_DIR="${YOINKC_OUTPUT_DIR:-$(pwd)}"
 
+# --- Browser launch helper ---
+_open_browser() {
+  if command -v open >/dev/null 2>&1; then
+    open "$1"
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$1" >/dev/null 2>&1
+  else
+    echo "  Open $1 in your browser"
+  fi
+}
+
 # --- Detect subcommand ---
 _mode="inspect"
 case "${1:-}" in
@@ -156,12 +167,32 @@ case "$_mode" in
       exit 1
     fi
 
+    # Check for --no-browser before consuming the tarball arg
+    _launch_browser=true
     TARBALL="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
     TARBALL_NAME="$(basename "$TARBALL")"
     shift
+    for _arg in "$@"; do
+      case "$_arg" in --no-browser) _launch_browser=false ;; esac
+    done
 
     echo "=== Running yoinkc refine ==="
     echo "  Report will be at: http://localhost:8642"
+
+    # Poll for server readiness and open browser on the host
+    if $_launch_browser; then
+      ( _tries=0
+        while ! curl -s -o /dev/null http://localhost:8642 2>/dev/null; do
+          _tries=$((_tries + 1))
+          if [ "$_tries" -ge 60 ]; then break; fi
+          sleep 0.5
+        done
+        if [ "$_tries" -lt 60 ]; then _open_browser "http://localhost:8642"; fi
+      ) &
+      _browser_pid=$!
+      trap 'kill "$_browser_pid" 2>/dev/null || true' EXIT
+    fi
+
     podman run --rm --pull=always \
       --security-opt label=disable \
       -p 8642:8642 \
