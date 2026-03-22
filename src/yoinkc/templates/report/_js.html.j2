@@ -238,12 +238,15 @@ function trapFocus(modalElement, closeHandler) {
 
   function countToggleChanges() {
     var includes = 0;
+    var seenIncludeKeys = new Set();
     document.querySelectorAll('.include-toggle').forEach(function(cb) {
       var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
       if (!tr) return;
       // Skip fleet variant parent rows — they mirror the first child and share the same snap-index
       if (tr.classList.contains('fleet-variant-group')) return;
       var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
+      if (seenIncludeKeys.has(key)) return;
+      seenIncludeKeys.add(key);
       if (cb.checked !== includeBaseline[key]) includes++;
     });
     var strategies = 0;
@@ -443,50 +446,108 @@ function trapFocus(modalElement, closeHandler) {
 
   updatePkgBanner();
 
-  // --- Repo cascade: unchecking a repo cascades to its leaf packages ---
-  function parseRepoSectionIds(content) {
-    var ids = [];
-    if (!content) return ids;
-    var lines = content.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var m = lines[i].match(/^\s*\[([^\]]+)\]\s*$/);
-      if (m) ids.push(m[1]);
-    }
-    return ids;
-  }
+  document.querySelectorAll('.repo-collapse-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var expanded = this.getAttribute('aria-expanded') === 'true';
+      this.setAttribute('aria-expanded', String(!expanded));
+      var icon = this.querySelector('.pf-v6-c-button__icon');
+      if (icon) icon.textContent = expanded ? '\u25B6' : '\u25BC';
 
-  function applyRepoCascade(repoCb) {
+      var row = this.closest('tr[data-repo-group]');
+      if (!row) return;
+
+      var next = row.nextElementSibling;
+      while (next && !next.hasAttribute('data-repo-group')) {
+        next.style.display = expanded ? 'none' : '';
+        next = next.nextElementSibling;
+      }
+    });
+  });
+
+  function syncRepoHeaderCheckboxes(repoCb) {
     var tr = repoCb.closest('tr[data-snap-index]');
     if (!tr) return;
-    var idx = parseInt(tr.getAttribute('data-snap-index'), 10);
-    var repos = (snapshot.rpm && snapshot.rpm.repo_files) || [];
-    if (idx < 0 || idx >= repos.length) return;
-    var repoIds = new Set(parseRepoSectionIds(repos[idx].content));
-    if (!repoIds.size) return;
+    var idx = tr.getAttribute('data-snap-index');
+    if (idx === null) return;
+
+    document.querySelectorAll(
+      'tr[data-snap-section="rpm"][data-snap-list="repo_files"][data-snap-index="' + idx + '"]'
+    ).forEach(function(peerRow) {
+      var peerCb = peerRow.querySelector('.repo-cb');
+      if (!peerCb) return;
+      peerCb.checked = repoCb.checked;
+      peerRow.classList.toggle('excluded', !repoCb.checked);
+    });
+  }
+
+  function repoGroupNamesForCheckbox(repoCb) {
+    var tr = repoCb.closest('tr[data-repo-group]');
+    if (!tr) return new Set();
+    var repoNames = new Set();
+    var idx = tr.getAttribute('data-snap-index');
+
+    if (idx !== null) {
+      document.querySelectorAll(
+        'tr[data-snap-section="rpm"][data-snap-list="repo_files"][data-snap-index="' + idx + '"][data-repo-group]'
+      ).forEach(function(peerRow) {
+        var peerName = peerRow.getAttribute('data-repo-group');
+        if (peerName) repoNames.add(peerName);
+      });
+    }
+
+    if (!repoNames.size) {
+      var repoName = tr.getAttribute('data-repo-group');
+      if (repoName) repoNames.add(repoName);
+    }
+
+    return repoNames;
+  }
+
+  function syncRepoLeafInteractivity(repoCb) {
+    var repoNames = repoGroupNamesForCheckbox(repoCb);
+    if (!repoNames.size) return;
     var checked = repoCb.checked;
 
     document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
-      var leafName = row.getAttribute('data-leaf');
       var pkgIdx = parseInt(row.getAttribute('data-snap-index'), 10);
       if (pkgIdx < 0) return;
       var pkg = snapshot.rpm.packages_added[pkgIdx];
-      if (!pkg || !repoIds.has(pkg.source_repo)) return;
+      if (!pkg || !repoNames.has(pkg.source_repo)) return;
+
+      var leafCb = row.querySelector('.leaf-cb');
+      if (!leafCb) return;
+      leafCb.disabled = !checked;
+    });
+  }
+
+  // --- Repo cascade: a repo header toggles all dep-tree leaf rows backed by its repo file ---
+  function applyRepoCascade(repoCb) {
+    var repoNames = repoGroupNamesForCheckbox(repoCb);
+    if (!repoNames.size) return;
+    var checked = repoCb.checked;
+
+    syncRepoHeaderCheckboxes(repoCb);
+
+    document.querySelectorAll('.pkg-dep-tree-group tr[data-leaf], #pkg-dep-tree tr[data-leaf]').forEach(function(row) {
+      var pkgIdx = parseInt(row.getAttribute('data-snap-index'), 10);
+      if (pkgIdx < 0) return;
+      var pkg = snapshot.rpm.packages_added[pkgIdx];
+      if (!pkg || !repoNames.has(pkg.source_repo)) return;
 
       var leafCb = row.querySelector('.leaf-cb');
       if (!leafCb) return;
 
       if (!checked) {
         leafCb.checked = false;
-        leafCb.disabled = true;
         pkg.include = false;
         row.classList.add('excluded');
       } else {
         leafCb.checked = true;
-        leafCb.disabled = false;
         pkg.include = true;
         row.classList.remove('excluded');
       }
     });
+    syncRepoLeafInteractivity(repoCb);
     recomputeAutoDeps();
     updatePkgBanner();
   }
@@ -532,8 +593,9 @@ function trapFocus(modalElement, closeHandler) {
       el.classList.toggle('excluded', shouldExclude);
     });
 
-    document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
-      applyRepoCascade(cb);
+    document.querySelectorAll('.repo-cb').forEach(function(cb) {
+      syncRepoHeaderCheckboxes(cb);
+      syncRepoLeafInteractivity(cb);
     });
 
     recomputeAutoDeps();
@@ -569,9 +631,10 @@ function trapFocus(modalElement, closeHandler) {
     showToast('Selections reset to initial state');
   }
 
-  document.querySelectorAll('#pkg-repo-table .repo-cb').forEach(function(cb) {
+  document.querySelectorAll('.repo-cb').forEach(function(cb) {
     cb.addEventListener('change', function() {
       applyRepoCascade(this);
+      recalcTriageCounts();
       updateToolbar();
       setDirty(!isSnapshotClean());
     });

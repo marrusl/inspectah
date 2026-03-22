@@ -15,7 +15,10 @@ from yoinkc.schema import (
     NetworkSection,
     NMConnection,
     OsRelease,
+    PackageEntry,
     ScheduledTaskSection,
+    RepoFile,
+    RpmSection,
     ServiceSection,
     SystemdDropIn,
     SystemdTimer,
@@ -43,6 +46,14 @@ def _content_template_paths() -> list[Path]:
         for path in report_dir.glob("_*.html.j2")
         if path.name not in {"_css.html.j2", "_js.html.j2"}
     )
+
+
+def _extract_js_block(html: str, start_marker: str, end_marker: str) -> str:
+    start = html.find(start_marker)
+    assert start >= 0, f"could not find start marker {start_marker!r}"
+    end = html.find(end_marker, start)
+    assert end >= 0, f"could not find end marker {end_marker!r}"
+    return html[start:end]
 
 
 def _render_with_scheduled_and_network() -> str:
@@ -372,3 +383,315 @@ class TestPencilReorder:
         assert "editor-icon" not in config_html
         assert "editor-icon" not in services_html
         assert "editor-icon" not in containers_html
+
+
+class TestPackagesRestructure:
+    """Part C: merge the repo card into the dependency tree."""
+
+    def _render_packages(self, refine_mode: bool = False) -> str:
+        return _render(
+            refine_mode=refine_mode,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="httpd",
+                        version="2.4.57",
+                        release="8.el9",
+                        arch="x86_64",
+                        source_repo="appstream",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/redhat.repo",
+                        content="[appstream]\nname=AppStream\n",
+                        include=True,
+                        is_default_repo=True,
+                    ),
+                    RepoFile(
+                        path="etc/yum.repos.d/epel.repo",
+                        content="[epel]\nname=Extra Packages for Enterprise Linux\n",
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+                leaf_dep_tree={"httpd": []},
+            ),
+        )
+
+    def _render_packages_with_shared_repo_file(self, refine_mode: bool = False) -> str:
+        return _render(
+            refine_mode=refine_mode,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="bash",
+                        version="5.1",
+                        release="1.el9",
+                        arch="x86_64",
+                        source_repo="baseos",
+                        include=True,
+                    ),
+                    PackageEntry(
+                        name="httpd",
+                        version="2.4.57",
+                        release="8.el9",
+                        arch="x86_64",
+                        source_repo="appstream",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/redhat.repo",
+                        content="[baseos]\nname=BaseOS\n[appstream]\nname=AppStream\n",
+                        include=True,
+                        is_default_repo=True,
+                    ),
+                ],
+                leaf_packages=["bash", "httpd"],
+                auto_packages=[],
+                leaf_dep_tree={"bash": [], "httpd": []},
+            ),
+        )
+
+    def test_separate_repo_card_removed(self):
+        html = self._render_packages()
+        assert 'id="card-pkg-repos"' not in html
+        assert 'id="pkg-repo-table"' not in html
+
+    def test_repo_headers_render_inside_dep_tree(self):
+        html = self._render_packages(refine_mode=True)
+        pkg_start = html.find('id="section-packages"')
+        assert pkg_start != -1, "packages section missing from test fixture"
+        pkg_html = html[pkg_start:pkg_start + 12000]
+        dep_tree_start = pkg_html.find('id="card-pkg-dep-tree"')
+        assert dep_tree_start != -1, "dependency tree card missing from packages section"
+        dep_tree_html = pkg_html[dep_tree_start:]
+        assert 'data-repo-group="appstream"' in dep_tree_html
+        assert 'data-repo-group="epel"' in dep_tree_html
+        assert 'class="pf-v6-c-button pf-m-plain repo-collapse-btn"' in dep_tree_html
+        assert 'aria-expanded="true"' in dep_tree_html
+
+    def test_repo_headers_render_repo_file_toggles(self):
+        html = self._render_packages(refine_mode=True)
+        pkg_start = html.find('id="section-packages"')
+        pkg_html = html[pkg_start:pkg_start + 12000]
+        dep_tree_start = pkg_html.find('id="card-pkg-dep-tree"')
+        assert dep_tree_start != -1, "dependency tree card missing from packages section"
+        dep_tree_html = pkg_html[dep_tree_start:]
+        assert 'class="pf-v6-c-switch__input include-toggle repo-cb"' in dep_tree_html
+        assert 'data-snap-section="rpm"' in dep_tree_html
+        assert 'data-snap-list="repo_files"' in dep_tree_html
+        assert 'data-snap-index="0"' in dep_tree_html
+        assert 'data-snap-index="1"' in dep_tree_html
+
+    def test_default_repo_toggle_disabled(self):
+        html = self._render_packages(refine_mode=True)
+        pkg_start = html.find('id="section-packages"')
+        pkg_html = html[pkg_start:pkg_start + 12000]
+        title_pos = pkg_html.find('Default distribution repository — cannot be excluded')
+        assert title_pos != -1
+        toggle_html = pkg_html[max(0, title_pos - 200):title_pos + 200]
+        assert 'repo-cb' in toggle_html
+        assert 'disabled' in toggle_html
+
+    def test_initial_excluded_repo_renders_excluded_header_and_disabled_leafs(self):
+        html = _render(
+            refine_mode=True,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="httpd",
+                        version="2.4.57",
+                        release="8.el9",
+                        arch="x86_64",
+                        source_repo="appstream",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/redhat.repo",
+                        content="[appstream]\nname=AppStream\n",
+                        include=False,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+                leaf_dep_tree={"httpd": []},
+            ),
+        )
+        header_pos = html.find('data-repo-group="appstream"')
+        leaf_pos = html.find('data-leaf="httpd"')
+        header_html = html[max(0, header_pos - 80):header_pos + 400]
+        leaf_html = html[max(0, leaf_pos - 40):leaf_pos + 400]
+        assert 'repo-group-row excluded' in header_html
+        assert 'repo-cb"' in header_html and 'checked' not in header_html
+        assert 'class="excluded"' in leaf_html
+        assert 'leaf-cb"' in leaf_html and 'disabled' in leaf_html
+
+    def test_repo_without_matching_leaf_rows_still_renders_header(self):
+        html = self._render_packages(refine_mode=True)
+        pkg_start = html.find('id="section-packages"')
+        pkg_html = html[pkg_start:pkg_start + 12000]
+        assert 'epel (0 packages)' in pkg_html
+
+    def test_overlapping_repo_names_get_distinct_repo_file_indices(self):
+        html = _render(
+            refine_mode=True,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="epel-pkg",
+                        version="1.0",
+                        release="1.el9",
+                        arch="x86_64",
+                        source_repo="epel",
+                        include=True,
+                    ),
+                    PackageEntry(
+                        name="epel-testing-pkg",
+                        version="1.0",
+                        release="1.el9",
+                        arch="x86_64",
+                        source_repo="epel-testing",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/epel-testing.repo",
+                        content="[epel-testing]\nname=EPEL Testing\n",
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                    RepoFile(
+                        path="etc/yum.repos.d/epel.repo",
+                        content="[epel]\nname=EPEL\n",
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["epel-pkg", "epel-testing-pkg"],
+                auto_packages=[],
+                leaf_dep_tree={"epel-pkg": [], "epel-testing-pkg": []},
+            ),
+        )
+        epel_header = html[html.find('data-repo-group="epel"'):html.find('data-repo-group="epel"') + 300]
+        testing_header = html[html.find('data-repo-group="epel-testing"'):html.find('data-repo-group="epel-testing"') + 300]
+        assert 'data-snap-index="1"' in epel_header
+        assert 'data-snap-index="0"' in testing_header
+
+    def test_shared_repo_file_headers_share_same_repo_file_index(self):
+        html = self._render_packages_with_shared_repo_file(refine_mode=True)
+        baseos_header = html[html.find('data-repo-group="baseos"'):html.find('data-repo-group="baseos"') + 300]
+        appstream_header = html[html.find('data-repo-group="appstream"'):html.find('data-repo-group="appstream"') + 300]
+        assert 'data-snap-index="0"' in baseos_header
+        assert 'data-snap-index="0"' in appstream_header
+
+    def test_duplicate_repo_ids_across_files_suppress_ambiguous_toggle(self):
+        html = _render(
+            refine_mode=True,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="epel-pkg",
+                        version="1.0",
+                        release="1.el9",
+                        arch="x86_64",
+                        source_repo="epel",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/epel-primary.repo",
+                        content="[epel]\nname=EPEL Primary\n",
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                    RepoFile(
+                        path="etc/yum.repos.d/epel-secondary.repo",
+                        content="[epel]\nname=EPEL Secondary\n",
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["epel-pkg"],
+                auto_packages=[],
+                leaf_dep_tree={"epel-pkg": []},
+            ),
+        )
+        epel_header = html[html.find('data-repo-group="epel"'):html.find('data-repo-group="epel"') + 300]
+        assert 'data-snap-index=' not in epel_header
+        assert 'repo-cb' not in epel_header
+
+    def test_apply_repo_cascade_scopes_to_header_repo_group(self):
+        html = self._render_packages(refine_mode=True)
+        repo_js = _extract_js_block(
+            html,
+            "function applyRepoCascade",
+            "  function resetToOriginal",
+        )
+        assert "repoGroupNamesForCheckbox(repoCb)" in repo_js
+        assert "!repoNames.has(pkg.source_repo)" in repo_js
+        assert "syncRepoHeaderCheckboxes(repoCb);" in repo_js
+
+    def test_shared_repo_file_toggle_targets_all_linked_repo_groups(self):
+        html = self._render_packages_with_shared_repo_file(refine_mode=True)
+        helper_js = _extract_js_block(
+            html,
+            "function repoGroupNamesForCheckbox",
+            "  function syncRepoLeafInteractivity",
+        )
+        assert 'data-snap-list="repo_files"' in html
+        assert 'data-repo-group="baseos"' in html
+        assert 'data-repo-group="appstream"' in html
+        assert '[data-snap-index="' in helper_js
+        assert "repoNames.add(peerName)" in helper_js
+
+    def test_shared_repo_file_header_sync_updates_peer_row_state(self):
+        html = self._render_packages_with_shared_repo_file(refine_mode=True)
+        sync_js = _extract_js_block(
+            html,
+            "function syncRepoHeaderCheckboxes",
+            "  function repoGroupNamesForCheckbox",
+        )
+        assert "peerRow.querySelector('.repo-cb')" in sync_js
+        assert "peerRow.classList.toggle('excluded', !repoCb.checked);" in sync_js
+
+    def test_reset_to_original_syncs_repo_ui_without_reapplying_cascade(self):
+        html = self._render_packages_with_shared_repo_file(refine_mode=True)
+        reset_js = _extract_js_block(
+            html,
+            "  function resetToOriginal()",
+            "  if (resetBtn)",
+        )
+        assert "syncRepoHeaderCheckboxes(cb);" in reset_js
+        assert "syncRepoLeafInteractivity(cb);" in reset_js
+        assert "applyRepoCascade(cb);" not in reset_js
+
+    def test_repo_toggle_handler_recalculates_counts(self):
+        html = self._render_packages(refine_mode=True)
+        handler_js = _extract_js_block(
+            html,
+            "document.querySelectorAll('.repo-cb').forEach(function(cb)",
+            "  if (resetBtn)",
+        )
+        assert "applyRepoCascade(this);" in handler_js
+        assert "recalcTriageCounts();" in handler_js
+
+    def test_toggle_change_counting_deduplicates_shared_repo_file_headers(self):
+        html = self._render_packages_with_shared_repo_file(refine_mode=True)
+        count_js = _extract_js_block(
+            html,
+            "  function countToggleChanges()",
+            "  function updateToolbar()",
+        )
+        assert "var seenIncludeKeys = new Set();" in count_js
+        assert "if (seenIncludeKeys.has(key)) return;" in count_js

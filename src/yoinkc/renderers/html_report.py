@@ -438,6 +438,46 @@ def _group_variants(items, path_key="path"):
     return groups
 
 
+def _repo_section_ids(content: str) -> List[str]:
+    """Extract repo section ids from a repo file body."""
+    ids: List[str] = []
+    for line in (content or "").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            ids.append(stripped[1:-1])
+    return ids
+
+
+def _repo_file_candidate_names(repo_file) -> List[str]:
+    """Return likely repo group names represented by a repo file."""
+    candidate_names = _repo_section_ids(repo_file.content or "")
+    if candidate_names:
+        return candidate_names
+    stem = Path(repo_file.path).stem
+    return [stem] if stem else []
+
+
+def _repo_name_matches_file(repo_name: str, repo_file, candidate_names: Optional[List[str]] = None) -> bool:
+    """Match a dependency-tree repo name to a repo file without fuzzy overlaps."""
+    repo_lower = repo_name.lower()
+    for candidate in candidate_names or _repo_file_candidate_names(repo_file):
+        candidate_lower = candidate.lower()
+        if repo_lower == candidate_lower:
+            return True
+    return False
+
+
+def _record_repo_lookup(repo_file_lookup: dict, repo_name: str, lookup_entry: dict) -> None:
+    """Record a repo-file match, suppressing ambiguous multi-file bindings."""
+    existing = repo_file_lookup.get(repo_name)
+    if existing is None and repo_name in repo_file_lookup:
+        return
+    if existing and existing["snap_index"] != lookup_entry["snap_index"]:
+        repo_file_lookup[repo_name] = None
+        return
+    repo_file_lookup.setdefault(repo_name, lookup_entry)
+
+
 # ---------------------------------------------------------------------------
 # Context builder
 # ---------------------------------------------------------------------------
@@ -511,68 +551,57 @@ def _build_context(
         leaf_sorted = sorted(snapshot.rpm.leaf_packages, key=lambda k: -len(dep_tree.get(k, [])))
 
     # Pre-compute repo groups for the dependency tree display
-    repo_groups: dict = {}
-    if snapshot.rpm and snapshot.rpm.leaf_packages:
+    repo_groups: OrderedDict = OrderedDict()
+    repo_file_lookup: dict = {}
+    if snapshot.rpm:
         dep_tree = snapshot.rpm.leaf_dep_tree or {}
-        pkg_by_name = {p.name: p for p in snapshot.rpm.packages_added}
-        for lf in (leaf_sorted or snapshot.rpm.leaf_packages):
-            pkg = pkg_by_name.get(lf)
-            repo = pkg.source_repo if pkg and pkg.source_repo else "(unknown)"
-            snap_idx = -1
-            for idx, p in enumerate(snapshot.rpm.packages_added):
-                if p.name == lf:
-                    snap_idx = idx
-                    break
-            repo_groups.setdefault(repo, []).append({
-                "name": lf,
-                "version": f"{pkg.version}-{pkg.release}" if pkg and pkg.version else "",
-                "deps": dep_tree.get(lf, []),
-                "snap_index": snap_idx,
-                "include": pkg.include if pkg else True,
-                "fleet": pkg.fleet if pkg else None,
-            })
-        # Sort groups: known repos alphabetically, "(unknown)" last
-        sorted_groups = []
-        for k in sorted(repo_groups.keys()):
-            if k != "(unknown)":
-                sorted_groups.append((k, repo_groups[k]))
-        if "(unknown)" in repo_groups:
-            sorted_groups.append(("(unknown)", repo_groups["(unknown)"]))
-        repo_groups = dict(sorted_groups)
+        if snapshot.rpm.leaf_packages:
+            pkg_by_name = {p.name: p for p in snapshot.rpm.packages_added}
+            for lf in (leaf_sorted or snapshot.rpm.leaf_packages):
+                pkg = pkg_by_name.get(lf)
+                repo = pkg.source_repo if pkg and pkg.source_repo else "(unknown)"
+                snap_idx = -1
+                for idx, p in enumerate(snapshot.rpm.packages_added):
+                    if p.name == lf:
+                        snap_idx = idx
+                        break
+                repo_groups.setdefault(repo, []).append({
+                    "name": lf,
+                    "version": f"{pkg.version}-{pkg.release}" if pkg and pkg.version else "",
+                    "deps": dep_tree.get(lf, []),
+                    "snap_index": snap_idx,
+                    "include": pkg.include if pkg else True,
+                    "fleet": pkg.fleet if pkg else None,
+                })
 
-    # Pre-compute repo display metadata for the template
-    repo_display: List[dict] = []
-    if snapshot.rpm and snapshot.rpm.repo_files:
-        for rf in snapshot.rpm.repo_files:
-            section_ids = []
-            for line in (rf.content or "").splitlines():
-                stripped = line.strip()
-                if stripped.startswith("[") and stripped.endswith("]"):
-                    section_ids.append(stripped[1:-1])
-            content_lower = (rf.content or "").lower()
-            path_lower = rf.path.lower()
-            if rf.is_default_repo:
-                badge = "BASE"
-                badge_color = ""
-            elif "epel" in path_lower or any(sid.startswith("epel") for sid in section_ids):
-                badge = "EPEL"
-                badge_color = "pf-m-blue"
-            elif "copr" in content_lower or "copr" in path_lower:
-                badge = "COPR"
-                badge_color = "pf-m-red"
-            elif "rpmfusion" in content_lower or "rpmfusion" in path_lower:
-                badge = "RPM FUSION"
-                badge_color = "pf-m-orange"
-            else:
-                badge = ""
-                badge_color = ""
-            repo_display.append({
-                "path": rf.path,
-                "badge": badge,
-                "badge_color": badge_color,
-                "section_ids": section_ids,
-                "is_default": rf.is_default_repo,
-            })
+        if snapshot.rpm.repo_files:
+            for idx, rf in enumerate(snapshot.rpm.repo_files):
+                candidate_names = []
+                for name in _repo_file_candidate_names(rf):
+                    if name and name.lower() not in {candidate.lower() for candidate in candidate_names}:
+                        candidate_names.append(name)
+
+                lookup_entry = {
+                    "path": rf.path,
+                    "include": rf.include,
+                    "is_default_repo": rf.is_default_repo,
+                    "snap_index": idx,
+                }
+
+                matched_names = []
+                for repo_name in list(repo_groups.keys()):
+                    if _repo_name_matches_file(repo_name, rf, candidate_names):
+                        _record_repo_lookup(repo_file_lookup, repo_name, lookup_entry)
+                        matched_names.append(repo_name)
+
+                matched_lowers = {name.lower() for name in matched_names}
+                for candidate in candidate_names:
+                    if candidate.lower() not in matched_lowers:
+                        repo_groups.setdefault(candidate, [])
+                    _record_repo_lookup(repo_file_lookup, candidate, lookup_entry)
+
+        sorted_group_names = sorted(repo_groups.keys(), key=lambda name: (name == "(unknown)", name.lower()))
+        repo_groups = OrderedDict((name, repo_groups[name]) for name in sorted_group_names)
 
     # Secrets data for dedicated tab
     redactions = snapshot.redactions or []
@@ -675,7 +704,7 @@ def _build_context(
         "triage_detail": triage_detail,
         "leaf_packages_sorted": leaf_sorted,
         "repo_groups": repo_groups,
-        "repo_display": repo_display,
+        "repo_file_lookup": repo_file_lookup,
         "secrets_data": redactions,
         "secrets_file_count": secrets_files,
     }
