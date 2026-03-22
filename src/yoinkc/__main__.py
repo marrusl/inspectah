@@ -47,10 +47,8 @@ def _run_renderers(
     )
 
 
-def main(argv: Optional[list] = None) -> int:
-    args = parse_args(argv)
-
-    # Preflight: bail out early if container privileges are missing.
+def _run_inspect(args) -> int:
+    """Run the inspect pipeline (default subcommand)."""
     if (
         args.from_snapshot is None
         and str(args.host_root) != "/"
@@ -72,62 +70,79 @@ def main(argv: Optional[list] = None) -> int:
             )
             return 1
 
-    try:
-        def run_inspectors(host_root: Path):
-            return _run_inspectors(host_root, args)
+    def run_inspectors(host_root: Path):
+        return _run_inspectors(host_root, args)
 
-        renderers = partial(
-            _run_renderers,
-            refine_mode=args.refine_mode,
-            original_snapshot_path=args.original_snapshot,
-        )
+    renderers = partial(
+        _run_renderers,
+        refine_mode=args.refine_mode,
+        original_snapshot_path=args.original_snapshot,
+    )
 
-        snapshot = run_pipeline(
-            host_root=args.host_root,
-            run_inspectors=run_inspectors,
-            run_renderers=renderers,
-            from_snapshot_path=args.from_snapshot,
-            inspect_only=args.inspect_only,
-            output_file=args.output_file,
-            output_dir=args.output_dir,
-            no_subscription=args.no_subscription,
-        )
-        # --validate and --push-to-github require --output-dir (enforced by CLI)
-        if args.output_dir and not args.inspect_only:
-            if args.validate:
-                from .validate import run_validate
-                run_validate(args.output_dir)
-            if args.push_to_github:
-                from .git_github import init_git_repo, add_and_commit, push_to_github, output_stats
-                if not init_git_repo(args.output_dir):
-                    print(
-                        "Error: failed to initialise git repository in output directory. "
-                        "GitPython may not be installed \u2014 try: pip install 'yoinkc[github]'",
-                        file=sys.stderr,
-                    )
-                    return 1
-                if not add_and_commit(args.output_dir):
-                    print(
-                        "Error: failed to commit output files to git repository.",
-                        file=sys.stderr,
-                    )
-                    return 1
-                size, file_count, fixme_count = output_stats(args.output_dir)
-                err = push_to_github(
-                    args.output_dir,
-                    args.push_to_github,
-                    create_private=not args.public,
-                    skip_confirmation=args.yes,
-                    total_size_bytes=size,
-                    file_count=file_count,
-                    fixme_count=fixme_count,
-                    redaction_count=len(snapshot.redactions),
-                    github_token=args.github_token,
+    snapshot = run_pipeline(
+        host_root=args.host_root,
+        run_inspectors=run_inspectors,
+        run_renderers=renderers,
+        from_snapshot_path=args.from_snapshot,
+        inspect_only=args.inspect_only,
+        output_file=args.output_file,
+        output_dir=args.output_dir,
+        no_subscription=args.no_subscription,
+    )
+    if args.output_dir and not args.inspect_only:
+        if args.validate:
+            from .validate import run_validate
+            run_validate(args.output_dir)
+        if args.push_to_github:
+            from .git_github import init_git_repo, add_and_commit, push_to_github, output_stats
+            if not init_git_repo(args.output_dir):
+                print(
+                    "Error: failed to initialise git repository in output directory. "
+                    "GitPython may not be installed \u2014 try: pip install 'yoinkc[github]'",
+                    file=sys.stderr,
                 )
-                if err:
-                    print(f"GitHub push failed: {err}", file=sys.stderr)
-                    return 1
-        return 0
+                return 1
+            if not add_and_commit(args.output_dir):
+                print(
+                    "Error: failed to commit output files to git repository.",
+                    file=sys.stderr,
+                )
+                return 1
+            size, file_count, fixme_count = output_stats(args.output_dir)
+            err = push_to_github(
+                args.output_dir,
+                args.push_to_github,
+                create_private=not args.public,
+                skip_confirmation=args.yes,
+                total_size_bytes=size,
+                file_count=file_count,
+                fixme_count=fixme_count,
+                redaction_count=len(snapshot.redactions),
+                github_token=args.github_token,
+            )
+            if err:
+                print(f"GitHub push failed: {err}", file=sys.stderr)
+                return 1
+    return 0
+
+
+def main(argv: Optional[list] = None) -> int:
+    args = parse_args(argv)
+
+    try:
+        match args.command:
+            case None | "inspect":
+                return _run_inspect(args)
+            case "fleet":
+                raise NotImplementedError("yoinkc fleet: coming soon")
+            case "refine":
+                raise NotImplementedError("yoinkc refine: coming soon")
+            case other:
+                print(f"Unknown command: {other}", file=sys.stderr)
+                return 1
+    except NotImplementedError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         if os.environ.get("YOINKC_DEBUG"):

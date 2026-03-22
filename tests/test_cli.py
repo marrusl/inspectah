@@ -208,3 +208,96 @@ def test_no_baseline_and_baseline_packages_are_mutually_exclusive():
     """--no-baseline and --baseline-packages together must be rejected."""
     with pytest.raises(SystemExit):
         parse_args(["--no-baseline", "--baseline-packages", "/tmp/pkgs.txt"])
+
+
+# --- Subcommand routing tests ---
+
+
+class TestSubcommandRouting:
+    """Verify the subcommand-based CLI structure."""
+
+    def test_no_args_defaults_to_inspect(self):
+        args = parse_args([])
+        assert args.command in (None, "inspect")
+
+    def test_explicit_inspect_subcommand(self):
+        args = parse_args(["inspect"])
+        assert args.command == "inspect"
+
+    def test_inspect_with_from_snapshot(self):
+        args = parse_args(["inspect", "--from-snapshot", "foo.json"])
+        assert args.command == "inspect"
+        assert args.from_snapshot == Path("foo.json")
+
+    def test_bare_flags_parsed_as_inspect(self):
+        """Bare `yoinkc --from-snapshot foo.json` should parse as inspect."""
+        args = parse_args(["--from-snapshot", "foo.json"])
+        assert args.command in (None, "inspect")
+        assert args.from_snapshot == Path("foo.json")
+
+    def test_fleet_subcommand_recognized(self):
+        args = parse_args(["fleet"])
+        assert args.command == "fleet"
+
+    def test_refine_subcommand_recognized(self):
+        args = parse_args(["refine"])
+        assert args.command == "refine"
+
+    def test_top_level_help_lists_subcommands(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(["--help"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "fleet" in out
+        assert "refine" in out
+
+    def test_inspect_help_shows_inspect_flags(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(["inspect", "--help"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "--from-snapshot" in out
+
+    @pytest.mark.parametrize("flags,attr,expected", [
+        (["inspect", "--host-root", "/mnt"], "host_root", Path("/mnt")),
+        (["inspect", "-o", "/tmp/out.tar.gz"], "output_file", Path("/tmp/out.tar.gz")),
+        (["inspect", "--output-dir", "/tmp/d"], "output_dir", Path("/tmp/d")),
+        (["inspect", "--no-subscription"], "no_subscription", True),
+        (["inspect", "--inspect-only"], "inspect_only", True),
+        (["inspect", "--config-diffs"], "config_diffs", True),
+        (["inspect", "--deep-binary-scan"], "deep_binary_scan", True),
+        (["inspect", "--query-podman"], "query_podman", True),
+        (["inspect", "--skip-preflight"], "skip_preflight", True),
+        (["inspect", "--output-dir", "/d", "--validate"], "validate", True),
+        (["inspect", "--target-version", "9.6"], "target_version", "9.6"),
+        (["inspect", "--target-image", "reg/img:1"], "target_image", "reg/img:1"),
+        (["inspect", "--no-baseline"], "no_baseline", True),
+        (["inspect", "--baseline-packages", "/f"], "baseline_packages", Path("/f")),
+        (["inspect", "--user-strategy", "sysusers"], "user_strategy", "sysusers"),
+    ], ids=lambda v: str(v) if not isinstance(v, list) else " ".join(v))
+    def test_inspect_flags_under_subcommand(self, flags, attr, expected):
+        """All inspect flags work under the explicit 'inspect' subcommand."""
+        args = parse_args(flags)
+        assert getattr(args, attr) == expected
+
+    @pytest.mark.parametrize("flags,attr,expected", [
+        (["--host-root", "/mnt"], "host_root", Path("/mnt")),
+        (["-o", "/tmp/out.tar.gz"], "output_file", Path("/tmp/out.tar.gz")),
+        (["--output-dir", "/tmp/d"], "output_dir", Path("/tmp/d")),
+        (["--no-subscription"], "no_subscription", True),
+        (["--inspect-only"], "inspect_only", True),
+        (["--config-diffs"], "config_diffs", True),
+        (["--deep-binary-scan"], "deep_binary_scan", True),
+        (["--query-podman"], "query_podman", True),
+        (["--skip-preflight"], "skip_preflight", True),
+        (["--output-dir", "/d", "--validate"], "validate", True),
+        (["--target-version", "9.6"], "target_version", "9.6"),
+        (["--target-image", "reg/img:1"], "target_image", "reg/img:1"),
+        (["--no-baseline"], "no_baseline", True),
+        (["--baseline-packages", "/f"], "baseline_packages", Path("/f")),
+        (["--user-strategy", "sysusers"], "user_strategy", "sysusers"),
+    ], ids=lambda v: str(v) if not isinstance(v, list) else " ".join(v))
+    def test_inspect_flags_bare(self, flags, attr, expected):
+        """All inspect flags work without explicit 'inspect' subcommand (backwards compat)."""
+        args = parse_args(flags)
+        assert getattr(args, attr) == expected

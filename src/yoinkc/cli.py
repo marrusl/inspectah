@@ -1,24 +1,36 @@
 """
-CLI argument parsing. All flags from the design doc plus --from-snapshot and --inspect-only.
+CLI argument parsing with subcommand-based structure.
+
+Subcommands: inspect (default), fleet, refine.
+Backwards-compatible: bare flags without a subcommand are treated as inspect.
 """
 
 import argparse
 from pathlib import Path
 from typing import Optional
 
+SUBCOMMANDS = ("inspect", "fleet", "refine")
 
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="yoinkc",
-        description="Inspect RHEL/CentOS hosts and produce bootc image artifacts.",
-    )
+
+def _preprocess_argv(argv: list[str]) -> list[str]:
+    """Prepend 'inspect' if the first arg looks like a flag, not a subcommand.
+
+    This preserves backwards compatibility so that `yoinkc --from-snapshot f`
+    behaves the same as `yoinkc inspect --from-snapshot f`.
+    """
+    if not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help")):
+        return ["inspect"] + argv
+    return argv
+
+
+def _add_inspect_args(parser: argparse.ArgumentParser) -> None:
+    """Register all inspect-specific flags on the given parser."""
     parser.add_argument(
         "--host-root",
         type=Path,
         default=Path("/host"),
         help="Root path for host inspection (default: /host)",
     )
-    # Output mode: tarball (default) or directory
     output_group = parser.add_mutually_exclusive_group()
     output_group.add_argument(
         "-o",
@@ -39,8 +51,6 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Skip bundling RHEL subscription certs into the output",
     )
-
-    # Snapshot load/save
     parser.add_argument(
         "--from-snapshot",
         type=Path,
@@ -52,8 +62,6 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Run inspectors and save snapshot to output; do not run renderers",
     )
-
-    # Target image
     parser.add_argument(
         "--target-version",
         type=str,
@@ -69,8 +77,6 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
              "(e.g. registry.redhat.io/rhel10/rhel-bootc:10.2). "
              "Overrides --target-version and all automatic mapping.",
     )
-
-    # Baseline
     parser.add_argument(
         "--baseline-packages",
         type=Path,
@@ -85,7 +91,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
              "included in the Containerfile. Use when the base image cannot be "
              "queried and --baseline-packages is unavailable.",
     )
-    # Opt-in deeper inspection (design doc)
+    _VALID_STRATEGIES = ("sysusers", "blueprint", "useradd", "kickstart")
+    parser.add_argument(
+        "--user-strategy",
+        type=str,
+        metavar="STRATEGY",
+        choices=_VALID_STRATEGIES,
+        help="Override user creation strategy for all users. "
+             f"Valid: {', '.join(_VALID_STRATEGIES)}. "
+             "Default: auto-assigned per classification (service→sysusers, human→kickstart, ambiguous→useradd).",
+    )
     parser.add_argument(
         "--config-diffs",
         action="store_true",
@@ -101,32 +116,16 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Connect to podman socket to enumerate running containers",
     )
-
-    _VALID_STRATEGIES = ("sysusers", "blueprint", "useradd", "kickstart")
-    parser.add_argument(
-        "--user-strategy",
-        type=str,
-        metavar="STRATEGY",
-        choices=_VALID_STRATEGIES,
-        help="Override user creation strategy for all users. "
-             f"Valid: {', '.join(_VALID_STRATEGIES)}. "
-             "Default: auto-assigned per classification (service→sysusers, human→kickstart, ambiguous→useradd).",
-    )
-
-    # Build validation
     parser.add_argument(
         "--skip-preflight",
         action="store_true",
         help="Skip container privilege checks (rootful, --pid=host, --privileged, SELinux)",
     )
-
     parser.add_argument(
         "--validate",
         action="store_true",
         help="After generating output, run podman build to verify Containerfile",
     )
-
-    # GitHub push
     parser.add_argument(
         "--push-to-github",
         type=str,
@@ -150,32 +149,61 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         action="store_true",
         help="Skip interactive confirmation prompts",
     )
-
     parser.add_argument(
         "--refine-mode",
         action="store_true",
-        help="Enable editor UI in rendered report (set by yoinkc-refine)",
+        help="Enable editor UI in rendered report (set by yoinkc refine)",
     )
     parser.add_argument(
         "--original-snapshot",
         type=Path,
         metavar="PATH",
         help="Path to unmodified original snapshot for editor diff/reset support "
-             "(set by yoinkc-refine during re-render)",
+             "(set by yoinkc refine during re-render)",
+    )
+
+
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    if argv is None:
+        import sys
+        argv = sys.argv[1:]
+
+    argv = _preprocess_argv(argv)
+
+    parser = argparse.ArgumentParser(
+        prog="yoinkc",
+        description="Inspect RHEL/CentOS hosts and produce bootc image artifacts.",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    inspect_parser = subparsers.add_parser(
+        "inspect",
+        help="Inspect a host and generate migration artifacts (default)",
+    )
+    _add_inspect_args(inspect_parser)
+
+    subparsers.add_parser(
+        "fleet",
+        help="Aggregate multiple inspection snapshots into a fleet report",
+    )
+    subparsers.add_parser(
+        "refine",
+        help="Interactively edit and re-render inspection output",
     )
 
     args = parser.parse_args(argv)
 
-    if args.from_snapshot and args.inspect_only:
-        parser.error("--from-snapshot and --inspect-only cannot be used together")
+    if args.command == "inspect":
+        if args.from_snapshot and args.inspect_only:
+            parser.error("--from-snapshot and --inspect-only cannot be used together")
 
-    if args.no_baseline and args.baseline_packages:
-        parser.error("--no-baseline and --baseline-packages cannot be used together")
+        if args.no_baseline and args.baseline_packages:
+            parser.error("--no-baseline and --baseline-packages cannot be used together")
 
-    if (args.validate or args.push_to_github) and args.output_dir is None:
-        parser.error(
-            "--validate and --push-to-github require --output-dir "
-            "(directory output mode)"
-        )
+        if (args.validate or args.push_to_github) and args.output_dir is None:
+            parser.error(
+                "--validate and --push-to-github require --output-dir "
+                "(directory output mode)"
+            )
 
     return args
