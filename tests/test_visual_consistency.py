@@ -6,12 +6,20 @@ from pathlib import Path
 from yoinkc.renderers import run_all as run_all_renderers
 from yoinkc.schema import (
     AtJob,
+    ConfigCategory,
+    ConfigFileEntry,
+    ConfigFileKind,
+    ConfigSection,
+    ContainerSection,
     InspectionSnapshot,
     NetworkSection,
     NMConnection,
     OsRelease,
     ScheduledTaskSection,
+    ServiceSection,
+    SystemdDropIn,
     SystemdTimer,
+    QuadletUnit,
 )
 
 
@@ -73,6 +81,28 @@ def _render_with_at_jobs() -> str:
                 )
             ]
         )
+    )
+
+
+def _render_with_config(
+    flags: str = "S.5.....",
+    diff: str = "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new",
+    refine_mode: bool = False,
+) -> str:
+    return _render(
+        refine_mode=refine_mode,
+        config=ConfigSection(
+            files=[
+                ConfigFileEntry(
+                    path="/etc/test.conf",
+                    rpm_va_flags=flags,
+                    diff_against_rpm=diff,
+                    kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                    category=ConfigCategory.OTHER,
+                    include=True,
+                )
+            ]
+        ),
     )
 
 
@@ -174,3 +204,171 @@ class TestColumnConsistency:
             '<th scope="col">Command</th>'
         ) in first_table
         assert "pf-v6-c-table__check" not in first_table
+
+
+class TestConfigColumnCleanup:
+    """Part B1-B2: rpm-Va and diff columns removed."""
+
+    def test_rpm_va_column_removed(self):
+        html = _render_with_config()
+        config_start = html.find('id="section-config"')
+        assert config_start != -1, "config section missing from test fixture"
+        config_html = html[config_start:config_start + 5000]
+        assert "rpm -Va" not in config_html
+        assert "S.5....." not in config_html
+
+    def test_diff_column_removed(self):
+        html = _render_with_config()
+        config_start = html.find('id="section-config"')
+        assert config_start != -1, "config section missing from test fixture"
+        config_html = html[config_start:config_start + 5000]
+        assert "diff-view" not in config_html
+        assert "diff-add" not in config_html
+
+    def test_diff_css_classes_removed(self):
+        html = _render_with_config()
+        assert ".diff-view" not in html
+        assert ".diff-hdr" not in html
+        assert ".diff-hunk" not in html
+        assert ".diff-add" not in html
+        assert ".diff-del" not in html
+
+    def test_render_diff_html_function_removed(self):
+        from yoinkc.renderers import html_report
+
+        assert not hasattr(html_report, "_render_diff_html")
+
+
+class TestPermissionsBadge:
+    """Part B3: permissions badge when rpm-Va flags contain M, U, or G."""
+
+    def test_badge_shown_for_mode_change(self):
+        html = _render_with_config(flags="SM5.....", diff="")
+        config_start = html.find('id="section-config"')
+        config_html = html[config_start:config_start + 5000]
+        assert "permissions" in config_html.lower()
+
+    def test_badge_shown_for_user_change(self):
+        html = _render_with_config(flags="..5..U..", diff="")
+        config_start = html.find('id="section-config"')
+        config_html = html[config_start:config_start + 5000]
+        assert "permissions" in config_html.lower()
+
+    def test_badge_shown_for_group_change(self):
+        html = _render_with_config(flags="..5...G.", diff="")
+        config_start = html.find('id="section-config"')
+        config_html = html[config_start:config_start + 5000]
+        assert "permissions" in config_html.lower()
+
+    def test_badge_not_shown_for_content_only(self):
+        html = _render_with_config(flags="S.5.....", diff="")
+        config_start = html.find('id="section-config"')
+        config_html = html[config_start:config_start + 5000]
+        assert "permissions" not in config_html.lower()
+
+    def test_badge_not_shown_for_empty_flags(self):
+        html = _render_with_config(flags="", diff="")
+        config_start = html.find('id="section-config"')
+        config_html = html[config_start:config_start + 5000]
+        assert "permissions" not in config_html.lower()
+
+
+class TestPencilReorder:
+    """Part B4-B5: pencil icon between checkbox and path-like columns."""
+
+    def test_config_pencil_before_path(self):
+        html = _render_with_config(refine_mode=True)
+        config_start = html.find('id="section-config"')
+        config_html = html[config_start:config_start + 5000]
+        pencil_pos = config_html.find("editor-icon")
+        path_pos = config_html.find("/etc/test.conf")
+        assert pencil_pos != -1, "pencil icon not found in config section"
+        assert path_pos != -1, "path not found in config section"
+        assert pencil_pos < path_pos, "pencil should appear before path in config DOM order"
+
+    def test_services_pencil_before_dropin_path(self):
+        html = _render(
+            refine_mode=True,
+            services=ServiceSection(
+                drop_ins=[
+                    SystemdDropIn(
+                        unit="postgresql.service",
+                        path="etc/systemd/system/postgresql.service.d/override.conf",
+                        content="[Service]\nLimitNOFILE=65536",
+                    )
+                ]
+            ),
+        )
+        services_start = html.find('id="section-services"')
+        services_html = html[services_start:services_start + 6000]
+        pencil_pos = services_html.find("editor-icon")
+        path_pos = services_html.find("override.conf")
+        assert pencil_pos != -1, "pencil icon not found in services section"
+        assert path_pos != -1, "drop-in path not found in services section"
+        assert pencil_pos < path_pos, "pencil should appear before drop-in path in services DOM order"
+
+    def test_containers_pencil_before_path(self):
+        html = _render(
+            refine_mode=True,
+            containers=ContainerSection(
+                quadlet_units=[
+                    QuadletUnit(
+                        path="/etc/containers/systemd/myapp.container",
+                        name="myapp.container",
+                        image="ghcr.io/myapp:latest",
+                        content="[Container]\nImage=ghcr.io/myapp:latest",
+                    )
+                ]
+            ),
+        )
+        containers_start = html.find('id="section-containers"')
+        containers_html = html[containers_start:containers_start + 6000]
+        pencil_pos = containers_html.find("editor-icon")
+        path_pos = containers_html.find("/etc/containers/systemd/myapp.container")
+        assert pencil_pos != -1, "pencil icon not found in containers section"
+        assert path_pos != -1, "quadlet path not found in containers section"
+        assert pencil_pos < path_pos, "pencil should appear before path in containers DOM order"
+
+    def test_pencil_not_in_readonly_mode(self):
+        html = _render(
+            refine_mode=False,
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/test.conf",
+                        rpm_va_flags="S.5.....",
+                        kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                        category=ConfigCategory.OTHER,
+                        include=True,
+                    )
+                ]
+            ),
+            services=ServiceSection(
+                drop_ins=[
+                    SystemdDropIn(
+                        unit="postgresql.service",
+                        path="etc/systemd/system/postgresql.service.d/override.conf",
+                        content="[Service]\nLimitNOFILE=65536",
+                    )
+                ]
+            ),
+            containers=ContainerSection(
+                quadlet_units=[
+                    QuadletUnit(
+                        path="/etc/containers/systemd/myapp.container",
+                        name="myapp.container",
+                        image="ghcr.io/myapp:latest",
+                        content="[Container]\nImage=ghcr.io/myapp:latest",
+                    )
+                ]
+            ),
+        )
+        config_start = html.find('id="section-config"')
+        config_html = html[config_start:config_start + 5000]
+        services_start = html.find('id="section-services"')
+        services_html = html[services_start:services_start + 6000]
+        containers_start = html.find('id="section-containers"')
+        containers_html = html[containers_start:containers_start + 6000]
+        assert "editor-icon" not in config_html
+        assert "editor-icon" not in services_html
+        assert "editor-icon" not in containers_html

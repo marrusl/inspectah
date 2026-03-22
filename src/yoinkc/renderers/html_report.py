@@ -340,36 +340,8 @@ def _summary_counts(snapshot: InspectionSnapshot) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Pre-computed diff HTML for config files
-# ---------------------------------------------------------------------------
-
-def _render_diff_html(diff_text: str) -> str:
-    """Produce colored diff HTML from a unified diff string."""
-    if not diff_text:
-        return ""
-    diff_lines = diff_text.splitlines()[:80]
-    colored = []
-    for dl in diff_lines:
-        escaped_line = dl.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        if dl.startswith("+++") or dl.startswith("---"):
-            colored.append(f'<span class="diff-hdr">{escaped_line}</span>')
-        elif dl.startswith("@@"):
-            colored.append(f'<span class="diff-hunk">{escaped_line}</span>')
-        elif dl.startswith("+"):
-            colored.append(f'<span class="diff-add">{escaped_line}</span>')
-        elif dl.startswith("-"):
-            colored.append(f'<span class="diff-del">{escaped_line}</span>')
-        else:
-            colored.append(escaped_line)
-    total_lines = len(diff_text.splitlines())
-    if total_lines > 80:
-        colored.append(f'<span class="diff-hdr">... {total_lines - 80} more lines</span>')
-    return '<pre class="diff-view">' + "\n".join(colored) + "</pre>"
-
-
 def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
-    """Pre-process config file entries with pre-rendered diff HTML."""
+    """Pre-process config file entries for HTML rendering."""
     if not snapshot.config or not snapshot.config.files:
         return []
     result = []
@@ -381,7 +353,6 @@ def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
             "kind": f.kind.value,
             "category": f.category.value,
             "flags": f.rpm_va_flags or "",
-            "diff_html": _render_diff_html(f.diff_against_rpm or ""),
             "snap_index": idx,
             "include": f.include,
             "fleet": f.fleet,

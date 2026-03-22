@@ -427,7 +427,7 @@ class TestCrossMajorWarning:
         assert "CROSS-MAJOR-VERSION" not in cf
 
 
-def test_html_diff_spans():
+def test_html_diff_preview_removed():
     snapshot = InspectionSnapshot(
         meta={}, os_release=OsRelease(name="RHEL", version_id="9.6"),
         config=ConfigSection(files=[ConfigFileEntry(
@@ -440,7 +440,7 @@ def test_html_diff_spans():
         render_html_report(snapshot, _env(), Path(tmp))
         html = (Path(tmp) / "report.html").read_text()
     for cls in ("diff-view", "diff-hdr", "diff-hunk", "diff-add", "diff-del"):
-        assert f'class="{cls}"' in html
+        assert f'class="{cls}"' not in html
 
 
 def test_storage_recommendation_mapping():
