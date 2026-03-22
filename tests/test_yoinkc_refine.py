@@ -364,6 +364,13 @@ class TestServer:
         _, _, headers = _get(url + "/api/health")
         assert headers.get("Access-Control-Allow-Origin") == "*"
 
+    def test_cache_control_prevents_stale_responses(self, live_server):
+        url, _ = live_server
+        _, _, headers = _get(url + "/")
+        cc = headers.get("Cache-Control", "")
+        assert "no-cache" in cc
+        assert "no-store" in cc
+
     def test_get_snapshot_serves_json(self, live_server):
         url, _ = live_server
         status, body, headers = _get(url + "/snapshot")
