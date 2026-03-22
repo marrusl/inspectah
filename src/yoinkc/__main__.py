@@ -223,3 +223,7 @@ def main(argv: Optional[list] = None, cwd: Optional[Path] = None) -> int:
         else:
             print("Set YOINKC_DEBUG=1 for the full traceback.", file=sys.stderr)
         return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

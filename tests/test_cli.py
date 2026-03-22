@@ -381,3 +381,18 @@ class TestRefineSubcommand:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "tarball" in out.lower()
+
+
+class TestMainModule:
+    """Verify `python -m yoinkc` works via __main__.py guard."""
+
+    def test_module_help(self):
+        """python3 -m yoinkc --help produces output and exits 0."""
+        import subprocess
+
+        result = subprocess.run(
+            [sys.executable, "-m", "yoinkc", "--help"],
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0
+        assert "inspect" in result.stdout
