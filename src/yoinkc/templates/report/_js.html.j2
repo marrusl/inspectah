@@ -951,9 +951,10 @@ function closeCompareModal() {
   }, 160);
 }
 
-function showCompareModal(path, selectedItem, comparisonItem) {
+function showCompareModal(path, selectedItem, comparisonItem, peerMode) {
   var modal = document.getElementById('variant-compare-modal');
   if (!modal) return;
+  peerMode = !!peerMode;
 
   var hasContent = !!(selectedItem.content || comparisonItem.content);
   var diff = hasContent ? lineDiff(selectedItem.content || '', comparisonItem.content || '') : null;
@@ -967,10 +968,12 @@ function showCompareModal(path, selectedItem, comparisonItem) {
   var selCount = selectedItem.fleet ? selectedItem.fleet.count + '/' + selectedItem.fleet.total : '';
   var cmpHosts = comparisonItem.fleet ? comparisonItem.fleet.hosts.join(', ') : '';
   var cmpCount = comparisonItem.fleet ? comparisonItem.fleet.count + '/' + comparisonItem.fleet.total : '';
+  var selectedLabel = peerMode ? 'Variant A' : 'Selected';
+  var comparisonLabel = peerMode ? 'Variant B' : 'This variant';
   var bodyHtml = '<div style="padding:8px 20px;font-size:0.8rem;color:var(--pf-t--global--text--color--subtle);border-bottom:1px solid var(--pf-t--global--border--color--default);">'
     + '<code style="font-size:0.8rem;">' + escapeHtml(path) + '</code><br>'
-    + '<span class="diff-legend-selected">&#9632;</span> Selected (' + selCount + ' hosts: ' + escapeHtml(selHosts) + ')<br>'
-    + '<span class="diff-legend-comparison">&#9632;</span> This variant (' + cmpCount + ' hosts: ' + escapeHtml(cmpHosts) + ')'
+    + '<span class="diff-legend-selected">&#9632;</span> ' + selectedLabel + ' (' + selCount + ' hosts: ' + escapeHtml(selHosts) + ')<br>'
+    + '<span class="diff-legend-comparison">&#9632;</span> ' + comparisonLabel + ' (' + cmpCount + ' hosts: ' + escapeHtml(cmpHosts) + ')'
     + '</div>';
 
   // Diff body
@@ -992,17 +995,39 @@ function showCompareModal(path, selectedItem, comparisonItem) {
 
   // Footer
   var footerEl = document.getElementById('compare-modal-footer');
-  footerEl.innerHTML = '<button class="pf-v6-c-button pf-m-secondary" data-action="close">Close</button>'
-    + '<button class="pf-v6-c-button pf-m-primary" data-action="switch">Switch to this variant</button>';
+  if (peerMode) {
+    footerEl.innerHTML = '<button class="pf-v6-c-button pf-m-secondary" data-action="close">Close</button>'
+      + '<button class="pf-v6-c-button pf-m-secondary" data-action="use-a">Use Variant A</button>'
+      + '<button class="pf-v6-c-button pf-m-primary" data-action="use-b">Use Variant B</button>';
+  } else {
+    footerEl.innerHTML = '<button class="pf-v6-c-button pf-m-secondary" data-action="close">Close</button>'
+      + '<button class="pf-v6-c-button pf-m-primary" data-action="switch">Switch to this variant</button>';
+  }
 
   footerEl.querySelector('[data-action="close"]').addEventListener('click', closeCompareModal);
 
-  modal._comparisonContext = { path: path, selectedItem: selectedItem, comparisonItem: comparisonItem };
+  modal._comparisonContext = {
+    path: path,
+    selectedItem: selectedItem,
+    comparisonItem: comparisonItem,
+    peerMode: peerMode
+  };
 
-  footerEl.querySelector('[data-action="switch"]').addEventListener('click', function() {
-    switchVariant(modal._comparisonContext);
-    closeCompareModal();
-  });
+  if (peerMode) {
+    footerEl.querySelector('[data-action="use-a"]').addEventListener('click', function() {
+      applyVariantSelection(path, selectedItem);
+      closeCompareModal();
+    });
+    footerEl.querySelector('[data-action="use-b"]').addEventListener('click', function() {
+      applyVariantSelection(path, comparisonItem);
+      closeCompareModal();
+    });
+  } else {
+    footerEl.querySelector('[data-action="switch"]').addEventListener('click', function() {
+      switchVariant(modal._comparisonContext);
+      closeCompareModal();
+    });
+  }
 
   if (compareCloseTimer) { clearTimeout(compareCloseTimer); compareCloseTimer = null; }
   modal.style.display = '';
@@ -1013,9 +1038,33 @@ function showCompareModal(path, selectedItem, comparisonItem) {
   });
 }
 
-function switchVariant(ctx) {
-  var group = ctx.path;
+function syncParentGroupRows(group) {
+  document.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
+    var parentIdx = parseInt(parentRow.getAttribute('data-snap-index'), 10);
+    var section = parentRow.getAttribute('data-snap-section');
+    var list = parentRow.getAttribute('data-snap-list');
+    if (!section || !list || isNaN(parentIdx)) return;
+    var arr = resolveSnapshotRef(section, list);
+    if (!arr || !arr[parentIdx]) return;
 
+    var childRows = document.querySelectorAll('[data-variant-group="' + group + '"]');
+    var matchesGroup = false;
+    childRows.forEach(function(child) {
+      if (child.getAttribute('data-snap-section') === section
+          && child.getAttribute('data-snap-list') === list
+          && parseInt(child.getAttribute('data-snap-index'), 10) === parentIdx) {
+        matchesGroup = true;
+      }
+    });
+    if (!matchesGroup) return;
+
+    var parentCb = parentRow.querySelector('.include-toggle');
+    if (parentCb) parentCb.checked = arr[parentIdx].include;
+    parentRow.classList.toggle('excluded', !arr[parentIdx].include);
+  });
+}
+
+function applyVariantSelection(group, targetItem) {
   var rows = document.querySelectorAll('[data-variant-group="' + group + '"]');
   rows.forEach(function(row) {
     var section = row.getAttribute('data-snap-section');
@@ -1025,7 +1074,7 @@ function switchVariant(ctx) {
     var arr = resolveSnapshotRef(section, list);
     if (!arr || !arr[idx]) return;
 
-    var isTarget = (arr[idx] === ctx.comparisonItem);
+    var isTarget = (arr[idx] === targetItem);
     arr[idx].include = isTarget;
 
     var cb = row.querySelector('.include-toggle');
@@ -1042,41 +1091,22 @@ function switchVariant(ctx) {
     }
   });
 
-  // Sync parent group header row toggle
-  var parentRows = document.querySelectorAll('.fleet-variant-group');
-  parentRows.forEach(function(parentRow) {
-    var parentIdx = parseInt(parentRow.getAttribute('data-snap-index'), 10);
-    var section = parentRow.getAttribute('data-snap-section');
-    var list = parentRow.getAttribute('data-snap-list');
-    if (!section || !list || isNaN(parentIdx)) return;
-    var arr = resolveSnapshotRef(section, list);
-    if (!arr || !arr[parentIdx]) return;
-
-    // Only match parent rows in the same section/list group
-    var childRows = document.querySelectorAll('[data-variant-group="' + group + '"]');
-    var matchesGroup = false;
-    childRows.forEach(function(child) {
-      if (child.getAttribute('data-snap-section') === section
-          && child.getAttribute('data-snap-list') === list
-          && parseInt(child.getAttribute('data-snap-index'), 10) === parentIdx) {
-        matchesGroup = true;
-      }
-    });
-    if (!matchesGroup) return;
-
-    var parentCb = parentRow.querySelector('.include-toggle');
-    if (parentCb) parentCb.checked = arr[parentIdx].include;
-    parentRow.classList.toggle('excluded', !arr[parentIdx].include);
-  });
+  syncParentGroupRows(group);
 
   updateToolbar();
   setDirty(!isSnapshotClean());
   if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
+  if (typeof updateCompareButtons === 'function') updateCompareButtons(group);
   if (typeof editorRefreshTree === 'function') editorRefreshTree();
+}
+
+function switchVariant(ctx) {
+  applyVariantSelection(ctx.path, ctx.comparisonItem);
 }
 
 function updateCompareButtons(group) {
   var rows = document.querySelectorAll('[data-variant-group="' + group + '"]');
+  var canPeerCompare = rows.length === 2;
   var hasSelected = false;
   rows.forEach(function(row) {
     var section = row.getAttribute('data-snap-section');
@@ -1088,7 +1118,7 @@ function updateCompareButtons(group) {
   rows.forEach(function(row) {
     var btn = row.querySelector('.variant-compare-btn');
     if (!btn) return;
-    if (hasSelected) {
+    if (hasSelected || canPeerCompare) {
       btn.removeAttribute('disabled');
       btn.classList.remove('pf-m-disabled');
     } else {
@@ -1115,9 +1145,10 @@ document.addEventListener('click', function(e) {
   var arr = resolveSnapshotRef(section, list);
   if (!arr || !arr[idx]) return;
   var comparisonItem = arr[idx];
+  var rows = Array.prototype.slice.call(document.querySelectorAll('[data-variant-group="' + group + '"]'));
 
   var selectedItem = null;
-  document.querySelectorAll('[data-variant-group="' + group + '"]').forEach(function(sibling) {
+  rows.forEach(function(sibling) {
     var sibIdx = parseInt(sibling.getAttribute('data-snap-index'), 10);
     var sibArr = resolveSnapshotRef(sibling.getAttribute('data-snap-section'), sibling.getAttribute('data-snap-list'));
     if (sibArr && sibArr[sibIdx] && sibArr[sibIdx].include) {
@@ -1125,10 +1156,30 @@ document.addEventListener('click', function(e) {
     }
   });
 
-  if (!selectedItem) return;
+  if (!selectedItem) {
+    if (rows.length !== 2) return;
+    var otherItem = null;
+    rows.forEach(function(sibling) {
+      if (sibling === row) return;
+      var sibIdx = parseInt(sibling.getAttribute('data-snap-index'), 10);
+      var sibArr = resolveSnapshotRef(sibling.getAttribute('data-snap-section'), sibling.getAttribute('data-snap-list'));
+      if (sibArr && sibArr[sibIdx]) {
+        otherItem = sibArr[sibIdx];
+      }
+    });
+    if (!otherItem) return;
+    showCompareModal(group, otherItem, comparisonItem, true);
+    return;
+  }
 
   showCompareModal(group, selectedItem, comparisonItem);
 });
+
+var initialCompareGroups = {};
+document.querySelectorAll('[data-variant-group]').forEach(function(el) {
+  initialCompareGroups[el.getAttribute('data-variant-group')] = true;
+});
+Object.keys(initialCompareGroups).forEach(function(g) { updateCompareButtons(g); });
 
 /* Fleet: keyboard activation for fleet bars */
 document.querySelectorAll('.fleet-bar').forEach(function(bar) {
@@ -1461,23 +1512,63 @@ document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
         var bc = b.item.fleet ? b.item.fleet.count : 0;
         return bc - ac;
       });
-      var foundIncluded = false;
-      variants.forEach(function(v) {
-        if (v.item.include && !foundIncluded) {
-          foundIncluded = true;
-        } else if (v.item.include) {
+
+      // Tie detection: if the top two share the same count, deselect all.
+      var topCount = variants[0].item.fleet ? variants[0].item.fleet.count : 0;
+      var isTied = variants.length >= 2 &&
+        (variants[1].item.fleet ? variants[1].item.fleet.count : 0) === topCount;
+
+      if (isTied) {
+        variants.forEach(function(v) {
           v.item.include = false;
           var cb = v.el.querySelector('.include-toggle');
           if (cb) cb.checked = false;
           v.el.classList.add('excluded');
+        });
+      } else {
+        var foundIncluded = false;
+        variants.forEach(function(v) {
+          if (v.item.include && !foundIncluded) {
+            foundIncluded = true;
+          } else if (v.item.include) {
+            v.item.include = false;
+            var cb = v.el.querySelector('.include-toggle');
+            if (cb) cb.checked = false;
+            v.el.classList.add('excluded');
+          }
+        });
+        // If no variant was already included, promote the clear winner (variants[0]).
+        if (!foundIncluded) {
+          variants[0].item.include = true;
+          var winCb = variants[0].el.querySelector('.include-toggle');
+          if (winCb) winCb.checked = true;
+          variants[0].el.classList.remove('excluded');
         }
-      });
+      }
+    });
+
+    // Phase 2b: Single-variant items have no data-variant-group, so Phase 2
+    // never touches them.  No tie detection needed — the threshold from
+    // Phase 1 is the final answer.
+
+    // Phase 2c: Sync parent group header rows after Phase 2 may have changed
+    // child variant states (ties, winner promotion).
+    Object.keys(groups).forEach(function(group) {
+      syncParentGroupRows(group);
     });
 
     // Phase 3: Update UI
     updateToolbar();
     setDirty(!isSnapshotClean());
     recalcTriageCounts();
+    if (typeof updateCompareButtons === 'function') {
+      var seen = {};
+      document.querySelectorAll('[data-variant-group]').forEach(function(el) {
+        seen[el.getAttribute('data-variant-group')] = true;
+      });
+      Object.keys(seen).forEach(function(g) { updateCompareButtons(g); });
+    }
+    if (typeof editorRefreshTree === 'function') editorRefreshTree();
   }
 
 })();

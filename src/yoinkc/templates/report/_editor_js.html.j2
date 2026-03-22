@@ -94,6 +94,23 @@
             '<span class="path-dir">' + escapeHtml(pp.dir) + '</span>' +
             '<span class="path-file">' + escapeHtml(pp.name) + '</span>' +
             ' <span class="pf-v6-c-badge pf-m-read">' + entries.length + ' variants</span>';
+
+          var hasSelected = entries.some(function(e) { return e.item.include === true; });
+          if (!hasSelected && entries.length >= 2) {
+            var sortedForTie = entries.slice().sort(function(a, b) {
+              return (b.item.fleet ? b.item.fleet.count : 0) - (a.item.fleet ? a.item.fleet.count : 0);
+            });
+            var topCount = sortedForTie[0].item.fleet ? sortedForTie[0].item.fleet.count : 0;
+            var secondCount = sortedForTie[1].item.fleet ? sortedForTie[1].item.fleet.count : 0;
+            if (topCount === secondCount) {
+              var tieBadge = document.createElement('span');
+              tieBadge.className = 'variant-tie-badge';
+              tieBadge.textContent = 'tied \u2014 compare & choose';
+              tieBadge.style.cssText = 'margin-left:8px; padding:2px 6px; border-radius:3px; font-size:0.75rem; background:rgba(204,136,0,0.2); color:#cc8800;';
+              headerDiv.appendChild(tieBadge);
+            }
+          }
+
           headerDiv.addEventListener('click', function() { toggleAccordion(this); });
           headerDiv.addEventListener('keydown', activateOnKeydown);
           group.appendChild(headerDiv);
@@ -146,7 +163,7 @@
               var compareBtn = document.createElement('button');
               compareBtn.className = 'pf-v6-c-button pf-m-small pf-m-link editor-compare-btn';
               compareBtn.textContent = 'Compare';
-              if (!groupHasSelected) {
+              if (!groupHasSelected && entries.length !== 2) {
                 compareBtn.disabled = true;
                 compareBtn.classList.add('pf-m-disabled');
               }
@@ -280,12 +297,24 @@
     if (!arr || !arr[idx]) return;
     var comparisonItem = arr[idx];
     var path = comparisonItem.path;
+    var siblings = findSiblingVariants(section, list, path);
 
     var selectedItem = null;
-    findSiblingVariants(section, list, path).forEach(function(s) {
+    siblings.forEach(function(s) {
       if (s.item.include === true) selectedItem = s.item;
     });
-    if (!selectedItem) return;
+
+    if (!selectedItem) {
+      if (siblings.length !== 2) return;
+      siblings.forEach(function(s) {
+        if (s.item !== comparisonItem) selectedItem = s.item;
+      });
+      if (!selectedItem) return;
+      if (typeof showCompareModal === 'function') {
+        showCompareModal(path, selectedItem, comparisonItem, true);
+      }
+      return;
+    }
 
     if (typeof showCompareModal === 'function') {
       showCompareModal(path, selectedItem, comparisonItem);

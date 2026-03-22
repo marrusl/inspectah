@@ -9,6 +9,7 @@ from yoinkc.schema import (
     ConfigFileKind,
     ConfigSection,
     ContainerSection,
+    FleetPrevalence,
     InspectionSnapshot,
     OsRelease,
     QuadletUnit,
@@ -36,6 +37,59 @@ def _render(refine_mode=False, with_content=False):
     with tempfile.TemporaryDirectory() as tmp:
         run_all_renderers(snapshot, Path(tmp), refine_mode=refine_mode)
         return (Path(tmp) / "report.html").read_text()
+
+
+def _render_fleet_variants(tmp_path, variant_count=2, selected_index=None):
+    hosts = [f"web-0{i + 1}" for i in range(variant_count)]
+    snapshot = InspectionSnapshot(
+        meta={
+            "host_root": "/host",
+            "fleet": {
+                "source_hosts": hosts,
+                "total_hosts": variant_count,
+                "min_prevalence": 100,
+            },
+        },
+        os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        config=ConfigSection(files=[
+            ConfigFileEntry(
+                path="/etc/myapp/app.conf",
+                kind=ConfigFileKind.UNOWNED,
+                content=f"variant={i}",
+                include=(selected_index == i),
+                fleet=FleetPrevalence(count=1, total=variant_count, hosts=[hosts[i]]),
+            )
+            for i in range(variant_count)
+        ]),
+    )
+    run_all_renderers(snapshot, tmp_path, refine_mode=True)
+    return (tmp_path / "report.html").read_text()
+
+
+def _extract_js_function(html: str, name: str) -> str:
+    marker = f"function {name}"
+    start = html.find(marker)
+    assert start >= 0, f"could not find JS function {name}"
+    brace_start = html.find("{", start)
+    assert brace_start >= 0, f"could not find opening brace for {name}"
+    depth = 0
+    for idx in range(brace_start, len(html)):
+        ch = html[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return html[start:idx + 1]
+    raise AssertionError(f"could not find closing brace for {name}")
+
+
+def _extract_js_block(html: str, start_marker: str, end_marker: str) -> str:
+    start = html.find(start_marker)
+    assert start >= 0, f"could not find start marker {start_marker!r}"
+    end = html.find(end_marker, start)
+    assert end >= 0, f"could not find end marker {end_marker!r}"
+    return html[start:end]
 
 
 class TestEditorTab:
@@ -283,3 +337,67 @@ class TestEditorIntegration:
         assert 'JSON.parse(JSON.stringify(snapshot))' not in html
         # Sidebar says Editor
         assert 'Editor</a>' in html
+
+
+class TestVariantCompare:
+
+    def test_update_compare_buttons_enables_compare_for_two_variants_without_selection(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=2)
+        fn = _extract_js_function(html, "updateCompareButtons")
+        assert "var canPeerCompare = rows.length === 2;" in fn
+        assert "if (hasSelected || canPeerCompare)" in fn
+
+    def test_update_compare_buttons_keeps_three_plus_variants_disabled_without_selection(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=3)
+        fn = _extract_js_function(html, "updateCompareButtons")
+        assert "rows.length === 2" in fn
+        assert "rows.length >= 2" not in fn
+
+    def test_compare_click_on_two_variant_group_without_selection_uses_peer_mode(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=2)
+        block = _extract_js_block(
+            html,
+            "/* Fleet: Compare button click delegation */",
+            "/* Fleet: keyboard activation for fleet bars */",
+        )
+        assert "if (!selectedItem) {" in block
+        assert "if (rows.length !== 2) return;" in block
+        assert "showCompareModal(group, otherItem, comparisonItem, true);" in block
+
+    def test_compare_modal_peer_mode_shows_use_buttons_instead_of_switch_button(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=2)
+        fn = _extract_js_function(html, "showCompareModal")
+        assert "function showCompareModal(path, selectedItem, comparisonItem, peerMode)" in fn
+        assert 'data-action="use-a"' in fn
+        assert 'data-action="use-b"' in fn
+        assert "Use Variant A" in fn
+        assert "Use Variant B" in fn
+
+    def test_use_variant_a_button_selects_that_variant_and_excludes_the_other(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=2)
+        modal_fn = _extract_js_function(html, "showCompareModal")
+        select_fn = _extract_js_function(html, "applyVariantSelection")
+        assert "applyVariantSelection(path, selectedItem);" in modal_fn
+        assert "applyVariantSelection(path, comparisonItem);" in modal_fn
+        assert "arr[idx].include = isTarget;" in select_fn
+        assert "if (cb) cb.checked = isTarget;" in select_fn
+        assert "row.classList.toggle('excluded', !isTarget);" in select_fn
+
+    def test_compare_buttons_are_synced_on_initial_page_load(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=2)
+        assert "var initialCompareGroups = {};" in html
+        assert "Object.keys(initialCompareGroups).forEach(function(g) { updateCompareButtons(g); });" in html
+
+    def test_editor_tree_keeps_two_variant_compare_enabled_without_selection(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=2)
+        build_tree_fn = _extract_js_function(html, "buildTree")
+        assert "if (!groupHasSelected && entries.length !== 2) {" in build_tree_fn
+        assert "compareBtn.disabled = true;" in build_tree_fn
+
+    def test_compare_from_editor_uses_peer_mode_for_two_variant_groups_without_selection(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=2)
+        fn = _extract_js_function(html, "compareFromEditor")
+        assert "var siblings = findSiblingVariants(section, list, path);" in fn
+        assert "if (!selectedItem) {" in fn
+        assert "if (siblings.length !== 2) return;" in fn
+        assert "showCompareModal(path, selectedItem, comparisonItem, true);" in fn
