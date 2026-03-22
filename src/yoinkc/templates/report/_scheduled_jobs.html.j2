@@ -19,7 +19,7 @@
     <p class="text-sm">{{ vendor_timers|length }} vendor timer{{ 's' if vendor_timers|length != 1 else '' }} (base image defaults) not shown.</p>
     {%- endif %}
     {%- if local_timers %}
-    <table class="pf-v6-c-table"><thead><tr><th scope="col">Timer</th><th scope="col">Schedule</th><th scope="col">ExecStart</th></tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Timer</th><th class="pf-m-fit-content" scope="col">Schedule</th><th scope="col">ExecStart</th></tr></thead><tbody>
       {%- for t in local_timers %}
       <tr>
         <td>{{ t.name }}</td><td>{{ t.on_calendar }}</td>

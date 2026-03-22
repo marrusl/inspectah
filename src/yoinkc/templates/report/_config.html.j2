@@ -24,8 +24,7 @@
         <td>
           <code>{{ path }}</code>
           <span class="pf-v6-c-label pf-m-compact pf-m-outline fleet-variant-toggle"
-                tabindex="0" role="button" aria-label="Toggle variants"
-                style="margin-left: 8px; cursor: pointer;">
+                tabindex="0" role="button" aria-label="Toggle variants">
             <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
           </span>
         </td>
@@ -35,7 +34,7 @@
       </tr>
       <tr class="fleet-variant-children">
         <td colspan="10">
-          <table class="pf-v6-c-table pf-m-compact" style="margin: 0;">
+          <table class="pf-v6-c-table pf-m-compact fleet-variant-table">
             {%- for v in variants %}
             <tr{% if not v.item.include %} class="excluded"{% endif %}
                 data-snap-section="config" data-snap-list="files"
@@ -48,7 +47,7 @@
                   <span class="pf-v6-c-switch__toggle"></span>
                 </label>
               </td>
-              <td><code>{{ path }}</code> <span style="color: var(--pf-v6-global--Color--200);">(variant {{ loop.index }})</span></td>
+              <td><code>{{ path }}</code> <span class="variant-index">(variant {{ loop.index }})</span></td>
               <td>{{ v.item.kind }}</td>
               <td>{{ v.item.category | replace('_', ' ') | title }}</td>
               {{ fleet_cell(v.item) }}

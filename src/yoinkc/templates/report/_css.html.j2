@@ -11,6 +11,14 @@
   }
 }
 
+/* Global table spacing - relaxed density */
+.pf-v6-c-table {
+  --pf-v6-c-table--cell--PaddingBlockStart: var(--pf-t--global--spacer--sm);
+  --pf-v6-c-table--cell--PaddingBlockEnd: var(--pf-t--global--spacer--sm);
+  --pf-v6-c-table--cell--PaddingInlineStart: var(--pf-t--global--spacer--md);
+  --pf-v6-c-table--cell--PaddingInlineEnd: var(--pf-t--global--spacer--md);
+}
+
 /* OS icon theme-aware colours */
 .os-icon { vertical-align: middle; margin-right: 6px; }
 .os-icon-rhel   { color: #ffffff; }
@@ -121,6 +129,12 @@ details > summary:hover { text-decoration: underline; }
 details[open] > summary { margin-bottom: 0.25rem; }
 
 /* Inline semantic labels now use native PF6 variants */
+
+/* Fleet variant styling (migrated from inline styles) */
+.fleet-variant-toggle { margin-left: 8px; cursor: pointer; }
+.fleet-variant-table { margin: 0; }
+.variant-index { color: var(--pf-v6-global--Color--200); }
+.fleet-banner-hosts { color: var(--pf-v6-global--Color--200); }
 
 /* Audit */
 .audit-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }

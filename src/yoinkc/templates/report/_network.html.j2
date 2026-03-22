@@ -8,7 +8,7 @@
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-net-connections", "Connections") }}</div>
     <div class="pf-v6-c-expandable-section__content" id="card-net-connections"><div class="pf-v6-c-card__body">
-    <table class="pf-v6-c-table"><thead><tr><th scope="col">Name</th><th scope="col">Method</th><th scope="col">Type</th><th scope="col">Deployment</th></tr></thead><tbody>
+    <table class="pf-v6-c-table"><thead><tr><th scope="col">Name</th><th class="pf-m-fit-content" scope="col">Method</th><th class="pf-m-fit-content" scope="col">Type</th><th class="pf-m-fit-content" scope="col">Deployment</th></tr></thead><tbody>
       {%- for c in net.connections %}
       <tr>
         <td><code>{{ c.name }}</code></td>
