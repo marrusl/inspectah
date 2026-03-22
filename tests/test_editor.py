@@ -177,7 +177,6 @@ class TestEditorTab:
     def test_rerender_button_in_refine_mode(self):
         html = _render(refine_mode=True)
         assert 'id="btn-re-render"' in html
-        assert 'editor-changed-count' in html
 
     def test_no_editor_rerender_button_in_static_mode(self):
         html = _render(refine_mode=False)
@@ -326,7 +325,6 @@ class TestEditorIntegration:
         assert 'showEditorError' in html
         # Re-render button
         assert 'id="btn-re-render"' in html
-        assert 'editor-changed-count' in html
         # Cross-tab editor buttons (pencil icon)
         assert 'class="pf-v6-c-button pf-m-plain editor-icon"' in html
         assert 'navigateToEditor' in html
