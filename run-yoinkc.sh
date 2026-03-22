@@ -182,7 +182,7 @@ case "$_mode" in
     # Poll for server readiness and open browser on the host
     if $_launch_browser; then
       ( _tries=0
-        while ! curl -s -o /dev/null http://localhost:8642 2>/dev/null; do
+        while ! curl -sf http://localhost:8642/api/health >/dev/null 2>&1; do
           _tries=$((_tries + 1))
           if [ "$_tries" -ge 60 ]; then break; fi
           sleep 0.5
