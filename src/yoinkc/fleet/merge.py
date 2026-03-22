@@ -115,6 +115,44 @@ def _merge_content_items(
     return result
 
 
+def _auto_select_variants(items: list) -> None:
+    """Post-process content-variant item lists with tie-breaking auto-selection.
+
+    Groups items by ``path``. Within each group:
+    - Single variant: always selected (``include=True``).
+    - Clear winner (strictly highest ``fleet.count``): winner selected, rest deselected.
+    - Tie at the top: all deselected (``include=False``).
+
+    Items lacking ``path``, ``fleet``, or ``include`` attributes are skipped.
+    """
+    groups: dict[str, list] = {}
+    order: list[str] = []
+    for item in items:
+        path = getattr(item, "path", None)
+        if path is None or not hasattr(item, "fleet") or item.fleet is None:
+            continue
+        if not hasattr(item, "include"):
+            continue
+        if path not in groups:
+            order.append(path)
+            groups[path] = []
+        groups[path].append(item)
+
+    for path in order:
+        variants = groups[path]
+        if len(variants) == 1:
+            variants[0].include = True
+            continue
+        variants.sort(key=lambda v: v.fleet.count, reverse=True)
+        if variants[0].fleet.count == variants[1].fleet.count:
+            for v in variants:
+                v.include = False
+        else:
+            variants[0].include = True
+            for v in variants[1:]:
+                v.include = False
+
+
 def _deduplicate_strings(all_lists: list[list[str]]) -> list[str]:
     """Union of string lists, preserving first-seen order."""
     seen = set()
@@ -299,6 +337,7 @@ def merge_snapshots(
             variant_fn=lambda f: _content_hash(f.content),
             total=total, min_prevalence=min_prevalence, host_names=host_names,
         )
+        _auto_select_variants(files)
         config_section = ConfigSection(files=files)
 
     # --- Services ---
@@ -322,6 +361,7 @@ def merge_snapshots(
         disabled_units = _deduplicate_strings(
             _collect_section_lists(snapshots, "services", "disabled_units")
         )
+        _auto_select_variants(drop_ins)
         services_section = ServiceSection(
             state_changes=state_changes,
             drop_ins=drop_ins,
@@ -384,6 +424,8 @@ def merge_snapshots(
             ),
             total=total, min_prevalence=min_prevalence, host_names=host_names,
         )
+        _auto_select_variants(quadlet_units)
+        _auto_select_variants(compose_files)
         containers_section = ContainerSection(
             quadlet_units=quadlet_units,
             compose_files=compose_files,
@@ -404,6 +446,7 @@ def merge_snapshots(
             variant_fn=lambda f: _content_hash(f.content),
             total=total, min_prevalence=min_prevalence, host_names=host_names,
         )
+        _auto_select_variants(non_rpm_env_files)
         non_rpm_section = NonRpmSoftwareSection(
             items=non_rpm_items,
             env_files=non_rpm_env_files,

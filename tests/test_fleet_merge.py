@@ -676,6 +676,56 @@ class TestNoHostsMode:
         assert merged.users_groups.users[0]["fleet"]["count"] == 2
 
 
+import pytest
+
+
+class TestAutoSelectVariants:
+    """Auto-selection of most-prevalent variant per path group."""
+
+    @pytest.mark.parametrize("counts,expected_include", [
+        # Clear winner: count=3 wins over count=1
+        ([3, 1], [True, False]),
+        # 2-way tie: both deselected
+        ([2, 2], [False, False]),
+        # 3-way tie: all deselected
+        ([1, 1, 1], [False, False, False]),
+        # Single variant: always selected
+        ([3], [True]),
+        # Mixed [3, 3, 1]: top two tied, all deselected
+        ([3, 3, 1], [False, False, False]),
+    ])
+    def test_auto_select_config_variants(self, counts, expected_include):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        total = sum(counts)
+        snaps = []
+        host_idx = 0
+        # Build one snapshot per "host" for each variant count
+        for variant_idx, count in enumerate(counts):
+            content = f"variant={variant_idx}"
+            for _ in range(count):
+                f = ConfigFileEntry(
+                    path="/etc/test.conf",
+                    kind="unowned",
+                    content=content,
+                )
+                snaps.append(_snap(f"host-{host_idx}", config=ConfigSection(files=[f])))
+                host_idx += 1
+
+        merged = merge_snapshots(snaps, min_prevalence=0)
+        by_content = {f.content: f for f in merged.config.files}
+
+        # Map expected_include indices back to sorted-by-count order
+        # variants are in the merged list; sort by fleet.count descending to match spec order
+        sorted_variants = sorted(merged.config.files, key=lambda f: f.fleet.count, reverse=True)
+
+        for i, expected in enumerate(expected_include):
+            assert sorted_variants[i].include is expected, (
+                f"counts={counts}: variant[{i}] (count={sorted_variants[i].fleet.count}) "
+                f"expected include={expected}, got {sorted_variants[i].include}"
+            )
+
+
 class TestStorageSuppression:
     def test_storage_suppressed_in_fleet_report(self):
         """Storage section is not merged — remains None in fleet snapshot."""
