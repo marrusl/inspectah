@@ -26,6 +26,8 @@ html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 
 /* Page padding – toolbar lives at the bottom (5rem covers fleet slider + preview) */
 body { padding-bottom: 5rem; }
+/* Prevent PF6 flex-grow from creating a gap between content and fixed toolbar */
+.pf-v6-c-page__main { flex-grow: 0; }
 
 /* Inline alert banners – wrap content in .pf-v6-c-alert__title to land in the
    grid's "title" area; nowrap + overflow-x keeps stats on a single line. */
