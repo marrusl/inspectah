@@ -164,6 +164,66 @@ class TestEditorTab:
             assert 'alert(' not in editor_js
 
 
+class TestEditorDrawer:
+    """PF6 resizable drawer for the editor tree pane.
+
+    These tests verify rendered markup structure only. The following behaviors
+    require a browser to verify manually:
+
+    - Drag splitter to resize — panel width updates smoothly
+    - Drag past 240px minimum — clamps to 240px
+    - Drag past 600px maximum — clamps to 600px
+    - Resize via ArrowLeft/ArrowRight — panel shrinks/grows by 20px per keystroke
+    - Resize, then refresh page — width restores from localStorage
+    - Resize, then re-render via button — width restores from localStorage
+    """
+
+    def test_drawer_uses_pf6_classes(self):
+        html = _render(refine_mode=True)
+        assert 'pf-v6-c-drawer' in html
+        assert 'pf-m-panel-left' in html
+        assert 'pf-m-resizable' in html
+        assert 'pf-m-expanded' in html
+
+    def test_drawer_default_width_340px(self):
+        html = _render(refine_mode=True)
+        assert '--pf-v6-c-drawer__panel--md--FlexBasis' in html
+        assert '340px' in html
+
+    def test_drawer_min_max_constraints(self):
+        html = _render(refine_mode=True)
+        assert '--pf-v6-c-drawer__panel--md--FlexBasis--min' in html
+        assert '240px' in html
+        assert '600px' in html
+
+    def test_drawer_splitter_markup(self):
+        html = _render(refine_mode=True)
+        assert 'pf-v6-c-drawer__splitter' in html
+
+    def test_drawer_has_panel_and_content_regions(self):
+        html = _render(refine_mode=True)
+        assert 'pf-v6-c-drawer__panel' in html
+        assert 'pf-v6-c-drawer__content' in html
+
+    def test_drawer_splitter_aria_attributes(self):
+        """Splitter must carry static ARIA attributes for screen readers."""
+        html = _render(refine_mode=True)
+        assert 'aria-label="Resize file list"' in html
+        assert 'aria-valuemin="240"' in html
+        assert 'aria-valuemax="600"' in html
+        assert 'aria-valuenow=' in html
+
+    def test_drawer_no_fixed_300px_width(self):
+        """Old fixed-width inline style must be removed."""
+        html = _render(refine_mode=True)
+        assert 'width:300px' not in html
+
+    def test_drawer_static_mode_unaffected(self):
+        """Static report must not reference drawer resize JS."""
+        html = _render(refine_mode=False)
+        assert 'yoinkc-editor-drawer-width' not in html
+
+
 class TestEditorIntegration:
     """End-to-end tests verifying the complete editor feature set."""
 

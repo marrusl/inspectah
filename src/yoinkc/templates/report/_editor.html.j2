@@ -77,26 +77,58 @@
   </div>
 </div>
 
-<div id="editor-tab" style="display:flex; height:calc(100vh - 200px); border:1px solid var(--pf-t--global--border--color--default);">
+<style>
+#editor-tab {
+  height: calc(100vh - 200px);
+  border: 1px solid var(--pf-t--global--border--color--default);
+}
+#editor-tab .pf-v6-c-drawer__panel {
+  border-right: 1px solid var(--pf-t--global--border--color--default);
+}
+#editor-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+</style>
 
-  {# --- Tree pane --- #}
-  <div id="editor-tree" style="width:300px; border-right:1px solid var(--pf-t--global--border--color--default); background:var(--pf-t--global--background--color--secondary--default); display:flex; flex-direction:column; overflow:hidden;">
-    <div style="padding:12px 16px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center;">
-      <span class="pf-v6-c-title pf-m-lg">Files</span>
-      <button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-new-file" type="button">+ New File</button>
+<div id="editor-tab"
+     class="pf-v6-c-drawer pf-m-expanded pf-m-panel-left pf-m-resizable"
+     style="--pf-v6-c-drawer__panel--md--FlexBasis: 340px; --pf-v6-c-drawer__panel--md--FlexBasis--min: 240px; --pf-v6-c-drawer__panel--md--FlexBasis--max: 600px;">
+
+  {# --- Tree pane (drawer panel) --- #}
+  <div class="pf-v6-c-drawer__panel">
+    <div id="editor-tree" style="display:flex; flex-direction:column; height:100%; overflow:hidden; background:var(--pf-t--global--background--color--secondary--default);">
+      <div style="padding:12px 16px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center;">
+        <span class="pf-v6-c-title pf-m-lg">Files</span>
+        <button class="pf-v6-c-button pf-m-primary pf-m-small" id="btn-new-file" type="button">+ New File</button>
+      </div>
+      <div id="editor-tree-list" style="padding:8px; overflow-y:auto; flex:1;"></div>
     </div>
-    <div id="editor-tree-list" style="padding:8px; overflow-y:auto; flex:1;"></div>
   </div>
 
-  {# --- Content pane --- #}
-  <div id="editor-content" style="flex:1; display:flex; flex-direction:column;">
-    <div id="editor-toolbar" style="padding:8px 16px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center; min-height:48px;">
-      <div id="editor-file-path" style="font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--heading--sm);"></div>
-      <div id="editor-actions"></div>
-    </div>
-    <div id="editor-view" style="flex:1; overflow:auto; padding:16px;">
-      <pre id="editor-readonly-content" style="margin:0; white-space:pre-wrap; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);"></pre>
-      <div id="editor-cm-container" style="display:none; height:100%;"></div>
+  {# --- Splitter handle --- #}
+  <div class="pf-v6-c-drawer__splitter pf-m-vertical"
+       role="separator" aria-orientation="vertical"
+       aria-label="Resize file list"
+       aria-valuemin="240" aria-valuemax="600" aria-valuenow="340"
+       tabindex="0">
+    <div class="pf-v6-c-drawer__splitter-handle" aria-hidden="true"></div>
+  </div>
+
+  {# --- Content pane (drawer body) --- #}
+  <div class="pf-v6-c-drawer__content">
+    <div id="editor-content">
+      <div id="editor-toolbar" style="padding:8px 16px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center; min-height:48px;">
+        <div id="editor-file-path" style="font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--heading--sm);"></div>
+        <div id="editor-actions"></div>
+      </div>
+      <div id="editor-view" style="flex:1; overflow:auto; padding:16px;">
+        <pre id="editor-readonly-content" style="margin:0; white-space:pre-wrap; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);"></pre>
+        <div id="editor-cm-container" style="display:none; height:100%;"></div>
+      </div>
     </div>
   </div>
 
