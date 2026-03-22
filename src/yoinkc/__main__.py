@@ -208,7 +208,8 @@ def main(argv: Optional[list] = None, cwd: Optional[Path] = None) -> int:
             case "fleet":
                 return _run_fleet(args, cwd=cwd)
             case "refine":
-                raise NotImplementedError("yoinkc refine: coming soon")
+                from .refine import run_refine
+                return run_refine(args)
             case other:
                 print(f"Unknown command: {other}", file=sys.stderr)
                 return 1

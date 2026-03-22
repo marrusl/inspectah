@@ -111,7 +111,7 @@ def run_pipeline(
                 host_cwd = os.environ.get("YOINKC_HOST_CWD")
                 scp_path = f"{host_cwd}/{name}" if host_cwd else name
                 print(f"  Copy to workstation:    scp {scp_host}:{scp_path} .")
-            print(f"  Interactive refinement: ./yoinkc-refine {name}")
+            print(f"  Interactive refinement: yoinkc refine {name}")
             print(f"  Build the image:        ./yoinkc-build {name} my-image:latest")
     except Exception:
         print(

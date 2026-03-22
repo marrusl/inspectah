@@ -240,7 +240,7 @@ class TestSubcommandRouting:
         assert args.command == "fleet"
 
     def test_refine_subcommand_recognized(self):
-        args = parse_args(["refine"])
+        args = parse_args(["refine", "dummy.tar.gz"])
         assert args.command == "refine"
 
     def test_top_level_help_lists_subcommands(self, capsys):
@@ -349,3 +349,35 @@ class TestFleetSubcommand:
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "input" in out.lower() or "dir" in out.lower()
+
+
+class TestRefineSubcommand:
+    """Verify refine subcommand parsing."""
+
+    def test_refine_tarball_positional(self):
+        args = parse_args(["refine", "foo.tar.gz"])
+        assert args.command == "refine"
+        assert args.tarball == Path("foo.tar.gz")
+
+    def test_refine_no_browser_flag(self):
+        args = parse_args(["refine", "foo.tar.gz", "--no-browser"])
+        assert args.command == "refine"
+        assert args.no_browser is True
+
+    def test_refine_port_flag(self):
+        args = parse_args(["refine", "foo.tar.gz", "--port", "9000"])
+        assert args.command == "refine"
+        assert args.port == 9000
+
+    def test_refine_defaults(self):
+        args = parse_args(["refine", "foo.tar.gz"])
+        assert args.tarball == Path("foo.tar.gz")
+        assert args.no_browser is False
+        assert args.port == 8642
+
+    def test_refine_help_exits_cleanly(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(["refine", "--help"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "tarball" in out.lower()

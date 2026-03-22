@@ -1,22 +1,18 @@
 """
-Tests for the yoinkc-refine helper script.
+Tests for the yoinkc.refine module.
 
-The script lives at the repo root as a standalone Python file (not a package).
-We import it by path using importlib so no package structure is needed.
+Covers tarball extraction, validation, HTTP server routes, and the
+re-render subprocess pipeline.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
-import os
 import socket
-import sys
+import subprocess as sp
 import tarfile
-import tempfile
 import threading
-import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,26 +20,16 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Import the script as a module by absolute path
-# ---------------------------------------------------------------------------
-
-_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "yoinkc-refine"
-
-
-def _load_refine():
-    """Import yoinkc-refine as a module (handles hyphens in name, no .py extension)."""
-    from importlib.machinery import SourceFileLoader
-    loader = SourceFileLoader("yoinkc_refine", str(_SCRIPT_PATH))
-    spec = importlib.util.spec_from_loader("yoinkc_refine", loader)
-    mod = importlib.util.module_from_spec(spec)
-    loader.exec_module(mod)
-    return mod
-
-
-@pytest.fixture(scope="module")
-def refine():
-    return _load_refine()
+from yoinkc.refine import (
+    _DEFAULT_PORT,
+    _Handler,
+    _build_tarball,
+    _count_excluded,
+    _extract_tarball,
+    _find_free_port,
+    _re_render,
+    _validate_output_dir,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +37,7 @@ def refine():
 # ---------------------------------------------------------------------------
 
 def _make_tarball(files: dict[str, str], dest: Path) -> Path:
-    """Write a tar.gz at *dest* containing *files* (name → content)."""
+    """Write a tar.gz at *dest* containing *files* (name -> content)."""
     with tarfile.open(dest, "w:gz") as tf:
         for name, content in files.items():
             data = content.encode()
@@ -76,25 +62,24 @@ def _minimal_tarball(tmp_path: Path, extra: dict | None = None) -> Path:
 # ---------------------------------------------------------------------------
 
 class TestFindFreePort:
-    def test_returns_integer(self, refine):
-        port = refine._find_free_port()
+    def test_returns_integer(self):
+        port = _find_free_port()
         assert isinstance(port, int)
         assert port > 0
 
-    def test_port_is_bindable(self, refine):
-        port = refine._find_free_port()
+    def test_port_is_bindable(self):
+        port = _find_free_port()
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             s.bind(("127.0.0.1", port))  # should not raise
 
-    def test_increments_when_busy(self, refine):
+    def test_increments_when_busy(self):
         start = 59900
-        # Occupy start port
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
             occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             occupied.bind(("127.0.0.1", start))
             occupied.listen(1)
-            port = refine._find_free_port(start=start, max_attempts=10)
+            port = _find_free_port(start=start, max_attempts=10)
             assert port > start
 
 
@@ -103,32 +88,31 @@ class TestFindFreePort:
 # ---------------------------------------------------------------------------
 
 class TestExtractAndValidate:
-    def test_extracts_files(self, refine, tmp_path):
+    def test_extracts_files(self, tmp_path):
         tb = _minimal_tarball(tmp_path)
         out = tmp_path / "out"
         out.mkdir()
-        refine._extract_tarball(tb, out)
+        _extract_tarball(tb, out)
         assert (out / "report.html").exists()
         assert (out / "inspection-snapshot.json").exists()
 
-    def test_validate_passes_when_files_present(self, refine, tmp_path):
+    def test_validate_passes_when_files_present(self, tmp_path):
         out = tmp_path / "out"
         out.mkdir()
         (out / "report.html").write_text("<html/>")
         (out / "inspection-snapshot.json").write_text("{}")
-        refine._validate_output_dir(out)  # should not raise or exit
+        _validate_output_dir(out)  # should not raise or exit
 
-    def test_validate_fails_with_system_exit_on_missing(self, refine, tmp_path):
+    def test_validate_fails_with_system_exit_on_missing(self, tmp_path):
         out = tmp_path / "out"
         out.mkdir()
         (out / "report.html").write_text("<html/>")
         # inspection-snapshot.json is missing
         with pytest.raises(SystemExit):
-            refine._validate_output_dir(out)
+            _validate_output_dir(out)
 
-    def test_validate_unwraps_single_subdirectory(self, refine, tmp_path):
+    def test_validate_unwraps_single_subdirectory(self, tmp_path):
         """Tarballs that wrap contents in one dir are transparently unwrapped."""
-        # Build a tarball with a wrapper dir
         files = {
             "wrapper/report.html": "<html/>",
             "wrapper/inspection-snapshot.json": "{}",
@@ -136,12 +120,11 @@ class TestExtractAndValidate:
         tb = _make_tarball(files, tmp_path / "wrapped.tar.gz")
         out = tmp_path / "out"
         out.mkdir()
-        refine._extract_tarball(tb, out)
-        refine._validate_output_dir(out)
-        # After unwrap, files should be directly in out/
+        _extract_tarball(tb, out)
+        _validate_output_dir(out)
         assert (out / "report.html").exists()
 
-    def test_extract_prevents_path_traversal(self, refine, tmp_path):
+    def test_extract_prevents_path_traversal(self, tmp_path):
         """Entries with '..' in their path must not escape the destination."""
         escape_target = tmp_path / "escape.txt"
         buf = io.BytesIO()
@@ -155,7 +138,7 @@ class TestExtractAndValidate:
         tb.write_bytes(buf.getvalue())
         out = tmp_path / "out"
         out.mkdir()
-        refine._extract_tarball(tb, out)
+        _extract_tarball(tb, out)
         assert not escape_target.exists()
 
 
@@ -164,12 +147,12 @@ class TestExtractAndValidate:
 # ---------------------------------------------------------------------------
 
 class TestBuildTarball:
-    def test_returns_valid_targz(self, refine, tmp_path):
+    def test_returns_valid_targz(self, tmp_path):
         out = tmp_path / "out"
         out.mkdir()
         (out / "report.html").write_text("<html/>")
         (out / "data.json").write_text("{}")
-        data = refine._build_tarball(out)
+        data = _build_tarball(out)
         assert isinstance(data, bytes)
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
             names = tf.getnames()
@@ -178,29 +161,11 @@ class TestBuildTarball:
 
 
 # ---------------------------------------------------------------------------
-# Runtime detection
-# ---------------------------------------------------------------------------
-
-class TestFindRuntime:
-    def test_finds_podman_when_available(self, refine):
-        with patch("shutil.which", side_effect=lambda x: "/usr/bin/podman" if x == "podman" else None):
-            assert refine._find_runtime() == "podman"
-
-    def test_falls_back_to_docker(self, refine):
-        with patch("shutil.which", side_effect=lambda x: "/usr/bin/docker" if x == "docker" else None):
-            assert refine._find_runtime() == "docker"
-
-    def test_returns_none_when_neither_found(self, refine):
-        with patch("shutil.which", return_value=None):
-            assert refine._find_runtime() is None
-
-
-# ---------------------------------------------------------------------------
 # Count excluded
 # ---------------------------------------------------------------------------
 
 class TestCountExcluded:
-    def test_counts_false_include_fields(self, refine):
+    def test_counts_false_include_fields(self):
         snapshot = {
             "rpm": {
                 "packages_added": [
@@ -215,54 +180,24 @@ class TestCountExcluded:
                 ],
             },
         }
-        assert refine._count_excluded(snapshot) == 3
+        assert _count_excluded(snapshot) == 3
 
-    def test_returns_zero_when_all_included(self, refine):
+    def test_returns_zero_when_all_included(self):
         snapshot = {
             "rpm": {"packages_added": [{"name": "httpd", "include": True}]},
         }
-        assert refine._count_excluded(snapshot) == 0
+        assert _count_excluded(snapshot) == 0
 
-    def test_ignores_non_list_fields(self, refine):
+    def test_ignores_non_list_fields(self):
         snapshot = {
             "meta": {"hostname": "myhost"},
             "schema_version": 5,
         }
-        assert refine._count_excluded(snapshot) == 0
+        assert _count_excluded(snapshot) == 0
 
 
 # ---------------------------------------------------------------------------
-# Image pre-pull
-# ---------------------------------------------------------------------------
-
-class TestEnsureImage:
-    def test_pull_success_logs_done(self, refine, capsys):
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0)
-            refine._ensure_image("podman")
-        out = capsys.readouterr().out
-        assert "done" in out
-        assert mock_run.call_count == 1  # only pull, no check needed
-
-    def test_pull_failure_with_cache_logs_cached(self, refine, capsys):
-        results = [MagicMock(returncode=1), MagicMock(returncode=0)]
-        with patch("subprocess.run", side_effect=results):
-            refine._ensure_image("podman")
-        out = capsys.readouterr().out
-        assert "failed" in out
-        assert "cached" in out
-
-    def test_pull_failure_no_cache_warns(self, refine, capsys):
-        with patch("subprocess.run", return_value=MagicMock(returncode=1)):
-            refine._ensure_image("podman")
-        captured = capsys.readouterr()
-        combined = captured.out + captured.err
-        assert "failed" in combined
-        assert "Re-render will not be available" in combined
-
-
-# ---------------------------------------------------------------------------
-# Re-render via container
+# Re-render via subprocess (calls `yoinkc inspect --from-snapshot`)
 # ---------------------------------------------------------------------------
 
 class TestReRender:
@@ -273,36 +208,29 @@ class TestReRender:
         (d / "inspection-snapshot.json").write_text("{}")
         return d
 
-    def test_no_runtime_returns_error(self, refine, tmp_path):
-        with patch.object(refine, "_find_runtime", return_value=None):
-            ok, msg = refine._re_render(b'{"schema_version": 5}', self._make_output_dir(tmp_path))
-        assert ok is False
-        assert "podman" in msg.lower() or "docker" in msg.lower()
-
-    def test_successful_rerender_replaces_output(self, refine, tmp_path):
+    def test_successful_rerender_updates_report(self, tmp_path):
         output_dir = self._make_output_dir(tmp_path)
         new_html = "<html>new</html>"
 
         def _fake_run(cmd, **kwargs):
-            # Write new output as if the container did it
-            new_out = Path(cmd[cmd.index("-v", 4) + 1].split(":")[0])
-            (new_out / "report.html").write_text(new_html)
-            (new_out / "inspection-snapshot.json").write_text("{}")
-            result = MagicMock()
-            result.returncode = 0
-            result.stdout = ""
-            result.stderr = ""
-            return result
+            idx = cmd.index("--output-dir")
+            out_path = Path(cmd[idx + 1])
+            (out_path / "report.html").write_text(new_html)
+            (out_path / "inspection-snapshot.json").write_text("{}")
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = ""
+            r.stderr = ""
+            return r
 
-        with patch.object(refine, "_find_runtime", return_value="podman"), \
-             patch("subprocess.run", side_effect=_fake_run):
-            ok, html = refine._re_render(b'{"schema_version": 5}', output_dir)
+        with patch("subprocess.run", side_effect=_fake_run):
+            ok, html = _re_render(b'{"schema_version": 5}', output_dir)
 
         assert ok is True
         assert new_html in html
         assert (output_dir / "report.html").read_text() == new_html
 
-    def test_container_failure_returns_log(self, refine, tmp_path):
+    def test_subprocess_failure_returns_log(self, tmp_path):
         output_dir = self._make_output_dir(tmp_path)
 
         def _fail(*args, **kwargs):
@@ -312,37 +240,54 @@ class TestReRender:
             r.stderr = "some error"
             return r
 
-        with patch.object(refine, "_find_runtime", return_value="podman"), \
-             patch("subprocess.run", side_effect=_fail):
-            ok, msg = refine._re_render(b"{}", output_dir)
+        with patch("subprocess.run", side_effect=_fail):
+            ok, msg = _re_render(b"{}", output_dir)
 
         assert ok is False
         assert "some error" in msg or "some stdout" in msg
 
-    def test_falls_back_to_docker(self, refine, tmp_path):
-        """When podman is unavailable but docker is, docker is used."""
+    def test_timeout_returns_error(self, tmp_path):
         output_dir = self._make_output_dir(tmp_path)
-        called_with: list[str] = []
 
-        def _fake_which(name: str) -> str | None:
-            return None if name == "podman" else f"/usr/bin/{name}"
+        with patch("subprocess.run", side_effect=sp.TimeoutExpired("yoinkc", 300)):
+            ok, msg = _re_render(b"{}", output_dir)
+
+        assert ok is False
+        assert "timeout" in msg.lower() or "300" in msg
+
+    def test_command_not_found_returns_error(self, tmp_path):
+        output_dir = self._make_output_dir(tmp_path)
+
+        with patch("subprocess.run", side_effect=FileNotFoundError("yoinkc")):
+            ok, msg = _re_render(b"{}", output_dir)
+
+        assert ok is False
+        assert "not found" in msg.lower() or "yoinkc" in msg.lower()
+
+    def test_passes_original_snapshot(self, tmp_path):
+        output_dir = self._make_output_dir(tmp_path)
+        captured_cmd: list[str] = []
 
         def _fake_run(cmd, **kwargs):
-            called_with.append(cmd[0])
-            new_out = Path(cmd[cmd.index("-v", 4) + 1].split(":")[0])
-            (new_out / "report.html").write_text("<html>docker</html>")
-            (new_out / "inspection-snapshot.json").write_text("{}")
+            captured_cmd.extend(cmd)
+            idx = cmd.index("--output-dir")
+            out_path = Path(cmd[idx + 1])
+            (out_path / "report.html").write_text("<html/>")
+            (out_path / "inspection-snapshot.json").write_text("{}")
             r = MagicMock()
             r.returncode = 0
             r.stdout = r.stderr = ""
             return r
 
-        with patch("shutil.which", side_effect=_fake_which), \
-             patch("subprocess.run", side_effect=_fake_run):
-            ok, _ = refine._re_render(b"{}", output_dir)
+        snap = b'{"schema_version": 5}'
+        orig = b'{"schema_version": 5, "meta": {"hostname": "orig"}}'
+        with patch("subprocess.run", side_effect=_fake_run):
+            ok, _ = _re_render(snap, output_dir, original_data=orig)
 
         assert ok is True
-        assert called_with[0] == "docker"
+        assert "--original-snapshot" in captured_cmd
+        assert "--refine-mode" in captured_cmd
+        assert "--from-snapshot" in captured_cmd
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +295,7 @@ class TestReRender:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
-def live_server(refine, tmp_path):
+def live_server(tmp_path):
     """Spin up the HTTP server in a background thread; yield (url, output_dir)."""
     from http.server import HTTPServer
 
@@ -362,10 +307,10 @@ def live_server(refine, tmp_path):
     )
     (output_dir / "extra.txt").write_text("extra content")
 
-    port = refine._find_free_port(start=59200)
-    # Inject output_dir into handler
-    refine._Handler.output_dir = output_dir  # type: ignore[attr-defined]
-    server = HTTPServer(("127.0.0.1", port), refine._Handler)
+    port = _find_free_port(start=59200)
+    _Handler.output_dir = output_dir  # type: ignore[attr-defined]
+    _Handler.re_render_available = True  # type: ignore[attr-defined]
+    server = HTTPServer(("127.0.0.1", port), _Handler)
 
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -406,26 +351,13 @@ class TestServer:
         assert status == 200
         assert b"<html>report</html>" in body
 
-    def test_get_health_returns_ok(self, live_server, refine):
+    def test_get_health_returns_ok(self, live_server):
         url, _ = live_server
-        refine._Handler.re_render_available = True
         status, body, _ = _get(url + "/api/health")
         assert status == 200
         data = json.loads(body)
         assert data["status"] == "ok"
         assert data["re_render"] is True
-
-    def test_get_health_re_render_false_when_no_runtime(self, live_server, refine):
-        url, _ = live_server
-        refine._Handler.re_render_available = False
-        try:
-            status, body, _ = _get(url + "/api/health")
-            assert status == 200
-            data = json.loads(body)
-            assert data["status"] == "ok"
-            assert data["re_render"] is False
-        finally:
-            refine._Handler.re_render_available = True
 
     def test_cors_headers_on_all_responses(self, live_server):
         url, _ = live_server
@@ -459,66 +391,46 @@ class TestServer:
         cd = headers.get("Content-Disposition", "")
         assert "yoinkc-refined-" in cd
         assert ".tar.gz" in cd
-        # Verify it's a valid tar.gz
         with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as tf:
             names = tf.getnames()
         assert "report.html" in names
 
-    def test_post_rerender_no_runtime_returns_500(self, live_server, refine):
-        url, _ = live_server
-        with patch.object(refine, "_find_runtime", return_value=None):
-            status, body, _ = _post(url + "/api/re-render", b'{"schema_version": 5}')
-        assert status == 500
-
-    def test_post_rerender_with_podman_mock(self, live_server, refine):
+    def test_post_rerender_success(self, live_server):
         url, output_dir = live_server
         new_html = "<html>refreshed</html>"
 
-        def _fake_run(cmd, **kwargs):
-            new_out = Path(cmd[cmd.index("-v", 4) + 1].split(":")[0])
-            (new_out / "report.html").write_text(new_html)
-            (new_out / "inspection-snapshot.json").write_text("{}")
-            r = MagicMock()
-            r.returncode = 0
-            r.stdout = r.stderr = ""
-            return r
-
-        with patch.object(refine, "_find_runtime", return_value="podman"), \
-             patch("subprocess.run", side_effect=_fake_run):
+        with patch("yoinkc.refine._re_render", return_value=(True, new_html)):
             status, body, headers = _post(url + "/api/re-render", b'{"schema_version": 5}')
 
         assert status == 200
         assert new_html.encode() in body
         assert "html" in headers.get("Content-Type", "")
 
-    def test_post_rerender_wrapper_format(self, live_server, refine):
+    def test_post_rerender_failure_returns_500(self, live_server):
+        url, _ = live_server
+
+        with patch("yoinkc.refine._re_render", return_value=(False, "Re-render failed")):
+            status, body, _ = _post(url + "/api/re-render", b'{"schema_version": 5}')
+
+        assert status == 500
+
+    def test_post_rerender_wrapper_format(self, live_server):
         """Re-render accepts the {"snapshot": ..., "original": ...} wrapper."""
         url, output_dir = live_server
         new_html = "<html>wrapper-rerender</html>"
 
-        def _fake_run(cmd, **kwargs):
-            for i, arg in enumerate(cmd):
-                if arg == "-v" and ":/output" in cmd[i + 1]:
-                    new_out = Path(cmd[i + 1].split(":")[0])
-                    break
-            (new_out / "report.html").write_text(new_html)
-            (new_out / "inspection-snapshot.json").write_text("{}")
-            r = MagicMock()
-            r.returncode = 0
-            r.stdout = r.stderr = ""
-            return r
-
-        wrapper = json.dumps({
-            "snapshot": {"schema_version": 5},
-            "original": {"schema_version": 5, "meta": {"hostname": "orig"}},
-        }).encode()
-
-        with patch.object(refine, "_find_runtime", return_value="podman"), \
-             patch("subprocess.run", side_effect=_fake_run):
+        with patch("yoinkc.refine._re_render", return_value=(True, new_html)) as mock_rr:
+            wrapper = json.dumps({
+                "snapshot": {"schema_version": 5},
+                "original": {"schema_version": 5, "meta": {"hostname": "orig"}},
+            }).encode()
             status, body, headers = _post(url + "/api/re-render", wrapper)
 
         assert status == 200
         assert new_html.encode() in body
+        # Verify original_data was passed through
+        call_args = mock_rr.call_args
+        assert call_args[0][2] is not None  # third positional = original_data
 
     def test_post_rerender_empty_body_returns_400(self, live_server):
         url, _ = live_server

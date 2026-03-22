@@ -1,20 +1,18 @@
-#!/usr/bin/env python3
 """
-yoinkc-refine — local helper that serves a yoinkc output tarball and enables
-live re-rendering from the HTML report's interactive UI.
+Interactive refinement server for yoinkc output.
 
-Usage:
-    ./yoinkc-refine output-tarball.tar.gz
-    python3 yoinkc-refine output-tarball.tar.gz
+Extracts a yoinkc output tarball, serves the HTML report over HTTP,
+and handles live re-rendering via the ``yoinkc inspect --from-snapshot``
+subprocess pipeline.
 
-No pip dependencies — stdlib only (Python 3.9+).
+Usage (via CLI):
+    yoinkc refine output-tarball.tar.gz [--no-browser] [--port PORT]
 """
 
 from __future__ import annotations
 
 import io
 import json
-import os
 import shutil
 import signal
 import socket
@@ -32,9 +30,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 _DEFAULT_PORT = 8642
-_IMAGE = "ghcr.io/marrusl/yoinkc:latest"
 _REQUIRED_FILES = ("report.html", "inspection-snapshot.json")
-_SCRIPT_NAME = "yoinkc-refine"
+_LOG_PREFIX = "yoinkc refine"
 
 
 # ---------------------------------------------------------------------------
@@ -42,11 +39,11 @@ _SCRIPT_NAME = "yoinkc-refine"
 # ---------------------------------------------------------------------------
 
 def _log(msg: str) -> None:
-    print(f"{_SCRIPT_NAME}: {msg}", flush=True)
+    print(f"{_LOG_PREFIX}: {msg}", flush=True)
 
 
 def _err(msg: str) -> None:
-    print(f"{_SCRIPT_NAME}: error: {msg}", file=sys.stderr, flush=True)
+    print(f"{_LOG_PREFIX}: error: {msg}", file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +60,7 @@ def _find_free_port(start: int = _DEFAULT_PORT, max_attempts: int = 20) -> int:
                 return port
             except OSError:
                 continue
-    raise RuntimeError(f"No free port found in range {start}–{start + max_attempts - 1}")
+    raise RuntimeError(f"No free port found in range {start}\u2013{start + max_attempts - 1}")
 
 
 # ---------------------------------------------------------------------------
@@ -73,10 +70,8 @@ def _find_free_port(start: int = _DEFAULT_PORT, max_attempts: int = 20) -> int:
 def _extract_tarball(tarball_path: Path, dest: Path) -> None:
     """Extract *tarball_path* into *dest*."""
     with tarfile.open(tarball_path, "r:gz") as tf:
-        # Security: strip any leading path components that escape dest.
         members = []
         for m in tf.getmembers():
-            # Normalize: strip leading slashes and ".." components
             safe_name = "/".join(
                 part for part in m.name.replace("\\", "/").split("/")
                 if part and part != ".."
@@ -85,8 +80,6 @@ def _extract_tarball(tarball_path: Path, dest: Path) -> None:
                 continue
             m.name = safe_name
             members.append(m)
-        # Use filter='data' to strip dangerous metadata (setuid bits, absolute paths, etc.).
-        # filter parameter was added in Python 3.12; gracefully omit for older versions.
         try:
             tf.extractall(dest, members=members, filter='data')  # noqa: S202
         except TypeError:
@@ -97,13 +90,11 @@ def _validate_output_dir(d: Path) -> None:
     """Raise SystemExit if required files are missing from *d*."""
     missing = [f for f in _REQUIRED_FILES if not (d / f).exists()]
     if missing:
-        # Try one level deeper (tarballs sometimes wrap in a single directory)
         subdirs = [p for p in d.iterdir() if p.is_dir()]
         if len(subdirs) == 1:
             inner = subdirs[0]
             missing = [f for f in _REQUIRED_FILES if not (inner / f).exists()]
             if not missing:
-                # Move contents up
                 for item in inner.iterdir():
                     shutil.move(str(item), str(d / item.name))
                 inner.rmdir()
@@ -113,38 +104,8 @@ def _validate_output_dir(d: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Container runner
+# Excluded-item counter
 # ---------------------------------------------------------------------------
-
-def _find_runtime() -> str | None:
-    """Return 'podman', 'docker', or None."""
-    for rt in ("podman", "docker"):
-        if shutil.which(rt):
-            return rt
-    return None
-
-
-def _ensure_image(runtime: str) -> None:
-    """Pull the latest yoinkc image; fall back to cached copy if pull fails."""
-    print(f"{_SCRIPT_NAME}: pulling latest yoinkc image...", end=" ", flush=True)
-    pull = subprocess.run([runtime, "pull", _IMAGE], capture_output=True)
-    if pull.returncode == 0:
-        print("done", flush=True)
-        return
-
-    # Pull failed — check whether a cached copy is usable.
-    check_cmd = (
-        [runtime, "image", "exists", _IMAGE]
-        if runtime == "podman"
-        else [runtime, "image", "inspect", _IMAGE]
-    )
-    has_cache = subprocess.run(check_cmd, capture_output=True).returncode == 0
-    if has_cache:
-        print("failed, using cached version", flush=True)
-    else:
-        print("failed", flush=True)
-        _log("warning: no cached yoinkc image found — Re-render will not be available")
-
 
 def _count_excluded(snapshot: dict) -> int:
     """Count items where include==False across the snapshot."""
@@ -160,56 +121,40 @@ def _count_excluded(snapshot: dict) -> int:
     return count
 
 
+# ---------------------------------------------------------------------------
+# Re-render via subprocess
+# ---------------------------------------------------------------------------
+
 def _re_render(
     snapshot_data: bytes,
     output_dir: Path,
     original_data: bytes | None = None,
 ) -> tuple[bool, str]:
     """
-    Run yoinkc in a container to re-render from the modified snapshot.
+    Re-render by calling ``yoinkc inspect --from-snapshot``.
 
-    Returns (success: bool, message_or_html: str).
-    If successful, message_or_html is the new report.html content.
-    On failure, it is the error/log text.
+    Returns (success, message_or_html).  On success the second element is
+    the new report.html content; on failure it is the error text.
     """
-    runtime = _find_runtime()
-    if runtime is None:
-        return False, (
-            "Neither podman nor docker was found on PATH. "
-            "Install one to enable live re-render."
-        )
-
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(prefix="yoinkc-rerender-") as tmp:
         tmp_path = Path(tmp)
         snap_file = tmp_path / "snapshot.json"
         snap_file.write_bytes(snapshot_data)
         new_output = tmp_path / "output"
         new_output.mkdir()
 
-        volumes = [
-            "-v", f"{snap_file}:/input/snapshot.json:ro",
-            "-v", f"{new_output}:/output",
+        cmd = [
+            "yoinkc", "inspect",
+            "--from-snapshot", str(snap_file),
+            "--output-dir", str(new_output),
+            "--refine-mode",
         ]
         if original_data:
             orig_file = tmp_path / "original-snapshot.json"
             orig_file.write_bytes(original_data)
-            volumes += ["-v", f"{orig_file}:/input/original-snapshot.json:ro"]
+            cmd += ["--original-snapshot", str(orig_file)]
 
-        yoinkc_args = [
-            "--from-snapshot", "/input/snapshot.json",
-            "--output-dir", "/output",
-            "--refine-mode",
-        ]
-        if original_data:
-            yoinkc_args += ["--original-snapshot", "/input/original-snapshot.json"]
-
-        cmd = [
-            runtime, "run", "--rm",
-            *volumes,
-            _IMAGE,
-            *yoinkc_args,
-        ]
-        _log(f"running: {' '.join(cmd)}")
+        _log(f"re-rendering: {' '.join(cmd)}")
         t0 = time.monotonic()
         try:
             result = subprocess.run(
@@ -219,21 +164,20 @@ def _re_render(
                 timeout=300,
             )
         except FileNotFoundError as exc:
-            return False, f"Container runtime not found: {exc}"
+            return False, f"yoinkc command not found: {exc}"
         except subprocess.TimeoutExpired:
-            return False, "Container timed out after 300 seconds."
+            return False, "Re-render timed out after 300 seconds."
 
         elapsed = time.monotonic() - t0
 
         if result.returncode != 0:
             log = (result.stdout or "") + (result.stderr or "")
-            return False, f"Container exited {result.returncode}:\n{log}"
+            return False, f"Re-render failed (exit {result.returncode}):\n{log}"
 
         new_html = new_output / "report.html"
         if not new_html.exists():
-            return False, "Container ran but did not produce report.html"
+            return False, "Re-render ran but did not produce report.html"
 
-        # Replace output_dir contents with new output
         for item in list(output_dir.iterdir()):
             if item.is_dir():
                 shutil.rmtree(item)
@@ -269,9 +213,8 @@ def _build_tarball(output_dir: Path) -> bytes:
 # ---------------------------------------------------------------------------
 
 class _Handler(BaseHTTPRequestHandler):
-    """Minimal HTTP handler for yoinkc-refine routes."""
+    """HTTP handler for yoinkc refine routes."""
 
-    # Injected at server creation time
     output_dir: Path
     re_render_available: bool = True
 
@@ -349,7 +292,6 @@ class _Handler(BaseHTTPRequestHandler):
             _log(f"tarball downloaded: {filename}")
 
         else:
-            # Serve any other file from the output directory
             rel = path.lstrip("/")
             candidate = output_dir / rel
             if candidate.is_file():
@@ -372,7 +314,6 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send(400, f"Invalid JSON: {exc}")
                 return
 
-            # Support both wrapper format and legacy bare snapshot
             if isinstance(payload, dict) and "snapshot" in payload and "original" in payload:
                 snapshot_data = payload["snapshot"]
                 original_data = payload["original"]
@@ -415,32 +356,27 @@ def _open_browser(url: str) -> None:
         else:
             subprocess.run(["xdg-open", url], check=False)
     except Exception:
-        pass  # Non-fatal — user can open manually
+        pass
 
 
 # ---------------------------------------------------------------------------
-# Main entry point
+# Entry point (called from __main__.py)
 # ---------------------------------------------------------------------------
 
-def main(argv: list[str] | None = None) -> None:
-    if argv is None:
-        argv = sys.argv[1:]
+def run_refine(args) -> int:
+    """
+    Main entry point for ``yoinkc refine``.
 
-    if not argv or argv[0] in ("-h", "--help"):
-        print(
-            f"Usage: {_SCRIPT_NAME} output-tarball.tar.gz\n\n"
-            "Extracts the tarball, serves the report at http://localhost:8642,\n"
-            "and enables live re-rendering from the browser UI.",
-        )
-        sys.exit(0 if argv and argv[0] in ("-h", "--help") else 1)
-
-    tarball = Path(argv[0])
+    *args* is the argparse Namespace with ``tarball``, ``no_browser``,
+    and ``port`` attributes.
+    """
+    tarball = args.tarball
     if not tarball.exists():
         _err(f"file not found: {tarball}")
-        sys.exit(1)
+        return 1
     if not tarfile.is_tarfile(tarball):
         _err(f"not a valid tar.gz file: {tarball}")
-        sys.exit(1)
+        return 1
 
     tmpdir = tempfile.mkdtemp(prefix="yoinkc-refine-")
     output_dir = Path(tmpdir)
@@ -452,20 +388,18 @@ def main(argv: list[str] | None = None) -> None:
     signal.signal(signal.SIGINT, _cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
 
-    _log(f"extracting {tarball} …")
+    _log(f"extracting {tarball} \u2026")
     try:
         _extract_tarball(tarball, output_dir)
     except Exception as exc:
         _err(f"failed to extract tarball: {exc}")
         shutil.rmtree(tmpdir, ignore_errors=True)
-        sys.exit(1)
+        return 1
 
-    _validate_output_dir(output_dir)  # exits on failure
+    _validate_output_dir(output_dir)
 
-    # Count extracted files for the startup banner
     file_count = sum(1 for _ in output_dir.rglob("*") if _.is_file())
 
-    # Read hostname from snapshot metadata for the startup banner
     snapshot_path = output_dir / "inspection-snapshot.json"
     host_label = ""
     try:
@@ -474,42 +408,38 @@ def main(argv: list[str] | None = None) -> None:
     except Exception:
         pass
 
-    runtime = _find_runtime()
-    re_render_available = runtime is not None
-    if not re_render_available:
-        _log("warning: podman and docker not found — Re-render will not be available")
-    else:
-        _ensure_image(runtime)
-
     # Initial re-render with --refine-mode so the served report has the
-    # editor UI from the first page load. The original tarball's report.html
-    # was generated without --refine-mode (static report).
-    if re_render_available and snapshot_path.exists():
-        _log("re-rendering with editor UI enabled…")
+    # editor UI from the first page load.
+    re_render_available = True
+    if snapshot_path.exists():
+        _log("re-rendering with editor UI enabled\u2026")
         snap_bytes = snapshot_path.read_bytes()
         ok, result = _re_render(snap_bytes, output_dir, original_data=snap_bytes)
         if ok:
             _log("editor UI ready")
         else:
+            re_render_available = False
             _log(f"warning: initial re-render failed, serving static report: {result[:200]}")
 
-    try:
-        port = _find_free_port()
-    except RuntimeError as exc:
-        _err(str(exc))
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        sys.exit(1)
+    port = args.port
+    if port == _DEFAULT_PORT:
+        try:
+            port = _find_free_port(start=port)
+        except RuntimeError as exc:
+            _err(str(exc))
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            return 1
 
-    # Inject runtime config into the handler class
     _Handler.output_dir = output_dir  # type: ignore[attr-defined]
     _Handler.re_render_available = re_render_available  # type: ignore[attr-defined]
 
-    server = HTTPServer(("127.0.0.1", port), _Handler)
+    bind = getattr(args, "bind", "127.0.0.1")
+    server = HTTPServer((bind, port), _Handler)
     url = f"http://localhost:{port}"
 
     src_name = tarball.name
     summary = f"{file_count} files from {src_name}" + (f"  [{host_label}]" if host_label else "")
-    rule = "─" * 42
+    rule = "\u2500" * 42
     _log(f"extracted {summary}")
     _log(rule)
     _log(f"  Report: {url}")
@@ -517,7 +447,8 @@ def main(argv: list[str] | None = None) -> None:
     _log("edit items in the browser, then click Re-render")
     _log("Ctrl+C to stop")
 
-    _open_browser(url)
+    if not args.no_browser:
+        _open_browser(url)
 
     try:
         server.serve_forever()
@@ -527,6 +458,4 @@ def main(argv: list[str] | None = None) -> None:
         server.server_close()
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-
-if __name__ == "__main__":
-    main()
+    return 0

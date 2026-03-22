@@ -190,9 +190,30 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     add_fleet_args(fleet_parser)
 
-    subparsers.add_parser(
+    refine_parser = subparsers.add_parser(
         "refine",
         help="Interactively edit and re-render inspection output",
+    )
+    refine_parser.add_argument(
+        "tarball",
+        type=Path,
+        help="Path to a yoinkc output tarball (.tar.gz)",
+    )
+    refine_parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not auto-open the browser on startup",
+    )
+    refine_parser.add_argument(
+        "--port",
+        type=int,
+        default=8642,
+        help="HTTP server port (default: 8642)",
+    )
+    refine_parser.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help=argparse.SUPPRESS,
     )
 
     args = parser.parse_args(argv)

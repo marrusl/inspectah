@@ -10,7 +10,7 @@ Run yoinkc on any supported host. The wrapper script installs podman if needed, 
 curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
 ```
 
-That's it. The tarball (e.g. `webserver01-20260312-143000.tar.gz`) contains everything: Containerfile, config tree, reports, snapshot, and RHEL subscription certs (if present). Pass it to `yoinkc-refine` for interactive editing or `yoinkc-build` to build the image.
+That's it. The tarball (e.g. `webserver01-20260312-143000.tar.gz`) contains everything: Containerfile, config tree, reports, snapshot, and RHEL subscription certs (if present). Pass it to `yoinkc refine` for interactive editing or `yoinkc-build` to build the image.
 
 All yoinkc flags pass through the wrapper:
 
@@ -42,9 +42,9 @@ A core design principle is **baseline subtraction**: wherever possible, the tool
 
 Three companion tools complete the workflow:
 
-- **`yoinkc-refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live. See [Interactive refinement](#interactive-refinement).
+- **`yoinkc refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live. See [Interactive refinement](#interactive-refinement).
 - **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling for building on non-RHEL hosts. See [Building the image](#building-the-image).
-- **`yoinkc-fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations. See [Fleet analysis](#fleet-analysis).
+- **`yoinkc fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations. See [Fleet analysis](#fleet-analysis).
 
 ---
 
@@ -86,7 +86,7 @@ podman build -t yoinkc .
 >
 > The tool needs broad read access across the host filesystem — the container is a packaging convenience, not a security boundary.
 
-After the run, a hostname-stamped tarball appears in your current directory. Extract it to inspect the contents, or pass it directly to `yoinkc-refine` or `yoinkc-build`. Use `--output-dir DIR` instead if you prefer unpacked directory output (required for `--validate` and `--push-to-github`). The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
+After the run, a hostname-stamped tarball appears in your current directory. Extract it to inspect the contents, or pass it directly to `yoinkc refine` or `yoinkc-build`. Use `--output-dir DIR` instead if you prefer unpacked directory output (required for `--validate` and `--push-to-github`). The HTML report (`report.html`) is **self-contained and portable**: all content is embedded, so you can share or archive that file alone.
 
 ---
 
@@ -254,7 +254,7 @@ Use `--output-dir` to get unpacked directory output instead.
 
 ## Interactive refinement
 
-`yoinkc-refine` is a small local helper that serves a yoinkc output tarball over HTTP on your workstation. Once running, the HTML report's include/exclude checkboxes and Re-render button become active, letting you toggle packages, repos, and config files and immediately see an updated Containerfile — without touching the inspected host again.
+`yoinkc refine` serves a yoinkc output tarball over HTTP, enabling the HTML report's interactive editing UI. Toggle packages, repos, and config files in the browser and immediately see an updated Containerfile — without touching the inspected host again.
 
 **Workflow:**
 
@@ -262,23 +262,24 @@ Use `--output-dir` to get unpacked directory output instead.
    ```bash
    scp target-host:~/hostname-*.tar.gz .
    ```
-2. Download `yoinkc-refine` (one-time):
+2. Start the refine server via the wrapper script:
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/yoinkc-refine -o yoinkc-refine
-   chmod +x yoinkc-refine
+   ./run-yoinkc.sh refine hostname-*.tar.gz
    ```
-3. Start the server and open the URL it prints:
-   ```bash
-   ./yoinkc-refine hostname-*.tar.gz
-   ```
+   This runs `yoinkc refine` inside the container with port 8642 mapped. Open `http://localhost:8642` in your browser.
 
-**Interactive UI features (with yoinkc-refine running):**
+**Interactive UI features (with yoinkc refine running):**
 
-Every inspected item (packages, config files, services, repos, etc.) has an include/exclude checkbox. Users and groups have per-row strategy dropdowns (`sysusers`, `useradd`, `blueprint`, `kickstart`) with apply-all buttons for batch changes. The sticky footer toolbar reflects three states: **dirty** (changes pending, Re-render button highlighted), **clean + helper** (no pending changes, tarball download available), and **standalone** (report opened without yoinkc-refine — checkboxes hidden, toolbar collapsed). Clicking Re-render sends the modified snapshot to yoinkc-refine, which runs a fresh render in a container and replaces the page with the updated report. The Download Tarball button packages the current output state for transfer.
+Every inspected item (packages, config files, services, repos, etc.) has an include/exclude checkbox. Users and groups have per-row strategy dropdowns (`sysusers`, `useradd`, `blueprint`, `kickstart`) with apply-all buttons for batch changes. The sticky footer toolbar reflects three states: **dirty** (changes pending, Re-render button highlighted), **clean + helper** (no pending changes, tarball download available), and **standalone** (report opened without the refine server — checkboxes hidden, toolbar collapsed). Clicking Re-render sends the modified snapshot to the server, which runs a fresh render and replaces the page with the updated report. The Download Tarball button packages the current output state for transfer.
 
-**Requirements:** Python 3.9+ (stdlib only, no pip dependencies). Podman or Docker is required for re-rendering; the include/exclude checkboxes and tarball download work without it.
+**Direct usage** (when installed via pip):
 
-The server runs entirely locally. It extracts the tarball into a temporary directory, serves the report at `http://localhost:8642` (or the next available port), and prints the URL on startup. Press Ctrl+C to stop.
+```bash
+yoinkc refine hostname-*.tar.gz
+yoinkc refine hostname-*.tar.gz --no-browser --port 9000
+```
+
+The server extracts the tarball into a temporary directory, serves the report at `http://localhost:8642` (or the next available port), and auto-opens the browser. Press Ctrl+C to stop.
 
 ---
 
@@ -307,7 +308,7 @@ Use `--no-cache` for a clean rebuild without layer caching.
 
 ## Fleet analysis
 
-`yoinkc-fleet` aggregates inspection snapshots from multiple hosts serving the same role into a single fleet snapshot. Building one image per host quickly becomes unmanageable. Fleet analysis finds the common ground across your fleet and produces one shared image spec.
+`yoinkc fleet` aggregates inspection snapshots from multiple hosts serving the same role into a single fleet snapshot. Building one image per host quickly becomes unmanageable. Fleet analysis finds the common ground across your fleet and produces one shared image spec.
 
 **Workflow:**
 
@@ -321,14 +322,14 @@ Use `--no-cache` for a clean rebuild without layer caching.
 2. Collect tarballs into a directory on your workstation and run the fleet wrapper:
    ```bash
    mkdir web-servers && cp web-0*.tar.gz web-servers/
-   ./run-yoinkc-fleet.sh ./web-servers/ -p 80
+   ./run-yoinkc.sh fleet ./web-servers/ -p 80
    ```
 
 The fleet tarball contains a Containerfile, HTML report, and snapshot — same structure as single-host output. The HTML report includes fleet-specific UI: a summary banner, prevalence color bars on every item (showing how many hosts have it), click-to-toggle fraction/percentage display, host list popovers with a split Copy button (one-per-line, comma-separated, or space-separated formats), and grouped content variants for config files with differences across hosts.
 
 **Prevalence threshold (`-p`):** Controls what gets included. `-p 100` (default) means strict intersection — only items on every host. `-p 80` includes items on 80%+ of hosts. Items below threshold are still visible in the report (as unchecked), just not included in the Containerfile.
 
-**Container wrapper:** `run-yoinkc-fleet.sh` runs `yoinkc-fleet` inside the yoinkc container — no Python/pip/venv needed on your workstation. Just podman and the script.
+**Container wrapper:** `run-yoinkc.sh fleet` runs `yoinkc fleet` inside the yoinkc container — no Python/pip/venv needed on your workstation. Just podman and the script.
 
 | Variable | Effect |
 |----------|--------|
@@ -338,9 +339,9 @@ The fleet tarball contains a Containerfile, HTML report, and snapshot — same s
 **Direct usage** (when installed via pip):
 
 ```bash
-yoinkc-fleet aggregate ./web-servers/ -p 80
-yoinkc-fleet aggregate ./web-servers/ --json-only -o merged.json
-yoinkc-fleet aggregate ./web-servers/ --output-dir ./fleet-output/
+yoinkc fleet ./web-servers/ -p 80
+yoinkc fleet ./web-servers/ --json-only -o merged.json
+yoinkc fleet ./web-servers/ --output-dir ./fleet-output/
 ```
 
 | Flag | Description |
