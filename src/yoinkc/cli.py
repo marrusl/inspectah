@@ -9,6 +9,8 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+from .fleet.cli import add_fleet_args
+
 SUBCOMMANDS = ("inspect", "fleet", "refine")
 
 
@@ -182,16 +184,22 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     _add_inspect_args(inspect_parser)
 
-    subparsers.add_parser(
+    fleet_parser = subparsers.add_parser(
         "fleet",
         help="Aggregate multiple inspection snapshots into a fleet report",
     )
+    add_fleet_args(fleet_parser)
+
     subparsers.add_parser(
         "refine",
         help="Interactively edit and re-render inspection output",
     )
 
     args = parser.parse_args(argv)
+
+    if args.command == "fleet":
+        if not (1 <= args.min_prevalence <= 100):
+            parser.error("--min-prevalence must be between 1 and 100")
 
     if args.command == "inspect":
         if args.from_snapshot and args.inspect_only:

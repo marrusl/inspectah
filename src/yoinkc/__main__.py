@@ -126,7 +126,79 @@ def _run_inspect(args) -> int:
     return 0
 
 
-def main(argv: Optional[list] = None) -> int:
+def _run_fleet(args, cwd: Optional[Path] = None) -> int:
+    """Run the fleet aggregation pipeline."""
+    import tempfile
+
+    from .fleet.loader import discover_snapshots, validate_snapshots
+    from .fleet.merge import merge_snapshots
+    from .pipeline import run_pipeline
+
+    input_dir: Path = args.input_dir
+    if not input_dir.is_dir():
+        print(f"Error: {input_dir} is not a directory.", file=sys.stderr)
+        return 1
+
+    snapshots = discover_snapshots(input_dir)
+    if len(snapshots) < 2:
+        print(
+            f"Error: Need at least 2 snapshots, found {len(snapshots)} in {input_dir}.",
+            file=sys.stderr,
+        )
+        return 1
+
+    validate_snapshots(snapshots)
+
+    fleet_name = input_dir.resolve().name
+    merged = merge_snapshots(
+        snapshots,
+        min_prevalence=args.min_prevalence,
+        fleet_name=fleet_name,
+        include_hosts=not args.no_hosts,
+    )
+
+    if args.output_file and args.output_dir:
+        print("Error: -o/--output-file and --output-dir are mutually exclusive.", file=sys.stderr)
+        return 1
+    if args.json_only and args.output_dir:
+        print("Error: --json-only and --output-dir are mutually exclusive.", file=sys.stderr)
+        return 1
+
+    if args.json_only:
+        output_path = args.output_file or (input_dir / "fleet-snapshot.json")
+        output_path.write_text(merged.model_dump_json(indent=2))
+        print(f"Fleet snapshot written to {output_path}")
+        print(f"  {len(snapshots)} hosts merged, threshold {args.min_prevalence}%")
+        return 0
+
+    def _fleet_renderers(snapshot, output_dir):
+        from .renderers import run_all
+        run_all(snapshot, output_dir)
+
+    print(f"Merged {len(snapshots)} hosts (threshold {args.min_prevalence}%)")
+
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        tmp.write(merged.model_dump_json(indent=2).encode())
+        tmp_path = Path(tmp.name)
+    try:
+        run_pipeline(
+            host_root=Path("/"),
+            run_inspectors=None,
+            run_renderers=_fleet_renderers,
+            from_snapshot_path=tmp_path,
+            inspect_only=False,
+            output_file=args.output_file,
+            output_dir=args.output_dir,
+            no_subscription=True,
+            cwd=cwd or input_dir.resolve(),
+        )
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return 0
+
+
+def main(argv: Optional[list] = None, cwd: Optional[Path] = None) -> int:
     args = parse_args(argv)
 
     try:
@@ -134,7 +206,7 @@ def main(argv: Optional[list] = None) -> int:
             case None | "inspect":
                 return _run_inspect(args)
             case "fleet":
-                raise NotImplementedError("yoinkc fleet: coming soon")
+                return _run_fleet(args, cwd=cwd)
             case "refine":
                 raise NotImplementedError("yoinkc refine: coming soon")
             case other:

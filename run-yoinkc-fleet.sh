@@ -7,7 +7,7 @@ OUTPUT_DIR="${YOINKC_OUTPUT_DIR:-$(pwd)}"
 if [ $# -eq 0 ]; then
     echo "Usage: $(basename "$0") <input-dir> [yoinkc-fleet-args...]" >&2
     echo "" >&2
-    echo "Runs yoinkc-fleet aggregate inside the yoinkc container." >&2
+    echo "Runs yoinkc fleet inside the yoinkc container." >&2
     echo "" >&2
     echo "  <input-dir>  Directory containing yoinkc tarballs or JSON snapshots" >&2
     echo "" >&2
@@ -30,14 +30,14 @@ TEMP_OUT="$(mktemp -d)"
 trap 'rm -rf "$TEMP_OUT"' EXIT
 
 echo "Image: $IMAGE"
-echo "=== Running yoinkc-fleet ==="
+echo "=== Running yoinkc fleet ==="
 podman run --rm --pull=always \
     --security-opt label=disable \
+    --entrypoint yoinkc \
     -w /output \
     -v "$INPUT_DIR":/input:ro \
     -v "$TEMP_OUT":/output \
-    --entrypoint yoinkc-fleet \
-    "$IMAGE" aggregate /input -o "/output/${DIR_NAME}.tar.gz" "$@"
+    "$IMAGE" fleet /input -o "/output/${DIR_NAME}.tar.gz" "$@"
 
 cp "$TEMP_OUT/${DIR_NAME}.tar.gz" "$OUTPUT_DIR/"
 echo ""

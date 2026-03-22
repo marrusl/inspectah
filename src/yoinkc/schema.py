@@ -25,7 +25,7 @@ class OsRelease(BaseModel):
     pretty_name: str = ""
 
 
-# --- Fleet metadata (set by yoinkc-fleet aggregate) ---
+# --- Fleet metadata (set by yoinkc fleet) ---
 
 
 class FleetPrevalence(BaseModel):

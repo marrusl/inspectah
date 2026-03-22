@@ -236,7 +236,7 @@ class TestSubcommandRouting:
         assert args.from_snapshot == Path("foo.json")
 
     def test_fleet_subcommand_recognized(self):
-        args = parse_args(["fleet"])
+        args = parse_args(["fleet", "/some/dir"])
         assert args.command == "fleet"
 
     def test_refine_subcommand_recognized(self):
@@ -301,3 +301,51 @@ class TestSubcommandRouting:
         """All inspect flags work without explicit 'inspect' subcommand (backwards compat)."""
         args = parse_args(flags)
         assert getattr(args, attr) == expected
+
+
+class TestFleetSubcommand:
+    """Verify fleet subcommand parsing."""
+
+    def test_fleet_input_dir_positional(self):
+        args = parse_args(["fleet", "/some/dir"])
+        assert args.command == "fleet"
+        assert args.input_dir == Path("/some/dir")
+
+    def test_fleet_min_prevalence(self):
+        args = parse_args(["fleet", "/some/dir", "-p", "75"])
+        assert args.min_prevalence == 75
+
+    def test_fleet_min_prevalence_long(self):
+        args = parse_args(["fleet", "/some/dir", "--min-prevalence", "50"])
+        assert args.min_prevalence == 50
+
+    def test_fleet_json_only(self):
+        args = parse_args(["fleet", "/some/dir", "--json-only"])
+        assert args.json_only is True
+
+    def test_fleet_output_file(self):
+        args = parse_args(["fleet", "/some/dir", "-o", "out.tar.gz"])
+        assert args.output_file == Path("out.tar.gz")
+
+    def test_fleet_output_dir(self):
+        args = parse_args(["fleet", "/some/dir", "--output-dir", "/tmp/out"])
+        assert args.output_dir == Path("/tmp/out")
+
+    def test_fleet_no_hosts(self):
+        args = parse_args(["fleet", "/some/dir", "--no-hosts"])
+        assert args.no_hosts is True
+
+    def test_fleet_defaults(self):
+        args = parse_args(["fleet", "/some/dir"])
+        assert args.min_prevalence == 100
+        assert args.json_only is False
+        assert args.no_hosts is False
+        assert args.output_file is None
+        assert args.output_dir is None
+
+    def test_fleet_help_exits_cleanly(self, capsys):
+        with pytest.raises(SystemExit) as exc_info:
+            parse_args(["fleet", "--help"])
+        assert exc_info.value.code == 0
+        out = capsys.readouterr().out
+        assert "input" in out.lower() or "dir" in out.lower()

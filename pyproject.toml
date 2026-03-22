@@ -27,7 +27,6 @@ github = [
 
 [project.scripts]
 yoinkc = "yoinkc.__main__:main"
-yoinkc-fleet = "yoinkc.fleet.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
