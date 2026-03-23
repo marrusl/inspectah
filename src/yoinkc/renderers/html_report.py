@@ -438,19 +438,41 @@ def _group_variants(items, path_key="path"):
     return groups
 
 
-def _repo_section_ids(content: str) -> List[str]:
-    """Extract repo section ids from a repo file body."""
+_FALSE_REPO_VALUES = {"0", "false", "no", "off"}
+
+
+def _repo_section_ids(content: Optional[str], *, enabled_only: bool = True) -> List[str]:
+    """Extract enabled repo section ids from a repo file body.
+
+    Only returns sections where ``enabled=1`` or ``enabled`` is absent
+    (the default is enabled).  Sections with ``enabled=0`` are skipped.
+    """
     ids: List[str] = []
+    current_section = None
+    enabled = True
     for line in (content or "").splitlines():
         stripped = line.strip()
         if stripped.startswith("[") and stripped.endswith("]"):
-            ids.append(stripped[1:-1])
+            if current_section is not None and (enabled or not enabled_only):
+                ids.append(current_section)
+            current_section = stripped[1:-1]
+            enabled = True
+        elif current_section is not None:
+            key = stripped.split("=", 1)[0].strip().lower()
+            if key == "enabled" and "=" in stripped:
+                val = stripped.split("=", 1)[1].split("#", 1)[0].split(";", 1)[0].strip().lower()
+                enabled = val not in _FALSE_REPO_VALUES
+    if current_section is not None and (enabled or not enabled_only):
+        ids.append(current_section)
     return ids
 
 
 def _repo_file_candidate_names(repo_file) -> List[str]:
     """Return likely repo group names represented by a repo file."""
     candidate_names = _repo_section_ids(repo_file.content or "")
+    if candidate_names:
+        return candidate_names
+    candidate_names = _repo_section_ids(repo_file.content or "", enabled_only=False)
     if candidate_names:
         return candidate_names
     stem = Path(repo_file.path).stem

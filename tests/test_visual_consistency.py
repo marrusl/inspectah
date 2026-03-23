@@ -695,3 +695,73 @@ class TestPackagesRestructure:
         )
         assert "var seenIncludeKeys = new Set();" in count_js
         assert "if (seenIncludeKeys.has(key)) return;" in count_js
+
+
+class TestRepoSectionIds:
+    """Disabled repo sections should be filtered out."""
+
+    def test_enabled_sections_returned(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        content = "[baseos]\nenabled=1\n[appstream]\nenabled=1\n"
+        assert _repo_section_ids(content) == ["baseos", "appstream"]
+
+    def test_disabled_sections_excluded(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        content = "[baseos]\nenabled=1\n[supplementary]\nenabled=0\n"
+        assert _repo_section_ids(content) == ["baseos"]
+
+    def test_enabled_default_when_absent(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        content = "[epel]\ngpgcheck=1\nbaseurl=https://example.com\n"
+        assert _repo_section_ids(content) == ["epel"]
+
+    def test_mixed_enabled_disabled(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        content = (
+            "[baseos]\nenabled=1\n"
+            "[debug-rpms]\nenabled=0\n"
+            "[appstream]\n"
+            "[source-rpms]\nenabled=0\n"
+            "[codeready]\nenabled=0\n"
+        )
+        assert _repo_section_ids(content) == ["baseos", "appstream"]
+
+    def test_enabled_metadata_key_ignored(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        content = "[myrepo]\nenabled_metadata=0\ngpgcheck=1\n"
+        assert _repo_section_ids(content) == ["myrepo"]
+
+    def test_inline_comment_stripped(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        content = "[disabled-repo]\nenabled=0 # turned off for now\n"
+        assert _repo_section_ids(content) == []
+
+    def test_inline_comment_on_enabled(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        content = "[active-repo]\nenabled=1 # keep this on\n"
+        assert _repo_section_ids(content) == ["active-repo"]
+
+    def test_empty_content(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        assert _repo_section_ids("") == []
+        assert _repo_section_ids(None) == []
+
+    def test_common_false_values_disable_section(self):
+        from yoinkc.renderers.html_report import _repo_section_ids
+        for value in ("0", "no", "false", "off", "NO", "False", " Off "):
+            content = f"[disabled-repo]\nenabled={value}\n"
+            assert _repo_section_ids(content) == [], value
+
+
+class TestRepoFileCandidateNames:
+    def test_disabled_only_repo_file_keeps_section_ids(self):
+        from yoinkc.renderers.html_report import _repo_file_candidate_names
+
+        repo_file = RepoFile(
+            path="etc/yum.repos.d/redhat.repo",
+            content="[baseos]\nenabled=0\n[appstream]\nenabled=0\n",
+            include=True,
+            is_default_repo=True,
+        )
+
+        assert _repo_file_candidate_names(repo_file) == ["baseos", "appstream"]
