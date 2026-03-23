@@ -32,6 +32,9 @@ from pathlib import Path
 _DEFAULT_PORT = 8642
 _REQUIRED_FILES = ("report.html", "inspection-snapshot.json")
 _LOG_PREFIX = "yoinkc refine"
+_CACHE_CONTROL = "no-cache, no-store, must-revalidate"
+_PRAGMA = "no-cache"
+_EXPIRES = "0"
 
 
 # ---------------------------------------------------------------------------
@@ -225,19 +228,27 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:  # noqa: N802
         pass  # suppress default access log noise
 
+    def _send_shared_headers(self) -> None:
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", _CACHE_CONTROL)
+        self.send_header("Pragma", _PRAGMA)
+        self.send_header("Expires", _EXPIRES)
+
     def _send(
         self,
         code: int,
         body: bytes | str,
         content_type: str = "text/plain; charset=utf-8",
+        extra_headers: dict[str, str] | None = None,
     ) -> None:
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self._send_shared_headers()
+        for name, value in (extra_headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -283,13 +294,12 @@ class _Handler(BaseHTTPRequestHandler):
             timestamp = time.strftime("%Y%m%d-%H%M%S")
             filename = f"yoinkc-refined-{timestamp}.tar.gz"
             data = _build_tarball(output_dir)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/gzip")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(data)
+            self._send(
+                200,
+                data,
+                "application/gzip",
+                extra_headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
             _log(f"tarball downloaded: {filename}")
 
         else:
@@ -337,7 +347,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:  # noqa: N802
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_shared_headers()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
@@ -436,7 +446,8 @@ def run_refine(args) -> int:
 
     bind = getattr(args, "bind", "127.0.0.1")
     server = HTTPServer((bind, port), _Handler)
-    url = f"http://localhost:{port}"
+    cache_buster = int(time.time())
+    url = f"http://localhost:{port}?t={cache_buster}"
 
     src_name = tarball.name
     summary = f"{file_count} files from {src_name}" + (f"  [{host_label}]" if host_label else "")

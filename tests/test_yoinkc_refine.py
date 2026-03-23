@@ -15,6 +15,7 @@ import tarfile
 import threading
 import urllib.error
 import urllib.request
+from argparse import Namespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -29,6 +30,7 @@ from yoinkc.refine import (
     _find_free_port,
     _re_render,
     _validate_output_dir,
+    run_refine,
 )
 
 
@@ -294,6 +296,24 @@ class TestReRender:
 # HTTP server (live server in a background thread)
 # ---------------------------------------------------------------------------
 
+class TestHandlerSend:
+    def test_send_sets_no_cache_headers(self):
+        handler = object.__new__(_Handler)
+        handler.wfile = io.BytesIO()
+        headers: list[tuple[str, str]] = []
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock(side_effect=lambda name, value: headers.append((name, value)))
+        handler.end_headers = MagicMock()
+
+        handler._send(200, "ok")
+
+        header_map = dict(headers)
+        assert header_map["Cache-Control"] == "no-cache, no-store, must-revalidate"
+        assert header_map["Pragma"] == "no-cache"
+        assert header_map["Expires"] == "0"
+        assert handler.wfile.getvalue() == b"ok"
+
+
 @pytest.fixture()
 def live_server(tmp_path):
     """Spin up the HTTP server in a background thread; yield (url, output_dir)."""
@@ -370,6 +390,8 @@ class TestServer:
         cc = headers.get("Cache-Control", "")
         assert "no-cache" in cc
         assert "no-store" in cc
+        assert headers.get("Pragma") == "no-cache"
+        assert headers.get("Expires") == "0"
 
     def test_get_snapshot_serves_json(self, live_server):
         url, _ = live_server
@@ -395,6 +417,9 @@ class TestServer:
         status, body, headers = _get(url + "/api/tarball")
         assert status == 200
         assert "gzip" in headers.get("Content-Type", "")
+        assert headers.get("Cache-Control") == "no-cache, no-store, must-revalidate"
+        assert headers.get("Pragma") == "no-cache"
+        assert headers.get("Expires") == "0"
         cd = headers.get("Content-Disposition", "")
         assert "yoinkc-refined-" in cd
         assert ".tar.gz" in cd
@@ -448,3 +473,30 @@ class TestServer:
         url, _ = live_server
         status, _, _ = _post(url + "/api/re-render", b"not-json")
         assert status == 400
+
+
+class TestRunRefine:
+    def test_opens_browser_with_cache_busting_query(self, tmp_path):
+        tarball = _minimal_tarball(tmp_path)
+        server = MagicMock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+
+        args = Namespace(
+            tarball=tarball,
+            no_browser=False,
+            port=_DEFAULT_PORT,
+            bind="127.0.0.1",
+        )
+
+        with (
+            patch("yoinkc.refine.signal.signal"),
+            patch("yoinkc.refine._find_free_port", return_value=8765),
+            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("yoinkc.refine.HTTPServer", return_value=server),
+            patch("yoinkc.refine.time.time", return_value=1_700_000_000),
+            patch("yoinkc.refine._open_browser") as mock_open_browser,
+        ):
+            result = run_refine(args)
+
+        assert result == 0
+        mock_open_browser.assert_called_once_with("http://localhost:8765?t=1700000000")
