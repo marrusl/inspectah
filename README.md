@@ -11,13 +11,13 @@ yoinkc inspects a running RHEL, CentOS Stream, or Fedora host and produces every
 Four steps take a host from bare metal to a bootc image:
 
 ```
-  1. Inspect          2. Refine           3. Build            4. Fleet
-  ─────────          ────────            ───────             ───────
-  Scan a host,       Edit findings       Build the bootc     Aggregate multiple
-  produce a          interactively in    image from yoinkc   hosts into one
-  tarball            the browser         output              image spec
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  1. Inspect  │───▸│  2. Refine   │───▸│  3. Build    │───▸│  4. Fleet    │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+ Scan a host,        Edit findings       Build the bootc     Merge multiple
+ get a tarball       in the browser      image               hosts into one
 
-  run-yoinkc.sh      run-yoinkc.sh       yoinkc-build        run-yoinkc.sh
+ run-yoinkc.sh       run-yoinkc.sh       yoinkc-build        run-yoinkc.sh
                      refine *.tar.gz     *.tar.gz tag        fleet dir/ -p 80
 ```
 
