@@ -30,6 +30,7 @@ from yoinkc.refine import (
     _find_free_port,
     _re_render,
     _validate_output_dir,
+    _wait_for_server_ready,
     run_refine,
 )
 
@@ -476,10 +477,150 @@ class TestServer:
 
 
 class TestRunRefine:
+    def test_signal_handlers_raise_keyboard_interrupt_for_centralized_cleanup(self, tmp_path):
+        tarball = _minimal_tarball(tmp_path)
+        registered_handlers = []
+        server = MagicMock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+
+        args = Namespace(
+            tarball=tarball,
+            no_browser=True,
+            port=_DEFAULT_PORT,
+            bind="127.0.0.1",
+        )
+
+        def _capture_handler(_sig, handler):
+            registered_handlers.append(handler)
+
+        with (
+            patch("yoinkc.refine.signal.signal", side_effect=_capture_handler),
+            patch("yoinkc.refine._find_free_port", return_value=8765),
+            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("yoinkc.refine.HTTPServer", return_value=server),
+        ):
+            result = run_refine(args)
+
+        assert result == 0
+        assert len(registered_handlers) == 2
+        for handler in registered_handlers:
+            with pytest.raises(KeyboardInterrupt):
+                handler()
+
+    def test_waits_for_server_health_before_opening_browser(self, tmp_path):
+        tarball = _minimal_tarball(tmp_path)
+        server = MagicMock()
+        events: list[tuple[str, str]] = []
+
+        class _FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"status":"ok"}'
+
+        class _FakeThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+                self.join_calls = 0
+
+            def start(self):
+                events.append(("thread", "start"))
+
+            def join(self):
+                self.join_calls += 1
+                events.append(("thread", f"join-{self.join_calls}"))
+                if self.join_calls == 1:
+                    raise KeyboardInterrupt
+
+        args = Namespace(
+            tarball=tarball,
+            no_browser=False,
+            port=_DEFAULT_PORT,
+            bind="127.0.0.1",
+        )
+
+        def _fake_urlopen(url, timeout=0.0):
+            events.append(("health", url))
+            return _FakeResponse()
+
+        def _fake_open_browser(url):
+            events.append(("browser", url))
+
+        with (
+            patch("yoinkc.refine.signal.signal"),
+            patch("yoinkc.refine._find_free_port", return_value=8765),
+            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("yoinkc.refine.HTTPServer", return_value=server),
+            patch("yoinkc.refine.time.time", return_value=1_700_000_000),
+            patch("yoinkc.refine.threading.Thread", _FakeThread),
+            patch("yoinkc.refine.urllib.request.urlopen", side_effect=_fake_urlopen),
+            patch("yoinkc.refine._open_browser", side_effect=_fake_open_browser),
+        ):
+            result = run_refine(args)
+
+        assert result == 0
+        assert events == [
+            ("thread", "start"),
+            ("health", "http://127.0.0.1:8765/api/health"),
+            ("browser", "http://localhost:8765?t=1700000000"),
+            ("thread", "join-1"),
+            ("thread", "join-2"),
+        ]
+
+    def test_wait_for_server_ready_brackets_ipv6_host(self):
+        class _FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("yoinkc.refine.urllib.request.urlopen", return_value=_FakeResponse()) as mock_urlopen:
+            assert _wait_for_server_ready("::1", 8765, attempts=1)
+
+        mock_urlopen.assert_called_once_with("http://[::1]:8765/api/health", timeout=0.5)
+
+    def test_wait_for_server_ready_uses_ipv6_loopback_for_ipv6_wildcard_bind(self):
+        class _FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+        with patch("yoinkc.refine.urllib.request.urlopen", return_value=_FakeResponse()) as mock_urlopen:
+            assert _wait_for_server_ready("::", 8765, attempts=1)
+
+        mock_urlopen.assert_called_once_with("http://[::1]:8765/api/health", timeout=0.5)
+
     def test_opens_browser_with_cache_busting_query(self, tmp_path):
         tarball = _minimal_tarball(tmp_path)
         server = MagicMock()
-        server.serve_forever.side_effect = KeyboardInterrupt
+
+        class _FakeThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+                self.join_calls = 0
+
+            def start(self):
+                return None
+
+            def join(self):
+                self.join_calls += 1
+                if self.join_calls == 1:
+                    raise KeyboardInterrupt
 
         args = Namespace(
             tarball=tarball,
@@ -494,9 +635,128 @@ class TestRunRefine:
             patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
             patch("yoinkc.refine.HTTPServer", return_value=server),
             patch("yoinkc.refine.time.time", return_value=1_700_000_000),
+            patch("yoinkc.refine._wait_for_server_ready", return_value=True),
+            patch("yoinkc.refine.threading.Thread", _FakeThread),
             patch("yoinkc.refine._open_browser") as mock_open_browser,
         ):
             result = run_refine(args)
 
         assert result == 0
         mock_open_browser.assert_called_once_with("http://localhost:8765?t=1700000000")
+
+    def test_no_browser_skips_readiness_wait_and_browser_open(self, tmp_path):
+        tarball = _minimal_tarball(tmp_path)
+        server = MagicMock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+
+        args = Namespace(
+            tarball=tarball,
+            no_browser=True,
+            port=_DEFAULT_PORT,
+            bind="127.0.0.1",
+        )
+
+        with (
+            patch("yoinkc.refine.signal.signal"),
+            patch("yoinkc.refine._find_free_port", return_value=8765),
+            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("yoinkc.refine.HTTPServer", return_value=server),
+            patch("yoinkc.refine._wait_for_server_ready") as mock_wait_ready,
+            patch("yoinkc.refine._open_browser") as mock_open_browser,
+        ):
+            result = run_refine(args)
+
+        assert result == 0
+        mock_wait_ready.assert_not_called()
+        mock_open_browser.assert_not_called()
+
+    def test_timeout_wait_logs_warning_and_skips_browser_open(self, tmp_path):
+        tarball = _minimal_tarball(tmp_path)
+        server = MagicMock()
+
+        class _FakeThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+                self.join_calls = 0
+
+            def start(self):
+                return None
+
+            def join(self):
+                self.join_calls += 1
+                if self.join_calls == 1:
+                    raise KeyboardInterrupt
+
+        args = Namespace(
+            tarball=tarball,
+            no_browser=False,
+            port=_DEFAULT_PORT,
+            bind="127.0.0.1",
+        )
+
+        with (
+            patch("yoinkc.refine.signal.signal"),
+            patch("yoinkc.refine._find_free_port", return_value=8765),
+            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("yoinkc.refine.HTTPServer", return_value=server),
+            patch("yoinkc.refine._wait_for_server_ready", return_value=False),
+            patch("yoinkc.refine.threading.Thread", _FakeThread),
+            patch("yoinkc.refine._open_browser") as mock_open_browser,
+            patch("yoinkc.refine._log") as mock_log,
+        ):
+            result = run_refine(args)
+
+        assert result == 0
+        mock_open_browser.assert_not_called()
+        mock_log.assert_any_call("warning: refine server did not become ready in time; not opening browser automatically")
+
+    def test_interrupt_shutdown_joins_thread_before_closing_server(self, tmp_path):
+        tarball = _minimal_tarball(tmp_path)
+        events: list[tuple[str, str]] = []
+
+        server = MagicMock()
+        server.shutdown.side_effect = lambda: events.append(("server", "shutdown"))
+        server.server_close.side_effect = lambda: events.append(("server", "close"))
+
+        class _FakeThread:
+            def __init__(self, target=None, daemon=None):
+                self.target = target
+                self.daemon = daemon
+                self.join_calls = 0
+
+            def start(self):
+                events.append(("thread", "start"))
+
+            def join(self):
+                self.join_calls += 1
+                events.append(("thread", f"join-{self.join_calls}"))
+                if self.join_calls == 1:
+                    raise KeyboardInterrupt
+
+        args = Namespace(
+            tarball=tarball,
+            no_browser=False,
+            port=_DEFAULT_PORT,
+            bind="127.0.0.1",
+        )
+
+        with (
+            patch("yoinkc.refine.signal.signal"),
+            patch("yoinkc.refine._find_free_port", return_value=8765),
+            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("yoinkc.refine.HTTPServer", return_value=server),
+            patch("yoinkc.refine._wait_for_server_ready", return_value=True),
+            patch("yoinkc.refine.threading.Thread", _FakeThread),
+            patch("yoinkc.refine._open_browser"),
+        ):
+            result = run_refine(args)
+
+        assert result == 0
+        assert events == [
+            ("thread", "start"),
+            ("thread", "join-1"),
+            ("server", "shutdown"),
+            ("thread", "join-2"),
+            ("server", "close"),
+        ]

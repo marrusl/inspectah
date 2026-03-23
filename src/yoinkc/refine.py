@@ -20,7 +20,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
+import urllib.error
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -370,6 +373,39 @@ def _open_browser(url: str) -> None:
         pass
 
 
+def _healthcheck_url(bind: str, port: int) -> str:
+    """Return the local healthcheck URL for the refine server."""
+    if bind == "0.0.0.0":
+        health_host = "127.0.0.1"
+    elif bind == "::":
+        health_host = "::1"
+    else:
+        health_host = bind
+    if ":" in health_host and not health_host.startswith("["):
+        health_host = f"[{health_host}]"
+    return f"http://{health_host}:{port}/api/health"
+
+
+def _wait_for_server_ready(
+    bind: str,
+    port: int,
+    *,
+    attempts: int = 50,
+    delay: float = 0.1,
+    timeout: float = 0.5,
+) -> bool:
+    """Poll the refine health endpoint until it responds or attempts are exhausted."""
+    health_url = _healthcheck_url(bind, port)
+    for _ in range(attempts):
+        try:
+            with urllib.request.urlopen(health_url, timeout=timeout) as response:
+                if response.status == 200:
+                    return True
+        except (OSError, TimeoutError, urllib.error.URLError):
+            time.sleep(delay)
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Entry point (called from __main__.py)
 # ---------------------------------------------------------------------------
@@ -391,83 +427,90 @@ def run_refine(args) -> int:
 
     tmpdir = tempfile.mkdtemp(prefix="yoinkc-refine-")
     output_dir = Path(tmpdir)
+    server: HTTPServer | None = None
+    server_thread: threading.Thread | None = None
 
     def _cleanup(*_: object) -> None:
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        sys.exit(0)
+        raise KeyboardInterrupt
 
     signal.signal(signal.SIGINT, _cleanup)
     signal.signal(signal.SIGTERM, _cleanup)
 
-    _log(f"extracting {tarball} \u2026")
     try:
-        _extract_tarball(tarball, output_dir)
-    except Exception as exc:
-        _err(f"failed to extract tarball: {exc}")
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        return 1
-
-    _validate_output_dir(output_dir)
-
-    file_count = sum(1 for _ in output_dir.rglob("*") if _.is_file())
-
-    snapshot_path = output_dir / "inspection-snapshot.json"
-    host_label = ""
-    try:
-        snap = json.loads(snapshot_path.read_text())
-        host_label = (snap.get("meta") or {}).get("hostname", "")
-    except Exception:
-        pass
-
-    # Initial re-render with --refine-mode so the served report has the
-    # editor UI from the first page load.
-    re_render_available = True
-    if snapshot_path.exists():
-        _log("re-rendering with editor UI enabled\u2026")
-        snap_bytes = snapshot_path.read_bytes()
-        ok, result = _re_render(snap_bytes, output_dir, original_data=snap_bytes)
-        if ok:
-            _log("editor UI ready")
-        else:
-            re_render_available = False
-            _log(f"warning: initial re-render failed, serving static report: {result[:200]}")
-
-    port = args.port
-    if port == _DEFAULT_PORT:
         try:
-            port = _find_free_port(start=port)
-        except RuntimeError as exc:
-            _err(str(exc))
-            shutil.rmtree(tmpdir, ignore_errors=True)
+            _log(f"extracting {tarball} \u2026")
+            _extract_tarball(tarball, output_dir)
+        except Exception as exc:
+            _err(f"failed to extract tarball: {exc}")
             return 1
+        _validate_output_dir(output_dir)
 
-    _Handler.output_dir = output_dir  # type: ignore[attr-defined]
-    _Handler.re_render_available = re_render_available  # type: ignore[attr-defined]
+        file_count = sum(1 for _ in output_dir.rglob("*") if _.is_file())
 
-    bind = getattr(args, "bind", "127.0.0.1")
-    server = HTTPServer((bind, port), _Handler)
-    cache_buster = int(time.time())
-    url = f"http://localhost:{port}?t={cache_buster}"
+        snapshot_path = output_dir / "inspection-snapshot.json"
+        host_label = ""
+        try:
+            snap = json.loads(snapshot_path.read_text())
+            host_label = (snap.get("meta") or {}).get("hostname", "")
+        except Exception:
+            pass
 
-    src_name = tarball.name
-    summary = f"{file_count} files from {src_name}" + (f"  [{host_label}]" if host_label else "")
-    rule = "\u2500" * 42
-    _log(f"extracted {summary}")
-    _log(rule)
-    _log(f"  Report: {url}")
-    _log(rule)
-    _log("edit items in the browser, then click Re-render")
-    _log("Ctrl+C to stop")
+        # Initial re-render with --refine-mode so the served report has the
+        # editor UI from the first page load.
+        re_render_available = True
+        if snapshot_path.exists():
+            _log("re-rendering with editor UI enabled\u2026")
+            snap_bytes = snapshot_path.read_bytes()
+            ok, result = _re_render(snap_bytes, output_dir, original_data=snap_bytes)
+            if ok:
+                _log("editor UI ready")
+            else:
+                re_render_available = False
+                _log(f"warning: initial re-render failed, serving static report: {result[:200]}")
 
-    if not args.no_browser:
-        _open_browser(url)
+        port = args.port
+        if port == _DEFAULT_PORT:
+            try:
+                port = _find_free_port(start=port)
+            except RuntimeError as exc:
+                _err(str(exc))
+                return 1
 
-    try:
-        server.serve_forever()
+        _Handler.output_dir = output_dir  # type: ignore[attr-defined]
+        _Handler.re_render_available = re_render_available  # type: ignore[attr-defined]
+
+        bind = getattr(args, "bind", "127.0.0.1")
+        server = HTTPServer((bind, port), _Handler)
+        cache_buster = int(time.time())
+        url = f"http://localhost:{port}?t={cache_buster}"
+
+        src_name = tarball.name
+        summary = f"{file_count} files from {src_name}" + (f"  [{host_label}]" if host_label else "")
+        rule = "\u2500" * 42
+        _log(f"extracted {summary}")
+        _log(rule)
+        _log(f"  Report: {url}")
+        _log(rule)
+        _log("edit items in the browser, then click Re-render")
+        _log("Ctrl+C to stop")
+
+        if args.no_browser:
+            server.serve_forever()
+        else:
+            server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            server_thread.start()
+            if _wait_for_server_ready(bind, port):
+                _open_browser(url)
+            else:
+                _log("warning: refine server did not become ready in time; not opening browser automatically")
+            server_thread.join()
+        return 0
     except KeyboardInterrupt:
-        pass
+        return 0
     finally:
-        server.server_close()
+        if server_thread is not None and server is not None:
+            server.shutdown()
+            server_thread.join()
+        if server is not None:
+            server.server_close()
         shutil.rmtree(tmpdir, ignore_errors=True)
-
-    return 0
