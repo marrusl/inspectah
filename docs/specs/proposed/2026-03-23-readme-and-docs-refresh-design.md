@@ -51,17 +51,17 @@ New section. 3-4 sentences covering:
 New section. A text diagram showing the four steps with one-liner descriptions and link to each section:
 
 ```
-  1. Inspect        2. Refine           3. Build            4. Fleet
-  ─────────         ────────            ───────             ───────
-  Scan a host,      Edit findings       Build the bootc     Aggregate multiple
-  produce a         interactively in    image from yoinkc   hosts into one
-  tarball           the browser         output              image spec
+┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
+│  1. Inspect  │───▸│  2. Refine   │───▸│  3. Build    │───▸│  4. Fleet    │
+└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
+ Scan a host,        Edit findings       Build the bootc     Merge multiple
+ get a tarball       in the browser      image               hosts into one
 
-  run-yoinkc.sh     run-yoinkc.sh       yoinkc-build        run-yoinkc.sh
-                    refine *.tar.gz     *.tar.gz tag        fleet dir/ -p 80
+ run-yoinkc.sh       run-yoinkc.sh       yoinkc-build        run-yoinkc.sh
+                     refine *.tar.gz     *.tar.gz tag        fleet dir/ -p 80
 ```
 
-Each step links to its detailed section below. Goal: within 15 lines the reader knows the tool's shape. The exact formatting is flexible — the key constraint is that all four steps are visible at a glance with their one-liner command.
+Columns are on a 20-char pitch (16-char box + 4-char gap). Each step links to its detailed section below. Goal: within 15 lines the reader knows the tool's shape. The exact formatting is flexible — the key constraint is that all four steps are visible at a glance with their one-liner command.
 
 ### Section 3: Inspect
 
