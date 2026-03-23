@@ -2,6 +2,7 @@
 
 import re
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 
 from yoinkc.renderers import run_all as run_all_renderers
@@ -133,6 +134,76 @@ class TestHtmlReport:
 
 class TestHtmlStructure:
 
+    def _summary_column_headings(self, html: str) -> list[list[str]]:
+        class SummaryGridParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.in_summary_grid = False
+                self.grid_depth = 0
+                self.column_stack: list[int] = []
+                self.columns: list[list[str]] = []
+                self.in_h3 = False
+                self.heading_parts: list[str] = []
+
+            def handle_starttag(self, tag, attrs):
+                attrs_dict = dict(attrs)
+                if (
+                    tag == "div"
+                    and not self.in_summary_grid
+                    and attrs_dict.get("class") == "summary-grid"
+                ):
+                    self.in_summary_grid = True
+                    self.grid_depth = 0
+                    return
+
+                if not self.in_summary_grid:
+                    return
+
+                if tag == "div":
+                    self.grid_depth += 1
+                    if self.grid_depth == 1:
+                        self.columns.append([])
+                        self.column_stack.append(self.grid_depth)
+
+                if tag == "h3" and self.column_stack:
+                    self.in_h3 = True
+                    self.heading_parts = []
+
+            def handle_data(self, data):
+                if self.in_h3 and self.column_stack:
+                    self.heading_parts.append(data)
+
+            def handle_endtag(self, tag):
+                if not self.in_summary_grid:
+                    return
+
+                if tag == "h3" and self.in_h3 and self.column_stack:
+                    heading = "".join(self.heading_parts).strip()
+                    if heading:
+                        self.columns[-1].append(heading)
+                    self.in_h3 = False
+                    self.heading_parts = []
+                    return
+
+                if tag == "div":
+                    if self.column_stack and self.column_stack[-1] == self.grid_depth:
+                        self.column_stack.pop()
+                    self.grid_depth -= 1
+                    if self.grid_depth < 0:
+                        self.in_summary_grid = False
+
+        start = html.find('id="section-summary"')
+        assert start != -1, "summary section missing from rendered report"
+        end = html.find('id="section-packages"', start)
+        assert end != -1, "packages section missing from rendered report"
+
+        parser = SummaryGridParser()
+        parser.feed(html[start:end])
+        assert len(parser.columns) == 2, (
+            f"expected two summary columns, got {len(parser.columns)}"
+        )
+        return parser.columns
+
     def test_section_ids_match_template(self, outputs_with_baseline):
         """Every card data-section and tab data-tab has a matching section element."""
         html = (outputs_with_baseline["dir"] / "report.html").read_text()
@@ -146,6 +217,41 @@ class TestHtmlStructure:
         html = (outputs_with_baseline["dir"] / "report.html").read_text()
         assert 'id="section-summary"' in html
         assert 'class="section visible"' in html
+
+    def test_non_fleet_summary_cards_keep_existing_order(self, outputs_with_baseline):
+        columns = self._summary_column_headings(
+            (outputs_with_baseline["dir"] / "report.html").read_text()
+        )
+
+        assert columns == [
+            ["System Information", "Migration Readiness"],
+            ["Breakdown"],
+        ]
+
+    def test_fleet_summary_cards_reordered_for_fleet_mode(self):
+        snapshot = InspectionSnapshot(
+            meta={
+                "host_root": "/host",
+                "hostname": "fleet-host",
+                "timestamp": "2026-03-23T00:00:00Z",
+                "fleet": {
+                    "source_hosts": ["fleet-host-01", "fleet-host-02"],
+                    "total_hosts": 2,
+                    "min_prevalence": 75,
+                },
+            },
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            columns = self._summary_column_headings(
+                (Path(tmp) / "report.html").read_text()
+            )
+
+        assert columns == [
+            ["Fleet Overview", "Migration Readiness"],
+            ["System Information", "Breakdown"],
+        ]
 
     def test_service_snap_index_matches_unfiltered_array(self):
         """data-snap-index for each rendered service row must equal its position in

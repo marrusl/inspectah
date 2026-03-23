@@ -1,10 +1,5 @@
 {% from "report/_macros.html.j2" import section with context -%}
-{# ── Summary ────────────────────────────────────────────────────────────── #}
-{% call section("summary", "Summary", visible=true) %}
-<div class="summary-grid">
-
-  {# ── Left column ──────────────────────────────────────────────────────── #}
-  <div>
+{% macro system_information_card() -%}
     {# System Information #}
     <div class="pf-v6-c-card">
       <div class="pf-v6-c-card__header">
@@ -33,7 +28,9 @@
         </dl>
       </div>
     </div>
+{%- endmacro %}
 
+{% macro migration_readiness_card() -%}
     {# Migration Readiness #}
     <h3 class="mt-md mb-md">Migration Readiness</h3>
     {%- if triage.automatic %}
@@ -60,10 +57,9 @@
       </div>
     </div>
     {%- endif %}
-  </div>
+{%- endmacro %}
 
-  {# ── Right column ─────────────────────────────────────────────────────── #}
-  <div>
+{% macro breakdown_card() -%}
     {# Breakdown #}
     <div class="pf-v6-c-card">
       <div class="pf-v6-c-card__header">
@@ -80,10 +76,11 @@
         </ul>
       </div>
     </div>
+{%- endmacro %}
 
+{% macro fleet_overview_card() -%}
     {# Fleet Overview (fleet mode only) #}
-    {%- if fleet_meta %}
-    <div class="pf-v6-c-card mt-md" style="border-left: 4px solid var(--pf-t--global--color--status--info--default)">
+    <div class="pf-v6-c-card" style="border-left: 4px solid var(--pf-t--global--color--status--info--default)">
       <div class="pf-v6-c-card__header">
         <div class="pf-v6-c-card__title"><h3>Fleet Overview</h3></div>
         <span class="text-sm">{{ fleet_meta.total_hosts }} hosts · {{ fleet_meta.min_prevalence }}% threshold</span>
@@ -116,6 +113,29 @@
         </p>
       </div>
     </div>
+{%- endmacro %}
+{# ── Summary ────────────────────────────────────────────────────────────── #}
+{% call section("summary", "Summary", visible=true) %}
+<div class="summary-grid">
+
+  {# ── Left column ──────────────────────────────────────────────────────── #}
+  <div>
+    {%- if fleet_meta %}
+    {{ fleet_overview_card() }}
+    {{ migration_readiness_card() }}
+    {%- else %}
+    {{ system_information_card() }}
+    {{ migration_readiness_card() }}
+    {%- endif %}
+  </div>
+
+  {# ── Right column ─────────────────────────────────────────────────────── #}
+  <div>
+    {%- if fleet_meta %}
+    {{ system_information_card() }}
+    {{ breakdown_card() }}
+    {%- else %}
+    {{ breakdown_card() }}
     {%- endif %}
   </div>
 
