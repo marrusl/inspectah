@@ -16,7 +16,7 @@ Two paths depending on whether you're migrating one host or many:
 
   Refine and Fleet are optional. Each step consumes and produces tarballs.
 
-  Inspect   run-yoinkc.sh                   Scan host, produce tarball
+  Inspect   run-yoinkc.sh                    Scan host, produce tarball
   Fleet     run-yoinkc.sh fleet dir/ -p 80   Merge N hosts into one spec
   Refine    run-yoinkc.sh refine *.tar.gz    Edit findings in the browser
   Build     yoinkc-build *.tar.gz tag        Build the bootc image
