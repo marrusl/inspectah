@@ -1,5 +1,6 @@
 """Editor tab tests: refine mode rendering, static mode preservation."""
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -90,6 +91,18 @@ def _extract_js_block(html: str, start_marker: str, end_marker: str) -> str:
     end = html.find(end_marker, start)
     assert end >= 0, f"could not find end marker {end_marker!r}"
     return html[start:end]
+
+
+def _extract_opening_tag_attrs(html: str, selector: str) -> str:
+    if selector == "editor-tab":
+        pattern = r'<div id="editor-tab"\s+class="[^"]+"\s+style="([^"]+)"'
+    elif selector == "drawer-panel":
+        pattern = r'<div class="([^"]*\bpf-v6-c-drawer__panel\b[^"]*)"(?:\s+[^>]*)?>'
+    else:
+        raise AssertionError(f"unsupported selector {selector!r}")
+    match = re.search(pattern, html)
+    assert match, f"could not find opening tag for {selector}"
+    return match.group(1)
 
 
 class TestEditorTab:
@@ -218,58 +231,70 @@ class TestEditorTab:
 
 
 class TestEditorDrawer:
-    """PF6 resizable drawer for the editor tree pane.
+    """PF6 fixed-width drawer for the editor tree pane.
 
     These tests verify rendered markup structure only. The following behaviors
     require a browser to verify manually:
 
-    - Drag splitter to resize — panel width updates smoothly
-    - Drag past 240px minimum — clamps to 240px
-    - Drag past 600px maximum — clamps to 600px
-    - Resize via ArrowLeft/ArrowRight — panel shrinks/grows by 20px per keystroke
-    - Resize, then refresh page — width restores from localStorage
-    - Resize, then re-render via button — width restores from localStorage
+    - File tree renders at a fixed 480px width
+    - No drag handle is visible between the tree and editor panes
+    - Panel border cleanly separates the tree from the editor content
     """
 
     def test_drawer_uses_pf6_classes(self):
         html = _render(refine_mode=True)
-        assert 'pf-v6-c-drawer' in html
-        assert 'pf-m-panel-left' in html
-        assert 'pf-m-resizable' in html
-        assert 'pf-m-expanded' in html
+        match = re.search(r'<div id="editor-tab"\s+class="([^"]+)"', html)
+        assert match
+        classes = set(match.group(1).split())
+        assert "pf-v6-c-drawer" in classes
+        assert "pf-m-expanded" in classes
+        assert "pf-m-panel-left" in classes
+        assert "pf-m-inline" in classes
+        assert "pf-m-resizable" not in classes
 
-    def test_drawer_default_width_340px(self):
+    def test_drawer_panel_is_not_resizable(self):
         html = _render(refine_mode=True)
-        assert '--pf-v6-c-drawer__panel--md--FlexBasis' in html
-        assert '340px' in html
+        panel_classes = set(_extract_opening_tag_attrs(html, "drawer-panel").split())
+        assert "pf-v6-c-drawer__panel" in panel_classes
+        assert "pf-m-resizable" not in panel_classes
 
-    def test_drawer_min_max_constraints(self):
+    def test_drawer_default_width_480px(self):
         html = _render(refine_mode=True)
-        assert '--pf-v6-c-drawer__panel--md--FlexBasis--min' in html
-        assert '240px' in html
-        assert '600px' in html
+        style = _extract_opening_tag_attrs(html, "editor-tab")
+        assert "--pf-v6-c-drawer__panel--md--FlexBasis: 480px;" in style
 
-    def test_drawer_splitter_markup(self):
+    def test_drawer_fixed_width_constraints(self):
         html = _render(refine_mode=True)
-        assert 'pf-v6-c-drawer__splitter' in html
+        style = _extract_opening_tag_attrs(html, "editor-tab")
+        assert "--pf-v6-c-drawer__panel--md--FlexBasis--min: 480px;" in style
+        assert "--pf-v6-c-drawer__panel--md--FlexBasis--max: 480px;" in style
+        assert style.count("480px") == 3
+
+    def test_drawer_omits_splitter_markup(self):
+        html = _render(refine_mode=True)
+        assert 'class="pf-v6-c-drawer__splitter' not in html
 
     def test_drawer_has_panel_and_content_regions(self):
         html = _render(refine_mode=True)
         assert 'pf-v6-c-drawer__panel' in html
         assert 'pf-v6-c-drawer__content' in html
 
-    def test_drawer_splitter_aria_attributes(self):
-        """Splitter must carry static ARIA attributes for screen readers."""
+    def test_drawer_uses_default_pf_visual_separator(self):
         html = _render(refine_mode=True)
-        assert 'aria-label="Resize file list"' in html
-        assert 'aria-valuemin="240"' in html
-        assert 'aria-valuemax="600"' in html
-        assert 'aria-valuenow=' in html
+        panel_classes = set(_extract_opening_tag_attrs(html, "drawer-panel").split())
+        assert "pf-m-no-border" not in panel_classes
+        assert '<div class="pf-v6-c-drawer__panel" style=' not in html
 
     def test_drawer_no_fixed_300px_width(self):
         """Old fixed-width inline style must be removed."""
         html = _render(refine_mode=True)
         assert 'width:300px' not in html
+
+    def test_drawer_refine_mode_omits_resize_js_state(self):
+        html = _render(refine_mode=True)
+        assert 'yoinkc-editor-drawer-width' not in html
+        assert 'DRAWER_LS_KEY' not in html
+        assert 'applyDrawerWidth' not in html
 
     def test_drawer_static_mode_unaffected(self):
         """Static report must not reference drawer resize JS."""

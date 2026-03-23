@@ -97,20 +97,12 @@
 </style>
 
 <div id="editor-tab"
-     class="pf-v6-c-drawer pf-m-expanded pf-m-panel-left pf-m-inline pf-m-resizable"
-     style="--pf-v6-c-drawer__panel--md--FlexBasis: 340px; --pf-v6-c-drawer__panel--md--FlexBasis--min: 240px; --pf-v6-c-drawer__panel--md--FlexBasis--max: 600px;">
+     class="pf-v6-c-drawer pf-m-expanded pf-m-panel-left pf-m-inline"
+     style="--pf-v6-c-drawer__panel--md--FlexBasis: 480px; --pf-v6-c-drawer__panel--md--FlexBasis--min: 480px; --pf-v6-c-drawer__panel--md--FlexBasis--max: 480px;">
   <div class="pf-v6-c-drawer__main">
 
-  {# --- Tree pane (drawer panel, resizable) --- #}
-  <div class="pf-v6-c-drawer__panel pf-m-resizable">
-    {# Splitter must be inside the panel for PF6 resizable drawers #}
-    <div class="pf-v6-c-drawer__splitter pf-m-vertical"
-         role="separator" aria-orientation="vertical"
-         aria-label="Resize file list"
-         aria-valuemin="240" aria-valuemax="600" aria-valuenow="340"
-         tabindex="0">
-      <div class="pf-v6-c-drawer__splitter-handle" aria-hidden="true"></div>
-    </div>
+  {# --- Tree pane (drawer panel) --- #}
+  <div class="pf-v6-c-drawer__panel">
     <div class="pf-v6-c-drawer__panel-main">
       <div id="editor-tree" style="display:flex; flex-direction:column; height:100%; overflow:hidden; background:var(--pf-t--global--background--color--secondary--default);">
         <div style="padding:12px 16px; border-bottom:1px solid var(--pf-t--global--border--color--default); display:flex; justify-content:space-between; align-items:center;">
