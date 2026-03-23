@@ -216,10 +216,10 @@ When podman is not installed, `--validate` reports failure with an explanatory w
 | `--github-token TOKEN` | `GITHUB_TOKEN` env | GitHub personal access token for repo creation. Falls back to the `GITHUB_TOKEN` environment variable. |
 | `--public` | off | When creating a new GitHub repo, make it public instead of private. |
 
-### `yoinkc-fleet` — Fleet Aggregation
+### `yoinkc fleet` — Fleet Aggregation
 
 ```
-yoinkc-fleet aggregate <input_dir> [flags]
+yoinkc fleet <input_dir> [flags]
 ```
 
 Merges multiple yoinkc inspection snapshots into a single fleet-level snapshot with prevalence metadata. Produces a tarball (default) containing a Containerfile, HTML report, and merged snapshot.
@@ -239,10 +239,10 @@ Merges multiple yoinkc inspection snapshots into a single fleet-level snapshot w
 |---|---|---|
 | `YOINKC_DEBUG` | `yoinkc` (Python), `run-yoinkc.sh` | When set, prints full Python tracebacks on error instead of a one-line summary. The wrapper script forwards it into the container as `YOINKC_DEBUG=1`. |
 | `YOINKC_HOSTNAME` | `run-yoinkc.sh`, inspectors | Overrides hostname detection. The wrapper defaults to `$(hostname -s)` and passes it into the container. Inside the container, the inspector reads this as the top-priority hostname source (above `/etc/hostname` and the kernel hostname). |
-| `YOINKC_IMAGE` | `run-yoinkc.sh`, `run-yoinkc-fleet.sh` | Container image to use. Default: `ghcr.io/marrusl/yoinkc:latest`. |
+| `YOINKC_IMAGE` | `run-yoinkc.sh` | Container image to use. Default: `ghcr.io/marrusl/yoinkc:latest`. |
 | `YOINKC_HOST_CWD` | `run-yoinkc.sh`, pipeline | The host's working directory, passed into the container by the wrapper. Used by the pipeline to name output files relative to the host filesystem. |
 | `YOINKC_EXCLUDE_PREREQS` | `run-yoinkc.sh`, RPM inspector | Space-separated list of packages that the wrapper installed as prerequisites (e.g. `podman`). The RPM inspector excludes these from the "operator-added" package list so they don't end up in the Containerfile. |
-| `YOINKC_OUTPUT_DIR` | `run-yoinkc-fleet.sh` | Destination directory for fleet output tarball. Default: current working directory. |
+| `YOINKC_OUTPUT_DIR` | `run-yoinkc.sh fleet` | Destination directory for fleet output tarball. Default: current working directory. |
 | `GITHUB_TOKEN` | `yoinkc` (Python) | Fallback for `--github-token` when pushing to GitHub. |
 
 ### Wrapper Scripts
@@ -256,28 +256,15 @@ A self-contained shell script (POSIX `sh`) for running yoinkc on a host without 
 3. Checks/prompts for `registry.redhat.io` login when using RHEL base images
 4. Launches the yoinkc container with the required privileges (`--pid=host`, `--privileged`, `--security-opt label=disable`)
 5. Forwards all extra arguments to the `yoinkc` entry point
+6. Detects subcommands (`fleet`, `refine`) and routes accordingly — `run-yoinkc.sh fleet` maps to `yoinkc fleet`, `run-yoinkc.sh refine` maps to `yoinkc refine`
 
 Usage:
 
 ```
 curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
 curl -fsSL ... | sudo YOINKC_HOSTNAME=webserver01 sh -s -- --inspect-only
-```
-
-#### `run-yoinkc-fleet.sh`
-
-A Bash wrapper for running `yoinkc-fleet aggregate` inside the yoinkc container. It:
-
-1. Requires `podman` to be already installed (does not auto-install)
-2. Bind-mounts the input directory read-only and a temp directory for output
-3. Copies the result tarball to `YOINKC_OUTPUT_DIR` (default: CWD)
-
-Usage:
-
-```
-./run-yoinkc-fleet.sh ./snapshots/
-./run-yoinkc-fleet.sh ./snapshots/ -p 80 --no-hosts
-YOINKC_OUTPUT_DIR=/tmp/fleet ./run-yoinkc-fleet.sh ./snapshots/
+./run-yoinkc.sh fleet ./snapshots/ -p 80
+./run-yoinkc.sh refine hostname-*.tar.gz
 ```
 
 ## 4. Schema
@@ -312,7 +299,7 @@ Fleet-aggregated snapshots carry additional metadata at two levels:
 
 - **`FleetMeta`** on `InspectionSnapshot.meta` — contains `source_hosts` (list of hostnames), `total_hosts`, and `min_prevalence` (the `--min-prevalence` threshold used during aggregation).
 
-- **`FleetPrevalence`** on individual item models — contains `count` (how many hosts had this item), `total` (total hosts in the fleet), and `hosts` (list of hostnames). Exactly **10 item models** carry an `Optional[FleetPrevalence]` field: `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, and `ComposeFile`. These are the models that support deduplication and prevalence tracking during fleet merge. The `fleet` field is `None` in single-host snapshots and populated only by `yoinkc-fleet aggregate`.
+- **`FleetPrevalence`** on individual item models — contains `count` (how many hosts had this item), `total` (total hosts in the fleet), and `hosts` (list of hostnames). Exactly **10 item models** carry an `Optional[FleetPrevalence]` field: `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, and `ComposeFile`. These are the models that support deduplication and prevalence tracking during fleet merge. The `fleet` field is `None` in single-host snapshots and populated only by `yoinkc fleet`.
 
 The source code (`schema.py`) is the authoritative reference for individual field names and types.
 
@@ -612,7 +599,7 @@ Produces `report.html`, a single self-contained HTML file (inline CSS/JS, no ext
 - Embedded PatternFly 6 CSS (read from `templates/patternfly.css` and inlined)
 - Embedded snapshot JSON (for the interactive refine UI)
 
-**Template architecture.** `report.html.j2` is a ~66-line skeleton of Jinja2 `{% include %}` directives; the content lives in 23 partials under `templates/report/`. Macros (`section`, `fleet_cell`, `data_table`) are defined in `_macros.html.j2` and imported via `{% from ... import ... with context %}` in each partial that needs them. CSS and JS each have their own partial (`_css.html.j2`, `_js.html.j2`). Content sections map one-to-one to partials — packages, services, config, non-RPM software, containers, users/groups, scheduled jobs, kernel/boot, SELinux, secrets, network, storage, warnings, and audit report. The packages partial includes an optional "Version Changes" subsection with PF6 color-coded labels (red for downgrades, blue for upgrades), shown only when `version_changes` is non-empty. The rendered output is unchanged: a single self-contained HTML file. The template uses PatternFly 6 CSS with custom overrides, and PF6's page structure: sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
+**Template architecture.** `report.html.j2` is a ~66-line skeleton of Jinja2 `{% include %}` directives; the content lives in 29 partials under `templates/report/`. Infrastructure partials include macros (`_macros.html.j2`), CSS (`_css.html.j2`), JS (`_js.html.j2`), toolbar (`_toolbar.html.j2`), sidebar (`_sidebar.html.j2`), and summary (`_summary.html.j2`). Content sections map one-to-one to partials — packages, services, config, non-RPM software, containers, users/groups, scheduled jobs, kernel/boot, SELinux, secrets, network, storage, warnings, audit report, Containerfile preview, module streams, and version locks. UI overlays include the file editor (`_editor.html.j2`, `_editor_js.html.j2`), fleet banner (`_banner.html.j2`), compare modal (`_compare_modal.html.j2`), new file modal (`_new_file_modal.html.j2`), and file browser (`_file_browser.html.j2`). The packages partial includes an optional "Version Changes" subsection with PF6 color-coded labels (red for downgrades, blue for upgrades), shown only when `version_changes` is non-empty. The rendered output is unchanged: a single self-contained HTML file. The template uses PatternFly 6 CSS with custom overrides, and PF6's page structure: sidebar navigation with section links and a main content area with show/hide sections controlled by JavaScript.
 
 **Fleet-aware rendering.** The template conditionally renders fleet-specific elements when `fleet_meta` is present in the context: a fleet banner showing host count and prevalence threshold, prevalence color bars (blue/gold/red) on individual items, fraction/percentage toggle, host list popovers, and content variant grouping for config files, quadlet units, and service drop-ins.
 
@@ -667,7 +654,7 @@ discover_snapshots()  →  validate_snapshots()  →  merge_snapshots()  →  ru
      (loader.py)            (loader.py)             (merge.py)         (reuse existing)
 ```
 
-The entry point is `yoinkc-fleet aggregate <input_dir>`, implemented in `fleet/__main__.py`. It calls the loader, validates compatibility, merges, and delegates to `run_pipeline()` for rendering and tarball packaging.
+The entry point is `yoinkc fleet <input_dir>`, implemented in `fleet/__main__.py`. It calls the loader, validates compatibility, merges, and delegates to `run_pipeline()` for rendering and tarball packaging.
 
 ### Loader (`fleet/loader.py`)
 
@@ -771,10 +758,10 @@ In non-fleet mode, none of these elements appear — the template renders exactl
 
 ### CLI (`fleet/cli.py`)
 
-The `yoinkc-fleet` command uses a subcommand structure with `aggregate` as the primary (and currently only) subcommand:
+The `yoinkc fleet` subcommand accepts:
 
 ```
-yoinkc-fleet aggregate <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json-only] [--no-hosts]
+yoinkc fleet <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json-only] [--no-hosts]
 ```
 
 | Flag | Default | Effect |
@@ -788,16 +775,16 @@ yoinkc-fleet aggregate <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json
 
 Default output is a tarball containing Containerfile, HTML report, and merged snapshot — matching the single-host output format.
 
-### Container Wrapper (`run-yoinkc-fleet.sh`)
+### Container Wrapper (`run-yoinkc.sh fleet`)
 
-For zero-install workstation use, `run-yoinkc-fleet.sh` runs the fleet aggregation inside the yoinkc container image. It:
+For zero-install workstation use, `run-yoinkc.sh fleet` runs the fleet aggregation inside the yoinkc container image. It:
 
 1. Requires `podman` (does not auto-install).
 2. Bind-mounts the input directory read-only and a temp directory for output.
-3. Runs `yoinkc-fleet aggregate` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
+3. Runs `yoinkc fleet` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
 4. Copies the result tarball to `YOINKC_OUTPUT_DIR` (default: current working directory).
 
-Usage: `./run-yoinkc-fleet.sh ./snapshots/ -p 80 --no-hosts`
+Usage: `./run-yoinkc.sh fleet ./snapshots/ -p 80 --no-hosts`
 
 ## 8. Pipeline & Packaging
 
@@ -866,21 +853,26 @@ When building the Containerfile, `yoinkc-build` searches for certificates in a p
 
 ### Wrapper Scripts
 
-Two shell scripts provide zero-install entry points for hosts that don't have yoinkc installed locally:
+`run-yoinkc.sh` is the single zero-install entry point. It detects subcommands (`fleet`, `refine`) via a case statement and routes accordingly:
 
-**`run-yoinkc.sh`** — the primary host inspection wrapper:
+**Default (inspect):**
 
 1. Installs `podman` if missing (via `dnf` or `yum`).
 2. Tracks just-installed tools in `YOINKC_EXCLUDE_PREREQS` so yoinkc can exclude them from the RPM output (they're tool prerequisites, not operator additions).
 3. Checks/prompts for `registry.redhat.io` login when using Red Hat base images.
 4. Runs the yoinkc container with `--privileged`, `--pid=host`, and the host root bind-mounted at `/host:ro`. Passes through `YOINKC_DEBUG`, `YOINKC_HOST_CWD`, and `YOINKC_HOSTNAME` (defaulting to `hostname -s`).
 
-**`run-yoinkc-fleet.sh`** — the fleet aggregation wrapper:
+**`run-yoinkc.sh fleet`:**
 
 1. Requires `podman` (does not auto-install).
 2. Bind-mounts the input directory read-only and a temp directory for output.
-3. Runs `yoinkc-fleet aggregate` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
+3. Runs `yoinkc fleet` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
 4. Copies the result tarball to `YOINKC_OUTPUT_DIR` (default: current working directory).
+
+**`run-yoinkc.sh refine`:**
+
+1. Runs `yoinkc refine` inside the container with port 8642 mapped.
+2. Passes through `--no-browser`, `--port`, and the tarball path.
 
 ### Image Build
 
@@ -889,7 +881,7 @@ The `Containerfile` at the repository root defines the yoinkc tool image:
 - **Base image**: `fedora:latest` — chosen because it's in the Red Hat family (compatible tooling and package ecosystem) but doesn't require a subscription, and works on both `amd64` and `aarch64`.
 - **Dependencies**: `python3`, `python3-pip`, `systemd` (for systemd-related inspection), `binutils` and `file` (for binary analysis).
 - **Install**: the yoinkc package is installed in editable mode (`pip install -e .`).
-- **Entry point**: `yoinkc`. For fleet operations, `run-yoinkc-fleet.sh` overrides the entry point to `yoinkc-fleet`.
+- **Entry point**: `yoinkc`. Subcommands `fleet` and `refine` are routed by `run-yoinkc.sh` via a case statement.
 
 ### Interactive Refinement
 
@@ -899,13 +891,16 @@ The HTML report embeds the full inspection snapshot and exposes include/exclude 
 
 1. **Inspect on host:** run yoinkc, collect the output tarball.
 2. **Copy to workstation:** `scp target-host:~/hostname-*.tar.gz .`
-3. **Start refine:** `./run-yoinkc.sh refine hostname-*.tar.gz` — runs `yoinkc refine` inside the container, serves the report at `http://localhost:8642`.
+3. **Start refine:** `./run-yoinkc.sh refine hostname-*.tar.gz` — runs `yoinkc refine` inside the container, serves the report at `http://localhost:8642`, and auto-opens the browser.
 4. **Iterate in browser:** toggle items with checkboxes, click Re-render to apply changes, download a refined tarball when done.
 
 **`yoinkc refine`** (`src/yoinkc/refine.py`) is an HTTP server module that:
 - Extracts the tarball into a temporary directory and serves `report.html`
+- Auto-opens the browser after the server is ready
 - Handles re-render requests by calling `yoinkc inspect --from-snapshot --refine-mode` as a subprocess
 - Serves the download tarball of the current output state
+- Exposes `/api/health` for readiness detection (polled by the JavaScript UI on startup)
+- Sets `Cache-Control: no-cache, no-store, must-revalidate` on all responses to prevent stale content after re-renders
 
 **Interactive UI in the HTML report:**
 
@@ -915,7 +910,7 @@ Every inspected item has an include/exclude checkbox. Unchecking an item sets `i
 
 The sticky footer toolbar reflects three states:
 
-- **Dirty** — changes are pending. The Re-render button is highlighted and the status text shows what changed (e.g., "3 items excluded, 1 strategy change"). The Download Snapshot button is also active, allowing the modified snapshot JSON to be saved without re-rendering.
+- **Dirty** — changes are pending. The Re-render button is highlighted and shows combined counts (e.g., "Re-render (2 edits, 3 toggles)"). The Download Snapshot button is also active, allowing the modified snapshot JSON to be saved without re-rendering.
 - **Clean + helper** — no pending changes, refine server is running. The Re-render button is dimmed. The Download Tarball button is active, packaging the current output state as a `.tar.gz`.
 - **Standalone** — report opened directly in a browser without the refine server. Include/exclude checkboxes are hidden, the toolbar is collapsed, and all interactive buttons are disabled. The report is still fully functional as a read-only dashboard.
 
@@ -990,4 +985,4 @@ Pushing to GitHub means network egress from a container with read access to the 
 
 ### Tech Debt
 
-All identified tech debt items have been addressed: `containerfile.py` was split into the `renderers/containerfile/` package (14 modules), `report.html.j2` was split into 23 include partials under `templates/report/`, and the three large test files were split into 13 focused files plus a shared `conftest.py`.
+All identified tech debt items have been addressed: `containerfile.py` was split into the `renderers/containerfile/` package (14 modules), `report.html.j2` was split into 29 include partials under `templates/report/`, and the three large test files were split into 13 focused files plus a shared `conftest.py`.

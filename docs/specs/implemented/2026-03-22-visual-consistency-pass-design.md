@@ -1,7 +1,7 @@
 # Visual Consistency Pass
 
 **Date:** 2026-03-22
-**Status:** Proposed
+**Status:** Implemented
 
 ## Problem
 
@@ -12,6 +12,8 @@ The report UI has grown organically across many feature specs. While each tab wo
 A single sweep across all templates and CSS on a feature branch (`visual-consistency-pass`). Six focused changes that collectively make the report feel like one product instead of a patchwork.
 
 ## Part A: Global Table Spacing
+
+> **Status:** Implemented in b428ac2.
 
 Override PF6 table cell padding via CSS variables to achieve relaxed density across all tables. One rule in `_css.html.j2`:
 
@@ -27,6 +29,8 @@ Override PF6 table cell padding via CSS variables to achieve relaxed density acr
 PF6 uses CSS logical properties (block/inline) rather than physical (top/left). These are the actual variable names from `patternfly.css`. This override affects headers and body cells uniformly. No per-table changes needed.
 
 ## Part B: Config Files Tab Cleanup
+
+> **Status:** Implemented in 6f6c78a (B1–B5 all addressed: rpm -Va and diff columns removed, permissions badge added, pencil moved left, variant row colspan/filler cells updated).
 
 ### B1: Drop `rpm -Va` Column
 
@@ -84,6 +88,8 @@ The **inner/nested variant tables** (compact `pf-m-compact` tables inside fleet 
 The same pencil-column reorder applies to `_services.html.j2` and `_containers.html.j2` — check each for filler cells, colspan values, and nested variant tables that reference the old column order.
 
 ## Part C: Packages Tab Restructure
+
+> **Status:** Implemented in f530c15.
 
 Collapse the separate "Repositories" card into the dependency tree. The repo name becomes the expandable section header within the dependency tree card, with the include/exclude toggle on that header row.
 
@@ -145,6 +151,8 @@ This "bulk override" model matches the reset button's behavior — it's a coarse
 
 ## Part D: Column Consistency Across Tabs
 
+> **Status:** Implemented in b428ac2 (fit-content on scheduled jobs Schedule column, network Method/Type/Deployment columns).
+
 ### D1: Scheduled Jobs — Timers Table
 
 Current columns: `Timer` | `Schedule` | `ExecStart` (no checkboxes, no fit-content).
@@ -168,6 +176,8 @@ Add `pf-m-fit-content` to `Method`, `Type`, and `Deployment` (all short-value co
 SELinux, Kernel & Boot, Users & Groups, and Non-RPM Software tables already have appropriate fit-content and checkbox usage. They benefit from Part A's global spacing but need no structural changes.
 
 ## Part E: Inline Style Cleanup
+
+> **Status:** Implemented in b428ac2 (fleet-variant-toggle, fleet-variant-table, and variant-index classes added to _css.html.j2).
 
 Move three remaining `style="..."` attributes to CSS classes in `_css.html.j2`:
 
