@@ -10,6 +10,72 @@ from pathlib import Path
 from ..schema import InspectionSnapshot
 
 
+def compute_display_names(hostnames: list[str]) -> list[str]:
+    """Compute shortest unique display names from hostnames.
+
+    Progressive disambiguation starts with the short hostname and adds one
+    domain segment at a time until collisions are resolved. If identical
+    hostnames still collide after all segments are exhausted, numeric suffixes
+    are applied to the short hostname.
+    """
+    if not hostnames:
+        return []
+
+    segments = [hostname.split(".") if hostname else [""] for hostname in hostnames]
+    depths = [1] * len(hostnames)
+
+    def labels_for_depths() -> list[str]:
+        return [
+            ".".join(parts[: min(depth, len(parts))])
+            for parts, depth in zip(segments, depths)
+        ]
+
+    while True:
+        labels = labels_for_depths()
+        groups: dict[str, list[int]] = {}
+        for idx, label in enumerate(labels):
+            groups.setdefault(label, []).append(idx)
+
+        collisions = [indices for indices in groups.values() if len(indices) > 1]
+        if not collisions:
+            return labels
+
+        changed = False
+        for indices in collisions:
+            for idx in indices:
+                if depths[idx] < len(segments[idx]):
+                    depths[idx] += 1
+                    changed = True
+
+        if not changed:
+            break
+
+    labels = labels_for_depths()
+    duplicate_groups: dict[str, list[int]] = {}
+    for idx, label in enumerate(labels):
+        duplicate_groups.setdefault(label, []).append(idx)
+
+    for indices in duplicate_groups.values():
+        if len(indices) < 2:
+            continue
+        for ordinal, idx in enumerate(indices, start=1):
+            labels[idx] = f"{segments[idx][0]} ({ordinal})"
+
+    return labels
+
+
+def assign_display_names(snapshots: list[InspectionSnapshot]) -> list[str]:
+    """Compute and store per-snapshot display names in snapshot metadata."""
+    hostnames = [
+        snapshot.meta.get("hostname", f"host-{idx}")
+        for idx, snapshot in enumerate(snapshots)
+    ]
+    display_names = compute_display_names(hostnames)
+    for snapshot, display_name in zip(snapshots, display_names):
+        snapshot.meta["display_name"] = display_name
+    return display_names
+
+
 def _load_from_json(path: Path) -> InspectionSnapshot | None:
     """Load a snapshot from a bare JSON file. Returns None on failure."""
     try:

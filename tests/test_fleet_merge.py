@@ -134,6 +134,29 @@ class TestMergeFleetMeta:
         merged = merge_snapshots([s1, s2], min_prevalence=100, fleet_name="web-servers")
         assert merged.meta["hostname"] == "web-servers"
 
+    def test_merge_stores_display_names_on_snapshots_and_fleet_metadata(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        s1 = _snap(
+            "web-01.east.example.com",
+            rpm=RpmSection(packages_added=[
+                PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
+            ]),
+        )
+        s2 = _snap(
+            "web-01.west.example.com",
+            rpm=RpmSection(packages_added=[
+                PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
+            ]),
+        )
+
+        merged = merge_snapshots([s1, s2], min_prevalence=100)
+
+        assert s1.meta["display_name"] == "web-01.east"
+        assert s2.meta["display_name"] == "web-01.west"
+        assert merged.meta["fleet"]["source_hosts"] == ["web-01.east", "web-01.west"]
+        assert merged.rpm.packages_added[0].fleet.hosts == ["web-01.east", "web-01.west"]
+
 
 class TestMergeNoneSection:
     def test_one_snapshot_missing_rpm(self):

@@ -102,7 +102,9 @@
       <div class="fleet-bar"
            data-count="{{ c.fleet.count }}"
            data-total="{{ c.fleet.total }}"
-           data-hosts="{{ c.fleet.hosts | join(', ') }}">
+           data-hosts="{{ c.fleet.hosts | join(', ') }}"
+           data-host-titles="{% for host in c.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}"
+           title="{% for host in c.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}">
         <div class="fleet-bar-track">
           <div class="fleet-bar-fill {{ c.fleet | fleet_color }}"
                style="width: {{ (c.fleet.count * 100 // c.fleet.total) if c.fleet.total > 0 else 100 }}%"></div>

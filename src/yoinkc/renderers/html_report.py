@@ -517,6 +517,7 @@ def _build_context(
 
     fleet_raw = (snapshot.meta or {}).get("fleet")
     fleet_meta = FleetMeta(**fleet_raw) if fleet_raw else None
+    host_title_map = fleet_raw.get("host_title_map", {}) if fleet_raw else {}
 
     # Aggregate included/excluded counts across key sections for the fleet banner.
     _inc_items = []
@@ -703,6 +704,7 @@ def _build_context(
         "codemirror_js": Markup(codemirror_js),
         "counts": counts,
         "fleet_meta": fleet_meta,
+        "host_title_map": host_title_map,
         "triage": triage,
         "os_desc": os_desc,
         "os_id": snapshot.os_release.id if snapshot.os_release else "",

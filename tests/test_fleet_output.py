@@ -105,6 +105,26 @@ class TestFleetBanner:
         html = (tmp_path / "report.html").read_text()
         assert "Fleet Analysis" not in html
 
+    def test_fleet_banner_prefers_short_display_names(self, tmp_path):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        s1 = InspectionSnapshot(
+            os_release=OsRelease(name="Red Hat Enterprise Linux", version_id="9.4", id="rhel"),
+            meta={"hostname": "web-01.east.example.com"},
+        )
+        s2 = InspectionSnapshot(
+            os_release=OsRelease(name="Red Hat Enterprise Linux", version_id="9.4", id="rhel"),
+            meta={"hostname": "web-01.west.example.com"},
+        )
+
+        merged = merge_snapshots([s1, s2])
+        env = Environment(autoescape=True)
+        html_report.render(merged, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+
+        assert "web-01.east, web-01.west" in html
+        assert "web-01.east.example.com, web-01.west.example.com" not in html
+
 
 class TestFleetPrevalenceBadge:
     """Tests for fleet prevalence badges on item rows."""
@@ -197,6 +217,32 @@ class TestFleetPrevalenceBadge:
         html_report.render(snap, env, tmp_path)
         html = (tmp_path / "report.html").read_text()
         assert 'data-hosts=""' in html
+
+    def test_prevalence_bar_uses_display_names_and_preserves_full_host_titles(self, tmp_path):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        pkg = PackageEntry(name="httpd", version="2.4.57", release="1.el9", arch="x86_64")
+        s1 = InspectionSnapshot(
+            os_release=OsRelease(name="Red Hat Enterprise Linux", version_id="9.4", id="rhel"),
+            meta={"hostname": "web-01.east.example.com"},
+            rpm=RpmSection(packages_added=[pkg]),
+        )
+        s2 = InspectionSnapshot(
+            os_release=OsRelease(name="Red Hat Enterprise Linux", version_id="9.4", id="rhel"),
+            meta={"hostname": "web-01.west.example.com"},
+            rpm=RpmSection(packages_added=[pkg]),
+        )
+
+        merged = merge_snapshots([s1, s2])
+        env = Environment(autoescape=True)
+        html_report.render(merged, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+
+        assert 'data-hosts="web-01.east, web-01.west"' in html
+        assert (
+            'data-host-titles="web-01.east.example.com, web-01.west.example.com"'
+            in html
+        )
 
 
 class TestFleetConfigPassthrough:

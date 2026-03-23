@@ -14,6 +14,7 @@ from ..schema import (
     FirewallZone, GeneratedTimerUnit, CronJob,
     QuadletUnit, ComposeFile,
 )
+from .loader import assign_display_names
 
 
 def _prevalence_include(count: int, total: int, min_prevalence: int) -> bool:
@@ -253,7 +254,8 @@ def merge_snapshots(
 ) -> InspectionSnapshot:
     """Merge N snapshots into a single fleet snapshot with prevalence metadata."""
     total = len(snapshots)
-    host_names = [s.meta.get("hostname", f"host-{i}") for i, s in enumerate(snapshots)]
+    full_hostnames = [s.meta.get("hostname", f"host-{i}") for i, s in enumerate(snapshots)]
+    host_names = assign_display_names(snapshots)
 
     # --- RPM ---
     rpm_section = None
@@ -539,7 +541,10 @@ def merge_snapshots(
         meta={
             "hostname": fleet_name,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "fleet": fleet_meta.model_dump(),
+            "fleet": {
+                **fleet_meta.model_dump(),
+                "host_title_map": dict(zip(host_names, full_hostnames)),
+            },
         },
         os_release=first.os_release,
         rpm=rpm_section,

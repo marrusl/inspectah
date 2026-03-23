@@ -26,7 +26,9 @@
        aria-label="{{ item.fleet.count }} of {{ item.fleet.total }} hosts"
        data-count="{{ item.fleet.count }}"
        data-total="{{ item.fleet.total }}"
-       data-hosts="{{ item.fleet.hosts | join(', ') }}">
+       data-hosts="{{ item.fleet.hosts | join(', ') }}"
+       data-host-titles="{% for host in item.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}"
+       title="{% for host in item.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}">
     <div class="fleet-bar-track">
       <div class="fleet-bar-fill {{ item.fleet | fleet_color }}"
            style="width: {{ (item.fleet.count * 100 // item.fleet.total) if item.fleet.total > 0 else 100 }}%"></div>

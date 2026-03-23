@@ -131,3 +131,39 @@ class TestValidateSnapshots:
         s2 = self._make_snap("web-02")
         with pytest.raises(SystemExit):
             validate_snapshots([s1, s2])
+
+
+class TestComputeDisplayNames:
+    @pytest.mark.parametrize(
+        ("hostnames", "expected"),
+        [
+            (
+                ["web-01.east.example.com", "web-02.west.example.com"],
+                ["web-01", "web-02"],
+            ),
+            (
+                ["web-01.east.example.com", "web-01.west.example.com"],
+                ["web-01.east", "web-01.west"],
+            ),
+            (
+                ["web-01.east.example.com", "web-01.east.internal.com"],
+                ["web-01.east.example", "web-01.east.internal"],
+            ),
+            (
+                ["web-01", "web-02"],
+                ["web-01", "web-02"],
+            ),
+            (
+                ["web-01", "web-01.east.example.com"],
+                ["web-01", "web-01.east"],
+            ),
+            (
+                ["web-01.example.com", "web-01.example.com"],
+                ["web-01 (1)", "web-01 (2)"],
+            ),
+        ],
+    )
+    def test_progressively_disambiguates_colliding_hostnames(self, hostnames, expected):
+        from yoinkc.fleet.loader import compute_display_names
+
+        assert compute_display_names(hostnames) == expected

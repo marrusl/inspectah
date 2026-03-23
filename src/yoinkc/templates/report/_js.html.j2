@@ -1306,6 +1306,12 @@ document.querySelectorAll('.fleet-bar-label').forEach(function(label) {
 var activePopover = null;
 var copyFormat = 'newline';
 
+function fleetHostTitle(host) {
+  var fleetMeta = snapshot.meta && snapshot.meta.fleet;
+  var titleMap = fleetMeta && fleetMeta.host_title_map;
+  return (titleMap && titleMap[host]) || host;
+}
+
 function fleetCopyHosts(hostList, btnEl) {
   var sep = copyFormat === 'comma' ? ',' : (copyFormat === 'space' ? ' ' : '\n');
   var text = hostList.join(sep);
@@ -1344,6 +1350,7 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
       activePopover = null;
     }
     var hostsAttr = this.getAttribute('data-hosts');
+    var hostTitlesAttr = this.getAttribute('data-host-titles');
     var count = parseInt(this.getAttribute('data-count'), 10) || 0;
     var total = parseInt(this.getAttribute('data-total'), 10) || 0;
     var popover = document.createElement('div');
@@ -1362,6 +1369,9 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
       popover.textContent = 'Host list not available';
     } else {
       var hostList = hostsAttr.split(', ').map(function(h) { return h.trim(); }).filter(Boolean);
+      var hostTitles = hostTitlesAttr
+        ? hostTitlesAttr.split(', ').map(function(h) { return h.trim(); })
+        : hostList.map(fleetHostTitle);
       if (hostList.length === 0) {
         popover.textContent = 'Host list not available';
       } else {
@@ -1439,9 +1449,10 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
         popover.appendChild(header);
 
         var ul = document.createElement('ul');
-        hostList.forEach(function(h) {
+        hostList.forEach(function(h, idx) {
           var li = document.createElement('li');
           li.textContent = h;
+          li.title = hostTitles[idx] || fleetHostTitle(h);
           ul.appendChild(li);
         });
         popover.appendChild(ul);

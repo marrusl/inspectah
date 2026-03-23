@@ -20,6 +20,12 @@
       escapeHtml(pp.dir) + '</span><strong>' + escapeHtml(pp.name) + '</strong>';
   }
 
+  function hostTitleFor(label) {
+    var fleetMeta = snapshot.meta && snapshot.meta.fleet;
+    var titleMap = fleetMeta && fleetMeta.host_title_map;
+    return (titleMap && titleMap[label]) || label;
+  }
+
   function buildTree() {
     var treeEl = document.getElementById('editor-tree-list');
     if (!treeEl) return;
@@ -233,13 +239,14 @@
           var chip = document.createElement('span');
           chip.className = 'host-chip';
           chip.textContent = h;
-          chip.title = h;
+          chip.title = hostTitleFor(h);
           chipSpan.appendChild(chip);
         });
       } else {
         var countSpan = document.createElement('span');
         countSpan.className = 'host-count';
         countSpan.textContent = hosts.length + ' hosts';
+        countSpan.title = hosts.map(hostTitleFor).join('\n');
         chipSpan.appendChild(countSpan);
       }
     });
