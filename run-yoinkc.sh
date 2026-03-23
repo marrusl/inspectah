@@ -124,7 +124,7 @@ case "$_mode" in
       ${YOINKC_DEBUG:+-e YOINKC_DEBUG=1} \
       ${YOINKC_EXCLUDE_PREREQS:+--env YOINKC_EXCLUDE_PREREQS} \
       -e YOINKC_HOST_CWD="$(pwd)" \
-      -e YOINKC_HOSTNAME="${YOINKC_HOSTNAME:-$(hostname -s)}" \
+      -e YOINKC_HOSTNAME="${YOINKC_HOSTNAME:-$(hostnamectl hostname 2>/dev/null || hostname -f)}" \
       -v /:/host:ro \
       -v "$(pwd):/output" \
       "$IMAGE" "$@"

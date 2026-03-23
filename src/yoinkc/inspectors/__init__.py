@@ -207,19 +207,30 @@ def run_all(
 
     meta = {"host_root": str(host_root), "timestamp": datetime.now(timezone.utc).isoformat()}
     # Hostname priority: YOINKC_HOSTNAME env var (set by wrapper on host)
-    #                  → /etc/hostname (may be empty on systemd hosts)
+    #                  → /etc/hostname
+    #                  → hostnamectl hostname
     env_hostname = os.environ.get("YOINKC_HOSTNAME", "").strip()
     if env_hostname:
         meta["hostname"] = env_hostname
     else:
         hostname_path = host_root / "etc" / "hostname"
+        name = ""
         try:
             if hostname_path.exists():
-                lines = hostname_path.read_text().strip().splitlines()
+                lines = hostname_path.read_text().splitlines()
                 if lines:
-                    meta["hostname"] = lines[0]
+                    name = lines[0].strip()
         except (PermissionError, OSError):
             pass
+        if not name:
+            try:
+                result = executor(["hostnamectl", "hostname"])
+            except OSError:
+                result = None
+            if result and result.returncode == 0 and result.stdout.strip():
+                name = result.stdout.strip().splitlines()[0].strip()
+        if name:
+            meta["hostname"] = name
     os_release = _read_os_release(host_root)
     err = _validate_supported_host(os_release)
     if err:

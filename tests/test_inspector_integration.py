@@ -290,6 +290,63 @@ def test_hostname_falls_back_to_etc_hostname_when_env_unset(tmp_path, fixture_ex
     assert snapshot.meta.get("hostname") == "from-etc-hostname"
 
 
+def test_hostname_from_etc_hostname_strips_whitespace(tmp_path, fixture_executor, monkeypatch):
+    """The first /etc/hostname line is stripped before storing it in snapshot metadata."""
+    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "hostname").write_text("  from-etc-hostname  \nextra-line\n")
+    (etc / "os-release").write_text('NAME="CentOS Stream"\nVERSION_ID="9"\nID=centos\n')
+
+    snapshot = run_all(tmp_path, executor=fixture_executor, no_baseline_opt_in=True)
+    assert snapshot.meta.get("hostname") == "from-etc-hostname"
+
+
+def test_hostname_falls_back_to_hostnamectl_when_env_and_etc_hostname_are_empty(
+    tmp_path, fixture_executor, monkeypatch
+):
+    """When env and /etc/hostname are empty, hostnamectl hostname is used."""
+    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "hostname").write_text("\n")
+    (etc / "os-release").write_text('NAME="Red Hat Enterprise Linux"\nVERSION_ID="9.4"\nID=rhel\n')
+
+    calls = []
+
+    def executor(cmd, cwd=None):
+        if cmd == ["hostnamectl", "hostname"]:
+            calls.append(cmd)
+            return RunResult(stdout="host.example.com\n", stderr="", returncode=0)
+        return fixture_executor(cmd, cwd=cwd)
+
+    snapshot = run_all(tmp_path, executor=executor, no_baseline_opt_in=True)
+    assert snapshot.meta.get("hostname") == "host.example.com"
+    assert calls == [["hostnamectl", "hostname"]]
+
+
+def test_hostname_is_omitted_when_env_file_and_hostnamectl_are_unavailable(
+    tmp_path, fixture_executor, monkeypatch
+):
+    """Missing env, empty /etc/hostname, and unavailable hostnamectl must not crash."""
+    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "hostname").write_text("")
+    (etc / "os-release").write_text('NAME="Red Hat Enterprise Linux"\nVERSION_ID="9.4"\nID=rhel\n')
+
+    def executor(cmd, cwd=None):
+        if cmd == ["hostnamectl", "hostname"]:
+            return RunResult(stdout="", stderr="Command not found", returncode=127)
+        return fixture_executor(cmd, cwd=cwd)
+
+    snapshot = run_all(tmp_path, executor=executor, no_baseline_opt_in=True)
+    assert "hostname" not in snapshot.meta
+
+
 # ---------------------------------------------------------------------------
 # Snapshot roundtrip
 # ---------------------------------------------------------------------------

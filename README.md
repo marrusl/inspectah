@@ -48,7 +48,7 @@ Environment variables for customization:
 | Variable | Effect |
 |----------|--------|
 | `YOINKC_IMAGE` | Override the container image (e.g. a local build or pinned tag) |
-| `YOINKC_HOSTNAME` | Override the reported hostname (default: `hostname -s`) |
+| `YOINKC_HOSTNAME` | Override the reported hostname (default: `hostnamectl hostname`, falling back to `hostname -f`) |
 | `YOINKC_DEBUG` | Set to `1` to enable debug logging to stderr |
 
 > **Important:** `sudo` must wrap `sh`, not `curl`. The container requires rootful podman — if `sudo` only applies to the download, podman runs rootless and nsenter into host namespaces will fail.

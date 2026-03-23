@@ -238,7 +238,7 @@ Merges multiple yoinkc inspection snapshots into a single fleet-level snapshot w
 | Variable | Used by | Effect |
 |---|---|---|
 | `YOINKC_DEBUG` | `yoinkc` (Python), `run-yoinkc.sh` | When set, prints full Python tracebacks on error instead of a one-line summary. The wrapper script forwards it into the container as `YOINKC_DEBUG=1`. |
-| `YOINKC_HOSTNAME` | `run-yoinkc.sh`, inspectors | Overrides hostname detection. The wrapper defaults to `$(hostname -s)` and passes it into the container. Inside the container, the inspector reads this as the top-priority hostname source (above `/etc/hostname` and the kernel hostname). |
+| `YOINKC_HOSTNAME` | `run-yoinkc.sh`, inspectors | Overrides hostname detection. The wrapper defaults to `$(hostnamectl hostname)` and falls back to `$(hostname -f)` before passing it into the container. Inside the container, the inspector reads this as the top-priority hostname source, then falls back to `/etc/hostname`, then `hostnamectl hostname`. |
 | `YOINKC_IMAGE` | `run-yoinkc.sh` | Container image to use. Default: `ghcr.io/marrusl/yoinkc:latest`. |
 | `YOINKC_HOST_CWD` | `run-yoinkc.sh`, pipeline | The host's working directory, passed into the container by the wrapper. Used by the pipeline to name output files relative to the host filesystem. |
 | `YOINKC_EXCLUDE_PREREQS` | `run-yoinkc.sh`, RPM inspector | Space-separated list of packages that the wrapper installed as prerequisites (e.g. `podman`). The RPM inspector excludes these from the "operator-added" package list so they don't end up in the Containerfile. |
@@ -860,7 +860,7 @@ When building the Containerfile, `yoinkc-build` searches for certificates in a p
 1. Installs `podman` if missing (via `dnf` or `yum`).
 2. Tracks just-installed tools in `YOINKC_EXCLUDE_PREREQS` so yoinkc can exclude them from the RPM output (they're tool prerequisites, not operator additions).
 3. Checks/prompts for `registry.redhat.io` login when using Red Hat base images.
-4. Runs the yoinkc container with `--privileged`, `--pid=host`, and the host root bind-mounted at `/host:ro`. Passes through `YOINKC_DEBUG`, `YOINKC_HOST_CWD`, and `YOINKC_HOSTNAME` (defaulting to `hostname -s`).
+4. Runs the yoinkc container with `--privileged`, `--pid=host`, and the host root bind-mounted at `/host:ro`. Passes through `YOINKC_DEBUG`, `YOINKC_HOST_CWD`, and `YOINKC_HOSTNAME` (defaulting to `hostnamectl hostname`, then `hostname -f`).
 
 **`run-yoinkc.sh fleet`:**
 
