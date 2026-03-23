@@ -8,20 +8,21 @@ yoinkc inspects a running RHEL, CentOS Stream, or Fedora host and produces every
 
 ## Workflow
 
-Four steps take a host from bare metal to a bootc image:
+Two paths depending on whether you're migrating one host or many:
 
 ```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  1. Inspect  │───▸│  2. Refine   │───▸│  3. Build    │───▸│  4. Fleet    │
-└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
- Scan a host,        Edit findings       Build the bootc     Merge multiple
- get a tarball       in the browser      image               hosts into one
+  One host:    Inspect ────→ Refine ────→ Build
+  Many hosts:  Inspect ────→ Fleet ─────→ Refine ────→ Build
 
- run-yoinkc.sh       run-yoinkc.sh       yoinkc-build        run-yoinkc.sh
-                     refine *.tar.gz     *.tar.gz tag        fleet dir/ -p 80
+  Refine and Fleet are optional. Each step consumes and produces tarballs.
+
+  Inspect   run-yoinkc.sh                   Scan host, produce tarball
+  Fleet     run-yoinkc.sh fleet dir/ -p 80   Merge N hosts into one spec
+  Refine    run-yoinkc.sh refine *.tar.gz    Edit findings in the browser
+  Build     yoinkc-build *.tar.gz tag        Build the bootc image
 ```
 
-[Inspect](#inspect) | [Refine](#refine) | [Build](#build) | [Fleet](#fleet)
+[Inspect](#inspect) | [Refine](#refine) | [Fleet](#fleet) | [Build](#build)
 
 ---
 
