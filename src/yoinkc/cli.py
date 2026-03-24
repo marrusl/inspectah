@@ -165,17 +165,33 @@ def _add_inspect_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
-    if argv is None:
-        import sys
-        argv = sys.argv[1:]
-
-    host_root_explicit = any(
-        arg == "--host-root" or arg.startswith("--host-root=")
-        for arg in argv
+def _add_refine_args(parser: argparse.ArgumentParser) -> None:
+    """Register refine-specific flags on the given parser."""
+    parser.add_argument(
+        "tarball",
+        type=Path,
+        help="Path to a yoinkc output tarball (.tar.gz)",
     )
-    argv = _preprocess_argv(argv)
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not auto-open the browser on startup",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8642,
+        help="HTTP server port (default: 8642)",
+    )
+    parser.add_argument(
+        "--bind",
+        default="127.0.0.1",
+        help=argparse.SUPPRESS,
+    )
 
+
+def build_parser() -> argparse.ArgumentParser:
+    """Build and return the top-level yoinkc argument parser."""
     parser = argparse.ArgumentParser(
         prog="yoinkc",
         description="Inspect RHEL/CentOS hosts and produce bootc image artifacts.",
@@ -198,27 +214,23 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         "refine",
         help="Interactively edit and re-render inspection output",
     )
-    refine_parser.add_argument(
-        "tarball",
-        type=Path,
-        help="Path to a yoinkc output tarball (.tar.gz)",
+    _add_refine_args(refine_parser)
+
+    return parser
+
+
+def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
+    if argv is None:
+        import sys
+        argv = sys.argv[1:]
+
+    host_root_explicit = any(
+        arg == "--host-root" or arg.startswith("--host-root=")
+        for arg in argv
     )
-    refine_parser.add_argument(
-        "--no-browser",
-        action="store_true",
-        help="Do not auto-open the browser on startup",
-    )
-    refine_parser.add_argument(
-        "--port",
-        type=int,
-        default=8642,
-        help="HTTP server port (default: 8642)",
-    )
-    refine_parser.add_argument(
-        "--bind",
-        default="127.0.0.1",
-        help=argparse.SUPPRESS,
-    )
+    argv = _preprocess_argv(argv)
+
+    parser = build_parser()
 
     args = parser.parse_args(argv)
     args.host_root_explicit = host_root_explicit
