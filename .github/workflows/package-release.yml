@@ -1,0 +1,274 @@
+name: Package release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-srpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Install build dependencies
+        run: >-
+          dnf install -y
+          rpm-build
+          python3-devel
+          python3-setuptools
+          python3-wheel
+          pyproject-rpm-macros
+
+      - name: Build SRPM
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          mkdir -p ~/rpmbuild/SOURCES
+          tar czf ~/rpmbuild/SOURCES/yoinkc-${VERSION}.tar.gz \
+            --transform "s,^\.,yoinkc-${VERSION}," --exclude-vcs .
+          rpmbuild -bs yoinkc.spec
+          cp ~/rpmbuild/SRPMS/*.src.rpm .
+
+      - name: Upload SRPM to release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const assets = await github.paginate(
+              github.rest.repos.listReleaseAssets,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: context.payload.release.id,
+                per_page: 100,
+              }
+            );
+            for (const file of fs.readdirSync('.')) {
+              if (!file.endsWith('.src.rpm')) continue;
+              const existing = assets.find((asset) => asset.name === file);
+              if (existing) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: existing.id,
+                });
+              }
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: context.payload.release.id,
+                name: file,
+                data: fs.readFileSync(file),
+              });
+            }
+
+      - name: Upload SRPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: srpm
+          path: "*.src.rpm"
+
+  build-rpm:
+    needs: build-srpm
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { name: "fedora", container: "fedora:latest" }
+          - { name: "el9", container: "quay.io/centos/centos:stream9" }
+          - { name: "el10", container: "quay.io/centos/centos:stream10" }
+    container: ${{ matrix.target.container }}
+    steps:
+      - name: Download SRPM
+        uses: actions/download-artifact@v4
+        with:
+          name: srpm
+
+      - name: Enable EPEL and CRB repositories
+        if: matrix.target.name != 'fedora'
+        run: |
+          dnf install -y epel-release dnf-plugins-core
+          dnf config-manager --set-enabled crb
+
+      - name: Install build tools
+        run: dnf install -y rpm-build dnf-plugins-core
+
+      - name: Install build dependencies from SRPM
+        run: dnf builddep -y *.src.rpm
+
+      - name: Build RPM
+        run: |
+          rpmbuild --rebuild *.src.rpm
+          cp ~/rpmbuild/RPMS/noarch/*.rpm .
+
+      - name: Upload RPM to release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const assets = await github.paginate(
+              github.rest.repos.listReleaseAssets,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: context.payload.release.id,
+                per_page: 100,
+              }
+            );
+            for (const file of fs.readdirSync('.')) {
+              if (!file.endsWith('.rpm') || file.endsWith('.src.rpm')) continue;
+              const existing = assets.find((asset) => asset.name === file);
+              if (existing) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: existing.id,
+                });
+              }
+              await github.rest.repos.uploadReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: context.payload.release.id,
+                name: file,
+                data: fs.readFileSync(file),
+              });
+            }
+
+  update-homebrew:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          path: yoinkc-src
+
+      - name: Compute source tarball metadata
+        id: source_tarball
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          URL="https://github.com/${REPO}/archive/refs/tags/${RELEASE_TAG}.tar.gz"
+          SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+        with:
+          repository: marrusl/homebrew-yoinkc
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Resolve dependencies and update formula
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          SOURCE_TARBALL_SHA: ${{ steps.source_tarball.outputs.sha256 }}
+          SOURCE_TARBALL_URL: ${{ steps.source_tarball.outputs.url }}
+        working-directory: yoinkc-src
+        run: |
+          python3 -m venv /tmp/resolve
+          /tmp/resolve/bin/pip install --quiet .
+          /tmp/resolve/bin/python3 - "$SOURCE_TARBALL_URL" "$SOURCE_TARBALL_SHA" \
+            ../homebrew-tap/Formula/yoinkc.rb << 'PYEOF'
+          import importlib.metadata
+          import json
+          import re
+          import sys
+          import urllib.request
+          from pathlib import Path
+
+          def normalize_package_name(name: str) -> str:
+              return re.sub(r"[-_.]+", "-", name).lower()
+
+          _, tarball_url, tarball_sha, formula_path = sys.argv
+          formula_path = Path(formula_path)
+
+          SKIP = {"yoinkc", "pip", "setuptools", "wheel"}
+
+          packages = sorted(
+              (
+                  normalize_package_name(d.metadata["Name"]),
+                  d.metadata["Version"],
+              )
+              for d in importlib.metadata.distributions()
+              if d.metadata["Name"].lower() not in SKIP
+          )
+
+          resource_blocks = []
+          for name, version in packages:
+              with urllib.request.urlopen(
+                  f"https://pypi.org/pypi/{name}/{version}/json"
+              ) as resp:
+                  data = json.loads(resp.read())
+              for fi in data["urls"]:
+                  if fi["packagetype"] == "sdist":
+                      resource_blocks.append(
+                          f'  resource "{name}" do\n'
+                          f'    url "{fi["url"]}"\n'
+                          f'    sha256 "{fi["digests"]["sha256"]}"\n'
+                          f"  end"
+                      )
+                      break
+              else:
+                  raise SystemExit(f"No sdist found on PyPI for {name} {version}")
+
+          formula = formula_path.read_text()
+          formula = re.sub(r'(  url ").*(")', rf"\g<1>{tarball_url}\2", formula)
+          formula = re.sub(
+              r'(  sha256 ").*(")', rf"\g<1>{tarball_sha}\2", formula, count=1
+          )
+
+          resource_text = "\n\n".join(resource_blocks)
+          resource_section_start = formula.find('  resource "')
+          resource_section_end = formula.find("\n  def install")
+          if resource_section_start == -1 or resource_section_end == -1:
+              raise SystemExit("Could not locate Homebrew resource section")
+          formula = (
+              formula[:resource_section_start]
+              + resource_text
+              + "\n\n"
+              + formula[resource_section_end + 1 :]
+          )
+
+          formula_path.write_text(formula)
+          print(f"Updated formula with {len(resource_blocks)} resource blocks")
+          PYEOF
+
+      - name: Open PR against tap repo
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        working-directory: homebrew-tap
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          BRANCH="update-${TAG}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin "$BRANCH":"refs/remotes/origin/$BRANCH" || true
+          git checkout -B "$BRANCH"
+          git add Formula/yoinkc.rb
+          if git diff --cached --quiet; then
+            echo "No formula changes to commit"
+            exit 0
+          fi
+          git commit -m "Update yoinkc to ${TAG}"
+          git push -u origin "HEAD:${BRANCH}" --force-with-lease
+          PR_BODY="Automated formula update from [yoinkc ${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG})."
+          if gh pr view "$BRANCH" >/dev/null 2>&1; then
+            gh pr edit "$BRANCH" \
+              --title "Update yoinkc to ${TAG}" \
+              --body "$PR_BODY"
+          else
+            gh pr create \
+              --title "Update yoinkc to ${TAG}" \
+              --body "$PR_BODY"
+          fi
