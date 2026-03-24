@@ -170,6 +170,10 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         import sys
         argv = sys.argv[1:]
 
+    host_root_explicit = any(
+        arg == "--host-root" or arg.startswith("--host-root=")
+        for arg in argv
+    )
     argv = _preprocess_argv(argv)
 
     parser = argparse.ArgumentParser(
@@ -217,6 +221,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
 
     args = parser.parse_args(argv)
+    args.host_root_explicit = host_root_explicit
 
     if args.command == "fleet":
         if not (1 <= args.min_prevalence <= 100):

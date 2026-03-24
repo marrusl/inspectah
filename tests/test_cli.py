@@ -65,6 +65,13 @@ def test_output_dir_long_flag():
     assert args.output_file is None
 
 
+def test_host_root_equal_syntax_counts_as_explicit():
+    """`--host-root=/path` must count as an explicit override."""
+    args = parse_args(["inspect", "--host-root=/host"])
+    assert args.host_root == Path("/host")
+    assert args.host_root_explicit is True
+
+
 def test_output_file_and_output_dir_mutually_exclusive():
     """-o and --output-dir together must be rejected."""
     with pytest.raises(SystemExit):
@@ -180,13 +187,18 @@ def test_main_exception_prints_traceback_in_debug_mode(capsys, monkeypatch):
 
 
 def test_main_git_init_failure_returns_error(capsys, tmp_path, monkeypatch):
-    """When init_git_repo returns False, main() exits with code 1 and a helpful message."""
+    """When github deps are available but init_git_repo fails, main() exits 1 with a helpful message."""
     monkeypatch.delenv("YOINKC_DEBUG", raising=False)
     snap = _make_main_snapshot()
+    # The packaged-install guard checks whether github/git are importable. Mock them
+    # as available so the test can reach the init_git_repo failure path it exercises.
+    fake_github = unittest.mock.MagicMock()
+    fake_git = unittest.mock.MagicMock()
     with (
         unittest.mock.patch("yoinkc.__main__.run_pipeline", return_value=snap),
         unittest.mock.patch("yoinkc.git_github.init_git_repo", return_value=False) as mock_init,
         unittest.mock.patch("yoinkc.git_github.add_and_commit") as mock_commit,
+        unittest.mock.patch.dict(sys.modules, {"github": fake_github, "git": fake_git}),
     ):
         from yoinkc.__main__ import main
         rc = main(["--output-dir", str(tmp_path), "--push-to-github", "owner/repo",

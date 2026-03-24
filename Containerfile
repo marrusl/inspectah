@@ -11,4 +11,6 @@ COPY src/ ./src/
 
 RUN pip install --no-cache-dir -e .
 
+ENV YOINKC_CONTAINER=1
+
 ENTRYPOINT ["yoinkc"]

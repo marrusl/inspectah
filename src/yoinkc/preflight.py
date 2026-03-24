@@ -21,6 +21,60 @@ def _debug(msg: str) -> None:
     _debug_fn("preflight", msg)
 
 
+_REGISTRY = "registry.redhat.io"
+_PACKAGED_MARKER = Path("/usr/share/yoinkc/.packaged")
+
+
+def is_container() -> bool:
+    """Return True when running inside the published yoinkc container image."""
+    return os.environ.get("YOINKC_CONTAINER") == "1"
+
+
+def is_packaged_install() -> bool:
+    """Return True for RPM/Homebrew installs that ship a packaged marker file."""
+    if _PACKAGED_MARKER.is_file():
+        return True
+
+    # Homebrew installs live under a Cellar prefix rather than /usr. Walk upward
+    # from the installed module path and look for the shared marker alongside it.
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "share" / "yoinkc" / ".packaged").is_file():
+            return True
+
+    # The Homebrew formula lives outside this repo, so also recognize the
+    # conventional Cellar install path even before the formula grows a marker.
+    parts = Path(__file__).resolve().parts
+    for idx, part in enumerate(parts[:-1]):
+        if part == "Cellar" and idx + 1 < len(parts) and parts[idx + 1] == "yoinkc":
+            return True
+
+    return False
+
+
+def requires_registry_login(
+    *,
+    target_image: str | None,
+    baseline_packages_file: Path | None,
+    no_baseline: bool,
+) -> bool:
+    """Return True when inspect will need auth for registry.redhat.io.
+
+    Air-gapped modes don't query the remote base image at all, and explicit
+    non-Red Hat images may come from a mirrored or local registry.
+    """
+    if no_baseline or baseline_packages_file is not None:
+        return False
+
+    if target_image is not None:
+        first_component = target_image.split("/", 1)[0]
+        if "." in first_component or ":" in first_component or first_component == "localhost":
+            return first_component == _REGISTRY
+        return False
+
+    # Automatic target-image resolution currently maps to Red Hat-hosted images.
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Individual checks
 # ---------------------------------------------------------------------------
@@ -145,7 +199,7 @@ def _check_selinux_label() -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Public entry point
+# Public entry point: container privilege checks
 # ---------------------------------------------------------------------------
 
 def check_container_privileges() -> List[str]:
@@ -156,3 +210,72 @@ def check_container_privileges() -> List[str]:
         if msg:
             errors.append(msg)
     return errors
+
+
+# ---------------------------------------------------------------------------
+# Native install preflight: podman availability and registry login
+# ---------------------------------------------------------------------------
+
+
+def check_podman() -> None:
+    """Verify podman is on PATH.
+
+    Called by the inspect subcommand for native (RPM/Homebrew) installs.
+    Raises RuntimeError with platform-appropriate install instructions if missing.
+    """
+    import shutil
+    if shutil.which("podman") is None:
+        raise RuntimeError(
+            "yoinkc inspect requires podman, which was not found on PATH.\n"
+            "Install it with:\n"
+            "  dnf install podman   # Fedora / RHEL / CentOS\n"
+            "  brew install podman  # macOS"
+        )
+    _debug("podman: ok")
+
+
+def check_registry_login() -> None:
+    """Verify authentication with registry.redhat.io.
+
+    If already logged in, returns immediately. Otherwise:
+    - Interactive terminal: prompts ``podman login`` and re-checks.
+    - Non-interactive: prints instructions and exits with code 1.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        ["podman", "login", "--get-login", _REGISTRY],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        _debug(f"registry login: ok ({result.stdout.strip()!r})")
+        return
+
+    _debug(f"registry login: not authenticated with {_REGISTRY}")
+
+    if sys.stdin.isatty():
+        print(
+            f"\nNot logged in to {_REGISTRY}. Running: podman login {_REGISTRY}",
+            file=sys.stderr,
+        )
+        subprocess.run(["podman", "login", _REGISTRY])
+        recheck = subprocess.run(
+            ["podman", "login", "--get-login", _REGISTRY],
+            capture_output=True,
+        )
+        if recheck.returncode != 0:
+            print(
+                f"Error: still not authenticated with {_REGISTRY}.\n"
+                f"Run: podman login {_REGISTRY}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        print(
+            f"Error: not authenticated with {_REGISTRY}.\n"
+            f"Run: podman login {_REGISTRY}",
+            file=sys.stderr,
+        )
+        sys.exit(1)

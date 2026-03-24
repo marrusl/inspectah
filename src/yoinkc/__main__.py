@@ -49,9 +49,59 @@ def _run_renderers(
 
 def _run_inspect(args) -> int:
     """Run the inspect pipeline (default subcommand)."""
+    from .preflight import is_container, is_packaged_install, requires_registry_login
+
+    packaged_native = is_packaged_install() and not is_container()
+    effective_host_root = args.host_root
+    if (
+        packaged_native
+        and not getattr(args, "host_root_explicit", False)
+        and effective_host_root == Path("/host")
+    ):
+        effective_host_root = Path("/")
+
+    # Packaged installs (RPM/Homebrew) do not bundle the github/git optional
+    # dependencies. Distinguish that case from a development install that is
+    # simply missing the optional extras.
+    if args.push_to_github:
+        try:
+            import github  # noqa: F401
+            import git  # noqa: F401
+        except ImportError:
+            if is_packaged_install():
+                print(
+                    "--push-to-github is not supported in packaged installs. "
+                    "To push results to GitHub, commit and push the output directory manually.",
+                    file=sys.stderr,
+                )
+            else:
+                print(
+                    "--push-to-github requires the github extras. "
+                    "Install them with: pip install 'yoinkc[github]'",
+                    file=sys.stderr,
+                )
+            return 1
+
+    # Native install podman/login checks are only needed outside the published
+    # container image. The container wrapper already handles them on the host.
+    if args.from_snapshot is None and not args.skip_preflight and not is_container():
+        from .preflight import check_podman, check_registry_login
+        try:
+            check_podman()
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if requires_registry_login(
+            target_image=args.target_image,
+            baseline_packages_file=args.baseline_packages,
+            no_baseline=args.no_baseline,
+        ):
+            check_registry_login()
+
     if (
         args.from_snapshot is None
-        and str(args.host_root) != "/"
+        and not packaged_native
+        and str(effective_host_root) != "/"
         and not args.skip_preflight
     ):
         from .preflight import check_container_privileges
@@ -80,7 +130,7 @@ def _run_inspect(args) -> int:
     )
 
     snapshot = run_pipeline(
-        host_root=args.host_root,
+        host_root=effective_host_root,
         run_inspectors=run_inspectors,
         run_renderers=renderers,
         from_snapshot_path=args.from_snapshot,
