@@ -85,9 +85,10 @@ def _run_inspect(args) -> int:
     # Native install podman/login checks are only needed outside the published
     # container image. The container wrapper already handles them on the host.
     if args.from_snapshot is None and not args.skip_preflight and not is_container():
-        from .preflight import check_podman, check_registry_login
+        from .preflight import check_podman, check_root, check_registry_login
         try:
             check_podman()
+            check_root()
         except RuntimeError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1

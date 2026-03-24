@@ -30,7 +30,8 @@ The packaged CLI supports the full subcommand surface (`inspect`, `fleet`,
 
 - **RPM (Linux):** All three subcommands. `inspect` is the primary use case
   — sysadmins run it on the hosts they are migrating. Podman is a hard
-  package dependency.
+  package dependency. `inspect` requires root (`sudo yoinkc inspect`) for
+  namespace access and reading protected host paths.
 - **Homebrew (macOS):** `fleet` and `refine` are the primary use cases —
   processing collected tarballs on a workstation. `inspect` works if podman
   is installed and pointed at a Linux machine, but is an edge case. Podman
@@ -195,6 +196,12 @@ The following logic moves from `run-yoinkc.sh` into Python code:
 - `inspect` subcommand checks `podman` is on PATH before proceeding
 - Clear error: "yoinkc requires podman. Install it with:
   dnf install podman / brew install podman"
+
+**Root privilege check:**
+- Only for `inspect` subcommand in native (non-container) installs
+- Checks `os.geteuid() == 0`, exits with: "yoinkc inspect requires root.
+  Run with: sudo yoinkc inspect"
+- Skipped for fleet, refine, `--from-snapshot`, and `--skip-preflight`
 
 **Registry login check:**
 - Only for `inspect` subcommand — inspect pulls bootc base images from

@@ -305,6 +305,135 @@ def test_podman_missing_ignored_for_refine():
 
 
 # ---------------------------------------------------------------------------
+# check_root (native install root privilege check)
+# ---------------------------------------------------------------------------
+
+def test_native_inspect_requires_root(capsys):
+    """Non-root native inspect exits with 'requires root' error."""
+    from yoinkc.__main__ import _run_inspect
+
+    args = _make_inspect_args()
+    snapshot = MagicMock(redactions=[])
+
+    with (
+        patch("yoinkc.preflight.is_packaged_install", return_value=True),
+        patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_registry_login"),
+        patch("os.geteuid", return_value=1000),
+        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+    ):
+        result = _run_inspect(args)
+
+    assert result == 1
+    captured = capsys.readouterr()
+    assert "yoinkc inspect requires root" in captured.err
+    assert "sudo yoinkc inspect" in captured.err
+
+
+def test_native_inspect_root_passes():
+    """Root native inspect proceeds without root error."""
+    from yoinkc.__main__ import _run_inspect
+
+    args = _make_inspect_args()
+    snapshot = MagicMock(redactions=[])
+
+    with (
+        patch("yoinkc.preflight.is_packaged_install", return_value=True),
+        patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_registry_login"),
+        patch("os.geteuid", return_value=0),
+        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+    ):
+        result = _run_inspect(args)
+
+    assert result == 0
+
+
+def test_root_check_skipped_in_container(monkeypatch):
+    """Container entrypoint skips root check regardless of euid."""
+    from yoinkc.__main__ import _run_inspect
+
+    monkeypatch.setenv("YOINKC_CONTAINER", "1")
+    args = _make_inspect_args()
+    snapshot = MagicMock(redactions=[])
+
+    with (
+        patch("yoinkc.preflight.check_root", create=True) as mock_root,
+        patch("os.geteuid", return_value=1000),
+        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
+        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+    ):
+        result = _run_inspect(args)
+
+    assert result == 0
+    mock_root.assert_not_called()
+
+
+def test_root_check_skipped_for_fleet(tmp_path):
+    """Fleet pipeline never checks for root."""
+    from yoinkc.__main__ import _run_fleet
+
+    args = argparse.Namespace(
+        input_dir=tmp_path,
+        min_prevalence=90,
+        output_file=None,
+        output_dir=None,
+        json_only=False,
+        no_hosts=False,
+    )
+    with patch("yoinkc.preflight.check_root", create=True) as mock_root:
+        _run_fleet(args)
+    mock_root.assert_not_called()
+
+
+def test_root_check_skipped_for_refine():
+    """Refine pipeline never checks for root."""
+    from yoinkc.__main__ import main
+    with (
+        patch("yoinkc.preflight.check_root", create=True) as mock_root,
+        patch("yoinkc.refine.run_refine", return_value=0),
+    ):
+        main(["refine", "nonexistent.tar.gz"])
+    mock_root.assert_not_called()
+
+
+def test_root_check_skipped_for_from_snapshot():
+    """inspect --from-snapshot does not require root."""
+    from yoinkc.__main__ import _run_inspect
+
+    args = _make_inspect_args(from_snapshot=Path("/tmp/snapshot.json"))
+    snapshot = MagicMock(redactions=[])
+
+    with (
+        patch("yoinkc.preflight.is_packaged_install", return_value=True),
+        patch("yoinkc.preflight.check_root", create=True) as mock_root,
+        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+    ):
+        result = _run_inspect(args)
+
+    assert result == 0
+    mock_root.assert_not_called()
+
+
+def test_root_check_skipped_with_skip_preflight():
+    """inspect --skip-preflight does not require root."""
+    from yoinkc.__main__ import _run_inspect
+
+    args = _make_inspect_args(skip_preflight=True)
+    snapshot = MagicMock(redactions=[])
+
+    with (
+        patch("yoinkc.preflight.is_packaged_install", return_value=True),
+        patch("yoinkc.preflight.check_root", create=True) as mock_root,
+        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+    ):
+        result = _run_inspect(args)
+
+    assert result == 0
+    mock_root.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # check_registry_login
 # ---------------------------------------------------------------------------
 
@@ -371,6 +500,7 @@ def test_registry_login_skipped_with_baseline_packages():
 
     with (
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login") as mock_login,
         patch("yoinkc.preflight.check_container_privileges", return_value=[]),
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
@@ -390,6 +520,7 @@ def test_registry_login_skipped_with_no_baseline():
 
     with (
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login") as mock_login,
         patch("yoinkc.preflight.check_container_privileges", return_value=[]),
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
@@ -409,6 +540,7 @@ def test_registry_login_skipped_with_non_redhat_target_image():
 
     with (
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login") as mock_login,
         patch("yoinkc.preflight.check_container_privileges", return_value=[]),
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
@@ -428,6 +560,7 @@ def test_registry_login_skipped_with_mirrored_redhat_path():
 
     with (
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login") as mock_login,
         patch("yoinkc.preflight.check_container_privileges", return_value=[]),
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
@@ -447,6 +580,7 @@ def test_registry_login_runs_for_redhat_target_image():
 
     with (
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login") as mock_login,
         patch("yoinkc.preflight.check_container_privileges", return_value=[]),
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
@@ -484,6 +618,7 @@ def test_packaged_install_defaults_to_local_host_root():
     with (
         patch("yoinkc.preflight.is_packaged_install", return_value=True),
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login"),
         patch("yoinkc.preflight.check_container_privileges", return_value=[] ) as mock_privs,
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
@@ -505,6 +640,7 @@ def test_packaged_install_preserves_explicit_host_root():
     with (
         patch("yoinkc.preflight.is_packaged_install", return_value=True),
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login"),
         patch("yoinkc.preflight.check_container_privileges", return_value=[] ) as mock_privs,
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
@@ -582,6 +718,7 @@ def test_push_to_github_works_with_deps():
         patch("yoinkc.preflight.is_packaged_install", return_value=True),
         patch.dict(sys.modules, {"github": MagicMock(), "git": MagicMock()}),
         patch("yoinkc.preflight.check_podman"),
+        patch("yoinkc.preflight.check_root"),
         patch("yoinkc.preflight.check_registry_login"),
         patch("yoinkc.preflight.check_container_privileges", return_value=[]),
         patch("yoinkc.__main__.run_pipeline", return_value=snapshot),

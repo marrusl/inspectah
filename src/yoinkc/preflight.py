@@ -217,6 +217,20 @@ def check_container_privileges() -> List[str]:
 # ---------------------------------------------------------------------------
 
 
+def check_root() -> None:
+    """Verify running as root for native inspect.
+
+    Native (RPM/Homebrew) installs need real root to nsenter into host
+    namespaces and read protected paths.  Raises RuntimeError with sudo
+    instructions if euid is not 0.
+    """
+    if os.geteuid() != 0:
+        raise RuntimeError(
+            "yoinkc inspect requires root. Run with: sudo yoinkc inspect"
+        )
+    _debug("root: ok")
+
+
 def check_podman() -> None:
     """Verify podman is on PATH.
 

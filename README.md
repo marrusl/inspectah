@@ -55,6 +55,21 @@ Environment variables for customization:
 
 > **RHEL hosts:** The base image on `registry.redhat.io` requires authentication. Run `sudo podman login registry.redhat.io` on the host before running yoinkc, or use `--baseline-packages FILE` as an alternative. CentOS Stream and Fedora images are on public registries and need no authentication.
 
+### Native install (RPM/Homebrew)
+
+If installed via `dnf` or `brew`, run inspect directly:
+
+```bash
+sudo yoinkc inspect
+```
+
+`fleet` and `refine` do not require root:
+
+```bash
+yoinkc fleet ./tarballs/
+yoinkc refine ./fleet-output.tar.gz
+```
+
 ---
 
 ## Refine
