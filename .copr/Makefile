@@ -12,5 +12,5 @@ srpm:
 	git archive --format=tar.gz --prefix=$(NAME)-$(VERSION)/ HEAD \
 	    > $(RPMBUILD)/SOURCES/$(TARBALL)
 	cp $(SPECFILE) $(RPMBUILD)/SPECS/
-	rpmbuild -bs --define "_topdir $(RPMBUILD)" $(RPMBUILD)/SPECS/$(SPECFILE)
+	rpmbuild -bs --define "_topdir $(RPMBUILD)" --define "pyproject_version $(VERSION)" $(RPMBUILD)/SPECS/$(SPECFILE)
 	cp $(RPMBUILD)/SRPMS/*.src.rpm $(outdir)/

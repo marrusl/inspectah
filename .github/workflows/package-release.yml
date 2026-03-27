@@ -27,11 +27,11 @@ jobs:
 
       - name: Build SRPM
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           mkdir -p ~/rpmbuild/SOURCES
           tar czf ~/rpmbuild/SOURCES/yoinkc-${VERSION}.tar.gz \
             --transform "s,^\.,yoinkc-${VERSION}," --exclude-vcs .
-          rpmbuild -bs yoinkc.spec
+          rpmbuild -bs yoinkc.spec --define "pyproject_version ${VERSION}"
           cp ~/rpmbuild/SRPMS/*.src.rpm .
 
       - name: Upload SRPM to release
