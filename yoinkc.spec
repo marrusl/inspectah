@@ -1,5 +1,5 @@
 Name:           yoinkc
-Version:        0.5.0
+Version:        0.5.0-rc1
 Release:        1%{?dist}
 Summary:        Inspect RHEL/CentOS hosts and produce bootc image artifacts
 

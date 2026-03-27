@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "yoinkc"
-version = "0.5.0"
+version = "0.5.0-rc1"
 description = "Inspect RHEL/CentOS hosts and produce bootc image artifacts"
 readme = "README.md"
 requires-python = ">=3.11"
