@@ -96,14 +96,18 @@ jobs:
           dnf config-manager --set-enabled crb
 
       - name: Install build tools
-        run: dnf install -y rpm-build dnf-plugins-core
+        run: dnf install -y rpm-build dnf-plugins-core pyproject-rpm-macros
 
       - name: Install build dependencies from SRPM
         run: dnf builddep -y *.src.rpm
 
       - name: Build RPM
         run: |
-          rpmbuild --rebuild *.src.rpm
+          VERSION=$(rpm -qp --queryformat '%{VERSION}' *.src.rpm 2>/dev/null || echo "")
+          if [ -z "$VERSION" ] || echo "$VERSION" | grep -q pyproject; then
+            VERSION=$(echo *.src.rpm | sed 's/^yoinkc-//;s/-1\..*//')
+          fi
+          rpmbuild --rebuild *.src.rpm --define "pyproject_version $VERSION"
           cp ~/rpmbuild/RPMS/noarch/*.rpm .
 
       - name: Upload RPM to release
