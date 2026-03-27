@@ -1,5 +1,5 @@
 Name:           yoinkc
-Version:        %{pyproject_version}
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Inspect RHEL/CentOS hosts and produce bootc image artifacts
 

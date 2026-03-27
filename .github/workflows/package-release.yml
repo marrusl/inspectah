@@ -27,11 +27,17 @@ jobs:
 
       - name: Build SRPM
         run: |
-          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          SPEC_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' yoinkc.spec)
+          PYPROJECT_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$SPEC_VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "Version mismatch: yoinkc.spec=$SPEC_VERSION pyproject.toml=$PYPROJECT_VERSION" >&2
+            exit 1
+          fi
+          VERSION=$SPEC_VERSION
           mkdir -p ~/rpmbuild/SOURCES
           tar czf ~/rpmbuild/SOURCES/yoinkc-${VERSION}.tar.gz \
             --transform "s,^\.,yoinkc-${VERSION}," --exclude-vcs .
-          rpmbuild -bs yoinkc.spec --define "pyproject_version ${VERSION}"
+          rpmbuild -bs yoinkc.spec
           cp ~/rpmbuild/SRPMS/*.src.rpm .
 
       - name: Upload SRPM to release
@@ -96,18 +102,14 @@ jobs:
           dnf config-manager --set-enabled crb
 
       - name: Install build tools
-        run: dnf install -y rpm-build dnf-plugins-core pyproject-rpm-macros
+        run: dnf install -y rpm-build dnf-plugins-core
 
       - name: Install build dependencies from SRPM
         run: dnf builddep -y *.src.rpm
 
       - name: Build RPM
         run: |
-          VERSION=$(rpm -qp --queryformat '%{VERSION}' *.src.rpm 2>/dev/null || echo "")
-          if [ -z "$VERSION" ] || echo "$VERSION" | grep -q pyproject; then
-            VERSION=$(echo *.src.rpm | sed 's/^yoinkc-//;s/-1\..*//')
-          fi
-          rpmbuild --rebuild *.src.rpm --define "pyproject_version $VERSION"
+          rpmbuild --rebuild *.src.rpm
           cp ~/rpmbuild/RPMS/noarch/*.rpm .
 
       - name: Upload RPM to release
