@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shutil
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -15,8 +18,8 @@ def add_architect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "input_dir",
         type=Path,
-        metavar="INPUT_DIR",
-        help="Directory containing refined fleet tarballs (.tar.gz)",
+        metavar="INPUT",
+        help="Directory or tarball containing refined fleet tarballs (.tar.gz)",
     )
     parser.add_argument(
         "--port",
@@ -38,14 +41,38 @@ def add_architect_args(parser: argparse.ArgumentParser) -> None:
 
 def run_architect(args: argparse.Namespace) -> int:
     """Entry point for the architect subcommand."""
+    input_path = args.input_dir
+    if not input_path.exists():
+        print(f"Error: {input_path} does not exist", file=sys.stderr)
+        return 1
+
+    tmp_dir = None
+    if input_path.is_file() and input_path.name.endswith(".tar.gz"):
+        tmp_dir = Path(tempfile.mkdtemp(prefix="architect-bundle-"))
+        try:
+            with tarfile.open(input_path, "r:gz") as tar:
+                tar.extractall(tmp_dir, filter="data")
+        except tarfile.TarError as e:
+            print(f"Error: failed to extract bundle {input_path}: {e}", file=sys.stderr)
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            return 1
+        input_dir = tmp_dir
+        logger.info("Extracted bundle to %s", tmp_dir)
+    else:
+        input_dir = input_path
+
+    try:
+        return _run_architect_inner(args, input_dir)
+    finally:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _run_architect_inner(args: argparse.Namespace, input_dir: Path) -> int:
+    """Core architect logic after input resolution."""
     from yoinkc.architect.loader import load_refined_fleets
     from yoinkc.architect.analyzer import analyze_fleets
     from yoinkc.architect.server import start_server
-
-    input_dir = args.input_dir
-    if not input_dir.exists():
-        print(f"Error: directory {input_dir} does not exist", file=sys.stderr)
-        return 1
 
     fleets = load_refined_fleets(input_dir)
     if not fleets:

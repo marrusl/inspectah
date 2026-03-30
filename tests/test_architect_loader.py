@@ -93,3 +93,31 @@ class TestLoadRefinedFleets:
 
         fleets = load_refined_fleets(tmp_path)
         assert len(fleets) == 1
+
+    def test_loads_from_tarball_of_tarballs(self, tmp_path):
+        """A .tar.gz bundle containing fleet tarballs should be extractable
+        and loadable via the standard loader path."""
+        # Create fleet tarballs in a staging directory
+        staging = tmp_path / "staging"
+        staging.mkdir()
+        snap1 = _make_snapshot("web-fleet", ["httpd", "openssl"])
+        snap2 = _make_snapshot("db-fleet", ["postgresql", "openssl"])
+        _write_tarball(staging, "web-fleet", snap1)
+        _write_tarball(staging, "db-fleet", snap2)
+
+        # Bundle them into a tarball-of-tarballs
+        bundle_path = tmp_path / "architect-demo-bundle.tar.gz"
+        with tarfile.open(bundle_path, "w:gz") as bundle:
+            for child in sorted(staging.iterdir()):
+                bundle.add(child, arcname=child.name)
+
+        # Extract and load through the normal loader
+        extract_dir = tmp_path / "extracted"
+        extract_dir.mkdir()
+        with tarfile.open(bundle_path, "r:gz") as bundle:
+            bundle.extractall(extract_dir, filter="data")
+
+        fleets = load_refined_fleets(extract_dir)
+        assert len(fleets) == 2
+        names = {f.name for f in fleets}
+        assert names == {"web-fleet", "db-fleet"}
