@@ -70,14 +70,14 @@ def create_handler(
         def do_POST(self) -> None:
             path = self.path.split("?")[0]
             if path == "/api/move":
-                length = int(self.headers.get("Content-Length", 0))
-                body = json.loads(self.rfile.read(length))
                 try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length))
                     self._topology.move_package(
                         body["package"], body["from"], body["to"],
                     )
                     self._send_json(200, self._topology.to_dict())
-                except (ValueError, KeyError) as e:
+                except (ValueError, KeyError, json.JSONDecodeError) as e:
                     self._send_json(400, {"error": str(e)})
             else:
                 self._send(404, b"Not found", "text/plain")
