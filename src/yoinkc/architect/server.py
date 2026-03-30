@@ -77,7 +77,7 @@ def create_handler(
                         body["package"], body["from"], body["to"],
                     )
                     self._send_json(200, self._topology.to_dict())
-                except (ValueError, KeyError, json.JSONDecodeError) as e:
+                except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
                     self._send_json(400, {"error": str(e)})
             else:
                 self._send(404, b"Not found", "text/plain")

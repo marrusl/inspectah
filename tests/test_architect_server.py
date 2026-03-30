@@ -106,6 +106,17 @@ class TestMoveEndpoint:
             urllib.request.urlopen(req)
         assert exc_info.value.code == 400
 
+    def test_move_non_object_json_returns_400(self, server_url):
+        req = urllib.request.Request(
+            f"{server_url}/api/move",
+            data=b"[]",
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req)
+        assert exc_info.value.code == 400
+
 
 class TestExportEndpoint:
     def test_export_returns_tarball(self, server_url):

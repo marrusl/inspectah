@@ -1,6 +1,7 @@
 """Tests for architect fleet tarball loader."""
 
 import json
+import sys
 import tarfile
 import pytest
 from io import BytesIO
@@ -130,7 +131,10 @@ class TestLoadRefinedFleets:
         extract_dir = tmp_path / "extracted"
         extract_dir.mkdir()
         with tarfile.open(bundle_path, "r:gz") as bundle:
-            bundle.extractall(extract_dir, filter="data")
+            if sys.version_info >= (3, 12):
+                bundle.extractall(extract_dir, filter="data")
+            else:
+                bundle.extractall(extract_dir)
 
         fleets = load_refined_fleets(extract_dir)
         assert len(fleets) == 2
