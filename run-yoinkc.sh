@@ -18,7 +18,7 @@ _open_browser() {
 # --- Detect subcommand ---
 _mode="inspect"
 case "${1:-}" in
-  fleet|refine) _mode="$1"; shift ;;
+  fleet|refine|architect) _mode="$1"; shift ;;
 esac
 
 # --- Ensure podman is available ---
@@ -198,5 +198,60 @@ case "$_mode" in
       -p 8642:8642 \
       -v "$TARBALL":/input/"$TARBALL_NAME":ro \
       "$IMAGE" refine --port 8642 --bind 0.0.0.0 --no-browser "/input/$TARBALL_NAME" "$@"
+    ;;
+
+  architect)
+    if [ $# -eq 0 ]; then
+      echo "Usage: $(basename "$0") architect <tarball-or-dir> [--no-browser] [extra args...]" >&2
+      exit 1
+    fi
+
+    # Check for --no-browser before consuming the input arg
+    _launch_browser=true
+    INPUT_PATH="$1"
+    shift
+    for _arg in "$@"; do
+      case "$_arg" in --no-browser) _launch_browser=false ;; esac
+    done
+
+    # Handle both tarball and directory input
+    if [ -f "$INPUT_PATH" ]; then
+      # Tarball input
+      INPUT_FULL="$(cd "$(dirname "$INPUT_PATH")" && pwd)/$(basename "$INPUT_PATH")"
+      INPUT_NAME="$(basename "$INPUT_FULL")"
+      MOUNT_SPEC="$INPUT_FULL:/input/$INPUT_NAME:ro"
+      CMD_ARG="/input/$INPUT_NAME"
+    elif [ -d "$INPUT_PATH" ]; then
+      # Directory input
+      INPUT_FULL="$(cd "$INPUT_PATH" && pwd)"
+      MOUNT_SPEC="$INPUT_FULL:/input:ro"
+      CMD_ARG="/input"
+    else
+      echo "ERROR: $INPUT_PATH is neither a file nor a directory" >&2
+      exit 1
+    fi
+
+    echo "=== Running yoinkc architect ==="
+    echo "  Dashboard will be at: http://localhost:8643"
+
+    # Poll for server readiness and open browser on the host
+    if $_launch_browser; then
+      ( _tries=0
+        while ! curl -sf http://localhost:8643/api/health >/dev/null 2>&1; do
+          _tries=$((_tries + 1))
+          if [ "$_tries" -ge 60 ]; then break; fi
+          sleep 0.5
+        done
+        if [ "$_tries" -lt 60 ]; then _open_browser "http://localhost:8643"; fi
+      ) &
+      _browser_pid=$!
+      trap 'kill "$_browser_pid" 2>/dev/null || true' EXIT
+    fi
+
+    podman run --rm --pull=always \
+      --security-opt label=disable \
+      -p 8643:8643 \
+      -v "$MOUNT_SPEC" \
+      "$IMAGE" architect --port 8643 --bind 0.0.0.0 --no-browser "$CMD_ARG" "$@"
     ;;
 esac
