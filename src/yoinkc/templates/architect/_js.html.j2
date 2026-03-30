@@ -128,7 +128,9 @@
     }
 
     if (base) {
-      html += renderLayerCard(base, false, -1);
+      // Single-fleet: base IS the fleet, so match its sidebar color
+      var baseFleetIdx = (topology.fleets.length === 1) ? 0 : -1;
+      html += renderLayerCard(base, false, baseFleetIdx);
     }
 
     if (derived.length > 0) {

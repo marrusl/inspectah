@@ -131,14 +131,18 @@ body { display: flex; flex-direction: column; }
 }
 .layer-card.layer-selected {
   background: var(--pf-t--global--background--color--primary--default, rgba(0,102,204,0.12));
-  border-color: var(--pf-t--global--color--brand--default, #0066cc);
+  border-top-color: var(--pf-t--global--color--brand--default, #0066cc);
+  border-right-color: var(--pf-t--global--color--brand--default, #0066cc);
+  border-bottom-color: var(--pf-t--global--color--brand--default, #0066cc);
   border-left-width: 3px;
 }
 .layer-card.layer-derived {
   margin-left: 2.5rem;
 }
 .layer-card.layer-derived.layer-selected {
-  border-color: var(--pf-t--global--color--brand--default, #0066cc);
+  border-top-color: var(--pf-t--global--color--brand--default, #0066cc);
+  border-right-color: var(--pf-t--global--color--brand--default, #0066cc);
+  border-bottom-color: var(--pf-t--global--color--brand--default, #0066cc);
 }
 
 /* Layer card fleet color accents — match sidebar fleet colors */
@@ -595,12 +599,220 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ── Light theme adjustments ─────────────────────────────────────────── */
+html:not(.pf-v6-theme-dark) body {
+  background: #f0f0f0;
+  color: #151515;
+}
+
+/* Masthead */
+html:not(.pf-v6-theme-dark) .pf-v6-c-masthead {
+  background: #fff;
+  border-bottom: 1px solid #d2d2d2;
+  color: #151515;
+}
+
+/* Sidebar */
+html:not(.pf-v6-theme-dark) .architect-sidebar {
+  background: #fff;
+  border-right-color: #d2d2d2;
+}
+html:not(.pf-v6-theme-dark) .sidebar-title {
+  color: #6a6e73;
+}
+html:not(.pf-v6-theme-dark) .fleet-card {
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .fleet-card:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+html:not(.pf-v6-theme-dark) .fleet-card.fleet-active {
+  background: rgba(0, 0, 0, 0.06);
+}
+html:not(.pf-v6-theme-dark) .fleet-card-meta {
+  color: #6a6e73;
+}
+
+/* Center panel */
+html:not(.pf-v6-theme-dark) .architect-center {
+  background: #f0f0f0;
+  border-right-color: #d2d2d2;
+}
+html:not(.pf-v6-theme-dark) .layer-tree-title {
+  color: #6a6e73;
+}
+html:not(.pf-v6-theme-dark) .layer-card {
+  background: #fff;
+  border-top-color: #d2d2d2;
+  border-right-color: #d2d2d2;
+  border-bottom-color: #d2d2d2;
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .layer-card:hover {
+  background: #f5f5f5;
+}
+html:not(.pf-v6-theme-dark) .layer-card.layer-selected {
+  background: rgba(0, 102, 204, 0.06);
+  border-top-color: #0066cc;
+  border-right-color: #0066cc;
+  border-bottom-color: #0066cc;
+}
+html:not(.pf-v6-theme-dark) .layer-card-detail {
+  color: #6a6e73;
+}
+html:not(.pf-v6-theme-dark) .layer-color-base {
+  border-left-color: #8a8d90;
+}
+html:not(.pf-v6-theme-dark) .derived-group::before {
+  border-left-color: #d2d2d2;
+}
+html:not(.pf-v6-theme-dark) .derived-connector::before {
+  border-top-color: #d2d2d2;
+}
+html:not(.pf-v6-theme-dark) .derived-connector:last-child::after {
+  background: #f0f0f0;
+}
+
+/* Badges */
+html:not(.pf-v6-theme-dark) .layer-badge-pkg {
+  background: rgba(0, 0, 0, 0.06);
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .layer-badge-hosts {
+  background: rgba(62, 134, 53, 0.1);
+  color: #1e4f18;
+}
+html:not(.pf-v6-theme-dark) .layer-badge-fanout {
+  background: rgba(240, 171, 0, 0.1);
+  color: #795600;
+}
+html:not(.pf-v6-theme-dark) .layer-badge-turbulence {
+  background: rgba(43, 154, 243, 0.1);
+  color: #004080;
+}
+
+/* Right drawer */
+html:not(.pf-v6-theme-dark) .architect-drawer {
+  background: #fff;
+  border-left-color: #d2d2d2;
+}
+html:not(.pf-v6-theme-dark) .drawer-header {
+  border-bottom-color: #d2d2d2;
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .drawer-header-meta {
+  color: #6a6e73;
+}
+html:not(.pf-v6-theme-dark) .drawer-section-label {
+  background: #f5f5f5;
+  border-bottom-color: #d2d2d2;
+  color: #6a6e73;
+}
+html:not(.pf-v6-theme-dark) .pkg-row {
+  border-bottom-color: #e0e0e0;
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .pkg-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+html:not(.pf-v6-theme-dark) .config-row {
+  border-bottom-color: #e0e0e0;
+  color: #6a6e73;
+}
+html:not(.pf-v6-theme-dark) .drawer-empty {
+  color: #6a6e73;
+}
+
+/* Move/copy menus & buttons */
 html:not(.pf-v6-theme-dark) .move-menu {
   background: #fff;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  border-color: #d2d2d2;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
 }
+html:not(.pf-v6-theme-dark) .move-btn,
+html:not(.pf-v6-theme-dark) .moveup-btn,
+html:not(.pf-v6-theme-dark) .layer-preview-btn {
+  border-color: #b8bbbe;
+  color: #0066cc;
+}
+html:not(.pf-v6-theme-dark) .move-btn:hover,
+html:not(.pf-v6-theme-dark) .moveup-btn:hover,
+html:not(.pf-v6-theme-dark) .layer-preview-btn:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+html:not(.pf-v6-theme-dark) .move-menu-item {
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .move-menu-item:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+/* Impact badges (light) */
+html:not(.pf-v6-theme-dark) .impact-low {
+  background: rgba(62, 134, 53, 0.12);
+  color: #1e4f18;
+}
+html:not(.pf-v6-theme-dark) .impact-med {
+  background: rgba(240, 171, 0, 0.12);
+  color: #795600;
+}
+html:not(.pf-v6-theme-dark) .impact-high {
+  background: rgba(201, 25, 11, 0.12);
+  color: #a30000;
+}
+
+/* Bottom toolbar */
+html:not(.pf-v6-theme-dark) .architect-toolbar {
+  background: #fff;
+  border-top-color: #d2d2d2;
+}
+html:not(.pf-v6-theme-dark) .toolbar-summary {
+  color: #6a6e73;
+}
+
+/* Toast */
+html:not(.pf-v6-theme-dark) .architect-toast {
+  background: #fff;
+  color: #151515;
+  border: 1px solid #d2d2d2;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+/* Modal */
+html:not(.pf-v6-theme-dark) .cf-modal-overlay {
+  background: rgba(0, 0, 0, 0.4);
+}
+html:not(.pf-v6-theme-dark) .cf-modal {
+  background: #fff;
+  border-color: #d2d2d2;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+html:not(.pf-v6-theme-dark) .cf-modal-header {
+  border-bottom-color: #d2d2d2;
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .cf-modal-close {
+  color: #6a6e73;
+}
+html:not(.pf-v6-theme-dark) .cf-modal-close:hover {
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .cf-modal-body {
+  background: #f5f5f5;
+  color: #151515;
+}
+html:not(.pf-v6-theme-dark) .cf-kw {
+  color: #004080;
+}
+
+/* Scrollbars (light) */
 html:not(.pf-v6-theme-dark) .architect-sidebar::-webkit-scrollbar-thumb,
-html:not(.pf-v6-theme-dark) .drawer-body::-webkit-scrollbar-thumb {
-  background: rgba(0,0,0,0.2);
+html:not(.pf-v6-theme-dark) .drawer-body::-webkit-scrollbar-thumb,
+html:not(.pf-v6-theme-dark) .architect-center::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+/* Theme toggle button */
+html:not(.pf-v6-theme-dark) #theme-toggle {
+  color: #151515;
 }
 </style>
