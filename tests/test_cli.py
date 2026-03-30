@@ -167,7 +167,7 @@ def test_main_exception_prints_hint(capsys, monkeypatch):
     monkeypatch.delenv("YOINKC_DEBUG", raising=False)
     with unittest.mock.patch("yoinkc.__main__.run_pipeline", side_effect=RuntimeError("boom")):
         from yoinkc.__main__ import main
-        rc = main([])
+        rc = main(["--skip-preflight"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "boom" in err
@@ -179,7 +179,7 @@ def test_main_exception_prints_traceback_in_debug_mode(capsys, monkeypatch):
     monkeypatch.setenv("YOINKC_DEBUG", "1")
     with unittest.mock.patch("yoinkc.__main__.run_pipeline", side_effect=RuntimeError("kaboom")):
         from yoinkc.__main__ import main
-        rc = main([])
+        rc = main(["--skip-preflight"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "kaboom" in err
