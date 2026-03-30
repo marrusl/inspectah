@@ -20,31 +20,24 @@
       </div>
     </header>
 
-    {# ── Three-column layout ──────────────────────────────────────────── #}
+    {# ── Three-column layout (plain divs, no PF6 page structure) ─────── #}
     <div class="architect-layout">
 
       {# ── Left: Fleet sidebar ─────────────────────────────────────────── #}
-      <div class="pf-v6-c-page__sidebar architect-sidebar" id="fleet-sidebar">
-        <div class="pf-v6-c-page__sidebar-body">
-          <nav class="pf-v6-c-nav" role="navigation" aria-label="Fleet navigation">
-            <section class="pf-v6-c-nav__section">
-              <h2 class="pf-v6-c-nav__section-title">Fleets</h2>
-              <ul class="pf-v6-c-nav__list" id="fleet-list">
-                <!-- JS renders fleet items -->
-              </ul>
-            </section>
-          </nav>
+      <div class="architect-sidebar" id="fleet-sidebar">
+        <div class="sidebar-title">Fleets</div>
+        <div id="fleet-list">
+          <!-- JS renders fleet items -->
         </div>
       </div>
 
       {# ── Center: Layer topology tree ─────────────────────────────────── #}
-      <main class="pf-v6-c-page__main" id="main-content">
-        <section class="pf-v6-c-page__main-section">
-          <div class="pf-v6-c-content" id="layer-tree">
-            <!-- JS renders layer cards -->
-          </div>
-        </section>
-      </main>
+      <div class="architect-center" id="main-content">
+        <div class="layer-tree-title">Layer Topology</div>
+        <div id="layer-tree">
+          <!-- JS renders layer cards -->
+        </div>
+      </div>
 
       {# ── Right: Package drawer ──────────────────────────────────────── #}
       <div class="architect-drawer" id="package-drawer">

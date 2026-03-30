@@ -52,17 +52,11 @@ body { display: flex; flex-direction: column; }
 
 /* ── Sidebar (fleets) ────────────────────────────────────────────────── */
 .architect-sidebar {
-  /* Override PF6 sidebar defaults that break CSS grid child behavior */
-  opacity: 1 !important;
-  transform: none !important;
-  position: static !important;
-  display: block !important;
-  width: auto !important;
-  max-width: none !important;
   overflow-y: auto;
   border-right: 1px solid var(--pf-t--global--border--color--default, #444);
+  padding-top: var(--pf-t--global--spacer--sm, 0.5rem);
 }
-.architect-sidebar .pf-v6-c-nav__section-title {
+.sidebar-title {
   text-transform: uppercase;
   font-size: 0.6875rem;
   font-weight: 600;
@@ -105,11 +99,12 @@ body { display: flex; flex-direction: column; }
 .fleet-color-5 { border-left-color: #ec7a08; }
 
 /* ── Center: Layer topology tree ─────────────────────────────────────── */
-.architect-layout > .pf-v6-c-page__main {
+.architect-center {
   overflow-y: auto;
   overflow-x: hidden;
   padding: var(--pf-t--global--spacer--lg, 1.5rem);
-  min-width: 0;  /* prevent grid blowout from long content */
+  min-width: 0;
+  border-right: 1px solid var(--pf-t--global--border--color--default, #444);
 }
 
 .layer-tree-title {
@@ -426,18 +421,18 @@ body { display: flex; flex-direction: column; }
 /* ── Scrollbar styling (dark) ────────────────────────────────────────── */
 .architect-sidebar::-webkit-scrollbar,
 .drawer-body::-webkit-scrollbar,
-.pf-v6-c-page__main::-webkit-scrollbar {
+.architect-center::-webkit-scrollbar {
   width: 6px;
 }
 .architect-sidebar::-webkit-scrollbar-thumb,
 .drawer-body::-webkit-scrollbar-thumb,
-.pf-v6-c-page__main::-webkit-scrollbar-thumb {
+.architect-center::-webkit-scrollbar-thumb {
   background: rgba(255,255,255,0.15);
   border-radius: 3px;
 }
 .architect-sidebar::-webkit-scrollbar-track,
 .drawer-body::-webkit-scrollbar-track,
-.pf-v6-c-page__main::-webkit-scrollbar-track {
+.architect-center::-webkit-scrollbar-track {
   background: transparent;
 }
 
