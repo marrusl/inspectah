@@ -107,9 +107,13 @@
       html += renderLayerCard(base, false);
     }
 
-    for (var j = 0; j < derived.length; j++) {
-      html += '<div class="tree-connector">';
-      html += renderLayerCard(derived[j], true);
+    if (derived.length > 0) {
+      html += '<div class="derived-group">';
+      for (var j = 0; j < derived.length; j++) {
+        html += '<div class="derived-connector">';
+        html += renderLayerCard(derived[j], true);
+        html += '</div>';
+      }
       html += '</div>';
     }
 
