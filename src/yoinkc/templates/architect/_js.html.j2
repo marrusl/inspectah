@@ -185,7 +185,7 @@
 
     if (isDerived) {
       // "Move up" button — moves to parent layer
-      actionsHtml += '<button class="moveup-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(fromLayer.parent) + '">\u2191 Move up</button>';
+      actionsHtml += '<button class="moveup-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(fromLayer.parent) + '">\u2191 Move up to ' + esc(fromLayer.parent) + '</button>';
 
       // "Copy to" dropdown — sibling derived layers only
       var siblings = [];
