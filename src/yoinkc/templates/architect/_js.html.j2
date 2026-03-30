@@ -129,6 +129,7 @@
       '<div class="layer-card-header">' +
         '<span class="layer-card-name">' + esc(layer.name) + '</span>' +
         '<div class="layer-card-badges">' +
+          '<button class="layer-preview-btn" data-preview-layer="' + esc(layer.name) + '" title="View Containerfile">\uD83D\uDCC4 View</button>' +
           '<span class="layer-badge layer-badge-pkg">' + layer.packages.length + ' pkgs</span>' +
           (layer.fan_out > 0 ? '<span class="layer-badge layer-badge-fanout" title="Fan-out: number of downstream images">fan-out: ' + layer.fan_out + '</span>' : '') +
           '<span class="layer-badge layer-badge-turbulence" title="Turbulence: rebuild impact score">turbulence: ' + layer.turbulence.toFixed(1) + '</span>' +
@@ -179,33 +180,41 @@
   }
 
   function renderPackageRow(pkg, fromLayer) {
-    var targets = [];
-    for (var i = 0; i < topology.layers.length; i++) {
-      if (topology.layers[i].name !== fromLayer.name) {
-        targets.push(topology.layers[i]);
+    var isDerived = fromLayer.parent !== null;
+    var actionsHtml = '';
+
+    if (isDerived) {
+      // "Move up" button — moves to parent layer
+      actionsHtml += '<button class="moveup-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(fromLayer.parent) + '">\u2191 Move up</button>';
+
+      // "Copy to" dropdown — sibling derived layers only
+      var siblings = [];
+      for (var i = 0; i < topology.layers.length; i++) {
+        var l = topology.layers[i];
+        if (l.parent !== null && l.name !== fromLayer.name) {
+          siblings.push(l);
+        }
+      }
+
+      if (siblings.length > 0) {
+        var menuOpen = (openMenuPkg === fromLayer.name + '/' + pkg) ? ' open' : '';
+        actionsHtml += '<div class="move-dropdown">' +
+          '<button class="move-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '">Copy to \u25BE</button>' +
+          '<div class="move-menu' + menuOpen + '" data-menu-for="' + esc(fromLayer.name + '/' + pkg) + '">';
+        for (var s = 0; s < siblings.length; s++) {
+          actionsHtml += '<button class="move-menu-item copy-action" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(siblings[s].name) + '">' +
+            '\u2192 ' + esc(siblings[s].name) +
+          '</button>';
+        }
+        actionsHtml += '<div class="move-impact" data-impact-for="' + esc(fromLayer.name + '/' + pkg) + '"></div>';
+        actionsHtml += '</div></div>';
       }
     }
-
-    var menuOpen = (openMenuPkg === fromLayer.name + '/' + pkg) ? ' open' : '';
-
-    var moveHtml = '';
-    if (targets.length > 0) {
-      moveHtml = '<div class="move-dropdown">' +
-        '<button class="move-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '">Move to \u25BE</button>' +
-        '<div class="move-menu' + menuOpen + '" data-menu-for="' + esc(fromLayer.name + '/' + pkg) + '">';
-      for (var t = 0; t < targets.length; t++) {
-        moveHtml += '<button class="move-menu-item" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(targets[t].name) + '">' +
-          '\u2192 ' + esc(targets[t].name) +
-        '</button>';
-      }
-      // Impact tooltip area
-      moveHtml += '<div class="move-impact" data-impact-for="' + esc(fromLayer.name + '/' + pkg) + '"></div>';
-      moveHtml += '</div></div>';
-    }
+    // Base layer packages: no move/copy buttons
 
     return '<div class="pkg-row">' +
       '<span class="pkg-name"><span class="pkg-icon">\uD83D\uDCE6</span> ' + esc(pkg) + '</span>' +
-      moveHtml +
+      (actionsHtml ? '<span class="pkg-actions">' + actionsHtml + '</span>' : '') +
     '</div>';
   }
 
@@ -242,6 +251,64 @@
       ' downstream image' + (target.fan_out !== 1 ? 's' : '') +
       '. Turbulence: ' + target.turbulence.toFixed(1) + ' \u2192 ' + newTurbulence.toFixed(1);
   }
+
+  function moveUp(pkg, from, to) {
+    movePackage(pkg, from, to);
+  }
+
+  function copyPackage(pkg, from, to) {
+    fetch('/api/copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ package: pkg, from: from, to: to }),
+    }).then(function(resp) {
+      if (!resp.ok) {
+        return resp.json().then(function(d) {
+          throw new Error(d.error || 'HTTP ' + resp.status);
+        });
+      }
+      return resp.json();
+    }).then(function(data) {
+      topology = data;
+      openMenuPkg = null;
+      showToast('Copied ' + pkg + ' to ' + to, 3000);
+      render();
+    }).catch(function(err) {
+      showToast('Copy failed: ' + err.message, 5000);
+    });
+  }
+
+  // ── Containerfile preview modal ─────────────────────────────────────
+  function showCfModal(layerName) {
+    fetch('/api/preview/' + encodeURIComponent(layerName)).then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.text();
+    }).then(function(content) {
+      var modal = document.getElementById('containerfile-modal');
+      document.getElementById('cf-modal-title').textContent = layerName + '/Containerfile';
+      // Highlight Containerfile keywords
+      var highlighted = esc(content).replace(/^(FROM|RUN|COPY|ADD|ENV|EXPOSE|CMD|ENTRYPOINT|WORKDIR|LABEL|ARG|VOLUME|USER|STOPSIGNAL|HEALTHCHECK|SHELL|ONBUILD)\b/gm, '<span class="cf-kw">$1</span>');
+      document.getElementById('cf-modal-body').innerHTML = highlighted;
+      modal.style.display = '';
+    }).catch(function(err) {
+      showToast('Preview failed: ' + err.message, 5000);
+    });
+  }
+
+  // Global close function for the modal
+  window.closeCfModal = function() {
+    document.getElementById('containerfile-modal').style.display = 'none';
+  };
+
+  // Close on overlay click
+  document.getElementById('containerfile-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeCfModal();
+  });
+
+  // Close on Escape key
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeCfModal();
+  });
 
   function movePackage(pkg, from, to) {
     fetch('/api/move', {
@@ -307,6 +374,13 @@
 
   // Layer card clicks
   layerTree.addEventListener('click', function(e) {
+    // Preview button
+    var previewBtn = e.target.closest('.layer-preview-btn');
+    if (previewBtn) {
+      e.stopPropagation();
+      showCfModal(previewBtn.dataset.previewLayer);
+      return;
+    }
     var card = e.target.closest('.layer-card');
     if (card && card.dataset.layer) {
       selectLayer(card.dataset.layer);
@@ -328,27 +402,38 @@
     }
   });
 
-  // Move button & menu clicks (drawer)
+  // Move/copy button & menu clicks (drawer)
   drawerBody.addEventListener('click', function(e) {
-    // "Move to" toggle button
+    // "Move up" button
+    var moveupBtn = e.target.closest('.moveup-btn');
+    if (moveupBtn) {
+      e.stopPropagation();
+      moveUp(moveupBtn.dataset.pkg, moveupBtn.dataset.from, moveupBtn.dataset.to);
+      return;
+    }
+
+    // "Copy to" toggle button
     var moveBtn = e.target.closest('.move-btn');
     if (moveBtn) {
       e.stopPropagation();
       var key = moveBtn.dataset.from + '/' + moveBtn.dataset.pkg;
       openMenuPkg = (openMenuPkg === key) ? null : key;
       renderDrawer();
-      // Show impact text for the open menu
       if (openMenuPkg) {
         updateImpactText(moveBtn.dataset.pkg, moveBtn.dataset.from);
       }
       return;
     }
 
-    // Menu item click
+    // Copy menu item click
     var menuItem = e.target.closest('.move-menu-item');
     if (menuItem) {
       e.stopPropagation();
-      movePackage(menuItem.dataset.pkg, menuItem.dataset.from, menuItem.dataset.to);
+      if (menuItem.classList.contains('copy-action')) {
+        copyPackage(menuItem.dataset.pkg, menuItem.dataset.from, menuItem.dataset.to);
+      } else {
+        movePackage(menuItem.dataset.pkg, menuItem.dataset.from, menuItem.dataset.to);
+      }
       return;
     }
   });

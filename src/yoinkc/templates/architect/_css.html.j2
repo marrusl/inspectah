@@ -444,6 +444,105 @@ body { display: flex; flex-direction: column; }
   font-size: 0.8125rem;
 }
 
+/* ── Containerfile preview modal ─────────────────────────────────────── */
+.cf-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cf-modal {
+  background: var(--pf-t--global--background--color--primary--default, #1b1d21);
+  border: 1px solid var(--pf-t--global--border--color--default, #444);
+  border-radius: var(--pf-t--global--border--radius--small, 3px);
+  width: min(720px, 90vw);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+.cf-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--pf-t--global--border--color--default, #444);
+  flex-shrink: 0;
+}
+.cf-modal-title {
+  font-weight: 700;
+  font-size: 0.9375rem;
+}
+.cf-modal-close {
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  color: var(--pf-t--global--text--color--subtle, #aaa);
+  cursor: pointer;
+  padding: 0.25rem 0.5rem;
+  line-height: 1;
+}
+.cf-modal-close:hover {
+  color: var(--pf-t--global--text--color--regular, #eee);
+}
+.cf-modal-body {
+  overflow: auto;
+  padding: 1rem;
+  margin: 0;
+  font-family: 'Red Hat Mono', 'SF Mono', 'Menlo', monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--pf-t--global--text--color--regular, #eee);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+/* Containerfile keyword highlighting handled via JS spans */
+.cf-kw { color: var(--pf-t--global--color--status--info--default, #2b9af3); font-weight: 700; }
+
+/* Preview button on layer cards */
+.layer-preview-btn {
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--pf-t--global--border--color--default, #555);
+  border-radius: var(--pf-t--global--border--radius--small, 3px);
+  background: transparent;
+  color: var(--pf-t--global--text--color--link--default, #2b9af3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.layer-preview-btn:hover {
+  background: var(--pf-t--global--background--color--secondary--hover, rgba(255,255,255,0.08));
+}
+
+/* Move-up button (same style as move-btn) */
+.moveup-btn {
+  font-size: 0.6875rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--pf-t--global--border--color--default, #555);
+  border-radius: var(--pf-t--global--border--radius--small, 3px);
+  background: transparent;
+  color: var(--pf-t--global--text--color--link--default, #2b9af3);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+}
+.moveup-btn:hover {
+  background: var(--pf-t--global--background--color--secondary--hover, rgba(255,255,255,0.08));
+}
+
+/* Package action buttons container */
+.pkg-actions {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  flex-shrink: 0;
+}
+
 /* ── Light theme adjustments ─────────────────────────────────────────── */
 html:not(.pf-v6-theme-dark) .move-menu {
   background: #fff;

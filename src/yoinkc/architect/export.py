@@ -12,7 +12,7 @@ def export_topology(topo: LayerTopology, base_image: str) -> bytes:
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for layer in topo.layers:
-            containerfile = _render_containerfile(layer.name, layer.parent, layer.packages, base_image)
+            containerfile = render_containerfile(layer.name, layer.parent, layer.packages, base_image)
             _add_string_to_tar(tar, f"{layer.name}/Containerfile", containerfile)
 
         build_sh = _render_build_sh(topo, base_image)
@@ -21,7 +21,7 @@ def export_topology(topo: LayerTopology, base_image: str) -> bytes:
     return buf.getvalue()
 
 
-def _render_containerfile(
+def render_containerfile(
     layer_name: str,
     parent: str | None,
     packages: list[str],

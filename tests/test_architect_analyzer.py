@@ -146,6 +146,51 @@ class TestMovePackage:
             topo.move_package("nonexistent", "base", "web")
 
 
+class TestCopyPackage:
+    def test_copy_between_derived_layers(self):
+        fleets = [
+            _make_fleet("web", ["httpd", "openssl", "bash"]),
+            _make_fleet("db", ["postgresql", "openssl", "bash"]),
+        ]
+        topo = analyze_fleets(fleets)
+        topo.copy_package("httpd", "web", "db")
+        # Package remains in source
+        assert "httpd" in topo.get_layer("web").packages
+        # Package also in target
+        assert "httpd" in topo.get_layer("db").packages
+
+    def test_copy_nonexistent_package_raises(self):
+        fleets = [
+            _make_fleet("web", ["httpd", "bash"]),
+            _make_fleet("db", ["postgresql", "bash"]),
+        ]
+        topo = analyze_fleets(fleets)
+        with pytest.raises(ValueError, match="not found"):
+            topo.copy_package("nonexistent", "web", "db")
+
+    def test_copy_to_nonexistent_layer_raises(self):
+        fleets = [
+            _make_fleet("web", ["httpd", "bash"]),
+            _make_fleet("db", ["postgresql", "bash"]),
+        ]
+        topo = analyze_fleets(fleets)
+        with pytest.raises(ValueError, match="not found"):
+            topo.copy_package("httpd", "web", "nope")
+
+    def test_copy_idempotent_if_already_present(self):
+        fleets = [
+            _make_fleet("web", ["httpd", "openssl", "bash"]),
+            _make_fleet("db", ["postgresql", "openssl", "bash"]),
+        ]
+        topo = analyze_fleets(fleets)
+        # First copy httpd to db
+        topo.copy_package("httpd", "web", "db")
+        assert "httpd" in topo.get_layer("db").packages
+        # Copy again — should not duplicate
+        topo.copy_package("httpd", "web", "db")
+        assert topo.get_layer("db").packages.count("httpd") == 1
+
+
 class TestTopologyJson:
     def test_to_json_roundtrip(self):
         fleets = [

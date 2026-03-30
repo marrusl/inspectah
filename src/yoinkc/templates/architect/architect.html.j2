@@ -54,10 +54,21 @@
     {# ── Bottom toolbar ───────────────────────────────────────────────── #}
     <div class="architect-toolbar" id="architect-toolbar" role="toolbar" aria-label="Actions">
       <span class="toolbar-summary" id="toolbar-summary"></span>
-      <button id="btn-export" class="pf-v6-c-button pf-m-danger" type="button" title="Export Containerfiles as tar.gz">Export Containerfiles</button>
+      <button id="btn-export" class="pf-v6-c-button pf-m-primary" type="button" title="Export Containerfiles as tar.gz">Export Containerfiles</button>
     </div>
 
     <div id="toast" class="pf-v6-c-alert pf-m-info architect-toast"></div>
+
+    {# ── Containerfile preview modal ──────────────────────────────────── #}
+    <div id="containerfile-modal" class="cf-modal-overlay" style="display:none">
+      <div class="cf-modal">
+        <div class="cf-modal-header">
+          <span class="cf-modal-title" id="cf-modal-title"></span>
+          <button class="cf-modal-close" onclick="closeCfModal()">&times;</button>
+        </div>
+        <pre class="cf-modal-body" id="cf-modal-body"></pre>
+      </div>
+    </div>
 
   </div>{# /.pf-v6-c-page #}
 

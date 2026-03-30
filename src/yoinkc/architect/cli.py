@@ -115,8 +115,8 @@ def _run_architect_inner(args: argparse.Namespace, input_dir: Path) -> int:
         open_browser=not args.no_browser,
     )
 
-    print(f"Serving architect UI at http://{args.bind}:{port}")
-    print("Press Ctrl+C to stop")
+    print(f"Serving architect UI at http://{args.bind}:{port}", flush=True)
+    print("Press Ctrl+C to stop", flush=True)
 
     try:
         httpd.serve_forever()

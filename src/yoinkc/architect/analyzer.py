@@ -89,6 +89,20 @@ class LayerTopology:
 
         self._recalc_all()
 
+    def copy_package(self, package: str, from_layer: str, to_layer: str) -> None:
+        """Copy a package to another layer without removing from source."""
+        src = self.get_layer(from_layer)
+        dst = self.get_layer(to_layer)
+        if src is None:
+            raise ValueError(f"Layer {from_layer!r} not found")
+        if dst is None:
+            raise ValueError(f"Layer {to_layer!r} not found")
+        if package not in src.packages:
+            raise ValueError(f"Package {package!r} not found in layer {from_layer!r}")
+        if package not in dst.packages:
+            dst.packages.append(package)
+        self._recalc_all()
+
     def _recalc_all(self) -> None:
         base = self.get_layer("base")
         if base is not None:

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import jinja2
 
 from yoinkc.architect.analyzer import LayerTopology
-from yoinkc.architect.export import export_topology
+from yoinkc.architect.export import export_topology, render_containerfile
 
 if TYPE_CHECKING:
     pass
@@ -64,6 +64,16 @@ def create_handler(
                 self._send(200, data, "application/gzip", {
                     "Content-Disposition": 'attachment; filename="architect-export.tar.gz"',
                 })
+            elif path.startswith("/api/preview/"):
+                layer_name = path[len("/api/preview/"):]
+                layer = self._topology.get_layer(layer_name)
+                if layer is None:
+                    self._send_json(404, {"error": f"Layer {layer_name!r} not found"})
+                else:
+                    content = render_containerfile(
+                        layer.name, layer.parent, layer.packages, self._base_image,
+                    )
+                    self._send(200, content.encode(), "text/plain; charset=utf-8")
             else:
                 self._send(404, b"Not found", "text/plain")
 
@@ -74,6 +84,16 @@ def create_handler(
                     length = int(self.headers.get("Content-Length", 0))
                     body = json.loads(self.rfile.read(length))
                     self._topology.move_package(
+                        body["package"], body["from"], body["to"],
+                    )
+                    self._send_json(200, self._topology.to_dict())
+                except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+                    self._send_json(400, {"error": str(e)})
+            elif path == "/api/copy":
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length))
+                    self._topology.copy_package(
                         body["package"], body["from"], body["to"],
                     )
                     self._send_json(200, self._topology.to_dict())
