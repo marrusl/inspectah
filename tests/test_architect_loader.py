@@ -82,6 +82,21 @@ class TestLoadRefinedFleets:
         fleets = load_refined_fleets(tmp_path)
         assert len(fleets[0].configs) >= 1
 
+    def test_base_image_extracted(self, tmp_path):
+        snap = _make_snapshot("web", ["httpd"])
+        _write_tarball(tmp_path, "web", snap)
+
+        fleets = load_refined_fleets(tmp_path)
+        assert fleets[0].base_image == "registry.redhat.io/rhel9/rhel-bootc:9.4"
+
+    def test_base_image_defaults_to_empty(self, tmp_path):
+        snap = _make_snapshot("web", ["httpd"])
+        del snap["rpm"]["base_image"]
+        _write_tarball(tmp_path, "web", snap)
+
+        fleets = load_refined_fleets(tmp_path)
+        assert fleets[0].base_image == ""
+
     def test_empty_directory(self, tmp_path):
         fleets = load_refined_fleets(tmp_path)
         assert fleets == []

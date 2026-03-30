@@ -14,6 +14,7 @@ class FleetInput:
     packages: list[str]
     configs: list[str]
     host_count: int = 0
+    base_image: str = ""
 
 
 @dataclass

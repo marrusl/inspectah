@@ -74,9 +74,12 @@ def _snapshot_to_fleet_input(snapshot: dict) -> FleetInput:
     config = snapshot.get("config", {})
     configs = [f.get("path", "") for f in config.get("files", []) if f.get("path")]
 
+    base_image = rpm.get("base_image", "")
+
     return FleetInput(
         name=hostname,
         packages=packages,
         configs=configs,
         host_count=host_count,
+        base_image=base_image if isinstance(base_image, str) else "",
     )
