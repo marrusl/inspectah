@@ -1,12 +1,13 @@
 # fish completion for yoinkc
 # Place in /usr/share/fish/vendor_completions.d/yoinkc.fish
 
-set -l subcmds inspect fleet refine
+set -l subcmds inspect fleet refine architect
 
 # Subcommands
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -a inspect -d "Inspect a host and generate migration artifacts"
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -a fleet -d "Aggregate multiple inspection snapshots"
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -a refine -d "Interactively edit and re-render output"
+complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -a architect -d "Plan layer decomposition from refined fleets"
 
 # Top-level inspect flags for the backwards-compatible `yoinkc --flag` form
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l host-root -r -d "Root path for host inspection"
@@ -62,3 +63,8 @@ complete -c yoinkc -n "__fish_seen_subcommand_from fleet" -l no-hosts -d "Omit p
 # refine flags
 complete -c yoinkc -n "__fish_seen_subcommand_from refine" -l no-browser -d "Do not auto-open the browser on startup"
 complete -c yoinkc -n "__fish_seen_subcommand_from refine" -l port -r -d "HTTP server port"
+
+# architect flags
+complete -c yoinkc -n "__fish_seen_subcommand_from architect" -l port -r -d "Port for the architect web UI"
+complete -c yoinkc -n "__fish_seen_subcommand_from architect" -l no-browser -d "Do not open browser automatically"
+complete -c yoinkc -n "__fish_seen_subcommand_from architect" -l bind -r -d "Address to bind"

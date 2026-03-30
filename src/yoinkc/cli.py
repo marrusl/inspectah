@@ -11,7 +11,7 @@ from typing import Optional
 
 from .fleet.cli import add_fleet_args
 
-SUBCOMMANDS = ("inspect", "fleet", "refine")
+SUBCOMMANDS = ("inspect", "fleet", "refine", "architect")
 
 
 def _preprocess_argv(argv: list[str]) -> list[str]:
@@ -215,6 +215,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Interactively edit and re-render inspection output",
     )
     _add_refine_args(refine_parser)
+
+    from .architect.cli import add_architect_args
+    architect_parser = subparsers.add_parser(
+        "architect",
+        help="Plan layer decomposition from refined fleets",
+    )
+    add_architect_args(architect_parser)
 
     return parser
 

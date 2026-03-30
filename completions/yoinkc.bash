@@ -5,7 +5,7 @@ _yoinkc() {
     local cur prev words cword
     _init_completion || return
 
-    local subcommands="inspect fleet refine"
+    local subcommands="inspect fleet refine architect"
 
     local inspect_flags="--host-root -o --output-dir --no-subscription
         --from-snapshot --inspect-only --target-version --target-image
@@ -18,12 +18,14 @@ _yoinkc() {
 
     local refine_flags="--no-browser --port"
 
+    local architect_flags="--port --no-browser --bind"
+
     # Determine which subcommand is active
     local subcmd=""
     local i
     for (( i=1; i < cword; i++ )); do
         case "${words[i]}" in
-            inspect|fleet|refine)
+            inspect|fleet|refine|architect)
                 subcmd="${words[i]}"
                 break
                 ;;
@@ -64,6 +66,13 @@ _yoinkc() {
                 COMPREPLY=( $(compgen -W "$refine_flags" -- "$cur") )
             else
                 _filedir '*.tar.gz'
+            fi
+            ;;
+        architect)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "$architect_flags" -- "$cur") )
+            else
+                _filedir -d
             fi
             ;;
     esac

@@ -43,11 +43,20 @@ _yoinkc_refine() {
         '--port[HTTP server port]:port:'
 }
 
+_yoinkc_architect() {
+    _arguments -s \
+        '1:input_dir:_files -/' \
+        '--port[Port for the architect web UI]:port:' \
+        '--no-browser[Do not open browser automatically]' \
+        '--bind[Address to bind]:address:'
+}
+
 _yoinkc() {
     local -a subcmds=(
         'inspect:Inspect a host and generate migration artifacts'
         'fleet:Aggregate multiple inspection snapshots'
         'refine:Interactively edit and re-render output'
+        'architect:Plan layer decomposition from refined fleets'
     )
 
     if (( CURRENT == 2 )); then
@@ -62,8 +71,9 @@ _yoinkc() {
     case "${words[2]}" in
         inspect) _yoinkc_inspect ;;
         fleet)   _yoinkc_fleet ;;
-        refine)  _yoinkc_refine ;;
-        *)       _yoinkc_inspect ;;
+        refine)    _yoinkc_refine ;;
+        architect) _yoinkc_architect ;;
+        *)         _yoinkc_inspect ;;
     esac
 }
 

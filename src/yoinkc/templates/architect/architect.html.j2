@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en" class="pf-v6-theme-dark">
+<head>
+  <meta charset="UTF-8"/>
+  <title>yoinkc Architect</title>
+  <style>{{ patternfly_css }}</style>
+  {% include "architect/_css.html.j2" %}
+</head>
+<body>
+  <div class="pf-v6-c-page">
+    <header class="pf-v6-c-masthead">
+      <div class="pf-v6-c-masthead__main">
+        <span class="pf-v6-c-masthead__brand">yoinkc Architect</span>
+      </div>
+      <div class="pf-v6-c-masthead__content">
+        <button id="theme-toggle" class="pf-v6-c-button pf-m-plain">&#9728;</button>
+      </div>
+    </header>
+    <div class="pf-v6-c-page__body" id="app">
+      <!-- JS will render the interactive UI -->
+      <noscript>JavaScript is required for the architect UI.</noscript>
+    </div>
+  </div>
+  <script>
+    window.__TOPOLOGY__ = {{ topology_json }};
+  </script>
+  {% include "architect/_js.html.j2" %}
+</body>
+</html>

@@ -1,0 +1,16 @@
+<script>
+(function(){
+  // Theme toggle
+  var t = localStorage.getItem('yoinkc-architect-theme');
+  if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark');
+  var btn = document.getElementById('theme-toggle');
+  if (btn) btn.addEventListener('click', function() {
+    var html = document.documentElement;
+    html.classList.toggle('pf-v6-theme-dark');
+    localStorage.setItem('yoinkc-architect-theme',
+      html.classList.contains('pf-v6-theme-dark') ? 'dark' : 'light');
+  });
+})();
+
+// Full interactive UI will be added in Task 6
+</script>
