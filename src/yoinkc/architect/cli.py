@@ -51,7 +51,10 @@ def run_architect(args: argparse.Namespace) -> int:
         tmp_dir = Path(tempfile.mkdtemp(prefix="architect-bundle-"))
         try:
             with tarfile.open(input_path, "r:gz") as tar:
-                tar.extractall(tmp_dir, filter="data")
+                if sys.version_info >= (3, 12):
+                    tar.extractall(tmp_dir, filter="data")
+                else:
+                    tar.extractall(tmp_dir)
         except tarfile.TarError as e:
             print(f"Error: failed to extract bundle {input_path}: {e}", file=sys.stderr)
             shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -100,7 +103,7 @@ def _run_architect_inner(args: argparse.Namespace, input_dir: Path) -> int:
     patternfly_css = pf_path.read_text() if pf_path.exists() else ""
 
     # Determine base image from first fleet's snapshot (if available)
-    base_image = "registry.redhat.io/rhel9/rhel-bootc:9.4"
+    base_image = fleets[0].base_image or "registry.redhat.io/rhel9/rhel-bootc:9.4"
 
     port, httpd = start_server(
         topology,
