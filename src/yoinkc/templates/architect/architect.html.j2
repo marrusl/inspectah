@@ -2,25 +2,72 @@
 <html lang="en" class="pf-v6-theme-dark">
 <head>
   <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>yoinkc Architect</title>
   <style>{{ patternfly_css }}</style>
   {% include "architect/_css.html.j2" %}
 </head>
 <body>
+  <a class="pf-v6-c-skip-to-content" href="#main-content">Skip to main content</a>
   <div class="pf-v6-c-page">
+
     <header class="pf-v6-c-masthead">
       <div class="pf-v6-c-masthead__main">
         <span class="pf-v6-c-masthead__brand">yoinkc Architect</span>
       </div>
       <div class="pf-v6-c-masthead__content">
-        <button id="theme-toggle" class="pf-v6-c-button pf-m-plain">&#9728;</button>
+        <button id="theme-toggle" class="pf-v6-c-button pf-m-plain" title="Switch to light theme" aria-label="Toggle theme">&#9728;</button>
       </div>
     </header>
-    <div class="pf-v6-c-page__body" id="app">
-      <!-- JS will render the interactive UI -->
-      <noscript>JavaScript is required for the architect UI.</noscript>
+
+    {# ── Three-column layout ──────────────────────────────────────────── #}
+    <div class="architect-layout">
+
+      {# ── Left: Fleet sidebar ─────────────────────────────────────────── #}
+      <div class="pf-v6-c-page__sidebar architect-sidebar" id="fleet-sidebar">
+        <div class="pf-v6-c-page__sidebar-body">
+          <nav class="pf-v6-c-nav" role="navigation" aria-label="Fleet navigation">
+            <section class="pf-v6-c-nav__section">
+              <h2 class="pf-v6-c-nav__section-title">Fleets</h2>
+              <ul class="pf-v6-c-nav__list" id="fleet-list">
+                <!-- JS renders fleet items -->
+              </ul>
+            </section>
+          </nav>
+        </div>
+      </div>
+
+      {# ── Center: Layer topology tree ─────────────────────────────────── #}
+      <main class="pf-v6-c-page__main" id="main-content">
+        <section class="pf-v6-c-page__main-section">
+          <div class="pf-v6-c-content" id="layer-tree">
+            <!-- JS renders layer cards -->
+          </div>
+        </section>
+      </main>
+
+      {# ── Right: Package drawer ──────────────────────────────────────── #}
+      <div class="architect-drawer" id="package-drawer">
+        <div class="drawer-header" id="drawer-header">
+          <!-- JS renders selected layer header -->
+        </div>
+        <div class="drawer-body" id="drawer-body">
+          <!-- JS renders package list -->
+        </div>
+      </div>
+
+    </div>{# /.architect-layout #}
+
+    {# ── Bottom toolbar ───────────────────────────────────────────────── #}
+    <div class="architect-toolbar" id="architect-toolbar" role="toolbar" aria-label="Actions">
+      <span class="toolbar-summary" id="toolbar-summary"></span>
+      <button id="btn-export" class="pf-v6-c-button pf-m-danger" type="button" title="Export Containerfiles as tar.gz">Export Containerfiles</button>
     </div>
-  </div>
+
+    <div id="toast" class="pf-v6-c-alert pf-m-info architect-toast"></div>
+
+  </div>{# /.pf-v6-c-page #}
+
   <script>
     window.__TOPOLOGY__ = {{ topology_json }};
   </script>

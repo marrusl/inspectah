@@ -1,16 +1,384 @@
 <script>
-(function(){
-  // Theme toggle
-  var t = localStorage.getItem('yoinkc-architect-theme');
-  if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark');
-  var btn = document.getElementById('theme-toggle');
-  if (btn) btn.addEventListener('click', function() {
-    var html = document.documentElement;
-    html.classList.toggle('pf-v6-theme-dark');
-    localStorage.setItem('yoinkc-architect-theme',
-      html.classList.contains('pf-v6-theme-dark') ? 'dark' : 'light');
-  });
-})();
+(function() {
+  'use strict';
 
-// Full interactive UI will be added in Task 6
+  // ── State ──────────────────────────────────────────────────────────────
+  var topology = window.__TOPOLOGY__;
+  var selectedLayer = 'base';
+  var activeFleet = null;  // optional fleet highlight
+  var openMenuPkg = null;  // track which move menu is open
+
+  // ── DOM refs ───────────────────────────────────────────────────────────
+  var fleetList = document.getElementById('fleet-list');
+  var layerTree = document.getElementById('layer-tree');
+  var drawerHeader = document.getElementById('drawer-header');
+  var drawerBody = document.getElementById('drawer-body');
+  var toolbarSummary = document.getElementById('toolbar-summary');
+  var toast = document.getElementById('toast');
+
+  // ── Theme toggle ───────────────────────────────────────────────────────
+  (function() {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    function applyTheme(theme) {
+      if (theme === 'dark') {
+        document.documentElement.classList.add('pf-v6-theme-dark');
+      } else {
+        document.documentElement.classList.remove('pf-v6-theme-dark');
+      }
+      btn.textContent = theme === 'light' ? '\u263D' : '\u2600';
+      btn.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+      localStorage.setItem('yoinkc-architect-theme', theme);
+    }
+    applyTheme(localStorage.getItem('yoinkc-architect-theme') || 'dark');
+    btn.addEventListener('click', function() {
+      var isDark = document.documentElement.classList.contains('pf-v6-theme-dark');
+      applyTheme(isDark ? 'light' : 'dark');
+    });
+  })();
+
+  // ── Helpers ────────────────────────────────────────────────────────────
+  function esc(str) {
+    var d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  function showToast(msg, ms) {
+    if (!toast) return;
+    toast.textContent = msg;
+    toast.classList.add('visible');
+    setTimeout(function() { toast.classList.remove('visible'); }, ms || 3500);
+  }
+
+  function getLayer(name) {
+    for (var i = 0; i < topology.layers.length; i++) {
+      if (topology.layers[i].name === name) return topology.layers[i];
+    }
+    return null;
+  }
+
+  function getFleetColor(idx) { return 'fleet-color-' + (idx % 6); }
+
+  function totalHosts() {
+    var n = 0;
+    for (var i = 0; i < topology.fleets.length; i++) n += topology.fleets[i].host_count;
+    return n;
+  }
+
+  // ── Render: Sidebar (fleets) ───────────────────────────────────────────
+  function renderSidebar() {
+    var html = '';
+    for (var i = 0; i < topology.fleets.length; i++) {
+      var f = topology.fleets[i];
+      // Find the fleet's derived layer to get current package count
+      var layer = getLayer(f.name);
+      var baseLayer = getLayer('base');
+      var pkgCount = layer ? layer.packages.length : f.total_packages;
+      // For derived layers, total packages = own + base
+      if (layer && layer.parent === 'base' && baseLayer) {
+        pkgCount += baseLayer.packages.length;
+      }
+      var active = (activeFleet === f.name) ? ' fleet-active' : '';
+      html += '<li class="pf-v6-c-nav__item">' +
+        '<a class="fleet-card ' + getFleetColor(i) + active + '" data-fleet="' + esc(f.name) + '" href="#">' +
+          '<div class="fleet-card-name">' + esc(f.name) + '</div>' +
+          '<div class="fleet-card-meta">' +
+            (f.host_count > 0 ? f.host_count + ' hosts &middot; ' : '') +
+            pkgCount + ' pkgs' +
+          '</div>' +
+        '</a></li>';
+    }
+    fleetList.innerHTML = html;
+  }
+
+  // ── Render: Layer topology tree (center) ───────────────────────────────
+  function renderTree() {
+    var html = '<div class="layer-tree-title">Layer Topology</div>';
+    var base = null;
+    var derived = [];
+    for (var i = 0; i < topology.layers.length; i++) {
+      var l = topology.layers[i];
+      if (l.parent === null) base = l;
+      else derived.push(l);
+    }
+
+    if (base) {
+      html += renderLayerCard(base, false);
+    }
+
+    for (var j = 0; j < derived.length; j++) {
+      html += '<div class="tree-connector">';
+      html += renderLayerCard(derived[j], true);
+      html += '</div>';
+    }
+
+    layerTree.innerHTML = html;
+  }
+
+  function renderLayerCard(layer, isDerived) {
+    var sel = (layer.name === selectedLayer) ? ' layer-selected' : '';
+    var cls = isDerived ? ' layer-derived' : '';
+    var fleetLabel = layer.fleets.length > 0 ? layer.fleets.join(', ') : '';
+
+    return '<div class="layer-card' + cls + sel + '" data-layer="' + esc(layer.name) + '">' +
+      '<div class="layer-card-header">' +
+        '<span class="layer-card-name">' + esc(layer.name) + '</span>' +
+        '<div class="layer-card-badges">' +
+          '<span class="layer-badge layer-badge-pkg">' + layer.packages.length + ' pkgs</span>' +
+          (layer.fan_out > 0 ? '<span class="layer-badge layer-badge-fanout" title="Fan-out: number of downstream images">fan-out: ' + layer.fan_out + '</span>' : '') +
+          '<span class="layer-badge layer-badge-turbulence" title="Turbulence: rebuild impact score">turbulence: ' + layer.turbulence.toFixed(1) + '</span>' +
+        '</div>' +
+      '</div>' +
+      (fleetLabel ? '<div class="layer-card-detail">Serves: ' + esc(fleetLabel) + '</div>' : '') +
+    '</div>';
+  }
+
+  // ── Render: Package drawer (right) ─────────────────────────────────────
+  function renderDrawer() {
+    var layer = getLayer(selectedLayer);
+    if (!layer) {
+      drawerHeader.innerHTML = '<div class="drawer-header-title">No layer selected</div>';
+      drawerBody.innerHTML = '<div class="drawer-empty">Select a layer to view packages.</div>';
+      return;
+    }
+
+    drawerHeader.innerHTML =
+      '<div class="drawer-header-title">' + esc(layer.name) + '</div>' +
+      '<div class="drawer-header-meta">' +
+        layer.packages.length + ' packages' +
+        (layer.configs.length > 0 ? ' &middot; ' + layer.configs.length + ' configs' : '') +
+      '</div>';
+
+    var html = '';
+
+    // Packages section
+    if (layer.packages.length > 0) {
+      html += '<div class="drawer-section-label">Packages</div>';
+      var sorted = layer.packages.slice().sort();
+      for (var i = 0; i < sorted.length; i++) {
+        html += renderPackageRow(sorted[i], layer);
+      }
+    } else {
+      html += '<div class="drawer-empty">No packages in this layer.</div>';
+    }
+
+    // Configs section (read-only)
+    if (layer.configs.length > 0) {
+      html += '<div class="drawer-section-label">Configs (read-only)</div>';
+      for (var c = 0; c < layer.configs.length; c++) {
+        html += '<div class="config-row"><span class="pkg-icon">\uD83D\uDCC4</span> ' + esc(layer.configs[c]) + '</div>';
+      }
+    }
+
+    drawerBody.innerHTML = html;
+  }
+
+  function renderPackageRow(pkg, fromLayer) {
+    var targets = [];
+    for (var i = 0; i < topology.layers.length; i++) {
+      if (topology.layers[i].name !== fromLayer.name) {
+        targets.push(topology.layers[i]);
+      }
+    }
+
+    var menuOpen = (openMenuPkg === fromLayer.name + '/' + pkg) ? ' open' : '';
+
+    var moveHtml = '';
+    if (targets.length > 0) {
+      moveHtml = '<div class="move-dropdown">' +
+        '<button class="move-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '">Move to \u25BE</button>' +
+        '<div class="move-menu' + menuOpen + '" data-menu-for="' + esc(fromLayer.name + '/' + pkg) + '">';
+      for (var t = 0; t < targets.length; t++) {
+        moveHtml += '<button class="move-menu-item" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(targets[t].name) + '">' +
+          '\u2192 ' + esc(targets[t].name) +
+        '</button>';
+      }
+      // Impact tooltip area
+      moveHtml += '<div class="move-impact" data-impact-for="' + esc(fromLayer.name + '/' + pkg) + '"></div>';
+      moveHtml += '</div></div>';
+    }
+
+    return '<div class="pkg-row">' +
+      '<span class="pkg-name"><span class="pkg-icon">\uD83D\uDCE6</span> ' + esc(pkg) + '</span>' +
+      moveHtml +
+    '</div>';
+  }
+
+  // ── Render: Toolbar ────────────────────────────────────────────────────
+  function renderToolbar() {
+    var hosts = totalHosts();
+    toolbarSummary.textContent =
+      topology.fleets.length + ' fleet' + (topology.fleets.length !== 1 ? 's' : '') +
+      ' \u00B7 ' + hosts + ' host' + (hosts !== 1 ? 's' : '') +
+      ' \u00B7 ' + topology.layers.length + ' layer' + (topology.layers.length !== 1 ? 's' : '');
+  }
+
+  // ── Master render ──────────────────────────────────────────────────────
+  function render() {
+    renderSidebar();
+    renderTree();
+    renderDrawer();
+    renderToolbar();
+  }
+
+  // ── Actions ────────────────────────────────────────────────────────────
+  function selectLayer(name) {
+    selectedLayer = name;
+    openMenuPkg = null;
+    render();
+  }
+
+  function calcImpact(pkg, targetLayerName) {
+    var target = getLayer(targetLayerName);
+    if (!target) return '';
+    var newPkgCount = target.packages.length + 1;
+    var newTurbulence = Math.max(1.0, target.fan_out * (newPkgCount / 50.0));
+    return 'Moving ' + pkg + ' to ' + targetLayerName + ' affects ' + target.fan_out +
+      ' downstream image' + (target.fan_out !== 1 ? 's' : '') +
+      '. Turbulence: ' + target.turbulence.toFixed(1) + ' \u2192 ' + newTurbulence.toFixed(1);
+  }
+
+  function movePackage(pkg, from, to) {
+    fetch('/api/move', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ package: pkg, from: from, to: to }),
+    }).then(function(resp) {
+      if (!resp.ok) {
+        return resp.json().then(function(d) {
+          throw new Error(d.error || 'HTTP ' + resp.status);
+        });
+      }
+      return resp.json();
+    }).then(function(data) {
+      topology = data;
+      openMenuPkg = null;
+      showToast('Moved ' + pkg + ' from ' + from + ' to ' + to, 3000);
+      render();
+    }).catch(function(err) {
+      showToast('Move failed: ' + err.message, 5000);
+    });
+  }
+
+  function exportTopology() {
+    var btn = document.getElementById('btn-export');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Exporting\u2026';
+    }
+    fetch('/api/export').then(function(resp) {
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      return resp.blob();
+    }).then(function(blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'architect-export.tar.gz';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Containerfiles exported.', 3000);
+    }).catch(function(err) {
+      showToast('Export failed: ' + err.message, 5000);
+    }).finally(function() {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Export Containerfiles';
+      }
+    });
+  }
+
+  // ── Event delegation ───────────────────────────────────────────────────
+  // Close any open menus on outside click
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('.move-dropdown')) {
+      if (openMenuPkg !== null) {
+        openMenuPkg = null;
+        renderDrawer();
+      }
+    }
+  });
+
+  // Layer card clicks
+  layerTree.addEventListener('click', function(e) {
+    var card = e.target.closest('.layer-card');
+    if (card && card.dataset.layer) {
+      selectLayer(card.dataset.layer);
+    }
+  });
+
+  // Fleet sidebar clicks
+  fleetList.addEventListener('click', function(e) {
+    e.preventDefault();
+    var card = e.target.closest('.fleet-card');
+    if (card && card.dataset.fleet) {
+      var fleetName = card.dataset.fleet;
+      // Find the fleet's layer and select it
+      var layer = getLayer(fleetName);
+      if (layer) {
+        activeFleet = fleetName;
+        selectLayer(fleetName);
+      }
+    }
+  });
+
+  // Move button & menu clicks (drawer)
+  drawerBody.addEventListener('click', function(e) {
+    // "Move to" toggle button
+    var moveBtn = e.target.closest('.move-btn');
+    if (moveBtn) {
+      e.stopPropagation();
+      var key = moveBtn.dataset.from + '/' + moveBtn.dataset.pkg;
+      openMenuPkg = (openMenuPkg === key) ? null : key;
+      renderDrawer();
+      // Show impact text for the open menu
+      if (openMenuPkg) {
+        updateImpactText(moveBtn.dataset.pkg, moveBtn.dataset.from);
+      }
+      return;
+    }
+
+    // Menu item click
+    var menuItem = e.target.closest('.move-menu-item');
+    if (menuItem) {
+      e.stopPropagation();
+      movePackage(menuItem.dataset.pkg, menuItem.dataset.from, menuItem.dataset.to);
+      return;
+    }
+  });
+
+  // Hover on menu items shows impact
+  drawerBody.addEventListener('mouseover', function(e) {
+    var menuItem = e.target.closest('.move-menu-item');
+    if (menuItem) {
+      var impactEl = menuItem.parentElement.querySelector('.move-impact');
+      if (impactEl) {
+        impactEl.textContent = calcImpact(menuItem.dataset.pkg, menuItem.dataset.to);
+      }
+    }
+  });
+
+  function updateImpactText(pkg, from) {
+    var impactEl = document.querySelector('.move-impact[data-impact-for="' + from + '/' + pkg + '"]');
+    if (impactEl) {
+      // Show default impact for first target
+      var firstItem = impactEl.parentElement.querySelector('.move-menu-item');
+      if (firstItem) {
+        impactEl.textContent = calcImpact(pkg, firstItem.dataset.to);
+      }
+    }
+  }
+
+  // Export button
+  var exportBtn = document.getElementById('btn-export');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', function() { exportTopology(); });
+  }
+
+  // ── Initial render ─────────────────────────────────────────────────────
+  render();
+
+})();
 </script>
