@@ -12,17 +12,18 @@ Two paths depending on whether you're migrating one host or many:
 
 ```
   One host:    Inspect ────→ Refine ────→ Build
-  Many hosts:  Inspect ────→ Fleet ─────→ Refine ────→ Build
+  Many hosts:  Inspect ────→ Fleet ─────→ Refine ────→ Architect ─────→ Build
 
-  Refine and Fleet are optional. Each step consumes and produces tarballs.
+  Refine, Fleet, and Architect are optional. Each step consumes and produces tarballs.
 
-  Inspect   run-yoinkc.sh                    Scan host, produce tarball
-  Fleet     run-yoinkc.sh fleet dir/ -p 80   Merge N hosts into one spec
-  Refine    run-yoinkc.sh refine *.tar.gz    Edit findings in the browser
-  Build     yoinkc-build *.tar.gz tag        Build the bootc image
+  Inspect   run-yoinkc.sh                       Scan host, produce tarball
+  Fleet     run-yoinkc.sh fleet dir/ -p 80      Merge N hosts into one spec
+  Refine    run-yoinkc.sh refine *.tar.gz       Edit findings in the browser
+  Architect run-yoinkc.sh architect ./fleets/   Plan layer decomposition
+  Build     yoinkc-build *.tar.gz tag           Build the bootc image
 ```
 
-[Inspect](#inspect) | [Refine](#refine) | [Fleet](#fleet) | [Build](#build)
+[Inspect](#inspect) | [Refine](#refine) | [Fleet](#fleet) | [Architect](#architect) | [Build](#build)
 
 ---
 
@@ -168,6 +169,36 @@ yoinkc fleet ./web-servers/ --output-dir ./fleet-output/
 
 ---
 
+## Architect
+
+`yoinkc architect` takes multiple refined fleet outputs and helps decompose them into a layered bootc image hierarchy: a base image plus derived role-specific or hardware-specific images. It launches an interactive web UI for exploring and adjusting the proposed layer topology.
+
+**When to use architect:** You have 2+ fleets (e.g., web servers, database servers, GPU nodes) and you want to identify common packages that should go into a shared base layer, keeping role-specific packages in derived layers.
+
+```bash
+# Place refined fleet tarballs in a directory
+mkdir refined-fleets
+cp web-servers-refined.tar.gz db-servers-refined.tar.gz gpu-nodes-refined.tar.gz refined-fleets/
+
+# Launch architect
+./run-yoinkc.sh architect ./refined-fleets/
+```
+
+Architect serves an interactive UI on `http://localhost:8643`. The UI shows:
+- **Sidebar:** All loaded fleets with host/package counts
+- **Center:** Layer topology tree (base + derived layers) with package counts and metrics
+- **Drawer:** Packages in the selected layer with move controls
+
+Click a layer to view its packages. Use "Move to →" to shift packages between layers. Architect initially proposes all 100%-prevalent packages (shared by all fleets) go into the base layer, with role-specific packages in derived layers. Adjust the topology, then click **Export Containerfiles** to download a tarball containing a `Containerfile` and `tree/` directory for each layer, plus a `build.sh` script with ordered build commands.
+
+**Direct usage** (when installed via pip):
+
+```bash
+yoinkc architect ./refined-fleets/
+```
+
+---
+
 ## Output Artifacts
 
 The default output is a tarball (`hostname-YYYYMMDD-HHMMSS.tar.gz`) containing:
@@ -257,6 +288,14 @@ Use `--output-dir` to get unpacked directory output instead.
 | `--json-only` | Write merged snapshot JSON only, skip rendering |
 | `--no-hosts` | Omit per-item host lists from fleet metadata |
 
+### `yoinkc architect`
+
+| Argument | Description |
+|----------|-------------|
+| `input_dir` | Directory containing refined fleet tarballs (`.tar.gz`) |
+
+Launches an HTTP server on port 8643 with an interactive web UI for layer topology planning. Press Ctrl+C to stop.
+
 > `yoinkc-build` is a standalone companion script, not a subcommand. Its usage is covered in [Build](#build).
 
 ---
@@ -270,10 +309,11 @@ Use `--output-dir` to get unpacked directory output instead.
 
 A core design principle is **baseline subtraction**: wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the output. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there.
 
-Two subcommands and one companion tool complete the workflow:
+Three subcommands and one companion tool complete the workflow:
 
 - **`yoinkc refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live. See [Refine](#refine).
 - **`yoinkc fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations. See [Fleet](#fleet).
+- **`yoinkc architect`** takes multiple refined fleets and proposes a layered image topology (base + derived layers), with an interactive web UI for adjusting the decomposition. See [Architect](#architect).
 - **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling for building on non-RHEL hosts. See [Build](#build).
 
 ### Refine UI internals
