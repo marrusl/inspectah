@@ -180,21 +180,26 @@ yoinkc fleet ./web-servers/ --output-dir ./fleet-output/
 mkdir refined-fleets
 cp web-servers-refined.tar.gz db-servers-refined.tar.gz gpu-nodes-refined.tar.gz refined-fleets/
 
-# Launch architect
+# Launch architect — accepts a directory or a tarball bundle
 ./run-yoinkc.sh architect ./refined-fleets/
+./run-yoinkc.sh architect refined-fleets.tar.gz
 ```
 
 Architect serves an interactive UI on `http://localhost:8643`. The UI shows:
 - **Sidebar:** All loaded fleets with host/package counts
-- **Center:** Layer topology tree (base + derived layers) with package counts and metrics
-- **Drawer:** Packages in the selected layer with move controls
+- **Center:** Layer topology tree (base + derived layers) with package counts and metrics (hover for explanations)
+- **Drawer:** Packages in the selected layer with move/copy controls
+- **Preview:** Click "View" on any layer card to see its generated Containerfile
 
-Click a layer to view its packages. Use "Move to →" to shift packages between layers. Architect initially proposes all 100%-prevalent packages (shared by all fleets) go into the base layer, with role-specific packages in derived layers. Adjust the topology, then click **Export Containerfiles** to download a tarball containing a `Containerfile` and `tree/` directory for each layer, plus a `build.sh` script with ordered build commands.
+Architect initially proposes all 100%-prevalent packages (shared by all fleets) go into the base layer, with role-specific packages in derived layers. Use "Move up ↑" to shift packages from derived layers to the parent layer, or "Copy to →" to duplicate a package across sibling layers. Exported Containerfiles use bare package names (e.g., `vim`) for maximum compatibility across minor version boundaries.
+
+When ready, click **Export Containerfiles** to download a tarball containing a `Containerfile` and `tree/` directory for each layer, plus a `build.sh` script with ordered build commands.
 
 **Direct usage** (when installed via pip):
 
 ```bash
 yoinkc architect ./refined-fleets/
+yoinkc architect refined-fleets.tar.gz
 ```
 
 ---
@@ -292,9 +297,9 @@ Use `--output-dir` to get unpacked directory output instead.
 
 | Argument | Description |
 |----------|-------------|
-| `input_dir` | Directory containing refined fleet tarballs (`.tar.gz`) |
+| `input` | Directory containing refined fleet tarballs (`.tar.gz`), or a tarball bundle of tarballs |
 
-Launches an HTTP server on port 8643 with an interactive web UI for layer topology planning. Press Ctrl+C to stop.
+Launches an HTTP server on port 8643 with an interactive web UI for layer topology planning. If a tarball is provided, it's automatically extracted to a temporary directory. Press Ctrl+C to stop.
 
 > `yoinkc-build` is a standalone companion script, not a subcommand. Its usage is covered in [Build](#build).
 
