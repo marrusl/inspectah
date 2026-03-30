@@ -21,6 +21,20 @@ def export_topology(topo: LayerTopology, base_image: str) -> bytes:
     return buf.getvalue()
 
 
+def _nvra_to_name(nvra: str) -> str:
+    """Extract package name from NVRA like 'httpd-2.4.57-5.el9.x86_64' -> 'httpd'."""
+    # Remove arch (.x86_64, .noarch, .i686, .aarch64, .s390x, .ppc64le)
+    for arch in ('.x86_64', '.noarch', '.i686', '.aarch64', '.s390x', '.ppc64le'):
+        if nvra.endswith(arch):
+            nvra = nvra[:-len(arch)]
+            break
+    # Remove release (after last -)
+    nvra = nvra.rsplit('-', 1)[0]
+    # Remove version (after last -)
+    nvra = nvra.rsplit('-', 1)[0]
+    return nvra
+
+
 def render_containerfile(
     layer_name: str,
     parent: str | None,
@@ -38,7 +52,9 @@ def render_containerfile(
     lines.append("")
 
     if packages:
-        pkg_list = " \\\n    ".join(sorted(packages))
+        # Extract bare package names from NVRAs and deduplicate
+        pkg_names = sorted(set(_nvra_to_name(pkg) for pkg in packages))
+        pkg_list = " \\\n    ".join(pkg_names)
         lines.append(f"RUN dnf install -y \\\n    {pkg_list} \\\n    && dnf clean all")
         lines.append("")
 

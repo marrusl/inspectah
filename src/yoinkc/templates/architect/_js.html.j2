@@ -131,8 +131,8 @@
         '<div class="layer-card-badges">' +
           '<button class="layer-preview-btn" data-preview-layer="' + esc(layer.name) + '" title="View Containerfile">\uD83D\uDCC4 View</button>' +
           '<span class="layer-badge layer-badge-pkg">' + layer.packages.length + ' pkgs</span>' +
-          (layer.fan_out > 0 ? '<span class="layer-badge layer-badge-fanout" title="Fan-out: number of downstream images">fan-out: ' + layer.fan_out + '</span>' : '') +
-          '<span class="layer-badge layer-badge-turbulence" title="Turbulence: rebuild impact score">turbulence: ' + layer.turbulence.toFixed(1) + '</span>' +
+          (layer.fan_out > 0 ? '<span class="layer-badge layer-badge-fanout" title="Number of derived layers that rebuild when this layer changes">fan-out: ' + layer.fan_out + '</span>' : '') +
+          '<span class="layer-badge layer-badge-turbulence" title="Estimated update impact: fan-out × package density. Higher = more coordination needed when this layer changes.">turbulence: ' + layer.turbulence.toFixed(1) + '</span>' +
         '</div>' +
       '</div>' +
       (fleetLabel ? '<div class="layer-card-detail">Serves: ' + esc(fleetLabel) + '</div>' : '') +

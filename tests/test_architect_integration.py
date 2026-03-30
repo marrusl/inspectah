@@ -91,6 +91,9 @@ class TestEndToEnd:
             base_cf = tar.extractfile("base/Containerfile").read().decode()
             assert "FROM registry.redhat.io/rhel9/rhel-bootc:9.4" in base_cf
             assert "dnf install" in base_cf
+            # Verify bare package names (not NVRAs) are used
+            assert "shared-pkg-1" in base_cf  # pkg-0 was moved, so use pkg-1
+            assert "shared-pkg-1-1.0-1.el9.x86_64" not in base_cf
 
             # Verify derived references base
             web_cf = tar.extractfile("web-servers/Containerfile").read().decode()
