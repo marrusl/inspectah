@@ -260,8 +260,8 @@
     var newPkgCount = target.packages.length + 1;
     var affectedImages = target.fan_out + 1;  // includes the target layer itself
     var newTurbulence = target.parent !== null
-      ? Math.max(1.0, affectedImages * (newPkgCount / 50.0))
-      : affectedImages * (newPkgCount / 50.0);
+      ? Math.max(1.0, target.fan_out * (newPkgCount / 50.0))
+      : target.fan_out * (newPkgCount / 50.0);
     var text = verb + ' ' + pkg + ' to ' + targetLayerName + ' affects ' + affectedImages +
       ' image' + (affectedImages !== 1 ? 's' : '') +
       '. Turbulence: ' + target.turbulence.toFixed(1) + ' \u2192 ' + newTurbulence.toFixed(1);
