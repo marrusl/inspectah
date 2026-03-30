@@ -54,6 +54,13 @@ def run_architect(args: argparse.Namespace) -> int:
                 if sys.version_info >= (3, 12):
                     tar.extractall(tmp_dir, filter="data")
                 else:
+                    # Validate members against path traversal before extracting
+                    for member in tar.getmembers():
+                        member_path = (tmp_dir / member.name).resolve()
+                        if not member_path.is_relative_to(tmp_dir.resolve()):
+                            raise tarfile.TarError(
+                                f"Path traversal detected in tarball member: {member.name}"
+                            )
                     tar.extractall(tmp_dir)
         except tarfile.TarError as e:
             print(f"Error: failed to extract bundle {input_path}: {e}", file=sys.stderr)

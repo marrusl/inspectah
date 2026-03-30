@@ -8,19 +8,15 @@ import socket
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING
-
 import jinja2
 
 from yoinkc.architect.analyzer import LayerTopology
 from yoinkc.architect.export import export_topology, render_containerfile
 
-if TYPE_CHECKING:
-    pass
-
 logger = logging.getLogger(__name__)
 
 _DEFAULT_PORT = 8643
+_MAX_POST_BODY = 1 * 1024 * 1024  # 1 MB
 
 
 def _find_free_port(start: int = _DEFAULT_PORT, max_attempts: int = 20) -> int:
@@ -78,6 +74,12 @@ def create_handler(
                 self._send(404, b"Not found", "text/plain")
 
         def do_POST(self) -> None:
+            # Reject oversized request bodies (max 1 MB)
+            content_length = int(self.headers.get("Content-Length", 0))
+            if content_length > _MAX_POST_BODY:
+                self._send_json(413, {"error": "Request body too large"})
+                return
+
             path = self.path.split("?")[0]
             if path == "/api/move":
                 try:
