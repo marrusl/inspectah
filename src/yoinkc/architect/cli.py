@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import shutil
 import sys
 import tarfile
@@ -55,13 +56,31 @@ def run_architect(args: argparse.Namespace) -> int:
                     tar.extractall(tmp_dir, filter="data")
                 else:
                     # Validate members against path traversal before extracting
+                    safe_members = []
+                    resolved_tmp = tmp_dir.resolve()
                     for member in tar.getmembers():
+                        # Reject absolute paths and parent-directory references
                         member_path = (tmp_dir / member.name).resolve()
-                        if not member_path.is_relative_to(tmp_dir.resolve()):
+                        if not member_path.is_relative_to(resolved_tmp):
                             raise tarfile.TarError(
                                 f"Path traversal detected in tarball member: {member.name}"
                             )
-                    tar.extractall(tmp_dir)
+                        # Reject symlinks/hardlinks pointing outside extraction dir
+                        if member.issym() or member.islnk():
+                            link_target = Path(
+                                os.path.normpath(
+                                    os.path.join(
+                                        str(tmp_dir / os.path.dirname(member.name)),
+                                        member.linkname,
+                                    )
+                                )
+                            ).resolve()
+                            if not link_target.is_relative_to(resolved_tmp):
+                                raise tarfile.TarError(
+                                    f"Symlink/hardlink escape detected: {member.name} -> {member.linkname}"
+                                )
+                        safe_members.append(member)
+                    tar.extractall(tmp_dir, members=safe_members)
         except tarfile.TarError as e:
             print(f"Error: failed to extract bundle {input_path}: {e}", file=sys.stderr)
             shutil.rmtree(tmp_dir, ignore_errors=True)

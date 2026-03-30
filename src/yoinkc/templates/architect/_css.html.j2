@@ -348,7 +348,7 @@ body { display: flex; flex-direction: column; }
   right: 0;
   top: 100%;
   z-index: 100;
-  min-width: 160px;
+  min-width: 220px;
   background: var(--pf-t--global--background--color--primary--default, #1b1d21);
   border: 1px solid var(--pf-t--global--border--color--default, #444);
   border-radius: var(--pf-t--global--border--radius--small, 3px);
@@ -358,8 +358,49 @@ body { display: flex; flex-direction: column; }
 }
 .move-menu.open { display: block; }
 
+/* .move-menu-item is defined in the impact badge section below */
+.move-menu-item:hover {
+  background: var(--pf-t--global--background--color--secondary--hover, rgba(255,255,255,0.08));
+}
+
+/* Impact badges — inline on move/copy actions */
+.action-with-impact {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.impact-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  padding: 0.0625rem 0.375rem;
+  border-radius: 99px;
+  white-space: nowrap;
+  cursor: default;
+  letter-spacing: 0.01em;
+}
+
+/* Turbulence levels */
+.impact-low {
+  background: rgba(62, 134, 53, 0.2);
+  color: var(--pf-t--global--color--status--success--default, #3e8635);
+}
+.impact-med {
+  background: rgba(240, 171, 0, 0.2);
+  color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+}
+.impact-high {
+  background: rgba(201, 25, 11, 0.2);
+  color: var(--pf-t--global--color--status--danger--default, #c9190b);
+}
+
+/* Impact badge inside copy-to menu items */
 .move-menu-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 100%;
   padding: 0.375rem 0.75rem;
   text-align: left;
@@ -369,18 +410,14 @@ body { display: flex; flex-direction: column; }
   color: var(--pf-t--global--text--color--regular, #eee);
   cursor: pointer;
   transition: background 0.1s;
+  gap: 0.5rem;
 }
-.move-menu-item:hover {
-  background: var(--pf-t--global--background--color--secondary--hover, rgba(255,255,255,0.08));
+.move-menu-item .impact-badge {
+  flex-shrink: 0;
 }
-
-.move-impact {
-  font-size: 0.625rem;
-  color: var(--pf-t--global--text--color--subtle, #888);
-  padding: 0.25rem 0.75rem 0.375rem;
-  line-height: 1.4;
-  border-top: 1px solid var(--pf-t--global--border--color--default, rgba(255,255,255,0.08));
-  margin-top: 0.125rem;
+.menu-item-label {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ── Bottom toolbar ──────────────────────────────────────────────────── */

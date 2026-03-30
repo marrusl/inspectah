@@ -74,35 +74,35 @@ def create_handler(
                 self._send(404, b"Not found", "text/plain")
 
         def do_POST(self) -> None:
-            # Reject oversized request bodies (max 1 MB)
-            content_length = int(self.headers.get("Content-Length", 0))
+            # Parse and validate Content-Length
+            try:
+                content_length = int(self.headers.get("Content-Length", 0))
+            except (ValueError, TypeError):
+                self._send_json(400, {"error": "Invalid Content-Length header"})
+                return
+            if content_length <= 0:
+                self._send_json(400, {"error": "Missing or invalid Content-Length"})
+                return
             if content_length > _MAX_POST_BODY:
                 self._send_json(413, {"error": "Request body too large"})
                 return
 
             path = self.path.split("?")[0]
             if path == "/api/move":
-                try:
-                    length = int(self.headers.get("Content-Length", 0))
-                    body = json.loads(self.rfile.read(length))
-                    self._topology.move_package(
-                        body["package"], body["from"], body["to"],
-                    )
-                    self._send_json(200, self._topology.to_dict())
-                except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
-                    self._send_json(400, {"error": str(e)})
+                self._handle_pkg_operation(self._topology.move_package, content_length)
             elif path == "/api/copy":
-                try:
-                    length = int(self.headers.get("Content-Length", 0))
-                    body = json.loads(self.rfile.read(length))
-                    self._topology.copy_package(
-                        body["package"], body["from"], body["to"],
-                    )
-                    self._send_json(200, self._topology.to_dict())
-                except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
-                    self._send_json(400, {"error": str(e)})
+                self._handle_pkg_operation(self._topology.copy_package, content_length)
             else:
                 self._send(404, b"Not found", "text/plain")
+
+        def _handle_pkg_operation(self, operation, content_length: int) -> None:
+            """Read JSON body, call a package operation, return updated topology."""
+            try:
+                body = json.loads(self.rfile.read(content_length))
+                operation(body["package"], body["from"], body["to"])
+                self._send_json(200, self._topology.to_dict())
+            except (ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+                self._send_json(400, {"error": str(e)})
 
         def _send(self, code: int, body: bytes, content_type: str, extra_headers: dict | None = None) -> None:
             self.send_response(code)

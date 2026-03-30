@@ -184,8 +184,12 @@
     var actionsHtml = '';
 
     if (isDerived) {
-      // "Move up" button — moves to parent layer
-      actionsHtml += '<button class="moveup-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(fromLayer.parent) + '">\u2191 Move up to ' + esc(fromLayer.parent) + '</button>';
+      // "Move up" button with inline impact badge
+      var moveImpact = calcImpact(pkg, fromLayer.parent, 'move');
+      actionsHtml += '<span class="action-with-impact">' +
+        '<button class="moveup-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(fromLayer.parent) + '" title="' + esc(moveImpact.text) + '">\u2191 Move up</button>' +
+        impactBadgeHtml(moveImpact) +
+      '</span>';
 
       // "Copy to" dropdown — sibling derived layers only
       var siblings = [];
@@ -202,11 +206,12 @@
           '<button class="move-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '">Copy to \u25BE</button>' +
           '<div class="move-menu' + menuOpen + '" data-menu-for="' + esc(fromLayer.name + '/' + pkg) + '">';
         for (var s = 0; s < siblings.length; s++) {
-          actionsHtml += '<button class="move-menu-item copy-action" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(siblings[s].name) + '">' +
-            '\u2192 ' + esc(siblings[s].name) +
+          var copyImpact = calcImpact(pkg, siblings[s].name, 'copy');
+          actionsHtml += '<button class="move-menu-item copy-action" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(siblings[s].name) + '" title="' + esc(copyImpact.text) + '">' +
+            '<span class="menu-item-label">\u2192 ' + esc(siblings[s].name) + '</span>' +
+            impactBadgeHtml(copyImpact) +
           '</button>';
         }
-        actionsHtml += '<div class="move-impact" data-impact-for="' + esc(fromLayer.name + '/' + pkg) + '"></div>';
         actionsHtml += '</div></div>';
       }
     }
@@ -242,15 +247,39 @@
     render();
   }
 
+  function turbulenceLevel(value) {
+    if (value < 3) return 'low';
+    if (value < 8) return 'med';
+    return 'high';
+  }
+
   function calcImpact(pkg, targetLayerName, action) {
     var target = getLayer(targetLayerName);
-    if (!target) return '';
+    if (!target) return { text: '', level: 'low', fanOut: 0, oldTurb: 0, newTurb: 0 };
     var verb = (action === 'move') ? 'Moving' : 'Copying';
     var newPkgCount = target.packages.length + 1;
-    var newTurbulence = Math.max(1.0, target.fan_out * (newPkgCount / 50.0));
-    return verb + ' ' + pkg + ' to ' + targetLayerName + ' affects ' + target.fan_out +
-      ' downstream image' + (target.fan_out !== 1 ? 's' : '') +
+    var affectedImages = target.fan_out + 1;  // includes the target layer itself
+    var newTurbulence = target.parent !== null
+      ? Math.max(1.0, affectedImages * (newPkgCount / 50.0))
+      : affectedImages * (newPkgCount / 50.0);
+    var text = verb + ' ' + pkg + ' to ' + targetLayerName + ' affects ' + affectedImages +
+      ' image' + (affectedImages !== 1 ? 's' : '') +
       '. Turbulence: ' + target.turbulence.toFixed(1) + ' \u2192 ' + newTurbulence.toFixed(1);
+    return {
+      text: text,
+      level: turbulenceLevel(newTurbulence),
+      fanOut: affectedImages,
+      oldTurb: target.turbulence,
+      newTurb: newTurbulence
+    };
+  }
+
+  function impactBadgeHtml(impact) {
+    var levelClass = 'impact-' + impact.level;
+    return '<span class="impact-badge ' + levelClass + '" title="' + esc(impact.text) + '">' +
+      impact.fanOut + ' img' + (impact.fanOut !== 1 ? 's' : '') +
+      ' \u00B7 ' + impact.oldTurb.toFixed(1) + '\u2192' + impact.newTurb.toFixed(1) +
+    '</span>';
   }
 
   function moveUp(pkg, from, to) {
@@ -420,9 +449,6 @@
       var key = moveBtn.dataset.from + '/' + moveBtn.dataset.pkg;
       openMenuPkg = (openMenuPkg === key) ? null : key;
       renderDrawer();
-      if (openMenuPkg) {
-        updateImpactText(moveBtn.dataset.pkg, moveBtn.dataset.from);
-      }
       return;
     }
 
@@ -439,29 +465,7 @@
     }
   });
 
-  // Hover on menu items shows impact
-  drawerBody.addEventListener('mouseover', function(e) {
-    var menuItem = e.target.closest('.move-menu-item');
-    if (menuItem) {
-      var impactEl = menuItem.parentElement.querySelector('.move-impact');
-      if (impactEl) {
-        var action = menuItem.classList.contains('copy-action') ? 'copy' : 'move';
-        impactEl.textContent = calcImpact(menuItem.dataset.pkg, menuItem.dataset.to, action);
-      }
-    }
-  });
-
-  function updateImpactText(pkg, from) {
-    var impactEl = document.querySelector('.move-impact[data-impact-for="' + from + '/' + pkg + '"]');
-    if (impactEl) {
-      // Show default impact for first target
-      var firstItem = impactEl.parentElement.querySelector('.move-menu-item');
-      if (firstItem) {
-        var action = firstItem.classList.contains('copy-action') ? 'copy' : 'move';
-        impactEl.textContent = calcImpact(pkg, firstItem.dataset.to, action);
-      }
-    }
-  }
+  // Impact is now shown inline via badges — no hover handler needed
 
   // Export button
   var exportBtn = document.getElementById('btn-export');
