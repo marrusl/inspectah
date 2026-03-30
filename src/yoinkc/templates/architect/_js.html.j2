@@ -59,6 +59,30 @@
   }
 
   function getFleetColor(idx) { return 'fleet-color-' + (idx % 6); }
+  function getLayerColor(idx) { return 'layer-color-' + (idx % 6); }
+
+  // Map layer name → fleet index for color coordination
+  function getLayerFleetIndex(layerName) {
+    for (var i = 0; i < topology.fleets.length; i++) {
+      if (topology.fleets[i].name === layerName) return i;
+    }
+    return -1;
+  }
+
+  // Count total hosts served by a layer (own fleets + derived fleets)
+  function layerHostCount(layer) {
+    var count = 0;
+    for (var i = 0; i < layer.fleets.length; i++) {
+      for (var j = 0; j < topology.fleets.length; j++) {
+        if (topology.fleets[j].name === layer.fleets[i]) {
+          count += topology.fleets[j].host_count;
+        }
+      }
+    }
+    // For base layer, count all hosts
+    if (layer.parent === null) return totalHosts();
+    return count;
+  }
 
   function totalHosts() {
     var n = 0;
@@ -104,14 +128,15 @@
     }
 
     if (base) {
-      html += renderLayerCard(base, false);
+      html += renderLayerCard(base, false, -1);
     }
 
     if (derived.length > 0) {
       html += '<div class="derived-group">';
       for (var j = 0; j < derived.length; j++) {
+        var fleetIdx = getLayerFleetIndex(derived[j].name);
         html += '<div class="derived-connector">';
-        html += renderLayerCard(derived[j], true);
+        html += renderLayerCard(derived[j], true, fleetIdx);
         html += '</div>';
       }
       html += '</div>';
@@ -120,17 +145,20 @@
     layerTree.innerHTML = html;
   }
 
-  function renderLayerCard(layer, isDerived) {
+  function renderLayerCard(layer, isDerived, fleetIdx) {
     var sel = (layer.name === selectedLayer) ? ' layer-selected' : '';
     var cls = isDerived ? ' layer-derived' : '';
+    var colorCls = (fleetIdx >= 0) ? ' ' + getLayerColor(fleetIdx) : ' layer-color-base';
     var fleetLabel = layer.fleets.length > 0 ? layer.fleets.join(', ') : '';
+    var hosts = layerHostCount(layer);
 
-    return '<div class="layer-card' + cls + sel + '" data-layer="' + esc(layer.name) + '">' +
+    return '<div class="layer-card' + cls + sel + colorCls + '" data-layer="' + esc(layer.name) + '">' +
       '<div class="layer-card-header">' +
         '<span class="layer-card-name">' + esc(layer.name) + '</span>' +
         '<div class="layer-card-badges">' +
           '<button class="layer-preview-btn" data-preview-layer="' + esc(layer.name) + '" title="View Containerfile">\uD83D\uDCC4 View</button>' +
-          '<span class="layer-badge layer-badge-pkg">' + layer.packages.length + ' pkgs</span>' +
+          (hosts > 0 ? '<span class="layer-badge layer-badge-hosts" title="Number of hosts served by this layer">' + hosts + ' host' + (hosts !== 1 ? 's' : '') + '</span>' : '') +
+          '<span class="layer-badge layer-badge-pkg">' + layer.packages.length + ' pkg' + (layer.packages.length !== 1 ? 's' : '') + '</span>' +
           (layer.fan_out > 0 ? '<span class="layer-badge layer-badge-fanout" title="Number of derived layers that rebuild when this layer changes">fan-out: ' + layer.fan_out + '</span>' : '') +
           '<span class="layer-badge layer-badge-turbulence" title="Estimated update impact: fan-out × package density. Higher = more coordination needed when this layer changes.">turbulence: ' + layer.turbulence.toFixed(1) + '</span>' +
         '</div>' +
