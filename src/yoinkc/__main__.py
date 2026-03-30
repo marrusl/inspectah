@@ -261,6 +261,9 @@ def main(argv: Optional[list] = None, cwd: Optional[Path] = None) -> int:
             case "refine":
                 from .refine import run_refine
                 return run_refine(args)
+            case "architect":
+                from .architect.cli import run_architect
+                return run_architect(args)
             case other:
                 print(f"Unknown command: {other}", file=sys.stderr)
                 return 1
