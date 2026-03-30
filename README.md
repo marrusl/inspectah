@@ -185,21 +185,30 @@ cp web-servers-refined.tar.gz db-servers-refined.tar.gz gpu-nodes-refined.tar.gz
 ./run-yoinkc.sh architect refined-fleets.tar.gz
 ```
 
-Architect serves an interactive UI on `http://localhost:8643`. The UI shows:
+Architect serves an interactive UI on `http://localhost:8643` (or the next available port; customizable with `--port`). The UI shows:
 - **Sidebar:** All loaded fleets with host/package counts
-- **Center:** Layer topology tree (base + derived layers) with package counts and metrics (hover for explanations)
-- **Drawer:** Packages in the selected layer with move/copy controls
+- **Center:** Layer topology tree (base + derived layers) with package counts and metrics
+- **Drawer:** Packages in the selected layer (derived layers include move/copy controls)
 - **Preview:** Click "View" on any layer card to see its generated Containerfile
+- **Impact badges:** Hover over metrics to see explanations of fan-out and turbulence scores
 
-Architect initially proposes all 100%-prevalent packages (shared by all fleets) go into the base layer, with role-specific packages in derived layers. Use "Move up ↑" to shift packages from derived layers to the parent layer, or "Copy to →" to duplicate a package across sibling layers. Exported Containerfiles use bare package names (e.g., `vim`) for maximum compatibility across minor version boundaries.
+Architect initially proposes all 100%-prevalent packages (shared by all fleets) go into the base layer, with role-specific packages in derived layers.
 
-When ready, click **Export Containerfiles** to download a tarball containing a `Containerfile` for each layer, plus a `build.sh` script with ordered build commands.
+**Moving packages between layers** (available on derived layer packages):
+- Use "Move up ↑" to shift a package from a derived layer to its parent
+- Use "Copy to →" to duplicate a package across sibling layers
+- When a package is moved up to the base layer, it is removed from the source derived layer (the base layer already serves all fleets)
+
+Exported Containerfiles use bare package names (e.g., `vim`) for maximum compatibility across minor version boundaries.
+
+When ready, click **Export Containerfiles** to download a tarball containing one `Containerfile` per layer, plus a `build.sh` script with ordered build commands.
 
 **Direct usage** (when installed via pip):
 
 ```bash
 yoinkc architect ./refined-fleets/
 yoinkc architect refined-fleets.tar.gz
+yoinkc architect ./refined-fleets/ --port 9000 --no-browser
 ```
 
 ---
@@ -297,9 +306,12 @@ Use `--output-dir` to get unpacked directory output instead.
 
 | Argument | Description |
 |----------|-------------|
-| `input` | Directory containing refined fleet tarballs (`.tar.gz`), or a tarball bundle of tarballs |
+| `INPUT` | Directory containing refined fleet tarballs (`.tar.gz`), or a tarball bundle of tarballs |
+| `--port PORT` | Port for the architect web UI (default: 8643) |
+| `--no-browser` | Don't open browser automatically |
+| `--bind ADDRESS` | Address to bind (default: 127.0.0.1) |
 
-Launches an HTTP server on port 8643 with an interactive web UI for layer topology planning. If a tarball is provided, it's automatically extracted to a temporary directory. Press Ctrl+C to stop.
+Launches an HTTP server with an interactive web UI for layer topology planning. If a tarball is provided, it's automatically extracted to a temporary directory. Press Ctrl+C to stop.
 
 > `yoinkc-build` is a standalone companion script, not a subcommand. Its usage is covered in [Build](#build).
 
