@@ -193,7 +193,7 @@ Architect serves an interactive UI on `http://localhost:8643`. The UI shows:
 
 Architect initially proposes all 100%-prevalent packages (shared by all fleets) go into the base layer, with role-specific packages in derived layers. Use "Move up ↑" to shift packages from derived layers to the parent layer, or "Copy to →" to duplicate a package across sibling layers. Exported Containerfiles use bare package names (e.g., `vim`) for maximum compatibility across minor version boundaries.
 
-When ready, click **Export Containerfiles** to download a tarball containing a `Containerfile` and `tree/` directory for each layer, plus a `build.sh` script with ordered build commands.
+When ready, click **Export Containerfiles** to download a tarball containing a `Containerfile` for each layer, plus a `build.sh` script with ordered build commands.
 
 **Direct usage** (when installed via pip):
 

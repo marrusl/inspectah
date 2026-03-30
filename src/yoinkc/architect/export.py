@@ -8,7 +8,7 @@ from yoinkc.architect.analyzer import LayerTopology
 
 
 def export_topology(topo: LayerTopology, base_image: str) -> bytes:
-    """Generate a .tar.gz containing Containerfile + tree/ per layer, plus build.sh."""
+    """Generate a .tar.gz containing a Containerfile per layer, plus build.sh."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
         for layer in topo.layers:

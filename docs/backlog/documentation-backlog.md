@@ -26,7 +26,7 @@
 
 - [ ] **API reference docs** — Document HTTP endpoints for `yoinkc refine` and `yoinkc architect`:
   - Refine server: `GET /`, `POST /re-render`, `GET /download`
-  - Architect server: `GET /`, `GET /api/topology`, `POST /api/move`, `POST /api/copy`, `GET /api/preview/{layer}`, `POST /api/export`
+  - Architect server: `GET /`, `GET /api/topology`, `POST /api/move`, `POST /api/copy`, `GET /api/preview/{layer}`, `GET /api/export`
   - Include request/response schemas, error codes, example curl commands
   - Decision: separate `docs/reference/api.md` or embed in how-to guides?
 

@@ -242,12 +242,13 @@
     render();
   }
 
-  function calcImpact(pkg, targetLayerName) {
+  function calcImpact(pkg, targetLayerName, action) {
     var target = getLayer(targetLayerName);
     if (!target) return '';
+    var verb = (action === 'move') ? 'Moving' : 'Copying';
     var newPkgCount = target.packages.length + 1;
     var newTurbulence = Math.max(1.0, target.fan_out * (newPkgCount / 50.0));
-    return 'Moving ' + pkg + ' to ' + targetLayerName + ' affects ' + target.fan_out +
+    return verb + ' ' + pkg + ' to ' + targetLayerName + ' affects ' + target.fan_out +
       ' downstream image' + (target.fan_out !== 1 ? 's' : '') +
       '. Turbulence: ' + target.turbulence.toFixed(1) + ' \u2192 ' + newTurbulence.toFixed(1);
   }
@@ -444,7 +445,8 @@
     if (menuItem) {
       var impactEl = menuItem.parentElement.querySelector('.move-impact');
       if (impactEl) {
-        impactEl.textContent = calcImpact(menuItem.dataset.pkg, menuItem.dataset.to);
+        var action = menuItem.classList.contains('copy-action') ? 'copy' : 'move';
+        impactEl.textContent = calcImpact(menuItem.dataset.pkg, menuItem.dataset.to, action);
       }
     }
   });
@@ -455,7 +457,8 @@
       // Show default impact for first target
       var firstItem = impactEl.parentElement.querySelector('.move-menu-item');
       if (firstItem) {
-        impactEl.textContent = calcImpact(pkg, firstItem.dataset.to);
+        var action = firstItem.classList.contains('copy-action') ? 'copy' : 'move';
+        impactEl.textContent = calcImpact(pkg, firstItem.dataset.to, action);
       }
     }
   }
