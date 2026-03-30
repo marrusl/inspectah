@@ -66,8 +66,12 @@ if command -v yoinkc &>/dev/null; then
     echo ""
     yoinkc architect "$BUNDLE" --no-browser
 else
+    # Copy bundle to cwd so it survives temp cleanup
+    cp "$BUNDLE" ./architect-demo-bundle.tar.gz
     echo "=== Done ==="
-    echo "yoinkc not found — skipping architect launch."
-    echo "To run manually:"
-    echo "  yoinkc architect $BUNDLE --no-browser"
+    echo "Bundle saved to: $(pwd)/architect-demo-bundle.tar.gz"
+    echo ""
+    echo "Copy to your workstation and run:"
+    echo "  scp $(hostname):$(pwd)/architect-demo-bundle.tar.gz ."
+    echo "  yoinkc architect architect-demo-bundle.tar.gz"
 fi
