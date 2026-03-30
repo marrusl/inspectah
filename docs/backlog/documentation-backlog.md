@@ -1,5 +1,5 @@
 # Documentation Backlog
-**Maintained by:** Mango
+**Maintained by:** docs team
 **Last updated:** 2026-03-30
 
 ## Priority 1 (Do Soon)
@@ -82,6 +82,6 @@
 ## Deferred (Known Gaps, No Priority Yet)
 
 - Formal design docs for features still in `docs/specs/proposed/` — wait until implemented
-- Upstream bootc/Podman change impact tracking — Dash's domain, not pure docs
+- Upstream bootc/Podman change impact tracking — separate from docs
 - SEO optimization and repo metadata (badges, description) — ask Mark before changing
 - Deprecation/removal policy for old flags or output formats — establish when needed

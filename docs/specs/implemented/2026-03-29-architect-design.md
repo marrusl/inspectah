@@ -3,7 +3,7 @@
 **Date:** 2026-03-29
 **Status:** Approved
 **Deadline:** April 8, 2026 (demo at internal Red Hat meeting)
-**Reviewed by:** Mark Russell, Kiwi (orchestrator), Dash (technical), Kit (buildability), Ember (demo positioning)
+**Reviewed by:** Mark Russell
 
 ## Overview
 
