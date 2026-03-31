@@ -113,8 +113,16 @@ function trapFocus(modalElement, closeHandler) {
 
   document.querySelectorAll('#warnings-list .warning-row-dismiss').forEach(function(btn){
     btn.addEventListener('click', function(){
-      this.closest('.warning-row').classList.add('dismissed');
-      updateWarningBadge();
+      var row = this.closest('.warning-row');
+      row.style.maxHeight = row.scrollHeight + 'px';
+      void row.offsetHeight; // force reflow
+      row.classList.add('dismissing');
+      setTimeout(function() {
+        row.classList.add('dismissed');
+        row.classList.remove('dismissing');
+        row.style.maxHeight = '';
+        updateWarningBadge();
+      }, 150);
     });
   });
   var dismissAll = document.getElementById('warning-dismiss-all');
@@ -164,7 +172,8 @@ function trapFocus(modalElement, closeHandler) {
   // --- Interactive item exclusion ---
   var toolbar = document.getElementById('exclude-toolbar');
   var statusTextEl = document.getElementById('toolbar-status-text');
-  var toast = document.getElementById('toast');
+  var toastGroup = document.getElementById('toast-group');
+  var toastMessage = document.getElementById('toast-message');
   var rerenderBtn = document.getElementById('btn-rerender');
   var tarballBtn = document.getElementById('btn-tarball');
   var downloadSnapshotBtn = document.getElementById('btn-download-snapshot');
@@ -229,11 +238,16 @@ function trapFocus(modalElement, closeHandler) {
     if (editorReRenderBtn) editorReRenderBtn.disabled = !canReRender;
   }
 
-  function showToast(msg, ms) {
-    if (!toast) return;
-    toast.textContent = msg;
-    toast.classList.add('visible');
-    setTimeout(function(){ toast.classList.remove('visible'); }, ms || 4000);
+  function showToast(msg, ms, isError) {
+    if (!toastGroup || !toastMessage) return;
+    var alertEl = document.getElementById('toast');
+    if (alertEl) {
+      alertEl.classList.toggle('pf-m-success', !isError);
+      alertEl.classList.toggle('pf-m-danger', !!isError);
+    }
+    toastMessage.textContent = msg;
+    toastGroup.classList.add('visible');
+    setTimeout(function(){ toastGroup.classList.remove('visible'); }, ms || 4000);
   }
 
   function countToggleChanges() {
@@ -665,7 +679,7 @@ function trapFocus(modalElement, closeHandler) {
       if (!helperAvailable) return;
       if (!dirty) return;
       var origText = rerenderBtn.innerHTML;
-      rerenderBtn.innerHTML = '<span class="spinner"></span>Re-rendering...';
+      rerenderBtn.innerHTML = '<span class="pf-v6-c-spinner pf-m-sm" role="progressbar" aria-label="Loading"><span class="pf-v6-c-spinner__clipper"></span><span class="pf-v6-c-spinner__lead-ball"></span><span class="pf-v6-c-spinner__tail-ball"></span></span>Re-rendering...';
       rerenderBtn.disabled = true;
       var sliderEl = document.getElementById('summary-prevalence-slider');
       if (snapshot.meta && snapshot.meta.fleet && sliderEl) {
@@ -688,7 +702,7 @@ function trapFocus(modalElement, closeHandler) {
         document.write(html);
         document.close();
       }).catch(function(err){
-        showToast('Re-render failed: ' + err.message, 5000);
+        showToast('Re-render failed: ' + err.message, 5000, true);
         rerenderBtn.innerHTML = origText;
         rerenderBtn.disabled = false;
       });
@@ -777,7 +791,7 @@ function trapFocus(modalElement, closeHandler) {
           });
         }
       });
-      var el = document.querySelector('.triage-count[data-triage-section="' + sectionName + '"]');
+      var el = document.querySelector('.triage-badge[data-triage-section="' + sectionName + '"]');
       if (el) {
         var oldText = el.textContent;
         el.textContent = String(count);
@@ -1357,7 +1371,9 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
     var count = parseInt(this.getAttribute('data-count'), 10) || 0;
     var total = parseInt(this.getAttribute('data-total'), 10) || 0;
     var popover = document.createElement('div');
-    popover.className = 'fleet-popover';
+    popover.className = 'pf-v6-c-popover fleet-popover';
+    popover.setAttribute('role', 'dialog');
+    popover.setAttribute('aria-label', 'Fleet details');
     /* Stop clicks inside popover from bubbling to the bar handler.
        Also close the dropdown if the click was outside it. */
     popover.addEventListener('click', function(ev) {
@@ -1368,16 +1384,40 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
       }
     });
 
+    var arrow = document.createElement('div');
+    arrow.className = 'pf-v6-c-popover__arrow';
+    popover.appendChild(arrow);
+
+    var popContent = document.createElement('div');
+    popContent.className = 'pf-v6-c-popover__content';
+
     if (!hostsAttr) {
-      popover.textContent = 'Host list not available';
+      var popBody = document.createElement('div');
+      popBody.className = 'pf-v6-c-popover__body';
+      popBody.textContent = 'Host list not available';
+      popContent.appendChild(popBody);
     } else {
       var hostList = hostsAttr.split(', ').map(function(h) { return h.trim(); }).filter(Boolean);
       var hostTitles = hostTitlesAttr
         ? hostTitlesAttr.split(', ').map(function(h) { return h.trim(); })
         : hostList.map(fleetHostTitle);
       if (hostList.length === 0) {
-        popover.textContent = 'Host list not available';
+        var popBody = document.createElement('div');
+        popBody.className = 'pf-v6-c-popover__body';
+        popBody.textContent = 'Host list not available';
+        popContent.appendChild(popBody);
       } else {
+        var popHeader = document.createElement('div');
+        popHeader.className = 'pf-v6-c-popover__header';
+        var popTitle = document.createElement('h3');
+        popTitle.className = 'pf-v6-c-popover__title';
+        popTitle.textContent = 'Fleet Breakdown';
+        popHeader.appendChild(popTitle);
+        popContent.appendChild(popHeader);
+
+        var popBody = document.createElement('div');
+        popBody.className = 'pf-v6-c-popover__body';
+
         var header = document.createElement('div');
         header.className = 'fleet-popover-header';
 
@@ -1449,7 +1489,7 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
         splitBtn.appendChild(dropArrow);
         splitBtn.appendChild(dropdown);
         header.appendChild(splitBtn);
-        popover.appendChild(header);
+        popBody.appendChild(header);
 
         var ul = document.createElement('ul');
         hostList.forEach(function(h, idx) {
@@ -1458,9 +1498,11 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
           li.title = hostTitles[idx] || fleetHostTitle(h);
           ul.appendChild(li);
         });
-        popover.appendChild(ul);
+        popBody.appendChild(ul);
+        popContent.appendChild(popBody);
       }
     }
+    popover.appendChild(popContent);
 
     this.style.position = 'relative';
     this.appendChild(popover);
@@ -1477,7 +1519,7 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
 
 /* Close popover on click outside */
 document.addEventListener('click', function(e) {
-  if (activePopover && !e.target.closest('.fleet-bar')) {
+  if (activePopover && !e.target.closest('.fleet-bar') && !e.target.closest('.pf-v6-c-popover')) {
     if (activePopover._releaseTrap) activePopover._releaseTrap();
     activePopover.remove();
     activePopover = null;

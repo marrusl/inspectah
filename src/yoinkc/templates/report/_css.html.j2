@@ -87,6 +87,14 @@ body { padding-bottom: var(--yoinkc-content-bottom-padding); }
 
 /* Warning dismiss */
 .warning-row.dismissed { display: none; }
+.warning-row.dismissing {
+  opacity: 0;
+  max-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  transition: opacity 150ms ease-out, max-height 150ms ease-out, margin 150ms ease-out, padding 150ms ease-out;
+}
 #warnings-list { max-height: 400px; overflow-y: auto; }
 
 /* Summary two-column grid */
@@ -157,10 +165,14 @@ details.audit-expand { margin-bottom: 0.25rem; }
 #exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
 
 
-/* Sidebar triage counts */
-.triage-count { font-size: 0.75rem; opacity: 0.7; margin-left: 0.25rem; }
-.triage-count::before { content: "("; }
-.triage-count::after { content: ")"; }
+/* Sidebar triage badges (PF6 badge) */
+.triage-badge { margin-left: 0.25rem; }
+.triage-badge-reviewed {
+  background: var(--pf-t--global--color--status--success--default, #3e8635);
+}
+.triage-badge-attention {
+  background: var(--pf-t--global--color--status--warning--default, #f0ab00);
+}
 
 /* ── Extracted inline styles ────────────────────────────────────────────── */
 
@@ -313,13 +325,12 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .deps-list { margin: var(--pf-t--global--spacer--xs) 0; padding-left: 1.5rem; }
 .card-actions-layout { display: flex; align-items: center; gap: var(--pf-t--global--spacer--sm); flex-wrap: nowrap; }
 
-/* Toast */
-.toast { position: fixed; top: 1rem; right: 1rem; z-index: 2000; display: none; }
-.toast.visible { display: block; }
+/* Toast (PF6 alert group) */
+.pf-v6-c-alert-group.pf-m-toast { position: fixed; top: 1rem; right: 1rem; z-index: 2000; display: none; }
+.pf-v6-c-alert-group.pf-m-toast.visible { display: block; }
 
-/* Spinner (for re-render button) */
-.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-top-color: transparent; border-radius: 50%; animation: spin 0.6s linear infinite; margin-right: 0.5rem; vertical-align: middle; }
-@keyframes spin { to { transform: rotate(360deg); } }
+/* PF6 spinner sizing override for inline button usage */
+.pf-v6-c-spinner.pf-m-sm { margin-right: 0.5rem; vertical-align: middle; }
 
 /* Form controls in table cells – compact rows with breathing room between columns */
 .pf-v6-c-table td .pf-v6-c-form-control {
@@ -377,24 +388,19 @@ details.audit-expand { margin-bottom: 0.25rem; }
 }
 /* Fleet prevalence inline badge (compose-files context) */
 .fleet-prevalence-inline { display: inline-block; margin-left: 8px; }
-/* Fleet popover */
-.fleet-popover {
+/* Fleet popover (PF6) */
+.pf-v6-c-popover.fleet-popover {
   position: absolute;
   z-index: 1000;
-  background: var(--pf-t--global--background--color--primary--default, #fff);
-  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
-  border-radius: 4px;
-  padding: 8px 12px;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-  font-size: 13px;
   max-width: 300px;
+  font-size: 13px;
 }
-.fleet-popover ul {
+.fleet-popover .pf-v6-c-popover__body ul {
   list-style: none;
   margin: 0;
   padding: 0;
 }
-.fleet-popover li {
+.fleet-popover .pf-v6-c-popover__body li {
   padding: 2px 0;
 }
 /* Fleet popover: header + split copy button */
