@@ -1,21 +1,6 @@
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
 <div id="exclude-toolbar" class="pf-v6-c-toolbar" role="toolbar" aria-label="Actions">
   <button id="btn-reset" class="pf-v6-c-button pf-m-link pf-m-danger" type="button" disabled title="Reset all selections to their initial state">Reset</button>
-  {% if fleet_meta and refine_mode %}
-  <div class="toolbar-divider"></div>
-  <div class="fleet-slider-group">
-    <label class="fleet-slider-label" for="prevalence-slider">Prevalence:</label>
-    <input type="range" id="prevalence-slider" class="fleet-slider"
-           min="1" max="100"
-           value="{{ fleet_meta.min_prevalence }}">
-    <span id="prevalence-value" class="fleet-slider-value">{{ fleet_meta.min_prevalence }}%</span>
-    <span id="prevalence-preview" class="fleet-slider-preview"></span>
-    <button id="btn-apply-prevalence" class="pf-v6-c-button pf-m-secondary fleet-slider-apply"
-            style="display: none;">Apply</button>
-    <button id="btn-cancel-prevalence" class="pf-v6-c-button pf-m-link fleet-slider-cancel"
-            style="display: none;">Cancel</button>
-  </div>
-  {% endif %}
   <span class="toolbar-status" id="toolbar-status-text"></span>
   <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   {% if not refine_mode %}

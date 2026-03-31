@@ -860,9 +860,13 @@
       editorSaveAll();
       reRenderBtn.textContent = 'Re-rendering\u2026';
       reRenderBtn.disabled = true;
-      var sliderEl = document.getElementById('prevalence-slider');
+      var sliderEl = document.getElementById('summary-prevalence-slider');
       if (snapshot.meta && snapshot.meta.fleet && sliderEl) {
-        snapshot.meta.fleet.min_prevalence = parseInt(sliderEl.value, 10);
+        var newThreshold = parseInt(sliderEl.value, 10);
+        if (typeof window.applyPrevalenceThreshold === 'function') {
+          window.applyPrevalenceThreshold(newThreshold);
+        }
+        snapshot.meta.fleet.min_prevalence = newThreshold;
       }
       fetch(window.location.origin + '/api/re-render', {
         method: 'POST',

@@ -3,7 +3,15 @@
 <div id="section-{{ id }}" class="section{% if visible %} visible{% endif %}">
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header">
-      <div class="pf-v6-c-card__title"><h2>{{ title }}</h2></div>
+      <div class="pf-v6-c-card__title" style="display: flex; align-items: center;"><h2>{{ title }}</h2>
+      {% if fleet_meta and id != 'summary' %}
+      <span class="pf-v6-c-badge pf-m-read prevalence-badge"
+            title="Click to adjust prevalence threshold"
+            style="cursor: pointer; margin-left: auto;">
+        Prevalence: <span class="prevalence-badge-value">{{ fleet_meta.min_prevalence }}%</span>
+      </span>
+      {% endif %}
+      </div>
     </div>
     <div class="pf-v6-c-card__body">
     {%- if triageable %}
