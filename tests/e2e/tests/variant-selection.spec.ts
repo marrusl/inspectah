@@ -58,15 +58,25 @@ test.describe('Variant Selection', () => {
     const childrenRow = page.locator('tr.fleet-variant-children').first();
     await expect(childrenRow).toBeVisible();
 
-    // Each variant child should show "selected" label (all included by default)
+    // Variant children exist
     const appConfVariants = page.locator('tr[data-variant-group="/etc/app.conf"]');
     const count = await appConfVariants.count();
     expect(count).toBe(2);
 
-    for (let i = 0; i < count; i++) {
-      const label = appConfVariants.nth(i).locator('.variant-selected-label');
-      await expect(label).toContainText('selected');
-    }
+    // Only the auto-selected variant (the one with include=true) shows
+    // a "selected" label. The other variant shows a "Compare" button.
+    // Verify exactly one variant has the "selected" label.
+    const selectedLabels = page.locator(
+      'tr[data-variant-group="/etc/app.conf"] .variant-selected-label'
+    );
+    await expect(selectedLabels).toHaveCount(1);
+    await expect(selectedLabels.first()).toContainText('selected');
+
+    // The non-selected variant should have a "Compare" button
+    const compareButtons = page.locator(
+      'tr[data-variant-group="/etc/app.conf"] .variant-compare-btn'
+    );
+    await expect(compareButtons).toHaveCount(1);
   });
 
   test('unchecking a variant excludes it and activates dirty state', async ({ page }) => {
@@ -118,11 +128,20 @@ test.describe('Variant Selection', () => {
     const count = await httpdVariants.count();
     expect(count).toBe(3);
 
-    // Uncheck all 3 by clicking the PF switch toggle spans
-    for (let i = 0; i < count; i++) {
-      const toggleSpan = httpdVariants.nth(i).locator('.pf-v6-c-switch__toggle');
-      await toggleSpan.click();
-    }
+    // httpd.conf is a tied variant group — all 3 start unchecked (excluded).
+    // The variant toggle uses radio-group behavior: checking one unchecks the rest.
+    // To test the "exclude all" state, first check variant 1 (which selects it
+    // and keeps others excluded via radio), then uncheck variant 1 to return
+    // all to the excluded state.
+    const variant1Toggle = httpdVariants.nth(0).locator('.pf-v6-c-switch__toggle');
+
+    // Click variant 1 to check it (radio selects it, others remain excluded)
+    await variant1Toggle.click();
+    await expect(httpdVariants.nth(0).locator('.include-toggle')).toBeChecked();
+
+    // Click variant 1 again to uncheck it (now all are excluded)
+    await variant1Toggle.click();
+    await expect(httpdVariants.nth(0).locator('.include-toggle')).not.toBeChecked();
 
     // All 3 variant rows should be excluded
     for (let i = 0; i < count; i++) {
