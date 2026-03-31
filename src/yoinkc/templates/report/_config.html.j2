@@ -27,11 +27,15 @@
         <td>
           <code>{{ path }}</code>
           <span class="pf-v6-c-label pf-m-compact pf-m-outline fleet-variant-toggle"
-                tabindex="0" role="button" aria-label="Toggle variants">
+                tabindex="0" role="button" aria-label="Toggle variants"
+                aria-expanded="false">
             <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
           </span>
           {% if is_tied %}
           <span class="variant-tie-badge"><span class="tie-icon">&#x26A0;</span> tied &mdash; compare &amp; choose</span>
+          {% elif group_has_selected %}
+          {# Show auto-selected badge when there's a winner (not tied) and multiple variants #}
+          <span class="variant-auto-badge">auto-selected</span>
           {% endif %}
         </td>
         <td></td><td></td>

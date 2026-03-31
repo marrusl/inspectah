@@ -1639,18 +1639,34 @@ document.addEventListener('click', function(e) {
 });
 
 /* Fleet: variant group expand/collapse */
-document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
-  badge.addEventListener('keydown', activateOnKeydown);
-  badge.addEventListener('click', function() {
-    var childRow = this.closest('tr').nextElementSibling;
+document.querySelectorAll('.fleet-variant-toggle').forEach(function(toggle) {
+  toggle.addEventListener('keydown', activateOnKeydown);
+  toggle.addEventListener('click', function() {
+    var row = this.closest('tr');
+    var childRow = row.nextElementSibling;
     if (childRow && childRow.classList.contains('fleet-variant-children')) {
       if (childRow.style.display === 'table-row') {
         childRow.style.display = '';
+        this.classList.remove('expanded');
+        this.setAttribute('aria-expanded', 'false');
       } else {
         childRow.style.display = 'table-row';
+        this.classList.add('expanded');
+        this.setAttribute('aria-expanded', 'true');
       }
     }
   });
+});
+
+// Pre-expand tied variant groups on page load
+document.querySelectorAll('.variant-tied .fleet-variant-toggle').forEach(function(toggle) {
+  var row = toggle.closest('tr');
+  var next = row.nextElementSibling;
+  if (next && next.classList.contains('fleet-variant-children')) {
+    next.style.display = 'table-row';
+    toggle.classList.add('expanded');
+    toggle.setAttribute('aria-expanded', 'true');
+  }
 });
 {% endif %}
 
