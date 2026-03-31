@@ -501,3 +501,111 @@ class TestVariantTieResolution:
         # The fix: tied branch checks for an existing user selection before
         # deselecting all variants.  Verify the guard is present in the JS.
         assert "selectedCount === 1" in html
+
+    def test_prevalence_js_skips_variant_members_in_phase1(self, tmp_path):
+        """Phase 1 of applyPrevalenceThreshold must not touch variant group items.
+
+        The root cause of variant selection loss was Phase 1 overwriting
+        include on ALL items (including variant members) based purely on
+        prevalence, then Phase 2 seeing multiple includes and discarding
+        the user's choice.  The fix collects variant group snapshot keys
+        and skips them in Phase 1.
+        """
+        snap = self._make_tied_snapshot(resolved=True)
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path, refine_mode=True)
+        html = (tmp_path / "report.html").read_text()
+        # Phase 1 must skip variant group members — check the guard code
+        assert "variantSnapKeys" in html
+        assert "variantSnapKeys.has(key)" in html
+
+    def test_non_default_variant_selection_rendered(self, tmp_path):
+        """When user selects the lower-prevalence variant, the HTML reflects it."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 1,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="majority-variant",
+                        include=False,  # user deselected the majority
+                        fleet=FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"]),
+                    ),
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="minority-variant",
+                        include=True,  # user chose the minority
+                        fleet=FleetPrevalence(count=1, total=3, hosts=["web-03"]),
+                    ),
+                ],
+            ),
+        )
+        from yoinkc.renderers.html_report import _build_context
+        env = Environment(autoescape=True)
+        ctx = _build_context(snap, tmp_path, env)
+        # The resolved tie should not be counted as unresolved
+        assert ctx["unresolved_ties"] == 0
+        # The selected label should appear in the rendered HTML
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "variant-selected-label" in html
+
+    def test_non_default_variant_survives_json_roundtrip(self, tmp_path):
+        """Lower-prevalence variant selection persists through JSON round-trip."""
+        import json
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 1,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="majority-variant",
+                        include=False,
+                        fleet=FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"]),
+                    ),
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="minority-variant",
+                        include=True,
+                        fleet=FleetPrevalence(count=1, total=3, hosts=["web-03"]),
+                    ),
+                ],
+            ),
+        )
+        data = json.loads(snap.model_dump_json())
+        reloaded = InspectionSnapshot.model_validate(data)
+        files = reloaded.config.files
+        included = [f for f in files if f.include]
+        assert len(included) == 1
+        assert included[0].content == "minority-variant"
+        # Verify the render also shows it correctly
+        from yoinkc.renderers.html_report import _build_context
+        env = Environment(autoescape=True)
+        ctx = _build_context(reloaded, tmp_path, env)
+        assert ctx["unresolved_ties"] == 0

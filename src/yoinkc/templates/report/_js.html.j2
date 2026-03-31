@@ -1828,12 +1828,35 @@ function countAtThreshold(threshold) {
 {% if fleet_meta and refine_mode %}
 (function() {
   function applyPrevalenceThreshold(threshold) {
-    // Phase 1: Recalculate all include values based on threshold
+    // Collect variant-group snapshot indices so Phase 1 can skip them.
+    // Variant groups require radio-constraint logic (Phase 2) and must
+    // not have their include state blindly overwritten by the threshold.
+    var variantSnapKeys = new Set();
+    document.querySelectorAll('[data-variant-group]').forEach(function(el) {
+      var section = el.getAttribute('data-snap-section');
+      var list = el.getAttribute('data-snap-list');
+      var idx = el.getAttribute('data-snap-index');
+      if (section && list && idx) variantSnapKeys.add(section + '/' + list + '/' + idx);
+    });
+    // Parent group header rows (.fleet-variant-group) share a snapshot
+    // index with the first variant child — skip those too.
+    document.querySelectorAll('.fleet-variant-group[data-snap-section]').forEach(function(el) {
+      var section = el.getAttribute('data-snap-section');
+      var list = el.getAttribute('data-snap-list');
+      var idx = el.getAttribute('data-snap-index');
+      if (section && list && idx) variantSnapKeys.add(section + '/' + list + '/' + idx);
+    });
+
+    // Phase 1: Recalculate include for NON-variant items based on threshold.
+    // Variant group members are handled exclusively in Phase 2.
     document.querySelectorAll('[data-snap-section]').forEach(function(el) {
       var section = el.getAttribute('data-snap-section');
       var list = el.getAttribute('data-snap-list');
       var idx = parseInt(el.getAttribute('data-snap-index'), 10);
       if (!section || !list || isNaN(idx) || idx < 0) return;
+      // Skip variant group members and their parent header rows.
+      var key = section + '/' + list + '/' + idx;
+      if (variantSnapKeys.has(key)) return;
       var arr = resolveSnapshotRef(section, list);
       if (!arr || !arr[idx] || !arr[idx].fleet) return;
       var f = arr[idx].fleet;
@@ -1844,7 +1867,10 @@ function countAtThreshold(threshold) {
       el.classList.toggle('excluded', !shouldInclude);
     });
 
-    // Phase 2: Apply variant radio constraint — keep only the most prevalent included variant per group
+    // Phase 2: Apply variant radio constraint.
+    // Because Phase 1 did NOT touch variant items, the snapshot still
+    // carries the user's selection (item.include is the pre-threshold
+    // state, i.e. whatever the user chose).
     var groups = {};
     document.querySelectorAll('[data-variant-group]').forEach(function(el) {
       var group = el.getAttribute('data-variant-group');
@@ -1865,56 +1891,57 @@ function countAtThreshold(threshold) {
         return bc - ac;
       });
 
-      // Tie detection: if the top two share the same count, deselect all.
-      var topCount = variants[0].item.fleet ? variants[0].item.fleet.count : 0;
-      var isTied = variants.length >= 2 &&
-        (variants[1].item.fleet ? variants[1].item.fleet.count : 0) === topCount;
+      // Check if exactly one variant is already user-selected.
+      var userSelected = null;
+      var selectedCount = 0;
+      variants.forEach(function(v) {
+        if (v.item.include) { userSelected = v; selectedCount++; }
+      });
 
-      if (isTied) {
-        // Preserve an existing user selection: if exactly one variant is
-        // already included the user resolved this tie — keep that choice.
-        var userSelected = null;
-        var selectedCount = 0;
+      if (selectedCount === 1) {
+        // User has resolved this group — preserve their choice, deselect others.
         variants.forEach(function(v) {
-          if (v.item.include) { userSelected = v; selectedCount++; }
+          if (v !== userSelected) {
+            v.item.include = false;
+            var cb = v.el.querySelector('.include-toggle');
+            if (cb) cb.checked = false;
+            v.el.classList.add('excluded');
+          } else {
+            v.item.include = true;
+            var cb = v.el.querySelector('.include-toggle');
+            if (cb) cb.checked = true;
+            v.el.classList.remove('excluded');
+          }
         });
-        if (selectedCount === 1) {
-          // User resolved the tie — enforce radio constraint around it.
+      } else {
+        // No single user selection — fall back to prevalence-based logic.
+        var topCount = variants[0].item.fleet ? variants[0].item.fleet.count : 0;
+        var isTied = variants.length >= 2 &&
+          (variants[1].item.fleet ? variants[1].item.fleet.count : 0) === topCount;
+
+        if (isTied) {
+          // Tied with no user resolution — deselect all.
           variants.forEach(function(v) {
-            if (v !== userSelected) {
+            v.item.include = false;
+            var cb = v.el.querySelector('.include-toggle');
+            if (cb) cb.checked = false;
+            v.el.classList.add('excluded');
+          });
+        } else {
+          // Clear winner — promote highest-prevalence variant.
+          variants.forEach(function(v, i) {
+            if (i === 0) {
+              v.item.include = true;
+              var cb = v.el.querySelector('.include-toggle');
+              if (cb) cb.checked = true;
+              v.el.classList.remove('excluded');
+            } else {
               v.item.include = false;
               var cb = v.el.querySelector('.include-toggle');
               if (cb) cb.checked = false;
               v.el.classList.add('excluded');
             }
           });
-        } else {
-          // No user selection (or ambiguous) — deselect all as before.
-          variants.forEach(function(v) {
-            v.item.include = false;
-            var cb = v.el.querySelector('.include-toggle');
-            if (cb) cb.checked = false;
-            v.el.classList.add('excluded');
-          });
-        }
-      } else {
-        var foundIncluded = false;
-        variants.forEach(function(v) {
-          if (v.item.include && !foundIncluded) {
-            foundIncluded = true;
-          } else if (v.item.include) {
-            v.item.include = false;
-            var cb = v.el.querySelector('.include-toggle');
-            if (cb) cb.checked = false;
-            v.el.classList.add('excluded');
-          }
-        });
-        // If no variant was already included, promote the clear winner (variants[0]).
-        if (!foundIncluded) {
-          variants[0].item.include = true;
-          var winCb = variants[0].el.querySelector('.include-toggle');
-          if (winCb) winCb.checked = true;
-          variants[0].el.classList.remove('excluded');
         }
       }
     });
