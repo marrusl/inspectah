@@ -224,6 +224,12 @@ function trapFocus(modalElement, closeHandler) {
       var key = tr.getAttribute('data-snap-section') + '/' + tr.getAttribute('data-snap-list') + '/' + tr.getAttribute('data-snap-index');
       if (sel.value !== strategyBaseline[key]) clean = false;
     });
+    // Prevalence slider (fleet reports only)
+    var summarySlider = document.getElementById('summary-prevalence-slider');
+    if (summarySlider) {
+      var currentThreshold = parseInt(summarySlider.getAttribute('data-current-threshold'), 10);
+      if (parseInt(summarySlider.value, 10) !== currentThreshold) clean = false;
+    }
     return clean;
   }
   buildBaseline();
@@ -1641,6 +1647,10 @@ function countAtThreshold(threshold) {
     var attentionCard = document.querySelector('.summary-card-attention');
     if (scopeCard) scopeCard.classList.toggle('preview-state', isPreview);
     if (attentionCard) attentionCard.classList.toggle('preview-state', isPreview);
+    // Mark dirty so the Re-render button activates when threshold changes
+    if (typeof setDirty === 'function' && typeof isSnapshotClean === 'function') {
+      setDirty(!isSnapshotClean());
+    }
   });
 
   updateSummaryCards(parseInt(summarySlider.value, 10));
