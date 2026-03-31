@@ -1,5 +1,8 @@
 """Fleet prevalence UI tests: color filter, banner, badges, config passthrough, variant grouping."""
 
+import json
+import re
+
 from jinja2 import Environment
 
 from yoinkc.renderers import html_report
@@ -13,6 +16,88 @@ from yoinkc.schema import (
     PackageEntry,
     RpmSection,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for render-contract tests
+# ---------------------------------------------------------------------------
+
+
+def _extract_embedded_snapshot(html: str) -> dict:
+    """Extract the object assigned to ``var snapshot = ...;`` from report HTML."""
+    prefix = "var snapshot = "
+    start = html.find(prefix)
+    assert start != -1, "embedded snapshot not found"
+
+    i = start + len(prefix)
+    while i < len(html) and html[i] in " \t\r\n":
+        i += 1
+    assert i < len(html) and html[i] == "{", "snapshot payload is not an object"
+
+    depth = 0
+    in_string = False
+    escape = False
+    for j in range(i, len(html)):
+        ch = html[j]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(html[i : j + 1])
+
+    raise AssertionError("unterminated embedded snapshot object")
+
+
+def _variant_row_fragments(html: str, group_path: str) -> list[str]:
+    """Return the full ``<tr ...>...</tr>`` fragments for variant rows in *group_path*.
+
+    Each fragment starts at the ``<tr`` with the matching
+    ``data-variant-group`` and extends to the next ``</tr>``.
+    """
+    pattern = re.compile(
+        rf"<tr[^>]*data-variant-group=\"{re.escape(group_path)}\"[^>]*>.*?</tr>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.findall(html)
+
+
+def _variant_row_open_tags(html: str, group_path: str) -> list[str]:
+    """Return just the opening ``<tr ...>`` tags for variant rows."""
+    pattern = re.compile(
+        rf"<tr[^>]*data-variant-group=\"{re.escape(group_path)}\"[^>]*>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.findall(html)
+
+
+def _row_is_checked(row_fragment: str) -> bool:
+    """Return True if the variant row fragment contains a checked include-toggle."""
+    return bool(
+        re.search(
+            r'class="pf-v6-c-switch__input include-toggle"[^>]*\bchecked\b',
+            row_fragment,
+            re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+
+def _row_snap_index(row_tag_or_fragment: str) -> int:
+    """Extract the ``data-snap-index`` value from a row tag or fragment."""
+    m = re.search(r'data-snap-index="(\d+)"', row_tag_or_fragment)
+    assert m, f"missing data-snap-index in row: {row_tag_or_fragment[:200]}"
+    return int(m.group(1))
 
 
 class TestFleetColor:
@@ -609,3 +694,154 @@ class TestVariantTieResolution:
         env = Environment(autoescape=True)
         ctx = _build_context(reloaded, tmp_path, env)
         assert ctx["unresolved_ties"] == 0
+
+    def test_variant_rows_match_embedded_snapshot_include_state(self, tmp_path):
+        """Rendered variant row checkboxes must match embedded snapshot include flags."""
+        env = Environment(autoescape=True)
+        snap = self._make_tied_snapshot(resolved=True)
+
+        html_report.render(snap, env, tmp_path, refine_mode=True)
+        html = (tmp_path / "report.html").read_text()
+
+        embedded = _extract_embedded_snapshot(html)
+        # The embedded JSON uses the model schema; snap_index == list position.
+        files = {i: f for i, f in enumerate(embedded["config"]["files"])}
+
+        rows = _variant_row_fragments(html, "/etc/app.conf")
+        assert len(rows) == 2
+
+        checked_indices = []
+        for row in rows:
+            idx = _row_snap_index(row)
+            checked = _row_is_checked(row)
+            assert files[idx]["include"] is checked
+            if checked:
+                checked_indices.append(idx)
+
+        assert len(checked_indices) == 1
+
+    def test_variant_rows_expose_snapshot_metadata_needed_by_prevalence_js(self, tmp_path):
+        """Variant rows must carry the data-snap-* attributes used by applyPrevalenceThreshold."""
+        env = Environment(autoescape=True)
+        snap = self._make_tied_snapshot(resolved=True)
+
+        html_report.render(snap, env, tmp_path, refine_mode=True)
+        html = (tmp_path / "report.html").read_text()
+
+        rows = _variant_row_open_tags(html, "/etc/app.conf")
+        assert len(rows) == 2
+
+        for row in rows:
+            assert 'data-snap-section="config"' in row
+            assert 'data-snap-list="files"' in row
+            assert re.search(r'data-snap-index="\d+"', row), row
+
+    def test_non_default_variant_selection_renders_correct_row_checked(self, tmp_path):
+        """A user-selected minority variant must be the checked row in the rendered variant group."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux",
+                version_id="9.4",
+                id="rhel",
+                platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 1,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="majority-variant",
+                        include=False,
+                        fleet=FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"]),
+                    ),
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="minority-variant",
+                        include=True,
+                        fleet=FleetPrevalence(count=1, total=3, hosts=["web-03"]),
+                    ),
+                ],
+            ),
+        )
+
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path, refine_mode=True)
+        html = (tmp_path / "report.html").read_text()
+
+        embedded = _extract_embedded_snapshot(html)
+        files = {i: f for i, f in enumerate(embedded["config"]["files"])}
+
+        rows = _variant_row_fragments(html, "/etc/app.conf")
+        assert len(rows) == 2
+
+        checked_contents = []
+        unchecked_contents = []
+        for row in rows:
+            idx = _row_snap_index(row)
+            content = files[idx]["content"]
+            if _row_is_checked(row):
+                checked_contents.append(content)
+            else:
+                unchecked_contents.append(content)
+
+        assert checked_contents == ["minority-variant"]
+        assert unchecked_contents == ["majority-variant"]
+
+    def test_manual_variant_selection_below_threshold_is_preserved_as_explicit_override(self, tmp_path):
+        """A user-selected variant below the prevalence threshold must be preserved as an explicit override."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux",
+                version_id="9.4",
+                id="rhel",
+                platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 80,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="majority-variant",
+                        include=False,
+                        fleet=FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"]),
+                    ),
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="minority-variant",
+                        include=True,
+                        fleet=FleetPrevalence(count=1, total=3, hosts=["web-03"]),
+                    ),
+                ],
+            ),
+        )
+
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path, refine_mode=True)
+        html = (tmp_path / "report.html").read_text()
+
+        embedded = _extract_embedded_snapshot(html)
+        files = {i: f for i, f in enumerate(embedded["config"]["files"])}
+
+        # The minority variant (below 80% threshold) must still be included
+        # because the user explicitly selected it
+        minority = [f for f in files.values() if f["content"] == "minority-variant"]
+        assert len(minority) == 1
+        assert minority[0]["include"] is True
