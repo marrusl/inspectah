@@ -42,7 +42,7 @@
                 {{ fleet_cell(v.item) }}
                 <td class="variant-action-cell">
                   {% if v.item.include %}
-                    <span style="font-size:0.75rem;color:var(--pf-t--global--text--color--subtle);">selected</span>
+                    <span class="variant-selected-label">selected</span>
                   {% else %}
                     <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn{% if not group_has_selected %} pf-m-disabled{% endif %}"{% if not group_has_selected %} disabled{% endif %}>Compare</button>
                   {% endif %}
@@ -98,7 +98,7 @@
     <label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if c.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label>
     <span class="text-bold"><code>{{ c.path }}</code></span>
     {% if fleet_meta and c.fleet %}
-    <div class="fleet-prevalence" style="display: inline-block; margin-left: 8px;">
+    <div class="fleet-prevalence fleet-prevalence-inline">
       <div class="fleet-bar"
            data-count="{{ c.fleet.count }}"
            data-total="{{ c.fleet.total }}"

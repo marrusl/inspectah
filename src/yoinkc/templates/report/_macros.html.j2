@@ -7,7 +7,7 @@
     </div>
     <div class="pf-v6-c-card__body">
     {%- if triageable %}
-    <div style="display: flex; justify-content: flex-end; margin-bottom: var(--pf-t--global--spacer--sm);">
+    <div class="actions-end-row">
       <button class="pf-v6-c-button pf-m-secondary pf-m-small" onclick="toggleReviewed('{{ id }}', this)" data-tab-id="{{ id }}">Mark as reviewed</button>
     </div>
     {%- endif %}

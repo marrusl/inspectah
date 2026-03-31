@@ -170,6 +170,144 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .triage-count::before { content: "("; }
 .triage-count::after { content: ")"; }
 
+/* ── Extracted inline styles ────────────────────────────────────────────── */
+
+/* Sidebar layout */
+.sidebar-body-layout { display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-progress-container {
+  padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--md);
+  flex-shrink: 0;
+}
+.sidebar-nav-container { overflow-y: auto; flex: 1; }
+
+/* Sidebar reviewed check (hidden until JS reveals) */
+.reviewed-check {
+  display: none;
+  color: var(--pf-t--global--color--status--success--default);
+}
+
+/* Summary readiness cards — coloured left border */
+.readiness-card-success { border-left: 4px solid var(--pf-t--global--color--status--success--default); }
+.readiness-card-warning { border-left: 4px solid var(--pf-t--global--color--status--warning--default); }
+.readiness-card-danger  { border-left: 4px solid var(--pf-t--global--color--status--danger--default); }
+.readiness-card-info    { border-left: 4px solid var(--pf-t--global--color--status--info--default); }
+
+/* Summary readiness counts */
+.readiness-count { font-size: 1.3rem; }
+
+/* Summary breakdown + fleet variant lists */
+.breakdown-list { list-style: none; padding: 0; margin: 0; }
+.breakdown-list-item { display: flex; justify-content: space-between; padding: 0.25rem 0; }
+.breakdown-link-btn {
+  background: none;
+  border: none;
+  color: var(--pf-t--global--text--color--link--default);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+/* Banner */
+.banner-hostname { opacity: 0.7; }
+.fleet-banner-title { font-size: 1.1em; margin-bottom: 4px; }
+.fleet-banner-spacing { margin-bottom: var(--pf-t--global--spacer--md); }
+.fleet-banner-counts { margin-top: 4px; }
+
+/* Toolbar / action row — right-aligned button container */
+.actions-end-row { display: flex; justify-content: flex-end; margin-bottom: var(--pf-t--global--spacer--sm); }
+
+/* Warnings dismiss-all row (slightly different margin than generic) */
+.warnings-actions-row { display: flex; justify-content: flex-end; margin-bottom: 0.5rem; }
+
+/* Variant selected label (services, config, containers) */
+.variant-selected-label { font-size: 0.75rem; color: var(--pf-t--global--text--color--subtle); }
+
+/* File browser layout */
+.file-browser-layout { gap: 1rem; }
+
+/* Non-RPM venv info row */
+.venv-info-row { display: flex; align-items: center; gap: var(--pf-t--global--spacer--sm); }
+
+/* Code block with bottom spacing */
+.code-block-spaced { margin-bottom: var(--pf-t--global--spacer--md); }
+
+/* Audit manual-intervention list */
+.audit-manual-list { margin: 0.25rem 0 0; padding-left: 1.5rem; font-size: 0.9rem; }
+
+/* Subtle text colour */
+.text-subtle { color: var(--pf-t--global--text--color--subtle); }
+
+/* Inline warning/conflict icon */
+.conflict-icon { margin-left: 0.35em; cursor: help; }
+
+/* New-file modal form layout */
+.modal-field-group { margin-bottom: 20px; }
+.modal-field-label { display: block; margin-bottom: 6px; }
+.modal-radio-group { display: flex; gap: 24px; }
+.modal-radio-option { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.modal-hint-text {
+  font-size: var(--pf-t--global--font--size--sm);
+  color: var(--pf-t--global--text--color--subtle);
+  margin-bottom: 6px;
+}
+.modal-input-full { width: 100%; }
+.modal-input-mono { width: 100%; font-family: var(--pf-t--global--font--family--mono); }
+.modal-field-error {
+  color: var(--pf-t--global--danger--color--200);
+  font-size: var(--pf-t--global--font--size--sm);
+  margin-top: 4px;
+  display: none;
+}
+.modal-path-preview {
+  padding: 10px 14px;
+  background: var(--pf-t--global--background--color--secondary--default);
+  border: 1px solid var(--pf-t--global--border--color--default);
+  border-radius: 4px;
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--sm);
+}
+
+/* Editor tree pane */
+.editor-tree-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+.editor-tree-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.editor-tree-body { padding: 8px; overflow-y: auto; flex: 1; }
+
+/* Editor error banner (hidden by default, shown by JS) */
+.editor-error-hidden { display: none; margin-bottom: 8px; }
+
+/* Editor content pane */
+.editor-toolbar {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 48px;
+}
+.editor-file-path {
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--heading--sm);
+}
+.editor-view-pane { flex: 1; overflow: auto; padding: 16px; }
+.editor-readonly-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: var(--pf-t--global--font--family--mono);
+  font-size: var(--pf-t--global--font--size--sm);
+}
+
 /* Utility classes */
 .content-preview { border-radius: 4px; padding: var(--pf-t--global--spacer--sm); font-size: 0.8rem; max-height: 200px; overflow: auto; margin: var(--pf-t--global--spacer--xs) 0; }
 .table-group-header { font-weight: var(--pf-t--global--font--weight--body--bold); padding-bottom: var(--pf-t--global--spacer--xs); padding-top: var(--pf-t--global--spacer--md); border-top: 2px solid var(--pf-t--global--border--color--default); background-color: var(--pf-t--global--background--color--secondary--default); }
@@ -245,6 +383,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .fleet-banner {
   border-left: 4px solid var(--pf-t--global--color--brand--default, #0066cc);
 }
+/* Fleet prevalence inline badge (compose-files context) */
+.fleet-prevalence-inline { display: inline-block; margin-left: 8px; }
 /* Fleet popover */
 .fleet-popover {
   position: absolute;

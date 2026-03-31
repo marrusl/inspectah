@@ -14,7 +14,7 @@
   {%- else -%}
   <strong>Host:</strong>
   {%- endif -%}
-  {{ os_desc }}{% if hostname %} <span style="opacity:0.7">({{ hostname }})</span>{% endif %} &nbsp;|&nbsp;
+  {{ os_desc }}{% if hostname %} <span class="banner-hostname">({{ hostname }})</span>{% endif %} &nbsp;|&nbsp;
   <span class="text-status-success">&#10003; {{ triage.automatic }} automatic</span> &nbsp;|&nbsp;
   <span class="text-status-warning">&#9888; {{ triage.fixme }} FIXME</span> &nbsp;|&nbsp;
   <span class="text-status-danger">&#9679; {{ triage.manual }} manual</span> &nbsp;|&nbsp;
@@ -23,12 +23,12 @@
 </div>
 
 {% if fleet_meta %}
-<div class="pf-v6-c-card pf-m-compact fleet-banner" style="margin-bottom: 16px;">
+<div class="pf-v6-c-card pf-m-compact fleet-banner fleet-banner-spacing">
   <div class="pf-v6-c-card__body">
-    <div class="text-bold" style="font-size: 1.1em; margin-bottom: 4px;">Fleet Analysis</div>
+    <div class="text-bold fleet-banner-title">Fleet Analysis</div>
     <div>{{ fleet_meta.total_hosts }} hosts merged at {{ fleet_meta.min_prevalence }}% prevalence threshold</div>
     <div class="fleet-banner-hosts">{{ fleet_meta.source_hosts | join(', ') }}</div>
-    <div style="margin-top: 4px;">{{ counts.n_included }} items included, {{ counts.n_excluded }} excluded</div>
+    <div class="fleet-banner-counts">{{ counts.n_included }} items included, {{ counts.n_excluded }} excluded</div>
   </div>
 </div>
 {% endif %}

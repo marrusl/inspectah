@@ -34,25 +34,25 @@
     {# Migration Readiness #}
     <h3 class="mt-md mb-md">Migration Readiness</h3>
     {%- if triage.automatic %}
-    <div class="pf-v6-c-card mt-md" style="border-left: 4px solid var(--pf-t--global--color--status--success--default)">
+    <div class="pf-v6-c-card mt-md readiness-card-success">
       <div class="pf-v6-c-card__body">
-        <span class="text-bold" style="font-size:1.3rem; color:var(--pf-t--global--text--color--status--success--default)">{{ triage.automatic }}</span>
+        <span class="text-bold readiness-count text-status-success">{{ triage.automatic }}</span>
         Automatic
       </div>
     </div>
     {%- endif %}
     {%- if triage.fixme %}
-    <div class="pf-v6-c-card mt-md" style="border-left: 4px solid var(--pf-t--global--color--status--warning--default)">
+    <div class="pf-v6-c-card mt-md readiness-card-warning">
       <div class="pf-v6-c-card__body">
-        <span class="text-bold" style="font-size:1.3rem; color:var(--pf-t--global--text--color--status--warning--default)">{{ triage.fixme }}</span>
+        <span class="text-bold readiness-count text-status-warning">{{ triage.fixme }}</span>
         Needs Review
       </div>
     </div>
     {%- endif %}
     {%- if triage.manual %}
-    <div class="pf-v6-c-card mt-md" style="border-left: 4px solid var(--pf-t--global--color--status--danger--default)">
+    <div class="pf-v6-c-card mt-md readiness-card-danger">
       <div class="pf-v6-c-card__body">
-        <span class="text-bold" style="font-size:1.3rem; color:var(--pf-t--global--text--color--status--danger--default)">{{ triage.manual }}</span>
+        <span class="text-bold readiness-count text-status-danger">{{ triage.manual }}</span>
         Manual
       </div>
     </div>
@@ -66,10 +66,10 @@
         <div class="pf-v6-c-card__title"><h3>Breakdown</h3></div>
       </div>
       <div class="pf-v6-c-card__body">
-        <ul style="list-style:none; padding:0; margin:0">
+        <ul class="breakdown-list">
           {%- for item in triage_detail %}
-          <li style="display:flex; justify-content:space-between; padding:0.25rem 0">
-            <button type="button" style="background:none; border:none; color:var(--pf-t--global--text--color--link--default); cursor:pointer; padding:0; text-align:left" onclick="show('{{ item.tab }}');return false">{{ item.label }}</button>
+          <li class="breakdown-list-item">
+            <button type="button" class="breakdown-link-btn" onclick="show('{{ item.tab }}');return false">{{ item.label }}</button>
             <span class="text-status-{{ 'success' if item.status == 'automatic' else ('warning' if item.status == 'fixme' else 'danger') }}">{{ item.count }}</span>
           </li>
           {%- endfor %}
@@ -80,7 +80,7 @@
 
 {% macro fleet_overview_card() -%}
     {# Fleet Overview (fleet mode only) #}
-    <div class="pf-v6-c-card" style="border-left: 4px solid var(--pf-t--global--color--status--info--default)">
+    <div class="pf-v6-c-card readiness-card-info">
       <div class="pf-v6-c-card__header">
         <div class="pf-v6-c-card__title"><h3>Fleet Overview</h3></div>
         <span class="text-sm">{{ fleet_meta.total_hosts }} hosts · {{ fleet_meta.min_prevalence }}% threshold</span>
@@ -98,16 +98,16 @@
         </dl>
         {%- if variant_summary %}
         <p class="text-bold mt-md">Categories with variants:</p>
-        <ul style="list-style:none; padding:0; margin:0">
+        <ul class="breakdown-list">
           {%- for vs in variant_summary %}
-          <li style="display:flex; justify-content:space-between; padding:0.25rem 0">
-            <button type="button" style="background:none; border:none; color:var(--pf-t--global--text--color--link--default); cursor:pointer; padding:0; text-align:left" onclick="show('{{ vs.tab }}');return false">{{ vs.label }}</button>
+          <li class="breakdown-list-item">
+            <button type="button" class="breakdown-link-btn" onclick="show('{{ vs.tab }}');return false">{{ vs.label }}</button>
             <span class="text-sm">{{ vs.files }} files · {{ vs.variants }} variants</span>
           </li>
           {%- endfor %}
         </ul>
         {%- endif %}
-        <p class="text-sm mt-md" style="color:var(--pf-t--global--text--color--subtle)">
+        <p class="text-sm mt-md text-subtle">
           The most prevalent variant of each config file is auto-selected.
           Tied variants require your choice.
         </p>

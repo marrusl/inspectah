@@ -35,7 +35,7 @@
     <div class="pf-v6-c-expandable-section__content" id="card-nr-venv"><div class="pf-v6-c-card__body">
     {%- for v in nd.venv %}
     {%- set ssp = v.system_site_packages %}
-    <div class="mt-md" style="display:flex;align-items:center;gap:var(--pf-t--global--spacer--sm)">
+    <div class="mt-md venv-info-row">
       <code>{{ v.path }}</code>
       {%- if ssp %} <span class="pf-v6-c-label pf-m-filled pf-m-red">system-site-packages</span>
       {%- else %} <span class="pf-v6-c-label pf-m-filled pf-m-green">isolated</span>

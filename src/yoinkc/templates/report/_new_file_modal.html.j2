@@ -10,57 +10,57 @@
       </div>
 
       <div class="pf-v6-c-modal-box__body">
-      <div style="margin-bottom:20px;">
-        <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>File type</strong></label>
-        <div style="display:flex; gap:24px;">
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+      <div class="modal-field-group">
+        <label class="pf-v6-c-form__label modal-field-label"><strong>File type</strong></label>
+        <div class="modal-radio-group">
+          <label class="modal-radio-option">
             <input type="radio" name="new-file-type" value="config" checked onchange="updateNewFileForm()"> Config file
           </label>
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <label class="modal-radio-option">
             <input type="radio" name="new-file-type" value="quadlet" onchange="updateNewFileForm()"> Quadlet unit
           </label>
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <label class="modal-radio-option">
             <input type="radio" name="new-file-type" value="dropin" onchange="updateNewFileForm()"> Systemd drop-in
           </label>
         </div>
       </div>
 
       <div id="nf-config-fields">
-        <div style="margin-bottom:20px;">
-          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>File path</strong></label>
-          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Absolute path on the target system</div>
-          <input id="nf-config-path" class="pf-v6-c-form-control" type="text" placeholder="/etc/myapp/custom.conf" oninput="validateNewFileForm()" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
-          <div id="nf-config-error" style="color:var(--pf-t--global--danger--color--200); font-size:var(--pf-t--global--font--size--sm); margin-top:4px; display:none;"></div>
+        <div class="modal-field-group">
+          <label class="pf-v6-c-form__label modal-field-label"><strong>File path</strong></label>
+          <div class="modal-hint-text">Absolute path on the target system</div>
+          <input id="nf-config-path" class="pf-v6-c-form-control modal-input-mono" type="text" placeholder="/etc/myapp/custom.conf" oninput="validateNewFileForm()">
+          <div id="nf-config-error" class="modal-field-error"></div>
         </div>
       </div>
 
       <div id="nf-quadlet-fields" style="display:none;">
-        <div style="margin-bottom:20px;">
-          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Scope</strong></label>
-          <select id="nf-quadlet-scope" class="pf-v6-c-form-control" onchange="updateNewFilePath()" style="width:100%;">
+        <div class="modal-field-group">
+          <label class="pf-v6-c-form__label modal-field-label"><strong>Scope</strong></label>
+          <select id="nf-quadlet-scope" class="pf-v6-c-form-control modal-input-full" onchange="updateNewFilePath()">
             <option value="system">System (root)</option>
             {%- for user in (snapshot.users_groups.users or []) if user.get('home') %}
             <option value="{{ user.name }}">User &mdash; {{ user.name }}</option>
             {%- endfor %}
           </select>
         </div>
-        <div style="margin-bottom:20px;">
-          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Unit name</strong></label>
-          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">e.g. myapp.container</div>
-          <input id="nf-quadlet-name" class="pf-v6-c-form-control" type="text" placeholder="myapp.container" oninput="updateNewFilePath(); validateNewFileForm();" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
-          <div id="nf-quadlet-error" style="color:var(--pf-t--global--danger--color--200); font-size:var(--pf-t--global--font--size--sm); margin-top:4px; display:none;"></div>
+        <div class="modal-field-group">
+          <label class="pf-v6-c-form__label modal-field-label"><strong>Unit name</strong></label>
+          <div class="modal-hint-text">e.g. myapp.container</div>
+          <input id="nf-quadlet-name" class="pf-v6-c-form-control modal-input-mono" type="text" placeholder="myapp.container" oninput="updateNewFilePath(); validateNewFileForm();">
+          <div id="nf-quadlet-error" class="modal-field-error"></div>
         </div>
-        <div style="margin-bottom:20px;">
-          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Full path</strong></label>
-          <div id="nf-quadlet-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);"></div>
+        <div class="modal-field-group">
+          <label class="pf-v6-c-form__label modal-field-label"><strong>Full path</strong></label>
+          <div id="nf-quadlet-path-preview" class="modal-path-preview"></div>
         </div>
       </div>
 
       <div id="nf-dropin-fields" style="display:none;">
-        <div style="margin-bottom:20px;">
-          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Service</strong></label>
-          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:6px;">Select from services discovered on this host</div>
-          <select id="nf-dropin-service" class="pf-v6-c-form-control" onchange="updateNewFilePath()" style="width:100%;">
+        <div class="modal-field-group">
+          <label class="pf-v6-c-form__label modal-field-label"><strong>Service</strong></label>
+          <div class="modal-hint-text">Select from services discovered on this host</div>
+          <select id="nf-dropin-service" class="pf-v6-c-form-control modal-input-full" onchange="updateNewFilePath()">
             {%- if snapshot.services and snapshot.services.state_changes %}
             {%- for sc in snapshot.services.state_changes %}
             <option value="{{ sc.unit }}">{{ sc.unit }}</option>
@@ -68,14 +68,14 @@
             {%- endif %}
           </select>
         </div>
-        <div style="margin-bottom:20px;">
-          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Override filename</strong></label>
-          <input id="nf-dropin-filename" class="pf-v6-c-form-control" type="text" value="override.conf" oninput="updateNewFilePath(); validateNewFileForm();" style="width:100%; font-family:var(--pf-t--global--font--family--mono);">
-          <div id="nf-dropin-error" style="color:var(--pf-t--global--danger--color--200); font-size:var(--pf-t--global--font--size--sm); margin-top:4px; display:none;"></div>
+        <div class="modal-field-group">
+          <label class="pf-v6-c-form__label modal-field-label"><strong>Override filename</strong></label>
+          <input id="nf-dropin-filename" class="pf-v6-c-form-control modal-input-mono" type="text" value="override.conf" oninput="updateNewFilePath(); validateNewFileForm();">
+          <div id="nf-dropin-error" class="modal-field-error"></div>
         </div>
-        <div style="margin-bottom:20px;">
-          <label class="pf-v6-c-form__label" style="display:block; margin-bottom:6px;"><strong>Full path</strong></label>
-          <div id="nf-dropin-path-preview" style="padding:10px 14px; background:var(--pf-t--global--background--color--secondary--default); border:1px solid var(--pf-t--global--border--color--default); border-radius:4px; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);"></div>
+        <div class="modal-field-group">
+          <label class="pf-v6-c-form__label modal-field-label"><strong>Full path</strong></label>
+          <div id="nf-dropin-path-preview" class="modal-path-preview"></div>
         </div>
       </div>
     </div>

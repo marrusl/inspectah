@@ -1,13 +1,13 @@
 {# ── Sidebar navigation ─────────────────────────────────────────────────── #}
 <div class="pf-v6-c-page__sidebar">
-  <div class="pf-v6-c-page__sidebar-body" style="display:flex; flex-direction:column; overflow:hidden;">
-    <div class="pf-v6-c-progress pf-m-sm" id="review-progress" style="padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--md); flex-shrink:0;">
+  <div class="pf-v6-c-page__sidebar-body sidebar-body-layout">
+    <div class="pf-v6-c-progress pf-m-sm sidebar-progress-container" id="review-progress">
       <div class="pf-v6-c-progress__description" id="review-progress-label"></div>
       <div class="pf-v6-c-progress__bar" role="progressbar" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
         <div class="pf-v6-c-progress__indicator" id="review-progress-indicator" style="width: 0%;"></div>
       </div>
     </div>
-    <nav class="pf-v6-c-nav" id="report-nav" role="navigation" aria-label="Section navigation" style="overflow-y:auto; flex:1;">
+    <nav class="pf-v6-c-nav sidebar-nav-container" id="report-nav" role="navigation" aria-label="Section navigation">
       <section class="pf-v6-c-nav__section">
         <h2 class="pf-v6-c-nav__section-title">Overview</h2>
         <ul class="pf-v6-c-nav__list">
@@ -21,23 +21,23 @@
       <section class="pf-v6-c-nav__section">
         <h2 class="pf-v6-c-nav__section-title">Inspectors</h2>
         <ul class="pf-v6-c-nav__list">
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages<span class="reviewed-check" id="check-packages" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="rpm">{{ counts.packages_added + ((snapshot.rpm.module_streams | selectattr('include') | list | length) if snapshot.rpm else 0) + ((snapshot.rpm.version_locks | selectattr('include') | list | length) if snapshot.rpm else 0) }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="config" href="#">Config<span class="reviewed-check" id="check-config" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="config">{{ counts.config_files }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="services" href="#">Services<span class="reviewed-check" id="check-services" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="services">{{ ((snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list | length) + (snapshot.services.drop_ins | length)) if snapshot.services else 0 }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="users_groups" href="#">Users/Groups<span class="reviewed-check" id="check-users_groups" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containers" href="#">Containers<span class="reviewed-check" id="check-containers" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="containers">{{ counts.containers }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="non_rpm" href="#">Non-RPM<span class="reviewed-check" id="check-non_rpm" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="non_rpm_software">{{ counts.non_rpm }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="packages" href="#">Packages<span class="reviewed-check" id="check-packages"> ✓</span><span class="triage-count" data-triage-section="rpm">{{ counts.packages_added + ((snapshot.rpm.module_streams | selectattr('include') | list | length) if snapshot.rpm else 0) + ((snapshot.rpm.version_locks | selectattr('include') | list | length) if snapshot.rpm else 0) }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="config" href="#">Config<span class="reviewed-check" id="check-config"> ✓</span><span class="triage-count" data-triage-section="config">{{ counts.config_files }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="services" href="#">Services<span class="reviewed-check" id="check-services"> ✓</span><span class="triage-count" data-triage-section="services">{{ ((snapshot.services.state_changes | selectattr('action', 'ne', 'unchanged') | list | length) + (snapshot.services.drop_ins | length)) if snapshot.services else 0 }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="users_groups" href="#">Users/Groups<span class="reviewed-check" id="check-users_groups"> ✓</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="containers" href="#">Containers<span class="reviewed-check" id="check-containers"> ✓</span><span class="triage-count" data-triage-section="containers">{{ counts.containers }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="non_rpm" href="#">Non-RPM<span class="reviewed-check" id="check-non_rpm"> ✓</span><span class="triage-count" data-triage-section="non_rpm_software">{{ counts.non_rpm }}</span></a></li>
         </ul>
       </section>
       <section class="pf-v6-c-nav__section">
         <h2 class="pf-v6-c-nav__section-title">System</h2>
         <ul class="pf-v6-c-nav__list">
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="scheduled_tasks" href="#">Scheduled<span class="reviewed-check" id="check-scheduled_tasks" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="scheduled_tasks">{{ counts.scheduled_tasks }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="kernel_boot" href="#">Kernel/Boot<span class="reviewed-check" id="check-kernel_boot" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="selinux" href="#">SELinux<span class="reviewed-check" id="check-selinux" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="selinux">{{ (snapshot.selinux.port_labels | length) if snapshot.selinux else 0 }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="network" href="#">Network<span class="reviewed-check" id="check-network" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span><span class="triage-count" data-triage-section="network">{{ (snapshot.network.firewall_zones | length) if snapshot.network else 0 }}</span></a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="storage" href="#">Storage{% if not fleet_meta %}<span class="reviewed-check" id="check-storage" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span>{% endif %}</a></li>
-          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="secrets" href="#">Secrets<span class="reviewed-check" id="check-secrets" style="display:none; color: var(--pf-t--global--color--status--success--default);"> ✓</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="scheduled_tasks" href="#">Scheduled<span class="reviewed-check" id="check-scheduled_tasks"> ✓</span><span class="triage-count" data-triage-section="scheduled_tasks">{{ counts.scheduled_tasks }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="kernel_boot" href="#">Kernel/Boot<span class="reviewed-check" id="check-kernel_boot"> ✓</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="selinux" href="#">SELinux<span class="reviewed-check" id="check-selinux"> ✓</span><span class="triage-count" data-triage-section="selinux">{{ (snapshot.selinux.port_labels | length) if snapshot.selinux else 0 }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="network" href="#">Network<span class="reviewed-check" id="check-network"> ✓</span><span class="triage-count" data-triage-section="network">{{ (snapshot.network.firewall_zones | length) if snapshot.network else 0 }}</span></a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="storage" href="#">Storage{% if not fleet_meta %}<span class="reviewed-check" id="check-storage"> ✓</span>{% endif %}</a></li>
+          <li class="pf-v6-c-nav__item"><a class="pf-v6-c-nav__link" data-tab="secrets" href="#">Secrets<span class="reviewed-check" id="check-secrets"> ✓</span></a></li>
         </ul>
       </section>
     </nav>

@@ -244,7 +244,7 @@
 {# ── 13. Items Requiring Manual Intervention ── #}
 {%- if warnings %}
 <h3>Items Requiring Manual Intervention</h3>
-<ul style="margin:0.25rem 0 0;padding-left:1.5rem;font-size:0.9rem">
+<ul class="audit-manual-list">
   {%- for w in warnings[:20] %}
   {%- set msg = w.message or w.detail or '—' %}
   <li>{{ msg }}</li>

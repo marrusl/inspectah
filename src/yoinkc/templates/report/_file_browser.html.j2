@@ -6,7 +6,7 @@
 {# ── File browser (read-only, static reports) ────────────────────────────── #}
 {% call section("output_files", "File browser") %}
 <p>Browse <code>config/</code> and <code>quadlet/</code> generated in the output directory. Click a file to view its contents.</p>
-<div class="pf-v6-l-flex pf-m-nowrap mt-md" style="gap:1rem">
+<div class="pf-v6-l-flex pf-m-nowrap mt-md file-browser-layout">
   <div class="fb-tree">{{ tree_html|safe }}</div>
   <div class="fb-viewer">
     <div class="pf-v6-c-code-block">

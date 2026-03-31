@@ -25,7 +25,7 @@
       <td>
         {{ ms.module_name }}
         {%- if conflict.msg %}
-        <span class="text-status-warning" title="{{ conflict.msg }}" style="margin-left:0.35em;cursor:help">⚠</span>
+        <span class="text-status-warning conflict-icon" title="{{ conflict.msg }}">⚠</span>
         {%- endif %}
       </td>
       <td>{{ ms.stream }}</td>
