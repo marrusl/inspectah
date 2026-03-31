@@ -1134,12 +1134,11 @@ test.describe('Config Editor', () => {
   });
 
   test('clicking a file in the tree loads it in the editor', async ({ page }) => {
-    // Navigate to the editor tab
     await page.locator('.pf-v6-c-nav__link[data-tab="output_files"]').click();
     await expect(page.locator('#section-output_files')).toBeVisible();
 
-    // Click a file in the tree (look for a config file entry)
-    const fileEntry = page.locator('.editor-tree-file, [data-file-path]').first();
+    // Click a file entry (real selector: button.file-entry with data-path)
+    const fileEntry = page.locator('button.file-entry[data-path]').first();
     await expect(fileEntry).toBeVisible({ timeout: 5000 });
     await fileEntry.click();
 
@@ -1150,7 +1149,7 @@ test.describe('Config Editor', () => {
   test('editing and saving marks state as dirty', async ({ page }) => {
     // Navigate to editor, open a file
     await page.locator('.pf-v6-c-nav__link[data-tab="output_files"]').click();
-    const fileEntry = page.locator('.editor-tree-file, [data-file-path]').first();
+    const fileEntry = page.locator('button.file-entry[data-path]').first();
     await expect(fileEntry).toBeVisible({ timeout: 5000 });
     await fileEntry.click();
     await expect(page.locator('.cm-editor')).toBeVisible({ timeout: 5000 });
@@ -1160,13 +1159,14 @@ test.describe('Config Editor', () => {
     await editor.click();
     await page.keyboard.type('# test edit\n');
 
-    // Save should be available, and after saving Re-render should activate
-    const saveBtn = page.locator('#btn-editor-save, button:has-text("Save")');
-    if (await saveBtn.isVisible()) {
-      await saveBtn.click();
-      const rerender = page.locator('#btn-re-render');
-      await expect(rerender).toBeEnabled({ timeout: 5000 });
-    }
+    // Save button (real id: #btn-save)
+    const saveBtn = page.locator('#btn-save');
+    await expect(saveBtn).toBeVisible({ timeout: 5000 });
+    await saveBtn.click();
+
+    // After saving, Re-render should activate
+    const rerender = page.locator('#btn-re-render');
+    await expect(rerender).toBeEnabled({ timeout: 5000 });
   });
 });
 ```
@@ -1411,16 +1411,19 @@ test.describe('Theme Switching', () => {
       await page.locator('#theme-toggle, [aria-label*="theme"]').click();
     }
 
-    // Check that triage badges have visible text
+    // Navigate to a section that has triage badges
+    await page.locator('.pf-v6-c-nav__link[data-tab="packages"]').click();
+
+    // Triage badge must be visible in the fixture (fleet has items)
     const badge = page.locator('.triage-badge').first();
-    if (await badge.isVisible()) {
-      const color = await badge.evaluate(el => {
-        const style = window.getComputedStyle(el);
-        return { color: style.color, bg: style.backgroundColor };
-      });
-      // Text color should differ from background
-      expect(color.color).not.toEqual(color.bg);
-    }
+    await expect(badge).toBeVisible();
+
+    const color = await badge.evaluate(el => {
+      const style = window.getComputedStyle(el);
+      return { color: style.color, bg: style.backgroundColor };
+    });
+    // Text color should differ from background
+    expect(color.color).not.toEqual(color.bg);
   });
 });
 ```
@@ -1501,19 +1504,19 @@ test.describe('Keyboard Navigation', () => {
   });
 
   test('prevalence badge is focusable and Enter navigates to summary', async ({ page }) => {
-    // Navigate to a section that has a prevalence badge
+    // Navigate to packages section (fleet fixture has prevalence badges)
     await page.locator('.pf-v6-c-nav__link[data-tab="packages"]').click();
 
     const badge = page.locator('.prevalence-badge').first();
-    if (await badge.isVisible()) {
-      await badge.focus();
-      await expect(badge).toBeFocused();
+    await expect(badge).toBeVisible();
 
-      await page.keyboard.press('Enter');
+    await badge.focus();
+    await expect(badge).toBeFocused();
 
-      // Should navigate to summary
-      await expect(page.locator('#section-summary')).toBeVisible();
-    }
+    await page.keyboard.press('Enter');
+
+    // Should navigate to summary
+    await expect(page.locator('#section-summary')).toBeVisible();
   });
 
   test('priority rows are focusable and Enter navigates', async ({ page }) => {
@@ -1777,7 +1780,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 - [x] **No placeholders:** Every task has complete code — no TBD, TODO, or "similar to Task N"
 - [x] **Type consistency:** `FLEET_URL`, `SINGLE_URL`, `ARCHITECT_URL` used consistently across all specs via `helpers.ts`
 - [x] **Server management:** `--no-browser` flag used, deterministic ports 9100-9102, health check before tests
-- [x] **Isolation:** `workers: 1` in config, `beforeEach` page reloads in state-mutating specs (variant-selection, include-exclude, re-render-cycle)
+- [x] **Isolation:** `workers: 1` in config, `beforeEach` page reloads in state-mutating specs. Note: page reload resets client-side JS state but does NOT undo server-side mutations from re-render (output directory rewrite) or architect (topology changes). Tests that re-render run in sequence and accept cumulative state. True server reset would require restarting the server process, which is not implemented — this is a known limitation documented here.
 - [x] **Fixture generation:** Schema-version caching with `--force` flag, fleet/single/architect fixtures
 - [x] **CI contract:** Node >= 18, Chromium only, `uv run` for Python, working directory = repo root
 - [x] **Error path:** Re-render error test creates dirty state first, then corrupts snapshot
