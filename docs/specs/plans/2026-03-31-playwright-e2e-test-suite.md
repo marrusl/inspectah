@@ -147,9 +147,7 @@ import sys
 import tarfile
 from pathlib import Path
 
-from jinja2 import Environment
-
-from yoinkc.renderers import html_report
+from yoinkc.renderers import run_all
 from yoinkc.schema import (
     SCHEMA_VERSION,
     ConfigFileEntry,
@@ -161,8 +159,8 @@ from yoinkc.schema import (
     PackageEntry,
     PackageState,
     RpmSection,
-    ServiceEntry,
     ServiceSection,
+    ServiceStateChange,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -320,16 +318,19 @@ def _build_fleet_snapshot() -> InspectionSnapshot:
         ),
         services=ServiceSection(
             state_changes=[
-                ServiceEntry(
-                    name="httpd", action="enable", include=True,
+                ServiceStateChange(
+                    unit="httpd.service", current_state="enabled",
+                    default_state="disabled", action="enable", include=True,
                     fleet=FleetPrevalence(count=3, total=3, hosts=hosts),
                 ),
-                ServiceEntry(
-                    name="nginx", action="enable", include=True,
+                ServiceStateChange(
+                    unit="nginx.service", current_state="enabled",
+                    default_state="disabled", action="enable", include=True,
                     fleet=FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"]),
                 ),
-                ServiceEntry(
-                    name="kdump", action="disable", include=True,
+                ServiceStateChange(
+                    unit="kdump.service", current_state="disabled",
+                    default_state="enabled", action="disable", include=True,
                     fleet=FleetPrevalence(count=3, total=3, hosts=hosts),
                 ),
             ],
@@ -376,15 +377,17 @@ def _build_single_host_snapshot() -> InspectionSnapshot:
         ),
         services=ServiceSection(
             state_changes=[
-                ServiceEntry(name="httpd", action="enable", include=True),
+                ServiceStateChange(
+                    unit="httpd.service", current_state="enabled",
+                    default_state="disabled", action="enable", include=True,
+                ),
             ],
         ),
     )
 
 
 def _render_and_package(snapshot: InspectionSnapshot, name: str, refine_mode: bool = True) -> Path:
-    """Render a snapshot and package it as a tarball."""
-    env = Environment(autoescape=True)
+    """Render a snapshot through the full pipeline and package as a tarball."""
     output_dir = FIXTURES_DIR / f"_tmp_{name}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -395,14 +398,18 @@ def _render_and_package(snapshot: InspectionSnapshot, name: str, refine_mode: bo
         else:
             item.unlink()
 
-    # Create the snapshot JSON for the tarball
+    # Create the output directory structure
     report_dir = output_dir / name
     report_dir.mkdir(exist_ok=True)
+
+    # Write snapshot JSON (needed by run_all and by the tarball)
     snapshot_path = report_dir / "inspection-snapshot.json"
     snapshot_path.write_text(snapshot.model_dump_json(indent=2))
 
-    # Render HTML report
-    html_report.render(snapshot, env, report_dir, refine_mode=refine_mode)
+    # Render through the FULL pipeline: Containerfile, audit report,
+    # HTML report, README, kickstart, secrets review
+    run_all(snapshot, report_dir, refine_mode=refine_mode,
+            original_snapshot_path=snapshot_path)
 
     # Package as tarball
     tarball_path = FIXTURES_DIR / f"{name}.tar.gz"
@@ -1019,8 +1026,8 @@ import { FLEET_URL } from './helpers';
 
 test.describe('Variant Selection', () => {
   test.beforeEach(async ({ page }) => {
+    // Reload before each test to reset any state from prior re-renders
     await page.goto(FLEET_URL);
-    // Navigate to config section
     await page.locator('.pf-v6-c-nav__link[data-tab="config"]').click();
   });
 
@@ -1078,8 +1085,8 @@ test.describe('Variant Selection', () => {
     await expect(checkedAfter).toHaveCount(1);
   });
 
-  test('selecting a variant reduces tie count in summary', async ({ page }) => {
-    // Get initial tie count
+  test('resolving a tie and re-rendering reduces tie count in summary', async ({ page }) => {
+    // Get initial tie count from summary
     await page.locator('.pf-v6-c-nav__link[data-tab="summary"]').click();
     const tieCallout = page.locator('.summary-ties-callout');
     const initialText = await tieCallout.textContent();
@@ -1089,11 +1096,18 @@ test.describe('Variant Selection', () => {
     const appConfRows = page.locator('[data-variant-group="/etc/app.conf"]');
     await appConfRows.first().locator('.include-toggle').check();
 
-    // Return to summary — tie count should decrease
-    await page.locator('.pf-v6-c-nav__link[data-tab="summary"]').click();
-    const updatedText = await tieCallout.textContent();
+    // Re-render to commit the change (tie count is static until re-render)
+    const rerender = page.locator('#btn-re-render');
+    await expect(rerender).toBeEnabled({ timeout: 5000 });
+    await rerender.click();
 
-    // The count in the callout should be different (fewer ties)
+    // Wait for re-render to complete
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('.summary-dashboard')).toBeVisible({ timeout: 30000 });
+
+    // Tie count should now be lower
+    const updatedCallout = page.locator('.summary-ties-callout');
+    const updatedText = await updatedCallout.textContent();
     expect(updatedText).not.toEqual(initialText);
   });
 });
@@ -1110,25 +1124,48 @@ test.describe('Config Editor', () => {
     await page.goto(FLEET_URL);
   });
 
-  test('editor opens on file click', async ({ page }) => {
-    // Navigate to config section, find a config file link to the editor
-    await page.locator('.pf-v6-c-nav__link[data-tab="config"]').click();
+  test('editor tab opens file browser', async ({ page }) => {
+    // The editor/file browser tab is data-tab="output_files"
+    const editorTab = page.locator('.pf-v6-c-nav__link[data-tab="output_files"]');
+    await editorTab.click();
 
-    // Look for an edit button or file link that opens the editor
-    const editLink = page.locator('[data-tab="editor"]').first();
-    if (await editLink.isVisible()) {
-      await editLink.click();
-      await expect(page.locator('#editor-cm-container')).toBeVisible({ timeout: 5000 });
-    }
+    // File browser tree should be visible
+    await expect(page.locator('#section-output_files')).toBeVisible();
   });
 
-  test('editor shows file content', async ({ page }) => {
-    // Navigate directly to editor tab if available
-    const editorTab = page.locator('.pf-v6-c-nav__link[data-tab="editor"]');
-    if (await editorTab.isVisible()) {
-      await editorTab.click();
-      // Editor should have content loaded
-      await expect(page.locator('.cm-editor, #editor-cm-container')).toBeVisible({ timeout: 5000 });
+  test('clicking a file in the tree loads it in the editor', async ({ page }) => {
+    // Navigate to the editor tab
+    await page.locator('.pf-v6-c-nav__link[data-tab="output_files"]').click();
+    await expect(page.locator('#section-output_files')).toBeVisible();
+
+    // Click a file in the tree (look for a config file entry)
+    const fileEntry = page.locator('.editor-tree-file, [data-file-path]').first();
+    await expect(fileEntry).toBeVisible({ timeout: 5000 });
+    await fileEntry.click();
+
+    // CodeMirror editor should load with content
+    await expect(page.locator('.cm-editor')).toBeVisible({ timeout: 5000 });
+  });
+
+  test('editing and saving marks state as dirty', async ({ page }) => {
+    // Navigate to editor, open a file
+    await page.locator('.pf-v6-c-nav__link[data-tab="output_files"]').click();
+    const fileEntry = page.locator('.editor-tree-file, [data-file-path]').first();
+    await expect(fileEntry).toBeVisible({ timeout: 5000 });
+    await fileEntry.click();
+    await expect(page.locator('.cm-editor')).toBeVisible({ timeout: 5000 });
+
+    // Type something into the editor
+    const editor = page.locator('.cm-content[contenteditable="true"]');
+    await editor.click();
+    await page.keyboard.type('# test edit\n');
+
+    // Save should be available, and after saving Re-render should activate
+    const saveBtn = page.locator('#btn-editor-save, button:has-text("Save")');
+    if (await saveBtn.isVisible()) {
+      await saveBtn.click();
+      const rerender = page.locator('#btn-re-render');
+      await expect(rerender).toBeEnabled({ timeout: 5000 });
     }
   });
 });
@@ -1208,6 +1245,7 @@ import { FLEET_URL } from './helpers';
 
 test.describe('Include/Exclude Toggles', () => {
   test.beforeEach(async ({ page }) => {
+    // Reload to reset state from any prior re-renders
     await page.goto(FLEET_URL);
     await page.locator('.pf-v6-c-nav__link[data-tab="packages"]').click();
   });
@@ -1274,30 +1312,38 @@ test.describe('Fleet Popovers', () => {
 
   test('clicking fleet bar opens popover', async ({ page }) => {
     const fleetBar = page.locator('.fleet-bar').first();
-    if (await fleetBar.isVisible()) {
-      await fleetBar.click();
-      await expect(page.locator('.pf-v6-c-popover.fleet-popover')).toBeVisible();
-    }
+    await expect(fleetBar).toBeVisible();
+    await fleetBar.click();
+    await expect(page.locator('.pf-v6-c-popover.fleet-popover')).toBeVisible();
   });
 
   test('fleet bar gets active outline when popover is open', async ({ page }) => {
     const fleetBar = page.locator('.fleet-bar').first();
-    if (await fleetBar.isVisible()) {
-      await fleetBar.click();
-      await expect(fleetBar).toHaveClass(/active/);
-    }
+    await expect(fleetBar).toBeVisible();
+    await fleetBar.click();
+    await expect(fleetBar).toHaveClass(/active/);
+  });
+
+  test('popover shows host breakdown', async ({ page }) => {
+    const fleetBar = page.locator('.fleet-bar').first();
+    await expect(fleetBar).toBeVisible();
+    await fleetBar.click();
+    const popover = page.locator('.pf-v6-c-popover.fleet-popover');
+    await expect(popover).toBeVisible();
+    // Popover body should contain host names from the fixture
+    await expect(popover.locator('.pf-v6-c-popover__body')).not.toBeEmpty();
   });
 
   test('clicking outside closes popover', async ({ page }) => {
     const fleetBar = page.locator('.fleet-bar').first();
-    if (await fleetBar.isVisible()) {
-      await fleetBar.click();
-      await expect(page.locator('.pf-v6-c-popover.fleet-popover')).toBeVisible();
+    await expect(fleetBar).toBeVisible();
+    await fleetBar.click();
+    await expect(page.locator('.pf-v6-c-popover.fleet-popover')).toBeVisible();
 
-      // Click outside
-      await page.locator('.pf-v6-c-card__body').first().click();
-      await expect(page.locator('.pf-v6-c-popover.fleet-popover')).not.toBeVisible();
-    }
+    // Click outside
+    await page.locator('.pf-v6-c-card__body').first().click();
+    await expect(page.locator('.pf-v6-c-popover.fleet-popover')).not.toBeVisible();
+    await expect(fleetBar).not.toHaveClass(/active/);
   });
 });
 ```
@@ -1565,19 +1611,22 @@ test.describe('Package Move', () => {
   });
 
   test('moving a package updates layer counts', async ({ page }) => {
-    // Get initial state of a layer
-    const layers = page.locator('.architect-layer, [data-layer]');
-    await expect(layers.first()).toBeVisible({ timeout: 10000 });
+    // Get initial package count from the first layer
+    const firstLayer = page.locator('.architect-layer, [data-layer]').first();
+    await expect(firstLayer).toBeVisible({ timeout: 10000 });
+    const initialPkgCount = await firstLayer.locator('.pkg-name').count();
 
-    // Find and click a move action
+    // Click the first move action button
     const moveBtn = page.locator('.pkg-actions button, .move-btn').first();
-    if (await moveBtn.isVisible()) {
-      await moveBtn.click();
+    await expect(moveBtn).toBeVisible();
+    await moveBtn.click();
 
-      // Some UI change should occur (layer count, package list)
-      // Specific assertion depends on the move UI implementation
-      await page.waitForTimeout(500);
-    }
+    // After move, the first layer's package count should change
+    // (Wait for the DOM to update)
+    await expect(async () => {
+      const newCount = await firstLayer.locator('.pkg-name').count();
+      expect(newCount).not.toEqual(initialPkgCount);
+    }).toPass({ timeout: 5000 });
   });
 });
 ```
@@ -1629,17 +1678,15 @@ test.describe('Export', () => {
     await expect(exportBtn).toBeVisible({ timeout: 10000 });
   });
 
-  test('export triggers download', async ({ page }) => {
+  test('export triggers download with tarball', async ({ page }) => {
     const exportBtn = page.locator('#btn-export, button:has-text("Export"), [title*="export" i]');
-    if (await exportBtn.isVisible()) {
-      const [download] = await Promise.all([
-        page.waitForEvent('download', { timeout: 15000 }).catch(() => null),
-        exportBtn.click(),
-      ]);
-      if (download) {
-        expect(download.suggestedFilename()).toContain('.tar.gz');
-      }
-    }
+    await expect(exportBtn).toBeVisible({ timeout: 10000 });
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 15000 }),
+      exportBtn.click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(/\.tar\.gz$/);
   });
 });
 ```
@@ -1657,20 +1704,17 @@ test.describe('Impact Tooltips', () => {
 
   test('impact badge has title attribute with fan-out info', async ({ page }) => {
     const badge = page.locator('.impact-badge').first();
-    if (await badge.isVisible({ timeout: 10000 }).catch(() => false)) {
-      const title = await badge.getAttribute('title');
-      expect(title).toBeTruthy();
-      // Title should contain impact information
-      expect(title!.length).toBeGreaterThan(0);
-    }
+    await expect(badge).toBeVisible({ timeout: 10000 });
+    const title = await badge.getAttribute('title');
+    expect(title).toBeTruthy();
+    expect(title!.length).toBeGreaterThan(0);
   });
 
   test('layer badge has title with summary', async ({ page }) => {
     const layerBadge = page.locator('.layer-badge, [class*="layer"] .badge').first();
-    if (await layerBadge.isVisible({ timeout: 10000 }).catch(() => false)) {
-      const title = await layerBadge.getAttribute('title');
-      expect(title).toBeTruthy();
-    }
+    await expect(layerBadge).toBeVisible({ timeout: 10000 });
+    const title = await layerBadge.getAttribute('title');
+    expect(title).toBeTruthy();
   });
 });
 ```
@@ -1733,7 +1777,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 - [x] **No placeholders:** Every task has complete code — no TBD, TODO, or "similar to Task N"
 - [x] **Type consistency:** `FLEET_URL`, `SINGLE_URL`, `ARCHITECT_URL` used consistently across all specs via `helpers.ts`
 - [x] **Server management:** `--no-browser` flag used, deterministic ports 9100-9102, health check before tests
-- [x] **Isolation:** `workers: 1` in config, `afterEach` page reloads where needed
+- [x] **Isolation:** `workers: 1` in config, `beforeEach` page reloads in state-mutating specs (variant-selection, include-exclude, re-render-cycle)
 - [x] **Fixture generation:** Schema-version caching with `--force` flag, fleet/single/architect fixtures
 - [x] **CI contract:** Node >= 18, Chromium only, `uv run` for Python, working directory = repo root
 - [x] **Error path:** Re-render error test creates dirty state first, then corrupts snapshot
