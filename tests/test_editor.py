@@ -364,17 +364,19 @@ class TestEditorIntegration:
 
 class TestVariantCompare:
 
-    def test_update_compare_buttons_enables_compare_for_two_variants_without_selection(self, tmp_path):
+    def test_update_compare_buttons_switches_to_display_when_no_selection(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=2)
         fn = _extract_js_function(html, "updateCompareButtons")
-        assert "var canPeerCompare = rows.length === 2;" in fn
-        assert "if (hasSelected || canPeerCompare)" in fn
+        assert "variant-display-btn" in fn
+        assert "variant-compare-btn" in fn
+        # When no variant is selected, buttons should become Display
+        assert "displayBtn.textContent = 'Display'" in fn
 
-    def test_update_compare_buttons_keeps_three_plus_variants_disabled_without_selection(self, tmp_path):
+    def test_update_compare_buttons_switches_to_compare_when_has_selection(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=3)
         fn = _extract_js_function(html, "updateCompareButtons")
-        assert "rows.length === 2" in fn
-        assert "rows.length >= 2" not in fn
+        # When a variant IS selected, buttons should become Compare
+        assert "compareBtn.textContent = 'Compare'" in fn
 
     def test_compare_click_on_two_variant_group_without_selection_uses_peer_mode(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=2)
@@ -411,16 +413,21 @@ class TestVariantCompare:
         assert "var initialCompareGroups = {};" in html
         assert "Object.keys(initialCompareGroups).forEach(function(g) { updateCompareButtons(g); });" in html
 
-    def test_editor_tree_keeps_two_variant_compare_enabled_without_selection(self, tmp_path):
+    def test_editor_tree_shows_display_label_for_ties(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=2)
         build_tree_fn = _extract_js_function(html, "buildTree")
-        assert "if (!groupHasSelected && entries.length !== 2) {" in build_tree_fn
-        assert "compareBtn.disabled = true;" in build_tree_fn
+        # When no variant is selected (tie), button should say Display
+        assert "compareBtn.textContent = 'Display'" in build_tree_fn
+        # When a variant IS selected, button should say Compare
+        assert "compareBtn.textContent = 'Compare'" in build_tree_fn
 
-    def test_compare_from_editor_uses_peer_mode_for_two_variant_groups_without_selection(self, tmp_path):
+    def test_compare_from_editor_shows_display_modal_for_ties_with_many_variants(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=2)
         fn = _extract_js_function(html, "compareFromEditor")
         assert "var siblings = findSiblingVariants(section, list, path);" in fn
         assert "if (!selectedItem) {" in fn
-        assert "if (siblings.length !== 2) return;" in fn
+        # 2-variant ties still use peer compare
+        assert "if (siblings.length === 2) {" in fn
         assert "showCompareModal(path, selectedItem, comparisonItem, true);" in fn
+        # 3+ variant ties use Display modal
+        assert "showDisplayModal(path, comparisonItem);" in fn

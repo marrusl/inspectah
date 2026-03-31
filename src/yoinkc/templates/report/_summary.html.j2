@@ -46,18 +46,33 @@
     <div class="summary-card-value">
       <span id="summary-attention-count" class="counter-animate">{{ triage.fixme + triage.manual + unresolved_ties }}</span>
     </div>
+    {%- if unresolved_ties %}
+    <div class="summary-ties-callout">
+      <span class="summary-ties-icon">&#x26A0;</span>
+      <span id="summary-ties-count" class="counter-animate">{{ unresolved_ties }}</span> config tie{{ 's' if unresolved_ties != 1 else '' }} must be resolved
+    </div>
+    {%- endif %}
     <div class="summary-card-detail">
       <span id="summary-review-count" class="counter-animate">{{ triage.fixme }}</span> review ·
       <span id="summary-manual-count" class="counter-animate">{{ triage.manual }}</span> manual
-      {%- if unresolved_ties %} ·
-      <span id="summary-ties-count" class="counter-animate" style="color: var(--pf-t--global--color--status--warning--default, #f0ab00);">{{ unresolved_ties }}</span> <span style="color: var(--pf-t--global--color--status--warning--default, #f0ab00);">tied variant{{ 's' if unresolved_ties != 1 else '' }}</span>
-      {%- endif %}
     </div>
     <div class="summary-card-detail summary-card-note">
       Approximate preview — Re-render for exact counts
     </div>
   </div>
 </div>
+
+{# ── Variant drift callout (fleet only) ──────────────────────────────── #}
+{% if fleet_meta and variant_summary %}
+<div class="summary-drift-callout">
+  <span class="summary-drift-icon">&#x1F500;</span>
+  {% set total_files_with_variants = variant_summary | sum(attribute='files') %}
+  {{ total_files_with_variants }} config file{{ 's' if total_files_with_variants != 1 else '' }} {{ 'have' if total_files_with_variants != 1 else 'has' }} variants across hosts
+  <span class="summary-drift-detail">
+    {%- for vs in variant_summary %} · {{ vs.files }} {{ vs.label | lower }}{% endfor %}
+  </span>
+</div>
+{% endif %}
 
 {# ── Section Priority list (full width) ──────────────────────────────── #}
 <div class="summary-priority-list">

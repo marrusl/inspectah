@@ -689,6 +689,51 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .summary-card-scope { border-left: 3px solid var(--pf-t--global--color--status--success--default, #3e8635); }
 .summary-card-attention { border-left: 3px solid var(--pf-t--global--color--status--warning--default, #f0ab00); }
 
+/* Ties must-fix callout inside Needs Attention card */
+.summary-ties-callout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(201, 25, 11, 0.12);
+  color: var(--pf-t--global--color--status--danger--default, #c9190b);
+  border: 1px solid rgba(201, 25, 11, 0.30);
+}
+.summary-ties-icon {
+  font-size: 0.85rem;
+}
+html:not(.pf-v6-theme-dark) .summary-ties-callout {
+  background: rgba(201, 25, 11, 0.08);
+}
+
+/* Variant drift callout */
+.summary-drift-callout {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin-bottom: var(--pf-t--global--spacer--md, 1rem);
+  border-radius: var(--pf-t--global--border--radius--small, 3px);
+  font-size: 0.8125rem;
+  background: rgba(43, 154, 243, 0.06);
+  border: 1px solid rgba(43, 154, 243, 0.20);
+  color: var(--pf-t--global--text--color--regular, #ccc);
+}
+.summary-drift-icon {
+  font-size: 1rem;
+}
+.summary-drift-detail {
+  opacity: 0.6;
+  font-size: 0.75rem;
+}
+html:not(.pf-v6-theme-dark) .summary-drift-callout {
+  background: rgba(43, 154, 243, 0.04);
+}
+
 /* Section priority list */
 .summary-priority-list {
   margin-top: var(--pf-t--global--spacer--md, 1rem);

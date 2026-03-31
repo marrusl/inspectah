@@ -62,8 +62,10 @@
                 <td class="variant-action-cell">
                   {% if v.item.include %}
                     <span class="variant-selected-label">selected</span>
+                  {% elif group_has_selected %}
+                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn">Compare</button>
                   {% else %}
-                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn{% if not group_has_selected %} pf-m-disabled{% endif %}"{% if not group_has_selected %} disabled{% endif %}>Compare</button>
+                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-display-btn">Display</button>
                   {% endif %}
                 </td>
               </tr>

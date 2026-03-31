@@ -168,10 +168,10 @@
 
               var compareBtn = document.createElement('button');
               compareBtn.className = 'pf-v6-c-button pf-m-small pf-m-link editor-compare-btn';
-              compareBtn.textContent = 'Compare';
-              if (!groupHasSelected && entries.length !== 2) {
-                compareBtn.disabled = true;
-                compareBtn.classList.add('pf-m-disabled');
+              if (groupHasSelected) {
+                compareBtn.textContent = 'Compare';
+              } else {
+                compareBtn.textContent = 'Display';
               }
               compareBtn.addEventListener('click', function(ev) {
                 ev.stopPropagation();
@@ -312,13 +312,19 @@
     });
 
     if (!selectedItem) {
-      if (siblings.length !== 2) return;
-      siblings.forEach(function(s) {
-        if (s.item !== comparisonItem) selectedItem = s.item;
-      });
-      if (!selectedItem) return;
-      if (typeof showCompareModal === 'function') {
-        showCompareModal(path, selectedItem, comparisonItem, true);
+      if (siblings.length === 2) {
+        siblings.forEach(function(s) {
+          if (s.item !== comparisonItem) selectedItem = s.item;
+        });
+        if (!selectedItem) return;
+        if (typeof showCompareModal === 'function') {
+          showCompareModal(path, selectedItem, comparisonItem, true);
+        }
+      } else {
+        // No selected variant, not a 2-variant group — show Display modal
+        if (typeof showDisplayModal === 'function') {
+          showDisplayModal(path, comparisonItem);
+        }
       }
       return;
     }
