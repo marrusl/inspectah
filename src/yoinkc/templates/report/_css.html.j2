@@ -3,6 +3,21 @@
    yoinkc report – custom overrides on top of PatternFly 6
    ═══════════════════════════════════════════════════════════════════════ */
 
+/* Theme-aware custom properties */
+:root {
+  --yoinkc-diff-add-bg: rgba(77, 171, 247, 0.12);
+  --yoinkc-diff-remove-bg: rgba(201, 25, 11, 0.12);
+  --yoinkc-diff-add-border: #4dabf7;
+  --yoinkc-diff-remove-border: #c9190b;
+  --yoinkc-content-bottom-padding: 5rem;
+  --yoinkc-content-max-height: calc(100vh - 200px);
+}
+
+html:not(.pf-v6-theme-dark) {
+  --yoinkc-diff-add-bg: rgba(43, 154, 243, 0.08);
+  --yoinkc-diff-remove-bg: rgba(201, 25, 11, 0.08);
+}
+
 /* Reduced-motion: must come first so it gates ALL animations/transitions below */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -33,7 +48,7 @@ html:not(.pf-v6-theme-dark) .os-icon-rocky  { color: #10B981; }
 html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 
 /* Page padding – toolbar lives at the bottom (5rem covers fleet slider + preview) */
-body { padding-bottom: 5rem; }
+body { padding-bottom: var(--yoinkc-content-bottom-padding); }
 /* Prevent PF6 flex-grow from creating a gap between content and fixed toolbar */
 .pf-v6-c-page__main { flex-grow: 0; }
 
@@ -44,7 +59,7 @@ body { padding-bottom: 5rem; }
 #pkg-selection-banner .pf-v6-c-alert__title { white-space: nowrap; overflow-x: auto; }
 
 /* Section show/hide for nav switching */
-.section { display: none; margin-top: var(--pf-v6-global--spacer--md, 1rem); }
+.section { display: none; margin-top: var(--pf-t--global--spacer--md, 1rem); }
 .section.visible { display: block; opacity: 0; transition: opacity 150ms ease-in-out; }
 .section.visible.pf-m-current { opacity: 1; }
 
@@ -110,7 +125,7 @@ div.excluded { opacity: 0.6; }
 .pf-v6-c-table .pf-v6-c-table__check { vertical-align: middle; }
 
 /* Gap between stacked inner cards inside a card body */
-.pf-v6-c-card__body > .pf-v6-c-card + .pf-v6-c-card { margin-top: var(--pf-v6-global--spacer--md, 1rem); }
+.pf-v6-c-card__body > .pf-v6-c-card + .pf-v6-c-card { margin-top: var(--pf-t--global--spacer--md, 1rem); }
 
 
 /* Details/summary disclosure styling */
@@ -126,8 +141,8 @@ details[open] > summary { margin-bottom: 0.25rem; }
 /* Fleet variant styling (migrated from inline styles) */
 .fleet-variant-toggle { margin-left: 8px; cursor: pointer; }
 .fleet-variant-table { margin: 0; }
-.variant-index { color: var(--pf-v6-global--Color--200); }
-.fleet-banner-hosts { color: var(--pf-v6-global--Color--200); }
+.variant-index { color: var(--pf-t--global--text--color--subtle); }
+.fleet-banner-hosts { color: var(--pf-t--global--text--color--subtle); }
 
 /* Audit */
 .audit-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 50vh; font-size: 0.85rem; margin: 0.5rem 0; }
@@ -203,7 +218,7 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .fleet-bar-track {
   width: 60px;
   height: 6px;
-  background: #e0e0e0;
+  background: var(--pf-t--global--background--color--secondary--default, #e0e0e0);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -212,30 +227,30 @@ details.audit-expand { margin-bottom: 0.25rem; }
   border-radius: 3px;
 }
 .fleet-bar-fill.pf-m-blue {
-  background: var(--pf-v6-global--palette--blue-300, #0066cc);
+  background: var(--pf-t--global--color--brand--default, #0066cc);
 }
 .fleet-bar-fill.pf-m-gold {
-  background: var(--pf-v6-global--palette--gold-400, #f0ab00);
+  background: var(--pf-t--global--color--status--warning--default, #f0ab00);
 }
 .fleet-bar-fill.pf-m-red {
-  background: var(--pf-v6-global--palette--red-100, #c9190b);
+  background: var(--pf-t--global--color--status--danger--default, #c9190b);
 }
 .fleet-bar-label {
   font-size: 11px;
-  color: var(--pf-v6-global--Color--200, #6a6e73);
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
 }
 .fleet-banner {
-  border-left: 4px solid var(--pf-v6-global--palette--blue-300, #0066cc);
+  border-left: 4px solid var(--pf-t--global--color--brand--default, #0066cc);
 }
 /* Fleet popover */
 .fleet-popover {
   position: absolute;
   z-index: 1000;
-  background: var(--pf-v6-global--BackgroundColor--100, #fff);
-  border: 1px solid var(--pf-v6-global--BorderColor--100, #d2d2d2);
+  background: var(--pf-t--global--background--color--primary--default, #fff);
+  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
   border-radius: 4px;
   padding: 8px 12px;
   box-shadow: 0 4px 8px rgba(0,0,0,0.1);
@@ -257,11 +272,11 @@ details.audit-expand { margin-bottom: 0.25rem; }
   justify-content: space-between;
   margin-bottom: 6px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--pf-v6-global--BorderColor--100, #d2d2d2);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
 }
 .fleet-popover-count {
   font-size: 12px;
-  color: var(--pf-v6-global--Color--200, #6a6e73);
+  color: var(--pf-t--global--text--color--subtle, #6a6e73);
   white-space: nowrap;
   margin-right: 8px;
 }
@@ -272,9 +287,9 @@ details.audit-expand { margin-bottom: 0.25rem; }
 }
 .fleet-popover-copy-btn,
 .fleet-popover-drop-arrow {
-  background: var(--pf-v6-global--BackgroundColor--100, #fff);
-  border: 1px solid var(--pf-v6-global--BorderColor--200, #8a8d90);
-  color: var(--pf-v6-global--Color--100, #151515);
+  background: var(--pf-t--global--background--color--primary--default, #fff);
+  border: 1px solid var(--pf-t--global--border--color--default, #8a8d90);
+  color: var(--pf-t--global--text--color--regular, #151515);
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
@@ -290,10 +305,10 @@ details.audit-expand { margin-bottom: 0.25rem; }
 }
 .fleet-popover-copy-btn:hover,
 .fleet-popover-drop-arrow:hover {
-  background: var(--pf-v6-global--BackgroundColor--200, #f0f0f0);
+  background: var(--pf-t--global--background--color--secondary--default, #f0f0f0);
 }
 .fleet-popover-copy-btn--copied {
-  background: var(--pf-v6-global--BackgroundColor--200, #f0f0f0);
+  background: var(--pf-t--global--background--color--secondary--default, #f0f0f0);
 }
 /* Fleet popover: format dropdown */
 .fleet-popover-dropdown {
@@ -301,8 +316,8 @@ details.audit-expand { margin-bottom: 0.25rem; }
   top: 100%;
   right: 0;
   z-index: 100;
-  background: var(--pf-v6-global--BackgroundColor--100, #fff);
-  border: 1px solid var(--pf-v6-global--BorderColor--100, #d2d2d2);
+  background: var(--pf-t--global--background--color--primary--default, #fff);
+  border: 1px solid var(--pf-t--global--border--color--default, #d2d2d2);
   border-radius: 4px;
   box-shadow: 0 2px 6px rgba(0,0,0,0.12);
   min-width: 140px;
@@ -319,11 +334,11 @@ details.audit-expand { margin-bottom: 0.25rem; }
   font-size: 12px;
   padding: 5px 10px;
   text-align: left;
-  color: var(--pf-v6-global--Color--100, #151515);
+  color: var(--pf-t--global--text--color--regular, #151515);
   white-space: nowrap;
 }
 .fleet-popover-fmt-item:hover {
-  background: var(--pf-v6-global--BackgroundColor--200, #f0f0f0);
+  background: var(--pf-t--global--background--color--secondary--default, #f0f0f0);
 }
 .fleet-popover-fmt-check {
   color: var(--pf-t--global--icon--color--brand--default, #0066cc);
@@ -339,10 +354,10 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .variant-compare-btn { white-space: nowrap; padding-inline: var(--pf-t--global--spacer--sm, 0.5rem); min-width: max-content; }
 /* Fleet variant comparison diff */
 .diff-line-same { padding: 0 16px; white-space: pre; color: var(--pf-t--global--text--color--subtle); }
-.diff-line-add { padding: 0 16px; white-space: pre; background: rgba(77, 171, 247, 0.12); color: var(--pf-t--global--text--color--regular); }
-.diff-line-remove { padding: 0 16px; white-space: pre; background: rgba(201, 25, 11, 0.12); color: var(--pf-t--global--text--color--regular); }
-.diff-legend-selected { color: #c9190b; margin-right: 4px; }
-.diff-legend-comparison { color: #4dabf7; margin-right: 4px; }
+.diff-line-add { padding: 0 16px; white-space: pre; background: var(--yoinkc-diff-add-bg); color: var(--pf-t--global--text--color--regular); }
+.diff-line-remove { padding: 0 16px; white-space: pre; background: var(--yoinkc-diff-remove-bg); color: var(--pf-t--global--text--color--regular); }
+.diff-legend-selected { color: var(--yoinkc-diff-remove-border); margin-right: 4px; }
+.diff-legend-comparison { color: var(--yoinkc-diff-add-border); margin-right: 4px; }
 /* Focus indicators for fleet-specific interactive elements */
 .fleet-bar:focus-visible,
 .fleet-bar-label:focus-visible,
