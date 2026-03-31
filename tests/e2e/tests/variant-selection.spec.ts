@@ -47,64 +47,69 @@ test.describe('Variant Selection', () => {
   });
 
   test('expanding variant group shows children with "selected" labels', async ({ page }) => {
-    // Click the "2 variants" toggle to expand the app.conf variant children
-    const appConfGroup = page.locator('tr.fleet-variant-group', {
-      has: page.locator('code', { hasText: '/etc/app.conf' }),
+    // Click the "2 variants" toggle to expand the nginx.conf variant children
+    // (nginx.conf is a clear winner with include=True on the majority variant)
+    const nginxGroup = page.locator('tr.fleet-variant-group', {
+      has: page.locator('code', { hasText: '/etc/nginx/nginx.conf' }),
     });
-    const variantToggle = appConfGroup.locator('.fleet-variant-toggle');
+    const variantToggle = nginxGroup.locator('.fleet-variant-toggle');
     await variantToggle.click();
 
     // The children row should now be visible (display: table-row)
-    const childrenRow = page.locator('tr.fleet-variant-children').first();
-    await expect(childrenRow).toBeVisible();
+    const nginxChildren = page.locator('tr.fleet-variant-children', {
+      has: page.locator('tr[data-variant-group="/etc/nginx/nginx.conf"]'),
+    });
+    await expect(nginxChildren).toBeVisible();
 
     // Variant children exist
-    const appConfVariants = page.locator('tr[data-variant-group="/etc/app.conf"]');
-    const count = await appConfVariants.count();
+    const nginxVariants = page.locator('tr[data-variant-group="/etc/nginx/nginx.conf"]');
+    const count = await nginxVariants.count();
     expect(count).toBe(2);
 
     // Only the auto-selected variant (the one with include=true) shows
     // a "selected" label. The other variant shows a "Compare" button.
     // Verify exactly one variant has the "selected" label.
     const selectedLabels = page.locator(
-      'tr[data-variant-group="/etc/app.conf"] .variant-selected-label'
+      'tr[data-variant-group="/etc/nginx/nginx.conf"] .variant-selected-label'
     );
     await expect(selectedLabels).toHaveCount(1);
     await expect(selectedLabels.first()).toContainText('selected');
 
     // The non-selected variant should have a "Compare" button
     const compareButtons = page.locator(
-      'tr[data-variant-group="/etc/app.conf"] .variant-compare-btn'
+      'tr[data-variant-group="/etc/nginx/nginx.conf"] .variant-compare-btn'
     );
     await expect(compareButtons).toHaveCount(1);
   });
 
   test('unchecking a variant excludes it and activates dirty state', async ({ page }) => {
-    // Expand the app.conf variant group first
-    const appConfGroup = page.locator('tr.fleet-variant-group', {
-      has: page.locator('code', { hasText: '/etc/app.conf' }),
+    // Expand the nginx.conf variant group first (clear winner, variant 1 checked)
+    const nginxGroup = page.locator('tr.fleet-variant-group', {
+      has: page.locator('code', { hasText: '/etc/nginx/nginx.conf' }),
     });
-    await appConfGroup.locator('.fleet-variant-toggle').click();
+    await nginxGroup.locator('.fleet-variant-toggle').click();
 
     // Wait for the children to be visible
-    const childrenRow = page.locator('tr.fleet-variant-children').first();
-    await expect(childrenRow).toBeVisible();
+    const nginxChildren = page.locator('tr.fleet-variant-children', {
+      has: page.locator('tr[data-variant-group="/etc/nginx/nginx.conf"]'),
+    });
+    await expect(nginxChildren).toBeVisible();
 
-    // Uncheck variant 2 of app.conf (data-snap-index="1").
+    // Uncheck the selected variant of nginx.conf (data-snap-index="5").
     // The PF switch component has a <span class="pf-v6-c-switch__toggle">
     // overlay that intercepts pointer events, so click the toggle span directly.
-    const variant2 = page.locator(
-      'tr[data-variant-group="/etc/app.conf"][data-snap-index="1"]'
+    const variant1 = page.locator(
+      'tr[data-variant-group="/etc/nginx/nginx.conf"][data-snap-index="5"]'
     );
-    const toggleSpan = variant2.locator('.pf-v6-c-switch__toggle');
+    const toggleSpan = variant1.locator('.pf-v6-c-switch__toggle');
     await toggleSpan.click();
 
     // Verify the checkbox is now unchecked
-    const checkbox = variant2.locator('.include-toggle');
+    const checkbox = variant1.locator('.include-toggle');
     await expect(checkbox).not.toBeChecked();
 
     // The row should get the 'excluded' class
-    await expect(variant2).toHaveClass(/excluded/);
+    await expect(variant1).toHaveClass(/excluded/);
 
     // The toolbar should show dirty state (re-render button enabled)
     const rerender = page.locator('#btn-re-render');
@@ -112,14 +117,15 @@ test.describe('Variant Selection', () => {
   });
 
   test('unchecking all variants in 3-way group excludes all rows', async ({ page }) => {
-    // Expand the httpd.conf variant group
+    // httpd.conf is a tied variant group — pre-expanded on page load
     const httpdGroup = page.locator('tr.fleet-variant-group', {
       has: page.locator('code', { hasText: '/etc/httpd/conf/httpd.conf' }),
     });
-    await httpdGroup.locator('.fleet-variant-toggle').click();
 
-    // Wait for the children to be visible
-    const httpdChildren = page.locator('tr.fleet-variant-children').nth(1);
+    // The children should already be visible (tied groups are pre-expanded)
+    const httpdChildren = page.locator('tr.fleet-variant-children', {
+      has: page.locator('tr[data-variant-group="/etc/httpd/conf/httpd.conf"]'),
+    });
     await expect(httpdChildren).toBeVisible();
 
     const httpdVariants = page.locator(
@@ -152,24 +158,23 @@ test.describe('Variant Selection', () => {
   });
 
   test('selecting a variant persists through re-render', async ({ page }) => {
-    // Expand the app.conf variant group
-    const appConfGroup = page.locator('tr.fleet-variant-group', {
-      has: page.locator('code', { hasText: '/etc/app.conf' }),
+    // httpd.conf is a tied group (all include=false) — pre-expanded on load.
+    // Select variant 1 to resolve the tie, then verify it persists.
+    const httpdChildren = page.locator('tr.fleet-variant-children', {
+      has: page.locator('tr[data-variant-group="/etc/httpd/conf/httpd.conf"]'),
     });
-    await appConfGroup.locator('.fleet-variant-toggle').click();
-    const childrenRow = page.locator('tr.fleet-variant-children').first();
-    await expect(childrenRow).toBeVisible();
+    await expect(httpdChildren).toBeVisible();
 
-    // Uncheck variant 2 of app.conf by clicking the PF switch toggle
-    const variant2 = page.locator(
-      'tr[data-variant-group="/etc/app.conf"][data-snap-index="1"]'
+    // Check variant 1 of httpd.conf (data-snap-index="2")
+    const variant1 = page.locator(
+      'tr[data-variant-group="/etc/httpd/conf/httpd.conf"][data-snap-index="2"]'
     );
-    const toggleSpan = variant2.locator('.pf-v6-c-switch__toggle');
+    const toggleSpan = variant1.locator('.pf-v6-c-switch__toggle');
     await toggleSpan.click();
 
-    // Verify the change took effect: variant 2 checkbox should be unchecked
-    const checkbox = variant2.locator('.include-toggle');
-    await expect(checkbox).not.toBeChecked();
+    // Verify the change took effect: variant 1 checkbox should be checked
+    const checkbox = variant1.locator('.include-toggle');
+    await expect(checkbox).toBeChecked();
 
     // The re-render button should be enabled now (dirty state)
     const rerender = page.locator('#btn-re-render');
@@ -188,32 +193,122 @@ test.describe('Variant Selection', () => {
     await page.click('a[data-tab="config"]');
     await expect(page.locator('#section-config')).toBeVisible();
 
-    // Expand the variant group again (re-render resets expansion state)
-    const appConfGroupAfter = page.locator('tr.fleet-variant-group', {
-      has: page.locator('code', { hasText: '/etc/app.conf' }),
+    // After re-render with a selected variant, httpd.conf is no longer tied.
+    // Expand the variant group to check the children.
+    const httpdGroupAfter = page.locator('tr.fleet-variant-group', {
+      has: page.locator('code', { hasText: '/etc/httpd/conf/httpd.conf' }),
     });
-    await appConfGroupAfter.locator('.fleet-variant-toggle').click();
-    const childrenRowAfter = page.locator('tr.fleet-variant-children').first();
+    await httpdGroupAfter.locator('.fleet-variant-toggle').click();
+    const childrenRowAfter = page.locator('tr.fleet-variant-children', {
+      has: page.locator('tr[data-variant-group="/etc/httpd/conf/httpd.conf"]'),
+    });
     await expect(childrenRowAfter).toBeVisible();
 
-    // Verify variant 2 is still unchecked after re-render
-    const variant2After = page.locator(
-      'tr[data-variant-group="/etc/app.conf"][data-snap-index="1"]'
+    // Verify variant 1 is still checked after re-render
+    const variant1After = page.locator(
+      'tr[data-variant-group="/etc/httpd/conf/httpd.conf"][data-snap-index="2"]'
     );
-    const checkboxAfter = variant2After.locator('.include-toggle');
-    await expect(checkboxAfter).not.toBeChecked();
+    const checkboxAfter = variant1After.locator('.include-toggle');
+    await expect(checkboxAfter).toBeChecked();
   });
 
   test('non-variant config file has no variant toggle', async ({ page }) => {
-    // /etc/nginx/nginx.conf is a regular row, not a variant group
-    const nginxRow = page.locator(
-      'tr[data-snap-section="config"][data-snap-index="5"]'
+    // /etc/motd is a regular row, not a variant group
+    const motdRow = page.locator(
+      'tr[data-snap-section="config"][data-snap-index="7"]'
     );
-    await expect(nginxRow).toBeVisible();
-    await expect(nginxRow.locator('code')).toContainText('/etc/nginx/nginx.conf');
+    await expect(motdRow).toBeVisible();
+    await expect(motdRow.locator('code')).toContainText('/etc/motd');
 
     // It should NOT have a fleet-variant-toggle
-    const toggle = nginxRow.locator('.fleet-variant-toggle');
+    const toggle = motdRow.locator('.fleet-variant-toggle');
     await expect(toggle).toHaveCount(0);
+  });
+
+  // ── Three-tier variant hierarchy tests ─────────────────────────────────
+
+  test('tied groups are pre-expanded on page load', async ({ page }) => {
+    // /etc/app.conf is a 2-way tie (both include=false, equal fleet counts)
+    const appConfGroup = page.locator('tr.fleet-variant-group.variant-tied', {
+      has: page.locator('code', { hasText: '/etc/app.conf' }),
+    });
+    await expect(appConfGroup).toBeVisible();
+
+    // The toggle should already have the .expanded class (pre-expanded by JS)
+    const toggle = appConfGroup.locator('.fleet-variant-toggle');
+    await expect(toggle).toHaveClass(/expanded/);
+
+    // The children row should be visible without clicking
+    const childrenRow = page.locator('tr.fleet-variant-children', {
+      has: page.locator('tr[data-variant-group="/etc/app.conf"]'),
+    });
+    await expect(childrenRow).toBeVisible();
+  });
+
+  test('auto-selected groups show blue badge', async ({ page }) => {
+    // /etc/nginx/nginx.conf has a clear winner (one include=true) — auto-selected
+    const nginxGroup = page.locator('tr.fleet-variant-group', {
+      has: page.locator('code', { hasText: '/etc/nginx/nginx.conf' }),
+    });
+    await expect(nginxGroup).toBeVisible();
+
+    const badge = nginxGroup.locator('.variant-auto-badge');
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText('auto-selected');
+  });
+
+  test('clean files have no variant badges', async ({ page }) => {
+    // /etc/motd is a non-variant row — should have no auto or tie badge
+    const motdRow = page.locator(
+      'tr[data-snap-section="config"][data-snap-index="7"]'
+    );
+    await expect(motdRow).toBeVisible();
+
+    await expect(motdRow.locator('.variant-auto-badge')).toHaveCount(0);
+    await expect(motdRow.locator('.variant-tie-badge')).toHaveCount(0);
+  });
+
+  test('chevron expand and collapse toggle', async ({ page }) => {
+    // nginx.conf is a clear winner — starts collapsed (not tied)
+    const nginxGroup = page.locator('tr.fleet-variant-group', {
+      has: page.locator('code', { hasText: '/etc/nginx/nginx.conf' }),
+    });
+    const toggle = nginxGroup.locator('.fleet-variant-toggle');
+
+    // Initially collapsed (no .expanded class)
+    await expect(toggle).not.toHaveClass(/expanded/);
+
+    // Click to expand
+    await toggle.click();
+    await expect(toggle).toHaveClass(/expanded/);
+
+    const childrenRow = page.locator('tr.fleet-variant-children', {
+      has: page.locator('tr[data-variant-group="/etc/nginx/nginx.conf"]'),
+    });
+    await expect(childrenRow).toBeVisible();
+
+    // Click again to collapse
+    await toggle.click();
+    await expect(toggle).not.toHaveClass(/expanded/);
+  });
+
+  test('auto badge readable in light mode', async ({ page }) => {
+    // Switch to light theme by removing pf-v6-theme-dark from <html>
+    await page.evaluate(() => {
+      document.documentElement.classList.remove('pf-v6-theme-dark');
+    });
+
+    const nginxGroup = page.locator('tr.fleet-variant-group', {
+      has: page.locator('code', { hasText: '/etc/nginx/nginx.conf' }),
+    });
+    const badge = nginxGroup.locator('.variant-auto-badge');
+    await expect(badge).toBeVisible();
+
+    // Verify the badge has distinct foreground vs background color
+    const styles = await badge.evaluate((el) => {
+      const cs = window.getComputedStyle(el);
+      return { color: cs.color, background: cs.backgroundColor };
+    });
+    expect(styles.color).not.toBe(styles.background);
   });
 });

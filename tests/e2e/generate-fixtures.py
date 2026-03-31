@@ -191,36 +191,47 @@ def build_fleet_snapshot() -> InspectionSnapshot:
 
     # --- Config files with variant ties ---
     config = ConfigSection(files=[
-        # 2-way tie: /etc/app.conf appears on 2 hosts with same content
+        # 2-way tie: /etc/app.conf — equal fleet counts, no selection → tied
         _cfg("/etc/app.conf",
              kind=ConfigFileKind.UNOWNED,
              content="# App config variant A\nworkers=4\nlog_level=info\n",
-             fleet=_fleet(2, 3, ["web-01", "web-02"])),
+             include=False,
+             fleet=_fleet(1, 2, ["web-01"])),
         _cfg("/etc/app.conf",
              kind=ConfigFileKind.UNOWNED,
              content="# App config variant B\nworkers=8\nlog_level=debug\n",
-             fleet=_fleet(1, 3, ["web-03"])),
-        # 3-way tie: /etc/httpd/conf/httpd.conf all different
+             include=False,
+             fleet=_fleet(1, 2, ["web-02"])),
+        # 3-way tie: /etc/httpd/conf/httpd.conf — all different, equal counts
         _cfg("/etc/httpd/conf/httpd.conf",
              kind=ConfigFileKind.RPM_OWNED_MODIFIED,
              category=ConfigCategory.OTHER,
              content="# httpd.conf variant 1\nServerName web-01.example.com\nMaxClients 256\n",
+             include=False,
              fleet=_fleet(1, 3, ["web-01"])),
         _cfg("/etc/httpd/conf/httpd.conf",
              kind=ConfigFileKind.RPM_OWNED_MODIFIED,
              category=ConfigCategory.OTHER,
              content="# httpd.conf variant 2\nServerName web-02.example.com\nMaxClients 512\n",
+             include=False,
              fleet=_fleet(1, 3, ["web-02"])),
         _cfg("/etc/httpd/conf/httpd.conf",
              kind=ConfigFileKind.RPM_OWNED_MODIFIED,
              category=ConfigCategory.OTHER,
              content="# httpd.conf variant 3\nServerName web-03.example.com\nMaxClients 128\n",
+             include=False,
              fleet=_fleet(1, 3, ["web-03"])),
-        # Clear winner: /etc/nginx/nginx.conf same on all hosts
+        # Clear winner: /etc/nginx/nginx.conf — 2 variants, one dominant
         _cfg("/etc/nginx/nginx.conf",
              kind=ConfigFileKind.RPM_OWNED_MODIFIED,
-             content="# nginx.conf\nworker_processes auto;\nevents { worker_connections 1024; }\n",
-             fleet=_fleet(3, 3, ALL_HOSTS)),
+             content="# nginx.conf majority\nworker_processes auto;\nevents { worker_connections 1024; }\n",
+             include=True,
+             fleet=_fleet(2, 3, ["web-01", "web-02"])),
+        _cfg("/etc/nginx/nginx.conf",
+             kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+             content="# nginx.conf minority\nworker_processes 2;\nevents { worker_connections 512; }\n",
+             include=False,
+             fleet=_fleet(1, 3, ["web-03"])),
         # Excluded config (triage: user toggled off)
         _cfg("/etc/motd",
              kind=ConfigFileKind.UNOWNED,

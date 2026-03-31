@@ -845,3 +845,53 @@ class TestVariantTieResolution:
         minority = [f for f in files.values() if f["content"] == "minority-variant"]
         assert len(minority) == 1
         assert minority[0]["include"] is True
+
+    def test_auto_selected_group_renders_auto_badge(self, tmp_path):
+        """A variant group with a clear winner renders the auto-selected badge."""
+        snap = InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02", "web-03"],
+                    "total_hosts": 3,
+                    "min_prevalence": 1,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="winner-variant",
+                        include=True,
+                        fleet=FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"]),
+                    ),
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="loser-variant",
+                        include=False,
+                        fleet=FleetPrevalence(count=1, total=3, hosts=["web-03"]),
+                    ),
+                ],
+            ),
+        )
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        # Check for the actual badge element with auto-selected content
+        assert '>auto-selected<' in html
+
+    def test_tied_group_has_no_auto_badge(self, tmp_path):
+        """An unresolved tied variant group should NOT render the auto-selected badge."""
+        snap = self._make_tied_snapshot(resolved=False)
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        # The CSS class definition will be in the stylesheet, but the actual
+        # badge element (with "auto-selected" text) should not appear
+        assert '>auto-selected<' not in html
