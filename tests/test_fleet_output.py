@@ -397,3 +397,107 @@ class TestFleetVariantGrouping:
         html_report.render(snap, env, tmp_path)
         html = (tmp_path / "report.html").read_text()
         assert 'class="fleet-variant-group' not in html
+
+
+class TestVariantTieResolution:
+    """Tests that user-resolved variant ties survive re-render."""
+
+    def _make_tied_snapshot(self, *, resolved: bool):
+        """Build a snapshot with a 2-way tie on /etc/app.conf.
+
+        If *resolved* is True, one variant has include=True (user chose it).
+        If False, both have include=False (unresolved tie).
+        """
+        return InspectionSnapshot(
+            schema_version=1,
+            os_release=OsRelease(
+                name="Red Hat Enterprise Linux", version_id="9.4",
+                id="rhel", platform_id="platform:el9",
+            ),
+            meta={
+                "fleet": {
+                    "source_hosts": ["web-01", "web-02"],
+                    "total_hosts": 2,
+                    "min_prevalence": 50,
+                }
+            },
+            config=ConfigSection(
+                files=[
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="variant-A",
+                        include=resolved,  # user picked this one (or not)
+                        fleet=FleetPrevalence(count=1, total=2, hosts=["web-01"]),
+                    ),
+                    ConfigFileEntry(
+                        path="/etc/app.conf",
+                        kind=ConfigFileKind.UNOWNED,
+                        content="variant-B",
+                        include=False,
+                        fleet=FleetPrevalence(count=1, total=2, hosts=["web-02"]),
+                    ),
+                ],
+            ),
+        )
+
+    def test_unresolved_tie_counted(self, tmp_path):
+        """An unresolved tie (both include=False, same fleet count) is counted."""
+        from yoinkc.renderers.html_report import _build_context
+        snap = self._make_tied_snapshot(resolved=False)
+        env = Environment(autoescape=True)
+        ctx = _build_context(snap, tmp_path, env)
+        assert ctx["unresolved_ties"] == 1
+
+    def test_resolved_tie_not_counted(self, tmp_path):
+        """A user-resolved tie (one include=True) should NOT be counted."""
+        from yoinkc.renderers.html_report import _build_context
+        snap = self._make_tied_snapshot(resolved=True)
+        env = Environment(autoescape=True)
+        ctx = _build_context(snap, tmp_path, env)
+        assert ctx["unresolved_ties"] == 0
+
+    def test_resolved_tie_shows_selected_label(self, tmp_path):
+        """After resolving a tie, the HTML should show 'selected' label."""
+        snap = self._make_tied_snapshot(resolved=True)
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "variant-selected-label" in html
+        # The tie badge element should NOT appear in the markup
+        # (the CSS class definition is always present, so check for the
+        # actual badge element with its content, not just the class name)
+        assert 'tied &mdash; compare' not in html
+
+    def test_unresolved_tie_shows_tie_badge(self, tmp_path):
+        """An unresolved tie should display the tie warning badge."""
+        snap = self._make_tied_snapshot(resolved=False)
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path)
+        html = (tmp_path / "report.html").read_text()
+        assert "variant-tie-badge" in html
+
+    def test_resolved_tie_persists_through_json_roundtrip(self, tmp_path):
+        """Variant selection survives JSON serialise→deserialise (re-render path)."""
+        import json
+        from yoinkc.renderers.html_report import _build_context
+        snap = self._make_tied_snapshot(resolved=True)
+        data = json.loads(snap.model_dump_json())
+        reloaded = InspectionSnapshot.model_validate(data)
+        env = Environment(autoescape=True)
+        ctx = _build_context(reloaded, tmp_path, env)
+        assert ctx["unresolved_ties"] == 0
+        files = reloaded.config.files
+        included = [f for f in files if f.include]
+        assert len(included) == 1
+        assert included[0].content == "variant-A"
+
+    def test_prevalence_js_preserves_user_selection(self, tmp_path):
+        """The applyPrevalenceThreshold JS must preserve user variant picks."""
+        snap = self._make_tied_snapshot(resolved=True)
+        env = Environment(autoescape=True)
+        html_report.render(snap, env, tmp_path, refine_mode=True)
+        html = (tmp_path / "report.html").read_text()
+        # The fix: tied branch checks for an existing user selection before
+        # deselecting all variants.  Verify the guard is present in the JS.
+        assert "selectedCount === 1" in html

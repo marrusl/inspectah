@@ -1871,12 +1871,32 @@ function countAtThreshold(threshold) {
         (variants[1].item.fleet ? variants[1].item.fleet.count : 0) === topCount;
 
       if (isTied) {
+        // Preserve an existing user selection: if exactly one variant is
+        // already included the user resolved this tie — keep that choice.
+        var userSelected = null;
+        var selectedCount = 0;
         variants.forEach(function(v) {
-          v.item.include = false;
-          var cb = v.el.querySelector('.include-toggle');
-          if (cb) cb.checked = false;
-          v.el.classList.add('excluded');
+          if (v.item.include) { userSelected = v; selectedCount++; }
         });
+        if (selectedCount === 1) {
+          // User resolved the tie — enforce radio constraint around it.
+          variants.forEach(function(v) {
+            if (v !== userSelected) {
+              v.item.include = false;
+              var cb = v.el.querySelector('.include-toggle');
+              if (cb) cb.checked = false;
+              v.el.classList.add('excluded');
+            }
+          });
+        } else {
+          // No user selection (or ambiguous) — deselect all as before.
+          variants.forEach(function(v) {
+            v.item.include = false;
+            var cb = v.el.querySelector('.include-toggle');
+            if (cb) cb.checked = false;
+            v.el.classList.add('excluded');
+          });
+        }
       } else {
         var foundIncluded = false;
         variants.forEach(function(v) {

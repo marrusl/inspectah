@@ -697,20 +697,21 @@ def _build_context(
                 })
             # Count unresolved ties: variant groups with no selected item
             # where the top two variants share the same fleet count.
-            # Each entry in `vs` is {"item": <model>, "snap_index": int}.
+            # Each entry in `vs` is {"item": <model_or_dict>, "snap_index": int}.
+            # Config files pass through _prepare_config_files which yields
+            # plain dicts, so we must support both attribute and key access.
             for _path, vs in (groups or {}).items():
                 if len(vs) < 2:
                     continue
                 has_selected = any(
-                    getattr(v["item"], "include", False) for v in vs
+                    (v["item"].get("include", False) if isinstance(v["item"], dict)
+                     else getattr(v["item"], "include", False))
+                    for v in vs
                 )
                 if has_selected:
                     continue
                 fleet_counts = sorted(
-                    (
-                        v["item"].fleet.count if getattr(v["item"], "fleet", None) else 0
-                        for v in vs
-                    ),
+                    (_variant_prevalence(v["item"]) for v in vs),
                     reverse=True,
                 )
                 if len(fleet_counts) >= 2 and fleet_counts[0] == fleet_counts[1]:
