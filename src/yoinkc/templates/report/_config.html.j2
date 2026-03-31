@@ -11,7 +11,9 @@
     {%- if variants | length > 1 %}
       {%- set primary = variants[0] %}
       {%- set group_has_selected = variants | selectattr('item.include', 'equalto', true) | list | length > 0 %}
-      <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}"
+      {%- set sorted_variants = variants | sort(attribute='item.fleet.count', reverse=true) if variants[0].item.fleet else variants %}
+      {%- set is_tied = (not group_has_selected) and (variants | length >= 2) and sorted_variants[0].item.fleet and sorted_variants[1].item.fleet and (sorted_variants[0].item.fleet.count == sorted_variants[1].item.fleet.count) %}
+      <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}{% if is_tied %} variant-tied{% endif %}"
           data-snap-section="config" data-snap-list="files"
           data-snap-index="{{ primary.item.snap_index }}">
         <td class="pf-v6-c-table__check">
@@ -28,6 +30,9 @@
                 tabindex="0" role="button" aria-label="Toggle variants">
             <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
           </span>
+          {% if is_tied %}
+          <span class="variant-tie-badge"><span class="tie-icon">&#x26A0;</span> tied &mdash; compare &amp; choose</span>
+          {% endif %}
         </td>
         <td></td><td></td>
         {{ fleet_cell(primary.item) }}

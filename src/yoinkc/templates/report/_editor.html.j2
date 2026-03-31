@@ -67,6 +67,26 @@
 }
 .editor-single-file:hover { background: rgba(255,255,255,0.05); }
 .editor-single-file.pf-m-current { background: rgba(0,102,204,0.15); }
+/* Light-mode contrast fixes for editor tree */
+html:not(.pf-v6-theme-dark) .editor-variant-header { background: var(--pf-t--global--background--color--secondary--default, #f0f0f0); }
+html:not(.pf-v6-theme-dark) .editor-variant-header .chevron { color: var(--pf-t--global--text--color--subtle, #6a6e73); }
+html:not(.pf-v6-theme-dark) .editor-variant-header .path-dir { color: var(--pf-t--global--text--color--subtle, #6a6e73); }
+html:not(.pf-v6-theme-dark) .editor-variant-header .path-file { color: var(--pf-t--global--text--color--regular, #151515); }
+html:not(.pf-v6-theme-dark) .editor-variant-row:hover { background: rgba(0,0,0,0.04); }
+html:not(.pf-v6-theme-dark) .editor-variant-row.selected:hover { background: rgba(0, 102, 204, 0.12); }
+html:not(.pf-v6-theme-dark) .host-chip { background: rgba(0, 102, 204, 0.12); color: var(--pf-t--global--text--color--brand--default, #0066cc); }
+html:not(.pf-v6-theme-dark) .editor-variant-row:not(.selected) .host-chip { background: rgba(204, 136, 0, 0.12); color: #8a6900; }
+html:not(.pf-v6-theme-dark) .host-count { color: #8a6900; }
+html:not(.pf-v6-theme-dark) .editor-single-file { color: var(--pf-t--global--text--color--regular, #151515); }
+html:not(.pf-v6-theme-dark) .prevalence-bar { background: #e0e0e0; }
+/* Tied variant highlighting in editor tree */
+.editor-variant-group.variant-tied > .editor-variant-header {
+  border-left: 3px solid var(--pf-t--global--color--status--warning--default, #f0ab00);
+  background: rgba(240, 171, 0, 0.10);
+}
+html:not(.pf-v6-theme-dark) .editor-variant-group.variant-tied > .editor-variant-header {
+  background: rgba(240, 171, 0, 0.08);
+}
 </style>
 
 {# --- Re-render error banner (shown by JS on failure, hidden by default) --- #}

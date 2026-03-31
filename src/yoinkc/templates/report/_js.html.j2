@@ -1611,6 +1611,8 @@ function countAtThreshold(threshold) {
 
   var staticFixme = {{ triage.fixme }};
   var staticManual = {{ triage.manual }};
+  var staticTies = {{ unresolved_ties }};
+  var tiesEl = document.getElementById('summary-ties-count');
 
   function animateCounter(el, newValue) {
     if (!el) return;
@@ -1630,13 +1632,14 @@ function countAtThreshold(threshold) {
 
     var approxTotal = result.included + staticFixme + staticManual;
     var approxAuto = result.included;
-    var attentionCount = staticFixme + staticManual;
+    var attentionCount = staticFixme + staticManual + staticTies;
 
     animateCounter(scopeTotalEl, approxTotal);
     if (scopeAutoEl) animateCounter(scopeAutoEl, approxAuto);
     animateCounter(attentionEl, attentionCount);
     if (reviewEl) animateCounter(reviewEl, staticFixme);
     if (manualEl) animateCounter(manualEl, staticManual);
+    if (tiesEl) animateCounter(tiesEl, staticTies);
   }
 
   summarySlider.addEventListener('input', function() {

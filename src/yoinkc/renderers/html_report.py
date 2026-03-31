@@ -678,6 +678,7 @@ def _build_context(
         dropin_variant_groups = None
 
     variant_summary = []
+    unresolved_ties = 0
     if fleet_meta:
         for label, groups, tab in [
             ("Config files", config_variant_groups, "config"),
@@ -694,6 +695,35 @@ def _build_context(
                     "files": len(multi),
                     "variants": sum(len(v) for v in multi.values()),
                 })
+            # Count unresolved ties: variant groups with no selected item
+            # where the top two variants share the same fleet count.
+            # Each entry in `vs` is {"item": <model>, "snap_index": int}.
+            for _path, vs in (groups or {}).items():
+                if len(vs) < 2:
+                    continue
+                has_selected = any(
+                    getattr(v["item"], "include", False) for v in vs
+                )
+                if has_selected:
+                    continue
+                fleet_counts = sorted(
+                    (
+                        v["item"].fleet.count if getattr(v["item"], "fleet", None) else 0
+                        for v in vs
+                    ),
+                    reverse=True,
+                )
+                if len(fleet_counts) >= 2 and fleet_counts[0] == fleet_counts[1]:
+                    unresolved_ties += 1
+
+    # Inject unresolved ties into triage_detail for the summary priority list
+    if unresolved_ties > 0:
+        triage_detail.append({
+            "label": "Variant ties",
+            "count": unresolved_ties,
+            "tab": "config",
+            "status": "manual",
+        })
 
     return {
         "snapshot": snapshot,
@@ -723,6 +753,7 @@ def _build_context(
         "quadlet_variant_groups": quadlet_variant_groups,
         "dropin_variant_groups": dropin_variant_groups,
         "variant_summary": variant_summary,
+        "unresolved_ties": unresolved_ties,
         "containers_data": _prepare_containers(snapshot),
         "non_rpm_data": _prepare_non_rpm(snapshot),
         "triage_detail": triage_detail,

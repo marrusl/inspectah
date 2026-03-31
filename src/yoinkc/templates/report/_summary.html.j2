@@ -44,11 +44,14 @@
   <div class="summary-card summary-card-attention{% if not fleet_meta %} summary-card-attention-full{% endif %}">
     <div class="summary-card-label">Needs Attention</div>
     <div class="summary-card-value">
-      <span id="summary-attention-count" class="counter-animate">{{ triage.fixme + triage.manual }}</span>
+      <span id="summary-attention-count" class="counter-animate">{{ triage.fixme + triage.manual + unresolved_ties }}</span>
     </div>
     <div class="summary-card-detail">
       <span id="summary-review-count" class="counter-animate">{{ triage.fixme }}</span> review ·
       <span id="summary-manual-count" class="counter-animate">{{ triage.manual }}</span> manual
+      {%- if unresolved_ties %} ·
+      <span id="summary-ties-count" class="counter-animate" style="color: var(--pf-t--global--color--status--warning--default, #f0ab00);">{{ unresolved_ties }}</span> <span style="color: var(--pf-t--global--color--status--warning--default, #f0ab00);">tied variant{{ 's' if unresolved_ties != 1 else '' }}</span>
+      {%- endif %}
     </div>
     <div class="summary-card-detail summary-card-note">
       Approximate preview — Re-render for exact counts

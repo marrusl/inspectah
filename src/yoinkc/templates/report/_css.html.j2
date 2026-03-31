@@ -740,4 +740,54 @@ html:not(.pf-v6-theme-dark) .summary-card-prevalence {
   background: rgba(43, 154, 243, 0.03);
 }
 
+/* ── Light-mode badge contrast fixes ──────────────────────────────────── */
+html:not(.pf-v6-theme-dark) .fleet-variant-toggle {
+  border-color: var(--pf-t--global--border--color--default, #d2d2d2);
+  background: var(--pf-t--global--background--color--secondary--default, #f0f0f0);
+}
+html:not(.pf-v6-theme-dark) .fleet-variant-toggle .pf-v6-c-label__content {
+  color: var(--pf-t--global--text--color--regular, #151515);
+}
+html:not(.pf-v6-theme-dark) .variant-tie-badge {
+  background: var(--pf-t--global--color--status--warning--100, #f0ab00) !important;
+  color: var(--pf-t--global--text--color--on-status--warning--default, #151515) !important;
+}
+
+{% if fleet_meta %}
+/* ── Tied variant group highlighting ──────────────────────────────────── */
+.fleet-variant-group.variant-tied {
+  background: rgba(240, 171, 0, 0.08);
+}
+.fleet-variant-group.variant-tied > td {
+  border-top: 2px solid var(--pf-t--global--color--status--warning--default, #f0ab00);
+}
+html:not(.pf-v6-theme-dark) .fleet-variant-group.variant-tied {
+  background: rgba(240, 171, 0, 0.06);
+}
+
+/* Variant tie badge (shared between config table and editor tree) */
+.variant-tie-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(240, 171, 0, 0.20);
+  color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+  border: 1px solid rgba(240, 171, 0, 0.35);
+  white-space: nowrap;
+}
+.variant-tie-badge .tie-icon {
+  font-size: 0.8rem;
+}
+html:not(.pf-v6-theme-dark) .variant-tie-badge {
+  background: var(--pf-t--global--color--status--warning--100, #f0ab00);
+  color: #151515;
+  border-color: var(--pf-t--global--color--status--warning--default, #f0ab00);
+}
+{% endif %}
+
 </style>

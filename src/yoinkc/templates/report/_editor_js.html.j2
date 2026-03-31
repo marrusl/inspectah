@@ -109,10 +109,10 @@
             var topCount = sortedForTie[0].item.fleet ? sortedForTie[0].item.fleet.count : 0;
             var secondCount = sortedForTie[1].item.fleet ? sortedForTie[1].item.fleet.count : 0;
             if (topCount === secondCount) {
+              group.classList.add('variant-tied');
               var tieBadge = document.createElement('span');
               tieBadge.className = 'variant-tie-badge';
-              tieBadge.textContent = 'tied \u2014 compare & choose';
-              tieBadge.style.cssText = 'margin-left:8px; padding:2px 6px; border-radius:3px; font-size:0.75rem; background:rgba(204,136,0,0.2); color:#cc8800;';
+              tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare & choose';
               headerDiv.appendChild(tieBadge);
             }
           }
