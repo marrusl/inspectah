@@ -594,14 +594,21 @@ Also add JS for the priority list click-to-navigate:
   if (!container) return;
 
   // Re-sort Jinja-rendered rows by priority (Jinja renders in pipeline order as a no-JS fallback)
+  // Design spec: rank by manual count desc, then fixme/review count desc, then auto count desc
   var rows = Array.prototype.slice.call(container.children);
-  var order = { manual: 0, fixme: 1, review: 1, auto: 2 };
+  var bucket = { manual: 0, fixme: 1, review: 1, auto: 2 };
   rows.sort(function(a, b) {
     var aStatus = a.querySelector('[class*="status-"]');
     var bStatus = b.querySelector('[class*="status-"]');
-    var aOrder = aStatus && aStatus.className.match(/status-(\w+)/) ? order[RegExp.$1] || 2 : 2;
-    var bOrder = bStatus && bStatus.className.match(/status-(\w+)/) ? order[RegExp.$1] || 2 : 2;
-    return aOrder - bOrder;
+    var aMatch = aStatus && aStatus.className.match(/status-(\w+)/);
+    var bMatch = bStatus && bStatus.className.match(/status-(\w+)/);
+    var aBucket = aMatch ? (bucket[aMatch[1]] || 2) : 2;
+    var bBucket = bMatch ? (bucket[bMatch[1]] || 2) : 2;
+    if (aBucket !== bBucket) return aBucket - bBucket;
+    // Within same bucket, sort by count descending
+    var aCount = parseInt((aStatus && aStatus.textContent.match(/(\d+)/)) ? RegExp.$1 : '0', 10);
+    var bCount = parseInt((bStatus && bStatus.textContent.match(/(\d+)/)) ? RegExp.$1 : '0', 10);
+    return bCount - aCount;
   });
   rows.forEach(function(row) { container.appendChild(row); });
 
