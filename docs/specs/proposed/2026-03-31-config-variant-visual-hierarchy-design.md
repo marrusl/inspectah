@@ -3,69 +3,53 @@
 **Date:** 2026-03-31
 **Status:** Proposed
 **Author:** Kit (via brainstorm with Mark, Ember assessment)
+**Amends:** `2026-03-22-variant-auto-selection-design.md` — this spec supersedes the visual/badge portions of that spec. The auto-selection logic (tie detection, winner selection by prevalence count) is unchanged. This spec updates only the visual treatment and expand/collapse behavior.
 
 ## Goal
 
-Add a three-tier visual hierarchy to config file variant groups in the refine report, so users can instantly distinguish ties (must resolve), auto-selected winners (worth reviewing), and clean files (no variation).
+Add a three-tier visual hierarchy to config file variant groups in the refine report, so users can instantly distinguish ties (must resolve), auto-selected winners (worth reviewing), and clean files (no variation). Add chevron affordance to make expand/collapse discoverable.
 
-## Context
+## Definitions
 
-Fleet mode surfaces config file variants — the same path with different content across hosts. Currently:
-- Ties are highlighted with warning styling and "must fix" callouts (shipped in UI overhaul)
-- Auto-selected winners look identical to non-variant files — users don't know variation exists unless they expand the group
-- Clean files (no variation) have no indicator
+**Tie:** A variant group where two or more variants share the highest `fleet.count` AND no variant has `include=true`. Operationally: all items in the group have `include=false`. This is the definition from the Mar 22 auto-selection spec, unchanged.
 
-This leaves a trust gap: the tool silently picks a winner and the user doesn't know it happened.
+**Auto-selected:** A variant group where one variant has strictly higher `fleet.count` than all others, and that variant has `include=true`. The tool picked the winner automatically.
+
+**Clean (no variation):** A config file with only one entry for that path — identical across all hosts, or only present on one host. No variant group exists.
+
+## Apr 8 Scope
+
+**In scope (this sprint):**
+- Config section only (`_config.html.j2`, `_css.html.j2`, `_js.html.j2`)
+- Chevron affordance on config variant group headers
+- Auto-selected badge on config variant group headers
+- Pre-expand ties on page load
+- E2E test coverage for the three tiers
+
+**Deferred (post-Apr 8):**
+- Editor tree variant display (`_editor.html.j2`, `_editor_js.html.j2`) — follow-on, same pattern
+- Services and containers variant groups — follow-on if they use the same variant group pattern
+- Summary-line noise mitigation for large fleets (>10 auto-selected groups)
+
+This narrowing reduces regression risk and screenshot timing concerns for the demo.
 
 ## Design
 
-### Three Tiers
+### Tier 1: Tied (must resolve)
 
-**Tier 1: Tied (must resolve)**
-- Red/warning left border + tinted background (already implemented)
-- Bold badge: "⚠ N variants · tied — choose one"
-- **Pre-expanded on page load** — children visible immediately
-- Compare buttons (2-way) or Display buttons (3+)
+**Visual:** Red/warning left border + tinted background (already implemented in UI overhaul).
 
-**Tier 2: Auto-selected (worth reviewing)**
-- No row border or background tint — visually quiet
-- Light blue tinted badge: "N variants · auto-selected"
-- Collapsed by default (user expands to review)
-- Compare buttons available on non-selected variants
+**Badge text:** "⚠ N variants · tied — choose one"
 
-**Tier 3: No variation (clean)**
-- No indicator, no badge
-- Collapsed by default
-- No change from current behavior
+**Color:** Red/danger tokens — `--pf-t--global--color--status--danger--default` (`#c9190b`). This supersedes the gold `#cc8800` from the Mar 22 spec. Rationale: ties are blocking items that prevent a valid Containerfile. Warning/danger red matches PF6 severity semantics and the "must fix" framing established in the UI overhaul. Gold was proposed before the "must fix" callout existed; red is now the established treatment.
 
-### Chevron Affordance
+**Expand state:** Pre-expanded on page load. JS runs on `DOMContentLoaded` and expands all tied variant groups. This happens only on initial page load, NOT after prevalence slider changes (the slider is a preview — ties are recomputed on re-render).
 
-All expandable variant groups get a directional chevron:
-- ▶ when collapsed
-- ▼ when expanded
+### Tier 2: Auto-selected (worth reviewing)
 
-Use the existing `.chevron` CSS class (already defined but not rendered in HTML). For consistency with the file browser, use the PF6 tree-view SVG chevron (`_TOGGLE_ICON_SVG` constant already in `html_report.py`), or a CSS-rotated Unicode chevron if simpler.
+**Visual:** No row border or background tint. Just the badge on the group header row.
 
-The chevron makes the expand/collapse interaction discoverable — currently users only find it by accident.
-
-### Scope
-
-**Files to modify:**
-- `src/yoinkc/templates/report/_config.html.j2` — add chevron, auto-selected badge, tie pre-expand
-- `src/yoinkc/templates/report/_css.html.j2` — auto-selected badge styling, chevron rotation
-- `src/yoinkc/templates/report/_js.html.j2` — pre-expand ties on page load, chevron toggle
-- `src/yoinkc/templates/report/_editor.html.j2` — same chevron treatment in editor tree
-- `src/yoinkc/templates/report/_editor_js.html.j2` — editor tree chevron behavior
-
-**Also apply to services and containers** if they have variant groups (same pattern).
-
-### What NOT to change
-
-- Tie styling — already implemented and working
-- Summary dashboard — existing variant drift callout is sufficient
-- No new Python/renderer changes needed — all variant state data is already in the template context
-
-### Auto-selected Badge CSS
+**Badge:** Light blue tinted pill — `"N variants · auto-selected"`. Informational, not actionable.
 
 ```css
 .variant-auto-badge {
@@ -82,11 +66,60 @@ html:not(.pf-v6-theme-dark) .variant-auto-badge {
 }
 ```
 
-### Pre-expand Ties
+**Expand state:** Collapsed by default.
 
-On page load, JS finds all variant groups where all variants have `include=false` (no winner selected = tie) and expands them by triggering the toggle. Non-tied groups stay collapsed.
+### Tier 3: No variation (clean)
 
-### Testing
+**Visual:** No badge, no indicator. A clean file is a config file entry that has no sibling entries with the same path — it's a single row in the config table, not a variant group. No change from current behavior.
 
-- E2E tests should verify: ties are expanded on load, auto-selected groups show blue badge, clean files have no badge
-- The existing variant-selection E2E tests cover tie/Compare/Display behavior — this adds visual tier assertions
+### Chevron Affordance
+
+**Implementation:** CSS-rotated Unicode chevron via `::before` pseudo-element on the variant group toggle element. This is the single chosen approach — no SVG, no `.chevron` class reuse.
+
+```css
+.fleet-variant-toggle::before {
+  content: "▶";
+  display: inline-block;
+  font-size: 0.6rem;
+  margin-right: 0.4rem;
+  transition: transform 150ms ease;
+  color: var(--pf-t--global--text--color--subtle, #8a8d90);
+}
+
+.fleet-variant-toggle.expanded::before {
+  transform: rotate(90deg);
+}
+```
+
+The toggle element already has `cursor: pointer`. The chevron makes the affordance visible. Applied only to config variant groups in this sprint.
+
+### Renderer Verification
+
+**Claim: no Python/renderer changes needed.** This must be verified during implementation by confirming:
+1. The template context includes variant group state (which variant has `include=true`) for both initial render and post-re-render
+2. The tie detection logic in the renderer (`_build_context` in `html_report.py`) correctly identifies tied vs auto-selected groups
+3. After prevalence threshold changes and re-render, the tier assignments are still correct
+
+If any of these fail, the implementer must flag it as BLOCKED rather than working around it in JS.
+
+## Testing
+
+### E2E Tests (add to existing `variant-selection.spec.ts`)
+
+| Test | Assertion |
+|------|-----------|
+| Tied groups are pre-expanded on load | `.fleet-variant-toggle.expanded` exists for tied groups, `.fleet-variant-children` visible |
+| Auto-selected groups show blue badge | `.variant-auto-badge` visible on groups with a winner, text contains "auto-selected" |
+| Clean files have no badge | Config rows without variant groups have no `.variant-auto-badge` or `.variant-tie-badge` |
+| Chevron rotates on expand/collapse | Click toggle → `::before` content rotates (check `.expanded` class toggle) |
+| Badge contrast in light mode | Toggle theme, verify `.variant-auto-badge` text color differs from background |
+| 2-way tie shows expanded with Compare | Pre-expanded, Compare buttons visible |
+| 3-way tie shows expanded with Display | Pre-expanded, Display buttons visible |
+
+### Python Tests (verify renderer)
+
+| Test | Assertion |
+|------|-----------|
+| Tied group renders tie badge | HTML output contains `variant-tie-badge` for equal-count groups |
+| Auto-selected group renders auto badge | HTML output contains `variant-auto-badge` for winner groups |
+| Single-variant file has no badge | HTML output has no variant badge for non-grouped files |
