@@ -126,6 +126,9 @@ def _render_to_tarball(snapshot: InspectionSnapshot, tarball_path: Path) -> None
     with tempfile.TemporaryDirectory() as tmpdir:
         output_dir = Path(tmpdir) / "output"
         run_all(snapshot, output_dir)
+        # Write the inspection-snapshot.json (required by refine server)
+        snapshot_path = output_dir / "inspection-snapshot.json"
+        snapshot_path.write_text(snapshot.model_dump_json(indent=2))
         tarball_path.parent.mkdir(parents=True, exist_ok=True)
         with tarfile.open(tarball_path, "w:gz") as tar:
             for item in sorted(output_dir.iterdir()):

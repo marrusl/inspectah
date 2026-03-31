@@ -19,3 +19,5 @@ tests/e2e/playwright-report/
 tests/e2e/fixtures/*.tar.gz
 tests/e2e/fixtures/architect-topology/
 tests/e2e/fixtures/.schema-version
+tests/e2e/.env.test
+tests/e2e/.server-pids
