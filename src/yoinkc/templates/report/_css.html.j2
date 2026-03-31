@@ -63,6 +63,22 @@ body { padding-bottom: var(--yoinkc-content-bottom-padding); }
 .section.visible { display: block; opacity: 0; transition: opacity 150ms ease-in-out; }
 .section.visible.pf-m-current { opacity: 1; }
 
+/* Masthead branding */
+.pf-v6-c-masthead__brand {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+/* Section subheading consistency */
+.summary-priority-heading,
+.pf-v6-c-card__title h3 {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--pf-t--global--text--color--subtle, #8a8d90);
+}
+
 /* Sidebar nav */
 .pf-v6-c-page__sidebar .pf-v6-c-nav__section-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
 
@@ -96,16 +112,6 @@ body { padding-bottom: var(--yoinkc-content-bottom-padding); }
   transition: opacity 150ms ease-out, max-height 150ms ease-out, margin 150ms ease-out, padding 150ms ease-out;
 }
 #warnings-list { max-height: 400px; overflow-y: auto; }
-
-/* Summary two-column grid */
-.summary-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--pf-t--global--spacer--lg);
-}
-@media (max-width: 768px) {
-  .summary-grid { grid-template-columns: 1fr; }
-}
 
 /* Containerfile code block */
 .containerfile-pre { border-radius: 6px; padding: 1rem; overflow: auto; max-height: 70vh; font-size: 0.85rem; line-height: 1.4; white-space: pre; margin: 0; }
@@ -188,27 +194,6 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .reviewed-check {
   display: none;
   color: var(--pf-t--global--color--status--success--default);
-}
-
-/* Summary readiness cards — coloured left border */
-.readiness-card-success { border-left: 4px solid var(--pf-t--global--color--status--success--default); }
-.readiness-card-warning { border-left: 4px solid var(--pf-t--global--color--status--warning--default); }
-.readiness-card-danger  { border-left: 4px solid var(--pf-t--global--color--status--danger--default); }
-.readiness-card-info    { border-left: 4px solid var(--pf-t--global--color--status--info--default); }
-
-/* Summary readiness counts */
-.readiness-count { font-size: 1.3rem; }
-
-/* Summary breakdown + fleet variant lists */
-.breakdown-list { list-style: none; padding: 0; margin: 0; }
-.breakdown-list-item { display: flex; justify-content: space-between; padding: 0.25rem 0; }
-.breakdown-link-btn {
-  background: none;
-  border: none;
-  color: var(--pf-t--global--text--color--link--default);
-  cursor: pointer;
-  padding: 0;
-  text-align: left;
 }
 
 /* Banner */
@@ -315,6 +300,9 @@ details.audit-expand { margin-bottom: 0.25rem; }
 /* Utility classes */
 .content-preview { border-radius: 4px; padding: var(--pf-t--global--spacer--sm); font-size: 0.8rem; max-height: 200px; overflow: auto; margin: var(--pf-t--global--spacer--xs) 0; }
 .table-group-header { font-weight: var(--pf-t--global--font--weight--body--bold); padding-bottom: var(--pf-t--global--spacer--xs); padding-top: var(--pf-t--global--spacer--md); border-top: 2px solid var(--pf-t--global--border--color--default); background-color: var(--pf-t--global--background--color--secondary--default); }
+.table-group-header td {
+  border-left: 3px solid var(--pf-t--global--color--status--info--default, #2b9af3);
+}
 .text-sm { font-size: var(--pf-t--global--font--size--body--sm); }
 .text-bold { font-weight: var(--pf-t--global--font--weight--body--bold); }
 .mt-sm { margin-top: var(--pf-t--global--spacer--sm); }
@@ -496,6 +484,12 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .diff-line-remove { padding: 0 16px; white-space: pre; background: var(--yoinkc-diff-remove-bg); color: var(--pf-t--global--text--color--regular); }
 .diff-legend-selected { color: var(--yoinkc-diff-remove-border); margin-right: 4px; }
 .diff-legend-comparison { color: var(--yoinkc-diff-add-border); margin-right: 4px; }
+/* Fleet bar active state (popover open) */
+.fleet-bar.active {
+  outline: 2px solid var(--pf-t--global--color--brand--default, #0066cc);
+  outline-offset: 1px;
+  z-index: 1;
+}
 /* Focus indicators for fleet-specific interactive elements */
 .fleet-bar:focus-visible,
 .fleet-bar-label:focus-visible,
@@ -683,6 +677,11 @@ details.audit-expand { margin-bottom: 0.25rem; }
   width: 100%;
   accent-color: var(--pf-t--global--color--brand--default, #0066cc);
   margin-top: var(--pf-t--global--spacer--xs, 0.25rem);
+}
+
+/* Preview state — slider deviates from current threshold */
+.summary-card.preview-state {
+  border-style: dashed;
 }
 
 /* Left-border accent colors for summary cards */

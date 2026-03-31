@@ -630,6 +630,7 @@ function trapFocus(modalElement, closeHandler) {
         var counts = countAtThreshold(origThreshold);
         countsLabel.textContent = counts.included + ' included \u00b7 ' + counts.excluded + ' below threshold';
       }
+      slider.dispatchEvent(new Event('input'));
     }
 
     recalcTriageCounts();
@@ -1362,6 +1363,8 @@ function fleetCopyHosts(hostList, btnEl) {
 document.querySelectorAll('.fleet-bar').forEach(function(bar) {
   bar.addEventListener('click', function(e) {
     if (activePopover) {
+      var prevBar = activePopover.closest('.fleet-bar');
+      if (prevBar) prevBar.classList.remove('active');
       if (activePopover._releaseTrap) activePopover._releaseTrap();
       activePopover.remove();
       activePopover = null;
@@ -1505,10 +1508,13 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
     popover.appendChild(popContent);
 
     this.style.position = 'relative';
+    this.classList.add('active');
     this.appendChild(popover);
     activePopover = popover;
     activePopover._releaseTrap = trapFocus(popover, function() {
       if (activePopover) {
+        var parentBar = activePopover.closest('.fleet-bar');
+        if (parentBar) parentBar.classList.remove('active');
         if (activePopover._releaseTrap) activePopover._releaseTrap();
         activePopover.remove();
         activePopover = null;
@@ -1520,6 +1526,8 @@ document.querySelectorAll('.fleet-bar').forEach(function(bar) {
 /* Close popover on click outside */
 document.addEventListener('click', function(e) {
   if (activePopover && !e.target.closest('.fleet-bar') && !e.target.closest('.pf-v6-c-popover')) {
+    var parentBar = activePopover.closest('.fleet-bar');
+    if (parentBar) parentBar.classList.remove('active');
     if (activePopover._releaseTrap) activePopover._releaseTrap();
     activePopover.remove();
     activePopover = null;
@@ -1616,6 +1624,12 @@ function countAtThreshold(threshold) {
 
   summarySlider.addEventListener('input', function() {
     updateSummaryCards(parseInt(this.value, 10));
+    var currentThreshold = parseInt(summarySlider.getAttribute('data-current-threshold'), 10);
+    var isPreview = parseInt(summarySlider.value, 10) !== currentThreshold;
+    var scopeCard = document.querySelector('.summary-card-scope');
+    var attentionCard = document.querySelector('.summary-card-attention');
+    if (scopeCard) scopeCard.classList.toggle('preview-state', isPreview);
+    if (attentionCard) attentionCard.classList.toggle('preview-state', isPreview);
   });
 
   updateSummaryCards(parseInt(summarySlider.value, 10));
