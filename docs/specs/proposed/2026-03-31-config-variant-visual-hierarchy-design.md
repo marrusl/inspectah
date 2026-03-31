@@ -3,7 +3,7 @@
 **Date:** 2026-03-31
 **Status:** Proposed
 **Author:** Kit (via brainstorm with Mark, Ember assessment)
-**Amends:** `2026-03-22-variant-auto-selection-design.md` — this spec supersedes the visual/badge portions of that spec. The auto-selection logic (tie detection, winner selection by prevalence count) is unchanged. This spec updates only the visual treatment and expand/collapse behavior.
+**Extends:** `2026-03-22-variant-auto-selection-design.md` — this spec adds Tier 2 (auto-selected badge) and chevron affordance on top of the Mar 22 spec. Tie styling (gold), auto-selection logic, and tie detection are unchanged. The Mar 22 spec remains the source of truth for variant selection behavior.
 
 ## Goal
 
@@ -37,11 +37,11 @@ This narrowing reduces regression risk and screenshot timing concerns for the de
 
 ### Tier 1: Tied (must resolve)
 
-**Visual:** Red/warning left border + tinted background (already implemented in UI overhaul).
+**Visual:** Gold left border + tinted background (per Mar 22 spec). If the current implementation uses red/danger colors for ties, revert to gold (`#cc8800`).
 
-**Badge text:** "⚠ N variants · tied — choose one"
+**Badge text:** "⚠ N variants · tied — compare & choose"
 
-**Color:** Red/danger tokens — `--pf-t--global--color--status--danger--default` (`#c9190b`). This supersedes the gold `#cc8800` from the Mar 22 spec. Rationale: ties are blocking items that prevent a valid Containerfile. Warning/danger red matches PF6 severity semantics and the "must fix" framing established in the UI overhaul. Gold was proposed before the "must fix" callout existed; red is now the established treatment.
+**Color:** Gold/warning — `#cc8800` as established in the Mar 22 auto-selection spec. Ties are decision points, not errors. Gold says "your input needed" without implying something is broken. If the current implementation uses red/danger styling for ties, revert to gold to match the original spec intent.
 
 **Expand state:** Pre-expanded on page load. JS runs on `DOMContentLoaded` and expands all tied variant groups. This happens only on initial page load, NOT after prevalence slider changes (the slider is a preview — ties are recomputed on re-render).
 
