@@ -623,4 +623,124 @@ details.audit-expand { margin-bottom: 0.25rem; }
   animation: check-appear 250ms ease-out;
 }
 
+/* Summary dashboard grid */
+.summary-dashboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--pf-t--global--spacer--md, 1rem);
+  margin-bottom: var(--pf-t--global--spacer--md, 1rem);
+}
+
+.summary-card {
+  padding: var(--pf-t--global--spacer--md, 1rem);
+  border: 1px solid var(--pf-t--global--border--color--default, #444);
+  border-radius: var(--pf-t--global--border--radius--small, 3px);
+  background: var(--pf-t--global--background--color--primary--default, #1a1a1a);
+}
+
+.summary-card-label {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.5;
+  margin-bottom: var(--pf-t--global--spacer--xs, 0.25rem);
+}
+
+.summary-card-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+/* Counter animation for card values */
+.summary-card-value .counter-animate,
+.summary-card-detail .counter-animate {
+  display: inline-block;
+  transition: transform 200ms ease, opacity 200ms ease;
+}
+.summary-card-value .counter-animate.updating,
+.summary-card-detail .counter-animate.updating {
+  transform: translateY(-4px);
+  opacity: 0.3;
+}
+
+.summary-card-detail {
+  font-size: 0.6875rem;
+  opacity: 0.6;
+  margin-top: 0.125rem;
+}
+
+.summary-card-note {
+  font-style: italic;
+  opacity: 0.4;
+}
+
+/* Prevalence control card — interactive affordance */
+.summary-card-prevalence {
+  border-color: rgba(43, 154, 243, 0.2);
+  background: rgba(43, 154, 243, 0.04);
+  box-shadow: 0 0 0 1px rgba(43, 154, 243, 0.1);
+}
+
+.summary-card-prevalence input[type="range"] {
+  width: 100%;
+  accent-color: var(--pf-t--global--color--brand--default, #0066cc);
+  margin-top: var(--pf-t--global--spacer--xs, 0.25rem);
+}
+
+/* Left-border accent colors for summary cards */
+.summary-card-system { border-left: 3px solid var(--pf-t--global--color--status--info--default, #2b9af3); }
+.summary-card-scope { border-left: 3px solid var(--pf-t--global--color--status--success--default, #3e8635); }
+.summary-card-attention { border-left: 3px solid var(--pf-t--global--color--status--warning--default, #f0ab00); }
+
+/* Section priority list */
+.summary-priority-list {
+  margin-top: var(--pf-t--global--spacer--md, 1rem);
+}
+
+.summary-priority-heading {
+  font-size: 0.625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.5;
+  margin-bottom: var(--pf-t--global--spacer--sm, 0.5rem);
+}
+
+.summary-priority-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--pf-t--global--spacer--xs, 0.25rem) var(--pf-t--global--spacer--sm, 0.5rem);
+  border-radius: var(--pf-t--global--border--radius--small, 3px);
+  cursor: pointer;
+  transition: background 150ms ease;
+}
+
+.summary-priority-row:hover {
+  background: var(--pf-t--global--background--color--secondary--hover, rgba(255,255,255,0.06));
+}
+
+.summary-priority-status-manual { color: var(--pf-t--global--color--status--danger--default, #c9190b); }
+.summary-priority-status-review { color: var(--pf-t--global--color--status--warning--default, #f0ab00); }
+.summary-priority-status-auto { color: var(--pf-t--global--color--status--success--default, #3e8635); }
+
+/* Single-host: needs-attention spans full width */
+.summary-dashboard-single {
+  grid-template-columns: 1fr 1fr;
+}
+.summary-card-attention-full {
+  grid-column: 1 / -1;
+}
+
+/* Light theme overrides */
+html:not(.pf-v6-theme-dark) .summary-card {
+  background: #fff;
+  border-top-color: #d2d2d2;
+  border-right-color: #d2d2d2;
+  border-bottom-color: #d2d2d2;
+}
+
+html:not(.pf-v6-theme-dark) .summary-card-prevalence {
+  background: rgba(43, 154, 243, 0.03);
+}
+
 </style>

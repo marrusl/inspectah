@@ -1,144 +1,77 @@
 {% from "report/_macros.html.j2" import section with context -%}
-{% macro system_information_card() -%}
-    {# System Information #}
-    <div class="pf-v6-c-card">
-      <div class="pf-v6-c-card__header">
-        <div class="pf-v6-c-card__title"><h3>System Information</h3></div>
-      </div>
-      <div class="pf-v6-c-card__body">
-        <dl class="pf-v6-c-description-list">
-          <div class="pf-v6-c-description-list__group">
-            <dt class="pf-v6-c-description-list__term">Hostname</dt>
-            <dd class="pf-v6-c-description-list__description">{{ meta.hostname|default('—') }}</dd>
-          </div>
-          <div class="pf-v6-c-description-list__group">
-            <dt class="pf-v6-c-description-list__term">OS</dt>
-            <dd class="pf-v6-c-description-list__description">{{ os_desc }}</dd>
-          </div>
-          <div class="pf-v6-c-description-list__group">
-            <dt class="pf-v6-c-description-list__term">Inspection time (UTC)</dt>
-            <dd class="pf-v6-c-description-list__description">{{ meta.timestamp|default('—') }}</dd>
-          </div>
-          {%- if meta.host_root %}
-          <div class="pf-v6-c-description-list__group">
-            <dt class="pf-v6-c-description-list__term">Host root</dt>
-            <dd class="pf-v6-c-description-list__description"><code>{{ meta.host_root }}</code></dd>
-          </div>
-          {%- endif %}
-        </dl>
-      </div>
-    </div>
-{%- endmacro %}
-
-{% macro migration_readiness_card() -%}
-    {# Migration Readiness #}
-    <h3 class="mt-md mb-md">Migration Readiness</h3>
-    {%- if triage.automatic %}
-    <div class="pf-v6-c-card mt-md readiness-card-success">
-      <div class="pf-v6-c-card__body">
-        <span class="text-bold readiness-count text-status-success">{{ triage.automatic }}</span>
-        Automatic
-      </div>
-    </div>
-    {%- endif %}
-    {%- if triage.fixme %}
-    <div class="pf-v6-c-card mt-md readiness-card-warning">
-      <div class="pf-v6-c-card__body">
-        <span class="text-bold readiness-count text-status-warning">{{ triage.fixme }}</span>
-        Needs Review
-      </div>
-    </div>
-    {%- endif %}
-    {%- if triage.manual %}
-    <div class="pf-v6-c-card mt-md readiness-card-danger">
-      <div class="pf-v6-c-card__body">
-        <span class="text-bold readiness-count text-status-danger">{{ triage.manual }}</span>
-        Manual
-      </div>
-    </div>
-    {%- endif %}
-{%- endmacro %}
-
-{% macro breakdown_card() -%}
-    {# Breakdown #}
-    <div class="pf-v6-c-card">
-      <div class="pf-v6-c-card__header">
-        <div class="pf-v6-c-card__title"><h3>Breakdown</h3></div>
-      </div>
-      <div class="pf-v6-c-card__body">
-        <ul class="breakdown-list">
-          {%- for item in triage_detail %}
-          <li class="breakdown-list-item">
-            <button type="button" class="breakdown-link-btn" onclick="show('{{ item.tab }}');return false">{{ item.label }}</button>
-            <span class="text-status-{{ 'success' if item.status == 'automatic' else ('warning' if item.status == 'fixme' else 'danger') }}">{{ item.count }}</span>
-          </li>
-          {%- endfor %}
-        </ul>
-      </div>
-    </div>
-{%- endmacro %}
-
-{% macro fleet_overview_card() -%}
-    {# Fleet Overview (fleet mode only) #}
-    <div class="pf-v6-c-card readiness-card-info">
-      <div class="pf-v6-c-card__header">
-        <div class="pf-v6-c-card__title"><h3>Fleet Overview</h3></div>
-        <span class="text-sm">{{ fleet_meta.total_hosts }} hosts · {{ fleet_meta.min_prevalence }}% threshold</span>
-      </div>
-      <div class="pf-v6-c-card__body">
-        <dl class="pf-v6-c-description-list">
-          <div class="pf-v6-c-description-list__group">
-            <dt class="pf-v6-c-description-list__term">Included</dt>
-            <dd class="pf-v6-c-description-list__description">{{ counts.n_included }}</dd>
-          </div>
-          <div class="pf-v6-c-description-list__group">
-            <dt class="pf-v6-c-description-list__term">Excluded</dt>
-            <dd class="pf-v6-c-description-list__description">{{ counts.n_excluded }}</dd>
-          </div>
-        </dl>
-        {%- if variant_summary %}
-        <p class="text-bold mt-md">Categories with variants:</p>
-        <ul class="breakdown-list">
-          {%- for vs in variant_summary %}
-          <li class="breakdown-list-item">
-            <button type="button" class="breakdown-link-btn" onclick="show('{{ vs.tab }}');return false">{{ vs.label }}</button>
-            <span class="text-sm">{{ vs.files }} files · {{ vs.variants }} variants</span>
-          </li>
-          {%- endfor %}
-        </ul>
-        {%- endif %}
-        <p class="text-sm mt-md text-subtle">
-          The most prevalent variant of each config file is auto-selected.
-          Tied variants require your choice.
-        </p>
-      </div>
-    </div>
-{%- endmacro %}
 {# ── Summary ────────────────────────────────────────────────────────────── #}
 {% call section("summary", "Summary", visible=true) %}
-<div class="summary-grid">
 
-  {# ── Left column ──────────────────────────────────────────────────────── #}
-  <div>
-    {%- if fleet_meta %}
-    {{ fleet_overview_card() }}
-    {{ migration_readiness_card() }}
-    {%- else %}
-    {{ system_information_card() }}
-    {{ migration_readiness_card() }}
-    {%- endif %}
+<div class="summary-dashboard{% if not fleet_meta %} summary-dashboard-single{% endif %}">
+  {# ── System card ───────────────────────────────────────────────────── #}
+  <div class="summary-card summary-card-system">
+    <div class="summary-card-label">System</div>
+    <div class="summary-card-value">{{ os_desc }}</div>
+    <div class="summary-card-detail">
+      {% if fleet_meta %}{{ fleet_meta.total_hosts }} host{{ 's' if fleet_meta.total_hosts != 1 else '' }} · {{ fleet_meta.min_prevalence }}% prevalence threshold{% endif %}
+      {% if not fleet_meta %}{{ meta.hostname|default('—') }}{% endif %}
+    </div>
   </div>
 
-  {# ── Right column ─────────────────────────────────────────────────────── #}
-  <div>
-    {%- if fleet_meta %}
-    {{ system_information_card() }}
-    {{ breakdown_card() }}
-    {%- else %}
-    {{ breakdown_card() }}
-    {%- endif %}
+  {% if fleet_meta %}
+  {# ── Prevalence control card (fleet only) ──────────────────────────── #}
+  <div class="summary-card summary-card-prevalence">
+    <div class="summary-card-label">Fleet Prevalence</div>
+    <input type="range" id="summary-prevalence-slider" min="1" max="100"
+           value="{{ fleet_meta.min_prevalence }}"
+           data-current-threshold="{{ fleet_meta.min_prevalence }}">
+    <div class="summary-card-detail" id="summary-prevalence-detail">
+      <span id="summary-prevalence-value">{{ fleet_meta.min_prevalence }}%</span> ·
+      <span id="summary-prevalence-counts">{{ counts.n_included }} included · {{ counts.n_excluded }} below threshold</span>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ── Migration scope card ──────────────────────────────────────────── #}
+  <div class="summary-card summary-card-scope">
+    <div class="summary-card-label">Migration Scope</div>
+    <div class="summary-card-value">
+      <span id="summary-scope-total" class="counter-animate">{{ triage.automatic + triage.fixme + triage.manual }}</span> items
+    </div>
+    <div class="summary-card-detail">
+      <span id="summary-scope-auto" class="counter-animate">{{ triage.automatic }}</span> automatic ·
+      <span id="summary-scope-fixme" class="counter-animate">{{ triage.fixme }}</span> review ·
+      <span id="summary-scope-manual" class="counter-animate">{{ triage.manual }}</span> manual
+    </div>
   </div>
 
+  {# ── Needs attention card ──────────────────────────────────────────── #}
+  <div class="summary-card summary-card-attention{% if not fleet_meta %} summary-card-attention-full{% endif %}">
+    <div class="summary-card-label">Needs Attention</div>
+    <div class="summary-card-value">
+      <span id="summary-attention-count" class="counter-animate">{{ triage.fixme + triage.manual }}</span>
+    </div>
+    <div class="summary-card-detail">
+      <span id="summary-review-count" class="counter-animate">{{ triage.fixme }}</span> review ·
+      <span id="summary-manual-count" class="counter-animate">{{ triage.manual }}</span> manual
+    </div>
+    <div class="summary-card-detail summary-card-note">
+      Approximate preview — Re-render for exact counts
+    </div>
+  </div>
+</div>
+
+{# ── Section Priority list (full width) ──────────────────────────────── #}
+<div class="summary-priority-list">
+  <div class="summary-priority-heading">Sections by Priority</div>
+  <div id="summary-priority-rows">
+    {% for item in triage_detail %}
+    <div class="summary-priority-row" data-nav-tab="{{ item.tab }}">
+      <span>{{ item.label }}</span>
+      <span class="summary-priority-status-{{ 'manual' if item.status == 'manual' else ('review' if item.status == 'fixme' else 'auto') }}">
+        {% if item.status == 'manual' %}{{ item.count }} manual
+        {% elif item.status == 'fixme' %}{{ item.count }} review
+        {% else %}&check; {{ item.count }} auto
+        {% endif %}
+      </span>
+    </div>
+    {% endfor %}
+  </div>
 </div>
 
 {# ── Next Steps (full width) ───────────────────────────────────────────── #}

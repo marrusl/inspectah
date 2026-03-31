@@ -1497,6 +1497,117 @@ document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
 });
 {% endif %}
 
+{% if fleet_meta %}
+// Hoisted prevalence helpers — used by summary slider and toolbar slider
+function prevalenceInclude(count, total, minPrev) {
+  return (count * 100) >= (minPrev * total);
+}
+
+function countAtThreshold(threshold) {
+  var included = 0, excluded = 0;
+  var sections = ['rpm', 'config', 'services', 'network',
+                  'containers', 'scheduled_tasks', 'users_groups'];
+  sections.forEach(function(secName) {
+    var sec = snapshot[secName];
+    if (!sec) return;
+    Object.keys(sec).forEach(function(listName) {
+      var items = sec[listName];
+      if (!Array.isArray(items)) return;
+      items.forEach(function(item) {
+        if (!item.fleet) return;
+        if (prevalenceInclude(item.fleet.count, item.fleet.total, threshold)) {
+          included++;
+        } else {
+          excluded++;
+        }
+      });
+    });
+  });
+  return { included: included, excluded: excluded };
+}
+
+// Summary tab prevalence — live card updates (all fleet reports)
+(function() {
+  var summarySlider = document.getElementById('summary-prevalence-slider');
+  if (!summarySlider) return;
+
+  var valueEl = document.getElementById('summary-prevalence-value');
+  var countsEl = document.getElementById('summary-prevalence-counts');
+  var scopeTotalEl = document.getElementById('summary-scope-total');
+  var scopeAutoEl = document.getElementById('summary-scope-auto');
+  var attentionEl = document.getElementById('summary-attention-count');
+  var reviewEl = document.getElementById('summary-review-count');
+  var manualEl = document.getElementById('summary-manual-count');
+
+  var staticFixme = {{ triage.fixme }};
+  var staticManual = {{ triage.manual }};
+
+  function animateCounter(el, newValue) {
+    if (!el) return;
+    var newText = String(newValue);
+    if (el.textContent === newText) return;
+    el.classList.add('updating');
+    setTimeout(function() {
+      el.textContent = newText;
+      el.classList.remove('updating');
+    }, 100);
+  }
+
+  function updateSummaryCards(threshold) {
+    var result = countAtThreshold(threshold);
+    if (valueEl) valueEl.textContent = threshold + '%';
+    if (countsEl) countsEl.textContent = result.included + ' included \u00b7 ' + result.excluded + ' below threshold';
+
+    var approxTotal = result.included + staticFixme + staticManual;
+    var approxAuto = result.included;
+    var attentionCount = staticFixme + staticManual;
+
+    animateCounter(scopeTotalEl, approxTotal);
+    if (scopeAutoEl) animateCounter(scopeAutoEl, approxAuto);
+    animateCounter(attentionEl, attentionCount);
+    if (reviewEl) animateCounter(reviewEl, staticFixme);
+    if (manualEl) animateCounter(manualEl, staticManual);
+  }
+
+  summarySlider.addEventListener('input', function() {
+    updateSummaryCards(parseInt(this.value, 10));
+  });
+
+  updateSummaryCards(parseInt(summarySlider.value, 10));
+})();
+
+// Section priority list — sort by priority and click-to-navigate
+(function() {
+  var container = document.getElementById('summary-priority-rows');
+  if (!container) return;
+
+  var rows = Array.prototype.slice.call(container.children);
+  var bucket = { manual: 0, fixme: 1, review: 1, auto: 2 };
+  rows.sort(function(a, b) {
+    var aStatus = a.querySelector('[class*="status-"]');
+    var bStatus = b.querySelector('[class*="status-"]');
+    var aMatch = aStatus && aStatus.className.match(/status-(\w+)/);
+    var bMatch = bStatus && bStatus.className.match(/status-(\w+)/);
+    var aBucket = aMatch ? (bucket[aMatch[1]] || 2) : 2;
+    var bBucket = bMatch ? (bucket[bMatch[1]] || 2) : 2;
+    if (aBucket !== bBucket) return aBucket - bBucket;
+    var aCount = parseInt((aStatus && aStatus.textContent.match(/(\d+)/)) ? RegExp.$1 : '0', 10);
+    var bCount = parseInt((bStatus && bStatus.textContent.match(/(\d+)/)) ? RegExp.$1 : '0', 10);
+    return bCount - aCount;
+  });
+  rows.forEach(function(row) { container.appendChild(row); });
+
+  container.addEventListener('click', function(e) {
+    var row = e.target.closest('.summary-priority-row');
+    if (!row) return;
+    var tabId = row.getAttribute('data-nav-tab');
+    if (tabId && typeof show === 'function') {
+      show(tabId);
+    }
+  });
+})();
+{% endif %}
+
 {% if fleet_meta and refine_mode %}
 (function() {
   var slider = document.getElementById('prevalence-slider');
@@ -1508,35 +1619,6 @@ document.querySelectorAll('.fleet-variant-toggle').forEach(function(badge) {
 
   // Store current threshold on the slider element for cross-scope access (reset)
   slider.setAttribute('data-current-threshold', '{{ fleet_meta.min_prevalence }}');
-
-  function prevalenceInclude(count, total, minPrev) {
-    return (count * 100) >= (minPrev * total);
-  }
-
-  function countAtThreshold(threshold) {
-    // Count from snapshot data, not DOM, to avoid double-counting
-    // from variant group headers that share snap_index with first child
-    var included = 0, excluded = 0;
-    var sections = ['rpm', 'config', 'services', 'network', 'selinux',
-                    'non_rpm_software', 'containers', 'scheduled_tasks'];
-    sections.forEach(function(secName) {
-      var sec = snapshot[secName];
-      if (!sec) return;
-      Object.keys(sec).forEach(function(listName) {
-        var items = sec[listName];
-        if (!Array.isArray(items)) return;
-        items.forEach(function(item) {
-          if (!item.fleet) return;
-          if (prevalenceInclude(item.fleet.count, item.fleet.total, threshold)) {
-            included++;
-          } else {
-            excluded++;
-          }
-        });
-      });
-    });
-    return { included: included, excluded: excluded };
-  }
 
   slider.addEventListener('input', function() {
     var val = parseInt(this.value, 10);

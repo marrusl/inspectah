@@ -134,75 +134,50 @@ class TestHtmlReport:
 
 class TestHtmlStructure:
 
-    def _summary_column_headings(self, html: str) -> list[list[str]]:
-        class SummaryGridParser(HTMLParser):
+    def _summary_card_labels(self, html: str) -> list[str]:
+        """Extract card labels from the summary-dashboard grid."""
+        class SummaryDashboardParser(HTMLParser):
             def __init__(self):
                 super().__init__()
-                self.in_summary_grid = False
-                self.grid_depth = 0
-                self.column_stack: list[int] = []
-                self.columns: list[list[str]] = []
-                self.in_h3 = False
-                self.heading_parts: list[str] = []
+                self.in_dashboard = False
+                self.in_label = False
+                self.labels: list[str] = []
+                self.label_parts: list[str] = []
 
             def handle_starttag(self, tag, attrs):
                 attrs_dict = dict(attrs)
-                if (
-                    tag == "div"
-                    and not self.in_summary_grid
-                    and attrs_dict.get("class") == "summary-grid"
-                ):
-                    self.in_summary_grid = True
-                    self.grid_depth = 0
+                cls = attrs_dict.get("class", "")
+                if tag == "div" and "summary-dashboard" in cls:
+                    self.in_dashboard = True
                     return
-
-                if not self.in_summary_grid:
+                if not self.in_dashboard:
                     return
-
-                if tag == "div":
-                    self.grid_depth += 1
-                    if self.grid_depth == 1:
-                        self.columns.append([])
-                        self.column_stack.append(self.grid_depth)
-
-                if tag == "h3" and self.column_stack:
-                    self.in_h3 = True
-                    self.heading_parts = []
+                if tag == "div" and "summary-card-label" in cls:
+                    self.in_label = True
+                    self.label_parts = []
 
             def handle_data(self, data):
-                if self.in_h3 and self.column_stack:
-                    self.heading_parts.append(data)
+                if self.in_label:
+                    self.label_parts.append(data)
 
             def handle_endtag(self, tag):
-                if not self.in_summary_grid:
+                if not self.in_dashboard:
                     return
-
-                if tag == "h3" and self.in_h3 and self.column_stack:
-                    heading = "".join(self.heading_parts).strip()
-                    if heading:
-                        self.columns[-1].append(heading)
-                    self.in_h3 = False
-                    self.heading_parts = []
-                    return
-
-                if tag == "div":
-                    if self.column_stack and self.column_stack[-1] == self.grid_depth:
-                        self.column_stack.pop()
-                    self.grid_depth -= 1
-                    if self.grid_depth < 0:
-                        self.in_summary_grid = False
+                if tag == "div" and self.in_label:
+                    label = "".join(self.label_parts).strip()
+                    if label:
+                        self.labels.append(label)
+                    self.in_label = False
+                    self.label_parts = []
 
         start = html.find('id="section-summary"')
         assert start != -1, "summary section missing from rendered report"
         end = html.find('id="section-packages"', start)
         assert end != -1, "packages section missing from rendered report"
 
-        parser = SummaryGridParser()
+        parser = SummaryDashboardParser()
         parser.feed(html[start:end])
-        assert len(parser.columns) == 2, (
-            f"expected two summary columns, got {len(parser.columns)}"
-        )
-        return parser.columns
+        return parser.labels
 
     def test_section_ids_match_template(self, outputs_with_baseline):
         """Every card data-section and tab data-tab has a matching section element."""
@@ -219,14 +194,11 @@ class TestHtmlStructure:
         assert 'class="section visible"' in html
 
     def test_non_fleet_summary_cards_keep_existing_order(self, outputs_with_baseline):
-        columns = self._summary_column_headings(
+        labels = self._summary_card_labels(
             (outputs_with_baseline["dir"] / "report.html").read_text()
         )
 
-        assert columns == [
-            ["System Information", "Migration Readiness"],
-            ["Breakdown"],
-        ]
+        assert labels == ["System", "Migration Scope", "Needs Attention"]
 
     def test_fleet_summary_cards_reordered_for_fleet_mode(self):
         snapshot = InspectionSnapshot(
@@ -244,13 +216,12 @@ class TestHtmlStructure:
         )
         with tempfile.TemporaryDirectory() as tmp:
             run_all_renderers(snapshot, Path(tmp))
-            columns = self._summary_column_headings(
+            labels = self._summary_card_labels(
                 (Path(tmp) / "report.html").read_text()
             )
 
-        assert columns == [
-            ["Fleet Overview", "Migration Readiness"],
-            ["System Information", "Breakdown"],
+        assert labels == [
+            "System", "Fleet Prevalence", "Migration Scope", "Needs Attention",
         ]
 
     def test_service_snap_index_matches_unfiltered_array(self):
