@@ -1,0 +1,13 @@
+{
+  "name": "yoinkc-e2e",
+  "private": true,
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "generate-fixtures": "cd ../.. && uv run python tests/e2e/generate-fixtures.py",
+    "generate-fixtures:force": "cd ../.. && uv run python tests/e2e/generate-fixtures.py --force"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
+  }
+}

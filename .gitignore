@@ -11,3 +11,11 @@ uv.lock
 .superpowers/
 .worktrees/
 .superpowers/
+
+# Playwright
+tests/e2e/node_modules/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+tests/e2e/fixtures/*.tar.gz
+tests/e2e/fixtures/architect-topology/
+tests/e2e/fixtures/.schema-version
