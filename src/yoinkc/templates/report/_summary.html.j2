@@ -61,7 +61,7 @@
   <div class="summary-priority-heading">Sections by Priority</div>
   <div id="summary-priority-rows">
     {% for item in triage_detail %}
-    <div class="summary-priority-row" data-nav-tab="{{ item.tab }}">
+    <div class="summary-priority-row" data-nav-tab="{{ item.tab }}" tabindex="0" role="button">
       <span>{{ item.label }}</span>
       <span class="summary-priority-status-{{ 'manual' if item.status == 'manual' else ('review' if item.status == 'fixme' else 'auto') }}">
         {% if item.status == 'manual' %}{{ item.count }} manual

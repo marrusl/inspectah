@@ -1558,16 +1558,27 @@ function prevalenceInclude(count, total, minPrev) {
 
 function countAtThreshold(threshold) {
   var included = 0, excluded = 0;
-  var sections = ['rpm', 'config', 'services', 'network',
-                  'containers', 'scheduled_tasks', 'users_groups'];
-  sections.forEach(function(secName) {
+  // Must match the section/list pairs counted by compute_triage() in _triage.py
+  var sectionLists = {
+    'rpm':             ['packages_added', 'base_image_only'],
+    'services':        ['state_changes'],
+    'config':          ['files'],
+    'network':         ['firewall_zones'],
+    'scheduled_tasks': ['generated_timer_units', 'systemd_timers'],
+    'users_groups':    ['users', 'groups'],
+    'containers':      ['quadlet_units']
+  };
+  Object.keys(sectionLists).forEach(function(secName) {
     var sec = snapshot[secName];
     if (!sec) return;
-    Object.keys(sec).forEach(function(listName) {
+    sectionLists[secName].forEach(function(listName) {
       var items = sec[listName];
       if (!Array.isArray(items)) return;
       items.forEach(function(item) {
         if (!item.fleet) return;
+        if (secName === 'services' && listName === 'state_changes') {
+          if (item.action !== 'enable' && item.action !== 'disable') return;
+        }
         if (prevalenceInclude(item.fleet.count, item.fleet.total, threshold)) {
           included++;
         } else {
@@ -1643,12 +1654,19 @@ function countAtThreshold(threshold) {
   });
 })();
 
-// Prevalence badge click → navigate to summary tab
+// Prevalence badge click/keyboard → navigate to summary tab
 (function() {
   document.querySelectorAll('.prevalence-badge').forEach(function(badge) {
     badge.addEventListener('click', function(e) {
       e.stopPropagation();
       if (typeof show === 'function') show('summary');
+    });
+    badge.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof show === 'function') show('summary');
+      }
     });
   });
 })();
@@ -1677,6 +1695,17 @@ function countAtThreshold(threshold) {
   container.addEventListener('click', function(e) {
     var row = e.target.closest('.summary-priority-row');
     if (!row) return;
+    var tabId = row.getAttribute('data-nav-tab');
+    if (tabId && typeof show === 'function') {
+      show(tabId);
+    }
+  });
+
+  container.addEventListener('keydown', function(e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    var row = e.target.closest('.summary-priority-row');
+    if (!row) return;
+    e.preventDefault();
     var tabId = row.getAttribute('data-nav-tab');
     if (tabId && typeof show === 'function') {
       show(tabId);
