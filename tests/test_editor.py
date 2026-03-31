@@ -364,17 +364,19 @@ class TestEditorIntegration:
 
 class TestVariantCompare:
 
-    def test_update_compare_buttons_switches_to_display_when_no_selection(self, tmp_path):
+    def test_update_compare_buttons_shows_compare_for_two_way_tie(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=2)
         fn = _extract_js_function(html, "updateCompareButtons")
         assert "variant-display-btn" in fn
         assert "variant-compare-btn" in fn
-        # When no variant is selected, buttons should become Display
-        assert "displayBtn.textContent = 'Display'" in fn
+        # 2-way ties use Compare (peer mode), not Display
+        assert "rows.length === 2" in fn
 
-    def test_update_compare_buttons_switches_to_compare_when_has_selection(self, tmp_path):
+    def test_update_compare_buttons_shows_display_for_three_plus_way_tie(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=3)
         fn = _extract_js_function(html, "updateCompareButtons")
+        # 3+ way ties use Display for individual inspection
+        assert "displayBtn.textContent = 'Display'" in fn
         # When a variant IS selected, buttons should become Compare
         assert "compareBtn.textContent = 'Compare'" in fn
 
@@ -413,12 +415,18 @@ class TestVariantCompare:
         assert "var initialCompareGroups = {};" in html
         assert "Object.keys(initialCompareGroups).forEach(function(g) { updateCompareButtons(g); });" in html
 
-    def test_editor_tree_shows_display_label_for_ties(self, tmp_path):
+    def test_editor_tree_shows_compare_label_for_two_way_ties(self, tmp_path):
         html = _render_fleet_variants(tmp_path, variant_count=2)
         build_tree_fn = _extract_js_function(html, "buildTree")
-        # When no variant is selected (tie), button should say Display
+        # 2-way ties show Compare (peer mode A-vs-B)
+        assert "entries.length === 2" in build_tree_fn
+        assert "compareBtn.textContent = 'Compare'" in build_tree_fn
+
+    def test_editor_tree_shows_display_label_for_three_plus_ties(self, tmp_path):
+        html = _render_fleet_variants(tmp_path, variant_count=3)
+        build_tree_fn = _extract_js_function(html, "buildTree")
+        # 3+ ties show Display for individual inspection
         assert "compareBtn.textContent = 'Display'" in build_tree_fn
-        # When a variant IS selected, button should say Compare
         assert "compareBtn.textContent = 'Compare'" in build_tree_fn
 
     def test_compare_from_editor_shows_display_modal_for_ties_with_many_variants(self, tmp_path):

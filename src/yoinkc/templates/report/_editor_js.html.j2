@@ -168,7 +168,7 @@
 
               var compareBtn = document.createElement('button');
               compareBtn.className = 'pf-v6-c-button pf-m-small pf-m-link editor-compare-btn';
-              if (groupHasSelected) {
+              if (groupHasSelected || entries.length === 2) {
                 compareBtn.textContent = 'Compare';
               } else {
                 compareBtn.textContent = 'Display';

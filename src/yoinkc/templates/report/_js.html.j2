@@ -1287,8 +1287,8 @@ function updateCompareButtons(group) {
     var existingCompare = actionCell.querySelector('.variant-compare-btn');
     var existingDisplay = actionCell.querySelector('.variant-display-btn');
 
-    if (hasSelected) {
-      // Switch to Compare mode
+    if (hasSelected || (!hasSelected && rows.length === 2)) {
+      // Compare mode: either a variant is selected, or it's a 2-way tie (peer compare)
       if (existingDisplay) {
         var compareBtn = document.createElement('button');
         compareBtn.className = 'pf-v6-c-button pf-m-link pf-m-small variant-compare-btn';
@@ -1300,7 +1300,7 @@ function updateCompareButtons(group) {
         existingCompare.classList.remove('pf-m-disabled');
       }
     } else {
-      // Switch to Display mode (tie — no variant selected)
+      // Display mode: 3+ way tie — inspect individually before comparing
       if (existingCompare) {
         var displayBtn = document.createElement('button');
         displayBtn.className = 'pf-v6-c-button pf-m-link pf-m-small variant-display-btn';
