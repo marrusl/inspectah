@@ -365,6 +365,19 @@ function trapFocus(modalElement, closeHandler) {
           if (sibCb) sibCb.checked = false;
           sibling.classList.add('excluded');
         });
+        // User broke a tie — update parent row: remove gold highlight, swap badge
+        var parentRow = tr.closest('.fleet-variant-children');
+        if (parentRow) parentRow = parentRow.previousElementSibling;
+        if (parentRow && parentRow.classList.contains('fleet-variant-group') && parentRow.classList.contains('variant-tied')) {
+          parentRow.classList.remove('variant-tied');
+          var tieBadge = parentRow.querySelector('.variant-tie-badge');
+          if (tieBadge) {
+            var selectedBadge = document.createElement('span');
+            selectedBadge.className = 'variant-selected-badge';
+            selectedBadge.textContent = 'selected';
+            tieBadge.replaceWith(selectedBadge);
+          }
+        }
       }
       tr.classList.toggle('excluded', !this.checked);
       if (compareGroup && typeof updateCompareButtons === 'function') {
@@ -657,6 +670,57 @@ function trapFocus(modalElement, closeHandler) {
       });
       Object.keys(seen).forEach(function(g) { updateCompareButtons(g); });
     }
+    // Restore tie state on parent group rows after reset
+    document.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
+      var childRows = parentRow.nextElementSibling;
+      if (!childRows || !childRows.classList.contains('fleet-variant-children')) return;
+      var variantEls = childRows.querySelectorAll('[data-variant-group]');
+      if (variantEls.length < 2) return;
+
+      // Check if any variant is now selected after reset
+      var hasSelected = false;
+      variantEls.forEach(function(el) {
+        var sec = el.getAttribute('data-snap-section');
+        var lst = el.getAttribute('data-snap-list');
+        var ix = parseInt(el.getAttribute('data-snap-index'), 10);
+        var ar = resolveSnapshotRef(sec, lst);
+        if (ar && ar[ix] && ar[ix].include) hasSelected = true;
+      });
+
+      if (!hasSelected) {
+        // Check if it's actually a tie (top two counts equal)
+        var counts = [];
+        variantEls.forEach(function(el) {
+          var sec = el.getAttribute('data-snap-section');
+          var lst = el.getAttribute('data-snap-list');
+          var ix = parseInt(el.getAttribute('data-snap-index'), 10);
+          var ar = resolveSnapshotRef(sec, lst);
+          if (ar && ar[ix] && ar[ix].fleet) counts.push(ar[ix].fleet.count);
+        });
+        counts.sort(function(a, b) { return b - a; });
+        if (counts.length >= 2 && counts[0] === counts[1]) {
+          parentRow.classList.add('variant-tied');
+          // Replace any "selected" badge with tie badge
+          var selBadge = parentRow.querySelector('.variant-selected-badge');
+          if (selBadge) {
+            var tieBadge = document.createElement('span');
+            tieBadge.className = 'variant-tie-badge';
+            tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare &amp; choose';
+            selBadge.replaceWith(tieBadge);
+          }
+        }
+      } else {
+        // Has a selected variant — remove tied state if present
+        parentRow.classList.remove('variant-tied');
+        var tieBadge = parentRow.querySelector('.variant-tie-badge');
+        if (tieBadge) {
+          var autoBadge = document.createElement('span');
+          autoBadge.className = 'variant-auto-badge';
+          autoBadge.textContent = 'auto-selected';
+          tieBadge.replaceWith(autoBadge);
+        }
+      }
+    });
     // Reset editor state (saved files, dirty files, tree) so the
     // Rebuild & Download count goes back to 0.
     if (typeof resetEditorState === 'function') resetEditorState();
@@ -1455,6 +1519,35 @@ function applyVariantSelection(group, targetItem) {
   });
 
   syncParentGroupRows(group);
+
+  // When a user breaks a tie, remove the gold highlight and tie badge
+  // from the parent group row and replace with a "selected" badge.
+  document.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
+    var childRows = parentRow.nextElementSibling;
+    if (!childRows || !childRows.classList.contains('fleet-variant-children')) return;
+    var firstChild = childRows.querySelector('[data-variant-group]');
+    if (!firstChild || firstChild.getAttribute('data-variant-group') !== group) return;
+
+    // A selection was just made — remove tied state
+    parentRow.classList.remove('variant-tied');
+    var tieBadge = parentRow.querySelector('.variant-tie-badge');
+    if (tieBadge) {
+      var selectedBadge = document.createElement('span');
+      selectedBadge.className = 'variant-selected-badge';
+      selectedBadge.textContent = 'selected';
+      tieBadge.replaceWith(selectedBadge);
+    }
+    // If there was no tie badge but also no auto-badge, add the selected badge
+    if (!tieBadge && !parentRow.querySelector('.variant-auto-badge') && !parentRow.querySelector('.variant-selected-badge')) {
+      var badgeTarget = parentRow.querySelector('.fleet-variant-toggle');
+      if (badgeTarget) {
+        var newBadge = document.createElement('span');
+        newBadge.className = 'variant-selected-badge';
+        newBadge.textContent = 'selected';
+        badgeTarget.insertAdjacentElement('afterend', newBadge);
+      }
+    }
+  });
 
   updateToolbar();
   setDirty(!isSnapshotClean());

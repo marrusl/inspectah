@@ -285,6 +285,24 @@
     if (typeof updateCompareButtons === 'function') updateCompareButtons(path);
     if (typeof recalcTriageCounts === 'function') recalcTriageCounts();
 
+    // Update parent group row in config/services/containers tab:
+    // remove tied state and swap tie badge for "selected" badge.
+    document.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
+      var childRows = parentRow.nextElementSibling;
+      if (!childRows || !childRows.classList.contains('fleet-variant-children')) return;
+      var firstChild = childRows.querySelector('[data-variant-group]');
+      if (!firstChild || firstChild.getAttribute('data-variant-group') !== path) return;
+      parentRow.classList.remove('variant-tied');
+      var tieBadge = parentRow.querySelector('.variant-tie-badge');
+      if (tieBadge) {
+        var selectedBadge = document.createElement('span');
+        selectedBadge.className = 'variant-selected-badge';
+        selectedBadge.textContent = 'selected';
+        tieBadge.replaceWith(selectedBadge);
+      }
+    });
+    if (typeof syncParentGroupRows === 'function') syncParentGroupRows(path);
+
     buildTree();
     doSelectFile(section, list, idx, path);
 
