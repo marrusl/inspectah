@@ -683,9 +683,6 @@ function trapFocus(modalElement, closeHandler) {
     discardYes.addEventListener('click', function() {
       hideDiscardDialog();
       resetToOriginal();
-      if (typeof generateContainerfilePreview === 'function') {
-        generateContainerfilePreview();
-      }
     });
   }
   if (discardCancel) {
