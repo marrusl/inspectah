@@ -135,12 +135,13 @@ def _re_render(
     snapshot_data: bytes,
     output_dir: Path,
     original_data: bytes | None = None,
-) -> tuple[bool, str]:
+) -> tuple[bool, dict | str]:
     """
     Re-render by calling ``yoinkc inspect --from-snapshot``.
 
-    Returns (success, message_or_html).  On success the second element is
-    the new report.html content; on failure it is the error text.
+    Returns (success, result).  On success the second element is a dict
+    with keys ``html``, ``snapshot``, and ``containerfile``; on failure
+    it is the error text.
     """
     with tempfile.TemporaryDirectory(prefix="yoinkc-rerender-") as tmp:
         tmp_path = Path(tmp)
@@ -197,7 +198,19 @@ def _re_render(
                 shutil.copy2(item, dest)
 
         _log(f"done in {elapsed:.1f}s, serving updated report")
-        return True, (output_dir / "report.html").read_text()
+
+        # Build JSON result with all three pieces the client needs
+        html_content = (output_dir / "report.html").read_text()
+        snapshot_path = output_dir / "inspection-snapshot.json"
+        snapshot_json = json.loads(snapshot_path.read_text()) if snapshot_path.exists() else {}
+        containerfile_path = output_dir / "Containerfile"
+        containerfile_text = containerfile_path.read_text() if containerfile_path.exists() else ""
+
+        return True, {
+            "html": html_content,
+            "snapshot": snapshot_json,
+            "containerfile": containerfile_text,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +355,7 @@ class _Handler(BaseHTTPRequestHandler):
             original_bytes = json.dumps(original_data).encode() if original_data else None
             ok, result = _re_render(snapshot_bytes, output_dir, original_bytes)
             if ok:
-                self._send(200, result, "text/html; charset=utf-8")
+                self._send(200, json.dumps(result), "application/json")
             else:
                 self._send(500, result)
         else:

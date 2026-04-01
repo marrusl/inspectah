@@ -360,8 +360,8 @@ class TestEditorIntegration:
         # Baseline refresh in rebuild handler is legitimate (Task 6: dirty state lifecycle)
         # After Rebuild & Download, originalSnapshot is updated to match the new snapshot
         assert 'originalSnapshot = JSON.parse(JSON.stringify(snapshot));' in html
-        # Should only appear once (in rebuild handler, not on initial load)
-        assert html.count('JSON.parse(JSON.stringify(snapshot))') == 1
+        # Should appear twice: once in the static rebuild handler, once in the editor rebuild handler
+        assert html.count('JSON.parse(JSON.stringify(snapshot))') == 2
         # Sidebar says Editor
         assert 'Editor</a>' in html
 

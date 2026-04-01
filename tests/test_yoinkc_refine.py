@@ -214,12 +214,14 @@ class TestReRender:
     def test_successful_rerender_updates_report(self, tmp_path):
         output_dir = self._make_output_dir(tmp_path)
         new_html = "<html>new</html>"
+        new_snapshot = {"schema_version": 5, "rpm": None}
 
         def _fake_run(cmd, **kwargs):
             idx = cmd.index("--output-dir")
             out_path = Path(cmd[idx + 1])
             (out_path / "report.html").write_text(new_html)
-            (out_path / "inspection-snapshot.json").write_text("{}")
+            (out_path / "inspection-snapshot.json").write_text(json.dumps(new_snapshot))
+            (out_path / "Containerfile").write_text("FROM rhel:9")
             r = MagicMock()
             r.returncode = 0
             r.stdout = ""
@@ -227,10 +229,13 @@ class TestReRender:
             return r
 
         with patch("subprocess.run", side_effect=_fake_run):
-            ok, html = _re_render(b'{"schema_version": 5}', output_dir)
+            ok, result = _re_render(b'{"schema_version": 5}', output_dir)
 
         assert ok is True
-        assert new_html in html
+        assert isinstance(result, dict)
+        assert new_html in result["html"]
+        assert result["snapshot"] == new_snapshot
+        assert result["containerfile"] == "FROM rhel:9"
         assert (output_dir / "report.html").read_text() == new_html
 
     def test_subprocess_failure_returns_log(self, tmp_path):
@@ -276,7 +281,7 @@ class TestReRender:
             idx = cmd.index("--output-dir")
             out_path = Path(cmd[idx + 1])
             (out_path / "report.html").write_text("<html/>")
-            (out_path / "inspection-snapshot.json").write_text("{}")
+            (out_path / "inspection-snapshot.json").write_text('{"schema_version": 5}')
             r = MagicMock()
             r.returncode = 0
             r.stdout = r.stderr = ""
@@ -430,14 +435,21 @@ class TestServer:
 
     def test_post_rerender_success(self, live_server):
         url, output_dir = live_server
-        new_html = "<html>refreshed</html>"
+        result_dict = {
+            "html": "<html>refreshed</html>",
+            "snapshot": {"schema_version": 5},
+            "containerfile": "FROM rhel:9",
+        }
 
-        with patch("yoinkc.refine._re_render", return_value=(True, new_html)):
+        with patch("yoinkc.refine._re_render", return_value=(True, result_dict)):
             status, body, headers = _post(url + "/api/re-render", b'{"schema_version": 5}')
 
         assert status == 200
-        assert new_html.encode() in body
-        assert "html" in headers.get("Content-Type", "")
+        data = json.loads(body)
+        assert data["html"] == "<html>refreshed</html>"
+        assert data["snapshot"] == {"schema_version": 5}
+        assert data["containerfile"] == "FROM rhel:9"
+        assert "json" in headers.get("Content-Type", "")
 
     def test_post_rerender_failure_returns_500(self, live_server):
         url, _ = live_server
@@ -450,9 +462,13 @@ class TestServer:
     def test_post_rerender_wrapper_format(self, live_server):
         """Re-render accepts the {"snapshot": ..., "original": ...} wrapper."""
         url, output_dir = live_server
-        new_html = "<html>wrapper-rerender</html>"
+        result_dict = {
+            "html": "<html>wrapper-rerender</html>",
+            "snapshot": {"schema_version": 5},
+            "containerfile": "FROM rhel:9",
+        }
 
-        with patch("yoinkc.refine._re_render", return_value=(True, new_html)) as mock_rr:
+        with patch("yoinkc.refine._re_render", return_value=(True, result_dict)) as mock_rr:
             wrapper = json.dumps({
                 "snapshot": {"schema_version": 5},
                 "original": {"schema_version": 5, "meta": {"hostname": "orig"}},
@@ -460,7 +476,8 @@ class TestServer:
             status, body, headers = _post(url + "/api/re-render", wrapper)
 
         assert status == 200
-        assert new_html.encode() in body
+        data = json.loads(body)
+        assert data["html"] == "<html>wrapper-rerender</html>"
         # Verify original_data was passed through
         call_args = mock_rr.call_args
         assert call_args[0][2] is not None  # third positional = original_data

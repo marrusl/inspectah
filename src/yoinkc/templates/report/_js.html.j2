@@ -655,7 +655,7 @@ function trapFocus(modalElement, closeHandler) {
       Object.keys(seen).forEach(function(g) { updateCompareButtons(g); });
     }
     resetReviewState();
-    showToast('Selections reset to initial state');
+    showToast('Edits discarded');
   }
 
   document.querySelectorAll('.repo-cb').forEach(function(cb) {
@@ -729,22 +729,17 @@ function trapFocus(modalElement, closeHandler) {
         body: JSON.stringify({snapshot: snapshot, original: originalSnapshot}),
       }).then(function(r){
         if (!r.ok) throw new Error('HTTP ' + r.status);
-        return r.text();
-      }).then(function(html){
-        // Extract Containerfile from response
-        var parser = new DOMParser();
-        var doc = parser.parseFromString(html, 'text/html');
-        var newCfPre = doc.getElementById('containerfile-pre');
-        if (newCfPre) {
-          document.getElementById('containerfile-pre').textContent = newCfPre.textContent;
+        return r.json();
+      }).then(function(data){
+        // Update Containerfile from JSON response
+        var cfPre = document.getElementById('containerfile-pre');
+        if (cfPre && data.containerfile) {
+          cfPre.textContent = data.containerfile;
         }
-        // Extract updated snapshot from response
-        var scriptTag = doc.querySelector('script');
-        if (scriptTag) {
-          var match = scriptTag.textContent.match(/^var snapshot = ([\s\S]*?);\s*var originalSnapshot/m);
-          if (match) {
-            try { snapshot = JSON.parse(match[1]); } catch(e) {}
-          }
+        // Update snapshot from JSON response
+        if (data.snapshot) {
+          snapshot = data.snapshot;
+          window.snapshot = snapshot;
         }
         // Update originalSnapshot (new Discard baseline)
         originalSnapshot = JSON.parse(JSON.stringify(snapshot));
@@ -753,6 +748,11 @@ function trapFocus(modalElement, closeHandler) {
         recalcTriageCounts();
         setDirty(false);
         updateToolbar();
+        // Sync prevalence slider baseline
+        var sliderEl = document.getElementById('summary-prevalence-slider');
+        if (sliderEl) {
+          sliderEl.setAttribute('data-current-threshold', sliderEl.value);
+        }
         // Trigger tarball download
         fetch(window.location.origin + '/api/tarball').then(function(tr) {
           if (!tr.ok) throw new Error('Tarball download failed: HTTP ' + tr.status);
@@ -765,7 +765,7 @@ function trapFocus(modalElement, closeHandler) {
           URL.revokeObjectURL(a.href);
           showToast('Rebuilt and downloaded successfully');
         }).catch(function(err) {
-          showToast('Rebuild succeeded but download failed: ' + err.message + '. Use Download Modified Snapshot or retry.', 6000, true);
+          showToast('Rebuild succeeded but download failed: ' + err.message + '. Retry Rebuild & Download to get the tarball.', 6000, true);
         });
         rerenderBtn.innerHTML = origText;
         rerenderBtn.disabled = true;
