@@ -12,7 +12,9 @@ Eliminate the re-render cycle for previewing Containerfile changes. When the use
 
 Currently, every include/exclude toggle requires clicking Re-render, which spawns a full subprocess (`yoinkc inspect --from-snapshot`), rebuilds all 6 output artifacts, replaces the entire page via `document.write()`, and takes 1-3 seconds. This breaks flow for iterative decisions.
 
-The snapshot object is already in `window.snapshot` as a JS object. The Containerfile is displayed in a plain `<pre id="containerfile-pre">` block with no syntax highlighting. The copy button reads from the same element. All the data needed to generate a preview is already client-side.
+The snapshot object is already in `window.snapshot` as a JS object. The Containerfile is displayed in a plain `<pre id="containerfile-pre">` block with no syntax highlighting. All the data needed to generate a preview is already client-side.
+
+**Trust model:** The tab shows a **live preview** for fast iteration (“think”). It may intentionally differ from the Python renderer (see simplifications below). **Rebuild & Download** is the only supported path that produces the authoritative Containerfile and tarball together—users should treat that output as the artifact. We do not add UI that implies the preview text is copy-paste authority.
 
 ## Design
 
@@ -63,9 +65,8 @@ A new function `generateContainerfilePreview()` that reads `window.snapshot` and
 **Rebuild & Download behavior:**
 1. Runs the full `run_all()` pipeline via `/api/re-render` (same server endpoint)
 2. On success, automatically triggers tarball download via `/api/tarball`
-3. Updates `#containerfile-pre` with the authoritative Python-rendered version
+3. Updates `#containerfile-pre` with the authoritative Python-rendered version (preview and export stay aligned after a successful rebuild)
 4. Shows success toast
-5. Clears the "preview differs from export" state
 
 **Reset with confirmation:**
 ```
@@ -76,9 +77,11 @@ On confirm: restore `window.snapshot` from `window.originalSnapshot`, re-run `ge
 
 ### Containerfile Tab
 
-The static server-rendered Containerfile content in `#containerfile-pre` is replaced on page load by the JS preview output. The tab title stays "Containerfile". The copy button (`#btn-copy-cf`) continues to read from `#containerfile-pre` — it automatically copies the live preview.
+The static server-rendered Containerfile content in `#containerfile-pre` is replaced on page load by the JS preview output. The tab title stays **Containerfile**; treat it mentally as a **live preview** (fast feedback while editing includes/variants), not as a published artifact.
 
-No visual indicator needed to distinguish "preview" from "exported" — the Containerfile always shows the current state, and "Rebuild & Download" is how you make it real.
+**No Copy button** on this tab: we do not facilitate one-click copy from preview, because that implied the clipboard matched export when the preview can differ. Users may still select text in `#containerfile-pre` manually if they wish.
+
+After **Rebuild & Download** succeeds, `#containerfile-pre` shows the same Python-rendered Containerfile that ships in the tarball—the artifact-producing path.
 
 ### Hooking Into Existing Events
 
@@ -86,7 +89,7 @@ The preview generator hooks into existing event paths:
 
 | Event | Current behavior | New behavior (added) |
 |-------|-----------------|---------------------|
-| Include toggle click | Updates dirty state, enables Re-render | + calls `generateContainerfilePreview()` |
+| Include toggle click | Updates dirty state, enables Rebuild & Download | + calls `generateContainerfilePreview()` |
 | Variant selection change | Updates dirty state | + calls `generateContainerfilePreview()` |
 | Config editor save | Marks dirty | + calls `generateContainerfilePreview()` |
 | Prevalence slider input | Updates summary cards | + calls `generateContainerfilePreview()` |
@@ -103,8 +106,8 @@ The audit report is NOT live-previewed. It stays server-rendered. A manual "Refr
 - JS Containerfile preview generator
 - Toolbar restructuring (Rebuild & Download, Reset confirmation)
 - Hook into all include/exclude/variant/editor events
-- Copy button works with live preview
-- E2E tests for live preview behavior
+- Remove Containerfile tab Copy button and its clipboard handler (avoid preview-as-authority UX)
+- E2E tests for live preview behavior and absence of Copy affordance on the Containerfile tab
 
 **Out of scope:**
 - Live audit report preview
@@ -112,14 +115,16 @@ The audit report is NOT live-previewed. It stays server-rendered. A manual "Refr
 - FIXME annotations in preview
 - DHCP connection filtering in preview
 - "Refresh audit" button (follow-on)
+- Preview-vs-export copy labeling or switching what Copy does (superseded by removing Copy entirely)
 
 ## Files to Modify
 
-- `src/yoinkc/templates/report/_js.html.j2` — add `generateContainerfilePreview()`, hook into events
-- `src/yoinkc/templates/report/_toolbar.html.j2` — rename Re-render, remove Download Tarball
+- `src/yoinkc/templates/report/_js.html.j2` — add `generateContainerfilePreview()`, hook into events; remove Copy-to-clipboard logic for the Containerfile tab
+- `src/yoinkc/templates/report/_containerfile.html.j2` — remove Copy button (`#btn-copy-cf`)
+- `src/yoinkc/templates/report/_toolbar.html.j2` — rename Re-render, remove Download Tarball; drop `.btn-copy-cf` styling if it becomes unused
 - `src/yoinkc/templates/report/_css.html.j2` — confirmation dialog styling (if needed)
 - `tests/e2e/tests/re-render-cycle.spec.ts` — update for new button labels and behavior
-- New E2E tests for live preview behavior
+- New or extended E2E tests for live preview behavior and no Copy control on Containerfile tab
 
 ## Testing
 
@@ -133,7 +138,8 @@ The audit report is NOT live-previewed. It stays server-rendered. A manual "Refr
 | Reset shows confirmation | Click Reset with pending changes, verify dialog appears |
 | Reset confirmed restores original | Confirm Reset, verify Containerfile matches original |
 | Rebuild & Download triggers full pipeline | Click Rebuild & Download, verify tarball download starts |
-| Copy button copies live preview | Toggle a package, click Copy, verify clipboard contains updated content |
+| No Copy on Containerfile tab | Open Containerfile tab, assert no Copy / `#btn-copy-cf` (preview is not a one-click export surface) |
+| After Rebuild & Download, preview matches export | Toggle to dirty preview, run Rebuild & Download, assert `#containerfile-pre` matches server-rendered content (e.g. stable marker or snapshot from response) |
 
 ### Python Tests
 

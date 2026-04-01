@@ -20,6 +20,7 @@ Add a three-tier visual hierarchy to config file variant groups in the refine re
 ## Apr 8 Scope
 
 **In scope (this sprint):**
+
 - Config section only (`_config.html.j2`, `_css.html.j2`, `_js.html.j2`)
 - Chevron affordance on config variant group headers
 - Auto-selected badge on config variant group headers
@@ -27,6 +28,7 @@ Add a three-tier visual hierarchy to config file variant groups in the refine re
 - E2E test coverage for the three tiers
 
 **Deferred (post-Apr 8):**
+
 - Editor tree variant display (`_editor.html.j2`, `_editor_js.html.j2`) — follow-on, same pattern
 - Services and containers variant groups — follow-on if they use the same variant group pattern
 - Summary-line noise mitigation for large fleets (>10 auto-selected groups)
@@ -93,9 +95,12 @@ html:not(.pf-v6-theme-dark) .variant-auto-badge {
 
 The toggle element already has `cursor: pointer`. The chevron makes the affordance visible. Applied only to config variant groups in this sprint.
 
+**Keyboard and semantics (minimal):** The toggle stays keyboard-operable with the existing pattern (focusable; Enter/Space toggles). `aria-expanded` must match the visible state (e.g. `true` when the group is expanded / `.fleet-variant-children` is shown). The tie badge “⚠” is decorative alongside the full label text — meaning must not depend on the glyph alone.
+
 ### Renderer Verification
 
 **Claim: no Python/renderer changes needed.** This must be verified during implementation by confirming:
+
 1. The template context includes variant group state (which variant has `include=true`) for both initial render and post-re-render
 2. The tie detection logic in the renderer (`_build_context` in `html_report.py`) correctly identifies tied vs auto-selected groups
 3. After prevalence threshold changes and re-render, the tier assignments are still correct
@@ -104,22 +109,24 @@ If any of these fail, the implementer must flag it as BLOCKED rather than workin
 
 ## Testing
 
+**Selector contract:** Class names referenced in the tables below (`.fleet-variant-toggle`, `.expanded`, `.variant-auto-badge`, `.variant-tie-badge`, `.fleet-variant-children`, etc.) are the **required DOM hooks** for this sprint’s markup and E2E assertions — not optional examples. If implementation renames them, update this spec and `variant-selection.spec.ts` in the same change so acceptance criteria stay traceable.
+
 ### E2E Tests (add to existing `variant-selection.spec.ts`)
 
 | Test | Assertion |
-|------|-----------|
+| ------ | --------- |
 | Tied groups are pre-expanded on load | `.fleet-variant-toggle.expanded` exists for tied groups, `.fleet-variant-children` visible |
 | Auto-selected groups show blue badge | `.variant-auto-badge` visible on groups with a winner, text contains "auto-selected" |
 | Clean files have no badge | Config rows without variant groups have no `.variant-auto-badge` or `.variant-tie-badge` |
-| Chevron rotates on expand/collapse | Click toggle → `::before` content rotates (check `.expanded` class toggle) |
-| Badge contrast in light mode | Toggle theme, verify `.variant-auto-badge` text color differs from background |
+| Chevron reflects expand/collapse | Click toggle → toggle gains/loses `.expanded` and `.fleet-variant-children` visibility toggles accordingly (assert class + children visibility; do not assert `::before` transform — that is an implementation detail of the chevron) |
+| Auto badge readable in light mode | Default light theme: `.variant-auto-badge` text vs. pill background must meet WCAG 2.x **normal** text contrast (minimum 4.5∶1), e.g. by sampling computed foreground/background or validating the PF info tokens / rgba fill used in implementation |
 | 2-way tie shows expanded with Compare | Pre-expanded, Compare buttons visible |
 | 3-way tie shows expanded with Display | Pre-expanded, Display buttons visible |
 
 ### Python Tests (verify renderer)
 
 | Test | Assertion |
-|------|-----------|
+| ------ | --------- |
 | Tied group renders tie badge | HTML output contains `variant-tie-badge` for equal-count groups |
 | Auto-selected group renders auto badge | HTML output contains `variant-auto-badge` for winner groups |
 | Single-variant file has no badge | HTML output has no variant badge for non-grouped files |
