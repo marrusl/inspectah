@@ -835,43 +835,6 @@ function trapFocus(modalElement, closeHandler) {
     });
   })();
 
-  // --- Copy Containerfile to clipboard ---
-  (function() {
-    var btn = document.getElementById('btn-copy-cf');
-    if (!btn) return;
-    var pre = document.getElementById('containerfile-pre');
-    function flash() {
-      btn.textContent = 'Copied!';
-      btn.classList.remove('pf-m-secondary');
-      btn.classList.add('pf-m-primary');
-      setTimeout(function() {
-        btn.textContent = 'Copy';
-        btn.classList.remove('pf-m-primary');
-        btn.classList.add('pf-m-secondary');
-      }, 1500);
-    }
-    function fallback(text) {
-      var ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      var ok = false;
-      try { ok = document.execCommand('copy'); } catch(e) {}
-      document.body.removeChild(ta);
-      if (ok) { flash(); } else { showToast('Clipboard not available in this context', 3000); }
-    }
-    btn.addEventListener('click', function() {
-      var text = pre ? pre.textContent : '';
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(flash).catch(function() { fallback(text); });
-      } else {
-        fallback(text);
-      }
-    });
-  })();
-
   // --- Triage progress tracking ---
   var reviewedSections = {};
   // Build triageable tab list from the DOM so fleet reports (which omit Storage)
