@@ -623,6 +623,13 @@ def _build_context(
                         repo_groups.setdefault(candidate, [])
                     _record_repo_lookup(repo_file_lookup, candidate, lookup_entry)
 
+        # Remove repos with 0 packages — they clutter the UI and their
+        # repo-file toggle is already available on a sibling repo that
+        # shares the same .repo file.
+        repo_groups = {
+            name: pkgs for name, pkgs in repo_groups.items() if pkgs
+        }
+
         sorted_group_names = sorted(repo_groups.keys(), key=lambda name: (name == "(unknown)", name.lower()))
         repo_groups = OrderedDict((name, repo_groups[name]) for name in sorted_group_names)
 

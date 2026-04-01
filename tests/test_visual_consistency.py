@@ -401,6 +401,14 @@ class TestPackagesRestructure:
                         source_repo="appstream",
                         include=True,
                     ),
+                    PackageEntry(
+                        name="htop",
+                        version="3.2.2",
+                        release="1.el9",
+                        arch="x86_64",
+                        source_repo="epel",
+                        include=True,
+                    ),
                 ],
                 repo_files=[
                     RepoFile(
@@ -416,9 +424,9 @@ class TestPackagesRestructure:
                         is_default_repo=False,
                     ),
                 ],
-                leaf_packages=["httpd"],
+                leaf_packages=["httpd", "htop"],
                 auto_packages=[],
-                leaf_dep_tree={"httpd": []},
+                leaf_dep_tree={"httpd": [], "htop": []},
             ),
         )
 
@@ -499,6 +507,49 @@ class TestPackagesRestructure:
         assert 'repo-cb' in toggle_html
         assert 'disabled' in toggle_html
 
+    def test_empty_repos_hidden_from_report(self):
+        """Repos with 0 packages are completely hidden from the rendered output."""
+        html = _render(
+            refine_mode=True,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="httpd",
+                        version="2.4.57",
+                        release="8.el9",
+                        arch="x86_64",
+                        source_repo="appstream",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/redhat.repo",
+                        content="[appstream]\nname=AppStream\n",
+                        include=True,
+                        is_default_repo=True,
+                    ),
+                    RepoFile(
+                        path="etc/yum.repos.d/epel.repo",
+                        content=(
+                            "[epel]\nname=EPEL\n"
+                            "[epel-testing]\nname=EPEL Testing\n"
+                        ),
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+                leaf_dep_tree={"httpd": []},
+            ),
+        )
+        # Non-empty repo should render
+        assert 'data-repo-group="appstream"' in html
+        # Empty repos should be completely absent
+        assert 'data-repo-group="epel"' not in html
+        assert 'data-repo-group="epel-testing"' not in html
+
     def test_initial_excluded_repo_renders_excluded_header_and_disabled_leafs(self):
         html = _render(
             refine_mode=True,
@@ -535,11 +586,38 @@ class TestPackagesRestructure:
         assert 'class="excluded"' in leaf_html
         assert 'leaf-cb"' in leaf_html and 'disabled' in leaf_html
 
-    def test_repo_without_matching_leaf_rows_still_renders_header(self):
-        html = self._render_packages(refine_mode=True)
+    def test_repo_without_matching_leaf_rows_is_hidden(self):
+        """Repos with 0 packages are hidden — they no longer render at all."""
+        html = _render(
+            refine_mode=True,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="httpd",
+                        version="2.4.57",
+                        release="8.el9",
+                        arch="x86_64",
+                        source_repo="appstream",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/epel.repo",
+                        content="[epel]\nname=Extra Packages for Enterprise Linux\n",
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["httpd"],
+                auto_packages=[],
+                leaf_dep_tree={"httpd": []},
+            ),
+        )
         pkg_start = html.find('id="section-packages"')
         pkg_html = html[pkg_start:pkg_start + 12000]
-        assert 'epel (0 packages)' in pkg_html
+        assert 'data-repo-group="epel"' not in pkg_html
+        assert 'epel (0 packages)' not in pkg_html
 
     def test_overlapping_repo_names_get_distinct_repo_file_indices(self):
         html = _render(
