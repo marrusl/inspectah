@@ -1959,6 +1959,8 @@ function countAtThreshold(threshold) {
     if (typeof setDirty === 'function' && typeof isSnapshotClean === 'function') {
       setDirty(!isSnapshotClean());
     }
+    recalcTriageCounts();
+    generateContainerfilePreview();
   });
 
   updateSummaryCards(parseInt(summarySlider.value, 10));

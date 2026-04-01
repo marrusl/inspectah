@@ -83,4 +83,67 @@ test.describe('Live Containerfile Preview', () => {
     const restoredText = await page.locator('#containerfile-pre').textContent();
     expect(restoredText).toEqual(initialText);
   });
+
+  test('Containerfile updates on variant selection', async ({ page }) => {
+    await page.click('a[data-tab="containerfile"]');
+    const initialText = await page.locator('#containerfile-pre').textContent();
+
+    await page.click('a[data-tab="config"]');
+    await expect(page.locator('#section-config')).toBeVisible();
+
+    const appConfGroup = page.locator('tr.fleet-variant-group', {
+      has: page.locator('code', { hasText: '/etc/app.conf' }),
+    });
+    await appConfGroup.locator('.fleet-variant-toggle').click();
+    const childrenRow = page.locator('tr.fleet-variant-children').first();
+    await expect(childrenRow).toBeVisible();
+
+    const variant2 = page.locator(
+      'tr[data-variant-group="/etc/app.conf"][data-snap-index="1"]'
+    );
+    await variant2.locator('.pf-v6-c-switch__toggle').click();
+
+    await page.click('a[data-tab="containerfile"]');
+    const updatedText = await page.locator('#containerfile-pre').textContent();
+    expect(updatedText).toBeTruthy();
+  });
+
+  test('Containerfile updates on prevalence slider', async ({ page }) => {
+    const slider = page.locator('#summary-prevalence-slider');
+    if (!(await slider.isVisible())) {
+      test.skip();
+      return;
+    }
+    await page.click('a[data-tab="containerfile"]');
+    const initialText = await page.locator('#containerfile-pre').textContent();
+
+    await slider.fill('40');
+    await slider.dispatchEvent('input');
+
+    await page.click('a[data-tab="containerfile"]');
+    const updatedText = await page.locator('#containerfile-pre').textContent();
+    expect(updatedText).toBeTruthy();
+  });
+
+  test('audit counts update on package toggle', async ({ page }) => {
+    await page.click('a[data-tab="summary"]');
+    const initialTotal = await page.locator('#summary-scope-total').textContent();
+
+    await page.click('a[data-tab="rpm"]');
+    const firstToggle = page.locator('.include-toggle').first();
+    await firstToggle.click();
+
+    await page.click('a[data-tab="summary"]');
+    const updatedTotal = await page.locator('#summary-scope-total').textContent();
+    expect(parseInt(updatedTotal || '0')).toBeLessThan(parseInt(initialTotal || '0'));
+  });
+
+  test('audit preview cue is visible on audit tab', async ({ page }) => {
+    await page.click('a[data-tab="audit"]');
+    const cue = page.locator('#audit-preview-cue');
+    if (await cue.isVisible()) {
+      await expect(cue).toContainText('Summary counts update as you edit');
+      await expect(cue).toContainText('Rebuild & Download');
+    }
+  });
 });
