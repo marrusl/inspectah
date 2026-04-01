@@ -1,15 +1,24 @@
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
 <div id="exclude-toolbar" class="pf-v6-c-toolbar" role="toolbar" aria-label="Actions">
-  <button id="btn-reset" class="pf-v6-c-button pf-m-link pf-m-danger" type="button" disabled title="Reset all selections to their initial state">Reset</button>
+  <button id="btn-reset" class="pf-v6-c-button pf-m-link pf-m-danger" type="button" disabled title="Discard all edits and revert to last built state">Discard</button>
   <span class="toolbar-status" id="toolbar-status-text"></span>
   <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   {% if not refine_mode %}
-  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start yoinkc refine to enable live re-render">Re-render</button>
+  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start yoinkc refine to enable Rebuild &amp; Download">Rebuild &amp; Download</button>
   {% endif %}
   {% if refine_mode %}
-  <button id="btn-re-render" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Re-render with editor changes">Re-render</button>
+  <button id="btn-re-render" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Rebuild with editor changes and download tarball">Rebuild &amp; Download</button>
   {% endif %}
-  <button id="btn-tarball" class="pf-v6-c-button pf-m-secondary" type="button" disabled title="Start yoinkc refine to enable tarball download">Download Tarball</button>
+</div>
+<div id="discard-confirm-dialog" class="discard-dialog-backdrop" style="display:none;">
+  <div class="discard-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-dialog-title">
+    <h3 id="discard-dialog-title">Discard all edits?</h3>
+    <p>This will revert the Containerfile to its last built state.</p>
+    <div class="discard-dialog-actions">
+      <button id="discard-confirm-yes" class="pf-v6-c-button pf-m-danger" type="button">Discard</button>
+      <button id="discard-confirm-cancel" class="pf-v6-c-button pf-m-link" type="button">Cancel</button>
+    </div>
+  </div>
 </div>
 <div class="pf-v6-c-alert-group pf-m-toast" id="toast-group">
   <div class="pf-v6-c-alert pf-m-success" id="toast">
@@ -26,7 +35,7 @@
    Nav selectors: .pf-v6-c-nav__link[data-tab] for sidebar navigation.
    Active state: pf-m-current toggled on the .pf-v6-c-nav__link element.
    Theme toggle: pf-v6-theme-dark class on <html>.
-   Button state: disabled HTML attribute for btn-reset / btn-rerender / btn-tarball.
+   Button state: disabled HTML attribute for btn-reset / btn-rerender.
    All other JS-targeted classes preserved: .section, .visible, .include-toggle,
    .include-toggle-wrap, .strategy-select, .leaf-cb, .repo-cb, .warning-row,
    .warning-row-dismiss, .dismissed, .btn-copy-cf, tr.excluded,

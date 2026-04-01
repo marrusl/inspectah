@@ -713,9 +713,9 @@
     if (edits > 0) parts.push(edits + (edits === 1 ? ' edit' : ' edits'));
     if (toggles > 0) parts.push(toggles + (toggles === 1 ? ' toggle' : ' toggles'));
     if (parts.length === 0) {
-      reRenderBtn.textContent = 'Re-render';
+      reRenderBtn.textContent = 'Rebuild & Download';
     } else {
-      reRenderBtn.textContent = 'Re-render (' + parts.join(', ') + ')';
+      reRenderBtn.textContent = 'Rebuild & Download (' + parts.join(', ') + ')';
     }
     // Enable when there are changes AND re-render is available
     var canReRender = (typeof isReRenderEnabled === 'function') ? isReRenderEnabled() : true;
@@ -864,7 +864,7 @@
   if (reRenderBtn) {
     reRenderBtn.addEventListener('click', function() {
       editorSaveAll();
-      reRenderBtn.textContent = 'Re-rendering\u2026';
+      reRenderBtn.textContent = 'Rebuilding\u2026';
       reRenderBtn.disabled = true;
       var sliderEl = document.getElementById('summary-prevalence-slider');
       if (snapshot.meta && snapshot.meta.fleet && sliderEl) {

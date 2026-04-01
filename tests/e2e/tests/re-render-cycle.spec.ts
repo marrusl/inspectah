@@ -1,19 +1,16 @@
 import { test, expect } from '@playwright/test';
 import { FLEET_URL } from './helpers';
 
-test.describe('Re-render Cycle', () => {
+test.describe('Rebuild & Download Cycle', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(FLEET_URL);
-    // Wait for the helper script to detect the live server and enable toggles
     await page.locator('.helper-active').waitFor({ state: 'attached', timeout: 10_000 });
   });
 
-  test('full re-render cycle: toggle variant, re-render, verify dashboard loads', async ({ page }) => {
-    // Navigate to config section
+  test('Rebuild & Download triggers full pipeline and downloads tarball', async ({ page }) => {
     await page.click('a[data-tab="config"]');
     await expect(page.locator('#section-config')).toBeVisible();
 
-    // Expand the app.conf variant group and uncheck variant 2
     const appConfGroup = page.locator('tr.fleet-variant-group', {
       has: page.locator('code', { hasText: '/etc/app.conf' }),
     });
@@ -21,40 +18,28 @@ test.describe('Re-render Cycle', () => {
     const childrenRow = page.locator('tr.fleet-variant-children').first();
     await expect(childrenRow).toBeVisible();
 
-    // Uncheck variant 2 (snap-index="1") by clicking PF switch toggle
     const variant2 = page.locator(
       'tr[data-variant-group="/etc/app.conf"][data-snap-index="1"]'
     );
     const toggleSpan = variant2.locator('.pf-v6-c-switch__toggle');
     await toggleSpan.click();
 
-    // Verify dirty state: Re-render button is enabled
-    const rerender = page.locator('#btn-re-render');
-    await expect(rerender).toBeEnabled();
+    const rebuildBtn = page.locator('#btn-re-render');
+    await expect(rebuildBtn).toBeEnabled();
 
-    // Click Re-render. The app uses fetch() + document.write() to replace
-    // the entire page content. Use the same wait pattern as the passing
-    // variant-selection "persists through re-render" test.
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'networkidle' }),
-      rerender.click(),
-    ]);
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await rebuildBtn.click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toContain('.tar.gz');
 
-    // Wait for the helper script to reactivate on the freshly-written page
-    await page.locator('.helper-active').waitFor({ state: 'attached', timeout: 10_000 });
-
-    // Navigate to summary tab and verify the dashboard loads after re-render
-    await page.click('a[data-tab="summary"]');
-    const dashboard = page.locator('.summary-dashboard');
-    await expect(dashboard).toBeVisible();
+    await expect(page.locator('#section-config')).toBeVisible();
+    await expect(rebuildBtn).toBeDisabled();
   });
 
-  test('error on corrupted re-render: route interception returns 500', async ({ page }) => {
-    // Navigate to config section
+  test('error on corrupted rebuild: route interception returns 500', async ({ page }) => {
     await page.click('a[data-tab="config"]');
     await expect(page.locator('#section-config')).toBeVisible();
 
-    // Toggle a config variant to create dirty state
     const appConfGroup = page.locator('tr.fleet-variant-group', {
       has: page.locator('code', { hasText: '/etc/app.conf' }),
     });
@@ -62,36 +47,23 @@ test.describe('Re-render Cycle', () => {
     const childrenRow = page.locator('tr.fleet-variant-children').first();
     await expect(childrenRow).toBeVisible();
 
-    // Uncheck variant 2 to enter dirty state
     const variant2 = page.locator(
       'tr[data-variant-group="/etc/app.conf"][data-snap-index="1"]'
     );
     const toggleSpan = variant2.locator('.pf-v6-c-switch__toggle');
     await toggleSpan.click();
 
-    // Verify Re-render is enabled (dirty state exists)
-    const rerender = page.locator('#btn-re-render');
-    await expect(rerender).toBeEnabled();
+    const rebuildBtn = page.locator('#btn-re-render');
+    await expect(rebuildBtn).toBeEnabled();
 
-    // Intercept the re-render API call and return a 500 error
     await page.route('**/api/re-render', (route) =>
       route.fulfill({ status: 500, body: 'Internal Server Error' })
     );
 
-    // Click Re-render
-    await rerender.click();
+    await rebuildBtn.click();
 
-    // The editor re-render error handler calls showEditorError() which
-    // sets the #editor-error-message text content. The banner element
-    // has pf-m-danger class. Verify the error message was populated.
-    const errorMsg = page.locator('#editor-error-message');
-    await expect(errorMsg).toHaveText(/HTTP 500/, { timeout: 10_000 });
-
-    // Verify the error banner has pf-m-danger class (it always does)
-    const errorBanner = page.locator('#editor-error-banner');
-    await expect(errorBanner).toHaveClass(/pf-m-danger/);
-
-    // Verify the Re-render button is re-enabled after error
-    await expect(rerender).toBeEnabled({ timeout: 5_000 });
+    const toast = page.locator('#toast-message');
+    await expect(toast).toContainText(/Rebuild failed/, { timeout: 10_000 });
+    await expect(rebuildBtn).toBeEnabled({ timeout: 5_000 });
   });
 });

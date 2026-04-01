@@ -314,6 +314,14 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .deps-list { margin: var(--pf-t--global--spacer--xs) 0; padding-left: 1.5rem; }
 .card-actions-layout { display: flex; align-items: center; gap: var(--pf-t--global--spacer--sm); flex-wrap: nowrap; }
 
+/* Discard confirmation dialog */
+.discard-dialog-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1100; display: flex; align-items: center; justify-content: center; }
+.discard-dialog { background: var(--pf-t--global--background--color--primary--default, #fff); border-radius: 8px; padding: 1.5rem; max-width: 400px; width: 90%; box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
+.pf-v6-theme-dark .discard-dialog { background: var(--pf-t--global--background--color--primary--default, #1b1d21); }
+.discard-dialog h3 { margin: 0 0 0.5rem; }
+.discard-dialog p { margin: 0 0 1rem; font-size: 0.9rem; color: var(--pf-t--global--text--color--subtle); }
+.discard-dialog-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+
 /* Toast (PF6 alert group) */
 .pf-v6-c-alert-group.pf-m-toast { position: fixed; top: 1rem; right: 1rem; z-index: 2000; display: none; }
 .pf-v6-c-alert-group.pf-m-toast.visible { display: block; }

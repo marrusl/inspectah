@@ -175,7 +175,6 @@ function trapFocus(modalElement, closeHandler) {
   var toastGroup = document.getElementById('toast-group');
   var toastMessage = document.getElementById('toast-message');
   var rerenderBtn = document.getElementById('btn-rerender');
-  var tarballBtn = document.getElementById('btn-tarball');
   var downloadSnapshotBtn = document.getElementById('btn-download-snapshot');
   var resetBtn = document.getElementById('btn-reset');
   var helperAvailable = false;
@@ -236,7 +235,6 @@ function trapFocus(modalElement, closeHandler) {
 
   function setDirty(isDirty) {
     dirty = isDirty;
-    if (tarballBtn) tarballBtn.disabled = isDirty;
     // Re-render buttons respect both dirty state AND re-render availability
     var canReRender = isDirty && reRenderEnabled;
     if (rerenderBtn) rerenderBtn.disabled = !canReRender;
@@ -660,12 +658,34 @@ function trapFocus(modalElement, closeHandler) {
     });
   });
 
+  var discardDialog = document.getElementById('discard-confirm-dialog');
+  var discardYes = document.getElementById('discard-confirm-yes');
+  var discardCancel = document.getElementById('discard-confirm-cancel');
+
+  function showDiscardDialog() {
+    if (discardDialog) discardDialog.style.display = '';
+  }
+  function hideDiscardDialog() {
+    if (discardDialog) discardDialog.style.display = 'none';
+  }
+
   if (resetBtn) {
     resetBtn.addEventListener('click', function() {
-      if (confirm('Reset all selections to their initial state? This cannot be undone.')) {
-        resetToOriginal();
+      if (!dirty) return;
+      showDiscardDialog();
+    });
+  }
+  if (discardYes) {
+    discardYes.addEventListener('click', function() {
+      hideDiscardDialog();
+      resetToOriginal();
+      if (typeof generateContainerfilePreview === 'function') {
+        generateContainerfilePreview();
       }
     });
+  }
+  if (discardCancel) {
+    discardCancel.addEventListener('click', hideDiscardDialog);
   }
 
   // --- Download modified snapshot ---
@@ -680,13 +700,13 @@ function trapFocus(modalElement, closeHandler) {
     URL.revokeObjectURL(a.href);
   });
 
-  // --- Re-render ---
+  // --- Rebuild & Download ---
   if (rerenderBtn) {
     rerenderBtn.addEventListener('click', function(){
       if (!helperAvailable) return;
       if (!dirty) return;
       var origText = rerenderBtn.innerHTML;
-      rerenderBtn.innerHTML = '<span class="pf-v6-c-spinner pf-m-sm" role="progressbar" aria-label="Loading"><span class="pf-v6-c-spinner__clipper"></span><span class="pf-v6-c-spinner__lead-ball"></span><span class="pf-v6-c-spinner__tail-ball"></span></span>Re-rendering...';
+      rerenderBtn.innerHTML = '<span class="pf-v6-c-spinner pf-m-sm" role="progressbar" aria-label="Loading"><span class="pf-v6-c-spinner__clipper"></span><span class="pf-v6-c-spinner__lead-ball"></span><span class="pf-v6-c-spinner__tail-ball"></span></span>Rebuilding...';
       rerenderBtn.disabled = true;
       var sliderEl = document.getElementById('summary-prevalence-slider');
       if (snapshot.meta && snapshot.meta.fleet && sliderEl) {
@@ -704,23 +724,51 @@ function trapFocus(modalElement, closeHandler) {
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.text();
       }).then(function(html){
+        // Extract Containerfile from response
+        var parser = new DOMParser();
+        var doc = parser.parseFromString(html, 'text/html');
+        var newCfPre = doc.getElementById('containerfile-pre');
+        if (newCfPre) {
+          document.getElementById('containerfile-pre').textContent = newCfPre.textContent;
+        }
+        // Extract updated snapshot from response
+        var scriptTag = doc.querySelector('script');
+        if (scriptTag) {
+          var match = scriptTag.textContent.match(/^var snapshot = ([\s\S]*?);\s*var originalSnapshot/m);
+          if (match) {
+            try { snapshot = JSON.parse(match[1]); } catch(e) {}
+          }
+        }
+        // Update originalSnapshot (new Discard baseline)
+        originalSnapshot = JSON.parse(JSON.stringify(snapshot));
+        window.originalSnapshot = originalSnapshot;
+        buildBaseline();
+        recalcTriageCounts();
         setDirty(false);
-        document.open();
-        document.write(html);
-        document.close();
+        updateToolbar();
+        // Trigger tarball download
+        fetch(window.location.origin + '/api/tarball').then(function(tr) {
+          if (!tr.ok) throw new Error('Tarball download failed: HTTP ' + tr.status);
+          return tr.blob();
+        }).then(function(blob) {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'yoinkc-output.tar.gz';
+          a.click();
+          URL.revokeObjectURL(a.href);
+          showToast('Rebuilt and downloaded successfully');
+        }).catch(function(err) {
+          showToast('Rebuild succeeded but download failed: ' + err.message + '. Use Download Modified Snapshot or retry.', 6000, true);
+        });
+        rerenderBtn.innerHTML = origText;
+        rerenderBtn.disabled = true;
       }).catch(function(err){
-        showToast('Re-render failed: ' + err.message, 5000, true);
+        showToast('Rebuild failed: ' + err.message, 5000, true);
         rerenderBtn.innerHTML = origText;
         rerenderBtn.disabled = false;
       });
     });
   }
-
-  // --- Download tarball ---
-  tarballBtn.addEventListener('click', function(){
-    if (!helperAvailable) return;
-    window.location.href = window.location.origin + '/api/tarball';
-  });
 
   // --- Helper script detection with retry ---
   function enableHelperButtons(reRenderAvailable) {
@@ -735,13 +783,11 @@ function trapFocus(modalElement, closeHandler) {
     if (rerenderBtn) {
       if (reRenderEnabled) {
         rerenderBtn.disabled = false;
-        rerenderBtn.title = 'Re-render with excluded items removed';
+        rerenderBtn.title = 'Rebuild with excluded items removed and download tarball';
       } else {
-        rerenderBtn.title = 'Re-render requires podman or docker — not found on this system';
+        rerenderBtn.title = 'Rebuild & Download requires podman or docker — not found on this system';
       }
     }
-    tarballBtn.disabled = false;
-    tarballBtn.title = 'Download current output as tar.gz';
     updateToolbar();
   }
 
