@@ -774,6 +774,110 @@ class TestPackagesRestructure:
         assert "var seenIncludeKeys = new Set();" in count_js
         assert "if (seenIncludeKeys.has(key)) return;" in count_js
 
+    def test_release_package_deselect_cascades_to_repos(self):
+        """Deselecting a *-release leaf cascades to repos with matching prefix."""
+        html = _render(
+            refine_mode=True,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="epel-release",
+                        version="9",
+                        release="7.el9",
+                        arch="noarch",
+                        source_repo="@commandline",
+                        include=True,
+                    ),
+                    PackageEntry(
+                        name="htop",
+                        version="3.2.2",
+                        release="1.el9",
+                        arch="x86_64",
+                        source_repo="epel",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/epel.repo",
+                        content=(
+                            "[epel]\nname=EPEL\n"
+                            "[epel-testing]\nname=EPEL Testing\n"
+                        ),
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["epel-release", "htop"],
+                auto_packages=[],
+                leaf_dep_tree={"epel-release": [], "htop": []},
+            ),
+        )
+        # Verify the cascade JS block exists in the rendered output
+        cascade_js = _extract_js_block(
+            html,
+            "// --- Release-package cascade ---",
+            "if (compareGroup && typeof updateCompareButtons",
+        )
+        # Detects -release suffix
+        assert "/-release$/.test(leafName)" in cascade_js
+        # Computes prefix
+        assert "leafName.replace(/-release$/, '')" in cascade_js
+        # Cascades to matching repos
+        assert "repoName.indexOf(releasePrefix) === 0" in cascade_js
+        assert "applyRepoCascade(repoCb)" in cascade_js
+        # Shows toast on deselect
+        assert "showToast(" in cascade_js
+        assert "also excluded" in cascade_js
+        # Shows different toast on re-enable
+        assert "review related repos" in cascade_js
+
+    def test_release_cascade_does_not_auto_reenable_repos(self):
+        """Re-enabling a *-release package does NOT auto-re-enable repos."""
+        html = _render(
+            refine_mode=True,
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(
+                        name="rpmfusion-free-release",
+                        version="39",
+                        release="1.noarch",
+                        arch="noarch",
+                        source_repo="@commandline",
+                        include=True,
+                    ),
+                    PackageEntry(
+                        name="vlc",
+                        version="3.0.20",
+                        release="4.el9",
+                        arch="x86_64",
+                        source_repo="rpmfusion-free-updates",
+                        include=True,
+                    ),
+                ],
+                repo_files=[
+                    RepoFile(
+                        path="etc/yum.repos.d/rpmfusion-free.repo",
+                        content="[rpmfusion-free-updates]\nname=RPM Fusion Free Updates\n",
+                        include=True,
+                        is_default_repo=False,
+                    ),
+                ],
+                leaf_packages=["rpmfusion-free-release", "vlc"],
+                auto_packages=[],
+                leaf_dep_tree={"rpmfusion-free-release": [], "vlc": []},
+            ),
+        )
+        cascade_js = _extract_js_block(
+            html,
+            "// --- Release-package cascade ---",
+            "if (compareGroup && typeof updateCompareButtons",
+        )
+        # The re-enable branch only shows a toast, no repoCb.checked = true
+        re_enable_section = cascade_js[cascade_js.find("} else {"):]
+        assert "repoCb.checked = true" not in re_enable_section
+        assert "review related repos" in re_enable_section
+
 
 class TestRepoSectionIds:
     """Disabled repo sections should be filtered out."""

@@ -436,6 +436,54 @@ function trapFocus(modalElement, closeHandler) {
         restoreTieStateIfNeeded(variantGroup);
       }
       tr.classList.toggle('excluded', !this.checked);
+      // --- Release-package cascade ---
+      // When a *-release leaf is deselected, cascade to repos whose name
+      // starts with the matching prefix (e.g. epel-release → epel*).
+      // When re-enabled, nudge the user to review related repos.
+      if (this.classList.contains('leaf-cb')) {
+        var leafName = tr.getAttribute('data-leaf');
+        if (leafName && /-release$/.test(leafName)) {
+          var releasePrefix = leafName.replace(/-release$/, '');
+          if (!this.checked) {
+            var cascadedRepos = [];
+            document.querySelectorAll('tr.repo-group-row[data-repo-group]').forEach(function(repoRow) {
+              var repoName = repoRow.getAttribute('data-repo-group');
+              if (!repoName || repoName.indexOf(releasePrefix) !== 0) return;
+              var repoCb = repoRow.querySelector('.repo-cb');
+              if (!repoCb || !repoCb.checked || repoCb.disabled) return;
+              // Update snapshot for this repo file
+              var repoSection = repoRow.getAttribute('data-snap-section');
+              var repoList = repoRow.getAttribute('data-snap-list');
+              var repoIdx = parseInt(repoRow.getAttribute('data-snap-index'), 10);
+              if (repoSection && repoList && !isNaN(repoIdx) && repoIdx >= 0) {
+                var repoArr = resolveSnapshotRef(repoSection, repoList);
+                if (repoArr && repoArr[repoIdx] !== undefined) {
+                  repoArr[repoIdx].include = false;
+                }
+              }
+              repoCb.checked = false;
+              repoRow.classList.add('excluded');
+              applyRepoCascade(repoCb);
+              cascadedRepos.push(repoName);
+            });
+            if (cascadedRepos.length > 0) {
+              showToast('Deselected ' + leafName + ' \u2014 also excluded ' + cascadedRepos.length + ' related repo' + (cascadedRepos.length > 1 ? 's' : '') + ': ' + cascadedRepos.join(', '), 6000);
+            }
+          } else {
+            // Re-check: don't auto-enable repos, but nudge user
+            var relatedRepos = [];
+            document.querySelectorAll('tr.repo-group-row[data-repo-group]').forEach(function(repoRow) {
+              var repoName = repoRow.getAttribute('data-repo-group');
+              if (repoName && repoName.indexOf(releasePrefix) === 0) {
+                relatedRepos.push(repoName);
+              }
+            });
+            if (relatedRepos.length > 0) {
+              showToast('Re-enabled ' + leafName + ' \u2014 review related repos (' + relatedRepos.join(', ') + ') to re-include them', 6000);
+            }
+          }
+        }
+      }
       if (compareGroup && typeof updateCompareButtons === 'function') {
         updateCompareButtons(compareGroup);
       }
