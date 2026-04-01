@@ -61,4 +61,26 @@ test.describe('Live Containerfile Preview', () => {
     await expect(page.locator('#btn-re-render')).toBeAttached();
     await expect(page.locator('#btn-tarball')).not.toBeAttached();
   });
+
+  test('Containerfile updates on package toggle', async ({ page }) => {
+    await page.click('a[data-tab="containerfile"]');
+    const initialText = await page.locator('#containerfile-pre').textContent();
+
+    await page.click('a[data-tab="rpm"]');
+    await expect(page.locator('#section-rpm')).toBeVisible();
+    const firstToggle = page.locator('.include-toggle').first();
+    const wasChecked = await firstToggle.isChecked();
+    await firstToggle.click();
+
+    await page.click('a[data-tab="containerfile"]');
+    const updatedText = await page.locator('#containerfile-pre').textContent();
+    expect(updatedText).not.toEqual(initialText);
+
+    // Toggle back
+    await page.click('a[data-tab="rpm"]');
+    await firstToggle.click();
+    await page.click('a[data-tab="containerfile"]');
+    const restoredText = await page.locator('#containerfile-pre').textContent();
+    expect(restoredText).toEqual(initialText);
+  });
 });

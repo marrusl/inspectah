@@ -364,6 +364,7 @@ function trapFocus(modalElement, closeHandler) {
       updateToolbar();
       setDirty(!isSnapshotClean());
       recalcTriageCounts();
+      generateContainerfilePreview();
     });
   });
 
@@ -383,6 +384,7 @@ function trapFocus(modalElement, closeHandler) {
       }
       setDirty(!isSnapshotClean());
       updateToolbar();
+      generateContainerfilePreview();
     });
   });
 
@@ -638,6 +640,7 @@ function trapFocus(modalElement, closeHandler) {
     }
 
     recalcTriageCounts();
+    generateContainerfilePreview();
     if (typeof updateCompareButtons === 'function') {
       var seen = {};
       document.querySelectorAll('[data-variant-group]').forEach(function(el) {
@@ -653,6 +656,7 @@ function trapFocus(modalElement, closeHandler) {
     cb.addEventListener('change', function() {
       applyRepoCascade(this);
       recalcTriageCounts();
+      generateContainerfilePreview();
       updateToolbar();
       setDirty(!isSnapshotClean());
     });
@@ -814,6 +818,7 @@ function trapFocus(modalElement, closeHandler) {
 
   checkHelperAvailable(0);
   updateToolbar();
+  generateContainerfilePreview();
 
   // --- Sidebar triage count recalculation ---
   function recalcTriageCounts() {
@@ -859,6 +864,186 @@ function trapFocus(modalElement, closeHandler) {
       }
     });
   }
+
+  // --- Client-side Containerfile preview generator ---
+  function generateContainerfilePreview() {
+    var s = window.snapshot;
+    if (!s) return;
+    var lines = [];
+
+    // 1. Packages — FROM line + dnf install
+    var baseImage = (s.rpm && s.rpm.base_image) || (s.rpm && s.rpm.target_base_image) || 'registry.redhat.io/rhel9/rhel-bootc:9.4';
+    lines.push('FROM ' + baseImage);
+    lines.push('');
+
+    var installNames = [];
+    if (s.rpm && s.rpm.packages_added) {
+      var leafSet = s.rpm.leaf_packages ? new Set(s.rpm.leaf_packages) : null;
+      if (leafSet) {
+        var includedNames = new Set();
+        s.rpm.packages_added.forEach(function(p) {
+          if (p.include !== false) includedNames.add(p.name);
+        });
+        leafSet.forEach(function(n) {
+          if (includedNames.has(n)) installNames.push(n);
+        });
+      } else {
+        s.rpm.packages_added.forEach(function(p) {
+          if (p.include !== false) installNames.push(p.name);
+        });
+      }
+      // Deduplicate and sort
+      installNames = Array.from(new Set(installNames)).sort();
+    }
+    if (installNames.length > 0) {
+      lines.push('RUN dnf install -y \\');
+      for (var pi = 0; pi < installNames.length; pi++) {
+        lines.push('    ' + installNames[pi] + ' \\');
+      }
+      lines.push('    && dnf clean all && rm -rf /var/cache/dnf /var/lib/dnf/history* /var/log/dnf* /var/log/hawkey.log /var/log/rhsm');
+      lines.push('');
+    }
+
+    // 2. Services — systemctl enable/disable
+    if (s.services) {
+      var enabled = s.services.enabled_units || [];
+      var disabled = s.services.disabled_units || [];
+      if (enabled.length > 0 || disabled.length > 0) {
+        if (enabled.length > 0) {
+          lines.push('RUN systemctl enable ' + enabled.join(' '));
+        }
+        if (disabled.length > 0) {
+          lines.push('RUN systemctl disable ' + disabled.join(' '));
+        }
+        lines.push('');
+      }
+    }
+
+    // 3. Network (firewall)
+    if (s.network && s.network.firewall_zones) {
+      var includedZones = s.network.firewall_zones.filter(function(z) { return z.include !== false; });
+      if (includedZones.length > 0) {
+        lines.push('# ' + includedZones.length + ' firewall zone(s) — included in COPY config/etc/ below');
+        lines.push('');
+      }
+    }
+
+    // 4. Scheduled tasks
+    if (s.scheduled_tasks && s.scheduled_tasks.generated_timer_units) {
+      var includedTimers = s.scheduled_tasks.generated_timer_units.filter(function(u) { return u.include !== false; });
+      if (includedTimers.length > 0) {
+        lines.push('COPY config/etc/systemd/system/ /etc/systemd/system/');
+        var timerNames = includedTimers.filter(function(u) { return u.name; }).map(function(u) { return u.name + '.timer'; });
+        if (timerNames.length > 0) {
+          lines.push('RUN systemctl enable ' + timerNames.join(' '));
+        }
+        lines.push('');
+      }
+    }
+
+    // 5. Config files
+    if (s.config && s.config.files) {
+      var includedConfigs = s.config.files.filter(function(f) { return f.include !== false; });
+      if (includedConfigs.length > 0) {
+        lines.push('COPY config/etc/ /etc/');
+        lines.push('');
+      }
+    }
+
+    // 6. Non-RPM software (pip packages only)
+    if (s.non_rpm_software && s.non_rpm_software.items) {
+      var pipPkgs = s.non_rpm_software.items.filter(function(it) {
+        return it.include !== false && it.method === 'pip dist-info' && it.version && !it.has_c_extensions;
+      }).sort(function(a, b) { return a.name.localeCompare(b.name); });
+      if (pipPkgs.length > 0) {
+        lines.push('RUN pip install \\');
+        for (var qi = 0; qi < pipPkgs.length - 1; qi++) {
+          lines.push('    ' + pipPkgs[qi].name + '==' + pipPkgs[qi].version + ' \\');
+        }
+        lines.push('    ' + pipPkgs[pipPkgs.length - 1].name + '==' + pipPkgs[pipPkgs.length - 1].version);
+        lines.push('');
+      }
+    }
+
+    // 7. Containers (quadlet + compose)
+    if (s.containers) {
+      var hasQuadlets = (s.containers.quadlet_units || []).some(function(u) { return u.include !== false; });
+      var hasCompose = (s.containers.compose_files || []).some(function(c) { return c.include !== false; });
+      if (hasQuadlets || hasCompose) {
+        if (hasQuadlets) {
+          lines.push('COPY quadlet/ /etc/containers/systemd/');
+        }
+        if (hasCompose) {
+          var includedCompose = s.containers.compose_files.filter(function(c) { return c.include !== false; });
+          includedCompose.forEach(function(cf) {
+            if (cf.path) lines.push('# Compose file included: ' + cf.path);
+          });
+        }
+        lines.push('');
+      }
+    }
+
+    // 8. Users/Groups
+    if (s.users_groups && s.users_groups.users) {
+      var includedUsers = s.users_groups.users.filter(function(u) { return u.include !== false; });
+      if (includedUsers.length > 0) {
+        var sysusersUsers = includedUsers.filter(function(u) { return u.strategy === 'sysusers'; });
+        var useraddUsers = includedUsers.filter(function(u) { return u.strategy === 'useradd'; });
+
+        if (sysusersUsers.length > 0) {
+          lines.push('COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/yoinkc-users.conf');
+        }
+        if (useraddUsers.length > 0) {
+          // Groups first
+          var useraddGroups = (s.users_groups.groups || []).filter(function(g) {
+            return g.strategy === 'useradd' && g.include !== false;
+          });
+          useraddGroups.forEach(function(g) {
+            if (g.name && g.gid) {
+              lines.push('RUN groupadd -g ' + g.gid + ' ' + g.name);
+            }
+          });
+          useraddUsers.forEach(function(u) {
+            if (u.name && u.uid) {
+              var gidOpt = u.gid ? ' -g ' + u.gid : '';
+              var shellOpt = u.shell ? ' -s ' + u.shell : '';
+              lines.push('RUN useradd -m -u ' + u.uid + gidOpt + shellOpt + ' ' + u.name);
+            }
+          });
+        }
+        if (sysusersUsers.length > 0 || useraddUsers.length > 0) {
+          lines.push('');
+        }
+      }
+    }
+
+    // 9. Kernel boot — kargs.d
+    if (s.kernel_boot && s.kernel_boot.cmdline) {
+      lines.push('RUN mkdir -p /usr/lib/bootc/kargs.d');
+      lines.push('COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/');
+      lines.push('');
+    }
+
+    // 10. SELinux — semanage port
+    if (s.selinux && s.selinux.port_labels) {
+      var includedPorts = s.selinux.port_labels.filter(function(pl) { return pl.include !== false; });
+      if (includedPorts.length > 0) {
+        includedPorts.forEach(function(pl) {
+          lines.push('RUN semanage port -a -t ' + pl.type + ' -p ' + pl.protocol + ' ' + pl.port);
+        });
+        lines.push('');
+      }
+    }
+
+    // 11. Epilogue
+    lines.push('RUN bootc container lint');
+
+    var pre = document.getElementById('containerfile-pre');
+    if (pre) {
+      pre.textContent = lines.join('\n');
+    }
+  }
+  window.generateContainerfilePreview = generateContainerfilePreview;
 
   // --- Theme toggle ---
   (function() {
