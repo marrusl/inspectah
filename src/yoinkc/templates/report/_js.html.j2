@@ -325,6 +325,59 @@ function trapFocus(modalElement, closeHandler) {
     return sec[list] || null;
   }
 
+  /**
+   * Check whether a variant group is in a tied state (no variant selected
+   * and top two fleet counts are equal).  If so, restore the gold highlight
+   * and tie badge on the parent group row.  If a variant IS selected,
+   * ensure the tied state is removed.
+   *
+   * @param {string} variantGroup - The data-variant-group value
+   */
+  function restoreTieStateIfNeeded(variantGroup) {
+    var variantEls = document.querySelectorAll('[data-variant-group="' + variantGroup + '"]');
+    if (!variantEls.length) return;
+
+    // Find the parent group row
+    var parentRow = null;
+    var childContainer = variantEls[0].closest('.fleet-variant-children');
+    if (childContainer) parentRow = childContainer.previousElementSibling;
+    if (!parentRow || !parentRow.classList.contains('fleet-variant-group')) return;
+
+    // Check if any variant is currently selected
+    var hasSelected = false;
+    variantEls.forEach(function(el) {
+      var sec = el.getAttribute('data-snap-section');
+      var lst = el.getAttribute('data-snap-list');
+      var ix = parseInt(el.getAttribute('data-snap-index'), 10);
+      var ar = resolveSnapshotRef(sec, lst);
+      if (ar && ar[ix] && ar[ix].include) hasSelected = true;
+    });
+
+    if (!hasSelected) {
+      // No variant selected — check if it's actually a tie (top two counts equal)
+      var counts = [];
+      variantEls.forEach(function(el) {
+        var sec = el.getAttribute('data-snap-section');
+        var lst = el.getAttribute('data-snap-list');
+        var ix = parseInt(el.getAttribute('data-snap-index'), 10);
+        var ar = resolveSnapshotRef(sec, lst);
+        if (ar && ar[ix] && ar[ix].fleet) counts.push(ar[ix].fleet.count);
+      });
+      counts.sort(function(a, b) { return b - a; });
+      if (counts.length >= 2 && counts[0] === counts[1]) {
+        parentRow.classList.add('variant-tied');
+        // Replace any "selected" badge with tie badge
+        var selBadge = parentRow.querySelector('.variant-selected-badge');
+        if (selBadge) {
+          var tieBadge = document.createElement('span');
+          tieBadge.className = 'variant-tie-badge';
+          tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare &amp; choose';
+          selBadge.replaceWith(tieBadge);
+        }
+      }
+    }
+  }
+
   document.querySelectorAll('.include-toggle').forEach(function(cb){
     cb.addEventListener('change', function(){
       var tr = this.closest('tr[data-snap-section]') || this.closest('[data-snap-section]');
@@ -378,6 +431,9 @@ function trapFocus(modalElement, closeHandler) {
             tieBadge.replaceWith(selectedBadge);
           }
         }
+      } else if (variantGroup && !this.checked) {
+        // User un-toggled a variant — check if the group returns to a tie state
+        restoreTieStateIfNeeded(variantGroup);
       }
       tr.classList.toggle('excluded', !this.checked);
       if (compareGroup && typeof updateCompareButtons === 'function') {
@@ -1520,34 +1576,49 @@ function applyVariantSelection(group, targetItem) {
 
   syncParentGroupRows(group);
 
-  // When a user breaks a tie, remove the gold highlight and tie badge
-  // from the parent group row and replace with a "selected" badge.
-  document.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
-    var childRows = parentRow.nextElementSibling;
-    if (!childRows || !childRows.classList.contains('fleet-variant-children')) return;
-    var firstChild = childRows.querySelector('[data-variant-group]');
-    if (!firstChild || firstChild.getAttribute('data-variant-group') !== group) return;
-
-    // A selection was just made — remove tied state
-    parentRow.classList.remove('variant-tied');
-    var tieBadge = parentRow.querySelector('.variant-tie-badge');
-    if (tieBadge) {
-      var selectedBadge = document.createElement('span');
-      selectedBadge.className = 'variant-selected-badge';
-      selectedBadge.textContent = 'selected';
-      tieBadge.replaceWith(selectedBadge);
-    }
-    // If there was no tie badge but also no auto-badge, add the selected badge
-    if (!tieBadge && !parentRow.querySelector('.variant-auto-badge') && !parentRow.querySelector('.variant-selected-badge')) {
-      var badgeTarget = parentRow.querySelector('.fleet-variant-toggle');
-      if (badgeTarget) {
-        var newBadge = document.createElement('span');
-        newBadge.className = 'variant-selected-badge';
-        newBadge.textContent = 'selected';
-        badgeTarget.insertAdjacentElement('afterend', newBadge);
-      }
-    }
+  // Check if a variant is actually selected after the operation.
+  // If yes, clear tied state and show "selected" badge.
+  // If no (e.g., targetItem didn't match), restore tie indicators.
+  var anySelected = false;
+  rows.forEach(function(row) {
+    var s = row.getAttribute('data-snap-section');
+    var l = row.getAttribute('data-snap-list');
+    var i = parseInt(row.getAttribute('data-snap-index'), 10);
+    var a = resolveSnapshotRef(s, l);
+    if (a && a[i] && a[i].include) anySelected = true;
   });
+
+  if (anySelected) {
+    // A variant is selected — remove tied state and show "selected" badge
+    document.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
+      var childRows = parentRow.nextElementSibling;
+      if (!childRows || !childRows.classList.contains('fleet-variant-children')) return;
+      var firstChild = childRows.querySelector('[data-variant-group]');
+      if (!firstChild || firstChild.getAttribute('data-variant-group') !== group) return;
+
+      parentRow.classList.remove('variant-tied');
+      var tieBadge = parentRow.querySelector('.variant-tie-badge');
+      if (tieBadge) {
+        var selectedBadge = document.createElement('span');
+        selectedBadge.className = 'variant-selected-badge';
+        selectedBadge.textContent = 'selected';
+        tieBadge.replaceWith(selectedBadge);
+      }
+      // If there was no tie badge but also no auto-badge, add the selected badge
+      if (!tieBadge && !parentRow.querySelector('.variant-auto-badge') && !parentRow.querySelector('.variant-selected-badge')) {
+        var badgeTarget = parentRow.querySelector('.fleet-variant-toggle');
+        if (badgeTarget) {
+          var newBadge = document.createElement('span');
+          newBadge.className = 'variant-selected-badge';
+          newBadge.textContent = 'selected';
+          badgeTarget.insertAdjacentElement('afterend', newBadge);
+        }
+      }
+    });
+  } else {
+    // No variant selected — restore tie indicators if applicable
+    restoreTieStateIfNeeded(group);
+  }
 
   updateToolbar();
   setDirty(!isSnapshotClean());
