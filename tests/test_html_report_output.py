@@ -66,11 +66,15 @@ class TestHtmlReport:
         assert "disabled" in html.split('id="btn-reset"')[1].split(">")[0]
 
     def test_original_snapshot_embedded(self, outputs_with_baseline):
-        """originalSnapshot should be embedded separately, not deep-copied."""
+        """originalSnapshot should be embedded separately from server."""
         html = self._html(outputs_with_baseline)
         assert "var snapshot" in html
         assert "var originalSnapshot" in html
-        assert "JSON.parse(JSON.stringify(snapshot))" not in html
+        # Baseline refresh in rebuild handler is legitimate (Task 6: dirty state lifecycle)
+        # After Rebuild & Download, originalSnapshot is updated to match the new snapshot
+        assert 'originalSnapshot = JSON.parse(JSON.stringify(snapshot));' in html
+        # Should only appear once (in rebuild handler, not on initial load)
+        assert html.count('JSON.parse(JSON.stringify(snapshot))') == 1
 
     def test_original_snapshot_from_file(self):
         """When --original-snapshot is provided, it should be embedded instead of a copy."""

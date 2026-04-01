@@ -146,4 +146,35 @@ test.describe('Live Containerfile Preview', () => {
       await expect(cue).toContainText('Rebuild & Download');
     }
   });
+
+  test('after Rebuild & Download, Discard returns to post-rebuild state', async ({ page }) => {
+    // Make change 1
+    await page.click('a[data-tab="rpm"]');
+    const firstToggle = page.locator('.include-toggle').first();
+    await firstToggle.click();
+
+    // Rebuild & Download
+    const rebuildBtn = page.locator('#btn-re-render');
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await rebuildBtn.click();
+    await downloadPromise;
+
+    // Capture post-rebuild Containerfile
+    await page.click('a[data-tab="containerfile"]');
+    const postRebuildText = await page.locator('#containerfile-pre').textContent();
+
+    // Make change 2
+    await page.click('a[data-tab="rpm"]');
+    const secondToggle = page.locator('.include-toggle').nth(1);
+    await secondToggle.click();
+
+    // Discard — should return to post-rebuild state, not original page load
+    const discardBtn = page.locator('#btn-reset');
+    await discardBtn.click();
+    await page.locator('#discard-confirm-yes').click();
+
+    await page.click('a[data-tab="containerfile"]');
+    const afterDiscardText = await page.locator('#containerfile-pre').textContent();
+    expect(afterDiscardText).toEqual(postRebuildText);
+  });
 });

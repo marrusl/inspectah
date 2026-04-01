@@ -355,9 +355,13 @@ class TestEditorIntegration:
         assert 'navigateToEditor' in html
         # Keyboard shortcut
         assert "e.key === 's'" in html
-        # Original snapshot embedded separately
+        # Original snapshot embedded separately from server
         assert 'var originalSnapshot' in html
-        assert 'JSON.parse(JSON.stringify(snapshot))' not in html
+        # Baseline refresh in rebuild handler is legitimate (Task 6: dirty state lifecycle)
+        # After Rebuild & Download, originalSnapshot is updated to match the new snapshot
+        assert 'originalSnapshot = JSON.parse(JSON.stringify(snapshot));' in html
+        # Should only appear once (in rebuild handler, not on initial load)
+        assert html.count('JSON.parse(JSON.stringify(snapshot))') == 1
         # Sidebar says Editor
         assert 'Editor</a>' in html
 
