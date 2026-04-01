@@ -711,8 +711,8 @@
     var edits = editorState.savedFiles.size;
     var toggles = (typeof countToggleChanges === 'function') ? countToggleChanges().total : 0;
     var parts = [];
-    if (edits > 0) parts.push(edits + (edits === 1 ? ' edit' : ' edits'));
-    if (toggles > 0) parts.push(toggles + (toggles === 1 ? ' toggle' : ' toggles'));
+    if (edits > 0) parts.push(edits + (edits === 1 ? ' file edit' : ' file edits'));
+    if (toggles > 0) parts.push(toggles + ' toggle change' + (toggles > 1 ? 's' : '') + ' from original');
     if (parts.length === 0) {
       reRenderBtn.textContent = 'Rebuild & Download';
     } else {
@@ -724,6 +724,24 @@
     reRenderBtn.disabled = !(hasChanges && canReRender);
   }
   window.updateChangedCount = updateChangedCount;
+
+  window.resetEditorState = function() {
+    editorState.savedFiles.clear();
+    editorState.dirtyFiles.clear();
+    editorState.currentFile = null;
+    editorState.editMode = false;
+    updateChangedCount();
+    updateStateLabels();
+    buildTree();
+    var readonlyEl = document.getElementById('editor-readonly-content');
+    var cmContainer = document.getElementById('editor-cm-container');
+    if (readonlyEl) { readonlyEl.textContent = ''; readonlyEl.style.display = ''; }
+    if (cmContainer) cmContainer.style.display = 'none';
+    var pathEl = document.getElementById('editor-file-path');
+    if (pathEl) pathEl.innerHTML = '';
+    var actionsEl = document.getElementById('editor-actions');
+    if (actionsEl) actionsEl.innerHTML = '';
+  };
 
   window.navigateToEditor = function(linkEl) {
     var section = linkEl.dataset.section;

@@ -195,11 +195,14 @@ function trapFocus(modalElement, closeHandler) {
     document.querySelectorAll('.include-toggle').forEach(function(cb) {
       var tr = cb.closest('tr[data-snap-section]') || cb.closest('[data-snap-section]');
       if (!tr) return;
+      // Skip fleet variant parent rows to stay consistent with countToggleChanges()
+      if (tr.classList.contains('fleet-variant-group')) return;
       var section = tr.getAttribute('data-snap-section');
       var list = tr.getAttribute('data-snap-list');
       var idx = tr.getAttribute('data-snap-index');
-      if (section && list && idx !== null) {
-        includeBaseline[section + '/' + list + '/' + idx] = cb.checked;
+      var key = section + '/' + list + '/' + idx;
+      if (section && list && idx !== null && !includeBaseline.hasOwnProperty(key)) {
+        includeBaseline[key] = cb.checked;
       }
     });
     document.querySelectorAll('.strategy-select').forEach(function(sel) {
@@ -293,8 +296,8 @@ function trapFocus(modalElement, closeHandler) {
 
     if (changed) {
       var parts = [];
-      if (n > 0) parts.push(n + ' toggle change' + (n > 1 ? 's' : ''));
-      if (strategyChanges > 0) parts.push(strategyChanges + ' strategy change(s)');
+      if (n > 0) parts.push(n + ' toggle change' + (n > 1 ? 's' : '') + ' from original tarball');
+      if (strategyChanges > 0) parts.push(strategyChanges + ' strategy change' + (strategyChanges > 1 ? 's' : ''));
       if (parts.length === 0) parts.push('Snapshot modified');
       if (statusTextEl) { statusTextEl.textContent = parts.join(', '); statusTextEl.style.color = ''; }
       if (rerenderBtn) rerenderBtn.disabled = !reRenderEnabled;
@@ -654,6 +657,9 @@ function trapFocus(modalElement, closeHandler) {
       });
       Object.keys(seen).forEach(function(g) { updateCompareButtons(g); });
     }
+    // Reset editor state (saved files, dirty files, tree) so the
+    // Rebuild & Download count goes back to 0.
+    if (typeof resetEditorState === 'function') resetEditorState();
     resetReviewState();
     showToast('Edits discarded');
   }
@@ -1147,6 +1153,7 @@ function trapFocus(modalElement, closeHandler) {
   }
 
   // Expose helpers needed by the fleet refine IIFE (outside this closure)
+  window.buildBaseline = buildBaseline;
   window.updateToolbar = updateToolbar;
   window.setDirty = setDirty;
   window.isSnapshotClean = isSnapshotClean;

@@ -1,6 +1,6 @@
 {# ── Sticky toolbar for exclusions ─────────────────────────────────────── #}
 <div id="exclude-toolbar" class="pf-v6-c-toolbar" role="toolbar" aria-label="Actions">
-  <button id="btn-reset" class="pf-v6-c-button pf-m-link pf-m-danger" type="button" disabled title="Discard all edits and revert to last built state">Discard</button>
+  <button id="btn-reset" class="pf-v6-c-button pf-m-link pf-m-danger" type="button" disabled title="Discard all edits and revert to last built state">Discard all</button>
   <span class="toolbar-status" id="toolbar-status-text"></span>
   <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   {% if not refine_mode %}
@@ -15,7 +15,7 @@
     <h3 id="discard-dialog-title">Discard all edits?</h3>
     <p>This will revert the Containerfile to its last built state.</p>
     <div class="discard-dialog-actions">
-      <button id="discard-confirm-yes" class="pf-v6-c-button pf-m-danger" type="button">Discard</button>
+      <button id="discard-confirm-yes" class="pf-v6-c-button pf-m-danger" type="button">Discard all</button>
       <button id="discard-confirm-cancel" class="pf-v6-c-button pf-m-link" type="button">Cancel</button>
     </div>
   </div>
