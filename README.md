@@ -115,6 +115,8 @@ See [CLI Reference](docs/reference/cli.md#yoinkc-fleet) for the full flag list.
 
 `yoinkc architect` takes multiple refined fleet outputs and decomposes them into a layered bootc image hierarchy: a shared base image plus derived role-specific images.
 
+> **Early development:** Architect currently handles package list decomposition only. Config files, services, and other artifacts are not yet split across layers — they remain in the base. Multi-artifact layer planning is on the roadmap.
+
 <img src="docs/images/architect-layer-topology.png" alt="yoinkc Architect showing layer topology with base, app, db, and web layers and package placement controls" width="800">
 
 *Architect decomposes fleet packages into a layered image hierarchy — drag packages between layers, preview Containerfiles, and export the full build set.*
