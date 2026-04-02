@@ -8,7 +8,7 @@ yoinkc scans a running RHEL, CentOS Stream, or Fedora host and generates everyth
 
 > **Status:** yoinkc is an active prototype. It handles common RHEL 9, CentOS Stream, and Fedora configurations well, but expect rough edges on unusual setups. It targets RPM-based systems only — no Debian, no RHEL 7, no live/in-place migration. See [driftify](https://github.com/marrusl/driftify) for a companion testing harness that validates yoinkc end-to-end with synthetic drift.
 
-<img src="docs/images/refine-dashboard.png" alt="yoinkc Refine dashboard showing fleet analysis with 303 migration items and 21 requiring attention" width="800">
+<img src="docs/images/refine-dashboard.png" alt="yoinkc Refine dashboard showing fleet analysis of Fedora Linux 43 with 622 migration items and 21 requiring attention" width="800">
 
 *The Refine dashboard summarizes migration scope across a fleet — packages, configs, services, and system items — with automatic classification and an interactive editor.*
 
