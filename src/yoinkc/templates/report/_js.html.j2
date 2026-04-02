@@ -181,7 +181,6 @@ function trapFocus(modalElement, closeHandler) {
   var toastGroup = document.getElementById('toast-group');
   var toastMessage = document.getElementById('toast-message');
   var rerenderBtn = document.getElementById('btn-rerender');
-  var downloadSnapshotBtn = document.getElementById('btn-download-snapshot');
   var resetBtn = document.getElementById('btn-reset');
   var helperAvailable = false;
   var reRenderEnabled = false;
@@ -301,11 +300,9 @@ function trapFocus(modalElement, closeHandler) {
       if (parts.length === 0) parts.push('Snapshot modified');
       if (statusTextEl) { statusTextEl.textContent = parts.join(', '); statusTextEl.style.color = ''; }
       if (rerenderBtn) rerenderBtn.disabled = !reRenderEnabled;
-      if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = false;
     } else if (isHelper) {
       if (statusTextEl) { statusTextEl.textContent = 'No pending changes'; statusTextEl.style.color = 'var(--pf-t--global--text--color--subtle)'; }
       if (rerenderBtn) rerenderBtn.disabled = true;
-      if (downloadSnapshotBtn) downloadSnapshotBtn.disabled = true;
     } else {
       if (statusTextEl) { statusTextEl.textContent = ''; statusTextEl.style.color = ''; }
     }
@@ -868,18 +865,6 @@ function trapFocus(modalElement, closeHandler) {
   if (discardCancel) {
     discardCancel.addEventListener('click', hideDiscardDialog);
   }
-
-  // --- Download modified snapshot ---
-  downloadSnapshotBtn.addEventListener('click', function(){
-    if (!dirty) return;
-    var json = JSON.stringify(snapshot, null, 2);
-    var blob = new Blob([json], {type: 'application/json'});
-    var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'modified-snapshot.json';
-    a.click();
-    URL.revokeObjectURL(a.href);
-  });
 
   // --- Rebuild & Download ---
   if (rerenderBtn) {
