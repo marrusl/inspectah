@@ -3,7 +3,7 @@
 # Use :latest for current stable, or pin e.g. fedora:42 for reproducibility.
 FROM fedora:latest
 
-RUN dnf install -y python3 python3-pip systemd binutils file && dnf clean all
+RUN dnf install -y python3 python3-pip systemd binutils file iproute && dnf clean all
 
 WORKDIR /app
 COPY pyproject.toml ./
