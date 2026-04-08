@@ -52,7 +52,7 @@ A real user ran yoinkc on a Kinoite machine. The output tarball contained cockpi
 | 5 | Three remediation states, used consistently across all output | Regenerate-on-target, provision-from-store, value-removed-inline. Each has distinct operator action. |
 | 6 | Drop hash tokens — use sequential counters | Hash of secret value is a dictionary oracle for weak secrets. Sequential counters per type provide cross-file correlation without leaking information. Slate confirmed no legitimate use for hashes. |
 | 7 | Safety net redesign deferred to separate spec | Different precision/recall tradeoff. Ember recommended slicing to reduce complexity. |
-| 8 | auth.json scope: `/etc/containers/auth.json` only | Podman's system-wide auth path. Docker has no `/etc` auth path (`/etc/docker/config.json` does not exist). No inspector scope expansion. |
+| 8 | auth.json scope: `/etc/containers/auth.json` only | Podman's system-wide auth path. No inspector scope expansion. |
 
 ---
 
@@ -78,7 +78,7 @@ Each redaction record carries its remediation state. The state is assigned by pa
 | `.*keytab$` | Exclude | Provision from secret store |
 | `/etc/shadow`, `/etc/gshadow` | Exclude | Provision from secret store |
 | `.*\.p12$`, `.*\.pfx$`, `.*\.jks$` | Exclude | Provision from secret store |
-| `/etc/containers/auth\.json` | Exclude | Provision from secret store |
+| `/etc/containers/auth\.json`| Exclude | Provision from secret store |
 | All `REDACT_PATTERNS` (inline) | Inline | Value removed inline |
 
 ---
@@ -93,7 +93,7 @@ Each redaction record carries its remediation state. The state is assigned by pa
 | `.*\.pfx$` | Provision | Same as `.p12`, Windows naming convention |
 | `.*\.jks$` | Provision | Java KeyStore — binary, opaque |
 | `/etc/cockpit/ws-certs\.d/.*` | Regenerate | Auto-generated, hostname-specific, regenerated on target. Including even the public cert is harmful (wrong hostname/validity). |
-| `/etc/containers/auth\.json` | Provision | Container registry credentials — base64-encoded auth tokens. `/etc` only — no inspector scope expansion. |
+| `/etc/containers/auth\.json` | Provision | Podman system-wide registry credentials — base64-encoded auth tokens |
 
 ### New REDACT_PATTERNS entries (inline redaction)
 
@@ -309,7 +309,7 @@ the action specified for each item.
 - **Independent heuristic safety net** (entropy analysis, broad PEM detection, binary file detection, known secret filenames): deferred to separate spec. Different precision/recall tradeoff from primary detection.
 - **`--include-secrets` opt-in flag**: may be useful eventually, not needed for v2.
 - **ostree/rpm-ostree source system handling**: separate workstream (see `comms/threads/2026-04-08-yoinkc-image-mode-source-audit.md`).
-- **Inspector scope expansion**: only `/etc/containers/auth.json` (Podman's system-wide auth) is in scope. Docker has no system-wide auth path under `/etc`. No inspector changes to scan home directories or `XDG_RUNTIME_DIR`.
+- **Inspector scope expansion**: only `/etc/containers/auth.json` is in scope. No inspector changes to scan home directories.
 
 ---
 
