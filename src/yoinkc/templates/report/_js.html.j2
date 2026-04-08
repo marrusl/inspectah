@@ -2412,20 +2412,11 @@ function initCardSearch(cardId) {
     var container = document.getElementById(cardId);
     if (!container) return;
 
-    var rows = container.querySelectorAll('[data-search-text]');
-    var matchCount = 0;
-    rows.forEach(function(row) {
-      var text = (row.getAttribute('data-search-text') || '').toLowerCase();
-      var matches = text.indexOf(query) >= 0;
-      row.style.display = matches ? '' : 'none';
-      if (matches) matchCount++;
-    });
-
-    var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
-    var total = parseInt(toolbar.getAttribute('data-total-count'), 10);
-    if (filterCount) {
-      filterCount.textContent = matchCount + ' of ' + total + ' shown';
-      filterCount.style.display = '';
+    var hasGroups = container.querySelector('[data-group]') !== null;
+    if (hasGroups) {
+      filterGroupedCard(container, toolbar, query);
+    } else {
+      filterFlatCard(container, toolbar, query);
     }
 
     syncToolbar(cardId);
@@ -2439,6 +2430,105 @@ function initCardSearch(cardId) {
   });
 }
 
+function filterFlatCard(container, toolbar, query) {
+  var rows = container.querySelectorAll('[data-search-text]');
+  var matchCount = 0;
+  rows.forEach(function(row) {
+    var text = (row.getAttribute('data-search-text') || '').toLowerCase();
+    var matches = text.indexOf(query) >= 0;
+    row.style.display = matches ? '' : 'none';
+    if (matches) matchCount++;
+  });
+
+  var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
+  var total = parseInt(toolbar.getAttribute('data-total-count'), 10);
+  if (filterCount) {
+    filterCount.textContent = matchCount + ' of ' + total + ' shown';
+    filterCount.style.display = '';
+  }
+}
+
+function filterGroupedCard(container, toolbar, query) {
+  var groups = {};
+  container.querySelectorAll('[data-group]').forEach(function(row) {
+    var groupName = row.getAttribute('data-group');
+    if (!groups[groupName]) groups[groupName] = { header: null, items: [], matchCount: 0, totalCount: 0 };
+    if (row.classList.contains('repo-group-row')) {
+      groups[groupName].header = row;
+    } else if (row.hasAttribute('data-search-text')) {
+      groups[groupName].items.push(row);
+      groups[groupName].totalCount++;
+    }
+  });
+
+  var totalMatches = 0;
+  Object.keys(groups).forEach(function(groupName) {
+    var g = groups[groupName];
+    var matchCount = 0;
+    g.items.forEach(function(row) {
+      var text = (row.getAttribute('data-search-text') || '').toLowerCase();
+      var matches = text.indexOf(query) >= 0;
+      row.style.display = matches ? '' : 'none';
+      if (matches) matchCount++;
+    });
+    g.matchCount = matchCount;
+    totalMatches += matchCount;
+
+    if (g.header) {
+      if (matchCount === 0) {
+        g.header.style.display = 'none';
+        showGroupNoMatchStub(g.header, groupName);
+      } else {
+        g.header.style.display = '';
+        hideGroupNoMatchStub(g.header);
+        updateGroupHeaderCount(g.header, matchCount, g.totalCount);
+      }
+    }
+    var childrenRow = g.header ? g.header.nextElementSibling : null;
+    if (childrenRow && childrenRow.classList.contains('fleet-variant-children') && matchCount === 0) {
+      childrenRow.style.display = 'none';
+    }
+  });
+
+  var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
+  var total = parseInt(toolbar.getAttribute('data-total-count'), 10);
+  if (filterCount) {
+    filterCount.textContent = totalMatches + ' of ' + total + ' shown';
+    filterCount.style.display = '';
+  }
+}
+
+function showGroupNoMatchStub(header, groupName) {
+  var stubId = 'no-match-stub-' + groupName.replace(/[^a-zA-Z0-9]/g, '-');
+  if (document.getElementById(stubId)) return;
+  var stub = document.createElement('tr');
+  stub.id = stubId;
+  stub.className = 'group-no-match-stub';
+  stub.innerHTML = '<td colspan="99" style="font-style:italic;color:var(--pf-t--global--text--color--subtle);padding:6px 16px;">' +
+    groupName + ' \u2014 no matches</td>';
+  header.parentNode.insertBefore(stub, header.nextSibling);
+}
+
+function hideGroupNoMatchStub(header) {
+  var next = header.nextElementSibling;
+  if (next && next.classList.contains('group-no-match-stub')) {
+    next.remove();
+  }
+}
+
+function updateGroupHeaderCount(header, matchCount, totalCount) {
+  var label = header.querySelector('.repo-group-label, .table-group-header');
+  if (!label) return;
+  if (!label.hasAttribute('data-original-text')) {
+    label.setAttribute('data-original-text', label.textContent);
+  }
+  if (matchCount < totalCount) {
+    label.textContent = label.getAttribute('data-original-text') + ' (' + matchCount + ' of ' + totalCount + ' matching)';
+  } else {
+    label.textContent = label.getAttribute('data-original-text');
+  }
+}
+
 function clearCardFilter(cardId) {
   var toolbar = document.querySelector('.card-toolbar[data-card-id="' + cardId + '"]');
   if (!toolbar) return;
@@ -2447,6 +2537,12 @@ function clearCardFilter(cardId) {
     container.querySelectorAll('[data-search-text]').forEach(function(row) {
       row.style.display = '';
     });
+    // Clean up group stubs and header counts
+    container.querySelectorAll('.group-no-match-stub').forEach(function(stub) { stub.remove(); });
+    container.querySelectorAll('[data-original-text]').forEach(function(el) {
+      el.textContent = el.getAttribute('data-original-text');
+    });
+    container.querySelectorAll('.repo-group-row').forEach(function(row) { row.style.display = ''; });
   }
   var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
   if (filterCount) {
