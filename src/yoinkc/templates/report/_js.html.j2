@@ -2465,6 +2465,15 @@ function filterFlatCard(container, toolbar, query) {
     if (matches) matchCount++;
   });
 
+  // Handle fleet variant parent/child visibility
+  container.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
+    if (!parentRow.hasAttribute('data-search-text')) return;
+    var childrenRow = parentRow.nextElementSibling;
+    if (childrenRow && childrenRow.classList.contains('fleet-variant-children')) {
+      childrenRow.style.display = parentRow.style.display;
+    }
+  });
+
   var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
   var total = parseInt(toolbar.getAttribute('data-total-count'), 10);
   if (filterCount) {
@@ -2568,6 +2577,8 @@ function clearCardFilter(cardId) {
       el.textContent = el.getAttribute('data-original-text');
     });
     container.querySelectorAll('.repo-group-row').forEach(function(row) { row.style.display = ''; });
+    // Restore fleet variant children visibility
+    container.querySelectorAll('.fleet-variant-children').forEach(function(row) { row.style.display = ''; });
     // Clean up excluded stubs
     container.querySelectorAll('.excluded-group-stub').forEach(function(stub) { stub.remove(); });
   }
