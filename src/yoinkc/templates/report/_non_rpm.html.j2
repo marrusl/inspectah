@@ -1,4 +1,4 @@
-{% from "report/_macros.html.j2" import section, card_toggle with context -%}
+{% from "report/_macros.html.j2" import section, card_toggle, card_toolbar with context -%}
 {# ── Non-RPM software ────────────────────────────────────────────────────── #}
 {% call section("non_rpm", "Non-RPM software", triageable=true) %}
   {%- set nr = snapshot.non_rpm_software %}
@@ -8,7 +8,9 @@
   {%- if nd.elf %}
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-elf", "Compiled Binaries") }}</div>
-    <div class="pf-v6-c-expandable-section__content" id="card-nr-elf"><div class="pf-v6-c-card__body">
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-elf">
+    {{ card_toolbar("card-nr-elf-items", nd.elf|length, "Binaries") }}
+    <div class="pf-v6-c-card__body" id="card-nr-elf-items">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th class="pf-m-fit-content" scope="col">Language</th><th class="pf-m-fit-content" scope="col">Linking</th><th scope="col">Shared Libraries</th></tr></thead><tbody>
       {%- for i in nd.elf %}
       {%- set lang = i.lang %}
@@ -80,7 +82,9 @@
   {%- if nd.pip %}
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-pip", "System Pip Packages") }}</div>
-    <div class="pf-v6-c-expandable-section__content" id="card-nr-pip"><div class="pf-v6-c-card__body">
+    <div class="pf-v6-c-expandable-section__content" id="card-nr-pip">
+    {{ card_toolbar("card-nr-pip-items", nd.pip|length, "Pip packages") }}
+    <div class="pf-v6-c-card__body" id="card-nr-pip-items">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Package</th><th class="pf-m-fit-content" scope="col">Version</th><th scope="col">Path</th></tr></thead><tbody>
       {%- for i in nd.pip[:20] %}
       {%- set nr_idx = namespace(val=-1) %}

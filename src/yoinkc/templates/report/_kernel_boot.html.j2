@@ -1,4 +1,4 @@
-{% from "report/_macros.html.j2" import section, card_toggle with context -%}
+{% from "report/_macros.html.j2" import section, card_toggle, card_toolbar with context -%}
 {# ── Kernel / Boot ────────────────────────────────────────────────────────── #}
 {% call section("kernel_boot", "Kernel and boot", triageable=true) %}
   {%- set kb = snapshot.kernel_boot %}
@@ -21,7 +21,9 @@
   {%- if kb.sysctl_overrides %}
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-kb-sysctl", "Sysctl Overrides") }}</div>
-    <div class="pf-v6-c-expandable-section__content" id="card-kb-sysctl"><div class="pf-v6-c-card__body">
+    <div class="pf-v6-c-expandable-section__content" id="card-kb-sysctl">
+    {{ card_toolbar("card-kb-sysctl-items", kb.sysctl_overrides|length, "Sysctl overrides") }}
+    <div class="pf-v6-c-card__body" id="card-kb-sysctl-items">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Key</th><th class="pf-m-fit-content" scope="col">Runtime</th><th class="pf-m-fit-content" scope="col">Default</th><th scope="col">Source</th></tr></thead><tbody>
       {%- for s in kb.sysctl_overrides %}
       <tr{% if not s.include %} class="excluded"{% endif %} data-search-text="{{ s.key }}" data-snap-section="kernel_boot" data-snap-list="sysctl_overrides" data-snap-index="{{ loop.index0 }}">

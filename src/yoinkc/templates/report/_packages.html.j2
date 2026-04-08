@@ -1,4 +1,4 @@
-{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle, card_toolbar with context -%}
 {# ── Packages ────────────────────────────────────────────────────────────── #}
 {% call section("packages", "Packages", triageable=true) %}
   {%- if snapshot.rpm and snapshot.rpm.no_baseline %}
@@ -49,7 +49,8 @@
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-pkg-dep-tree", "Dependency Tree") }}</div>
     <div class="pf-v6-c-expandable-section__content" id="card-pkg-dep-tree">
-    <div class="pf-v6-c-card__body">
+    {{ card_toolbar("card-pkg-dep-tree-items", leaf_packages_sorted|length, "Packages") }}
+    <div class="pf-v6-c-card__body" id="card-pkg-dep-tree-items">
     {%- if repo_groups %}
     <table class="pf-v6-c-table pkg-dep-tree-group">
       <thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Leaf Package</th><th class="pf-m-fit-content" scope="col">Version</th><th class="pf-m-fit-content" scope="col">Dependencies</th><th scope="col"><span class="pf-v6-u-screen-reader">Details</span></th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead>
@@ -169,11 +170,14 @@
   {%- endif %}
 
   {%- else %}
+  {{ card_toolbar("card-pkg-flat-items", snapshot.rpm.packages_added|length, "Packages") }}
+  <div id="card-pkg-flat-items">
   <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Name</th><th class="pf-m-fit-content" scope="col">Version</th><th class="pf-m-fit-content" scope="col">Release</th><th class="pf-m-fit-content" scope="col">Arch</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
     <tr{% if not p.include %} class="excluded"{% endif %} data-search-text="{{ p.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if p.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td>{{ fleet_cell(p) }}</tr>
     {%- endfor %}
   </tbody></table>
+  </div>
   {%- if snapshot.rpm.packages_added|length > 100 %}
   <p>... and {{ snapshot.rpm.packages_added|length - 100 }} more.</p>
   {%- endif %}
