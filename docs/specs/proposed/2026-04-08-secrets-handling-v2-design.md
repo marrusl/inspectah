@@ -52,7 +52,7 @@ A real user ran yoinkc on a Kinoite machine. The output tarball contained cockpi
 | 5 | Three remediation states, used consistently across all output | Regenerate-on-target, provision-from-store, value-removed-inline. Each has distinct operator action. |
 | 6 | Drop hash tokens — use sequential counters | Hash of secret value is a dictionary oracle for weak secrets. Sequential counters per type provide cross-file correlation without leaking information. Slate confirmed no legitimate use for hashes. |
 | 7 | Safety net redesign deferred to separate spec | Different precision/recall tradeoff. Ember recommended slicing to reduce complexity. |
-| 8 | auth.json/config.json scope: root's home or /etc only | System-level migration tool — user home dirs out of scope. |
+| 8 | auth.json/config.json scope: /etc only | Only paths the inspector already captures. No inspector scope expansion. |
 
 ---
 
@@ -78,8 +78,8 @@ Each redaction record carries its remediation state. The state is assigned by pa
 | `.*keytab$` | Exclude | Provision from secret store |
 | `/etc/shadow`, `/etc/gshadow` | Exclude | Provision from secret store |
 | `.*\.p12$`, `.*\.pfx$`, `.*\.jks$` | Exclude | Provision from secret store |
-| `.*/containers/auth\.json$` | Exclude | Provision from secret store |
-| `.*/\.docker/config\.json$` | Exclude | Provision from secret store |
+| `/etc/containers/auth\.json` | Exclude | Provision from secret store |
+| `/etc/docker/config\.json` | Exclude | Provision from secret store |
 | All `REDACT_PATTERNS` (inline) | Inline | Value removed inline |
 
 ---
@@ -94,8 +94,8 @@ Each redaction record carries its remediation state. The state is assigned by pa
 | `.*\.pfx$` | Provision | Same as `.p12`, Windows naming convention |
 | `.*\.jks$` | Provision | Java KeyStore — binary, opaque |
 | `/etc/cockpit/ws-certs\.d/.*` | Regenerate | Auto-generated, hostname-specific, regenerated on target. Including even the public cert is harmful (wrong hostname/validity). |
-| `.*/containers/auth\.json$` | Provision | Container registry credentials — base64-encoded auth tokens. Scoped to root's config and `/etc` only. |
-| `.*/\.docker/config\.json$` | Provision | Docker registry credentials. Scoped to root's config and `/etc` only. |
+| `/etc/containers/auth\.json` | Provision | Container registry credentials — base64-encoded auth tokens. `/etc` only — no inspector scope expansion. |
+| `/etc/docker/config\.json` | Provision | Docker registry credentials. `/etc` only — no inspector scope expansion. |
 
 ### New REDACT_PATTERNS entries (inline redaction)
 
@@ -120,6 +120,8 @@ REDACTED_WIREGUARD_KEY_1
 
 This preserves type visibility, cross-file correlation (same secret value gets same counter), and idempotency (same input → same output) while eliminating the dictionary oracle risk.
 
+File-backed and non-file-backed findings share one counter space per type. Ordering is deterministic: file-backed findings first (sorted by path, then line number), then non-file-backed findings (sorted by source, then path/identifier). This ensures the same input always produces the same counter assignments regardless of processing order.
+
 ### Cockpit ws-certs.d behavior
 
 Exclude the entire directory. Cockpit auto-generates self-signed certs on first boot. Carrying them to the target means:
@@ -128,6 +130,16 @@ Exclude the entire directory. Cockpit auto-generates self-signed certs on first 
 - Shared private key across source and target
 
 The correct migration behavior is to let cockpit regenerate certs on the target. Remediation state: **regenerate on target**.
+
+### Mixed PEM bundle rule
+
+Outside the cockpit-specific directory exclusion, a general rule applies to any file containing PEM-encoded material:
+
+- **File contains only private key(s):** existing `.*\.key$` exclusion handles this.
+- **File contains cert + private key combined** (e.g., a PEM bundle): **inline-redact the private key block only.** The `PRIVATE_KEY` content pattern already matches `BEGIN ... PRIVATE KEY` blocks. The certificate portion is kept — it's public data and useful for understanding the TLS setup on the target. Remediation: "value removed inline."
+- **File contains only certificate(s):** no redaction needed. Certificates are public.
+
+This rule is already implied by the existing `REDACT_PATTERNS` behavior (private key content pattern fires regardless of what else is in the file), but stating it explicitly prevents implementation drift between "inline-redact the key" and "exclude the whole file" for mixed PEM bundles.
 
 ---
 
@@ -140,13 +152,16 @@ Replace the current flat `snapshot.redactions[]` list with a typed model. Each f
 ```python
 @dataclass
 class RedactionFinding:
-    path: str              # Original filesystem path
+    path: str              # Original filesystem path or synthetic identifier
+    source: str            # "file" | "shadow" | "container-env" | "timer-cmd" | "diff"
     kind: str              # "excluded" or "inline"
     pattern: str           # Pattern name that matched
     remediation: str       # "regenerate" | "provision" | "value-removed"
-    line: int | None       # Line number (inline only)
+    line: int | None       # Line number (inline only, file-backed only)
     replacement: str | None  # Replacement token (inline only, e.g. REDACTED_PASSWORD_1)
 ```
+
+The `source` field distinguishes file-backed findings (which produce `.REDACTED` artifacts and Containerfile comments) from non-file-backed findings (shadow entries, running-container env vars, timer command fields, `:diff` views). Non-file-backed findings appear in `secrets-review.md` only — they do not produce `.REDACTED` files or Containerfile entries, since there is no file to exclude or reprovision.
 
 This model drives all downstream output: `.REDACTED` file generation, `secrets-review.md`, Containerfile comments, and CLI summary. One source of truth, no drift.
 
@@ -256,7 +271,7 @@ the action specified for each item.
 
 ### Detection gap tests
 - WireGuard `PrivateKey` inline redaction (bare base64, not PEM)
-- Container registry `auth.json` full exclusion (under root's home and /etc)
+- Container registry `auth.json` full exclusion (under /etc)
 - WiFi `psk=` inline redaction
 - Binary keystore (`.p12`) full exclusion
 - Cockpit `ws-certs.d/` directory exclusion (all files, not just `.key`)
@@ -279,6 +294,16 @@ the action specified for each item.
 - Provision-from-store files say "provision from secrets management" in placeholder
 - Inline-redacted files say "supply value at deploy time" in Containerfile comment
 
+### Provenance and counter tests
+- Non-file-backed findings (shadow, container-env, timer-cmd, diff) appear in `secrets-review.md` only — no `.REDACTED` file, no Containerfile entry
+- File-backed and non-file-backed findings share counter space (no duplicate counters)
+- Counter assignment is deterministic: file-backed first sorted by path/line, then non-file-backed sorted by source/path
+
+### Mixed PEM tests
+- Combined cert+key PEM file: private key block is inline-redacted, certificate block preserved
+- Cert-only PEM file: no redaction
+- Key-only PEM file: full exclusion via `.*\.key$` pattern
+
 ---
 
 ## Out of Scope
@@ -286,7 +311,7 @@ the action specified for each item.
 - **Independent heuristic safety net** (entropy analysis, broad PEM detection, binary file detection, known secret filenames): deferred to separate spec. Different precision/recall tradeoff from primary detection.
 - **`--include-secrets` opt-in flag**: may be useful eventually, not needed for v2.
 - **ostree/rpm-ostree source system handling**: separate workstream (see `comms/threads/2026-04-08-yoinkc-image-mode-source-audit.md`).
-- **Inspector scope expansion for auth files**: auth.json / config.json are handled only if they appear under `/etc` or root's home. No inspector changes to proactively scan user home directories.
+- **Inspector scope expansion**: auth.json / config.json are handled only if they appear under `/etc` (paths the inspector already captures). No inspector changes to scan home directories.
 
 ---
 
