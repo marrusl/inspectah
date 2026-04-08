@@ -57,6 +57,38 @@
 </button>
 {%- endmacro %}
 
+{# ── Filterable card toolbar (search + bulk controls) ──────────────────── #}
+{% macro card_toolbar(card_id, item_count, card_label) -%}
+<div class="card-toolbar" data-card-id="{{ card_id }}" data-total-count="{{ item_count }}">
+  <div class="card-toolbar-left">
+    <input type="text"
+           class="pf-v6-c-form-control card-search-input"
+           role="searchbox"
+           aria-label="Search {{ card_label }}"
+           aria-controls="{{ card_id }}"
+           placeholder="Search {{ card_label | lower }}..."
+           data-card-id="{{ card_id }}" />
+    <span class="card-toolbar-filter-count" aria-live="polite" style="display:none;"></span>
+  </div>
+  <div class="card-toolbar-right">
+    <span class="card-toolbar-included-count"></span>
+    <span class="card-toolbar-warning-indicator" role="status" style="display:none;"></span>
+    <button type="button"
+            class="pf-v6-c-button pf-m-link pf-m-small card-toolbar-include-btn"
+            data-card-id="{{ card_id }}"
+            aria-label="Include all {{ item_count }} {{ card_label | lower }}">
+      Include All {{ item_count }}
+    </button>
+    <button type="button"
+            class="pf-v6-c-button pf-m-link pf-m-small card-toolbar-exclude-btn"
+            data-card-id="{{ card_id }}"
+            aria-label="Exclude all {{ item_count }} {{ card_label | lower }}">
+      Exclude All {{ item_count }}
+    </button>
+  </div>
+</div>
+{%- endmacro %}
+
 {# ── Simple data table macro ────────────────────────────────────────────── #}
 {% macro data_table(headers) %}
 <table class="pf-v6-c-table"><thead><tr>

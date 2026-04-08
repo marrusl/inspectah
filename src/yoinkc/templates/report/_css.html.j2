@@ -171,6 +171,19 @@ details.audit-expand { margin-bottom: 0.25rem; }
 #exclude-toolbar.visible, #exclude-toolbar.helper-active { display: flex; }
 #exclude-toolbar .toolbar-status { font-weight: 600; flex: 1; }
 
+/* Card-level search & bulk-action toolbar */
+.card-toolbar { display: flex; justify-content: space-between; align-items: center; padding: 6px 16px; gap: 12px; border-bottom: 1px solid var(--pf-t--global--border--color--default); background: var(--pf-t--global--background--color--secondary--default); }
+.card-toolbar-left { display: flex; align-items: center; gap: 8px; flex: 1; }
+.card-toolbar-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.card-search-input { max-width: 220px; font-size: var(--pf-t--global--font--size--sm); }
+.card-search-input:not(:placeholder-shown) { border-color: var(--pf-t--global--color--brand--default); }
+.card-toolbar-filter-count { font-size: var(--pf-t--global--font--size--xs); color: var(--pf-t--global--color--brand--default); }
+.card-toolbar-included-count { font-size: var(--pf-t--global--font--size--xs); color: var(--pf-t--global--text--color--subtle); }
+.card-toolbar-warning-indicator { font-size: var(--pf-t--global--font--size--xs); color: var(--pf-t--global--color--status--warning--default); }
+.card-toolbar-include-btn { color: var(--pf-t--global--color--brand--default); }
+.card-toolbar-exclude-btn { color: var(--pf-t--global--color--status--danger--default); }
+.card-toolbar-include-btn:disabled, .card-toolbar-exclude-btn:disabled { opacity: 0.4; cursor: default; }
+
 
 /* Sidebar triage badges (PF6 badge) */
 .triage-badge { margin-left: 0.25rem; }
