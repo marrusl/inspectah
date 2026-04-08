@@ -2736,6 +2736,25 @@ function syncToolbar(cardId) {
     excludeBtn.setAttribute('aria-label',
       (excludeBtn.disabled ? 'All visible items already excluded' : 'Exclude ' + scope + ' items'));
   }
+
+  // Warning/redaction indicator for hidden items
+  var warningEl = toolbar.querySelector('.card-toolbar-warning-indicator');
+  if (warningEl) {
+    var hiddenWarnings = 0;
+    container.querySelectorAll('[data-search-text]').forEach(function(row) {
+      if (row.style.display !== 'none') return;
+      if (row.querySelector('.warning-indicator, .redaction-indicator, [data-has-warning], [data-has-redaction]')) {
+        hiddenWarnings++;
+      }
+    });
+    if (hiddenWarnings > 0 && isFiltered) {
+      warningEl.textContent = hiddenWarnings + ' hidden item' + (hiddenWarnings !== 1 ? 's' : '') + ' have warnings or redactions';
+      warningEl.style.display = '';
+    } else {
+      warningEl.style.display = 'none';
+      warningEl.textContent = '';
+    }
+  }
 }
 
 // --- Batched Mutation Helper ---
