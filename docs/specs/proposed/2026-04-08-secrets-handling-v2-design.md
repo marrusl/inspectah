@@ -1,16 +1,19 @@
-# Secrets Handling v2: Detection Gaps, UX, and Safety Net
+# Secrets Handling v2: Detection Gaps, UX, and Remediation Clarity
 
-**Date:** 2026-04-08
+**Date:** 2026-04-08 (revised after team review)
 **Status:** Proposed
 **Author:** Kiwi (orchestrator, synthesizing team input)
 **Reviewers:** Kit (code audit), Slate (security assessment), Thorn (test coverage audit), Fern (UX), Ember (product strategy)
 **Synthesis thread:** `comms/threads/2026-04-08-yoinkc-secrets-in-output-review.md`
+**Supersedes:** v1 of this spec (pre-review draft)
 
 ---
 
 ## Overview
 
-Harden yoinkc's secrets handling across three workstreams: close detection gaps in the primary pattern set, improve the UX of redacted files so users understand what happened and what to do, and build an independent safety net that catches secret types the primary patterns miss.
+Close detection gaps in the primary pattern set, make redacted files obvious and actionable in the output, and give users clear remediation guidance based on the type of secret found.
+
+**Scope boundary:** This spec covers detection and UX only. The independent heuristic safety net (entropy analysis, broad PEM detection, binary file detection) is deferred to a separate spec — it has different precision/recall tradeoffs and needs its own design.
 
 ## Context
 
@@ -22,7 +25,7 @@ The secrets pipeline has two stages:
    - `EXCLUDED_PATHS` (6 regex patterns): match file paths, replace content with a 54-byte placeholder (`# Content excluded (sensitive path). Handle manually.`). Currently: `/etc/shadow`, `/etc/gshadow`, `ssh_host_.*`, `/etc/pki/.*\.key`, `.*\.key$`, `.*keytab$`.
    - `REDACT_PATTERNS` (15 content patterns): match within file content, replace matched values with `REDACTED_{TYPE}_{hash}`. Cover PEM private keys, API keys, tokens, passwords, AWS/GitHub/GCP/Azure credentials, database connection strings.
 
-2. **Safety net** (`scan_directory_for_secrets()`): runs post-render against files on disk before git push. Uses the same `REDACT_PATTERNS` list as primary detection.
+2. **Safety net** (`scan_directory_for_secrets()`): runs post-render against files on disk before git push. Uses the same `REDACT_PATTERNS` list as primary detection. Deferred to a separate spec for redesign.
 
 Redactions are logged to `snapshot.redactions[]` and rendered into `secrets-review.md` in the output.
 
@@ -33,8 +36,8 @@ A real user ran yoinkc on a Kinoite machine. The output tarball contained cockpi
 - **The system worked**: the `.key` file content was correctly replaced with a placeholder. No actual key material leaked.
 - **The UX is confusing**: the placeholder file still appears in the tarball with its original name, alarming users who see a `.key` file and assume their private key was included.
 - **Detection gaps exist**: WireGuard private keys (bare base64, not PEM-wrapped), container registry auth files, WiFi PSKs, and binary keystores are not covered by any pattern.
-- **The safety net is redundant**: it uses the same patterns as primary detection, so it catches application bugs but not pattern gaps — the actual threat.
-- **The safety net doesn't run on tarballs**: only wired into the git push path. Tarballs are created unconditionally.
+- **Remediation guidance is generic**: all redacted items say "handle manually" regardless of whether the correct action is to regenerate on target, provision from a secret store, or supply a value at deploy time.
+- **Hash tokens leak information**: inline redaction placeholders include a truncated SHA-256 of the original secret, creating a dictionary oracle for weak secrets like WiFi PSKs.
 
 ---
 
@@ -43,26 +46,56 @@ A real user ran yoinkc on a Kinoite machine. The output tarball contained cockpi
 | # | Decision | Rationale |
 |---|----------|-----------|
 | 1 | Two-tier redaction: inline for mixed-content text files, full exclusion for opaque/binary secrets | Maps to user mental model — a WireGuard config "has settings plus a secret" while a `.p12` file "is the secret." Fern confirmed. |
-| 2 | Excluded files renamed with `.REDACTED` suffix | Visible in directory listing without opening the file. No false alarm about key leakage. Natural COPY guard. Fern's recommendation. |
+| 2 | Excluded files written to `redacted/` directory with `.REDACTED` suffix | Outside the `config/` COPY tree — no risk of accidental inclusion in image. Fern's recommendation, placement resolved in review. |
 | 3 | Excluded files get `include=False` — skipped by Containerfile COPY | Fail-loud on target is correct for a migration tool. Missing key = clear "file not found" error. Placeholder key = runtime mystery. Fern + Ember aligned. |
-| 4 | Containerfile gets a comment block listing redacted secrets | Users edit the Containerfile — meet them where they're working. Replaces the need to cross-reference `secrets-review.md` during build. |
-| 5 | Independent safety net with broader heuristics | Primary set needs precision (mutates content). Safety net should be deliberately broader and more paranoid (warnings are acceptable). Different precision/recall tradeoffs = different pattern sets. Slate's recommendation. |
-| 6 | Safety net runs before tarball creation, not just git push | Tarballs are the primary sharing mechanism. Warnings on tarball, hard block on push. |
+| 4 | Containerfile gets separate comment blocks for excluded vs inline-redacted | Different remediation paths — grouping them misleads users. Fern + Ember review feedback. |
+| 5 | Three remediation states, used consistently across all output | Regenerate-on-target, provision-from-store, value-removed-inline. Each has distinct operator action. |
+| 6 | Drop hash tokens — use sequential counters | Hash of secret value is a dictionary oracle for weak secrets. Sequential counters per type provide cross-file correlation without leaking information. Slate confirmed no legitimate use for hashes. |
+| 7 | Safety net redesign deferred to separate spec | Different precision/recall tradeoff. Ember recommended slicing to reduce complexity. |
+| 8 | auth.json/config.json scope: root's home or /etc only | System-level migration tool — user home dirs out of scope. |
+
+---
+
+## Remediation State Model
+
+Three states, used consistently in `.REDACTED` placeholder content, `secrets-review.md`, Containerfile comments, and CLI output:
+
+| State | Operator Action | Example |
+|-------|----------------|---------|
+| **Regenerate on target** | Do nothing — service auto-generates on first boot | cockpit ws-certs.d, SSH host keys |
+| **Provision from secret store** | Deploy via secrets management after build | WireGuard private keys, TLS certs, registry auth, binary keystores |
+| **Value removed inline** | File included in image with secret replaced — supply actual value at deploy time | WireGuard config (PrivateKey field), WiFi config (psk field), app configs with API tokens |
+
+Each redaction record carries its remediation state. The state is assigned by pattern — excluded paths map to either "regenerate" or "provision" based on the pattern definition, inline redactions always map to "value removed inline."
+
+### Pattern-to-state mapping
+
+| Pattern | Tier | Remediation |
+|---------|------|-------------|
+| `/etc/cockpit/ws-certs\.d/.*` | Exclude | Regenerate on target |
+| `ssh_host_.*` | Exclude | Regenerate on target |
+| `.*\.key$`, `/etc/pki/.*\.key` | Exclude | Provision from secret store |
+| `.*keytab$` | Exclude | Provision from secret store |
+| `/etc/shadow`, `/etc/gshadow` | Exclude | Provision from secret store |
+| `.*\.p12$`, `.*\.pfx$`, `.*\.jks$` | Exclude | Provision from secret store |
+| `.*/containers/auth\.json$` | Exclude | Provision from secret store |
+| `.*/\.docker/config\.json$` | Exclude | Provision from secret store |
+| All `REDACT_PATTERNS` (inline) | Inline | Value removed inline |
 
 ---
 
 ## Workstream 1: Detection Gaps
 
-### New EXCLUDED_PATHS entries (full-file exclusion → `.REDACTED`)
+### New EXCLUDED_PATHS entries (full-file exclusion)
 
-| Pattern | Rationale |
-|---------|-----------|
-| `.*\.p12$` | PKCS#12 binary keystore — entirely secret, cannot inline-redact |
-| `.*\.pfx$` | Same as `.p12`, Windows naming convention |
-| `.*\.jks$` | Java KeyStore — binary, opaque |
-| `/etc/cockpit/ws-certs\.d/.*` | Auto-generated, hostname-specific, regenerated on target. Including even the public cert is harmful (wrong hostname/validity). |
-| `.*/containers/auth\.json$` | Container registry credentials — base64-encoded auth tokens |
-| `.*/\.docker/config\.json$` | Docker registry credentials — same as above |
+| Pattern | Remediation | Rationale |
+|---------|-------------|-----------|
+| `.*\.p12$` | Provision | PKCS#12 binary keystore — entirely secret, cannot inline-redact |
+| `.*\.pfx$` | Provision | Same as `.p12`, Windows naming convention |
+| `.*\.jks$` | Provision | Java KeyStore — binary, opaque |
+| `/etc/cockpit/ws-certs\.d/.*` | Regenerate | Auto-generated, hostname-specific, regenerated on target. Including even the public cert is harmful (wrong hostname/validity). |
+| `.*/containers/auth\.json$` | Provision | Container registry credentials — base64-encoded auth tokens. Scoped to root's config and `/etc` only. |
+| `.*/\.docker/config\.json$` | Provision | Docker registry credentials. Scoped to root's config and `/etc` only. |
 
 ### New REDACT_PATTERNS entries (inline redaction)
 
@@ -71,6 +104,22 @@ A real user ran yoinkc on a Kinoite machine. The output tarball contained cockpi
 | `WIREGUARD_KEY` | `PrivateKey\s*=\s*[A-Za-z0-9+/]{43}=` | `PrivateKey = aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4yZ5A=` |
 | `WIFI_PSK` | `psk\s*=\s*\S+` | `psk=mysecretpassword` |
 
+### Redaction placeholder format change
+
+**Current:** `REDACTED_{TYPE}_{truncated_sha256_hash}` (e.g., `REDACTED_PASSWORD_a3b2c1d4`)
+
+**New:** `REDACTED_{TYPE}_{N}` where `N` is a sequential counter per type, assigned deterministically within a single yoinkc run (sorted by discovery order: file path, then line number).
+
+Examples:
+```
+REDACTED_PASSWORD_1
+REDACTED_PASSWORD_2
+REDACTED_API_KEY_1
+REDACTED_WIREGUARD_KEY_1
+```
+
+This preserves type visibility, cross-file correlation (same secret value gets same counter), and idempotency (same input → same output) while eliminating the dictionary oracle risk.
+
 ### Cockpit ws-certs.d behavior
 
 Exclude the entire directory. Cockpit auto-generates self-signed certs on first boot. Carrying them to the target means:
@@ -78,177 +127,173 @@ Exclude the entire directory. Cockpit auto-generates self-signed certs on first 
 - Possibly expired validity
 - Shared private key across source and target
 
-The correct migration behavior is to let cockpit regenerate certs on the target. The `.REDACTED` placeholder file will tell the user this happened.
+The correct migration behavior is to let cockpit regenerate certs on the target. Remediation state: **regenerate on target**.
 
 ---
 
 ## Workstream 2: UX Improvements
 
+### Typed redaction findings model
+
+Replace the current flat `snapshot.redactions[]` list with a typed model. Each finding carries:
+
+```python
+@dataclass
+class RedactionFinding:
+    path: str              # Original filesystem path
+    kind: str              # "excluded" or "inline"
+    pattern: str           # Pattern name that matched
+    remediation: str       # "regenerate" | "provision" | "value-removed"
+    line: int | None       # Line number (inline only)
+    replacement: str | None  # Replacement token (inline only, e.g. REDACTED_PASSWORD_1)
+```
+
+This model drives all downstream output: `.REDACTED` file generation, `secrets-review.md`, Containerfile comments, and CLI summary. One source of truth, no drift.
+
 ### File-level behavior for excluded paths
 
-**Current:** Content replaced with placeholder, file written with original name, `include=True`.
+**Current:** Content replaced with placeholder, file written to `config/` with original name, `include=True`.
 
 **New:**
-1. `redact_snapshot()` sets `include=False` on the config entry (so Containerfile COPY skips it)
-2. `redact_snapshot()` stores the improved placeholder content (see below) in the entry's `content` field
-3. `write_config_tree()` gets a new post-loop pass: for entries with `include=False` that have a redaction record, write the file with `.REDACTED` suffix appended to the original filename. This is a separate code path from the normal config tree write (which checks `include=True`).
-4. The `.REDACTED` file is NOT included in Containerfile COPY directives — it exists only in the tarball for user awareness
+1. `redact_snapshot()` sets `include=False` on the config entry
+2. `redact_snapshot()` creates a `RedactionFinding` with the appropriate remediation state
+3. `write_config_tree()` skips entries with `include=False` in the normal config write loop
+4. A new post-render step writes `.REDACTED` files to `redacted/` directory (top-level, outside `config/`), preserving the path structure:
 
-### Improved placeholder content
+```
+redacted/
+  etc/
+    cockpit/
+      ws-certs.d/
+        0-self-signed.key.REDACTED
+        0-self-signed.cert.REDACTED
+        0-self-signed-ca.pem.REDACTED
+```
 
+### `.REDACTED` placeholder content
+
+Content varies by remediation state:
+
+**Regenerate on target:**
+```
+# REDACTED by yoinkc — auto-generated credential
+# Original path: /etc/cockpit/ws-certs.d/0-self-signed.key
+# Action: no action needed — this file is regenerated automatically on the target system
+# See secrets-review.md for details
+```
+
+**Provision from secret store:**
 ```
 # REDACTED by yoinkc — sensitive file detected
-# Original path: /etc/cockpit/ws-certs.d/0-self-signed.key
-# Action required: provision this file on the target system manually
-# See secrets-review.md for details and remediation guidance
+# Original path: /etc/pki/tls/private/server.key
+# Action: provision this file on the target system from your secrets management process
+# See secrets-review.md for details
 ```
 
-Four lines. Original path for reference. Action required. Pointer to full docs.
+### Containerfile comment blocks
 
-### Containerfile comment block
-
-After the existing COPY directives, add a comment block:
+Two separate blocks — one for excluded files, one for inline-redacted files:
 
 ```dockerfile
-# === Secrets requiring manual provisioning ===
-# The following files were detected on the source system but excluded
-# from this image because they contain sensitive material:
+# === Excluded secrets (not in this image) ===
+# These files were detected on the source system but excluded from the
+# image. See redacted/ directory for details.
 #
+# Regenerate on target (auto-generated, no action needed):
 #   /etc/cockpit/ws-certs.d/0-self-signed.key
 #   /etc/cockpit/ws-certs.d/0-self-signed.cert
-#   /etc/cockpit/ws-certs.d/0-self-signed-ca.pem
-#   /etc/wireguard/wg0.conf (PrivateKey redacted inline)
 #
-# Provision these via your secrets management process after deployment.
-# See secrets-review.md for details.
-```
+# Provision from secret store:
+#   /etc/pki/tls/private/server.key
 
-This lists both fully-excluded files and inline-redacted files (with a note about what was redacted). Inline-redacted files ARE still COPYed — only excluded files are skipped.
+# === Inline-redacted values ===
+# These files ARE in the image but have secret values replaced with
+# placeholders. Supply actual values at deploy time.
+#
+#   /etc/wireguard/wg0.conf — PrivateKey (REDACTED_WIREGUARD_KEY_1)
+#   /etc/NetworkManager/system-connections/wifi.nmconnection — psk (REDACTED_WIFI_PSK_1)
+```
 
 ### CLI output
 
-During the render phase, print a summary:
+During the render phase, print a summary with remediation context:
 
 ```
 Secrets handling:
-  Excluded: 3 files (binary/opaque secrets) → see .REDACTED files
-  Inline-redacted: 2 values in 1 file (WireGuard key, WiFi PSK)
-  See secrets-review.md for full details
+  Excluded (regenerate on target): 3 files
+  Excluded (provision from store): 1 file
+  Inline-redacted: 2 values in 2 files
+  Details: secrets-review.md | Placeholders: redacted/
 ```
 
----
-
-## Workstream 3: Independent Safety Net
-
-### Architecture
-
-`scan_directory_for_secrets()` becomes a separate detection layer with its own heuristics, distinct from the primary `REDACT_PATTERNS`. The primary set is precise (it mutates content). The safety net is deliberately broader (it emits warnings).
-
-### Safety net heuristics
-
-**1. Shannon entropy analysis**
-
-Flag any contiguous run of 40+ high-entropy characters (base64 alphabet: `A-Za-z0-9+/=`, or hex: `0-9a-fA-F`). Config files are mostly low-entropy text. A high-entropy block in a config tree is genuinely suspicious.
-
-Threshold tuning: start conservative. Log warnings, don't block. Adjust based on false positive rate in real tarballs.
-
-**2. Known secret filenames**
-
-Flag files matching known secret names regardless of content:
-
-```
-id_rsa, id_ed25519, id_ecdsa, id_dsa
-*.p12, *.pfx, *.jks, *.keystore
-auth.json, config.json (under .docker/)
-htpasswd, .htpasswd
-.pgpass, .my.cnf, .netrc
-krb5.keytab, *.keytab
-```
-
-Many of these overlap with `EXCLUDED_PATHS`. That's fine — defense in depth. The safety net catching something that the primary set should have excluded is itself a signal worth logging.
-
-**3. Broad PEM detection**
-
-The primary pattern matches `BEGIN ... PRIVATE KEY` specifically. The safety net additionally flags any `BEGIN` block:
-
-```
-BEGIN CERTIFICATE
-BEGIN RSA
-BEGIN EC
-BEGIN DSA
-BEGIN ENCRYPTED
-BEGIN PKCS7
-BEGIN X509
-```
-
-Certificates are not always secret, but in a migration tarball, unexpected PEM material is worth a warning.
-
-**4. Binary file detection**
-
-Any file in the rendered config tree that contains null bytes or fails UTF-8 decode is flagged. Config trees should be text files. Binary content could be keystore files, compiled credentials, or other opaque containers.
-
-### Integration point
-
-Wire `scan_directory_for_secrets()` into `run_pipeline()` before `create_tarball()`:
-
-- **Tarball path:** Run safety net. Emit findings as warnings in CLI output and append to `secrets-review.md` under a "Safety Net Warnings" section. Do not block tarball creation — heuristic matches are not high-confidence enough to hard-block.
-- **Git push path:** Keep existing behavior — hard block on any match.
-
-### Warning format in secrets-review.md
+### secrets-review.md format
 
 ```markdown
-## Safety Net Warnings
+# Secrets Review
 
-The following items were flagged by heuristic analysis. They may not be
-actual secrets, but review them before sharing this tarball.
+The following items were redacted or excluded. Handle them according to
+the action specified for each item.
 
-| File | Heuristic | Detail |
-|------|-----------|--------|
-| etc/openvpn/client.conf | high-entropy | 44-char base64 block at line 12 |
-| etc/pki/java/cacerts | binary-content | non-UTF-8 content detected |
+## Excluded Files
+
+| Path | Action | Reason |
+|------|--------|--------|
+| /etc/cockpit/ws-certs.d/0-self-signed.key | Regenerate on target | Auto-generated cockpit certificate |
+| /etc/cockpit/ws-certs.d/0-self-signed.cert | Regenerate on target | Auto-generated cockpit certificate |
+| /etc/pki/tls/private/server.key | Provision from secret store | TLS private key |
+
+## Inline Redactions
+
+| Path | Line | Type | Placeholder | Action |
+|------|------|------|-------------|--------|
+| /etc/wireguard/wg0.conf | 4 | WIREGUARD_KEY | REDACTED_WIREGUARD_KEY_1 | Supply value at deploy time |
+| /etc/NetworkManager/.../wifi.nmconnection | 8 | WIFI_PSK | REDACTED_WIFI_PSK_1 | Supply value at deploy time |
 ```
 
 ---
 
 ## Testing
 
-Thorn's audit identified 16 specific tests. Organized by workstream:
-
 ### Detection gap tests
 - WireGuard `PrivateKey` inline redaction (bare base64, not PEM)
-- Container registry `auth.json` full exclusion
+- Container registry `auth.json` full exclusion (under root's home and /etc)
 - WiFi `psk=` inline redaction
 - Binary keystore (`.p12`) full exclusion
 - Cockpit `ws-certs.d/` directory exclusion (all files, not just `.key`)
+- Sequential counter assignment is deterministic (same input → same counters)
+- Sequential counter correlates same secret value across files
 
 ### UX tests
-- Excluded file gets `.REDACTED` suffix in output
-- Excluded file gets `include=False` (not in Containerfile COPY)
-- Placeholder content includes original path and action required
-- Containerfile contains secrets comment block listing all redacted items
+- Excluded file written to `redacted/` directory (not `config/`)
+- Excluded file has `.REDACTED` suffix
+- Excluded file has `include=False` (not in Containerfile COPY)
+- Placeholder content varies by remediation state (regenerate vs provision)
+- Containerfile has separate comment blocks for excluded vs inline-redacted
 - Inline-redacted files ARE still included in Containerfile COPY
-- CLI output summary counts are correct
+- CLI output summary shows correct counts per remediation state
+- `secrets-review.md` has separate tables for excluded and inline
 
-### Safety net tests
-- Entropy detector fires on high-entropy base64 blocks
-- Entropy detector does NOT fire on normal config content
-- Known filename detector catches `id_rsa` in config tree
-- Broad PEM detector catches `BEGIN CERTIFICATE` (not just `PRIVATE KEY`)
-- Binary file detector catches null bytes in config tree
-- Safety net runs before tarball creation (integration test)
+### Remediation model tests
+- Each pattern maps to correct remediation state
+- Regenerate-on-target files say "no action needed" in placeholder
+- Provision-from-store files say "provision from secrets management" in placeholder
+- Inline-redacted files say "supply value at deploy time" in Containerfile comment
 
 ---
 
 ## Out of Scope
 
-- `--include-secrets` opt-in flag: may be useful eventually for users who know they want specific keys, but not needed for v2. Can be added later without design changes.
-- Entropy threshold tuning: start conservative, adjust based on real-world data. Not a spec concern.
-- ostree/rpm-ostree source system handling: separate workstream (see `comms/threads/2026-04-08-yoinkc-image-mode-source-audit.md`).
+- **Independent heuristic safety net** (entropy analysis, broad PEM detection, binary file detection, known secret filenames): deferred to separate spec. Different precision/recall tradeoff from primary detection.
+- **`--include-secrets` opt-in flag**: may be useful eventually, not needed for v2.
+- **ostree/rpm-ostree source system handling**: separate workstream (see `comms/threads/2026-04-08-yoinkc-image-mode-source-audit.md`).
+- **Inspector scope expansion for auth files**: auth.json / config.json are handled only if they appear under `/etc` or root's home. No inspector changes to proactively scan user home directories.
 
 ---
 
 ## Migration / Backwards Compatibility
 
-- Output format changes (`.REDACTED` suffix, Containerfile comments) are additive. Existing scripts that consume yoinkc output by parsing filenames may need updates, but yoinkc does not guarantee a stable output API.
-- `secrets-review.md` format gains a new "Safety Net Warnings" section. Existing sections unchanged.
-- No CLI flag changes. All new behavior is default-on.
+- **Output structure**: new `redacted/` top-level directory. Existing `config/` directory no longer contains excluded files. Scripts that parse the config tree by filename may need updates, but yoinkc does not guarantee a stable output API.
+- **Placeholder format**: `REDACTED_{TYPE}_{hash}` → `REDACTED_{TYPE}_{N}`. Any downstream tooling matching on hash tokens will need to match on sequential counters instead.
+- **`secrets-review.md`**: new format with separate Excluded/Inline tables and remediation guidance. Existing format replaced.
+- **Containerfile**: gains comment blocks. No structural changes to COPY directives beyond excluding redacted files.
+- **No CLI flag changes.** All new behavior is default-on.
