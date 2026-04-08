@@ -240,7 +240,8 @@ def _build(
     no_cache: bool,
 ) -> bool:
     """Run the container build. Returns True on success."""
-    cmd: list[str] = [runtime, "build", "-f", "Containerfile", "-t", tag]
+    containerfile = output_dir / "Containerfile"
+    cmd: list[str] = [runtime, "build", "-f", str(containerfile), "-t", tag]
 
     if entitlement_dir:
         cmd += ["-v", f"{entitlement_dir}:/etc/pki/entitlement:ro,Z"]
