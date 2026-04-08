@@ -45,12 +45,24 @@ A hostname-stamped tarball appears in your current directory (e.g. `webserver01-
 
 ### Refine findings
 
+After inspection, copy the tarball to your workstation and launch the interactive editor:
+
 ```bash
 scp target-host:~/hostname-*.tar.gz .
 ./run-yoinkc.sh refine hostname-*.tar.gz
 ```
 
-The browser opens automatically. Toggle packages, config files, and services; click Re-render to update the Containerfile; download the updated tarball when done.
+The browser opens automatically with the Refine dashboard. From here you can:
+
+- **Toggle items on/off** — exclude packages, config files, or services you don't want in the migration image
+- **Search and filter** — use the search box on each card to find specific packages, files, or services; bulk Include All / Exclude All buttons work on filtered results
+- **Review classifications** — yoinkc auto-classifies items (base OS, user-added, config-modified); refine lets you override
+- **Re-render** — click Re-render to regenerate the Containerfile, audit report, and all output artifacts with your changes applied
+- **Download** — grab the updated tarball with your refinements baked in
+
+Refine works on both single-host inspection tarballs and fleet-aggregated tarballs. For the single-host workflow (Inspect > Refine > Build), this is where you curate what goes into your bootc image before building. For fleets (Inspect > Fleet > Refine > Architect > Build), refine each fleet output before passing it to Architect.
+
+The refine server runs on port 8642 by default. Use `--port` to change it, or `--no-browser` to skip auto-opening the browser. See [CLI Reference](docs/reference/cli.md#yoinkc-refine) for all flags.
 
 ### Build the image
 
