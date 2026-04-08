@@ -488,6 +488,12 @@ function trapFocus(modalElement, closeHandler) {
       setDirty(!isSnapshotClean());
       recalcTriageCounts();
       generateContainerfilePreview();
+      // Update card toolbar and group state for the containing card
+      var cardBody = tr.closest('[id]');
+      if (cardBody) {
+        syncToolbar(cardBody.id);
+        updateGroupState(cardBody.id);
+      }
     });
   });
 
@@ -826,6 +832,17 @@ function trapFocus(modalElement, closeHandler) {
     // Rebuild & Download count goes back to 0.
     if (typeof resetEditorState === 'function') resetEditorState();
     resetReviewState();
+    // Clear search filters and reset group states
+    document.querySelectorAll('.card-search-input').forEach(function(input) {
+      input.value = '';
+    });
+    document.querySelectorAll('.card-toolbar').forEach(function(tb) {
+      var cid = tb.getAttribute('data-card-id');
+      if (cid) {
+        clearCardFilter(cid);
+        updateGroupState(cid);
+      }
+    });
     showToast('Edits discarded');
   }
 
@@ -907,6 +924,14 @@ function trapFocus(modalElement, closeHandler) {
         recalcTriageCounts();
         setDirty(false);
         updateToolbar();
+        // Sync card toolbars and group states after re-render
+        document.querySelectorAll('.card-toolbar').forEach(function(tb) {
+          var cid = tb.getAttribute('data-card-id');
+          if (cid) {
+            syncToolbar(cid);
+            updateGroupState(cid);
+          }
+        });
         // Sync prevalence slider baseline
         var sliderEl = document.getElementById('summary-prevalence-slider');
         if (sliderEl) {
@@ -2543,13 +2568,124 @@ function clearCardFilter(cardId) {
       el.textContent = el.getAttribute('data-original-text');
     });
     container.querySelectorAll('.repo-group-row').forEach(function(row) { row.style.display = ''; });
+    // Clean up excluded stubs
+    container.querySelectorAll('.excluded-group-stub').forEach(function(stub) { stub.remove(); });
   }
   var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
   if (filterCount) {
     filterCount.style.display = 'none';
     filterCount.textContent = '';
   }
+  // Reset group stub expansion state and re-evaluate
+  Object.keys(groupStubState).forEach(function(key) {
+    groupStubState[key].userExpandedStub = false;
+  });
   syncToolbar(cardId);
+  updateGroupState(cardId);
+}
+
+// --- Repo Group State Machine ---
+var groupStubState = {}; // { groupName: { userExpandedStub: false } }
+
+function updateGroupState(cardId) {
+  var container = document.getElementById(cardId);
+  if (!container) return;
+  if (!container.querySelector('[data-group]')) return;
+
+  var searchInput = document.querySelector('.card-toolbar[data-card-id="' + cardId + '"] .card-search-input');
+  var searchActive = searchInput && searchInput.value.trim() !== '';
+
+  var groups = {};
+  container.querySelectorAll('[data-group]').forEach(function(row) {
+    var groupName = row.getAttribute('data-group');
+    if (!groups[groupName]) groups[groupName] = { header: null, items: [] };
+    if (row.classList.contains('repo-group-row')) {
+      groups[groupName].header = row;
+    } else if (row.hasAttribute('data-snap-index')) {
+      groups[groupName].items.push(row);
+    }
+  });
+
+  Object.keys(groups).forEach(function(groupName) {
+    var g = groups[groupName];
+    if (!g.header) return;
+    if (!groupStubState[groupName]) groupStubState[groupName] = { userExpandedStub: false };
+    var state = groupStubState[groupName];
+
+    var allExcluded = g.items.length > 0 && g.items.every(function(row) {
+      var cb = row.querySelector('.include-toggle');
+      return cb && !cb.checked;
+    });
+    var hasVisibleMatches = searchActive && g.items.some(function(row) {
+      return row.style.display !== 'none';
+    });
+    var manuallyCollapsed = g.header.classList.contains('repo-collapsed');
+
+    if (searchActive && hasVisibleMatches) {
+      showGroupNormal(g.header);
+      removeExcludedStub(groupName);
+    } else if (searchActive && !hasVisibleMatches) {
+      // "No matches" stub -- handled by filterGroupedCard
+    } else if (!searchActive && allExcluded && !state.userExpandedStub) {
+      showExcludedStub(g, groupName);
+    } else if (!searchActive && allExcluded && state.userExpandedStub) {
+      showGroupNormal(g.header);
+      removeExcludedStub(groupName);
+      g.items.forEach(function(row) { row.style.display = ''; });
+    } else if (!searchActive && !allExcluded && manuallyCollapsed) {
+      removeExcludedStub(groupName);
+    } else {
+      showGroupNormal(g.header);
+      removeExcludedStub(groupName);
+      state.userExpandedStub = false;
+    }
+  });
+}
+
+function showExcludedStub(group, groupName) {
+  group.header.style.display = 'none';
+  group.items.forEach(function(row) { row.style.display = 'none'; });
+
+  var stubId = 'excluded-stub-' + groupName.replace(/[^a-zA-Z0-9]/g, '-');
+  if (document.getElementById(stubId)) return;
+
+  var warningCount = 0;
+  group.items.forEach(function(row) {
+    if (row.querySelector('.warning-indicator, .redaction-indicator, [data-has-warning]')) {
+      warningCount++;
+    }
+  });
+
+  var stub = document.createElement('tr');
+  stub.id = stubId;
+  stub.className = 'excluded-group-stub';
+  stub.setAttribute('data-stub-group', groupName);
+  var warningBadge = warningCount > 0
+    ? ' <span class="stub-warning-badge">\u26A0 ' + warningCount + ' warning' + (warningCount !== 1 ? 's' : '') + '</span>'
+    : '';
+  stub.innerHTML = '<td colspan="99" style="padding:8px 16px;cursor:pointer;">' +
+    '<span class="stub-chevron">\u25B8</span> ' + groupName +
+    ' <span style="color:var(--pf-t--global--text--color--subtle);">(' + group.items.length + ' packages \u2014 all excluded)</span>' +
+    warningBadge +
+    ' <button class="pf-v6-c-button pf-m-link pf-m-small">Expand</button></td>';
+
+  stub.addEventListener('click', function() {
+    groupStubState[groupName].userExpandedStub = true;
+    var cardId = group.header.closest('[id]').id;
+    updateGroupState(cardId);
+  });
+
+  group.header.parentNode.insertBefore(stub, group.header);
+}
+
+function removeExcludedStub(groupName) {
+  var stubId = 'excluded-stub-' + groupName.replace(/[^a-zA-Z0-9]/g, '-');
+  var stub = document.getElementById(stubId);
+  if (stub) stub.remove();
+}
+
+function showGroupNormal(header) {
+  header.style.display = '';
 }
 
 function syncToolbar(cardId) {
