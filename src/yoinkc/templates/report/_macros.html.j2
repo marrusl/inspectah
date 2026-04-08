@@ -58,7 +58,9 @@
 {%- endmacro %}
 
 {# ── Filterable card toolbar (search + bulk controls) ──────────────────── #}
+{# Threshold tiers: 1-4 items = no toolbar, 5-7 = bulk only, 8+ = full #}
 {% macro card_toolbar(card_id, item_count, card_label) -%}
+{% if item_count >= 8 %}
 <div class="card-toolbar" data-card-id="{{ card_id }}" data-total-count="{{ item_count }}">
   <div class="card-toolbar-left">
     <input type="text"
@@ -87,6 +89,26 @@
     </button>
   </div>
 </div>
+{% elif item_count >= 5 %}
+<div class="card-toolbar" data-card-id="{{ card_id }}" data-total-count="{{ item_count }}">
+  <div class="card-toolbar-right">
+    <span class="card-toolbar-included-count"></span>
+    <span class="card-toolbar-warning-indicator" role="status" style="display:none;"></span>
+    <button type="button"
+            class="pf-v6-c-button pf-m-link pf-m-small card-toolbar-include-btn"
+            data-card-id="{{ card_id }}"
+            aria-label="Include all {{ item_count }} {{ card_label | lower }}">
+      Include All {{ item_count }}
+    </button>
+    <button type="button"
+            class="pf-v6-c-button pf-m-link pf-m-small card-toolbar-exclude-btn"
+            data-card-id="{{ card_id }}"
+            aria-label="Exclude all {{ item_count }} {{ card_label | lower }}">
+      Exclude All {{ item_count }}
+    </button>
+  </div>
+</div>
+{% endif %}
 {%- endmacro %}
 
 {# ── Simple data table macro ────────────────────────────────────────────── #}
