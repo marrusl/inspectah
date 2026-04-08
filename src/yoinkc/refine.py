@@ -521,6 +521,8 @@ def run_refine(args) -> int:
     except KeyboardInterrupt:
         return 0
     finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if server_thread is not None and server is not None:
             server.shutdown()
             server_thread.join()
