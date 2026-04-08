@@ -1305,7 +1305,7 @@ function trapFocus(modalElement, closeHandler) {
     updateReviewProgress();
   }
 
-  // Expose helpers needed by the fleet refine IIFE (outside this closure)
+  // Expose helpers needed by the fleet refine IIFE and card search (outside this closure)
   window.buildBaseline = buildBaseline;
   window.updateToolbar = updateToolbar;
   window.setDirty = setDirty;
@@ -1314,6 +1314,9 @@ function trapFocus(modalElement, closeHandler) {
   window.resolveSnapshotRef = resolveSnapshotRef;
   window.recalcTriageCounts = recalcTriageCounts;
   window.toggleReviewed = toggleReviewed;
+  window.showToast = showToast;
+  window.recomputeAutoDeps = recomputeAutoDeps;
+  window.updatePkgBanner = updatePkgBanner;
 })();
 
 
@@ -2392,5 +2395,124 @@ function countAtThreshold(threshold) {
   window.applyPrevalenceThreshold = applyPrevalenceThreshold;
 })();
 {% endif %}
+
+// --- Card Search & Filter ---
+function initCardSearch(cardId) {
+  var toolbar = document.querySelector('.card-toolbar[data-card-id="' + cardId + '"]');
+  if (!toolbar) return;
+  var searchInput = toolbar.querySelector('.card-search-input');
+  if (!searchInput) return;
+
+  searchInput.addEventListener('input', function() {
+    var query = (this.value || '').trim().toLowerCase();
+    if (!query) {
+      clearCardFilter(cardId);
+      return;
+    }
+    var container = document.getElementById(cardId);
+    if (!container) return;
+
+    var rows = container.querySelectorAll('[data-search-text]');
+    var matchCount = 0;
+    rows.forEach(function(row) {
+      var text = (row.getAttribute('data-search-text') || '').toLowerCase();
+      var matches = text.indexOf(query) >= 0;
+      row.style.display = matches ? '' : 'none';
+      if (matches) matchCount++;
+    });
+
+    var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
+    var total = parseInt(toolbar.getAttribute('data-total-count'), 10);
+    if (filterCount) {
+      filterCount.textContent = matchCount + ' of ' + total + ' shown';
+      filterCount.style.display = '';
+    }
+
+    syncToolbar(cardId);
+  });
+
+  searchInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      this.value = '';
+      clearCardFilter(cardId);
+    }
+  });
+}
+
+function clearCardFilter(cardId) {
+  var toolbar = document.querySelector('.card-toolbar[data-card-id="' + cardId + '"]');
+  if (!toolbar) return;
+  var container = document.getElementById(cardId);
+  if (container) {
+    container.querySelectorAll('[data-search-text]').forEach(function(row) {
+      row.style.display = '';
+    });
+  }
+  var filterCount = toolbar.querySelector('.card-toolbar-filter-count');
+  if (filterCount) {
+    filterCount.style.display = 'none';
+    filterCount.textContent = '';
+  }
+  syncToolbar(cardId);
+}
+
+function syncToolbar(cardId) {
+  var toolbar = document.querySelector('.card-toolbar[data-card-id="' + cardId + '"]');
+  if (!toolbar) return;
+  var container = document.getElementById(cardId);
+  if (!container) return;
+  var searchInput = toolbar.querySelector('.card-search-input');
+  var isFiltered = searchInput && searchInput.value.trim() !== '';
+
+  var visibleRows = container.querySelectorAll('[data-search-text]');
+  var visibleCount = 0;
+  var includedCount = 0;
+  visibleRows.forEach(function(row) {
+    if (row.style.display === 'none') return;
+    visibleCount++;
+    var cb = row.querySelector('.include-toggle');
+    if (cb && cb.checked) includedCount++;
+  });
+
+  var totalCount = parseInt(toolbar.getAttribute('data-total-count'), 10);
+
+  var countEl = toolbar.querySelector('.card-toolbar-included-count');
+  if (countEl) {
+    if (isFiltered) {
+      countEl.textContent = includedCount + ' of ' + visibleCount + ' visible included';
+    } else {
+      countEl.textContent = includedCount + ' of ' + totalCount + ' included';
+    }
+  }
+
+  var includeBtn = toolbar.querySelector('.card-toolbar-include-btn');
+  var excludeBtn = toolbar.querySelector('.card-toolbar-exclude-btn');
+  var scope = isFiltered ? visibleCount : totalCount;
+  var label = isFiltered ? 'Matching' : 'All ' + scope;
+
+  if (includeBtn) {
+    includeBtn.textContent = 'Include ' + (isFiltered ? scope + ' ' : '') + label;
+    includeBtn.disabled = (includedCount === visibleCount) || visibleCount === 0;
+    includeBtn.setAttribute('aria-disabled', includeBtn.disabled ? 'true' : 'false');
+    includeBtn.setAttribute('aria-label',
+      (includeBtn.disabled ? 'All visible items already included' : 'Include ' + scope + ' items'));
+  }
+  if (excludeBtn) {
+    excludeBtn.textContent = 'Exclude ' + (isFiltered ? scope + ' ' : '') + label;
+    excludeBtn.disabled = (includedCount === 0) || visibleCount === 0;
+    excludeBtn.setAttribute('aria-disabled', excludeBtn.disabled ? 'true' : 'false');
+    excludeBtn.setAttribute('aria-label',
+      (excludeBtn.disabled ? 'All visible items already excluded' : 'Exclude ' + scope + ' items'));
+  }
+}
+
+// Initialize card search toolbars
+document.querySelectorAll('.card-toolbar').forEach(function(toolbar) {
+  var cardId = toolbar.getAttribute('data-card-id');
+  if (cardId) {
+    initCardSearch(cardId);
+    syncToolbar(cardId);
+  }
+});
 </script>
 {% include "report/_editor_js.html.j2" %}
