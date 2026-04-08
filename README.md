@@ -145,7 +145,7 @@ See [CLI Reference](docs/reference/cli.md#yoinkc-architect) for flags.
 
 ## Installation
 
-### Container (recommended)
+### Container
 
 The wrapper script handles everything — it installs podman if needed and pulls the pre-built image:
 
@@ -155,20 +155,6 @@ chmod +x run-yoinkc.sh
 ```
 
 The image is published to `ghcr.io/marrusl/yoinkc:latest` (multi-arch: amd64 + arm64).
-
-### pipx
-
-```bash
-pipx install yoinkc
-```
-
-### From source
-
-```bash
-pip install -e .
-```
-
-Requirements: Python 3.11+, pydantic, jinja2. Podman or Docker for inspect and build. Installs the `yoinkc` CLI; `yoinkc-build` is a standalone script in the repo root.
 
 | Variable | Effect |
 |----------|--------|
