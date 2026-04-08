@@ -1,10 +1,39 @@
 """Config tree file-writing and inventory comment generation."""
 
+import sys
 from pathlib import Path
 
 from ...schema import ConfigFileKind, InspectionSnapshot
 from .._triage import _QUADLET_PREFIX
 from ._helpers import _dhcp_connection_paths, _operator_kargs, _summarise_diff
+
+
+def _safe_write_file(dest: Path, content: str) -> None:
+    """Write content to dest, handling directory/file collisions gracefully.
+
+    If dest already exists as a directory (from a prior entry creating a
+    subdirectory at the same path), skip the write and warn.  If any
+    ancestor of dest already exists as a regular file (blocking mkdir),
+    skip the write and warn.
+    """
+    if dest.is_dir():
+        print(
+            f"yoinkc: warning: skipping config file write — "
+            f"path is already a directory: {dest}",
+            file=sys.stderr,
+        )
+        return
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    except (NotADirectoryError, FileExistsError):
+        # A component in the parent chain is an existing regular file
+        print(
+            f"yoinkc: warning: skipping config file write — "
+            f"parent path conflict: {dest}",
+            file=sys.stderr,
+        )
+        return
+    dest.write_text(content)
 
 
 def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
@@ -17,30 +46,29 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             if not entry.include:
                 continue
             rel = entry.path.lstrip("/")
+            if not rel:
+                continue
             if rel in dhcp_paths:
                 continue
             # Quadlet files are written to quadlet/ and COPYed separately
             if rel.startswith(_QUADLET_PREFIX):
                 continue
             dest = config_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(entry.content or "")
+            _safe_write_file(dest, entry.content or "")
 
     if snapshot.rpm and snapshot.rpm.repo_files:
         for repo in snapshot.rpm.repo_files:
-            if not repo.include:
+            if not repo.include or not repo.path:
                 continue
             dest = config_dir / repo.path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(repo.content or "")
+            _safe_write_file(dest, repo.content or "")
 
     if snapshot.rpm and snapshot.rpm.gpg_keys:
         for key in snapshot.rpm.gpg_keys:
-            if not key.include:
+            if not key.include or not key.path:
                 continue
             dest = config_dir / key.path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(key.content or "")
+            _safe_write_file(dest, key.content or "")
 
     # Firewalld zones and direct rules
     if snapshot.network:
@@ -49,8 +77,7 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
                 continue
             if z.path:
                 dest = config_dir / z.path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(z.content)
+                _safe_write_file(dest, z.content)
         included_direct = [r for r in snapshot.network.firewall_direct_rules if r.include]
         if included_direct:
             import xml.etree.ElementTree as ET
@@ -71,17 +98,15 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
         for c in snapshot.network.connections:
             if c.method == "static" and c.path:
                 dest = config_dir / c.path
-                dest.parent.mkdir(parents=True, exist_ok=True)
                 if not dest.exists():
-                    dest.write_text("")
+                    _safe_write_file(dest, "")
 
     # Custom tuned profiles
     if snapshot.kernel_boot and snapshot.kernel_boot.tuned_custom_profiles:
         for tp in snapshot.kernel_boot.tuned_custom_profiles:
             if tp.path:
                 dest = config_dir / tp.path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(tp.content or "")
+                _safe_write_file(dest, tp.content or "")
 
     # Systemd drop-in overrides — write to both config/ (for Containerfile COPY)
     # and drop-ins/ (for the file browser tree to show them as a dedicated section)
@@ -91,11 +116,9 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             if not di.include:
                 continue
             dest = config_dir / di.path
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(di.content or "")
+            _safe_write_file(dest, di.content or "")
             dropin_dest = dropins_dir / di.path
-            dropin_dest.parent.mkdir(parents=True, exist_ok=True)
-            dropin_dest.write_text(di.content or "")
+            _safe_write_file(dropin_dest, di.content or "")
 
     # Systemd timer units: cron-generated and existing local timers
     st = snapshot.scheduled_tasks
@@ -130,9 +153,10 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             if not entry.include:
                 continue
             rel = entry.path.lstrip("/")
+            if not rel:
+                continue
             dest = config_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(entry.content or "")
+            _safe_write_file(dest, entry.content or "")
 
     # Non-RPM software files
     if snapshot.non_rpm_software and snapshot.non_rpm_software.items:
@@ -142,16 +166,21 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
             # Items with a "files" dict (npm/yarn/gem lockfile dirs)
             if item.path and item.files and isinstance(item.files, dict):
                 rel = item.path.lstrip("/")
+                if not rel:
+                    continue
                 dest = config_dir / rel
+                if dest.is_file():
+                    dest.unlink()  # remove conflicting file to create directory
                 dest.mkdir(parents=True, exist_ok=True)
                 for fname, fcontent in item.files.items():
-                    (dest / fname).write_text(fcontent)
+                    _safe_write_file(dest / fname, fcontent)
             # Items with simple "content" (requirements.txt, single files)
             elif item.path and item.content:
                 rel = item.path.lstrip("/")
+                if not rel:
+                    continue
                 dest = config_dir / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(item.content)
+                _safe_write_file(dest, item.content)
 
     # User/group provisioning files — strategy-aware
     ug = snapshot.users_groups
@@ -223,8 +252,7 @@ def write_config_tree(snapshot: InspectionSnapshot, output_dir: Path) -> None:
                 content = entry.content
                 if kpath:
                     dest = config_dir / kpath
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_text(content)
+                    _safe_write_file(dest, content)
 
     if snapshot.kernel_boot and snapshot.kernel_boot.sysctl_overrides:
         included_sysctls = [s for s in snapshot.kernel_boot.sysctl_overrides if s.include]

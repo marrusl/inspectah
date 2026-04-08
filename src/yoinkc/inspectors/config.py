@@ -429,7 +429,8 @@ def run(
         for entry in rpm_section.rpm_va:
             if entry.path.startswith("/etc"):
                 rpm_va_paths.add(entry.path)
-        rpm_va_by_path = {e.path: e for e in rpm_section.rpm_va}
+        rpm_va_by_path = {e.path: e for e in rpm_section.rpm_va
+                         if e.path.startswith("/etc")}
     else:
         rpm_va_by_path = {}
 
