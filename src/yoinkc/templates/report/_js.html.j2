@@ -2602,6 +2602,85 @@ function syncToolbar(cardId) {
   }
 }
 
+// --- Batched Mutation Helper ---
+function batchToggleItems(cardId, items, include) {
+  if (items.length === 0) return;
+  var directCount = 0;
+
+  // Phase 1: Set checkboxes and snapshot state without per-item side effects
+  items.forEach(function(row) {
+    var section = row.getAttribute('data-snap-section');
+    var list = row.getAttribute('data-snap-list');
+    var idx = parseInt(row.getAttribute('data-snap-index'), 10);
+    if (!section || !list || isNaN(idx)) return;
+
+    var arr = resolveSnapshotRef(section, list);
+    if (arr && arr[idx] !== undefined) {
+      if (arr[idx].include !== include) {
+        arr[idx].include = include;
+        directCount++;
+      }
+    }
+    var cb = row.querySelector('.include-toggle');
+    if (cb) cb.checked = include;
+    row.classList.toggle('excluded', !include);
+  });
+
+  if (directCount === 0) return;
+
+  // Phase 2: One cascade recompute (packages only)
+  var cascadeCount = 0;
+  if (typeof recomputeAutoDeps === 'function') {
+    var beforeCount = countExcludedPackages();
+    recomputeAutoDeps();
+    var afterCount = countExcludedPackages();
+    cascadeCount = Math.abs(afterCount - beforeCount) - directCount;
+    if (cascadeCount < 0) cascadeCount = 0;
+    syncAllPackageCheckboxes();
+  }
+
+  // Phase 3: One UI refresh
+  recalcTriageCounts();
+  updatePkgBanner();
+  setDirty(true);
+  updateToolbar();
+  syncToolbar(cardId);
+
+  // Phase 4: One summary notification
+  var verb = include ? 'Included' : 'Excluded';
+  var msg = verb + ' ' + directCount + ' item' + (directCount !== 1 ? 's' : '');
+  if (cascadeCount > 0) {
+    msg += ' (+' + cascadeCount + ' dependencies)';
+  }
+  showToast(msg);
+}
+
+function countExcludedPackages() {
+  var count = 0;
+  if (snapshot.rpm && snapshot.rpm.packages_added) {
+    snapshot.rpm.packages_added.forEach(function(pkg) {
+      if (!pkg.include) count++;
+    });
+  }
+  return count;
+}
+
+function syncAllPackageCheckboxes() {
+  document.querySelectorAll('[data-snap-section="rpm"] .include-toggle, [data-snap-section="packages"] .include-toggle').forEach(function(cb) {
+    var row = cb.closest('[data-snap-section]');
+    if (!row) return;
+    var section = row.getAttribute('data-snap-section');
+    var list = row.getAttribute('data-snap-list');
+    var idx = parseInt(row.getAttribute('data-snap-index'), 10);
+    if (!section || !list || isNaN(idx)) return;
+    var arr = resolveSnapshotRef(section, list);
+    if (arr && arr[idx] !== undefined) {
+      cb.checked = arr[idx].include;
+      row.classList.toggle('excluded', !arr[idx].include);
+    }
+  });
+}
+
 // Initialize card search toolbars
 document.querySelectorAll('.card-toolbar').forEach(function(toolbar) {
   var cardId = toolbar.getAttribute('data-card-id');
