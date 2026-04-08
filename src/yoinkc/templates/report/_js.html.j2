@@ -2645,6 +2645,7 @@ function batchToggleItems(cardId, items, include) {
   setDirty(true);
   updateToolbar();
   syncToolbar(cardId);
+  generateContainerfilePreview();
 
   // Phase 4: One summary notification
   var verb = include ? 'Included' : 'Excluded';
@@ -2681,13 +2682,146 @@ function syncAllPackageCheckboxes() {
   });
 }
 
-// Initialize card search toolbars
+// Initialize card search toolbars and wire bulk buttons
 document.querySelectorAll('.card-toolbar').forEach(function(toolbar) {
   var cardId = toolbar.getAttribute('data-card-id');
   if (cardId) {
     initCardSearch(cardId);
     syncToolbar(cardId);
   }
+
+  var includeBtn = toolbar.querySelector('.card-toolbar-include-btn');
+  var excludeBtn = toolbar.querySelector('.card-toolbar-exclude-btn');
+
+  if (includeBtn) {
+    includeBtn.addEventListener('click', function() {
+      if (this.disabled) return;
+      bulkToggle(cardId, true);
+    });
+  }
+  if (excludeBtn) {
+    excludeBtn.addEventListener('click', function() {
+      if (this.disabled) return;
+      bulkToggle(cardId, false);
+    });
+  }
 });
+
+// --- Bulk Toggle Routing ---
+function bulkToggle(cardId, include) {
+  var container = document.getElementById(cardId);
+  if (!container) return;
+
+  var hasVariantGroups = container.querySelector('[data-variant-group]') !== null;
+  var isFiltered = isCardFiltered(cardId);
+
+  if (hasVariantGroups) {
+    bulkToggleVariantCard(cardId, container, include, isFiltered);
+  } else {
+    bulkToggleFlatCard(cardId, container, include, isFiltered);
+  }
+}
+
+function isCardFiltered(cardId) {
+  var toolbar = document.querySelector('.card-toolbar[data-card-id="' + cardId + '"]');
+  if (!toolbar) return false;
+  var input = toolbar.querySelector('.card-search-input');
+  return input && input.value.trim() !== '';
+}
+
+// Handles flat cards AND packages (packages get cascade via batchToggleItems)
+function bulkToggleFlatCard(cardId, container, include, isFiltered) {
+  var rows = [];
+  container.querySelectorAll('[data-search-text]').forEach(function(row) {
+    if (isFiltered && row.style.display === 'none') return;
+    var cb = row.querySelector('.include-toggle');
+    if (cb && cb.checked !== include) {
+      rows.push(row);
+    }
+  });
+  batchToggleItems(cardId, rows, include);
+}
+
+// Fleet variant cards: bulk operates at the group level.
+// Exclude unchecks all children. Include checks child[0] of fully-excluded groups only.
+function bulkToggleVariantCard(cardId, container, include, isFiltered) {
+  var groups = {};
+  container.querySelectorAll('[data-variant-group]').forEach(function(row) {
+    var groupKey = row.getAttribute('data-variant-group');
+    if (!groups[groupKey]) groups[groupKey] = [];
+    groups[groupKey].push(row);
+  });
+
+  var singleRows = [];
+  container.querySelectorAll('[data-search-text]:not([data-variant-group])').forEach(function(row) {
+    if (!row.classList.contains('fleet-variant-group') &&
+        !row.classList.contains('fleet-variant-children')) {
+      singleRows.push(row);
+    }
+  });
+
+  var itemsToToggle = [];
+
+  if (include) {
+    Object.keys(groups).forEach(function(key) {
+      var children = groups[key];
+      var parentRow = findVariantParentRow(children[0]);
+      if (isFiltered && parentRow && parentRow.style.display === 'none') return;
+
+      var anyChecked = children.some(function(r) {
+        var cb = r.querySelector('.include-toggle');
+        return cb && cb.checked;
+      });
+      if (!anyChecked && children.length > 0) {
+        itemsToToggle.push(children[0]);
+      }
+    });
+    singleRows.forEach(function(row) {
+      if (isFiltered && row.style.display === 'none') return;
+      var cb = row.querySelector('.include-toggle');
+      if (cb && !cb.checked) itemsToToggle.push(row);
+    });
+  } else {
+    Object.keys(groups).forEach(function(key) {
+      var children = groups[key];
+      var parentRow = findVariantParentRow(children[0]);
+      if (isFiltered && parentRow && parentRow.style.display === 'none') return;
+
+      children.forEach(function(row) {
+        var cb = row.querySelector('.include-toggle');
+        if (cb && cb.checked) itemsToToggle.push(row);
+      });
+    });
+    singleRows.forEach(function(row) {
+      if (isFiltered && row.style.display === 'none') return;
+      var cb = row.querySelector('.include-toggle');
+      if (cb && cb.checked) itemsToToggle.push(row);
+    });
+  }
+
+  batchToggleItems(cardId, itemsToToggle, include);
+  syncVariantParentRows(container);
+}
+
+function findVariantParentRow(childRow) {
+  var childrenWrapper = childRow.closest('.fleet-variant-children');
+  if (childrenWrapper) return childrenWrapper.previousElementSibling;
+  return null;
+}
+
+function syncVariantParentRows(container) {
+  container.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
+    var childrenWrapper = parentRow.nextElementSibling;
+    if (!childrenWrapper || !childrenWrapper.classList.contains('fleet-variant-children')) return;
+    var firstChild = childrenWrapper.querySelector('[data-variant-group]');
+    if (!firstChild) return;
+    var firstCb = firstChild.querySelector('.include-toggle');
+    var parentCb = parentRow.querySelector('.include-toggle');
+    if (firstCb && parentCb) {
+      parentCb.checked = firstCb.checked;
+      parentRow.classList.toggle('excluded', !firstCb.checked);
+    }
+  });
+}
 </script>
 {% include "report/_editor_js.html.j2" %}
