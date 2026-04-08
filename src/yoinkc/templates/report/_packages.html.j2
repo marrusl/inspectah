@@ -56,7 +56,7 @@
       <tbody>
       {%- for repo_name, entries in repo_groups.items() %}
       {%- set repo_meta = repo_file_lookup.get(repo_name) %}
-      <tr class="repo-group-row{% if repo_meta and not repo_meta.include %} excluded{% endif %}" data-repo-group="{{ repo_name }}"{% if repo_meta %} data-snap-section="rpm" data-snap-list="repo_files" data-snap-index="{{ repo_meta.snap_index }}"{% endif %}>
+      <tr class="repo-group-row{% if repo_meta and not repo_meta.include %} excluded{% endif %}" data-repo-group="{{ repo_name }}" data-group="{{ repo_name }}"{% if repo_meta %} data-snap-section="rpm" data-snap-list="repo_files" data-snap-index="{{ repo_meta.snap_index }}"{% endif %}>
         <td class="pf-v6-c-table__check table-group-header{{ ' table-group-header-first' if loop.first else '' }}">
           {%- if repo_meta %}
           <label class="pf-v6-c-switch include-toggle-wrap">
@@ -71,7 +71,7 @@
         </th>
       </tr>
       {%- for entry in entries %}
-      <tr{% if not entry.include or (repo_meta and not repo_meta.include) %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
+      <tr{% if not entry.include or (repo_meta and not repo_meta.include) %} class="excluded"{% endif %} data-leaf="{{ entry.name }}" data-search-text="{{ entry.name }}" data-group="{{ repo_name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ entry.snap_index }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle leaf-cb" {{ 'checked' if entry.include and (not repo_meta or repo_meta.include) else '' }}{{ ' disabled' if repo_meta and not repo_meta.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td><strong>{{ entry.name }}</strong></td>
         <td class="text-sm">{{ entry.version }}</td>
@@ -106,7 +106,7 @@
       {%- for p in snapshot.rpm.packages_added %}
         {%- if p.name == lf %}{% set leaf_idx.val = loop.index0 %}{% endif %}
       {%- endfor %}
-      <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
+      <tr{% if leaf_idx.val >= 0 and not snapshot.rpm.packages_added[leaf_idx.val].include %} class="excluded"{% endif %} data-leaf="{{ lf }}" data-search-text="{{ lf }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ leaf_idx.val }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle leaf-cb" {{ 'checked' if leaf_idx.val < 0 or snapshot.rpm.packages_added[leaf_idx.val].include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td><strong>{{ lf }}</strong></td>
         <td class="text-sm">{{ snapshot.rpm.packages_added[leaf_idx.val].source_repo if leaf_idx.val >= 0 else '' }}</td>
@@ -154,7 +154,7 @@
       {%- for q in snapshot.rpm.packages_added %}
         {%- if q.name == p.name %}{% set uidx.val = loop.index0 %}{% endif %}
       {%- endfor %}
-      <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ uidx.val }}">
+      <tr{% if not p.include %} class="excluded"{% endif %} data-search-text="{{ p.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ uidx.val }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if p.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td>{{ p.name }}</td>
         <td>{{ p.version }}-{{ p.release }}</td>
@@ -171,7 +171,7 @@
   {%- else %}
   <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Name</th><th class="pf-m-fit-content" scope="col">Version</th><th class="pf-m-fit-content" scope="col">Release</th><th class="pf-m-fit-content" scope="col">Arch</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
     {%- for p in snapshot.rpm.packages_added[:100] %}
-    <tr{% if not p.include %} class="excluded"{% endif %} data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if p.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td>{{ fleet_cell(p) }}</tr>
+    <tr{% if not p.include %} class="excluded"{% endif %} data-search-text="{{ p.name }}" data-snap-section="rpm" data-snap-list="packages_added" data-snap-index="{{ loop.index0 }}"><td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if p.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td><td>{{ p.name }}</td><td>{{ p.version }}</td><td>{{ p.release }}</td><td>{{ p.arch }}</td>{{ fleet_cell(p) }}</tr>
     {%- endfor %}
   </tbody></table>
   {%- if snapshot.rpm.packages_added|length > 100 %}

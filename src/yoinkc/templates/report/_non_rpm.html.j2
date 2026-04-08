@@ -16,7 +16,7 @@
       {%- set linking = 'static' if i.static else 'dynamic' %}
       {%- set nr_idx = namespace(val=-1) %}
       {%- for item in nr.items %}{% if item.path == i.path %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
-      <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+      <tr{% if not i.include %} class="excluded"{% endif %} data-search-text="{{ i.path }}" data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if i.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td><code>{{ i.path }}</code></td>
         <td><span class="pf-v6-c-label pf-m-filled {{ lang_lbl.get(lang, 'pf-m-grey') }}">{{ lang }}</span></td>
@@ -85,7 +85,7 @@
       {%- for i in nd.pip[:20] %}
       {%- set nr_idx = namespace(val=-1) %}
       {%- for item in nr.items %}{% if item.path == i.path and item.name == i.name %}{% set nr_idx.val = loop.index0 %}{% endif %}{%- endfor %}
-      <tr{% if not i.include %} class="excluded"{% endif %} data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
+      <tr{% if not i.include %} class="excluded"{% endif %} data-search-text="{{ i.name }}" data-snap-section="non_rpm_software" data-snap-list="items" data-snap-index="{{ nr_idx.val }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if i.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td>{{ i.name }}</td>
         <td>{{ i.version }}</td>

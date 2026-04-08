@@ -8,7 +8,7 @@
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Unit</th><th class="pf-m-fit-content" scope="col">Current</th><th class="pf-m-fit-content" scope="col">Default</th><th class="pf-m-fit-content" scope="col">Action</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
       {%- for s in snapshot.services.state_changes %}
       {%- if s.action != 'unchanged' %}
-      <tr{% if not s.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if s.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td>{{ fleet_cell(s) }}</tr>
+      <tr{% if not s.include %} class="excluded"{% endif %} data-search-text="{{ s.unit }}" data-snap-section="services" data-snap-list="state_changes" data-snap-index="{{ loop.index0 }}"><td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if s.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td><td>{{ s.unit }}</td><td>{{ s.current_state }}</td><td>{{ s.default_state }}</td><td>{{ s.action }}</td>{{ fleet_cell(s) }}</tr>
       {%- endif %}
       {%- endfor %}
     </tbody></table>
@@ -31,6 +31,7 @@
         {%- set sorted_variants = variants | sort(attribute='item.fleet.count', reverse=true) if variants[0].item.fleet else variants %}
         {%- set is_tied = (not group_has_selected) and (variants | length >= 2) and sorted_variants[0].item.fleet and sorted_variants[1].item.fleet and (sorted_variants[0].item.fleet.count == sorted_variants[1].item.fleet.count) %}
         <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}{% if is_tied %} variant-tied{% endif %}"
+            data-search-text="{{ path }}"
             data-snap-section="services" data-snap-list="drop_ins"
             data-snap-index="{{ primary.snap_index }}">
           <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if primary.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
@@ -79,7 +80,7 @@
         </tr>
       {%- else %}
         {%- set d = variants[0].item %}
-        <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ variants[0].snap_index }}">
+        <tr{% if not d.include %} class="excluded"{% endif %} data-search-text="{{ d.path }}" data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ variants[0].snap_index }}">
           <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if d.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
           {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="services" data-list="drop_ins" data-index="{{ variants[0].snap_index }}" data-path="{{ d.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
           <td>{{ d.unit }}</td>
@@ -91,7 +92,7 @@
       {%- endfor %}
     {% else %}
       {%- for d in snapshot.services.drop_ins %}
-      <tr{% if not d.include %} class="excluded"{% endif %} data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
+      <tr{% if not d.include %} class="excluded"{% endif %} data-search-text="{{ d.path }}" data-snap-section="services" data-snap-list="drop_ins" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if d.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="services" data-list="drop_ins" data-index="{{ loop.index0 }}" data-path="{{ d.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
         <td>{{ d.unit }}</td>

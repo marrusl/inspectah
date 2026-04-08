@@ -64,7 +64,7 @@
     <div class="pf-v6-c-expandable-section__content" id="card-net-firewall-direct"><div class="pf-v6-c-card__body">
     <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th class="pf-m-fit-content" scope="col">IPv</th><th class="pf-m-fit-content" scope="col">Table</th><th class="pf-m-fit-content" scope="col">Chain</th><th scope="col">Args</th></tr></thead><tbody>
       {%- for r in net.firewall_direct_rules %}
-      <tr{% if not r.include %} class="excluded"{% endif %} data-snap-section="network" data-snap-list="firewall_direct_rules" data-snap-index="{{ loop.index0 }}">
+      <tr{% if not r.include %} class="excluded"{% endif %} data-search-text="{{ r.args }}" data-snap-section="network" data-snap-list="firewall_direct_rules" data-snap-index="{{ loop.index0 }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if r.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td>{{ r.ipv }}</td>
         <td>{{ r.table }}</td>

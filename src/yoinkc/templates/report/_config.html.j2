@@ -14,6 +14,7 @@
       {%- set sorted_variants = variants | sort(attribute='item.fleet.count', reverse=true) if variants[0].item.fleet else variants %}
       {%- set is_tied = (not group_has_selected) and (variants | length >= 2) and sorted_variants[0].item.fleet and sorted_variants[1].item.fleet and (sorted_variants[0].item.fleet.count == sorted_variants[1].item.fleet.count) %}
       <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}{% if is_tied %} variant-tied{% endif %}"
+          data-search-text="{{ path }}"
           data-snap-section="config" data-snap-list="files"
           data-snap-index="{{ primary.item.snap_index }}">
         <td class="pf-v6-c-table__check">
@@ -77,7 +78,7 @@
       </tr>
     {%- else %}
       {%- set f = variants[0].item %}
-      <tr{% if not f.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ f.snap_index }}">
+      <tr{% if not f.include %} class="excluded"{% endif %} data-search-text="{{ f.path }}" data-snap-section="config" data-snap-list="files" data-snap-index="{{ f.snap_index }}">
         <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if f.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="config" data-list="files" data-index="{{ f.snap_index }}" data-path="{{ f.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
         <td><code>{{ f.path }}</code></td>
@@ -89,7 +90,7 @@
     {%- endfor %}
   {% else %}
     {%- for item in config_files_rendered %}
-    <tr{% if not item.include %} class="excluded"{% endif %} data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
+    <tr{% if not item.include %} class="excluded"{% endif %} data-search-text="{{ item.path }}" data-snap-section="config" data-snap-list="files" data-snap-index="{{ item.snap_index }}">
       <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
       {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="Edit in editor" data-section="config" data-list="files" data-index="{{ item.snap_index }}" data-path="{{ item.path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
       <td><code>{{ item.path }}</code></td>
