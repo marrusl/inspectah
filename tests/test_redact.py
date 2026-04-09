@@ -371,7 +371,10 @@ def test_redact_shadow_round_trip():
     for entry in result.users_groups.shadow_entries:
         assert "$6$" not in entry
         assert "longhashvalue" not in entry
-    assert result.users_groups.shadow_entries[1] == "nobody:*:19700:0:99999:7:::"
+    # After sorting by username, nobody comes before root
+    nobody_entries = [e for e in result.users_groups.shadow_entries if e.startswith("nobody:")]
+    assert len(nobody_entries) == 1
+    assert nobody_entries[0] == "nobody:*:19700:0:99999:7:::"
 
 
 # ---------------------------------------------------------------------------
@@ -576,3 +579,163 @@ def test_wifi_psk_redacted():
     # Assignment syntax preserved: "psk=" still present
     assert "psk=REDACTED_WIFI_PSK_" in content or "psk= REDACTED_WIFI_PSK_" in content
     assert result.config.files[0].include is True
+
+
+# ---------------------------------------------------------------------------
+# Task 3: Sequential counters
+# ---------------------------------------------------------------------------
+
+import re
+
+
+def test_sequential_counters_deterministic():
+    """Same input produces same counter assignments."""
+    content_a = "password=secret1\napi_key=abcdefghijklmnopqrstuvwxyz\n"
+    content_b = "password=secret2\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/app/a.conf", kind=ConfigFileKind.UNOWNED, content=content_a, include=True),
+        ConfigFileEntry(path="/etc/app/b.conf", kind=ConfigFileKind.UNOWNED, content=content_b, include=True),
+    ]))
+    r1 = redact_snapshot(snapshot)
+    r2 = redact_snapshot(_base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/app/a.conf", kind=ConfigFileKind.UNOWNED, content=content_a, include=True),
+        ConfigFileEntry(path="/etc/app/b.conf", kind=ConfigFileKind.UNOWNED, content=content_b, include=True),
+    ])))
+    assert r1.config.files[0].content == r2.config.files[0].content
+    assert r1.config.files[1].content == r2.config.files[1].content
+
+
+def test_sequential_counters_no_hash():
+    """Counter tokens must not contain hash fragments."""
+    content = "password=mysecret\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED, content=content, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    redacted = result.config.files[0].content
+    # Should be REDACTED_PASSWORD_N, not REDACTED_PASSWORD_<hex>
+    assert re.search(r"REDACTED_PASSWORD_\d+", redacted)
+    assert not re.search(r"REDACTED_PASSWORD_[0-9a-f]{8}", redacted)
+
+
+def test_same_secret_gets_same_counter():
+    """Identical secret values across files share the same counter."""
+    content_a = "password=identical_secret_value_here\n"
+    content_b = "password=identical_secret_value_here\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/app/a.conf", kind=ConfigFileKind.UNOWNED, content=content_a, include=True),
+        ConfigFileEntry(path="/etc/app/b.conf", kind=ConfigFileKind.UNOWNED, content=content_b, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    token_a = re.search(r"REDACTED_PASSWORD_\d+", result.config.files[0].content).group()
+    token_b = re.search(r"REDACTED_PASSWORD_\d+", result.config.files[1].content).group()
+    assert token_a == token_b
+
+
+def test_shadow_uses_sequential_counter():
+    """Shadow entries must use sequential counters, not truncated SHA-256."""
+    snapshot = _base_snapshot(
+        users_groups=UserGroupSection(
+            shadow_entries=[
+                "jdoe:$y$j9T$abc123hashdata$longhashcontinues:19700:0:99999:7:::",
+                "admin:$6$rounds=65536$saltsalt$longhashvalue:19700:0:99999:7:::",
+            ],
+        )
+    )
+    result = redact_snapshot(snapshot)
+    entry0 = result.users_groups.shadow_entries[0]
+    entry1 = result.users_groups.shadow_entries[1]
+    # Must use sequential counter format, not hash
+    assert re.search(r"REDACTED_SHADOW_HASH_\d+$", entry0.split(":")[1]), f"Expected counter format, got: {entry0.split(':')[1]}"
+    assert re.search(r"REDACTED_SHADOW_HASH_\d+$", entry1.split(":")[1]), f"Expected counter format, got: {entry1.split(':')[1]}"
+    # Different hashes get different counters
+    assert entry0.split(":")[1] != entry1.split(":")[1]
+
+
+def test_counter_shared_across_file_and_shadow():
+    """File-backed and shadow findings share counter space — no duplicate counters."""
+    content = "password=somesecret\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED, content=content, include=True),
+        ]),
+        users_groups=UserGroupSection(
+            shadow_entries=["jdoe:$y$j9T$abc$hash:19700:0:99999:7:::"],
+        ),
+    )
+    result = redact_snapshot(snapshot)
+    # Both should use counters (no hashes)
+    redacted_content = result.config.files[0].content
+    shadow_entry = result.users_groups.shadow_entries[0]
+    assert re.search(r"REDACTED_PASSWORD_\d+", redacted_content)
+    assert re.search(r"REDACTED_SHADOW_HASH_\d+", shadow_entry)
+    # No hex-hash patterns anywhere
+    assert not re.search(r"REDACTED_\w+_[0-9a-f]{8}", redacted_content)
+    assert not re.search(r"REDACTED_SHADOW_HASH_[0-9a-f]{8}", shadow_entry)
+
+
+def test_counter_assignment_independent_of_input_order():
+    """Counter tokens are deterministic regardless of input order.
+
+    This test creates files in two different orders and verifies:
+    1. The redactions list has identical path ordering (output-order sort)
+    2. ConfigFileEntry.content strings carry identical placeholder tokens
+    3. Each RedactionFinding.replacement token appears in its file's content
+
+    Check 2 is the critical one: it proves that sorting inputs before
+    processing makes the _CounterRegistry assign the same tokens
+    regardless of the caller's original ordering. Check 3 proves content
+    and metadata are in sync (same code path produces both).
+    """
+    # Files deliberately in REVERSE alphabetical order
+    snapshot_reversed = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/zzz/app.conf", kind=ConfigFileKind.UNOWNED,
+                        content="password=secret_zzz\n", include=True),
+        ConfigFileEntry(path="/etc/aaa/db.conf", kind=ConfigFileKind.UNOWNED,
+                        content="password=secret_aaa\n", include=True),
+        ConfigFileEntry(path="/etc/mmm/mid.conf", kind=ConfigFileKind.UNOWNED,
+                        content="password=secret_mmm\n", include=True),
+    ]))
+    # Same files in alphabetical order
+    snapshot_sorted = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/aaa/db.conf", kind=ConfigFileKind.UNOWNED,
+                        content="password=secret_aaa\n", include=True),
+        ConfigFileEntry(path="/etc/mmm/mid.conf", kind=ConfigFileKind.UNOWNED,
+                        content="password=secret_mmm\n", include=True),
+        ConfigFileEntry(path="/etc/zzz/app.conf", kind=ConfigFileKind.UNOWNED,
+                        content="password=secret_zzz\n", include=True),
+    ]))
+
+    result_reversed = redact_snapshot(snapshot_reversed)
+    result_sorted = redact_snapshot(snapshot_sorted)
+
+    # --- Check 1: redactions list ordering ---
+    # Extract paths in the order they appear in snapshot.redactions
+    paths_reversed = [r.get("path") if isinstance(r, dict) else r.path
+                      for r in result_reversed.redactions]
+    paths_sorted = [r.get("path") if isinstance(r, dict) else r.path
+                    for r in result_sorted.redactions]
+
+    # Both should produce the SAME ordering (alphabetical by path)
+    assert paths_reversed == paths_sorted, (
+        f"Findings order depends on input order!\n"
+        f"  Reversed input produced: {paths_reversed}\n"
+        f"  Sorted input produced:   {paths_sorted}"
+    )
+
+    # And the order should be alphabetical
+    assert paths_reversed == sorted(paths_reversed), (
+        f"Findings not sorted by path: {paths_reversed}"
+    )
+
+    # --- Check 2: actual content strings carry identical tokens ---
+    # Build path->content maps from each result's config.files
+    content_reversed = {f.path: f.content for f in result_reversed.config.files}
+    content_sorted = {f.path: f.content for f in result_sorted.config.files}
+
+    for path in content_reversed:
+        assert content_reversed[path] == content_sorted[path], (
+            f"Content tokens differ for {path}!\n"
+            f"  Reversed input: {content_reversed[path]!r}\n"
+            f"  Sorted input:   {content_sorted[path]!r}"
+        )

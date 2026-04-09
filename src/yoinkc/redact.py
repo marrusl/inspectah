@@ -72,6 +72,29 @@ def _truncated_sha256(value: str, length: int = 8) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:length]
 
 
+class _CounterRegistry:
+    """Maps (type_label, secret_value) -> deterministic sequential counter token.
+
+    One instance shared across ALL finding types within a single
+    redact_snapshot() call. Ordering: file-backed findings first (sorted
+    by path), then non-file-backed (shadow, container-env, etc.).
+    """
+
+    def __init__(self):
+        self._counters: dict[str, int] = {}  # type_label -> next counter
+        self._seen: dict[tuple[str, str], str] = {}  # (type_label, value) -> token
+
+    def get_token(self, type_label: str, value: str) -> str:
+        key = (type_label, value)
+        if key in self._seen:
+            return self._seen[key]
+        n = self._counters.get(type_label, 0) + 1
+        self._counters[type_label] = n
+        token = f"REDACTED_{type_label}_{n}"
+        self._seen[key] = token
+        return token
+
+
 # Values that commonly appear after "password:" or "passwd:" in config files
 # but are not actual secrets (e.g. nsswitch.conf, PAM configs, sudoers).
 _FALSE_POSITIVE_VALUES = frozenset({
@@ -96,7 +119,10 @@ def _is_comment_line(text: str, match_start: int) -> bool:
 _SHADOW_NOOP_HASHES = frozenset({"*", "!", "!!", ""})
 
 
-def _redact_shadow_entry(line: str, redactions: List[dict]) -> str:
+def _redact_shadow_entry(
+    line: str, redactions: List[dict],
+    registry: Optional[_CounterRegistry] = None,
+) -> str:
     """Redact the password hash (field index 1) of a shadow-format line.
 
     Locked/disabled markers (``*``, ``!``, ``!!``, empty) are left intact.
@@ -111,7 +137,10 @@ def _redact_shadow_entry(line: str, redactions: List[dict]) -> str:
     stripped = raw_hash.lstrip("!")
     if stripped in _SHADOW_NOOP_HASHES or not stripped:
         return line
-    replacement = f"REDACTED_SHADOW_HASH_{_truncated_sha256(raw_hash)}"
+    if registry is not None:
+        replacement = registry.get_token("SHADOW_HASH", raw_hash)
+    else:
+        replacement = f"REDACTED_SHADOW_HASH_{_truncated_sha256(raw_hash)}"
     redactions.append({
         "path": f"users:shadow/{fields[0]}",
         "pattern": "SHADOW_HASH",
@@ -122,7 +151,10 @@ def _redact_shadow_entry(line: str, redactions: List[dict]) -> str:
     return ":".join(fields)
 
 
-def _redact_text(text: str, path: str, redactions: List[dict]) -> str:
+def _redact_text(
+    text: str, path: str, redactions: List[dict],
+    registry: Optional[_CounterRegistry] = None,
+) -> str:
     out = text
     for pattern, type_label in REDACT_PATTERNS:
         matches = list(re.finditer(pattern, out, re.IGNORECASE | re.DOTALL))
@@ -131,12 +163,18 @@ def _redact_text(text: str, path: str, redactions: List[dict]) -> str:
             if _is_comment_line(out, m.start()):
                 continue
             if type_label == "PRIVATE_KEY":
-                replacement = f"REDACTED_{type_label}_<removed>"
+                if registry is not None:
+                    replacement = registry.get_token(type_label, m.group(0))
+                else:
+                    replacement = f"REDACTED_{type_label}_<removed>"
             else:
                 sub = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(0)
                 if type_label == "PASSWORD" and sub.strip().lower() in _FALSE_POSITIVE_VALUES:
                     continue
-                replacement = f"REDACTED_{type_label}_{_truncated_sha256(sub)}"
+                if registry is not None:
+                    replacement = registry.get_token(type_label, sub)
+                else:
+                    replacement = f"REDACTED_{type_label}_{_truncated_sha256(sub)}"
                 # Preserve the prefix (group 1) when it captures the
                 # assignment syntax (contains = or :).  Patterns like
                 # WIREGUARD_KEY and WIFI_PSK capture "PrivateKey = " or
@@ -189,15 +227,17 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
     """
     redactions: List[dict] = list(snapshot.redactions)
     updates: dict = {}
+    registry = _CounterRegistry()
 
     _EXCLUDED_PLACEHOLDER = "# Content excluded (sensitive path). Handle manually.\n"
 
     # -----------------------------------------------------------------------
-    # 1. config.files — existing behaviour
+    # 1. config.files — sorted by path for deterministic counter assignment
     # -----------------------------------------------------------------------
     if snapshot.config and snapshot.config.files:
         new_files: List[ConfigFileEntry] = []
-        for entry in snapshot.config.files:
+        sorted_files = sorted(snapshot.config.files, key=lambda f: f.path)
+        for entry in sorted_files:
             if _is_excluded_path(entry.path):
                 if entry.content != _EXCLUDED_PLACEHOLDER:
                     redactions.append({
@@ -208,9 +248,9 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                     })
                 new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
-            new_content = _redact_text(entry.content or "", entry.path, redactions)
+            new_content = _redact_text(entry.content or "", entry.path, redactions, registry=registry)
             new_diff = _redact_text(
-                entry.diff_against_rpm or "", f"{entry.path}:diff", redactions
+                entry.diff_against_rpm or "", f"{entry.path}:diff", redactions, registry=registry
             ) if entry.diff_against_rpm else None
             file_updates: dict = {}
             if new_content != (entry.content or ""):
@@ -224,13 +264,14 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         updates["config"] = snapshot.config.model_copy(update={"files": new_files})
 
     # -----------------------------------------------------------------------
-    # 2. NetworkSection — firewall zone XML (can contain VPN/wifi secrets)
+    # 2. NetworkSection — firewall zone XML (sorted by name)
     # -----------------------------------------------------------------------
     if snapshot.network and snapshot.network.firewall_zones:
         new_zones: List[FirewallZone] = []
         changed = False
-        for z in snapshot.network.firewall_zones:
-            new_content = _redact_text(z.content, f"network:firewall_zone/{z.name}", redactions)
+        sorted_zones = sorted(snapshot.network.firewall_zones, key=lambda z: z.name)
+        for z in sorted_zones:
+            new_content = _redact_text(z.content, f"network:firewall_zone/{z.name}", redactions, registry=registry)
             if new_content != z.content:
                 new_zones.append(z.model_copy(update={"content": new_content}))
                 changed = True
@@ -242,7 +283,8 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             )
 
     # -----------------------------------------------------------------------
-    # 3. ContainerSection — quadlet unit content and running container env
+    # 3. ContainerSection — quadlet units (sorted by name) and running
+    #    container env (sorted by name/id, env vars sorted within each)
     # -----------------------------------------------------------------------
     if snapshot.containers:
         ct_updates: dict = {}
@@ -250,8 +292,9 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         if snapshot.containers.quadlet_units:
             new_units: List[QuadletUnit] = []
             changed = False
-            for u in snapshot.containers.quadlet_units:
-                new_content = _redact_text(u.content, f"containers:quadlet/{u.name}", redactions)
+            sorted_quadlets = sorted(snapshot.containers.quadlet_units, key=lambda u: u.name)
+            for u in sorted_quadlets:
+                new_content = _redact_text(u.content, f"containers:quadlet/{u.name}", redactions, registry=registry)
                 if new_content != u.content:
                     new_units.append(u.model_copy(update={"content": new_content}))
                     changed = True
@@ -263,12 +306,14 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         if snapshot.containers.running_containers:
             new_containers: List[RunningContainer] = []
             changed = False
-            for c in snapshot.containers.running_containers:
+            sorted_containers = sorted(snapshot.containers.running_containers, key=lambda c: c.name or c.id[:12])
+            for c in sorted_containers:
                 name = c.name or c.id[:12]
                 new_env: List[str] = []
                 env_changed = False
-                for e in c.env:
-                    redacted_e = _redact_text(e, f"containers:running/{name}:env", redactions)
+                sorted_env = sorted(c.env)
+                for e in sorted_env:
+                    redacted_e = _redact_text(e, f"containers:running/{name}:env", redactions, registry=registry)
                     new_env.append(redacted_e)
                     if redacted_e != e:
                         env_changed = True
@@ -284,7 +329,8 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             updates["containers"] = snapshot.containers.model_copy(update=ct_updates)
 
     # -----------------------------------------------------------------------
-    # 4. ScheduledTaskSection — generated timer service content and commands
+    # 4. ScheduledTaskSection — generated timer units (sorted by name),
+    #    systemd timers (sorted by name)
     # -----------------------------------------------------------------------
     if snapshot.scheduled_tasks:
         st_updates: dict = {}
@@ -292,15 +338,16 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         if snapshot.scheduled_tasks.generated_timer_units:
             new_gen: List[GeneratedTimerUnit] = []
             changed = False
-            for u in snapshot.scheduled_tasks.generated_timer_units:
+            sorted_gen = sorted(snapshot.scheduled_tasks.generated_timer_units, key=lambda u: u.name)
+            for u in sorted_gen:
                 item_updates: dict = {}
                 new_svc = _redact_text(
-                    u.service_content, f"scheduled:timer/{u.name}:service_content", redactions
+                    u.service_content, f"scheduled:timer/{u.name}:service_content", redactions, registry=registry
                 )
                 if new_svc != u.service_content:
                     item_updates["service_content"] = new_svc
                 new_cmd = _redact_text(
-                    u.command, f"scheduled:timer/{u.name}:command", redactions
+                    u.command, f"scheduled:timer/{u.name}:command", redactions, registry=registry
                 )
                 if new_cmd != u.command:
                     item_updates["command"] = new_cmd
@@ -315,12 +362,13 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         if snapshot.scheduled_tasks.systemd_timers:
             new_timers: List[SystemdTimer] = []
             changed = False
-            for t in snapshot.scheduled_tasks.systemd_timers:
+            sorted_timers = sorted(snapshot.scheduled_tasks.systemd_timers, key=lambda t: t.name)
+            for t in sorted_timers:
                 if t.source != "local":
                     new_timers.append(t)
                     continue
                 new_svc = _redact_text(
-                    t.service_content, f"scheduled:systemd_timer/{t.name}:service_content", redactions
+                    t.service_content, f"scheduled:systemd_timer/{t.name}:service_content", redactions, registry=registry
                 )
                 if new_svc != t.service_content:
                     new_timers.append(t.model_copy(update={"service_content": new_svc}))
@@ -334,7 +382,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             updates["scheduled_tasks"] = snapshot.scheduled_tasks.model_copy(update=st_updates)
 
     # -----------------------------------------------------------------------
-    # 5. KernelBootSection — GRUB defaults and module configs
+    # 5. KernelBootSection — GRUB defaults and module configs (sorted by path)
     # -----------------------------------------------------------------------
     if snapshot.kernel_boot:
         kb_updates: dict = {}
@@ -343,6 +391,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             snapshot.kernel_boot.grub_defaults,
             "kernel:grub_defaults",
             redactions,
+            registry=registry,
         )
         if new_grub != snapshot.kernel_boot.grub_defaults:
             kb_updates["grub_defaults"] = new_grub
@@ -355,10 +404,11 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             entries = getattr(snapshot.kernel_boot, attr)
             if not entries:
                 continue
+            sorted_entries = sorted(entries, key=lambda e: e.path)
             new_entries = []
             changed = False
-            for entry in entries:
-                new_content = _redact_text(entry.content, f"kernel:{label}/{entry.path}", redactions)
+            for entry in sorted_entries:
+                new_content = _redact_text(entry.content, f"kernel:{label}/{entry.path}", redactions, registry=registry)
                 if new_content != entry.content:
                     new_entries.append(entry.model_copy(update={"content": new_content}))
                     changed = True
@@ -371,12 +421,13 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             updates["kernel_boot"] = snapshot.kernel_boot.model_copy(update=kb_updates)
 
     # -----------------------------------------------------------------------
-    # 6. NonRpmSoftwareSection — dotenv / secret files under /opt
+    # 6. NonRpmSoftwareSection — dotenv / secret files under /opt (sorted by path)
     # -----------------------------------------------------------------------
     if snapshot.non_rpm_software and snapshot.non_rpm_software.env_files:
         new_env_files: List[ConfigFileEntry] = []
         changed = False
-        for entry in snapshot.non_rpm_software.env_files:
+        sorted_env_files = sorted(snapshot.non_rpm_software.env_files, key=lambda f: f.path)
+        for entry in sorted_env_files:
             if _is_excluded_path(entry.path):
                 if entry.content != _EXCLUDED_PLACEHOLDER:
                     redactions.append({
@@ -387,7 +438,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                     })
                 new_env_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
-            new_content = _redact_text(entry.content or "", entry.path, redactions)
+            new_content = _redact_text(entry.content or "", entry.path, redactions, registry=registry)
             if new_content != (entry.content or ""):
                 new_env_files.append(entry.model_copy(update={"content": new_content}))
                 changed = True
@@ -399,7 +450,8 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             )
 
     # -----------------------------------------------------------------------
-    # 7. UserGroupSection — sudoers, shadow entries, passwd GECOS
+    # 7. UserGroupSection — sudoers (sorted), shadow (sorted by username),
+    #    passwd (sorted by username)
     # -----------------------------------------------------------------------
     if snapshot.users_groups:
         ug = snapshot.users_groups
@@ -408,8 +460,9 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         if ug.sudoers_rules:
             new_rules: List[str] = []
             changed = False
-            for rule in ug.sudoers_rules:
-                new_rule = _redact_text(rule, "users:sudoers", redactions)
+            sorted_rules = sorted(ug.sudoers_rules)
+            for rule in sorted_rules:
+                new_rule = _redact_text(rule, "users:sudoers", redactions, registry=registry)
                 new_rules.append(new_rule)
                 if new_rule != rule:
                     changed = True
@@ -419,8 +472,9 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         if ug.shadow_entries:
             new_shadow: List[str] = []
             changed = False
-            for entry in ug.shadow_entries:
-                new_entry = _redact_shadow_entry(entry, redactions)
+            sorted_shadow = sorted(ug.shadow_entries, key=lambda e: e.split(":")[0] if ":" in e else e)
+            for entry in sorted_shadow:
+                new_entry = _redact_shadow_entry(entry, redactions, registry=registry)
                 new_shadow.append(new_entry)
                 if new_entry != entry:
                     changed = True
@@ -430,10 +484,11 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         if ug.passwd_entries:
             new_passwd: List[str] = []
             changed = False
-            for entry in ug.passwd_entries:
+            sorted_passwd = sorted(ug.passwd_entries, key=lambda e: e.split(":")[0] if ":" in e else e)
+            for entry in sorted_passwd:
                 fields = entry.split(":")
                 if len(fields) >= 5:
-                    new_gecos = _redact_text(fields[4], f"users:passwd/{fields[0]}:gecos", redactions)
+                    new_gecos = _redact_text(fields[4], f"users:passwd/{fields[0]}:gecos", redactions, registry=registry)
                     if new_gecos != fields[4]:
                         fields[4] = new_gecos
                         new_passwd.append(":".join(fields))
@@ -445,6 +500,22 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
 
         if ug_updates:
             updates["users_groups"] = ug.model_copy(update=ug_updates)
+
+    # -----------------------------------------------------------------------
+    # Output-order sort (tokens are already assigned — this only reorders
+    # the findings list for consistent rendering)
+    # -----------------------------------------------------------------------
+    def _redaction_sort_key(r) -> tuple:
+        if isinstance(r, dict):
+            path = r.get("path", "")
+            return (True, "", path, 0)  # legacy dicts sort after file-backed
+        is_non_file = r.source != "file"
+        if is_non_file:
+            return (True, r.source, r.path, 0)
+        else:
+            return (False, "", r.path, r.line or 0)
+
+    redactions.sort(key=_redaction_sort_key)
 
     updates["redactions"] = redactions
     return snapshot.model_copy(update=updates)
