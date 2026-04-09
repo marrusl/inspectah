@@ -33,7 +33,7 @@ EXCLUDED_PATHS = (
 
 # (pattern, type_label). Order matters: more specific first.
 REDACT_PATTERNS: List[Tuple[str, str]] = [
-    (r"-----BEGIN\s+.+PRIVATE KEY-----[\s\S]+?-----END\s+.+-----", "PRIVATE_KEY"),
+    (r"-----BEGIN\s+(?:\w+\s+)*PRIVATE KEY-----[\s\S]+?-----END\s+(?:\w+\s+)*PRIVATE KEY-----", "PRIVATE_KEY"),
     (r"(?i)(api[_-]?key|apikey)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{20,})['\"]?", "API_KEY"),
     (r"(?i)(token)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{20,})['\"]?", "TOKEN"),
     (r"(?i)(?<![a-z])(password|passwd|pass|passphrase)\s*[:=]\s*['\"]?([^\s'\"]+)['\"]?", "PASSWORD"),

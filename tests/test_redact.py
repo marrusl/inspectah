@@ -852,3 +852,56 @@ def test_redaction_findings_compat_with_existing_tests():
     # .get() compat works
     assert r.get("path") == "/etc/app.conf"
     assert r.get("pattern") is not None
+
+
+# ---------------------------------------------------------------------------
+# Task 12: Mixed PEM bundle regression tests
+# ---------------------------------------------------------------------------
+
+def test_mixed_pem_cert_plus_key_inline_redacts_key_only():
+    """Combined cert+key PEM: private key block redacted, cert preserved."""
+    pem_bundle = (
+        "-----BEGIN CERTIFICATE-----\n"
+        "MIIBkTCB+wIJALRiMLAh0EGKMA0G...\n"
+        "-----END CERTIFICATE-----\n"
+        "-----BEGIN PRIVATE KEY-----\n"
+        "MIIEvgIBADANBgkqhkiG9w0BAQEF...\n"
+        "-----END PRIVATE KEY-----\n"
+    )
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/tls/certs/bundle.pem", kind=ConfigFileKind.UNOWNED, content=pem_bundle, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    content = result.config.files[0].content
+    # Cert block preserved
+    assert "BEGIN CERTIFICATE" in content
+    assert "MIIBkTCB" in content
+    # Key block redacted
+    assert "BEGIN PRIVATE KEY" not in content or "REDACTED_PRIVATE_KEY" in content
+    # File still included (inline redaction)
+    assert result.config.files[0].include is True
+
+
+def test_cert_only_pem_no_redaction():
+    """Cert-only PEM file: no redaction needed."""
+    cert_only = (
+        "-----BEGIN CERTIFICATE-----\n"
+        "MIIBkTCB+wIJALRiMLAh0EGKMA0G...\n"
+        "-----END CERTIFICATE-----\n"
+    )
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/tls/certs/ca-bundle.crt", kind=ConfigFileKind.UNOWNED, content=cert_only, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert result.config.files[0].content == cert_only
+    assert result.config.files[0].include is True
+
+
+def test_key_only_file_excluded():
+    """Key-only .key file: full exclusion via path pattern."""
+    key_only = "-----BEGIN PRIVATE KEY-----\nMIIEvg...\n-----END PRIVATE KEY-----\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/tls/private/server.key", kind=ConfigFileKind.UNOWNED, content=key_only, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert result.config.files[0].include is False
