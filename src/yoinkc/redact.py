@@ -238,7 +238,11 @@ def scan_directory_for_secrets(root: Path) -> Optional[str]:
         except Exception:
             continue
         for pattern, _ in REDACT_PATTERNS:
-            if re.search(pattern, text, re.IGNORECASE | re.DOTALL):
+            for m in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
+                # Extract the captured secret value (group 2 if present, else full match)
+                captured = m.group(m.lastindex) if m.lastindex else m.group(0)
+                if captured.startswith("REDACTED_"):
+                    continue
                 return str(f.relative_to(root))
     return None
 

@@ -971,3 +971,25 @@ def test_container_env_finding_has_no_line():
     env_findings = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.source == "container-env"]
     assert len(env_findings) >= 1
     assert all(f.line is None for f in env_findings)
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: scan_directory_for_secrets skips REDACTED_ placeholders
+# ---------------------------------------------------------------------------
+
+def test_scan_directory_ignores_redacted_placeholders(tmp_path):
+    """scan_directory_for_secrets skips REDACTED_ placeholder values."""
+    from yoinkc.redact import scan_directory_for_secrets
+    conf = tmp_path / "app.conf"
+    conf.write_text("password=REDACTED_PASSWORD_1\napi_key=REDACTED_API_KEY_1\n")
+    result = scan_directory_for_secrets(tmp_path)
+    assert result is None  # no false positive
+
+
+def test_scan_directory_catches_real_secrets(tmp_path):
+    """scan_directory_for_secrets still catches actual secret values."""
+    from yoinkc.redact import scan_directory_for_secrets
+    conf = tmp_path / "app.conf"
+    conf.write_text("password=actual_secret_value\n")
+    result = scan_directory_for_secrets(tmp_path)
+    assert result is not None  # real secret detected
