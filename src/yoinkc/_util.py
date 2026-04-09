@@ -92,6 +92,33 @@ def parse_dist_info_name(stem: str) -> Tuple[str, str]:
     return stem, ""
 
 
+def detect_rpmdb_path(host_root: Path, *, relative: bool = False) -> str:
+    """Return the rpmdb path for *host_root*.
+
+    Probes ``<host_root>/usr/lib/sysimage/rpm/`` first (Fedora 33+, modern
+    default), then falls back to ``<host_root>/var/lib/rpm/`` (RHEL 9,
+    CentOS, older Fedora).  Returns the first directory that exists and
+    is non-empty; defaults to the traditional path if neither qualifies.
+
+    When *relative* is True, the returned path is relative to *host_root*
+    (e.g. ``/var/lib/rpm``).  This is useful for ``rpm --root`` + ``--dbpath``
+    combos where rpm interprets the dbpath relative to the root.
+    """
+    # In-container paths (used for probing and for relative return value).
+    _RPMDB_CANDIDATES = [
+        Path("/usr/lib/sysimage/rpm"),
+        Path("/var/lib/rpm"),
+    ]
+    for in_container in _RPMDB_CANDIDATES:
+        on_disk = host_root / in_container.relative_to("/")
+        if on_disk.is_dir() and safe_iterdir(on_disk):
+            return str(in_container) if relative else str(on_disk)
+    # Default to the traditional location when neither directory exists
+    # (the subsequent rpm call will fail and trigger --root fallback).
+    fallback = _RPMDB_CANDIDATES[-1]
+    return str(fallback) if relative else str(host_root / fallback.relative_to("/"))
+
+
 def run_rpm_query(executor, host_root: Path, args: List[str]):
     """Run an rpm query against *host_root* with ``--dbpath`` fallback to ``--root``.
 
@@ -102,7 +129,7 @@ def run_rpm_query(executor, host_root: Path, args: List[str]):
     if str(host_root) == "/":
         prefix: List[str] = ["rpm"]
     else:
-        prefix = ["rpm", "--dbpath", str(host_root / "var" / "lib" / "rpm")]
+        prefix = ["rpm", "--dbpath", detect_rpmdb_path(host_root)]
     result = executor(prefix + args)
     if result.returncode != 0 and str(host_root) != "/":
         result = executor(

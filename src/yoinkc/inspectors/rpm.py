@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .._util import debug as _debug_fn, make_warning, run_rpm_query as _util_run_rpm_query, _RPM_LOCK_DEFINE as _UTIL_RPM_LOCK_DEFINE
+from .._util import debug as _debug_fn, detect_rpmdb_path, make_warning, run_rpm_query as _util_run_rpm_query, _RPM_LOCK_DEFINE as _UTIL_RPM_LOCK_DEFINE
 
 
 def _debug(msg: str) -> None:
@@ -903,7 +903,7 @@ def run(
 
     # 1) rpm -qa
     if executor is not None:
-        dbpath = str(host_root / "var" / "lib" / "rpm")
+        dbpath = detect_rpmdb_path(host_root)
         cmd_qa = ["rpm", "--dbpath", dbpath, "-qa", "--queryformat", RPM_QA_QUERYFORMAT + "\\n"]
         result_qa = executor(cmd_qa)
         used_root_fallback = False
@@ -1093,7 +1093,7 @@ def run(
         if str(host_root) == "/":
             cmd_va = ["rpm", "-Va", "--nodeps", "--noscripts"]
         else:
-            cmd_va = ["rpm", "--root", str(host_root), "--dbpath", "/var/lib/rpm"] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
+            cmd_va = ["rpm", "--root", str(host_root), "--dbpath", detect_rpmdb_path(host_root, relative=True)] + _RPM_LOCK_DEFINE + ["-Va", "--nodeps", "--noscripts"]
         _debug(f"running: {' '.join(cmd_va)}")
         result_va = executor(cmd_va)
         if result_va.stderr and "cannot open Packages database" in result_va.stderr:
