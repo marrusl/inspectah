@@ -993,3 +993,27 @@ def test_scan_directory_catches_real_secrets(tmp_path):
     conf.write_text("password=actual_secret_value\n")
     result = scan_directory_for_secrets(tmp_path)
     assert result is not None  # real secret detected
+
+
+# ---------------------------------------------------------------------------
+# Line-number accuracy after multi-pattern redaction
+# ---------------------------------------------------------------------------
+
+def test_line_number_correct_after_multipass_redaction():
+    """Line numbers are correct even when earlier redactions change string length."""
+    # First secret is short, replacement token is longer — shifts offsets
+    # Second secret is on a later line
+    content = "x=a\npassword=s\nstuff=ok\napi_key=secret_api_key_value_here\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/multi.conf", kind=ConfigFileKind.UNOWNED, content=content, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions
+                if isinstance(r, RedactionFinding) and r.kind == "inline" and r.source == "file"]
+    # Should have findings for PASSWORD and API_KEY patterns
+    pw = [f for f in findings if f.pattern == "PASSWORD"]
+    ak = [f for f in findings if f.pattern == "API_KEY"]
+    if pw:
+        assert pw[0].line == 2, f"PASSWORD should be line 2, got {pw[0].line}"
+    if ak:
+        assert ak[0].line == 4, f"API_KEY should be line 4, got {ak[0].line}"

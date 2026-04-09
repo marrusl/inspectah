@@ -215,7 +215,7 @@ def _redact_text(
             # Calculate line number for file-backed sources
             line_num = None
             if source in ("file", "diff"):
-                line_num = text[:m.start()].count('\n') + 1
+                line_num = out[:m.start()].count('\n') + 1
             redactions.append(RedactionFinding(
                 path=path,
                 source=source,
