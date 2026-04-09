@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from ..executor import Executor
 from ..schema import (
     ContainerSection, QuadletUnit, ComposeFile, ComposeService,
-    RunningContainer, ContainerMount,
+    RunningContainer, ContainerMount, FlatpakApp,
 )
 from .._util import debug as _debug_fn, safe_read as _safe_read_raw, make_warning, NON_SYSTEM_UID_MIN, NON_SYSTEM_UID_MAX
 from . import filtered_rglob
@@ -138,6 +138,54 @@ def _parse_podman_inspect(data: List[dict]) -> List[RunningContainer]:
     return results
 
 
+def _detect_flatpak_apps(executor: Optional[Executor]) -> List[FlatpakApp]:
+    """Detect installed Flatpak applications.
+
+    Runs on all system types (not just ostree). Returns empty list if
+    flatpak is not installed or if detection fails.
+    """
+    if not executor:
+        return []
+
+    # Check if flatpak is installed
+    which_result = executor(["which", "flatpak"])
+    if which_result.returncode != 0:
+        _debug("flatpak not installed (which failed)")
+        return []
+
+    # Run flatpak list
+    list_result = executor(["flatpak", "list", "--app", "--columns=application,origin,branch"])
+    if list_result.returncode != 0:
+        _debug(f"flatpak list failed: {list_result.stderr}")
+        return []
+
+    # Parse tab-separated output
+    apps: List[FlatpakApp] = []
+    for line in list_result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        parts = line.split("\t")
+        if len(parts) < 2:
+            # Malformed row - skip it
+            _debug(f"flatpak: skipping malformed row: {line!r}")
+            continue
+
+        app_id = parts[0].strip()
+        origin = parts[1].strip()
+        branch = parts[2].strip() if len(parts) >= 3 else ""
+
+        apps.append(FlatpakApp(
+            app_id=app_id,
+            origin=origin,
+            branch=branch,
+        ))
+
+    _debug(f"detected {len(apps)} flatpak apps")
+    return apps
+
+
 def run(
     host_root: Path,
     executor: Optional[Executor],
@@ -255,5 +303,8 @@ def run(
                                 image=c.get("Image", ""),
                                 status=c.get("Status", ""),
                             ))
+
+    # --- Flatpak apps ---
+    section.flatpak_apps = _detect_flatpak_apps(executor)
 
     return section
