@@ -478,3 +478,33 @@ class TestPackageWarningBanners:
         ))
         assert "Multi-arch" not in html
         assert "Duplicate" not in html
+
+
+class TestHtmlReportRedactionFinding:
+
+    def test_html_report_with_typed_redaction_findings(self):
+        """HTML report renders correctly with RedactionFinding objects in snapshot.redactions."""
+        from yoinkc.schema import InspectionSnapshot, OsRelease, RedactionFinding
+        from yoinkc.renderers import run_all as run_all_renderers
+
+        snapshot = InspectionSnapshot(
+            meta={"host_root": "/host"},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        snapshot.redactions = [
+            RedactionFinding(
+                path="/etc/pki/tls/private/server.key",
+                source="file", kind="excluded", pattern="EXCLUDED_PATH",
+                remediation="provision",
+            ),
+            RedactionFinding(
+                path="/etc/app.conf",
+                source="file", kind="inline", pattern="PASSWORD",
+                remediation="value-removed", replacement="REDACTED_PASSWORD_1",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            run_all_renderers(snapshot, Path(tmp))
+            html = (Path(tmp) / "report.html").read_text()
+        assert "server.key" in html
+        assert "app.conf" in html
