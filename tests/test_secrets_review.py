@@ -148,17 +148,23 @@ def test_secrets_review_no_flagged_table_when_no_flagged():
 
 
 def test_secrets_review_no_redaction_header():
-    """WARNING header appears when no_redaction=True."""
+    """WARNING header matches spec, rows show 'Not redacted'."""
     snap = InspectionSnapshot(meta={})
     snap.redactions = [
-        RedactionFinding(path="/etc/a.conf", source="file", kind="flagged",
-                        pattern="PASSWORD", remediation="",
+        RedactionFinding(path="/etc/shadow", source="file", kind="excluded",
+                        pattern="EXCLUDED_PATH", remediation="provision",
+                        detection_method="excluded_path"),
+        RedactionFinding(path="/etc/a.conf", source="file", kind="inline",
+                        pattern="PASSWORD", remediation="value-removed",
+                        replacement="REDACTED_PASSWORD_1",
                         detection_method="pattern"),
     ]
     with tempfile.TemporaryDirectory() as tmp:
         render(snap, Environment(), Path(tmp), no_redaction=True)
         content = (Path(tmp) / "secrets-review.md").read_text()
-        assert "> WARNING: Redaction was disabled" in content
+        assert "> WARNING: Redaction was disabled for this run." in content
+        assert "appear unredacted in the output artifacts" in content
+        assert "Not redacted" in content
 
 
 def test_secrets_review_no_redaction_via_meta():

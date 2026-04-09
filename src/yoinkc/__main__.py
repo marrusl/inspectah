@@ -172,6 +172,7 @@ def _run_inspect(args) -> int:
                 fixme_count=fixme_count,
                 redaction_count=len(snapshot.redactions),
                 github_token=args.github_token,
+                sensitivity=args.sensitivity,
             )
             if err:
                 print(f"GitHub push failed: {err}", file=sys.stderr)

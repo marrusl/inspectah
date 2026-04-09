@@ -1522,6 +1522,24 @@ def test_push_gate_uses_heuristic_scan(tmp_path):
             "push_to_github must call scan_directory_for_secrets with heuristic=True"
 
 
+def test_push_gate_threads_sensitivity(tmp_path):
+    """push_to_github passes sensitivity to scan_directory_for_secrets."""
+    from unittest.mock import patch
+    from yoinkc.redact import scan_directory_for_secrets as _real_scan
+
+    with patch("yoinkc.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
+        from yoinkc.git_github import push_to_github
+        push_to_github(
+            tmp_path, "owner/repo",
+            skip_confirmation=True, github_token="fake",
+            sensitivity="moderate",
+        )
+        mock_scan.assert_called_once()
+        _, kwargs = mock_scan.call_args
+        assert kwargs.get("sensitivity") == "moderate", \
+            "push_to_github must thread sensitivity to scan_directory_for_secrets"
+
+
 def test_heuristic_redaction_moderate_does_not_replace():
     """In moderate mode, heuristic pass flags but does not redact content."""
     from yoinkc.pipeline import _run_heuristic_pass

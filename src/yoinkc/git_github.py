@@ -54,17 +54,18 @@ def push_to_github(
     fixme_count: int = 0,
     redaction_count: int = 0,
     github_token: Optional[str] = None,
+    sensitivity: str = "strict",
 ) -> Optional[str]:
     """
     Push output_dir to GitHub. repo_spec is 'owner/repo'.
     If repo does not exist and PyGithub is available, create it (private by default).
-    Re-scans output for secret patterns and aborts if any found.
+    Re-scans output for secret patterns and heuristic signals, aborts if any found.
     Returns error message on failure, None on success.
     """
     from .redact import scan_directory_for_secrets
-    secret_path = scan_directory_for_secrets(output_dir, heuristic=True, sensitivity="strict")
+    secret_path = scan_directory_for_secrets(output_dir, heuristic=True, sensitivity=sensitivity)
     if secret_path is not None:
-        return f"Redaction verification failed: secret pattern found in output at {secret_path}. Aborting push."
+        return f"Redaction verification failed: secret detected in output at {secret_path}. Aborting push."
     if not skip_confirmation:
         print(f"About to push to GitHub: {repo_spec}")
         print(f"  Files: {file_count}, Size: {total_size_bytes} bytes, Redactions: {redaction_count}, FIXMEs: {fixme_count}")

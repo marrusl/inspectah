@@ -138,8 +138,10 @@ def _run_heuristic_pass(
 
     # Convert to RedactionFinding.
     # Caps limit reporting only — redaction and push-block use ALL candidates.
-    # We iterate all_candidates for redaction decisions, then mark which ones
-    # are in the reported set for advisory output.
+    # - Redacted candidates (strict + high confidence): always get a finding
+    #   (needed for replacement tracking), whether reported or suppressed.
+    # - Flagged-only candidates: only get a finding if in the reported set
+    #   (suppressed flagged candidates are not surfaced in advisory output).
     reported_set = set(id(c) for c in noise_result.reported)
     new_findings: List[RedactionFinding] = []
     # Track which files need content updates: {path: [(old_value, new_token), ...]}
@@ -152,8 +154,11 @@ def _run_heuristic_pass(
             and not no_redaction
         )
         is_reported = id(candidate) in reported_set
-        # Redact ALL qualifying candidates (not just reported ones).
-        # Only suppress from *advisory output* (the reported list).
+
+        # Skip suppressed flagged-only candidates — caps suppress advisory output
+        if not should_redact and not is_reported:
+            continue
+
         kind = "inline" if should_redact else "flagged"
         remediation = "value-removed" if should_redact else ""
 
@@ -161,7 +166,6 @@ def _run_heuristic_pass(
         if should_redact:
             type_label = (candidate.key_name or "HEURISTIC").upper()
             replacement = registry.get_token(type_label, candidate.value)
-            # Track replacement for content update
             if candidate.path not in content_replacements:
                 content_replacements[candidate.path] = []
             content_replacements[candidate.path].append((candidate.value, replacement))
@@ -339,10 +343,12 @@ def _print_no_redaction_warning(snapshot: InspectionSnapshot) -> None:
     print("", file=sys.stderr)
     if pattern_findings:
         n = len(pattern_findings)
-        print(f"  {n} pattern finding{'s' if n != 1 else ''} were NOT redacted", file=sys.stderr)
+        verb = "were" if n != 1 else "was"
+        print(f"  {n} pattern finding{'s' if n != 1 else ''} {verb} NOT redacted", file=sys.stderr)
     if heuristic_high:
         n = len(heuristic_high)
-        print(f"  {n} high-confidence heuristic finding{'s' if n != 1 else ''} were NOT redacted", file=sys.stderr)
+        verb = "were" if n != 1 else "was"
+        print(f"  {n} high-confidence heuristic finding{'s' if n != 1 else ''} {verb} NOT redacted", file=sys.stderr)
     if heuristic_low:
         n = len(heuristic_low)
         print(f"  {n} low-confidence heuristic finding{'s' if n != 1 else ''} flagged", file=sys.stderr)

@@ -71,7 +71,8 @@ def render(
 
     # No-redaction warning
     if no_redaction:
-        lines.append("> WARNING: Redaction was disabled for this run. Output may contain live secrets.")
+        lines.append("> WARNING: Redaction was disabled for this run. All values listed below")
+        lines.append("> appear unredacted in the output artifacts.")
         lines.append("")
 
     lines.append("The following items were redacted or excluded. Handle them according to")
@@ -84,21 +85,21 @@ def render(
         lines.append("| Path | Action | Reason |")
         lines.append("|------|--------|--------|")
         for f in excluded:
-            action = _REMEDIATION_LABELS.get(f.remediation, f.remediation)
+            action = "Not redacted" if no_redaction else _REMEDIATION_LABELS.get(f.remediation, f.remediation)
             lines.append(f"| {f.path} | {action} | {f.pattern} |")
         lines.append("")
 
     if inline:
         lines.append("## Inline Redactions")
         lines.append("")
-        lines.append("| Path | Line | Type | Detection | Placeholder | Action |")
-        lines.append("|------|------|------|-----------|-------------|--------|")
+        lines.append("| Path | Line | Type | Placeholder | Detection | Action |")
+        lines.append("|------|------|------|-------------|-----------|--------|")
         for f in inline:
             line_str = str(f.line) if f.line is not None else "\u2014"
             replacement = f.replacement or "\u2014"
-            action = _REMEDIATION_LABELS.get(f.remediation, f.remediation)
+            action = "Not redacted" if no_redaction else _REMEDIATION_LABELS.get(f.remediation, f.remediation)
             detection = _detection_label(f)
-            lines.append(f"| {f.path} | {line_str} | {f.pattern} | {detection} | {replacement} | {action} |")
+            lines.append(f"| {f.path} | {line_str} | {f.pattern} | {replacement} | {detection} | {action} |")
         lines.append("")
 
     if flagged:

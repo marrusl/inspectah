@@ -127,13 +127,14 @@ def test_secrets_review_three_tables():
 
 def test_strict_mode_redacts_container_env():
     """Container env secrets are actually scrubbed in strict mode, not just flagged."""
+    secret_value = "aR9xk!mQ2pL7bN4cKzW5tY8vU"
     snap = InspectionSnapshot(
         meta={"hostname": "test"},
         containers=ContainerSection(
             running_containers=[
                 RunningContainer(
                     id="abc123def456", name="myapp", image="myapp:latest",
-                    env=["DB_PASSWORD=aR9xk!mQ2pL7bN4cKzW5tY8vU"],
+                    env=[f"DB_PASSWORD={secret_value}"],
                 ),
             ],
         ),
@@ -142,16 +143,21 @@ def test_strict_mode_redacts_container_env():
     heuristic = [r for r in result.redactions
                  if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
     redacted = [f for f in heuristic if f.kind == "inline"]
-    if redacted:
-        # If we found and redacted something, verify the actual content was scrubbed
-        container = result.containers.running_containers[0]
-        for env_line in container.env:
-            assert "aR9xk!mQ2pL7bN4cKzW5tY8vU" not in env_line, \
-                "Container env should have secret value replaced after heuristic redaction"
+    # Non-vacuous: assert we actually found and redacted something
+    assert len(redacted) >= 1, "Should have at least one redacted heuristic finding for container env"
+    # Verify the actual content was scrubbed
+    container = result.containers.running_containers[0]
+    for env_line in container.env:
+        assert secret_value not in env_line, \
+            "Container env should have secret value replaced after heuristic redaction"
+    # Verify a REDACTED_ token is present
+    assert any("REDACTED_" in line for line in container.env), \
+        "Container env should contain a REDACTED_ replacement token"
 
 
 def test_strict_mode_redacts_timer_commands():
     """Timer command secrets are actually scrubbed in strict mode."""
+    secret_value = "aR9xk!mQ2pL7bN4cKzW5tY8vU"
     snap = InspectionSnapshot(
         meta={"hostname": "test"},
         scheduled_tasks=ScheduledTaskSection(
@@ -159,8 +165,8 @@ def test_strict_mode_redacts_timer_commands():
                 GeneratedTimerUnit(
                     name="backup.timer",
                     schedule="daily",
-                    command="backup --token=aR9xk!mQ2pL7bN4cKzW5tY8vU",
-                    service_content="ExecStart=backup --token=aR9xk!mQ2pL7bN4cKzW5tY8vU\n",
+                    command=f"backup --token={secret_value}",
+                    service_content=f"ExecStart=backup --token={secret_value}\n",
                 ),
             ],
         ),
@@ -169,12 +175,15 @@ def test_strict_mode_redacts_timer_commands():
     heuristic = [r for r in result.redactions
                  if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
     redacted = [f for f in heuristic if f.kind == "inline"]
-    if redacted:
-        unit = result.scheduled_tasks.generated_timer_units[0]
-        assert "aR9xk!mQ2pL7bN4cKzW5tY8vU" not in unit.command, \
-            "Timer command should have secret value replaced after heuristic redaction"
-        assert "aR9xk!mQ2pL7bN4cKzW5tY8vU" not in unit.service_content, \
-            "Timer service_content should have secret value replaced after heuristic redaction"
+    # Non-vacuous: assert we actually found and redacted something
+    assert len(redacted) >= 1, "Should have at least one redacted heuristic finding for timer"
+    unit = result.scheduled_tasks.generated_timer_units[0]
+    assert secret_value not in unit.command, \
+        "Timer command should have secret value replaced after heuristic redaction"
+    assert secret_value not in unit.service_content, \
+        "Timer service_content should have secret value replaced after heuristic redaction"
+    assert "REDACTED_" in unit.command, \
+        "Timer command should contain a REDACTED_ replacement token"
 
 
 def test_containerfile_comments_full_spectrum():
