@@ -1,0 +1,9 @@
+[Unit]
+Description=Development tools (user-level)
+
+[Container]
+Image=quay.io/toolbox/toolbox:latest
+Volume=%h/projects:/projects:Z
+
+[Install]
+WantedBy=default.target

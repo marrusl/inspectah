@@ -1,0 +1,10 @@
+[Unit]
+Description=Generated from cron: etc/cron.d/backup-daily
+# Original cron: 0 2 * * *
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

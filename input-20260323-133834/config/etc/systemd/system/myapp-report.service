@@ -1,0 +1,9 @@
+[Unit]
+Description=MyApp Daily Report
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/bin/generate-report.sh
+StandardOutput=journal

@@ -1,0 +1,13 @@
+[connection]
+id=mgmt
+type=ethernet
+interface-name=eth0
+autoconnect=true
+
+[ipv4]
+method=manual
+addresses=192.168.122.50/24,192.168.122.1
+dns=9.9.9.9;1.1.1.1;
+
+[ipv6]
+method=ignore

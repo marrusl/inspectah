@@ -1,0 +1,10 @@
+[Unit]
+Description=Generated from cron.daily: etc/cron.daily/cleanup.sh
+# Original: cron.daily script
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

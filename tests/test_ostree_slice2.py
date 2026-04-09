@@ -39,3 +39,37 @@ def test_ostree_mounts_filtered_from_storage(tmp_path):
     assert "/sysroot" not in mount_targets
     assert "/ostree" not in mount_targets
     assert "/boot" in mount_targets or "/" in mount_targets  # At least non-ostree mounts remain
+
+
+def test_ostree_grub_defaults_suppressed(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "default").mkdir()
+    (etc / "default" / "grub").write_text("GRUB_TIMEOUT=5\n")
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    (proc / "cmdline").write_text("root=/dev/sda2 ro rhgb quiet custom.option=foo")
+    def executor(cmd, *, cwd=None):
+        if "lsmod" in " ".join(cmd):
+            return RunResult(stdout="Module  Size  Used\nvfat  20480  1\n", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+    section = run_kernel_boot(tmp_path, executor, system_type=SystemType.RPM_OSTREE)
+    assert section.grub_defaults == ""
+
+
+def test_ostree_cmdline_still_captured(tmp_path):
+    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    (proc / "cmdline").write_text(
+        "BOOT_IMAGE=/vmlinuz root=/dev/sda2 ro rhgb quiet mitigations=off custom.opt=1"
+    )
+    def executor(cmd, *, cwd=None):
+        if "lsmod" in " ".join(cmd):
+            return RunResult(stdout="", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+    section = run_kernel_boot(tmp_path, executor, system_type=SystemType.RPM_OSTREE)
+    assert section.cmdline is not None
+    assert "mitigations=off" in section.cmdline
+    assert "custom.opt=1" in section.cmdline

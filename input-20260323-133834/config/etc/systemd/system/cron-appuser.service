@@ -1,0 +1,6 @@
+[Unit]
+Description=Timer from cron var/spool/cron/appuser
+
+[Service]
+Type=oneshot
+ExecStart=/opt/myapp/scripts/health-check.sh >> /var/log/myapp/health.log 2>&1

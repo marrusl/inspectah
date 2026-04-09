@@ -1,0 +1,11 @@
+production:
+  adapter: postgresql
+  host: db.internal
+  port: 5432
+  database: myapp
+  username: appuser
+
+# BEGIN DRIFTIFY fake-secrets-db
+  REDACTED_PASSWORD_f287fa34
+  url: REDACTED_POSTGRES_PASSWORD_1ec1c26bdb.internal:5432/myapp
+# END DRIFTIFY fake-secrets-db
