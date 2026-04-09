@@ -1347,3 +1347,58 @@ def test_tier1_vendor_pattern(token, expected_label):
 ])
 def test_tier1_vendor_pattern_negative(token, label):
     assert not _has_finding(token, label), f"Should NOT detect {label}: {token[:30]}..."
+
+
+# ---------------------------------------------------------------------------
+# Task 4 (Tier 2 vendor token patterns): Tier 2 vendor token pattern tests
+# ---------------------------------------------------------------------------
+
+def _has_finding_in_redactions(redactions, expected_label):
+    """Helper: returns True if redactions list contains a finding with expected_label."""
+    return any(
+        (r.pattern if isinstance(r, RedactionFinding) else r.get("pattern")) == expected_label
+        for r in redactions
+    )
+
+
+@pytest.mark.parametrize("value,expected_label,should_match", [
+    # DigitalOcean personal
+    ("dop_v1_" + "a" * 64, "DIGITALOCEAN_TOKEN", True),
+    # DigitalOcean OAuth
+    ("doo_v1_" + "a" * 64, "DIGITALOCEAN_TOKEN", True),
+    # Heroku
+    ("HRKU-AA" + "a" * 58, "HEROKU_KEY", True),
+    # Grafana Cloud
+    ("glc_" + "A" * 32, "GRAFANA_TOKEN", True),
+    # Grafana service account
+    ("glsa_" + "A" * 32 + "_" + "A" * 8, "GRAFANA_TOKEN", True),
+    # New Relic user
+    ("NRAK-" + "a" * 27, "NEWRELIC_KEY", True),
+    # New Relic insight
+    ("NRII-" + "a" * 32, "NEWRELIC_KEY", True),
+    # Sentry
+    ("sntrys_eyJpYXQiO" + "A" * 80, "SENTRY_TOKEN", True),
+    # Doppler
+    ("dp.pt." + "a" * 43, "DOPPLER_TOKEN", True),
+    # Pulumi
+    ("pul-" + "a" * 40, "PULUMI_TOKEN", True),
+])
+def test_tier2_vendor_pattern(value, expected_label, should_match):
+    redactions = []
+    text = f"credential = {value}"
+    _redact_text(text, "test/vendor-t2", redactions)
+    found = _has_finding_in_redactions(redactions, expected_label)
+    assert found == should_match, f"{expected_label} should match: {value}"
+
+
+@pytest.mark.parametrize("value,expected_label", [
+    ("dop_v1_" + "a" * 10, "DIGITALOCEAN_TOKEN"),   # too short
+    ("NRAK-" + "a" * 5, "NEWRELIC_KEY"),             # too short
+    ("pul-" + "a" * 10, "PULUMI_TOKEN"),             # too short
+])
+def test_tier2_vendor_pattern_negative(value, expected_label):
+    redactions = []
+    text = f"credential = {value}"
+    _redact_text(text, "test/vendor-t2", redactions)
+    found = _has_finding_in_redactions(redactions, expected_label)
+    assert not found, f"{expected_label} should NOT match: {value}"

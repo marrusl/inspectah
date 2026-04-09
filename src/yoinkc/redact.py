@@ -100,6 +100,25 @@ REDACT_PATTERNS: List[Tuple[str, str]] = [
     # age
     (r"AGE-SECRET-KEY-1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}", "AGE_KEY"),
 
+    # === Tier 2: Enterprise/DevOps environments ===
+    # DigitalOcean
+    (r"dop_v1_[a-f0-9]{64}", "DIGITALOCEAN_TOKEN"),
+    (r"doo_v1_[a-f0-9]{64}", "DIGITALOCEAN_TOKEN"),
+    # Heroku
+    (r"HRKU-AA[0-9a-zA-Z_-]{58}", "HEROKU_KEY"),
+    # Grafana
+    (r"glc_[A-Za-z0-9+/]{32,400}={0,3}", "GRAFANA_TOKEN"),
+    (r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}", "GRAFANA_TOKEN"),
+    # New Relic
+    (r"NRAK-[a-z0-9]{27}", "NEWRELIC_KEY"),
+    (r"NRII-[a-z0-9-]{32}", "NEWRELIC_KEY"),
+    # Sentry
+    (r"sntrys_eyJpYXQiO[A-Za-z0-9+/=_-]{80,}", "SENTRY_TOKEN"),
+    # Doppler
+    (r"dp\.pt\.[a-z0-9]{43}", "DOPPLER_TOKEN"),
+    # Pulumi
+    (r"pul-[a-f0-9]{40}", "PULUMI_TOKEN"),
+
     # --- Generic assignment-based patterns (less specific, last) ---
     (r"(?i)(api[_-]?key|apikey)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{20,})['\"]?", "API_KEY"),
     (r"(?i)(token)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{20,})['\"]?", "TOKEN"),
