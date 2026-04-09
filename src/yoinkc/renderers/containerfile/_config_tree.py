@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-from ...schema import ConfigFileKind, InspectionSnapshot
+from ...schema import ConfigFileKind, InspectionSnapshot, RedactionFinding
 from .._triage import _QUADLET_PREFIX
 from ._helpers import _dhcp_connection_paths, _operator_kargs, _summarise_diff
 
@@ -435,3 +435,42 @@ def config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> l
     lines.append("# tmpfiles.d: etc/tmpfiles.d/yoinkc-var.conf")
 
     return lines
+
+
+# ---------------------------------------------------------------------------
+# redacted/ directory — placeholder files for excluded secrets
+# ---------------------------------------------------------------------------
+
+_REGENERATE_TEMPLATE = """\
+# REDACTED by yoinkc — auto-generated credential
+# Original path: {path}
+# Action: no action needed — this file is regenerated automatically on the target system
+# See secrets-review.md for details
+"""
+
+_PROVISION_TEMPLATE = """\
+# REDACTED by yoinkc — sensitive file detected
+# Original path: {path}
+# Action: provision this file on the target system from your secrets management process
+# See secrets-review.md for details
+"""
+
+
+def write_redacted_dir(snapshot: InspectionSnapshot, output_dir: Path) -> None:
+    """Write .REDACTED placeholder files for excluded secrets."""
+    for finding in snapshot.redactions:
+        if not isinstance(finding, RedactionFinding):
+            continue
+        if finding.source != "file" or finding.kind != "excluded":
+            continue
+        rel = finding.path.lstrip("/")
+        if not rel:
+            continue
+        redacted_dir = output_dir / "redacted"
+        dest = redacted_dir / (rel + ".REDACTED")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if finding.remediation == "regenerate":
+            content = _REGENERATE_TEMPLATE.format(path=finding.path)
+        else:
+            content = _PROVISION_TEMPLATE.format(path=finding.path)
+        dest.write_text(content)

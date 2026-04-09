@@ -11,6 +11,7 @@ from ..schema import InspectionSnapshot
 from .._util import status as _status_fn
 
 from .containerfile import render as render_containerfile
+from .containerfile._config_tree import write_redacted_dir
 from .audit_report import render as render_audit_report
 from .html_report import render as render_html_report
 from .readme import render as render_readme
@@ -44,6 +45,7 @@ def run_all(
 
     _status_fn("Rendering output…")
     render_containerfile(snapshot, env, output_dir)
+    write_redacted_dir(snapshot, output_dir)
     render_audit_report(snapshot, env, output_dir, original_snapshot=original_snapshot)
     render_html_report(
         snapshot, env, output_dir,
