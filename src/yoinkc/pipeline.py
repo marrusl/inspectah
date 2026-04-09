@@ -36,6 +36,32 @@ def save_snapshot(snapshot: InspectionSnapshot, path: Path) -> None:
     path.write_text(snapshot.model_dump_json(indent=2))
 
 
+def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
+    """Print secrets handling summary to stderr."""
+    from .schema import RedactionFinding
+
+    findings = [r for r in snapshot.redactions if isinstance(r, RedactionFinding)]
+    if not findings:
+        return
+
+    excluded_regen = [f for f in findings if f.kind == "excluded" and f.remediation == "regenerate"]
+    excluded_prov = [f for f in findings if f.kind == "excluded" and f.remediation == "provision"]
+    inline = [f for f in findings if f.kind == "inline"]
+    inline_files = len({f.path for f in inline if f.source == "file"})
+
+    print("Secrets handling:", file=sys.stderr)
+    if excluded_regen:
+        n = len(excluded_regen)
+        print(f"  Excluded (regenerate on target): {n} file{'s' if n != 1 else ''}", file=sys.stderr)
+    if excluded_prov:
+        n = len(excluded_prov)
+        print(f"  Excluded (provision from store): {n} file{'s' if n != 1 else ''}", file=sys.stderr)
+    if inline:
+        n = len(inline)
+        print(f"  Inline-redacted: {n} value{'s' if n != 1 else ''} in {inline_files} file{'s' if inline_files != 1 else ''}", file=sys.stderr)
+    print("  Details: secrets-review.md | Placeholders: redacted/", file=sys.stderr)
+
+
 def run_pipeline(
     *,
     host_root: Path,
@@ -79,6 +105,7 @@ def run_pipeline(
     try:
         save_snapshot(snapshot, tmp_dir / "inspection-snapshot.json")
         run_renderers(snapshot, tmp_dir)
+        _print_secrets_summary(snapshot)
 
         # Bundle subscription certs (skip in --from-snapshot mode where
         # host filesystem may not be mounted)

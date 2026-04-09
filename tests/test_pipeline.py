@@ -202,3 +202,60 @@ def test_error_preserves_temp_dir(tmp_path):
             output_file=tarball_path,
         )
     assert not tarball_path.exists()
+
+
+# --- CLI secrets summary tests ---
+
+import sys
+from io import StringIO
+
+
+def test_cli_secrets_summary(monkeypatch):
+    """CLI summary prints correct counts to stderr."""
+    from yoinkc.pipeline import _print_secrets_summary
+    from yoinkc.schema import RedactionFinding
+
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/cockpit/ws-certs.d/0-self-signed.key", source="file",
+                        kind="excluded", pattern="EXCLUDED_PATH", remediation="regenerate"),
+        RedactionFinding(path="/etc/cockpit/ws-certs.d/0-self-signed.cert", source="file",
+                        kind="excluded", pattern="EXCLUDED_PATH", remediation="regenerate"),
+        RedactionFinding(path="/etc/pki/tls/private/server.key", source="file",
+                        kind="excluded", pattern="EXCLUDED_PATH", remediation="provision"),
+        RedactionFinding(path="/etc/wireguard/wg0.conf", source="file",
+                        kind="inline", pattern="WIREGUARD_KEY", remediation="value-removed",
+                        replacement="REDACTED_WIREGUARD_KEY_1"),
+        RedactionFinding(path="/etc/app.conf", source="file",
+                        kind="inline", pattern="PASSWORD", remediation="value-removed",
+                        replacement="REDACTED_PASSWORD_1"),
+        RedactionFinding(path="users:shadow/admin", source="shadow",
+                        kind="inline", pattern="SHADOW_HASH", remediation="value-removed",
+                        replacement="REDACTED_SHADOW_HASH_1"),
+    ]
+
+    captured = StringIO()
+    monkeypatch.setattr(sys, "stderr", captured)
+    _print_secrets_summary(snap)
+    output = captured.getvalue()
+
+    assert "Secrets handling:" in output
+    assert "Excluded (regenerate on target): 2 files" in output
+    assert "Excluded (provision from store): 1 file" in output
+    assert "Inline-redacted:" in output
+    assert "2 files" in output or "2 file" in output
+    assert "secrets-review.md" in output
+
+
+def test_cli_secrets_summary_no_findings(monkeypatch):
+    """CLI summary prints nothing when there are no findings."""
+    from yoinkc.pipeline import _print_secrets_summary
+
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = []
+
+    captured = StringIO()
+    monkeypatch.setattr(sys, "stderr", captured)
+    _print_secrets_summary(snap)
+    output = captured.getvalue()
+    assert output == ""
