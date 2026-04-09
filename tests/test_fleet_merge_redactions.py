@@ -44,3 +44,21 @@ def test_merge_keeps_different_typed_findings():
     snap_b = _snap_with_redactions("host-b", [f2])
     merged = merge_snapshots([snap_a, snap_b])
     assert len(merged.redactions) == 2
+
+
+def test_merge_preserves_distinct_inline_findings_same_file():
+    """Two inline PASSWORD findings in the same file with different replacements survive merge."""
+    f1 = RedactionFinding(
+        path="/etc/app.conf", source="file", kind="inline",
+        pattern="PASSWORD", remediation="value-removed",
+        replacement="REDACTED_PASSWORD_1",
+    )
+    f2 = RedactionFinding(
+        path="/etc/app.conf", source="file", kind="inline",
+        pattern="PASSWORD", remediation="value-removed",
+        replacement="REDACTED_PASSWORD_2",
+    )
+    snap_a = _snap_with_redactions("host-a", [f1, f2])
+    snap_b = _snap_with_redactions("host-b", [f1, f2])
+    merged = merge_snapshots([snap_a, snap_b])
+    assert len(merged.redactions) == 2  # both survive, not collapsed to 1

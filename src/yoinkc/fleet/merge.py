@@ -215,8 +215,10 @@ def _deduplicate_warning_dicts(all_lists: list[list]) -> list:
             if isinstance(item, dict):
                 key = (item.get("source", ""), item.get("message", ""))
             else:
-                # RedactionFinding — key on (path, pattern, source)
-                key = (getattr(item, "path", ""), getattr(item, "pattern", ""), getattr(item, "source", ""))
+                # RedactionFinding — key on (path, pattern, source, replacement)
+                # Including replacement prevents collapsing distinct inline findings
+                # in the same file (e.g. REDACTED_PASSWORD_1 vs REDACTED_PASSWORD_2).
+                key = (getattr(item, "path", ""), getattr(item, "pattern", ""), getattr(item, "source", ""), getattr(item, "replacement", None))
             if key not in seen:
                 seen.add(key)
                 result.append(item)
