@@ -76,3 +76,86 @@ def test_secrets_review_legacy_dict_compat():
         content = (Path(tmp) / "secrets-review.md").read_text()
         # Should not crash; both items should appear
         assert "/etc/old.conf" in content or "/etc/new.conf" in content
+
+
+def test_secrets_review_has_detection_column():
+    """Inline Redactions table includes a Detection column."""
+    snap = _snapshot_with_findings()
+    # Add detection_method to one finding
+    snap.redactions.append(
+        RedactionFinding(path="/etc/app.conf", source="file", kind="inline",
+                        pattern="API_KEY", remediation="value-removed",
+                        replacement="REDACTED_API_KEY_1", detection_method="heuristic",
+                        confidence="high"),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        render(snap, Environment(), Path(tmp))
+        content = (Path(tmp) / "secrets-review.md").read_text()
+        assert "| Detection |" in content
+        assert "heuristic (high)" in content
+        assert "pattern" in content
+
+
+def test_secrets_review_has_flagged_table():
+    """Flagged for Review table appears for kind='flagged' findings."""
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/app.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="low", line=5),
+        RedactionFinding(path="/etc/other.conf", source="file", kind="flagged",
+                        pattern="db_password", remediation="",
+                        detection_method="heuristic", confidence="high", line=12),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        render(snap, Environment(), Path(tmp))
+        content = (Path(tmp) / "secrets-review.md").read_text()
+        assert "## Flagged for Review" in content
+        assert "| Path | Line | Confidence | Why Flagged |" in content
+        assert "/etc/app.conf" in content
+        assert "low" in content
+        assert "signing_key" in content
+
+
+def test_secrets_review_summary_line():
+    """Summary line at top shows correct counts."""
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/a.conf", source="file", kind="inline",
+                        pattern="PASSWORD", remediation="value-removed",
+                        replacement="REDACTED_PASSWORD_1", detection_method="pattern"),
+        RedactionFinding(path="/etc/b.conf", source="file", kind="inline",
+                        pattern="API_KEY", remediation="value-removed",
+                        replacement="REDACTED_API_KEY_1", detection_method="heuristic",
+                        confidence="high"),
+        RedactionFinding(path="/etc/c.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="low", line=3),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        render(snap, Environment(), Path(tmp))
+        content = (Path(tmp) / "secrets-review.md").read_text()
+        assert "> Detected secrets: 2 redacted (1 pattern, 1 heuristic), 1 flagged for review" in content
+
+
+def test_secrets_review_no_flagged_table_when_no_flagged():
+    """No Flagged for Review table when there are no flagged findings."""
+    snap = _snapshot_with_findings()
+    with tempfile.TemporaryDirectory() as tmp:
+        render(snap, Environment(), Path(tmp))
+        content = (Path(tmp) / "secrets-review.md").read_text()
+        assert "## Flagged for Review" not in content
+
+
+def test_secrets_review_no_redaction_header():
+    """WARNING header appears when no_redaction=True."""
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/a.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        render(snap, Environment(), Path(tmp), no_redaction=True)
+        content = (Path(tmp) / "secrets-review.md").read_text()
+        assert "> WARNING: Redaction was disabled" in content
