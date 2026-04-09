@@ -205,6 +205,10 @@ def _redact_text(
                 if prefix and ("=" in prefix or ":" in prefix):
                     replacement = prefix + token
             spans.append((m.start(), m.end(), replacement))
+            # Calculate line number for file-backed sources
+            line_num = None
+            if source in ("file", "diff"):
+                line_num = text[:m.start()].count('\n') + 1
             redactions.append(RedactionFinding(
                 path=path,
                 source=source,
@@ -212,6 +216,7 @@ def _redact_text(
                 pattern=type_label,
                 remediation="value-removed",
                 replacement=replacement,
+                line=line_num,
             ))
         # Apply in reverse so earlier positions stay valid.
         for start, end, replacement in reversed(spans):

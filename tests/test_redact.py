@@ -941,3 +941,33 @@ def test_malformed_near_typed_dict_warns(tmp_path):
     assert len(w) >= 1
     assert "Failed to coerce" in str(w[0].message)
     assert isinstance(loaded.redactions[0], dict)  # fell back to dict
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: RedactionFinding.line populated for file-backed inline findings
+# ---------------------------------------------------------------------------
+
+def test_inline_redaction_has_line_number():
+    """File-backed inline findings carry the correct line number."""
+    content = "# config\ndb_host=localhost\npassword=secret123\nport=5432\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED, content=content, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.kind == "inline"]
+    assert len(findings) >= 1
+    pw_finding = [f for f in findings if f.pattern == "PASSWORD"][0]
+    assert pw_finding.line == 3  # "password=secret123" is line 3
+
+
+def test_container_env_finding_has_no_line():
+    """Container env findings should not carry a line number."""
+    c = RunningContainer(
+        id="abc123", name="redis", image="redis:7",
+        env=["REDIS_PASSWORD=topsecretredis"],
+    )
+    snapshot = _base_snapshot(containers=ContainerSection(running_containers=[c]))
+    result = redact_snapshot(snapshot)
+    env_findings = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.source == "container-env"]
+    assert len(env_findings) >= 1
+    assert all(f.line is None for f in env_findings)
