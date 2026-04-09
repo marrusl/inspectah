@@ -138,6 +138,22 @@ def test_map_universal_blue(tmp_path):
     assert result == "ghcr.io/ublue-os/bluefin:41"
 
 
+def test_map_ublue_synthesis_from_vendor_name_tag(tmp_path):
+    """UBlue image-info.json without image-ref but with vendor/name/tag -> synthesized ref."""
+    ublue_dir = tmp_path / "usr" / "share" / "ublue-os"
+    ublue_dir.mkdir(parents=True)
+    info = {
+        "image-name": "aurora",
+        "image-vendor": "ublue-os",
+        "image-tag": "42",
+        # No image-ref -- synthesis should kick in
+    }
+    (ublue_dir / "image-info.json").write_text(json.dumps(info))
+    os_rel = _make_os_release(variant_id="kinoite", version_id="42")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None)
+    assert result == "ghcr.io/ublue-os/aurora:42"
+
+
 def test_map_ublue_malformed_json_missing_fields(tmp_path):
     """Missing required image-name -> None."""
     ublue_dir = tmp_path / "usr" / "share" / "ublue-os"

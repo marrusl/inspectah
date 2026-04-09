@@ -89,12 +89,21 @@ def _read_ublue_image_info(host_root: Path) -> str | None:
         return None
 
     ref = data.get("image-ref")
-    if not ref:
-        _debug("UBlue image-info.json has no image-ref")
-        return None
+    if ref:
+        _debug(f"UBlue detected: {ref}")
+        return ref
 
-    _debug(f"UBlue detected: {ref}")
-    return ref
+    # Synthesis fallback: construct from vendor/name/tag
+    vendor = data.get("image-vendor", "")
+    name = data.get("image-name", "")
+    tag = data.get("image-tag", "")
+    if vendor and name and tag:
+        synthesized = f"ghcr.io/{vendor}/{name}:{tag}"
+        _debug(f"UBlue: synthesized ref from vendor/name/tag: {synthesized}")
+        return synthesized
+
+    _debug("UBlue image-info.json has no image-ref and insufficient fields for synthesis")
+    return None
 
 
 def _bootc_status_image_ref(executor: Executor) -> Optional[str]:
