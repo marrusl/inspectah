@@ -211,7 +211,7 @@ def _redact_text(
                 kind="inline",
                 pattern=type_label,
                 remediation="value-removed",
-                replacement=token,
+                replacement=replacement,
             ))
         # Apply in reverse so earlier positions stay valid.
         for start, end, replacement in reversed(spans):

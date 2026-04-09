@@ -549,6 +549,18 @@ def test_containers_auth_json_excluded():
 # Task 2: New REDACT_PATTERNS — WireGuard and WiFi PSK
 # ---------------------------------------------------------------------------
 
+def test_wireguard_replacement_matches_file_content():
+    """RedactionFinding.replacement matches the literal text in file content."""
+    wg_config = "[Interface]\nPrivateKey = aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4yZ5ABcd=\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/wireguard/wg0.conf", kind=ConfigFileKind.UNOWNED, content=wg_config, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    finding = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.pattern == "WIREGUARD_KEY"][0]
+    # The replacement stored in metadata must appear literally in the file content
+    assert finding.replacement in result.config.files[0].content
+
+
 def test_wireguard_private_key_redacted():
     """WireGuard PrivateKey redacted, assignment syntax preserved."""
     # Real WireGuard keys are 44 chars: 43 base64 chars + '=' padding (32 bytes)
