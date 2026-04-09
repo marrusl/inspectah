@@ -388,7 +388,7 @@ def run_all(
     snapshot.network = _safe_run("network", lambda: run_network(host_root, executor, warnings=w), None, w)
 
     _section_banner("Storage", 5, _TOTAL_STEPS)
-    snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor), None, w)
+    snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor, system_type=system_type), None, w)
 
     _section_banner("Scheduled tasks", 6, _TOTAL_STEPS)
     snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor, rpm_owned_paths=rpm_owned), None, w)
