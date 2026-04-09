@@ -1,5 +1,7 @@
 """Tests for redact_snapshot — extended section scanning."""
 
+import re
+
 import pytest
 
 from yoinkc.redact import redact_snapshot, _redact_text, _is_excluded_path
@@ -737,8 +739,6 @@ def test_wifi_psk_redacted():
 # Task 3: Sequential counters
 # ---------------------------------------------------------------------------
 
-import re
-
 
 def test_sequential_counters_deterministic():
     """Same input produces same counter assignments."""
@@ -1402,3 +1402,114 @@ def test_tier2_vendor_pattern_negative(value, expected_label):
     _redact_text(text, "test/vendor-t2", redactions)
     found = _has_finding_in_redactions(redactions, expected_label)
     assert not found, f"{expected_label} should NOT match: {value}"
+
+
+# ---------------------------------------------------------------------------
+# Counter ordering: pattern findings get counters first, then heuristic
+# ---------------------------------------------------------------------------
+
+
+def test_counter_ordering_pattern_before_heuristic():
+    """Pattern findings get counters first, then heuristic findings."""
+    from yoinkc.pipeline import _run_heuristic_pass
+
+    # Build snapshot with pattern target and heuristic target
+    content_pattern = "password=hunter2\n"
+    content_heuristic = "signing_key = aR9xk!mQ2pL7bN4cKzW\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/a.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content_pattern, include=True),
+            ConfigFileEntry(path="/etc/b.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content_heuristic, include=True),
+        ]),
+    )
+    # First run pattern redaction
+    redacted = redact_snapshot(snapshot)
+    # Then run heuristic pass with strict mode (should_redact=True)
+    result = _run_heuristic_pass(redacted, "strict", no_redaction=False)
+
+    pattern_findings = [r for r in result.redactions
+                       if isinstance(r, RedactionFinding) and r.detection_method == "pattern"]
+    heuristic_findings = [r for r in result.redactions
+                         if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"
+                         and r.kind == "inline"]
+
+    # Pattern findings should have counters
+    for f in pattern_findings:
+        if f.replacement:
+            match = re.search(r"_(\d+)$", f.replacement)
+            assert match, f"Pattern finding should have counter: {f.replacement}"
+
+    # Heuristic inline findings should also have counters (continuing sequence)
+    for f in heuristic_findings:
+        assert f.replacement is not None, f"Heuristic inline finding should have replacement: {f}"
+        match = re.search(r"_(\d+)$", f.replacement)
+        assert match, f"Heuristic finding should have counter: {f.replacement}"
+
+
+def test_flagged_findings_no_counter():
+    """Flagged-only findings do not consume counters."""
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/app.conf", source="file", kind="flagged",
+                        pattern="HEURISTIC", remediation="",
+                        detection_method="heuristic", confidence="low"),
+    ]
+    flagged = [r for r in snap.redactions if r.kind == "flagged"]
+    for f in flagged:
+        assert f.replacement is None, "Flagged findings should not have replacement tokens"
+
+
+def test_heuristic_redaction_replaces_content():
+    """In strict mode, heuristic pass replaces the secret value in file content."""
+    from yoinkc.pipeline import _run_heuristic_pass
+
+    # Use signing_key — not caught by pattern pass, but heuristic detects it
+    content = "signing_key = aR9xk!mQ2pL7bN4cKzW\nhost = localhost\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content, include=True),
+        ]),
+    )
+    # Pattern pass first (signing_key won't be caught by pattern redaction)
+    redacted = redact_snapshot(snapshot)
+    # Heuristic pass with strict mode
+    result = _run_heuristic_pass(redacted, "strict", no_redaction=False)
+
+    # The secret value should be replaced in file content
+    result_content = result.config.files[0].content
+    assert "aR9xk!mQ2pL7bN4cKzW" not in result_content, \
+        "Secret should be redacted from content"
+    assert "REDACTED_" in result_content, \
+        "Content should contain a REDACTED_ token"
+
+
+def test_heuristic_redaction_moderate_does_not_replace():
+    """In moderate mode, heuristic pass flags but does not redact content."""
+    from yoinkc.pipeline import _run_heuristic_pass
+
+    # Use signing_key — not caught by pattern pass, but heuristic detects it
+    content = "signing_key = aR9xk!mQ2pL7bN4cKzW\nhost = localhost\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content, include=True),
+        ]),
+    )
+    redacted = redact_snapshot(snapshot)
+    result = _run_heuristic_pass(redacted, "moderate", no_redaction=False)
+
+    # Content should NOT be modified
+    result_content = result.config.files[0].content
+    assert "aR9xk!mQ2pL7bN4cKzW" in result_content, \
+        "Secret should NOT be redacted in moderate mode"
+
+    # But there should be flagged findings
+    heuristic_findings = [r for r in result.redactions
+                         if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
+    assert len(heuristic_findings) > 0, "Should have heuristic findings"
+    for f in heuristic_findings:
+        assert f.kind == "flagged", "All heuristic findings should be flagged in moderate mode"
+        assert f.replacement is None, "Flagged findings should not have replacement tokens"

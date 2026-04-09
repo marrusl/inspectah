@@ -5,6 +5,7 @@ bundle subscription certs, then produce a tarball or write to a directory.
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -14,8 +15,8 @@ from typing import Callable, List, Optional
 from .heuristic import find_heuristic_candidates, apply_noise_control, HeuristicCandidate
 from .subscription import bundle_subscription_certs
 from .packaging import create_tarball, get_output_stamp
-from .redact import redact_snapshot
-from .schema import InspectionSnapshot, RedactionFinding, SCHEMA_VERSION
+from .redact import redact_snapshot, _CounterRegistry
+from .schema import InspectionSnapshot, RedactionFinding, ConfigFileEntry, SCHEMA_VERSION
 
 # Subscription cert paths excluded from heuristic scanning
 _SUBSCRIPTION_CERT_PREFIXES = (
@@ -120,8 +121,26 @@ def _run_heuristic_pass(
     # Apply noise control
     noise_result = apply_noise_control(all_candidates)
 
+    # Build counter registry, advancing past counters already used by pattern pass
+    registry = _CounterRegistry()
+    for r in snapshot.redactions:
+        if isinstance(r, RedactionFinding) and r.detection_method == "pattern" and r.replacement:
+            # Advance the registry past this token so heuristic counters continue
+            # Extract type_label from replacement like "REDACTED_PASSWORD_1"
+            # or "PrivateKey = REDACTED_WIREGUARD_KEY_1"
+            m = re.search(r"REDACTED_(\w+?)_(\d+)$", r.replacement)
+            if m:
+                type_label = m.group(1)
+                counter_val = int(m.group(2))
+                # Ensure the registry counter is at least this high
+                if registry._counters.get(type_label, 0) < counter_val:
+                    registry._counters[type_label] = counter_val
+
     # Convert to RedactionFinding
     new_findings: List[RedactionFinding] = []
+    # Track which files need content updates: {path: [(old_value, new_token), ...]}
+    content_replacements: dict[str, List[tuple[str, str]]] = {}
+
     for candidate in noise_result.reported:
         should_redact = (
             sensitivity == "strict"
@@ -131,21 +150,54 @@ def _run_heuristic_pass(
         kind = "inline" if should_redact else "flagged"
         remediation = "value-removed" if should_redact else ""
 
+        replacement = None
+        if should_redact:
+            type_label = (candidate.key_name or "HEURISTIC").upper()
+            replacement = registry.get_token(type_label, candidate.value)
+            # Track replacement for content update
+            if candidate.path not in content_replacements:
+                content_replacements[candidate.path] = []
+            content_replacements[candidate.path].append((candidate.value, replacement))
+
         new_findings.append(RedactionFinding(
             path=candidate.path,
             source=candidate.source,
             kind=kind,
             pattern=candidate.key_name or "HEURISTIC",
             remediation=remediation,
+            replacement=replacement,
             line=candidate.line_number,
             detection_method="heuristic",
             confidence=candidate.confidence,
         ))
 
-    if new_findings:
-        updated_redactions = list(snapshot.redactions) + new_findings
-        return snapshot.model_copy(update={"redactions": updated_redactions})
-    return snapshot
+    if not new_findings:
+        return snapshot
+
+    # Apply content replacements to config files
+    updates: dict = {}
+    if content_replacements and snapshot.config and snapshot.config.files:
+        new_files: List[ConfigFileEntry] = []
+        files_changed = False
+        for entry in snapshot.config.files:
+            replacements = content_replacements.get(entry.path)
+            if replacements:
+                new_content = entry.content or ""
+                for old_value, new_token in replacements:
+                    new_content = new_content.replace(old_value, new_token)
+                if new_content != (entry.content or ""):
+                    new_files.append(entry.model_copy(update={"content": new_content}))
+                    files_changed = True
+                else:
+                    new_files.append(entry)
+            else:
+                new_files.append(entry)
+        if files_changed:
+            updates["config"] = snapshot.config.model_copy(update={"files": new_files})
+
+    updated_redactions = list(snapshot.redactions) + new_findings
+    updates["redactions"] = updated_redactions
+    return snapshot.model_copy(update=updates)
 
 
 def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
