@@ -1,5 +1,6 @@
 """Shared test fixtures and helpers used across split test modules."""
 
+import json
 from pathlib import Path
 from typing import Optional
 from unittest.mock import patch
@@ -219,3 +220,42 @@ def host_root() -> Path:
 
 def _env():
     return Environment(autoescape=True)
+
+
+# ---------------------------------------------------------------------------
+# ostree / Silverblue fixture executor
+# ---------------------------------------------------------------------------
+
+_RPMOSTREE_STATUS = json.dumps({
+    "deployments": [{
+        "booted": True,
+        "requested-packages": ["httpd", "vim-enhanced"],
+        "requested-local-packages": [],
+        "packages": [],
+        "base-removals": [{"name": "nano", "nevra": "nano-7.2-3.fc41.x86_64"}],
+        "base-local-replacements": [],
+    }]
+})
+
+_FLATPAK_LIST = "org.mozilla.firefox\tflathub\tstable\n"
+
+
+def _ostree_fixture_executor(cmd, cwd=None):
+    """Executor that simulates an rpm-ostree/Silverblue system."""
+    cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
+    if cmd == ["bootc", "status"]:
+        return RunResult(stdout="", stderr="not found", returncode=1)
+    if cmd == ["rpm-ostree", "status", "--json"]:
+        return RunResult(stdout=_RPMOSTREE_STATUS, stderr="", returncode=0)
+    if cmd == ["rpm-ostree", "status"]:
+        return RunResult(stdout="State: idle", stderr="", returncode=0)
+    if "which" in cmd_str and "flatpak" in cmd_str:
+        return RunResult(stdout="/usr/bin/flatpak", stderr="", returncode=0)
+    if "flatpak" in cmd_str and "list" in cmd_str:
+        return RunResult(stdout=_FLATPAK_LIST, stderr="", returncode=0)
+    return _fixture_executor(cmd, cwd=cwd)
+
+
+@pytest.fixture
+def ostree_fixture_executor() -> Executor:
+    return _ostree_fixture_executor
