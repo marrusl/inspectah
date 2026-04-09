@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from ..executor import Executor
-from ..schema import NonRpmSoftwareSection, NonRpmItem, PipPackage, ConfigFileEntry, ConfigFileKind
+from ..schema import NonRpmSoftwareSection, NonRpmItem, PipPackage, ConfigFileEntry, ConfigFileKind, SystemType
 from .._util import debug as _debug_fn, safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning, parse_dist_info_name as _parse_dist_info_name
 from . import is_dev_artifact, filtered_rglob
 
@@ -375,9 +375,14 @@ def _scan_dirs(
     host_root: Path,
     executor: Optional[Executor],
     deep: bool,
+    is_ostree: bool = False,
 ) -> None:
     """Scan /opt and /usr/local for non-RPM software directories."""
-    for base in ("opt", "usr/local"):
+    scan_bases = ["opt"]
+    if not is_ostree:
+        scan_bases.append("usr/local")
+
+    for base in scan_bases:
         d = host_root / base
         if not d.exists():
             continue
@@ -438,9 +443,15 @@ def _scan_dirs(
             section.items.append(item)
 
 
-def _scan_pip(section: NonRpmSoftwareSection, host_root: Path, executor: Optional[Executor]) -> None:
+def _scan_pip(section: NonRpmSoftwareSection, host_root: Path, executor: Optional[Executor], is_ostree: bool = False) -> None:
     """Detect pip-installed packages by scanning system dist-info directories."""
-    for search_root in ("usr/lib/python3", "usr/lib64/python3", "usr/local/lib/python3"):
+    # On ostree, skip /usr/lib/python3* and /usr/lib64/python3* (immutable base image content)
+    if is_ostree:
+        search_roots = ("usr/local/lib/python3",)
+    else:
+        search_roots = ("usr/lib/python3", "usr/lib64/python3", "usr/local/lib/python3")
+
+    for search_root in search_roots:
         base = host_root / search_root
         if not base.exists():
             continue
@@ -515,8 +526,12 @@ def _read_lockfile_dir(d: Path) -> dict:
     return result
 
 
-def _scan_npm(section: NonRpmSoftwareSection, host_root: Path) -> None:
-    for search_root in ("opt", "srv", "usr/local"):
+def _scan_npm(section: NonRpmSoftwareSection, host_root: Path, is_ostree: bool = False) -> None:
+    scan_roots = ["opt", "srv"]
+    if not is_ostree:
+        scan_roots.append("usr/local")
+
+    for search_root in scan_roots:
         d = host_root / search_root
         if not d.exists():
             continue
@@ -547,8 +562,12 @@ def _scan_npm(section: NonRpmSoftwareSection, host_root: Path) -> None:
             continue
 
 
-def _scan_gem(section: NonRpmSoftwareSection, host_root: Path) -> None:
-    for search_root in ("opt", "srv", "usr/local"):
+def _scan_gem(section: NonRpmSoftwareSection, host_root: Path, is_ostree: bool = False) -> None:
+    scan_roots = ["opt", "srv"]
+    if not is_ostree:
+        scan_roots.append("usr/local")
+
+    for search_root in scan_roots:
         d = host_root / search_root
         if not d.exists():
             continue
@@ -611,9 +630,11 @@ def run(
     executor: Optional[Executor],
     deep_binary_scan: bool = False,
     warnings: Optional[list] = None,
+    system_type: SystemType = SystemType.PACKAGE_MODE,
 ) -> NonRpmSoftwareSection:
     section = NonRpmSoftwareSection()
     host_root = Path(host_root)
+    is_ostree = system_type in (SystemType.RPM_OSTREE, SystemType.BOOTC)
 
     # Probe for binary analysis tool availability (warn once, not per file)
     if executor:
@@ -632,12 +653,26 @@ def run(
                     "file not available (rc=127) — binary type detection skipped. Install file in the yoinkc container image.",
                 ))
 
-    _scan_dirs(section, host_root, executor, deep_binary_scan)
+    _scan_dirs(section, host_root, executor, deep_binary_scan, is_ostree=is_ostree)
     _scan_venv_packages(section, host_root, executor, warnings=warnings)
-    _scan_pip(section, host_root, executor)
-    _scan_npm(section, host_root)
-    _scan_gem(section, host_root)
+    _scan_pip(section, host_root, executor, is_ostree=is_ostree)
+    _scan_npm(section, host_root, is_ostree=is_ostree)
+    _scan_gem(section, host_root, is_ostree=is_ostree)
     _scan_env_files(section, host_root)
+
+    # Filter ostree-internal /var paths
+    if is_ostree:
+        _OSTREE_VAR_INTERNALS = {"var/lib/ostree", "var/lib/rpm-ostree", "var/lib/flatpak"}
+        filtered_items = []
+        for item in section.items:
+            skip = False
+            for internal_path in _OSTREE_VAR_INTERNALS:
+                if item.path.startswith(internal_path):
+                    skip = True
+                    break
+            if not skip:
+                filtered_items.append(item)
+        section.items = filtered_items
 
     _CONFIDENCE_RANK = {"high": 2, "medium": 1, "low": 0}
     seen: dict = {}

@@ -397,7 +397,7 @@ def run_all(
     snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman, warnings=w), None, w)
 
     _section_banner("Non-RPM software", 8, _TOTAL_STEPS)
-    snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan, warnings=w), None, w)
+    snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan, warnings=w, system_type=system_type), None, w)
 
     _section_banner("Kernel / boot", 9, _TOTAL_STEPS)
     snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor, warnings=w), None, w)
