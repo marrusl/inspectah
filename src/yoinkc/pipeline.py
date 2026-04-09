@@ -135,7 +135,7 @@ def _run_heuristic_pass(
             path=candidate.path,
             source=candidate.source,
             kind=kind,
-            pattern="heuristic",
+            pattern=candidate.key_name or "HEURISTIC",
             remediation=remediation,
             line=candidate.line_number,
             detection_method="heuristic",
@@ -177,10 +177,8 @@ def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
         suffix = f" ({len(inline_pattern)} pattern, {len(inline_heuristic)} heuristic)" if inline_heuristic else ""
         print(f"  Inline-redacted: {n} value{'s' if n != 1 else ''} in {inline_files} file{'s' if inline_files != 1 else ''}{suffix}", file=sys.stderr)
     if flagged:
-        flagged_heuristic = [f for f in flagged if f.detection_method == "heuristic"]
-        n = len(flagged_heuristic)
-        if n:
-            print(f"  Flagged for review: {n} heuristic finding{'s' if n != 1 else ''}", file=sys.stderr)
+        n = len(flagged)
+        print(f"  Flagged for review: {n} finding{'s' if n != 1 else ''}", file=sys.stderr)
     legacy = [r for r in snapshot.redactions if not isinstance(r, RedactionFinding)]
     if legacy:
         print(f"  Legacy (untyped): {len(legacy)} entries", file=sys.stderr)

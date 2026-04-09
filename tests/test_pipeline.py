@@ -398,6 +398,35 @@ def test_no_redaction_mode_detects_but_preserves_content(tmp_path):
         assert f.kind == "flagged", f"Expected kind='flagged' in no-redaction mode, got '{f.kind}' for {f.path}"
 
 
+def test_pipeline_moderate_flags_all_heuristic(tmp_path):
+    """In moderate mode, all heuristic findings are flagged, not redacted."""
+    from yoinkc.schema import RedactionFinding
+
+    snapshot = _make_snapshot_with_config_secret()
+    snap_path = tmp_path / "snap.json"
+    save_snapshot(snapshot, snap_path)
+
+    result = run_pipeline(
+        host_root=Path("/host"),
+        run_inspectors=None,
+        run_renderers=_tracking_renderer([]),
+        from_snapshot_path=snap_path,
+        output_dir=tmp_path / "out",
+        sensitivity="moderate",
+    )
+
+    heuristic_findings = [
+        r for r in result.redactions
+        if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"
+    ]
+    assert len(heuristic_findings) > 0, "Expected at least one heuristic finding"
+    for f in heuristic_findings:
+        assert f.kind == "flagged", (
+            f"In moderate mode, all heuristic findings should be flagged, "
+            f"got kind='{f.kind}' for {f.path}"
+        )
+
+
 def test_cli_summary_includes_heuristic_supplement(monkeypatch):
     """CLI summary shows heuristic breakdown in inline and flagged counts."""
     from yoinkc.pipeline import _print_secrets_summary
