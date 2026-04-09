@@ -587,7 +587,7 @@ def _run_ostree(
                 # RPM-owned — check if modified with rpm -V
                 pkg = r.stdout.strip().splitlines()[0].strip()
                 v_result = _run_rpm_query(executor, host_root, ["-V", pkg])
-                if v_result.returncode != 0 or (v_result.stdout and abs_path in v_result.stdout):
+                if v_result.stdout and abs_path in v_result.stdout:
                     # Modified RPM-owned file
                     try:
                         content = etc_file.read_text()

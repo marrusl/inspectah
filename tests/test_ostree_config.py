@@ -145,6 +145,54 @@ class TestOstreeEtcOnlyFiles:
         entry = [e for e in section.files if e.path == "etc/rpm-post.conf"][0]
         assert entry.kind == ConfigFileKind.RPM_OWNED_MODIFIED
 
+    def test_ostree_rpm_v_other_file_modified_not_false_positive(self, tmp_path):
+        """When rpm -V reports another file in the same package as modified,
+        our specific file should NOT be incorrectly classified as modified."""
+        host_root = _setup_ostree_config(tmp_path)
+
+        # Add a file that is RPM-owned but NOT listed in rpm -V output
+        (tmp_path / "etc" / "clean-rpm.conf").write_text("clean config\n")
+
+        def executor_other_file_modified(cmd, *, cwd=None):
+            if "rpm" in cmd and "-qf" in cmd:
+                if any("custom-app.conf" in a for a in cmd):
+                    return RunResult(stdout="", stderr="not owned", returncode=1)
+                if any("rpm-post.conf" in a for a in cmd):
+                    return RunResult(stdout="some-rpm\n", stderr="", returncode=0)
+                if any("clean-rpm.conf" in a for a in cmd):
+                    return RunResult(stdout="some-rpm\n", stderr="", returncode=0)
+                return RunResult(stdout="", stderr="not owned", returncode=1)
+            if "rpm" in cmd and "-V" in cmd:
+                # rpm -V returns rc=1 because ANOTHER file in the package is
+                # modified, but /etc/clean-rpm.conf is NOT in the output
+                return RunResult(
+                    stdout="S.5....T.  c /etc/rpm-post.conf\n",
+                    stderr="", returncode=1,
+                )
+            if "rpm" in cmd and "-qa" in cmd and "--queryformat" in cmd:
+                return RunResult(
+                    stdout="/etc/rpm-post.conf\n/etc/clean-rpm.conf\n",
+                    stderr="", returncode=0,
+                )
+            return RunResult(stdout="", stderr="", returncode=1)
+
+        section = run_config(
+            host_root,
+            executor_other_file_modified,
+            system_type=SystemType.RPM_OSTREE,
+        )
+        paths = [e.path for e in section.files]
+        # rpm-post.conf IS in rpm -V output -> should be RPM_OWNED_MODIFIED
+        assert "etc/rpm-post.conf" in paths
+        rpm_post = [e for e in section.files if e.path == "etc/rpm-post.conf"][0]
+        assert rpm_post.kind == ConfigFileKind.RPM_OWNED_MODIFIED
+
+        # clean-rpm.conf is NOT in rpm -V output -> should NOT appear as modified
+        assert "etc/clean-rpm.conf" not in paths, (
+            f"clean-rpm.conf should not be reported as modified (it's not in rpm -V output), "
+            f"got paths: {paths}"
+        )
+
 
 class TestOstreeVolatileFiltering:
     """Volatile files that change every boot are skipped."""
