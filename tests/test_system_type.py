@@ -205,3 +205,122 @@ def test_map_target_image_override(tmp_path):
         target_image_override="quay.io/my-custom/image:latest",
     )
     assert result == "quay.io/my-custom/image:latest"
+
+
+# =====================================================================
+# Pipeline wiring tests (run_all integration)
+# =====================================================================
+
+from unittest.mock import patch
+from yoinkc.inspectors import run_all, _read_os_release
+import yoinkc.preflight as preflight_mod
+
+
+def test_read_os_release_captures_variant_id(tmp_path):
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "os-release").write_text(
+        'NAME="Fedora Linux"\nVERSION_ID=41\nID=fedora\n'
+        'VARIANT_ID=silverblue\nPRETTY_NAME="Fedora Linux 41 (Silverblue)"\n'
+    )
+    os_rel = _read_os_release(tmp_path)
+    assert os_rel is not None
+    assert os_rel.variant_id == "silverblue"
+
+
+def _silverblue_executor(cmd, *, cwd=None):
+    """Executor simulating a Silverblue system."""
+    if cmd == ["bootc", "status"]:
+        return RunResult(stdout="", stderr="not found", returncode=1)
+    if cmd == ["rpm-ostree", "status"]:
+        return RunResult(stdout="State: idle", stderr="", returncode=0)
+    return RunResult(stdout="", stderr="", returncode=1)
+
+
+def _setup_silverblue_host(tmp_path):
+    (tmp_path / "ostree").mkdir()
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "os-release").write_text(
+        'NAME="Fedora Linux"\nVERSION_ID=41\nID=fedora\n'
+        'VARIANT_ID=silverblue\nPRETTY_NAME="Fedora Linux 41 (Silverblue)"\n'
+    )
+    (etc / "hostname").write_text("test-host\n")
+    return tmp_path
+
+
+def test_run_all_detects_rpm_ostree(tmp_path):
+    host_root = _setup_silverblue_host(tmp_path)
+    with patch.object(preflight_mod, "in_user_namespace", return_value=False):
+        snapshot = run_all(host_root, executor=_silverblue_executor, no_baseline_opt_in=True)
+    assert snapshot.system_type == SystemType.RPM_OSTREE
+
+
+def test_run_all_package_mode_unchanged(tmp_path):
+    """No /ostree -> package-mode, existing behavior intact."""
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "os-release").write_text(
+        'NAME="Fedora Linux"\nVERSION_ID=41\nID=fedora\n'
+    )
+    (etc / "hostname").write_text("test\n")
+    no_ostree_exec = _mock_executor()
+    with patch.object(preflight_mod, "in_user_namespace", return_value=False):
+        snapshot = run_all(tmp_path, executor=no_ostree_exec, no_baseline_opt_in=True)
+    assert snapshot.system_type == SystemType.PACKAGE_MODE
+
+
+def test_run_all_unknown_ostree_refuses_without_no_baseline(tmp_path):
+    """Unknown ostree without --target-image and without --no-baseline -> hard exit."""
+    (tmp_path / "ostree").mkdir()
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "os-release").write_text(
+        'NAME="CustomOS"\nVERSION_ID=1.0\nID=custom-os\n'
+        'VARIANT_ID=custom\nPRETTY_NAME="Custom OS"\n'
+    )
+    (etc / "hostname").write_text("test\n")
+    def unknown_exec(cmd, *, cwd=None):
+        if cmd == ["bootc", "status"]:
+            return RunResult(stdout="", stderr="", returncode=1)
+        if cmd == ["rpm-ostree", "status"]:
+            return RunResult(stdout="ok", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+    with patch.object(preflight_mod, "in_user_namespace", return_value=False):
+        with pytest.raises(SystemExit):
+            run_all(tmp_path, executor=unknown_exec)
+
+
+def test_run_all_unknown_ostree_proceeds_with_no_baseline(tmp_path):
+    """Unknown ostree + --no-baseline -> warn but proceed."""
+    (tmp_path / "ostree").mkdir()
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "os-release").write_text(
+        'NAME="CustomOS"\nVERSION_ID=1.0\nID=custom-os\n'
+        'VARIANT_ID=custom\nPRETTY_NAME="Custom OS"\n'
+    )
+    (etc / "hostname").write_text("test\n")
+    def unknown_exec(cmd, *, cwd=None):
+        if cmd == ["bootc", "status"]:
+            return RunResult(stdout="", stderr="", returncode=1)
+        if cmd == ["rpm-ostree", "status"]:
+            return RunResult(stdout="ok", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="", returncode=1)
+    with patch.object(preflight_mod, "in_user_namespace", return_value=False):
+        snapshot = run_all(tmp_path, executor=unknown_exec, no_baseline_opt_in=True)
+    assert snapshot.system_type == SystemType.RPM_OSTREE
+    warning_msgs = [w.get("message", "") for w in snapshot.warnings]
+    assert any("could not map" in m.lower() or "unknown" in m.lower() for m in warning_msgs)
+
+
+def test_run_all_target_image_overrides_ostree_mapping(tmp_path):
+    """--target-image overrides auto-mapping on ostree systems."""
+    host_root = _setup_silverblue_host(tmp_path)
+    with patch.object(preflight_mod, "in_user_namespace", return_value=False):
+        snapshot = run_all(
+            host_root, executor=_silverblue_executor,
+            target_image="quay.io/my-custom/image:latest",
+            no_baseline_opt_in=True,
+        )
+    assert snapshot.system_type == SystemType.RPM_OSTREE

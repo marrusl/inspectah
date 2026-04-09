@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Callable, List, Optional, TypeVar
 
 from ..executor import Executor, make_executor
-from ..schema import InspectionSnapshot, OsRelease
+from ..schema import InspectionSnapshot, OsRelease, SystemType
+from ..system_type import detect_system_type, map_ostree_base_image, OstreeDetectionError
 from .._util import make_warning, section_banner as _section_banner, status as _status_fn
 
 T = TypeVar("T")
@@ -189,6 +190,32 @@ def _baseline_fail_fast(base_image: Optional[str]) -> None:
     sys.exit(1)
 
 
+_COMMON_BASES = [
+    "quay.io/fedora-ostree-desktops/silverblue:41",
+    "quay.io/fedora-ostree-desktops/kinoite:41",
+    "quay.io/fedora/fedora-bootc:41",
+    "quay.io/centos-bootc/centos-bootc:stream10",
+]
+
+
+def _ostree_unknown_base_fail(system_type: "SystemType", os_release: Optional[OsRelease]) -> None:
+    """Print refusal message for unmappable ostree system and exit."""
+    type_label = "bootc" if system_type == SystemType.BOOTC else "rpm-ostree"
+    identity = (os_release.pretty_name or os_release.id) if os_release else "unknown"
+    lines = [
+        f"Detected {type_label} system: {identity}",
+        "Could not map to a known bootc base image.",
+        "",
+        "Specify one with: yoinkc --target-image <registry/image:tag>",
+        "",
+        "Common bases:",
+    ]
+    for base in _COMMON_BASES:
+        lines.append(f"  {base}")
+    print("\n".join(lines), file=sys.stderr)
+    sys.exit(1)
+
+
 def run_all(
     host_root: Path,
     executor: Optional[Executor] = None,
@@ -236,12 +263,43 @@ def run_all(
     err = _validate_supported_host(os_release)
     if err:
         raise ValueError(err)
+    # -- System type detection --
+    try:
+        system_type = detect_system_type(host_root, executor)
+    except OstreeDetectionError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+
     snapshot = InspectionSnapshot(
         meta=meta,
         os_release=os_release,
+        system_type=system_type,
     )
 
     w = snapshot.warnings
+
+    # Gate message for ostree systems
+    if system_type != SystemType.PACKAGE_MODE:
+        type_label = "bootc" if system_type == SystemType.BOOTC else "rpm-ostree"
+        print(f"Detected {type_label} system, adapting inspection", file=sys.stderr)
+
+    # Ostree base image mapping
+    if system_type != SystemType.PACKAGE_MODE:
+        mapped_image = map_ostree_base_image(
+            host_root, os_release, system_type,
+            executor=executor, target_image_override=target_image,
+        )
+        if mapped_image is None:
+            if not no_baseline_opt_in:
+                _ostree_unknown_base_fail(system_type, os_release)
+            else:
+                w.append(make_warning(
+                    "pipeline",
+                    "Could not map ostree system to a known base image. "
+                    "Running without baseline.",
+                ))
+        else:
+            target_image = mapped_image
 
     # Cross-major-version warning
     if target_version and os_release and os_release.version_id:
