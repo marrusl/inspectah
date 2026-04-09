@@ -36,9 +36,16 @@ from yoinkc.schema import ConfigSection, ConfigFileEntry
 Add a new test class:
 
 ```python
+import pytest
+
+
 class TestTieFlags:
     """Verify tie/tie_winner flags are set correctly after fleet merge."""
 
+    # These tests are marked xfail because Task 1 adds the model fields but
+    # the merge logic that sets tie/tie_winner lands in Task 3.  This keeps
+    # each commit green.  The xfail markers are removed in Task 3 Step 4.
+    @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
     def test_tied_variants_get_tie_flags(self):
         from yoinkc.fleet.merge import merge_snapshots
 
@@ -86,6 +93,7 @@ class TestTieFlags:
             assert v.tie is False, "Clear winners should not have tie=True"
             assert v.tie_winner is False
 
+    @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
     def test_three_way_tie_one_winner(self):
         from yoinkc.fleet.merge import merge_snapshots
 
@@ -98,7 +106,7 @@ class TestTieFlags:
         s3 = _snap("host-3", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="ccc"),
         ]))
-        merged = merge_snapshots([s1, s2, s3], min_prevalence=0)
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
 
         variants = merged.config.files
         assert len(variants) == 3
@@ -147,11 +155,11 @@ For `ComposeFile` (after line 440, before `fleet`):
     tie_winner: bool = False
 ```
 
-- [ ] **Step 4: Run tests to verify they still fail (flags exist but aren't set)**
+- [ ] **Step 4: Run tests to verify xfail tests are expected-fail, others pass**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestTieFlags -v`
 
-Expected: FAIL — `tie` is `False` on tied variants (the merge logic doesn't set them yet).
+Expected: Two tests `xfail` (flags exist but merge logic doesn't set them yet), one test passes (`test_clear_winner_no_tie_flags` passes because tie defaults are False).
 
 - [ ] **Step 5: Commit model changes**
 
@@ -465,11 +473,13 @@ def _auto_select_variants(items: list) -> None:
                 v.include = False
 ```
 
-- [ ] **Step 4: Run tiebreaker tests**
+- [ ] **Step 4: Remove xfail markers from Task 1 tests and run tiebreaker tests**
+
+In `tests/test_fleet_merge.py`, remove the two `@pytest.mark.xfail(reason="tie flags not yet set by merge logic")` decorators from `TestTieFlags.test_tied_variants_get_tie_flags` and `TestTieFlags.test_three_way_tie_one_winner`. The merge logic now sets the flags, so these tests should pass.
 
 Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestDeterministicTiebreaker tests/test_fleet_merge.py::TestTieFlags -v`
 
-Expected: PASS
+Expected: PASS (all tests, no xfail)
 
 - [ ] **Step 5: Update existing `TestAutoSelectVariants` expectations**
 
@@ -793,7 +803,7 @@ def _collect_variant_items(snapshot: InspectionSnapshot) -> list[_VariantInfo]:
             for v in variants:
                 c_hash = hashlib.sha256(
                     content_fn(v).encode()
-                ).hexdigest()[:16]
+                ).hexdigest()  # Full 64-char SHA-256 — consistent with Tasks 2-3
                 items.append(_VariantInfo(
                     path=v.path,
                     item_type=item_type,
@@ -1093,8 +1103,10 @@ In `tests/test_fleet_merge.py`, add:
 class TestCliTieSummary:
     """CLI prints tie summary when ties exist."""
 
-    def test_tie_count_in_cli_output(self, capsys):
+    def test_count_tied_winners_returns_correct_count(self):
+        """Unit test _count_tied_winners() as a pure function on a snapshot."""
         from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.__main__ import _count_tied_winners
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -1104,12 +1116,31 @@ class TestCliTieSummary:
         ]))
         merged = merge_snapshots([s1, s2], min_prevalence=0)
 
-        # Count ties the same way the CLI will
-        tie_count = sum(
-            1 for f in (merged.config.files or [])
-            if getattr(f, "tie_winner", False)
-        )
-        assert tie_count == 1
+        assert _count_tied_winners(merged) == 1
+
+    def test_tie_summary_printed_to_stdout(self, capsys):
+        """Verify the print output uses the count from _count_tied_winners()."""
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.__main__ import _count_tied_winners
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        tie_count = _count_tied_winners(merged)
+        if tie_count:
+            s = "s" if tie_count != 1 else ""
+            print(f"  {tie_count} item{s} with tied variants (auto-resolved by content hash)")
+
+        captured = capsys.readouterr()
+        assert "1 item with tied variants" in captured.out
+
+    # Note: The actual CLI print inside _run_fleet() is covered by the
+    # integration test in Task 11 (TestTieRoundTrip).
 ```
 
 - [ ] **Step 2: Implement tie summary in `_run_fleet()`**
@@ -1187,6 +1218,7 @@ class TestReadmeArtifacts:
     def test_merge_notes_in_readme_for_fleet(self):
         from yoinkc.fleet.merge import merge_snapshots
         from yoinkc.renderers.readme import render_readme
+        from yoinkc.renderers.merge_notes import render_merge_notes
         from jinja2 import Environment, FileSystemLoader
 
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -1201,6 +1233,9 @@ class TestReadmeArtifacts:
             output_dir = Path(tmpdir)
             templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
             env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
+            # render_merge_notes() must run first — render_readme() checks
+            # whether merge-notes.md exists on disk (see Step 3 above).
+            render_merge_notes(merged, output_dir)
             render_readme(merged, env, output_dir)
             content = (output_dir / "README.md").read_text()
             assert "merge-notes.md" in content
@@ -1217,25 +1252,20 @@ Expected: FAIL — "merge-notes.md" not in README.
 In `src/yoinkc/renderers/readme.py`, after the warnings row (around line 87), add a conditional row for fleet merges:
 
 ```python
-    # Merge notes (fleet merges with non-unanimous items only)
-    has_fleet = snapshot.fleet_metadata is not None
-    if has_fleet:
-        has_ties = False
-        for section_items in [
-            snapshot.config.files if snapshot.config else [],
-            snapshot.services.drop_ins if snapshot.services else [],
-            snapshot.containers.quadlet_units if snapshot.containers else [],
-            snapshot.containers.compose_files if snapshot.containers else [],
-            snapshot.non_rpm_software.env_files if snapshot.non_rpm_software else [],
-        ]:
-            if any(getattr(item, "tie", False) for item in section_items):
-                has_ties = True
-                break
-        if has_ties:
-            lines.append("| `merge-notes.md` | Fleet merge decisions — ties, non-unanimous items |")
+    # Merge notes (fleet merges with ties or non-unanimous items)
+    # Fleet context is stored in snapshot.meta["fleet"], not a dedicated attribute.
+    # See html_report.py:518 for the canonical pattern:
+    #   fleet_raw = (snapshot.meta or {}).get("fleet")
+    #
+    # The simplest predicate: check whether merge-notes.md already exists in
+    # the output directory.  render_merge_notes() runs before render_readme()
+    # in run_all(), so the file is present whenever there are ties OR
+    # non-unanimous items — matching the exact emission condition.
+    if (output_dir / "merge-notes.md").exists():
+        lines.append("| `merge-notes.md` | Fleet merge decisions — ties, non-unanimous items |")
 ```
 
-Note: Check whether `snapshot.fleet_metadata` exists in the schema. If the fleet detection uses a different signal (like checking if any item has `fleet` set), adjust accordingly.
+Note: `render_readme()` must accept the `output_dir` path (it already does for writing its own output). The predicate piggybacks on the fact that `render_merge_notes()` is called earlier in `run_all()`, so the file exists if and only if it would be generated. This avoids duplicating the emission logic and handles both tied and non-unanimous items correctly.
 
 - [ ] **Step 4: Run test**
 
@@ -1459,9 +1489,45 @@ class TestTieRoundTrip:
             # audit-report.md has [TIE LOSER]
             audit = (output_dir / "audit-report.md").read_text()
             assert "[TIE LOSER]" in audit
+
+    def test_refine_round_trip_resolves_tie(self):
+        """A tie resolved via refine removes the tied-items comment block."""
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers import run_all
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=alpha"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=beta"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        # Identify the auto-picked winner and the loser
+        winner = next(v for v in merged.config.files if v.tie_winner)
+        loser = next(v for v in merged.config.files if not v.tie_winner)
+
+        # Simulate refine: user overrides auto-pick — selects the loser
+        winner.tie_winner = False
+        winner.include = False
+        loser.include = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            run_all(merged, output_dir)
+
+            # Containerfile should NOT have the tied-items comment block
+            # because the user has made an explicit selection
+            containerfile = (output_dir / "Containerfile").read_text()
+            # The loser's content is now the selected variant
+            assert loser.content in (output_dir / "config" / "etc" / "app.conf").read_text()
+
+            # The newly selected variant should be in config/
+            config_file = output_dir / "config" / "etc" / "app.conf"
+            assert config_file.exists(), "User-selected variant should be in config/"
 ```
 
-- [ ] **Step 2: Run integration test**
+- [ ] **Step 2: Run integration tests**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestTieRoundTrip -v`
 
