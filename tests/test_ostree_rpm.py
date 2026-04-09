@@ -258,6 +258,56 @@ class TestRpmOstreeStatusFailure:
         assert section.ostree_removals == []
 
 
+class TestRpmOstreeStatusWarnings:
+    """Invalid or unexpected rpm-ostree status JSON emits warnings."""
+
+    def test_rpmostree_status_invalid_json_warns(self):
+        """Invalid JSON from rpm-ostree status (rc=0) emits warning."""
+        spy = OstreeExecutorSpy(rpmostree_stdout="not json{{{")
+        warnings = []
+        section = run_rpm(
+            Path("/fake-root"),
+            spy,
+            system_type=SystemType.RPM_OSTREE,
+            warnings=warnings,
+        )
+        warning_msgs = [w.get("message", "") if isinstance(w, dict) else str(w) for w in warnings]
+        assert any("invalid json" in m.lower() for m in warning_msgs), \
+            f"Expected invalid JSON warning, got: {warning_msgs}"
+
+    def test_rpmostree_status_no_deployments_warns(self):
+        """rpm-ostree status with empty deployments emits warning."""
+        spy = OstreeExecutorSpy(
+            rpmostree_stdout=json.dumps({"deployments": []}),
+        )
+        warnings = []
+        section = run_rpm(
+            Path("/fake-root"),
+            spy,
+            system_type=SystemType.RPM_OSTREE,
+            warnings=warnings,
+        )
+        warning_msgs = [w.get("message", "") if isinstance(w, dict) else str(w) for w in warnings]
+        assert any("no deployments" in m.lower() for m in warning_msgs), \
+            f"Expected no-deployments warning, got: {warning_msgs}"
+
+    def test_rpmostree_status_no_booted_deployment_warns(self):
+        """rpm-ostree status with no booted deployment emits warning."""
+        spy = OstreeExecutorSpy(
+            rpmostree_stdout=json.dumps({"deployments": [{"booted": False}]}),
+        )
+        warnings = []
+        section = run_rpm(
+            Path("/fake-root"),
+            spy,
+            system_type=SystemType.RPM_OSTREE,
+            warnings=warnings,
+        )
+        warning_msgs = [w.get("message", "") if isinstance(w, dict) else str(w) for w in warnings]
+        assert any("no booted deployment" in m.lower() for m in warning_msgs), \
+            f"Expected no-booted-deployment warning, got: {warning_msgs}"
+
+
 class TestPureBootcLowConfidenceFallback:
     """On BOOTC systems without rpm-ostree, emit low-confidence warning."""
 

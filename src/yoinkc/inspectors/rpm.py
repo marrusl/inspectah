@@ -568,9 +568,25 @@ def _parse_rpmostree_package_state(
         data = json.loads(result.stdout)
     except (json.JSONDecodeError, ValueError) as exc:
         _debug(f"rpm-ostree status returned invalid JSON: {exc}")
+        if warnings is not None:
+            warnings.append(make_warning(
+                "rpm",
+                "rpm-ostree status returned invalid JSON. "
+                "Layered, overridden, and removed package information is unavailable.",
+            ))
         return
 
     deployments = data.get("deployments", [])
+    if not deployments:
+        _debug("rpm-ostree status returned no deployments")
+        if warnings is not None:
+            warnings.append(make_warning(
+                "rpm",
+                "rpm-ostree status returned no deployments. "
+                "Layered, overridden, and removed package information is unavailable.",
+            ))
+        return
+
     booted = None
     for dep in deployments:
         if dep.get("booted"):
@@ -578,6 +594,12 @@ def _parse_rpmostree_package_state(
             break
     if booted is None:
         _debug("no booted deployment found in rpm-ostree status")
+        if warnings is not None:
+            warnings.append(make_warning(
+                "rpm",
+                "rpm-ostree status has no booted deployment. "
+                "Layered, overridden, and removed package information is unavailable.",
+            ))
         return
 
     # Layered packages
