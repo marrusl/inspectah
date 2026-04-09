@@ -321,14 +321,33 @@ def _redact_text(
     return out
 
 
-def scan_directory_for_secrets(root: Path) -> Optional[str]:
+_SUBSCRIPTION_DIR_NAMES = {"entitlement", "rhsm"}
+
+
+def scan_directory_for_secrets(
+    root: Path,
+    *,
+    heuristic: bool = False,
+    sensitivity: str = "strict",
+) -> Optional[str]:
     """
     Scan all text files under root for secret patterns. Returns first path where
     a pattern was found, or None if clean. Used to verify output before GitHub push.
+
+    When heuristic=True, also runs heuristic detection. In strict mode,
+    high-confidence heuristic findings block push; in moderate mode they
+    are advisory only.
     """
     root = Path(root)
     for f in root.rglob("*"):
         if not f.is_file() or ".git" in str(f):
+            continue
+        # Skip subscription cert directories under root
+        try:
+            rel = f.relative_to(root)
+        except ValueError:
+            continue
+        if rel.parts and rel.parts[0] in _SUBSCRIPTION_DIR_NAMES:
             continue
         try:
             text = f.read_text()
@@ -340,7 +359,29 @@ def scan_directory_for_secrets(root: Path) -> Optional[str]:
                 captured = m.group(m.lastindex) if m.lastindex else m.group(0)
                 if captured.startswith("REDACTED_"):
                     continue
-                return str(f.relative_to(root))
+                return str(rel)
+
+    # Heuristic pass over files
+    if heuristic:
+        from .heuristic import find_heuristic_candidates
+        for f in root.rglob("*"):
+            if not f.is_file() or ".git" in str(f):
+                continue
+            try:
+                rel = f.relative_to(root)
+            except ValueError:
+                continue
+            if rel.parts and rel.parts[0] in _SUBSCRIPTION_DIR_NAMES:
+                continue
+            try:
+                text = f.read_text()
+            except Exception:
+                continue
+            lines = text.splitlines()
+            candidates = find_heuristic_candidates(lines, str(rel), source="file")
+            for c in candidates:
+                if sensitivity == "strict" and c.confidence == "high":
+                    return str(rel)
     return None
 
 

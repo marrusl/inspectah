@@ -1486,6 +1486,25 @@ def test_heuristic_redaction_replaces_content():
         "Content should contain a REDACTED_ token"
 
 
+def test_scan_directory_skips_subscription_dirs(tmp_path):
+    from yoinkc.redact import scan_directory_for_secrets
+    ent_dir = tmp_path / "entitlement"
+    ent_dir.mkdir()
+    (ent_dir / "cert.pem").write_text("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n")
+    rhsm_dir = tmp_path / "rhsm"
+    rhsm_dir.mkdir()
+    (rhsm_dir / "rhsm.conf").write_text("password=secretvalue\n")
+    assert scan_directory_for_secrets(tmp_path) is None
+
+
+def test_scan_directory_catches_secrets_outside_subscription_dirs(tmp_path):
+    from yoinkc.redact import scan_directory_for_secrets
+    config_dir = tmp_path / "config" / "etc"
+    config_dir.mkdir(parents=True)
+    (config_dir / "app.conf").write_text("password=realsecret\n")
+    assert scan_directory_for_secrets(tmp_path) is not None
+
+
 def test_heuristic_redaction_moderate_does_not_replace():
     """In moderate mode, heuristic pass flags but does not redact content."""
     from yoinkc.pipeline import _run_heuristic_pass
