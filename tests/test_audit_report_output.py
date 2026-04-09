@@ -384,3 +384,28 @@ class TestSecretsReview:
         snapshot = outputs_with_baseline["snapshot"]
         if snapshot.redactions:
             assert "secret store" in sr.lower() or "deploy time" in sr.lower() or "manually" in sr.lower()
+
+
+class TestAuditReportRedactionFinding:
+
+    def test_audit_report_with_typed_redaction_findings(self):
+        """Audit report renders correctly with RedactionFinding objects."""
+        from yoinkc.schema import InspectionSnapshot, OsRelease, RedactionFinding
+        from yoinkc.renderers.audit_report import render
+
+        snapshot = InspectionSnapshot(
+            meta={},
+            os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
+        )
+        snapshot.redactions = [
+            RedactionFinding(
+                path="/etc/pki/tls/private/server.key",
+                source="file", kind="excluded", pattern="EXCLUDED_PATH",
+                remediation="provision",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            render(snapshot, Environment(), Path(tmp))
+            content = (Path(tmp) / "audit-report.md").read_text()
+        assert "server.key" in content
+        assert "Secrets redacted: 1" in content
