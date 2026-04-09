@@ -46,7 +46,7 @@ def test_redact_text_password():
     assert "hunter2" not in out
     assert "REDACTED_PASSWORD" in out
     assert len(redactions) == 1
-    assert redactions[0]["path"] == "test/path"
+    assert redactions[0].get("path") == "test/path"
 
 
 def test_redact_text_multiple_passwords_different_lengths():
@@ -110,7 +110,7 @@ def test_redact_firewall_zone_content():
     assert result.network is not None
     new_zone = result.network.firewall_zones[0]
     assert "myvpnsecret123456789" not in new_zone.content
-    assert any("firewall_zone/vpn" in r["path"] for r in result.redactions)
+    assert any("firewall_zone/vpn" in r.get("path", "") for r in result.redactions)
 
 
 def test_redact_firewall_zone_no_secrets():
@@ -139,7 +139,7 @@ def test_redact_quadlet_content():
     result = redact_snapshot(snapshot)
     new_unit = result.containers.quadlet_units[0]
     assert "supersecret99" not in new_unit.content
-    assert any("quadlet/myapp.container" in r["path"] for r in result.redactions)
+    assert any("quadlet/myapp.container" in r.get("path", "") for r in result.redactions)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +157,7 @@ def test_redact_running_container_env():
     result = redact_snapshot(snapshot)
     new_c = result.containers.running_containers[0]
     assert not any("topsecretredis" in e for e in new_c.env)
-    assert any("containers:running/redis:env" in r["path"] for r in result.redactions)
+    assert any("containers:running/redis:env" in r.get("path", "") for r in result.redactions)
 
 
 def test_running_container_env_no_secrets():
@@ -241,7 +241,7 @@ def test_redact_grub_defaults():
     )
     result = redact_snapshot(snapshot)
     assert "mylukspassword" not in result.kernel_boot.grub_defaults
-    assert any("kernel:grub_defaults" in r["path"] for r in result.redactions)
+    assert any("kernel:grub_defaults" in r.get("path", "") for r in result.redactions)
 
 
 def test_grub_no_secrets():
@@ -267,7 +267,7 @@ def test_redact_modprobe_d_content():
     )
     result = redact_snapshot(snapshot)
     assert "vpnsecret99" not in result.kernel_boot.modprobe_d[0].content
-    assert any("kernel:modprobe_d" in r["path"] for r in result.redactions)
+    assert any("kernel:modprobe_d" in r.get("path", "") for r in result.redactions)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +285,7 @@ def test_redact_sudoers_rules():
     )
     result = redact_snapshot(snapshot)
     assert not any("adminpass123" in r for r in result.users_groups.sudoers_rules)
-    assert any("users:sudoers" in r["path"] for r in result.redactions)
+    assert any("users:sudoers" in r.get("path", "") for r in result.redactions)
 
 
 def test_sudoers_no_secrets():
@@ -318,7 +318,7 @@ def test_redact_shadow_entry_with_hash():
     fields = entry.split(":")
     assert fields[0] == "jdoe"
     assert fields[2] == "19700"
-    assert any("SHADOW_HASH" in r["pattern"] for r in result.redactions)
+    assert any("SHADOW_HASH" in r.get("pattern", "") for r in result.redactions)
 
 
 def test_redact_shadow_entry_locked_unchanged():
@@ -739,3 +739,116 @@ def test_counter_assignment_independent_of_input_order():
             f"  Reversed input: {content_reversed[path]!r}\n"
             f"  Sorted input:   {content_sorted[path]!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 4: Remediation states and RedactionFinding emission
+# ---------------------------------------------------------------------------
+
+def test_cockpit_gets_regenerate_remediation():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/cockpit/ws-certs.d/0-self-signed.key", kind=ConfigFileKind.UNOWNED, content="key", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    cockpit = [r for r in result.redactions if isinstance(r, RedactionFinding) and "cockpit" in r.path]
+    assert len(cockpit) >= 1
+    assert all(f.remediation == "regenerate" for f in cockpit)
+
+
+def test_ssh_host_key_gets_regenerate_remediation():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/ssh/ssh_host_rsa_key", kind=ConfigFileKind.UNOWNED, content="key", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    ssh = [r for r in result.redactions if isinstance(r, RedactionFinding) and "ssh_host" in r.path]
+    assert len(ssh) >= 1
+    assert all(f.remediation == "regenerate" for f in ssh)
+
+
+def test_tls_key_gets_provision_remediation():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/tls/private/server.key", kind=ConfigFileKind.UNOWNED, content="key", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    tls = [r for r in result.redactions if isinstance(r, RedactionFinding) and "server.key" in r.path]
+    assert len(tls) >= 1
+    assert all(f.remediation == "provision" for f in tls)
+
+
+def test_inline_redaction_gets_value_removed_remediation():
+    wg_config = "[Interface]\nPrivateKey = lWcu7GLoyXymjngaiY3JfFMRrTy96Fyonm2K5hW9qoo=\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/wireguard/wg0.conf", kind=ConfigFileKind.UNOWNED, content=wg_config, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    wg = [r for r in result.redactions if isinstance(r, RedactionFinding) and "wireguard" in r.path]
+    assert len(wg) >= 1
+    assert all(f.remediation == "value-removed" for f in wg)
+
+
+def test_shadow_finding_has_source():
+    """Shadow findings carry source='shadow'."""
+    snapshot = _base_snapshot(users_groups=UserGroupSection(
+        shadow_entries=["testuser:$y$j9T$abc$hash:19700:0:99999:7:::"],
+    ))
+    result = redact_snapshot(snapshot)
+    shadow = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.source == "shadow"]
+    assert len(shadow) >= 1
+    assert all(f.kind == "inline" for f in shadow)
+    assert all(f.remediation == "value-removed" for f in shadow)
+
+
+def test_container_env_finding_has_source():
+    """Container env findings carry source='container-env'."""
+    c = RunningContainer(
+        id="abc123", name="redis", image="redis:7",
+        env=["REDIS_PASSWORD=topsecretredis", "HOSTNAME=redis-1"],
+    )
+    snapshot = _base_snapshot(containers=ContainerSection(running_containers=[c]))
+    result = redact_snapshot(snapshot)
+    env_findings = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.source == "container-env"]
+    assert len(env_findings) >= 1
+
+
+def test_timer_cmd_finding_has_source():
+    """Timer command findings carry source='timer-cmd'."""
+    unit = GeneratedTimerUnit(
+        name="cron-backup",
+        timer_content="[Timer]\nOnCalendar=daily\n",
+        service_content="[Service]\nExecStart=/usr/bin/pg_dump -p password=dbpass123 mydb\n",
+        cron_expr="0 2 * * *",
+        source_path="etc/cron.d/backup",
+        command="/usr/bin/pg_dump -p password=dbpass123 mydb",
+    )
+    snapshot = _base_snapshot(scheduled_tasks=ScheduledTaskSection(generated_timer_units=[unit]))
+    result = redact_snapshot(snapshot)
+    timer_findings = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.source == "timer-cmd"]
+    assert len(timer_findings) >= 1
+
+
+def test_diff_finding_has_source():
+    """Diff view findings carry source='diff'."""
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(
+            path="/etc/app.conf", kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+            content="clean content",
+            diff_against_rpm="+password=leakedsecret",
+            include=True,
+        ),
+    ]))
+    result = redact_snapshot(snapshot)
+    diff_findings = [r for r in result.redactions if isinstance(r, RedactionFinding) and r.source == "diff"]
+    assert len(diff_findings) >= 1
+
+
+def test_redaction_findings_compat_with_existing_tests():
+    """RedactionFinding.get() works with existing test patterns like r['pattern']."""
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED, content="password=secret123", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert len(result.redactions) > 0
+    r = result.redactions[0]
+    # .get() compat works
+    assert r.get("path") == "/etc/app.conf"
+    assert r.get("pattern") is not None

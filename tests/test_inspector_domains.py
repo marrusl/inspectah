@@ -333,7 +333,7 @@ def test_env_files_are_redacted(host_root, fixture_executor):
     myapp_env = next(ef for ef in redacted.non_rpm_software.env_files if "myapp/.env" in ef.path)
     assert "sk-fakekeyABCDEFGHIJKLMNOPQRSTUVWXYZ1234" not in myapp_env.content
     assert "REDACTED_" in myapp_env.content
-    assert any("myapp/.env" in r["path"] for r in redacted.redactions)
+    assert any("myapp/.env" in r.get("path", "") for r in redacted.redactions)
 
 
 # ---------------------------------------------------------------------------

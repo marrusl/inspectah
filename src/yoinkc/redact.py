@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .schema import (
-    ConfigFileEntry, InspectionSnapshot,
+    ConfigFileEntry, InspectionSnapshot, RedactionFinding,
     FirewallZone, QuadletUnit, RunningContainer,
     GeneratedTimerUnit, SystemdTimer,
 )
@@ -95,6 +95,23 @@ class _CounterRegistry:
         return token
 
 
+# Pattern → remediation state for excluded paths
+_EXCLUDED_REMEDIATION: list[tuple[str, str]] = [
+    (r"/etc/cockpit/ws-certs\.d/.*", "regenerate"),
+    (r"/etc/ssh/ssh_host_.*", "regenerate"),
+    # All others default to "provision"
+]
+
+
+def _remediation_for_excluded(path: str) -> str:
+    """Return remediation state for an excluded path."""
+    normalised = "/" + path.lstrip("/")
+    for pattern, remediation in _EXCLUDED_REMEDIATION:
+        if re.search(pattern, normalised):
+            return remediation
+    return "provision"
+
+
 # Values that commonly appear after "password:" or "passwd:" in config files
 # but are not actual secrets (e.g. nsswitch.conf, PAM configs, sudoers).
 _FALSE_POSITIVE_VALUES = frozenset({
@@ -120,7 +137,7 @@ _SHADOW_NOOP_HASHES = frozenset({"*", "!", "!!", ""})
 
 
 def _redact_shadow_entry(
-    line: str, redactions: List[dict],
+    line: str, redactions: list,
     registry: Optional[_CounterRegistry] = None,
 ) -> str:
     """Redact the password hash (field index 1) of a shadow-format line.
@@ -141,19 +158,22 @@ def _redact_shadow_entry(
         replacement = registry.get_token("SHADOW_HASH", raw_hash)
     else:
         replacement = f"REDACTED_SHADOW_HASH_{_truncated_sha256(raw_hash)}"
-    redactions.append({
-        "path": f"users:shadow/{fields[0]}",
-        "pattern": "SHADOW_HASH",
-        "line": "field 2",
-        "remediation": "Do not ship password hashes in image output.",
-    })
+    redactions.append(RedactionFinding(
+        path=f"users:shadow/{fields[0]}",
+        source="shadow",
+        kind="inline",
+        pattern="SHADOW_HASH",
+        remediation="value-removed",
+        replacement=replacement,
+    ))
     fields[1] = replacement
     return ":".join(fields)
 
 
 def _redact_text(
-    text: str, path: str, redactions: List[dict],
+    text: str, path: str, redactions: list,
     registry: Optional[_CounterRegistry] = None,
+    source: str = "file",
 ) -> str:
     out = text
     for pattern, type_label in REDACT_PATTERNS:
@@ -164,31 +184,35 @@ def _redact_text(
                 continue
             if type_label == "PRIVATE_KEY":
                 if registry is not None:
-                    replacement = registry.get_token(type_label, m.group(0))
+                    token = registry.get_token(type_label, m.group(0))
                 else:
-                    replacement = f"REDACTED_{type_label}_<removed>"
+                    token = f"REDACTED_{type_label}_<removed>"
+                replacement = token
             else:
                 sub = m.group(2) if m.lastindex and m.lastindex >= 2 else m.group(0)
                 if type_label == "PASSWORD" and sub.strip().lower() in _FALSE_POSITIVE_VALUES:
                     continue
                 if registry is not None:
-                    replacement = registry.get_token(type_label, sub)
+                    token = registry.get_token(type_label, sub)
                 else:
-                    replacement = f"REDACTED_{type_label}_{_truncated_sha256(sub)}"
+                    token = f"REDACTED_{type_label}_{_truncated_sha256(sub)}"
+                replacement = token
                 # Preserve the prefix (group 1) when it captures the
                 # assignment syntax (contains = or :).  Patterns like
                 # WIREGUARD_KEY and WIFI_PSK capture "PrivateKey = " or
                 # "psk=" as group(1) so the output keeps the key name.
                 prefix = m.group(1) if m.lastindex and m.lastindex >= 2 else None
                 if prefix and ("=" in prefix or ":" in prefix):
-                    replacement = prefix + replacement
+                    replacement = prefix + token
             spans.append((m.start(), m.end(), replacement))
-            redactions.append({
-                "path": path,
-                "pattern": type_label,
-                "line": "content",
-                "remediation": "Use a secret store or inject at deploy time.",
-            })
+            redactions.append(RedactionFinding(
+                path=path,
+                source=source,
+                kind="inline",
+                pattern=type_label,
+                remediation="value-removed",
+                replacement=token,
+            ))
         # Apply in reverse so earlier positions stay valid.
         for start, end, replacement in reversed(spans):
             out = out[:start] + replacement + out[end:]
@@ -225,7 +249,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
     Does not mutate the input.  Returns a new snapshot with redacted
     content and snapshot.redactions populated.
     """
-    redactions: List[dict] = list(snapshot.redactions)
+    redactions: list = list(snapshot.redactions)
     updates: dict = {}
     registry = _CounterRegistry()
 
@@ -240,17 +264,19 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         for entry in sorted_files:
             if _is_excluded_path(entry.path):
                 if entry.content != _EXCLUDED_PLACEHOLDER:
-                    redactions.append({
-                        "path": entry.path,
-                        "pattern": "EXCLUDED_PATH",
-                        "line": "entire file",
-                        "remediation": "File not included; handle credentials manually (e.g. systemd credential, secret store).",
-                    })
+                    redactions.append(RedactionFinding(
+                        path=entry.path,
+                        source="file",
+                        kind="excluded",
+                        pattern="EXCLUDED_PATH",
+                        remediation=_remediation_for_excluded(entry.path),
+                    ))
                 new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
             new_content = _redact_text(entry.content or "", entry.path, redactions, registry=registry)
             new_diff = _redact_text(
-                entry.diff_against_rpm or "", f"{entry.path}:diff", redactions, registry=registry
+                entry.diff_against_rpm or "", f"{entry.path}:diff", redactions,
+                registry=registry, source="diff",
             ) if entry.diff_against_rpm else None
             file_updates: dict = {}
             if new_content != (entry.content or ""):
@@ -313,7 +339,8 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                 env_changed = False
                 sorted_env = sorted(c.env)
                 for e in sorted_env:
-                    redacted_e = _redact_text(e, f"containers:running/{name}:env", redactions, registry=registry)
+                    redacted_e = _redact_text(e, f"containers:running/{name}:env", redactions,
+                                              registry=registry, source="container-env")
                     new_env.append(redacted_e)
                     if redacted_e != e:
                         env_changed = True
@@ -342,12 +369,14 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
             for u in sorted_gen:
                 item_updates: dict = {}
                 new_svc = _redact_text(
-                    u.service_content, f"scheduled:timer/{u.name}:service_content", redactions, registry=registry
+                    u.service_content, f"scheduled:timer/{u.name}:service_content", redactions,
+                    registry=registry, source="timer-cmd",
                 )
                 if new_svc != u.service_content:
                     item_updates["service_content"] = new_svc
                 new_cmd = _redact_text(
-                    u.command, f"scheduled:timer/{u.name}:command", redactions, registry=registry
+                    u.command, f"scheduled:timer/{u.name}:command", redactions,
+                    registry=registry, source="timer-cmd",
                 )
                 if new_cmd != u.command:
                     item_updates["command"] = new_cmd
@@ -368,7 +397,8 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                     new_timers.append(t)
                     continue
                 new_svc = _redact_text(
-                    t.service_content, f"scheduled:systemd_timer/{t.name}:service_content", redactions, registry=registry
+                    t.service_content, f"scheduled:systemd_timer/{t.name}:service_content", redactions,
+                    registry=registry, source="timer-cmd",
                 )
                 if new_svc != t.service_content:
                     new_timers.append(t.model_copy(update={"service_content": new_svc}))
@@ -430,12 +460,13 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
         for entry in sorted_env_files:
             if _is_excluded_path(entry.path):
                 if entry.content != _EXCLUDED_PLACEHOLDER:
-                    redactions.append({
-                        "path": entry.path,
-                        "pattern": "EXCLUDED_PATH",
-                        "line": "entire file",
-                        "remediation": "File not included; handle credentials manually.",
-                    })
+                    redactions.append(RedactionFinding(
+                        path=entry.path,
+                        source="file",
+                        kind="excluded",
+                        pattern="EXCLUDED_PATH",
+                        remediation=_remediation_for_excluded(entry.path),
+                    ))
                 new_env_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
             new_content = _redact_text(entry.content or "", entry.path, redactions, registry=registry)
