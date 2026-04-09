@@ -431,6 +431,144 @@ def test_redaction_finding_dict_compat():
     assert f.get("missing", "default") == "default"
 
 
+def test_redaction_finding_detection_method_field():
+    """RedactionFinding accepts detection_method='pattern' and confidence=None."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="PASSWORD",
+        remediation="value-removed",
+        detection_method="pattern",
+        confidence=None,
+    )
+    assert f.detection_method == "pattern"
+    assert f.confidence is None
+
+
+def test_redaction_finding_heuristic_fields():
+    """RedactionFinding accepts detection_method='heuristic' with confidence='high'."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="HEURISTIC_SECRET",
+        remediation="value-removed",
+        detection_method="heuristic",
+        confidence="high",
+        line=12,
+        replacement="REDACTED_HEURISTIC_1",
+    )
+    assert f.detection_method == "heuristic"
+    assert f.confidence == "high"
+    assert f.line == 12
+    assert f.replacement == "REDACTED_HEURISTIC_1"
+
+
+def test_redaction_finding_excluded_path_detection_method():
+    """RedactionFinding accepts detection_method='excluded_path'."""
+    f = RedactionFinding(
+        path="/etc/ssh/ssh_host_rsa_key",
+        source="file",
+        kind="excluded",
+        pattern="EXCLUDED_PATH",
+        remediation="regenerate",
+        detection_method="excluded_path",
+    )
+    assert f.detection_method == "excluded_path"
+    assert f.confidence is None
+
+
+def test_redaction_finding_detection_method_defaults():
+    """detection_method defaults to 'pattern', confidence defaults to None."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="PASSWORD",
+        remediation="value-removed",
+    )
+    assert f.detection_method == "pattern"
+    assert f.confidence is None
+
+
+def test_redaction_finding_detection_method_in_get():
+    """.get() works for new fields."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="PASSWORD",
+        remediation="value-removed",
+        detection_method="heuristic",
+        confidence="low",
+    )
+    assert f.get("detection_method") == "heuristic"
+    assert f.get("confidence") == "low"
+    assert f.get("detection_method", "fallback") == "heuristic"
+    assert f.get("nonexistent", "default") == "default"
+
+
+def test_redaction_finding_roundtrip_with_new_fields(tmp_path):
+    """save_snapshot/load_snapshot roundtrip preserves detection_method and confidence."""
+    from yoinkc.pipeline import save_snapshot, load_snapshot
+
+    snapshot = InspectionSnapshot(meta={"hostname": "test"})
+    snapshot.redactions = [
+        RedactionFinding(
+            path="/etc/app.conf",
+            source="file",
+            kind="inline",
+            pattern="HEURISTIC_SECRET",
+            remediation="value-removed",
+            detection_method="heuristic",
+            confidence="high",
+            line=5,
+            replacement="REDACTED_HEURISTIC_1",
+        ),
+        RedactionFinding(
+            path="/etc/shadow",
+            source="file",
+            kind="excluded",
+            pattern="EXCLUDED_PATH",
+            remediation="provision",
+            detection_method="excluded_path",
+        ),
+        RedactionFinding(
+            path="/etc/other.conf",
+            source="file",
+            kind="inline",
+            pattern="PASSWORD",
+            remediation="value-removed",
+            # defaults: detection_method="pattern", confidence=None
+        ),
+    ]
+
+    snapshot_path = tmp_path / "inspection-snapshot.json"
+    save_snapshot(snapshot, snapshot_path)
+    loaded = load_snapshot(snapshot_path)
+
+    assert len(loaded.redactions) == 3
+
+    # Heuristic finding preserved
+    r0 = loaded.redactions[0]
+    assert isinstance(r0, RedactionFinding)
+    assert r0.detection_method == "heuristic"
+    assert r0.confidence == "high"
+
+    # Excluded path finding preserved
+    r1 = loaded.redactions[1]
+    assert isinstance(r1, RedactionFinding)
+    assert r1.detection_method == "excluded_path"
+    assert r1.confidence is None
+
+    # Default pattern finding preserved
+    r2 = loaded.redactions[2]
+    assert isinstance(r2, RedactionFinding)
+    assert r2.detection_method == "pattern"
+    assert r2.confidence is None
+
+
 def test_redaction_finding_survives_save_load_roundtrip(tmp_path):
     """RedactionFinding objects survive save_snapshot() -> load_snapshot() round-trip.
 

@@ -583,6 +583,8 @@ class RedactionFinding(BaseModel):
     remediation: str       # "regenerate" | "provision" | "value-removed"
     line: Optional[int] = None       # Line number (inline only, file-backed only)
     replacement: Optional[str] = None  # Replacement token (inline only)
+    detection_method: str = "pattern"  # "pattern" | "heuristic" | "excluded_path"
+    confidence: Optional[str] = None   # "high" | "low" | None (None for pattern/excluded_path)
 
     def get(self, key: str, default=None):
         """Dict-like access for backwards compatibility with existing consumers."""
