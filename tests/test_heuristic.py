@@ -68,3 +68,36 @@ def test_no_finding_for_numeric_after_keyword():
     lines = ["password_min_length = 12"]
     candidates = find_heuristic_candidates(lines, "/etc/app.conf", source="file")
     assert len(candidates) == 0
+
+
+# --- False positive filters ---
+
+def test_uuid_is_false_positive():
+    lines = ["session_id = 550e8400-e29b-41d4-a716-446655440000"]
+    candidates = find_heuristic_candidates(lines, "/etc/app.conf", source="file")
+    assert len(candidates) == 0
+
+def test_hex_checksum_is_false_positive():
+    for val in ["a" * 32, "b" * 40, "c" * 64]:
+        lines = [f"checksum = {val}"]
+        candidates = find_heuristic_candidates(lines, "/etc/app.conf", source="file")
+        assert len(candidates) == 0, f"Hex checksum {len(val)} chars should be filtered"
+
+def test_already_redacted_is_false_positive():
+    lines = ["password = REDACTED_PASSWORD_1"]
+    candidates = find_heuristic_candidates(lines, "/etc/app.conf", source="file")
+    assert len(candidates) == 0
+
+def test_comment_lines_skipped():
+    lines = [
+        "# password = supersecretvalue12345678",
+        "; token = abcdefghijklmnop12345678",
+    ]
+    candidates = find_heuristic_candidates(lines, "/etc/app.conf", source="file")
+    assert len(candidates) == 0
+
+def test_vendor_prefix_residual_detected():
+    lines = ["config = myprefix_aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4"]
+    candidates = find_heuristic_candidates(lines, "/etc/app.conf", source="file")
+    residual = [c for c in candidates if "prefix" in c.why_flagged.lower() or "vendor" in c.why_flagged.lower()]
+    assert len(residual) >= 1
