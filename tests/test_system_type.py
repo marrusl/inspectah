@@ -89,3 +89,119 @@ def test_detect_bootc_preferred_over_rpmostree(tmp_path):
     assert detect_system_type(
         tmp_path, _mock_executor(bootc_rc=0, rpmostree_rc=0)
     ) == SystemType.BOOTC
+
+
+# =====================================================================
+# ostree base image mapping tests
+# =====================================================================
+
+import json
+from yoinkc.system_type import map_ostree_base_image
+
+
+def _make_os_release(**kwargs):
+    from yoinkc.schema import OsRelease
+    defaults = {
+        "name": "Fedora Linux", "version_id": "41",
+        "id": "fedora", "variant_id": "",
+    }
+    defaults.update(kwargs)
+    return OsRelease(**defaults)
+
+
+# --- rpm-ostree systems: VARIANT_ID mapping ---
+
+def test_map_silverblue(tmp_path):
+    os_rel = _make_os_release(variant_id="silverblue", version_id="41")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None)
+    assert result == "quay.io/fedora-ostree-desktops/silverblue:41"
+
+
+def test_map_kinoite(tmp_path):
+    os_rel = _make_os_release(variant_id="kinoite", version_id="42")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None)
+    assert result == "quay.io/fedora-ostree-desktops/kinoite:42"
+
+
+# --- Universal Blue ---
+
+def test_map_universal_blue(tmp_path):
+    ublue_dir = tmp_path / "usr" / "share" / "ublue-os"
+    ublue_dir.mkdir(parents=True)
+    info = {
+        "image-name": "bluefin", "image-vendor": "ublue-os",
+        "image-ref": "ghcr.io/ublue-os/bluefin:41", "image-tag": "41",
+    }
+    (ublue_dir / "image-info.json").write_text(json.dumps(info))
+    os_rel = _make_os_release(variant_id="silverblue", version_id="41")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None)
+    assert result == "ghcr.io/ublue-os/bluefin:41"
+
+
+def test_map_ublue_malformed_json_missing_fields(tmp_path):
+    """Missing required image-name -> None."""
+    ublue_dir = tmp_path / "usr" / "share" / "ublue-os"
+    ublue_dir.mkdir(parents=True)
+    (ublue_dir / "image-info.json").write_text(json.dumps({"image-vendor": "ublue-os"}))
+    os_rel = _make_os_release(variant_id="silverblue", version_id="41")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None)
+    assert result is None
+
+
+def test_map_ublue_invalid_json(tmp_path):
+    ublue_dir = tmp_path / "usr" / "share" / "ublue-os"
+    ublue_dir.mkdir(parents=True)
+    (ublue_dir / "image-info.json").write_text("not valid json{{{")
+    os_rel = _make_os_release(variant_id="silverblue", version_id="41")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None)
+    assert result is None
+
+
+# --- bootc systems ---
+
+def test_map_fedora_bootc_from_status(tmp_path):
+    os_rel = _make_os_release(id="fedora", version_id="41")
+    def executor(cmd, *, cwd=None):
+        if cmd == ["bootc", "status", "--json"]:
+            return RunResult(
+                stdout=json.dumps({"status": {"booted": {"image": {"image": {"image": "quay.io/fedora/fedora-bootc:41"}}}}}),
+                stderr="", returncode=0,
+            )
+        return RunResult(stdout="", stderr="", returncode=1)
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.BOOTC, executor=executor)
+    assert result == "quay.io/fedora/fedora-bootc:41"
+
+
+def test_map_bootc_status_fails_falls_back_to_os_release(tmp_path):
+    os_rel = _make_os_release(id="fedora", version_id="41")
+    def executor(cmd, *, cwd=None):
+        return RunResult(stdout="", stderr="error", returncode=1)
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.BOOTC, executor=executor)
+    assert result == "quay.io/fedora/fedora-bootc:41"
+
+
+def test_map_centos_bootc(tmp_path):
+    os_rel = _make_os_release(id="centos", name="CentOS Stream", version_id="10")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.BOOTC, executor=None)
+    assert result == "quay.io/centos-bootc/centos-bootc:stream10"
+
+
+def test_map_rhel_bootc(tmp_path):
+    os_rel = _make_os_release(id="rhel", version_id="9.4")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.BOOTC, executor=None)
+    assert result == "registry.redhat.io/rhel9/rhel-bootc:9.4"
+
+
+def test_map_unknown_returns_none(tmp_path):
+    os_rel = _make_os_release(id="custom-os", version_id="1.0")
+    result = map_ostree_base_image(tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None)
+    assert result is None
+
+
+def test_map_target_image_override(tmp_path):
+    os_rel = _make_os_release(variant_id="silverblue", version_id="41")
+    result = map_ostree_base_image(
+        tmp_path, os_rel, SystemType.RPM_OSTREE, executor=None,
+        target_image_override="quay.io/my-custom/image:latest",
+    )
+    assert result == "quay.io/my-custom/image:latest"
