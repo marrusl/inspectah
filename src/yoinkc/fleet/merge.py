@@ -213,7 +213,9 @@ def _deduplicate_warning_dicts(all_lists: list[list]) -> list:
     for items in all_lists:
         for item in items:
             if isinstance(item, dict):
-                key = (item.get("source", ""), item.get("message", ""))
+                key = (item.get("path", ""), item.get("pattern", ""),
+                       item.get("source", ""), item.get("message", ""),
+                       item.get("line", ""))
             else:
                 # RedactionFinding — key on (path, pattern, source, replacement)
                 # Including replacement prevents collapsing distinct inline findings

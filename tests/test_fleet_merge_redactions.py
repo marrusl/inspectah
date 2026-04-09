@@ -62,3 +62,16 @@ def test_merge_preserves_distinct_inline_findings_same_file():
     snap_b = _snap_with_redactions("host-b", [f1, f2])
     merged = merge_snapshots([snap_a, snap_b])
     assert len(merged.redactions) == 2  # both survive, not collapsed to 1
+
+
+def test_merge_preserves_distinct_legacy_dicts():
+    """Different legacy redaction dicts are not collapsed."""
+    snap_a = _snap_with_redactions("host-a", [
+        {"path": "/etc/a.conf", "pattern": "PASSWORD", "line": "content", "remediation": "old"},
+        {"path": "/etc/b.conf", "pattern": "PASSWORD", "line": "content", "remediation": "old"},
+    ])
+    snap_b = _snap_with_redactions("host-b", [
+        {"path": "/etc/a.conf", "pattern": "PASSWORD", "line": "content", "remediation": "old"},
+    ])
+    merged = merge_snapshots([snap_a, snap_b])
+    assert len(merged.redactions) == 2  # /etc/a.conf deduped, /etc/b.conf preserved
