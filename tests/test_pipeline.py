@@ -259,3 +259,260 @@ def test_cli_secrets_summary_no_findings(monkeypatch):
     _print_secrets_summary(snap)
     output = captured.getvalue()
     assert output == ""
+
+
+# --- Heuristic pass integration tests ---
+
+
+def _make_snapshot_with_config_secret():
+    """Create a snapshot with config content containing a heuristic-detectable secret.
+
+    Uses 'signing_key' as the keyword — pattern-based redact won't catch this
+    (no PASSWORD/TOKEN/SECRET/API_KEY pattern match), but heuristic will detect
+    it via keyword proximity + entropy.
+    """
+    from yoinkc.schema import ConfigSection, ConfigFileEntry, ConfigFileKind, ConfigCategory
+
+    snap = InspectionSnapshot(meta={"host_root": "/host"})
+    snap.config = ConfigSection(files=[
+        ConfigFileEntry(
+            path="/etc/myapp/config.ini",
+            kind=ConfigFileKind.UNOWNED,
+            category=ConfigCategory.OTHER,
+            content="[service]\nsigning_key = aB3dEfG7hI9jKlMnOpQrStUvWxYz012345\nhost = localhost\n",
+        ),
+    ])
+    return snap
+
+
+def _make_snapshot_with_subscription_cert():
+    """Snapshot with config file under subscription cert path (should be skipped)."""
+    from yoinkc.schema import ConfigSection, ConfigFileEntry, ConfigFileKind, ConfigCategory
+
+    snap = InspectionSnapshot(meta={"host_root": "/host"})
+    snap.config = ConfigSection(files=[
+        ConfigFileEntry(
+            path="/etc/pki/entitlement/1234.pem",
+            kind=ConfigFileKind.UNOWNED,
+            category=ConfigCategory.OTHER,
+            content="signing_key = aB3dEfG7hI9jKlMnOpQrStUvWxYz012345\n",
+        ),
+    ])
+    return snap
+
+
+def _make_snapshot_with_container_env_secret():
+    """Snapshot with container env var containing heuristic-detectable secret."""
+    from yoinkc.schema import ContainerSection, RunningContainer
+
+    snap = InspectionSnapshot(meta={"host_root": "/host"})
+    snap.containers = ContainerSection(running_containers=[
+        RunningContainer(
+            id="abc123def456",
+            name="myapp",
+            image="registry.example.com/myapp:latest",
+            env=["SIGNING_KEY=aB3dEfG7hI9jKlMnOpQrStUvWxYz012345"],
+        ),
+    ])
+    return snap
+
+
+def test_heuristic_findings_appear_in_redactions(tmp_path):
+    """Heuristic findings from config files appear in snapshot.redactions after pipeline."""
+    snapshot = _make_snapshot_with_config_secret()
+    snap_path = tmp_path / "snap.json"
+    save_snapshot(snapshot, snap_path)
+
+    result = run_pipeline(
+        host_root=Path("/host"),
+        run_inspectors=None,
+        run_renderers=_tracking_renderer([]),
+        from_snapshot_path=snap_path,
+        output_dir=tmp_path / "out",
+        sensitivity="strict",
+    )
+
+    heuristic_findings = [
+        r for r in result.redactions
+        if isinstance(r, __import__("yoinkc.schema", fromlist=["RedactionFinding"]).RedactionFinding)
+        and r.detection_method == "heuristic"
+    ]
+    assert len(heuristic_findings) > 0
+    # At least one should be from our config file
+    config_findings = [f for f in heuristic_findings if f.path == "/etc/myapp/config.ini"]
+    assert len(config_findings) > 0
+
+
+def test_heuristic_skips_subscription_cert_paths(tmp_path):
+    """Heuristic pass skips subscription cert paths (/etc/pki/entitlement/, /etc/rhsm/)."""
+    snapshot = _make_snapshot_with_subscription_cert()
+    snap_path = tmp_path / "snap.json"
+    save_snapshot(snapshot, snap_path)
+
+    result = run_pipeline(
+        host_root=Path("/host"),
+        run_inspectors=None,
+        run_renderers=_tracking_renderer([]),
+        from_snapshot_path=snap_path,
+        output_dir=tmp_path / "out",
+        sensitivity="strict",
+    )
+
+    heuristic_findings = [
+        r for r in result.redactions
+        if isinstance(r, __import__("yoinkc.schema", fromlist=["RedactionFinding"]).RedactionFinding)
+        and r.detection_method == "heuristic"
+    ]
+    # No heuristic findings for subscription cert paths
+    cert_findings = [f for f in heuristic_findings if "/etc/pki/entitlement/" in f.path]
+    assert len(cert_findings) == 0
+
+
+def test_no_redaction_mode_detects_but_preserves_content(tmp_path):
+    """no_redaction mode runs detection but doesn't modify content. All findings are flagged."""
+    snapshot = _make_snapshot_with_config_secret()
+    snap_path = tmp_path / "snap.json"
+    save_snapshot(snapshot, snap_path)
+
+    # Capture original content
+    original_content = snapshot.config.files[0].content
+
+    result = run_pipeline(
+        host_root=Path("/host"),
+        run_inspectors=None,
+        run_renderers=_tracking_renderer([]),
+        from_snapshot_path=snap_path,
+        output_dir=tmp_path / "out",
+        no_redaction=True,
+    )
+
+    # Content should be preserved (no REDACTED_ tokens)
+    if result.config and result.config.files:
+        for f in result.config.files:
+            assert "REDACTED_" not in f.content
+
+    # All findings should be kind="flagged"
+    from yoinkc.schema import RedactionFinding
+    typed_findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
+    for f in typed_findings:
+        assert f.kind == "flagged", f"Expected kind='flagged' in no-redaction mode, got '{f.kind}' for {f.path}"
+
+
+def test_pipeline_moderate_flags_all_heuristic(tmp_path):
+    """In moderate mode, all heuristic findings are flagged, not redacted."""
+    from yoinkc.schema import RedactionFinding
+
+    snapshot = _make_snapshot_with_config_secret()
+    snap_path = tmp_path / "snap.json"
+    save_snapshot(snapshot, snap_path)
+
+    result = run_pipeline(
+        host_root=Path("/host"),
+        run_inspectors=None,
+        run_renderers=_tracking_renderer([]),
+        from_snapshot_path=snap_path,
+        output_dir=tmp_path / "out",
+        sensitivity="moderate",
+    )
+
+    heuristic_findings = [
+        r for r in result.redactions
+        if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"
+    ]
+    assert len(heuristic_findings) > 0, "Expected at least one heuristic finding"
+    for f in heuristic_findings:
+        assert f.kind == "flagged", (
+            f"In moderate mode, all heuristic findings should be flagged, "
+            f"got kind='{f.kind}' for {f.path}"
+        )
+
+
+def test_cli_summary_includes_heuristic_supplement(monkeypatch):
+    """CLI summary shows heuristic breakdown in inline and flagged counts."""
+    from yoinkc.pipeline import _print_secrets_summary
+    from yoinkc.schema import RedactionFinding
+
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        # Pattern-based inline
+        RedactionFinding(path="/etc/app.conf", source="file",
+                        kind="inline", pattern="PASSWORD", remediation="value-removed",
+                        replacement="REDACTED_PASSWORD_1", detection_method="pattern"),
+        # Heuristic inline
+        RedactionFinding(path="/etc/app.conf", source="file",
+                        kind="inline", pattern="heuristic", remediation="value-removed",
+                        replacement="REDACTED_HEURISTIC_1", detection_method="heuristic",
+                        confidence="high"),
+        # Heuristic flagged
+        RedactionFinding(path="/etc/other.conf", source="file",
+                        kind="flagged", pattern="heuristic", remediation="",
+                        detection_method="heuristic", confidence="low"),
+    ]
+
+    captured = StringIO()
+    monkeypatch.setattr(sys, "stderr", captured)
+    _print_secrets_summary(snap)
+    output = captured.getvalue()
+
+    # Should show heuristic supplement in inline count
+    assert "pattern" in output.lower() or "heuristic" in output.lower()
+    # Should show flagged for review count
+    assert "Flagged" in output or "flagged" in output
+
+
+def test_no_redaction_warning_printed(monkeypatch):
+    """--no-redaction completion warning prints WARNING and secrets-review.md to stderr."""
+    from yoinkc.pipeline import _print_no_redaction_warning
+    from yoinkc.schema import RedactionFinding
+
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/a.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/b.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/c.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/d.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/e.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/f.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="high"),
+        RedactionFinding(path="/etc/g.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="high"),
+        RedactionFinding(path="/etc/h.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="high"),
+        RedactionFinding(path="/etc/i.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+        RedactionFinding(path="/etc/j.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+        RedactionFinding(path="/etc/k.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+        RedactionFinding(path="/etc/l.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+    ]
+
+    captured = StringIO()
+    monkeypatch.setattr(sys, "stderr", captured)
+    _print_no_redaction_warning(snap)
+    output = captured.getvalue()
+
+    assert "WARNING: Redaction was disabled for this run." in output
+    assert "5 pattern findings were NOT redacted" in output
+    assert "3 high-confidence heuristic findings were NOT redacted" in output
+    assert "4 low-confidence heuristic findings flagged" in output
+    assert "secrets-review.md" in output
+    assert "Do not share, commit, or upload" in output

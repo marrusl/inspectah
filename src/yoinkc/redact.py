@@ -34,21 +34,109 @@ EXCLUDED_PATHS = (
 
 # (pattern, type_label). Order matters: more specific first.
 REDACT_PATTERNS: List[Tuple[str, str]] = [
+    # --- PEM blocks (most specific structural match) ---
     (r"-----BEGIN\s+(?:\w+\s+)*PRIVATE KEY-----[\s\S]+?-----END\s+(?:\w+\s+)*PRIVATE KEY-----", "PRIVATE_KEY"),
+
+    # --- Vendor-specific prefix patterns (standalone, no key= prefix needed) ---
+    # Stripe
+    (r"(?:sk|rk)_(?:test|live)_[a-zA-Z0-9]{10,99}", "STRIPE_KEY"),
+    # Anthropic
+    (r"sk-ant-(?:api03|admin01)-[a-zA-Z0-9_\-]{80,}", "ANTHROPIC_KEY"),
+    # OpenAI
+    (r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}", "OPENAI_KEY"),
+
+    # --- Cloud provider prefix patterns ---
+    # AWS long-term keys
+    (r"AKIA[0-9A-Z]{16}", "AWS_KEY"),
+    # AWS temp session keys
+    (r"(?:A3T[A-Z0-9]|ASIA|ABIA|ACCA)[A-Z2-7]{16}", "AWS_TEMP_KEY"),
+
+    # --- Git forge tokens ---
+    (r"ghp_[a-zA-Z0-9]{36}", "GITHUB_TOKEN"),
+    (r"ghu_[a-zA-Z0-9]{36}", "GITHUB_TOKEN"),
+    # GitHub fine-grained PAT
+    (r"github_pat_[a-zA-Z0-9_]{36,255}", "GITHUB_TOKEN"),
+    # GitHub app installation
+    (r"ghs_[0-9a-zA-Z]{36}", "GITHUB_TOKEN"),
+    # GitHub OAuth
+    (r"gho_[a-zA-Z0-9]{36}", "GITHUB_TOKEN"),
+    # GitLab
+    (r"glpat-[a-zA-Z0-9_-]{20,}", "GITLAB_TOKEN"),
+    (r"glrt-[0-9a-zA-Z_\-]{20}", "GITLAB_TOKEN"),
+    (r"gldt-[0-9a-zA-Z_\-]{20}", "GITLAB_TOKEN"),
+    (r"glptt-[0-9a-f]{40}", "GITLAB_TOKEN"),
+
+    # --- Infrastructure tokens ---
+    # OpenShift
+    (r"sha256~[\w-]{43}", "OPENSHIFT_TOKEN"),
+    # Vault service
+    (r"hvs\.[a-zA-Z0-9_-]{24,}", "VAULT_TOKEN"),
+    # Vault batch
+    (r"hvb\.[\w-]{138,300}", "VAULT_TOKEN"),
+
+    # --- SaaS / CI tokens ---
+    # Slack
+    (r"xox[bp]-[a-zA-Z0-9-]{24,}", "SLACK_TOKEN"),
+    # SendGrid
+    (r"SG\.[a-zA-Z0-9_-]{22,}", "SENDGRID_KEY"),
+    # Databricks
+    (r"dapi[a-f0-9]{32}(?:-\d)?", "DATABRICKS_TOKEN"),
+    # Atlassian
+    (r"ATATT3[A-Za-z0-9_\-=]{186}", "ATLASSIAN_TOKEN"),
+    # Artifactory
+    (r"AKCp[A-Za-z0-9]{69}", "ARTIFACTORY_KEY"),
+
+    # --- Cloud / registry tokens ---
+    # Alibaba
+    (r"LTAI[a-zA-Z0-9]{20}", "ALIBABA_KEY"),
+    # npm
+    (r"npm_[a-zA-Z0-9]{36}", "NPM_TOKEN"),
+    # PyPI
+    (r"pypi-AgEIcHlwaS5vcmc[\w-]{50,1000}", "PYPI_TOKEN"),
+    # RubyGems
+    (r"rubygems_[a-f0-9]{48}", "RUBYGEMS_TOKEN"),
+
+    # --- Encryption keys ---
+    # age
+    (r"AGE-SECRET-KEY-1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{58}", "AGE_KEY"),
+
+    # === Tier 2: Enterprise/DevOps environments ===
+    # DigitalOcean
+    (r"dop_v1_[a-f0-9]{64}", "DIGITALOCEAN_TOKEN"),
+    (r"doo_v1_[a-f0-9]{64}", "DIGITALOCEAN_TOKEN"),
+    # Heroku
+    (r"HRKU-AA[0-9a-zA-Z_-]{58}", "HEROKU_KEY"),
+    # Grafana
+    (r"glc_[A-Za-z0-9+/]{32,400}={0,3}", "GRAFANA_TOKEN"),
+    (r"glsa_[A-Za-z0-9]{32}_[A-Fa-f0-9]{8}", "GRAFANA_TOKEN"),
+    # New Relic
+    (r"NRAK-[a-z0-9]{27}", "NEWRELIC_KEY"),
+    (r"NRII-[a-z0-9-]{32}", "NEWRELIC_KEY"),
+    # Sentry
+    (r"sntrys_eyJpYXQiO[A-Za-z0-9+/=_-]{80,}", "SENTRY_TOKEN"),
+    # Doppler
+    (r"dp\.pt\.[a-z0-9]{43}", "DOPPLER_TOKEN"),
+    # Pulumi
+    (r"pul-[a-f0-9]{40}", "PULUMI_TOKEN"),
+
+    # --- Generic assignment-based patterns (less specific, last) ---
     (r"(?i)(api[_-]?key|apikey)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{20,})['\"]?", "API_KEY"),
     (r"(?i)(token)\s*[:=]\s*['\"]?([a-zA-Z0-9_\-]{20,})['\"]?", "TOKEN"),
     (r"(?i)(?<![a-z])(password|passwd|pass|passphrase)\s*[:=]\s*['\"]?([^\s'\"]+)['\"]?", "PASSWORD"),
     (r"(?i)secret\s*[:=]\s*['\"]?([^\s'\"]+)['\"]?", "SECRET"),
     (r"(?i)bearer\s+([a-zA-Z0-9_\-\.]{20,})", "BEARER_TOKEN"),
-    (r"AKIA[0-9A-Z]{16}", "AWS_KEY"),
-    (r"ghp_[a-zA-Z0-9]{36}", "GITHUB_TOKEN"),
-    (r"ghu_[a-zA-Z0-9]{36}", "GITHUB_TOKEN"),
+
+    # --- Cloud provider assignment-based patterns ---
     (r"(?i)(?:gcp|google)[_-]?(?:api[_-]?key|credentials?)\s*[:=]\s*['\"]?([^\s'\"]{10,})['\"]?", "GCP_CREDENTIAL"),
     (r"(?i)(?:azure|az)[_-]?(?:storage[_-]?key|account[_-]?key|secret)\s*[:=]\s*['\"]?([^\s'\"]{10,})['\"]?", "AZURE_CREDENTIAL"),
+
+    # --- Database connection strings ---
     (r"(?i)jdbc:[^:]+://[^:]+:([^@\s]+)@", "JDBC_PASSWORD"),
     (r"(?i)postgres(ql)?://[^:]+:([^@\s]+)@", "POSTGRES_PASSWORD"),
     (r"(?i)mongodb(\+srv)?://[^:]+:([^@\s]+)@", "MONGODB_PASSWORD"),
     (r"(?i)redis://[^:]*:([^@\s]+)@", "REDIS_PASSWORD"),
+
+    # --- Protocol-specific keys ---
     # WireGuard private key (bare base64, not PEM-wrapped)
     # group(1)=assignment prefix, group(2)=key value
     (r"(PrivateKey\s*=\s*)([A-Za-z0-9+/]{43}=)", "WIREGUARD_KEY"),
@@ -172,6 +260,7 @@ def _redact_shadow_entry(
         pattern="SHADOW_HASH",
         remediation="value-removed",
         replacement=replacement,
+        detection_method="pattern",
     ))
     fields[1] = replacement
     return ":".join(fields)
@@ -224,6 +313,7 @@ def _redact_text(
                 remediation="value-removed",
                 replacement=replacement,
                 line=line_num,
+                detection_method="pattern",
             ))
         # Apply in reverse so earlier positions stay valid.
         for start, end, replacement in reversed(spans):
@@ -231,14 +321,33 @@ def _redact_text(
     return out
 
 
-def scan_directory_for_secrets(root: Path) -> Optional[str]:
+_SUBSCRIPTION_DIR_NAMES = {"entitlement", "rhsm"}
+
+
+def scan_directory_for_secrets(
+    root: Path,
+    *,
+    heuristic: bool = False,
+    sensitivity: str = "strict",
+) -> Optional[str]:
     """
     Scan all text files under root for secret patterns. Returns first path where
     a pattern was found, or None if clean. Used to verify output before GitHub push.
+
+    When heuristic=True, also runs heuristic detection. In strict mode,
+    high-confidence heuristic findings block push; in moderate mode they
+    are advisory only.
     """
     root = Path(root)
     for f in root.rglob("*"):
         if not f.is_file() or ".git" in str(f):
+            continue
+        # Skip subscription cert directories under root
+        try:
+            rel = f.relative_to(root)
+        except ValueError:
+            continue
+        if rel.parts and rel.parts[0] in _SUBSCRIPTION_DIR_NAMES:
             continue
         try:
             text = f.read_text()
@@ -250,7 +359,29 @@ def scan_directory_for_secrets(root: Path) -> Optional[str]:
                 captured = m.group(m.lastindex) if m.lastindex else m.group(0)
                 if captured.startswith("REDACTED_"):
                     continue
-                return str(f.relative_to(root))
+                return str(rel)
+
+    # Heuristic pass over files
+    if heuristic:
+        from .heuristic import find_heuristic_candidates
+        for f in root.rglob("*"):
+            if not f.is_file() or ".git" in str(f):
+                continue
+            try:
+                rel = f.relative_to(root)
+            except ValueError:
+                continue
+            if rel.parts and rel.parts[0] in _SUBSCRIPTION_DIR_NAMES:
+                continue
+            try:
+                text = f.read_text()
+            except Exception:
+                continue
+            lines = text.splitlines()
+            candidates = find_heuristic_candidates(lines, str(rel), source="file")
+            for c in candidates:
+                if sensitivity == "strict" and c.confidence == "high":
+                    return str(rel)
     return None
 
 
@@ -286,6 +417,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                         kind="excluded",
                         pattern="EXCLUDED_PATH",
                         remediation=_remediation_for_excluded(entry.path),
+                        detection_method="excluded_path",
                     ))
                 new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
@@ -482,6 +614,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                         kind="excluded",
                         pattern="EXCLUDED_PATH",
                         remediation=_remediation_for_excluded(entry.path),
+                        detection_method="excluded_path",
                     ))
                 new_env_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue

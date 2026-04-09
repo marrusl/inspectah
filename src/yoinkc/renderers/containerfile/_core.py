@@ -97,6 +97,16 @@ def _secrets_comment_lines(snapshot: InspectionSnapshot) -> list[str]:
             lines.append(f"#   {r.path} — {r.pattern} ({r.replacement})")
         lines.append("")
 
+    # Flagged-note: advisory for heuristic findings that were flagged but not redacted
+    flagged = [r for r in snapshot.redactions
+               if isinstance(r, RedactionFinding) and r.kind == "flagged" and r.source == "file"]
+    if flagged:
+        n = len(flagged)
+        lines.append(f"# Note: {n} additional value{'s' if n != 1 else ''} "
+                     f"{'were' if n != 1 else 'was'} flagged for review but not redacted.")
+        lines.append("# See secrets-review.md for details.")
+        lines.append("")
+
     return lines
 
 

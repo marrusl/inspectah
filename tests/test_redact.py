@@ -1,5 +1,9 @@
 """Tests for redact_snapshot — extended section scanning."""
 
+import re
+
+import pytest
+
 from yoinkc.redact import redact_snapshot, _redact_text, _is_excluded_path
 from yoinkc.schema import (
     InspectionSnapshot,
@@ -431,6 +435,144 @@ def test_redaction_finding_dict_compat():
     assert f.get("missing", "default") == "default"
 
 
+def test_redaction_finding_detection_method_field():
+    """RedactionFinding accepts detection_method='pattern' and confidence=None."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="PASSWORD",
+        remediation="value-removed",
+        detection_method="pattern",
+        confidence=None,
+    )
+    assert f.detection_method == "pattern"
+    assert f.confidence is None
+
+
+def test_redaction_finding_heuristic_fields():
+    """RedactionFinding accepts detection_method='heuristic' with confidence='high'."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="HEURISTIC_SECRET",
+        remediation="value-removed",
+        detection_method="heuristic",
+        confidence="high",
+        line=12,
+        replacement="REDACTED_HEURISTIC_1",
+    )
+    assert f.detection_method == "heuristic"
+    assert f.confidence == "high"
+    assert f.line == 12
+    assert f.replacement == "REDACTED_HEURISTIC_1"
+
+
+def test_redaction_finding_excluded_path_detection_method():
+    """RedactionFinding accepts detection_method='excluded_path'."""
+    f = RedactionFinding(
+        path="/etc/ssh/ssh_host_rsa_key",
+        source="file",
+        kind="excluded",
+        pattern="EXCLUDED_PATH",
+        remediation="regenerate",
+        detection_method="excluded_path",
+    )
+    assert f.detection_method == "excluded_path"
+    assert f.confidence is None
+
+
+def test_redaction_finding_detection_method_defaults():
+    """detection_method defaults to 'pattern', confidence defaults to None."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="PASSWORD",
+        remediation="value-removed",
+    )
+    assert f.detection_method == "pattern"
+    assert f.confidence is None
+
+
+def test_redaction_finding_detection_method_in_get():
+    """.get() works for new fields."""
+    f = RedactionFinding(
+        path="/etc/app.conf",
+        source="file",
+        kind="inline",
+        pattern="PASSWORD",
+        remediation="value-removed",
+        detection_method="heuristic",
+        confidence="low",
+    )
+    assert f.get("detection_method") == "heuristic"
+    assert f.get("confidence") == "low"
+    assert f.get("detection_method", "fallback") == "heuristic"
+    assert f.get("nonexistent", "default") == "default"
+
+
+def test_redaction_finding_roundtrip_with_new_fields(tmp_path):
+    """save_snapshot/load_snapshot roundtrip preserves detection_method and confidence."""
+    from yoinkc.pipeline import save_snapshot, load_snapshot
+
+    snapshot = InspectionSnapshot(meta={"hostname": "test"})
+    snapshot.redactions = [
+        RedactionFinding(
+            path="/etc/app.conf",
+            source="file",
+            kind="inline",
+            pattern="HEURISTIC_SECRET",
+            remediation="value-removed",
+            detection_method="heuristic",
+            confidence="high",
+            line=5,
+            replacement="REDACTED_HEURISTIC_1",
+        ),
+        RedactionFinding(
+            path="/etc/shadow",
+            source="file",
+            kind="excluded",
+            pattern="EXCLUDED_PATH",
+            remediation="provision",
+            detection_method="excluded_path",
+        ),
+        RedactionFinding(
+            path="/etc/other.conf",
+            source="file",
+            kind="inline",
+            pattern="PASSWORD",
+            remediation="value-removed",
+            # defaults: detection_method="pattern", confidence=None
+        ),
+    ]
+
+    snapshot_path = tmp_path / "inspection-snapshot.json"
+    save_snapshot(snapshot, snapshot_path)
+    loaded = load_snapshot(snapshot_path)
+
+    assert len(loaded.redactions) == 3
+
+    # Heuristic finding preserved
+    r0 = loaded.redactions[0]
+    assert isinstance(r0, RedactionFinding)
+    assert r0.detection_method == "heuristic"
+    assert r0.confidence == "high"
+
+    # Excluded path finding preserved
+    r1 = loaded.redactions[1]
+    assert isinstance(r1, RedactionFinding)
+    assert r1.detection_method == "excluded_path"
+    assert r1.confidence is None
+
+    # Default pattern finding preserved
+    r2 = loaded.redactions[2]
+    assert isinstance(r2, RedactionFinding)
+    assert r2.detection_method == "pattern"
+    assert r2.confidence is None
+
+
 def test_redaction_finding_survives_save_load_roundtrip(tmp_path):
     """RedactionFinding objects survive save_snapshot() -> load_snapshot() round-trip.
 
@@ -596,8 +738,6 @@ def test_wifi_psk_redacted():
 # ---------------------------------------------------------------------------
 # Task 3: Sequential counters
 # ---------------------------------------------------------------------------
-
-import re
 
 
 def test_sequential_counters_deterministic():
@@ -977,6 +1117,56 @@ def test_container_env_finding_has_no_line():
 # Finding 3: scan_directory_for_secrets skips REDACTED_ placeholders
 # ---------------------------------------------------------------------------
 
+def test_pattern_findings_have_detection_method_pattern():
+    """All inline pattern findings have detection_method='pattern'."""
+    content = "password=hunter2\ntoken=abc12345678901234567890\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content, include=True),
+        ]),
+    )
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
+    for f in findings:
+        assert f.detection_method == "pattern", f"Finding {f.path} has detection_method={f.detection_method}"
+        assert f.confidence is None, f"Pattern findings should have confidence=None"
+
+
+def test_excluded_path_findings_have_detection_method_excluded_path():
+    """Excluded path findings have detection_method='excluded_path'."""
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/shadow", kind=ConfigFileKind.UNOWNED,
+                          content="root:hash:...", include=True),
+        ]),
+    )
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
+    assert len(findings) >= 1
+    excluded = [f for f in findings if f.kind == "excluded"]
+    assert len(excluded) >= 1
+    for f in excluded:
+        assert f.detection_method == "excluded_path"
+        assert f.confidence is None
+
+
+def test_shadow_findings_have_detection_method_pattern():
+    """Shadow hash findings have detection_method='pattern'."""
+    snapshot = _base_snapshot(
+        users_groups=UserGroupSection(
+            shadow_entries=["jdoe:$y$j9T$abc$hash:19700:0:99999:7:::"],
+        ),
+    )
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
+    shadow = [f for f in findings if f.source == "shadow"]
+    assert len(shadow) >= 1
+    for f in shadow:
+        assert f.detection_method == "pattern"
+        assert f.confidence is None
+
+
 def test_scan_directory_ignores_redacted_placeholders(tmp_path):
     """scan_directory_for_secrets skips REDACTED_ placeholder values."""
     from yoinkc.redact import scan_directory_for_secrets
@@ -1017,3 +1207,363 @@ def test_line_number_correct_after_multipass_redaction():
         assert pw[0].line == 2, f"PASSWORD should be line 2, got {pw[0].line}"
     if ak:
         assert ak[0].line == 4, f"API_KEY should be line 4, got {ak[0].line}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (heuristic safety net): Vendor token pattern tests
+# ---------------------------------------------------------------------------
+
+def _has_finding(text: str, expected_label: str) -> bool:
+    """Helper: returns True if _redact_text produces a finding with the expected label."""
+    redactions = []
+    _redact_text(text, "test/vendor", redactions)
+    return any(
+        (r.pattern if isinstance(r, RedactionFinding) else r.get("pattern")) == expected_label
+        for r in redactions
+    )
+
+
+@pytest.mark.parametrize("token", [
+    "sk_live_" + "a" * 24,
+    "sk_test_" + "B" * 30,
+    "rk_live_" + "c1D2e3F4G5" + "x" * 10,
+    "rk_test_" + "z" * 50,
+])
+def test_stripe_key_pattern(token):
+    assert _has_finding(token, "STRIPE_KEY"), f"Should detect Stripe key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk_something_else_" + "a" * 24,   # wrong prefix after sk_
+    "sk_live_" + "a" * 5,               # too short (< 10 chars after prefix)
+])
+def test_stripe_key_pattern_negative(token):
+    assert not _has_finding(token, "STRIPE_KEY"), f"Should NOT detect as Stripe key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-ant-api03-" + "a" * 93,
+    "sk-ant-admin01-" + "B" * 80,
+    "sk-ant-api03-" + "a1_-" * 25,
+])
+def test_anthropic_key_pattern(token):
+    assert _has_finding(token, "ANTHROPIC_KEY"), f"Should detect Anthropic key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-ant-api03-" + "a" * 10,         # too short (< 80 chars)
+    "sk-ant-wrong01-" + "a" * 80,       # wrong sub-prefix
+    "sk-ant-" + "a" * 80,               # missing sub-prefix
+])
+def test_anthropic_key_pattern_negative(token):
+    assert not _has_finding(token, "ANTHROPIC_KEY"), f"Should NOT detect as Anthropic key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-proj-" + "a" * 40,
+    "sk-svcacct-" + "B" * 20,
+    "sk-admin-" + "Z1_" * 10,
+])
+def test_openai_key_pattern(token):
+    assert _has_finding(token, "OPENAI_KEY"), f"Should detect OpenAI key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-proj-" + "a" * 5,               # too short (< 20 chars)
+    "sk-other-" + "a" * 40,             # wrong sub-prefix
+])
+def test_openai_key_pattern_negative(token):
+    assert not _has_finding(token, "OPENAI_KEY"), f"Should NOT detect as OpenAI key: {token}"
+
+
+@pytest.mark.parametrize("token,expected_label", [
+    # AWS temp session keys
+    ("ASIA" + "A" * 16, "AWS_TEMP_KEY"),
+    ("ABIA" + "B" * 16, "AWS_TEMP_KEY"),
+    ("ACCA" + "C" * 16, "AWS_TEMP_KEY"),
+    # GitHub fine-grained PAT
+    ("github_pat_" + "a" * 40, "GITHUB_TOKEN"),
+    # GitHub app installation
+    ("ghs_" + "a" * 36, "GITHUB_TOKEN"),
+    # GitHub OAuth
+    ("gho_" + "a" * 36, "GITHUB_TOKEN"),
+    # OpenShift
+    ("sha256~" + "a" * 43, "OPENSHIFT_TOKEN"),
+    # Vault service
+    ("hvs." + "a" * 24, "VAULT_TOKEN"),
+    ("hvs." + "a" * 50, "VAULT_TOKEN"),
+    # Vault batch
+    ("hvb." + "a" * 140, "VAULT_TOKEN"),
+    # GitLab
+    ("glpat-" + "a" * 20, "GITLAB_TOKEN"),
+    ("glrt-" + "a" * 20, "GITLAB_TOKEN"),
+    ("gldt-" + "a" * 20, "GITLAB_TOKEN"),
+    ("glptt-" + "a" * 40, "GITLAB_TOKEN"),
+    # Slack
+    ("xoxb-" + "a" * 30, "SLACK_TOKEN"),
+    ("xoxp-" + "a" * 24, "SLACK_TOKEN"),
+    # SendGrid
+    ("SG." + "a" * 22, "SENDGRID_KEY"),
+    # Databricks
+    ("dapi" + "a" * 32, "DATABRICKS_TOKEN"),
+    # Atlassian
+    ("ATATT3" + "a" * 186, "ATLASSIAN_TOKEN"),
+    # Artifactory
+    ("AKCp" + "a" * 69, "ARTIFACTORY_KEY"),
+    # Alibaba
+    ("LTAI" + "a" * 20, "ALIBABA_KEY"),
+    # npm
+    ("npm_" + "a" * 36, "NPM_TOKEN"),
+    # PyPI
+    ("pypi-AgEIcHlwaS5vcmc" + "a" * 50, "PYPI_TOKEN"),
+    # RubyGems
+    ("rubygems_" + "a" * 48, "RUBYGEMS_TOKEN"),
+    # age
+    ("AGE-SECRET-KEY-1" + "q" * 58, "AGE_KEY"),
+])
+def test_tier1_vendor_pattern(token, expected_label):
+    assert _has_finding(token, expected_label), f"Should detect {expected_label}: {token[:30]}..."
+
+
+@pytest.mark.parametrize("token,label", [
+    ("ASIA" + "A" * 5, "AWS_TEMP_KEY"),            # too short
+    ("github_pat_" + "a" * 10, "GITHUB_TOKEN"),     # too short
+    ("ghs_" + "a" * 5, "GITHUB_TOKEN"),             # too short
+    ("gho_" + "a" * 5, "GITHUB_TOKEN"),             # too short
+    ("sha256~" + "a" * 10, "OPENSHIFT_TOKEN"),      # too short
+    ("hvs." + "a" * 5, "VAULT_TOKEN"),              # too short
+    ("hvb." + "a" * 10, "VAULT_TOKEN"),             # too short
+    ("glpat-" + "a" * 5, "GITLAB_TOKEN"),           # too short
+    ("xoxb-" + "a" * 5, "SLACK_TOKEN"),             # too short
+    ("SG." + "a" * 5, "SENDGRID_KEY"),              # too short
+    ("dapi" + "a" * 5, "DATABRICKS_TOKEN"),         # too short
+    ("ATATT3" + "a" * 10, "ATLASSIAN_TOKEN"),       # too short
+    ("AKCp" + "a" * 10, "ARTIFACTORY_KEY"),         # too short
+    ("LTAI" + "a" * 5, "ALIBABA_KEY"),              # too short
+    ("npm_" + "a" * 5, "NPM_TOKEN"),                # too short
+    ("pypi-AgEIcHlwaS5vcmc" + "a" * 5, "PYPI_TOKEN"),  # too short
+    ("rubygems_" + "a" * 5, "RUBYGEMS_TOKEN"),      # too short
+    ("AGE-SECRET-KEY-1" + "q" * 10, "AGE_KEY"),     # too short
+])
+def test_tier1_vendor_pattern_negative(token, label):
+    assert not _has_finding(token, label), f"Should NOT detect {label}: {token[:30]}..."
+
+
+# ---------------------------------------------------------------------------
+# Task 4 (Tier 2 vendor token patterns): Tier 2 vendor token pattern tests
+# ---------------------------------------------------------------------------
+
+def _has_finding_in_redactions(redactions, expected_label):
+    """Helper: returns True if redactions list contains a finding with expected_label."""
+    return any(
+        (r.pattern if isinstance(r, RedactionFinding) else r.get("pattern")) == expected_label
+        for r in redactions
+    )
+
+
+@pytest.mark.parametrize("value,expected_label,should_match", [
+    # DigitalOcean personal
+    ("dop_v1_" + "a" * 64, "DIGITALOCEAN_TOKEN", True),
+    # DigitalOcean OAuth
+    ("doo_v1_" + "a" * 64, "DIGITALOCEAN_TOKEN", True),
+    # Heroku
+    ("HRKU-AA" + "a" * 58, "HEROKU_KEY", True),
+    # Grafana Cloud
+    ("glc_" + "A" * 32, "GRAFANA_TOKEN", True),
+    # Grafana service account
+    ("glsa_" + "A" * 32 + "_" + "A" * 8, "GRAFANA_TOKEN", True),
+    # New Relic user
+    ("NRAK-" + "a" * 27, "NEWRELIC_KEY", True),
+    # New Relic insight
+    ("NRII-" + "a" * 32, "NEWRELIC_KEY", True),
+    # Sentry
+    ("sntrys_eyJpYXQiO" + "A" * 80, "SENTRY_TOKEN", True),
+    # Doppler
+    ("dp.pt." + "a" * 43, "DOPPLER_TOKEN", True),
+    # Pulumi
+    ("pul-" + "a" * 40, "PULUMI_TOKEN", True),
+])
+def test_tier2_vendor_pattern(value, expected_label, should_match):
+    redactions = []
+    text = f"credential = {value}"
+    _redact_text(text, "test/vendor-t2", redactions)
+    found = _has_finding_in_redactions(redactions, expected_label)
+    assert found == should_match, f"{expected_label} should match: {value}"
+
+
+@pytest.mark.parametrize("value,expected_label", [
+    ("dop_v1_" + "a" * 10, "DIGITALOCEAN_TOKEN"),   # too short
+    ("NRAK-" + "a" * 5, "NEWRELIC_KEY"),             # too short
+    ("pul-" + "a" * 10, "PULUMI_TOKEN"),             # too short
+])
+def test_tier2_vendor_pattern_negative(value, expected_label):
+    redactions = []
+    text = f"credential = {value}"
+    _redact_text(text, "test/vendor-t2", redactions)
+    found = _has_finding_in_redactions(redactions, expected_label)
+    assert not found, f"{expected_label} should NOT match: {value}"
+
+
+# ---------------------------------------------------------------------------
+# Counter ordering: pattern findings get counters first, then heuristic
+# ---------------------------------------------------------------------------
+
+
+def test_counter_ordering_pattern_before_heuristic():
+    """Pattern findings get counters first, then heuristic findings."""
+    from yoinkc.pipeline import _run_heuristic_pass
+
+    # Build snapshot with pattern target and heuristic target
+    content_pattern = "password=hunter2\n"
+    content_heuristic = "signing_key = aR9xk!mQ2pL7bN4cKzW\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/a.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content_pattern, include=True),
+            ConfigFileEntry(path="/etc/b.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content_heuristic, include=True),
+        ]),
+    )
+    # First run pattern redaction
+    redacted = redact_snapshot(snapshot)
+    # Then run heuristic pass with strict mode (should_redact=True)
+    result = _run_heuristic_pass(redacted, "strict", no_redaction=False)
+
+    pattern_findings = [r for r in result.redactions
+                       if isinstance(r, RedactionFinding) and r.detection_method == "pattern"]
+    heuristic_findings = [r for r in result.redactions
+                         if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"
+                         and r.kind == "inline"]
+
+    # Pattern findings should have counters
+    for f in pattern_findings:
+        if f.replacement:
+            match = re.search(r"_(\d+)$", f.replacement)
+            assert match, f"Pattern finding should have counter: {f.replacement}"
+
+    # Heuristic inline findings should also have counters (continuing sequence)
+    for f in heuristic_findings:
+        assert f.replacement is not None, f"Heuristic inline finding should have replacement: {f}"
+        match = re.search(r"_(\d+)$", f.replacement)
+        assert match, f"Heuristic finding should have counter: {f.replacement}"
+
+
+def test_flagged_findings_no_counter():
+    """Flagged-only findings do not consume counters."""
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/app.conf", source="file", kind="flagged",
+                        pattern="HEURISTIC", remediation="",
+                        detection_method="heuristic", confidence="low"),
+    ]
+    flagged = [r for r in snap.redactions if r.kind == "flagged"]
+    for f in flagged:
+        assert f.replacement is None, "Flagged findings should not have replacement tokens"
+
+
+def test_heuristic_redaction_replaces_content():
+    """In strict mode, heuristic pass replaces the secret value in file content."""
+    from yoinkc.pipeline import _run_heuristic_pass
+
+    # Use signing_key — not caught by pattern pass, but heuristic detects it
+    content = "signing_key = aR9xk!mQ2pL7bN4cKzW\nhost = localhost\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content, include=True),
+        ]),
+    )
+    # Pattern pass first (signing_key won't be caught by pattern redaction)
+    redacted = redact_snapshot(snapshot)
+    # Heuristic pass with strict mode
+    result = _run_heuristic_pass(redacted, "strict", no_redaction=False)
+
+    # The secret value should be replaced in file content
+    result_content = result.config.files[0].content
+    assert "aR9xk!mQ2pL7bN4cKzW" not in result_content, \
+        "Secret should be redacted from content"
+    assert "REDACTED_" in result_content, \
+        "Content should contain a REDACTED_ token"
+
+
+def test_scan_directory_skips_subscription_dirs(tmp_path):
+    from yoinkc.redact import scan_directory_for_secrets
+    ent_dir = tmp_path / "entitlement"
+    ent_dir.mkdir()
+    (ent_dir / "cert.pem").write_text("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n")
+    rhsm_dir = tmp_path / "rhsm"
+    rhsm_dir.mkdir()
+    (rhsm_dir / "rhsm.conf").write_text("password=secretvalue\n")
+    assert scan_directory_for_secrets(tmp_path) is None
+
+
+def test_scan_directory_catches_secrets_outside_subscription_dirs(tmp_path):
+    from yoinkc.redact import scan_directory_for_secrets
+    config_dir = tmp_path / "config" / "etc"
+    config_dir.mkdir(parents=True)
+    (config_dir / "app.conf").write_text("password=realsecret\n")
+    assert scan_directory_for_secrets(tmp_path) is not None
+
+
+def test_push_gate_uses_heuristic_scan(tmp_path):
+    """push_to_github calls scan_directory_for_secrets with heuristic=True."""
+    from unittest.mock import patch
+    from yoinkc.redact import scan_directory_for_secrets as _real_scan
+
+    with patch("yoinkc.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
+        from yoinkc.git_github import push_to_github
+        push_to_github(
+            tmp_path, "owner/repo",
+            skip_confirmation=True, github_token="fake",
+        )
+        mock_scan.assert_called_once()
+        _, kwargs = mock_scan.call_args
+        assert kwargs.get("heuristic") is True, \
+            "push_to_github must call scan_directory_for_secrets with heuristic=True"
+
+
+def test_push_gate_threads_sensitivity(tmp_path):
+    """push_to_github passes sensitivity to scan_directory_for_secrets."""
+    from unittest.mock import patch
+    from yoinkc.redact import scan_directory_for_secrets as _real_scan
+
+    with patch("yoinkc.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
+        from yoinkc.git_github import push_to_github
+        push_to_github(
+            tmp_path, "owner/repo",
+            skip_confirmation=True, github_token="fake",
+            sensitivity="moderate",
+        )
+        mock_scan.assert_called_once()
+        _, kwargs = mock_scan.call_args
+        assert kwargs.get("sensitivity") == "moderate", \
+            "push_to_github must thread sensitivity to scan_directory_for_secrets"
+
+
+def test_heuristic_redaction_moderate_does_not_replace():
+    """In moderate mode, heuristic pass flags but does not redact content."""
+    from yoinkc.pipeline import _run_heuristic_pass
+
+    # Use signing_key — not caught by pattern pass, but heuristic detects it
+    content = "signing_key = aR9xk!mQ2pL7bN4cKzW\nhost = localhost\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content, include=True),
+        ]),
+    )
+    redacted = redact_snapshot(snapshot)
+    result = _run_heuristic_pass(redacted, "moderate", no_redaction=False)
+
+    # Content should NOT be modified
+    result_content = result.config.files[0].content
+    assert "aR9xk!mQ2pL7bN4cKzW" in result_content, \
+        "Secret should NOT be redacted in moderate mode"
+
+    # But there should be flagged findings
+    heuristic_findings = [r for r in result.redactions
+                         if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
+    assert len(heuristic_findings) > 0, "Should have heuristic findings"
+    for f in heuristic_findings:
+        assert f.kind == "flagged", "All heuristic findings should be flagged in moderate mode"
+        assert f.replacement is None, "Flagged findings should not have replacement tokens"

@@ -5,16 +5,24 @@ bundle subscription certs, then produce a tarball or write to a directory.
 
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
+from .heuristic import find_heuristic_candidates, apply_noise_control, HeuristicCandidate
 from .subscription import bundle_subscription_certs
 from .packaging import create_tarball, get_output_stamp
-from .redact import redact_snapshot
-from .schema import InspectionSnapshot, SCHEMA_VERSION
+from .redact import redact_snapshot, _CounterRegistry
+from .schema import InspectionSnapshot, RedactionFinding, ConfigFileEntry, SCHEMA_VERSION
+
+# Subscription cert paths excluded from heuristic scanning
+_SUBSCRIPTION_CERT_PREFIXES = (
+    "/etc/pki/entitlement/",
+    "/etc/rhsm/",
+)
 
 
 def load_snapshot(path: Path) -> InspectionSnapshot:
@@ -36,9 +44,253 @@ def save_snapshot(snapshot: InspectionSnapshot, path: Path) -> None:
     path.write_text(snapshot.model_dump_json(indent=2))
 
 
+def _is_subscription_cert_path(path: str) -> bool:
+    """Check if a path is under a subscription cert directory."""
+    normalised = "/" + path.lstrip("/")
+    return any(normalised.startswith(prefix) for prefix in _SUBSCRIPTION_CERT_PREFIXES)
+
+
+def _run_heuristic_pass(
+    snapshot: InspectionSnapshot,
+    sensitivity: str,
+    no_redaction: bool,
+) -> InspectionSnapshot:
+    """Run heuristic secret detection on snapshot content.
+
+    Scans config files, container env vars, and timer commands for
+    heuristic candidates.  Skips subscription cert paths.
+
+    Candidates are converted to RedactionFinding with detection_method="heuristic".
+    In strict mode, high-confidence candidates get kind="inline" (unless no_redaction).
+    All others get kind="flagged".
+    """
+    all_candidates: List[HeuristicCandidate] = []
+
+    # Scan config files
+    if snapshot.config and snapshot.config.files:
+        for entry in snapshot.config.files:
+            if _is_subscription_cert_path(entry.path):
+                continue
+            if not entry.content:
+                continue
+            lines = entry.content.splitlines()
+            candidates = find_heuristic_candidates(lines, entry.path, source="file")
+            all_candidates.extend(candidates)
+
+    # Scan container env vars
+    if snapshot.containers and snapshot.containers.running_containers:
+        for container in snapshot.containers.running_containers:
+            name = container.name or container.id[:12]
+            for env_line in container.env:
+                candidates = find_heuristic_candidates(
+                    [env_line],
+                    f"containers:running/{name}:env",
+                    source="container-env",
+                )
+                all_candidates.extend(candidates)
+
+    # Scan timer commands
+    if snapshot.scheduled_tasks:
+        if snapshot.scheduled_tasks.generated_timer_units:
+            for unit in snapshot.scheduled_tasks.generated_timer_units:
+                for field_name, content in [("command", unit.command), ("service_content", unit.service_content)]:
+                    if not content:
+                        continue
+                    lines = content.splitlines()
+                    candidates = find_heuristic_candidates(
+                        lines,
+                        f"scheduled:timer/{unit.name}:{field_name}",
+                        source="timer-cmd",
+                    )
+                    all_candidates.extend(candidates)
+
+        if snapshot.scheduled_tasks.systemd_timers:
+            for timer in snapshot.scheduled_tasks.systemd_timers:
+                if timer.source != "local":
+                    continue
+                if not timer.service_content:
+                    continue
+                lines = timer.service_content.splitlines()
+                candidates = find_heuristic_candidates(
+                    lines,
+                    f"scheduled:systemd_timer/{timer.name}:service_content",
+                    source="timer-cmd",
+                )
+                all_candidates.extend(candidates)
+
+    # Apply noise control
+    noise_result = apply_noise_control(all_candidates)
+
+    # Build counter registry, advancing past counters already used by pattern pass
+    registry = _CounterRegistry()
+    for r in snapshot.redactions:
+        if isinstance(r, RedactionFinding) and r.detection_method == "pattern" and r.replacement:
+            # Advance the registry past this token so heuristic counters continue
+            # Extract type_label from replacement like "REDACTED_PASSWORD_1"
+            # or "PrivateKey = REDACTED_WIREGUARD_KEY_1"
+            m = re.search(r"REDACTED_(\w+?)_(\d+)$", r.replacement)
+            if m:
+                type_label = m.group(1)
+                counter_val = int(m.group(2))
+                # Ensure the registry counter is at least this high
+                if registry._counters.get(type_label, 0) < counter_val:
+                    registry._counters[type_label] = counter_val
+
+    # Convert to RedactionFinding.
+    # Caps limit reporting only — redaction and push-block use ALL candidates.
+    # - Redacted candidates (strict + high confidence): always get a finding
+    #   (needed for replacement tracking), whether reported or suppressed.
+    # - Flagged-only candidates: only get a finding if in the reported set
+    #   (suppressed flagged candidates are not surfaced in advisory output).
+    reported_set = set(id(c) for c in noise_result.reported)
+    new_findings: List[RedactionFinding] = []
+    # Track which files need content updates: {path: [(old_value, new_token), ...]}
+    content_replacements: dict[str, List[tuple[str, str]]] = {}
+
+    for candidate in noise_result.all_candidates:
+        should_redact = (
+            sensitivity == "strict"
+            and candidate.confidence == "high"
+            and not no_redaction
+        )
+        is_reported = id(candidate) in reported_set
+
+        # Skip suppressed flagged-only candidates — caps suppress advisory output
+        if not should_redact and not is_reported:
+            continue
+
+        kind = "inline" if should_redact else "flagged"
+        remediation = "value-removed" if should_redact else ""
+
+        replacement = None
+        if should_redact:
+            type_label = (candidate.key_name or "HEURISTIC").upper()
+            replacement = registry.get_token(type_label, candidate.value)
+            if candidate.path not in content_replacements:
+                content_replacements[candidate.path] = []
+            content_replacements[candidate.path].append((candidate.value, replacement))
+
+        new_findings.append(RedactionFinding(
+            path=candidate.path,
+            source=candidate.source,
+            kind=kind,
+            pattern=candidate.why_flagged if not should_redact else (candidate.key_name or "HEURISTIC"),
+            remediation=remediation,
+            replacement=replacement,
+            line=candidate.line_number,
+            detection_method="heuristic",
+            confidence=candidate.confidence,
+        ))
+
+    if not new_findings:
+        return snapshot
+
+    # Apply content replacements to config files, container env, and timer commands
+    updates: dict = {}
+    if content_replacements and snapshot.config and snapshot.config.files:
+        new_files: List[ConfigFileEntry] = []
+        files_changed = False
+        for entry in snapshot.config.files:
+            replacements = content_replacements.get(entry.path)
+            if replacements:
+                new_content = entry.content or ""
+                for old_value, new_token in replacements:
+                    new_content = new_content.replace(old_value, new_token)
+                if new_content != (entry.content or ""):
+                    new_files.append(entry.model_copy(update={"content": new_content}))
+                    files_changed = True
+                else:
+                    new_files.append(entry)
+            else:
+                new_files.append(entry)
+        if files_changed:
+            updates["config"] = snapshot.config.model_copy(update={"files": new_files})
+
+    # Apply to container env vars
+    if content_replacements and snapshot.containers and snapshot.containers.running_containers:
+        new_containers = []
+        ct_changed = False
+        for container in snapshot.containers.running_containers:
+            name = container.name or container.id[:12]
+            path_key = f"containers:running/{name}:env"
+            replacements = content_replacements.get(path_key)
+            if replacements:
+                new_env = []
+                env_changed = False
+                for env_line in container.env:
+                    new_line = env_line
+                    for old_value, new_token in replacements:
+                        new_line = new_line.replace(old_value, new_token)
+                    new_env.append(new_line)
+                    if new_line != env_line:
+                        env_changed = True
+                if env_changed:
+                    new_containers.append(container.model_copy(update={"env": new_env}))
+                    ct_changed = True
+                else:
+                    new_containers.append(container)
+            else:
+                new_containers.append(container)
+        if ct_changed:
+            updates["containers"] = snapshot.containers.model_copy(
+                update={"running_containers": new_containers}
+            )
+
+    # Apply to timer commands
+    if content_replacements and snapshot.scheduled_tasks:
+        st_updates: dict = {}
+        if snapshot.scheduled_tasks.generated_timer_units:
+            new_gen = []
+            gen_changed = False
+            for unit in snapshot.scheduled_tasks.generated_timer_units:
+                unit_updates: dict = {}
+                for field_name in ("command", "service_content"):
+                    path_key = f"scheduled:timer/{unit.name}:{field_name}"
+                    replacements = content_replacements.get(path_key)
+                    if replacements:
+                        content = getattr(unit, field_name) or ""
+                        for old_value, new_token in replacements:
+                            content = content.replace(old_value, new_token)
+                        if content != (getattr(unit, field_name) or ""):
+                            unit_updates[field_name] = content
+                if unit_updates:
+                    new_gen.append(unit.model_copy(update=unit_updates))
+                    gen_changed = True
+                else:
+                    new_gen.append(unit)
+            if gen_changed:
+                st_updates["generated_timer_units"] = new_gen
+
+        if snapshot.scheduled_tasks.systemd_timers:
+            new_timers = []
+            timer_changed = False
+            for timer in snapshot.scheduled_tasks.systemd_timers:
+                path_key = f"scheduled:systemd_timer/{timer.name}:service_content"
+                replacements = content_replacements.get(path_key)
+                if replacements and timer.service_content:
+                    new_svc = timer.service_content
+                    for old_value, new_token in replacements:
+                        new_svc = new_svc.replace(old_value, new_token)
+                    if new_svc != timer.service_content:
+                        new_timers.append(timer.model_copy(update={"service_content": new_svc}))
+                        timer_changed = True
+                    else:
+                        new_timers.append(timer)
+                else:
+                    new_timers.append(timer)
+            if timer_changed:
+                st_updates["systemd_timers"] = new_timers
+
+        if st_updates:
+            updates["scheduled_tasks"] = snapshot.scheduled_tasks.model_copy(update=st_updates)
+
+    updated_redactions = list(snapshot.redactions) + new_findings
+    updates["redactions"] = updated_redactions
+    return snapshot.model_copy(update=updates)
+
+
 def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
     """Print secrets handling summary to stderr."""
-    from .schema import RedactionFinding
 
     findings = [r for r in snapshot.redactions if isinstance(r, RedactionFinding)]
     if not findings:
@@ -48,6 +300,11 @@ def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
     excluded_prov = [f for f in findings if f.kind == "excluded" and f.remediation == "provision"]
     inline = [f for f in findings if f.kind == "inline"]
     inline_files = len({f.path for f in inline if f.source == "file"})
+    flagged = [f for f in findings if f.kind == "flagged"]
+
+    # Break down inline by detection method
+    inline_pattern = [f for f in inline if f.detection_method == "pattern"]
+    inline_heuristic = [f for f in inline if f.detection_method == "heuristic"]
 
     print("Secrets handling:", file=sys.stderr)
     if excluded_regen:
@@ -58,11 +315,46 @@ def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
         print(f"  Excluded (provision from store): {n} file{'s' if n != 1 else ''}", file=sys.stderr)
     if inline:
         n = len(inline)
-        print(f"  Inline-redacted: {n} value{'s' if n != 1 else ''} in {inline_files} file{'s' if inline_files != 1 else ''}", file=sys.stderr)
+        suffix = f" ({len(inline_pattern)} pattern, {len(inline_heuristic)} heuristic)" if inline_heuristic else ""
+        print(f"  Inline-redacted: {n} value{'s' if n != 1 else ''} in {inline_files} file{'s' if inline_files != 1 else ''}{suffix}", file=sys.stderr)
+    if flagged:
+        n = len(flagged)
+        print(f"  Flagged for review: {n} finding{'s' if n != 1 else ''}", file=sys.stderr)
     legacy = [r for r in snapshot.redactions if not isinstance(r, RedactionFinding)]
     if legacy:
         print(f"  Legacy (untyped): {len(legacy)} entries", file=sys.stderr)
     print("  Details: secrets-review.md | Placeholders: redacted/", file=sys.stderr)
+
+
+def _print_no_redaction_warning(snapshot: InspectionSnapshot) -> None:
+    """Print a prominent warning to stderr when --no-redaction was used."""
+    findings = [r for r in snapshot.redactions if isinstance(r, RedactionFinding)]
+    if not findings:
+        return
+
+    # Count by category
+    pattern_findings = [f for f in findings if (f.detection_method or "pattern") == "pattern"]
+    heuristic_high = [f for f in findings if f.detection_method == "heuristic" and f.confidence == "high"]
+    heuristic_low = [f for f in findings if f.detection_method == "heuristic" and f.confidence == "low"]
+
+    print("", file=sys.stderr)
+    print("WARNING: Redaction was disabled for this run.", file=sys.stderr)
+    print("Output may contain passwords, tokens, API keys, and other secrets.", file=sys.stderr)
+    print("", file=sys.stderr)
+    if pattern_findings:
+        n = len(pattern_findings)
+        verb = "were" if n != 1 else "was"
+        print(f"  {n} pattern finding{'s' if n != 1 else ''} {verb} NOT redacted", file=sys.stderr)
+    if heuristic_high:
+        n = len(heuristic_high)
+        verb = "were" if n != 1 else "was"
+        print(f"  {n} high-confidence heuristic finding{'s' if n != 1 else ''} {verb} NOT redacted", file=sys.stderr)
+    if heuristic_low:
+        n = len(heuristic_low)
+        print(f"  {n} low-confidence heuristic finding{'s' if n != 1 else ''} flagged", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("See secrets-review.md for the full list of detected secrets.", file=sys.stderr)
+    print("Do not share, commit, or upload this output without manual review.", file=sys.stderr)
 
 
 def run_pipeline(
@@ -76,6 +368,8 @@ def run_pipeline(
     output_dir: Optional[Path] = None,
     no_subscription: bool = False,
     cwd: Optional[Path] = None,
+    sensitivity: str = "strict",
+    no_redaction: bool = False,
 ) -> InspectionSnapshot:
     """Run the yoinkc pipeline.
 
@@ -86,17 +380,52 @@ def run_pipeline(
 
     inspect_only: save snapshot to CWD and exit early.
     cwd: override working directory for default output paths (testing).
+    sensitivity: "strict" (redact high-confidence heuristics) or "moderate" (flag all).
+    no_redaction: run detection without modifying content; all findings become flagged.
     """
     working_dir = cwd or Path.cwd()
 
     # Load or build the snapshot
     if from_snapshot_path is not None:
         snapshot = load_snapshot(from_snapshot_path)
-        snapshot = redact_snapshot(snapshot)
+        if no_redaction:
+            # Run redaction to generate findings, then restore original content
+            original_snapshot = snapshot.model_copy(deep=True)
+            redacted = redact_snapshot(snapshot)
+            # Keep findings but mark all as flagged, restore original content
+            flagged_findings = []
+            for r in redacted.redactions:
+                if isinstance(r, RedactionFinding):
+                    flagged_findings.append(r.model_copy(update={"kind": "flagged"}))
+                else:
+                    flagged_findings.append(r)
+            snapshot = original_snapshot.model_copy(update={"redactions": flagged_findings})
+        else:
+            snapshot = redact_snapshot(snapshot)
     else:
         assert run_inspectors is not None, "run_inspectors required when not loading from snapshot"
         snapshot = run_inspectors(host_root)
-        snapshot = redact_snapshot(snapshot)
+        if no_redaction:
+            original_snapshot = snapshot.model_copy(deep=True)
+            redacted = redact_snapshot(snapshot)
+            flagged_findings = []
+            for r in redacted.redactions:
+                if isinstance(r, RedactionFinding):
+                    flagged_findings.append(r.model_copy(update={"kind": "flagged"}))
+                else:
+                    flagged_findings.append(r)
+            snapshot = original_snapshot.model_copy(update={"redactions": flagged_findings})
+        else:
+            snapshot = redact_snapshot(snapshot)
+
+    # Run heuristic pass after pattern redaction
+    snapshot = _run_heuristic_pass(snapshot, sensitivity, no_redaction)
+
+    # Thread no_redaction flag into snapshot.meta for renderers
+    if no_redaction:
+        snapshot = snapshot.model_copy(update={
+            "meta": {**snapshot.meta, "_no_redaction": True},
+        })
 
     # --inspect-only: save snapshot and return
     if inspect_only:
@@ -109,6 +438,8 @@ def run_pipeline(
         save_snapshot(snapshot, tmp_dir / "inspection-snapshot.json")
         run_renderers(snapshot, tmp_dir)
         _print_secrets_summary(snapshot)
+        if no_redaction:
+            _print_no_redaction_warning(snapshot)
 
         # Bundle subscription certs (skip in --from-snapshot mode where
         # host filesystem may not be mounted)

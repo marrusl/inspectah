@@ -139,6 +139,8 @@ def _run_inspect(args) -> int:
         output_file=args.output_file,
         output_dir=args.output_dir,
         no_subscription=args.no_subscription,
+        sensitivity=args.sensitivity,
+        no_redaction=args.no_redaction,
     )
     if args.output_dir and not args.inspect_only:
         if args.validate:
@@ -170,6 +172,7 @@ def _run_inspect(args) -> int:
                 fixme_count=fixme_count,
                 redaction_count=len(snapshot.redactions),
                 github_token=args.github_token,
+                sensitivity=args.sensitivity,
             )
             if err:
                 print(f"GitHub push failed: {err}", file=sys.stderr)
