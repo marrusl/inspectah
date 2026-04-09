@@ -123,6 +123,7 @@ def _read_os_release(host_root: Path) -> Optional[OsRelease]:
         id=data.get("ID", ""),
         id_like=data.get("ID_LIKE", ""),
         pretty_name=data.get("PRETTY_NAME", ""),
+        variant_id=data.get("VARIANT_ID", ""),
     )
 
 

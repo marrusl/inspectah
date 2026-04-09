@@ -12,6 +12,16 @@ from typing import Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 
 
+# --- System Type ---
+
+
+class SystemType(str, Enum):
+    """Source system type detected by inspectors."""
+    PACKAGE_MODE = "package-mode"
+    RPM_OSTREE = "rpm-ostree"
+    BOOTC = "bootc"
+
+
 # --- Metadata (set by pipeline from host) ---
 
 
@@ -24,6 +34,7 @@ class OsRelease(BaseModel):
     id: str = ""
     id_like: str = ""
     pretty_name: str = ""
+    variant_id: str = ""
 
 
 # --- Fleet metadata (set by yoinkc fleet) ---
@@ -117,6 +128,14 @@ class RpmVaEntry(BaseModel):
     package: Optional[str] = None
 
 
+class OstreePackageOverride(BaseModel):
+    """An rpm-ostree package override (layered, replaced, or removed)."""
+
+    name: str
+    from_nevra: str = ""
+    to_nevra: str = ""
+
+
 class RepoFile(BaseModel):
     """Repo definition file (content or path)."""
 
@@ -149,6 +168,10 @@ class RpmSection(BaseModel):
 
     multiarch_packages: List[str] = Field(default_factory=list)
     duplicate_packages: List[str] = Field(default_factory=list)
+
+    # Ostree-specific fields
+    ostree_overrides: List[OstreePackageOverride] = Field(default_factory=list)
+    ostree_removals: List[str] = Field(default_factory=list)
 
     # Baseline from target bootc base image (cached for --from-snapshot)
     base_image: Optional[str] = None  # e.g. "quay.io/centos-bootc/centos-bootc:stream9"
@@ -430,12 +453,22 @@ class RunningContainer(BaseModel):
     env: List[str] = Field(default_factory=list)
 
 
+class FlatpakApp(BaseModel):
+    """A Flatpak application detected on an ostree system."""
+
+    app_id: str
+    origin: str
+    branch: str = ""
+    include: bool = True
+
+
 class ContainerSection(BaseModel):
     """Output of the Container inspector."""
 
     quadlet_units: List[QuadletUnit] = Field(default_factory=list)
     compose_files: List[ComposeFile] = Field(default_factory=list)
     running_containers: List[RunningContainer] = Field(default_factory=list)
+    flatpak_apps: List[FlatpakApp] = Field(default_factory=list)
 
 
 class PipPackage(BaseModel):
@@ -606,6 +639,7 @@ class InspectionSnapshot(BaseModel):
     schema_version: int = SCHEMA_VERSION
     meta: dict = Field(default_factory=dict)  # hostname, timestamp, profile, etc.
     os_release: Optional[OsRelease] = None
+    system_type: SystemType = SystemType.PACKAGE_MODE
 
     rpm: Optional[RpmSection] = None
     config: Optional[ConfigSection] = None
