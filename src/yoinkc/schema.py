@@ -6,9 +6,9 @@ All inspectors produce data that fits into this schema; all renderers consume it
 """
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Metadata (set by pipeline from host) ---
@@ -569,6 +569,25 @@ class UserGroupSection(BaseModel):
     subgid_entries: List[str] = Field(default_factory=list)
 
 
+class RedactionFinding(BaseModel):
+    """A single redaction event — drives all downstream output.
+
+    Provides a .get() method for backwards compatibility with code that
+    previously consumed redactions as plain dicts.
+    """
+    path: str              # Original filesystem path or synthetic identifier
+    source: str            # "file" | "shadow" | "container-env" | "timer-cmd" | "diff"
+    kind: str              # "excluded" or "inline"
+    pattern: str           # Pattern name that matched
+    remediation: str       # "regenerate" | "provision" | "value-removed"
+    line: Optional[int] = None       # Line number (inline only, file-backed only)
+    replacement: Optional[str] = None  # Replacement token (inline only)
+
+    def get(self, key: str, default=None):
+        """Dict-like access for backwards compatibility with existing consumers."""
+        return getattr(self, key, default)
+
+
 # --- Root snapshot ---
 
 
@@ -600,6 +619,28 @@ class InspectionSnapshot(BaseModel):
 
     # Populated after redaction pass
     warnings: List[dict] = Field(default_factory=list)
-    redactions: List[dict] = Field(default_factory=list)
+    redactions: List[Union["RedactionFinding", dict]] = Field(default_factory=list)
+
+    @field_validator("redactions", mode="before")
+    @classmethod
+    def _coerce_redaction_dicts(cls, v):
+        """Reconstruct RedactionFinding from dicts on deserialization.
+
+        When a snapshot is loaded via model_validate() (e.g. load_snapshot()),
+        Pydantic deserializes RedactionFinding objects as plain dicts.  This
+        validator reconstructs them so isinstance() checks work after round-trip.
+        Dicts that don't match the RedactionFinding schema (e.g. legacy entries)
+        are left as-is.
+        """
+        result = []
+        for item in v:
+            if isinstance(item, dict) and "source" in item and "kind" in item:
+                try:
+                    result.append(RedactionFinding(**item))
+                except Exception:
+                    result.append(item)
+            else:
+                result.append(item)
+        return result
 
     model_config = {"extra": "ignore"}

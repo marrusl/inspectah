@@ -3,6 +3,7 @@
 from yoinkc.redact import redact_snapshot, _redact_text, _is_excluded_path
 from yoinkc.schema import (
     InspectionSnapshot,
+    RedactionFinding,
     NetworkSection, FirewallZone,
     ContainerSection, QuadletUnit, RunningContainer,
     ScheduledTaskSection, GeneratedTimerUnit, SystemdTimer,
@@ -387,3 +388,108 @@ def test_redact_idempotent():
     twice = redact_snapshot(once)
     assert once.containers.quadlet_units[0].content == twice.containers.quadlet_units[0].content
     assert len(once.redactions) == len(twice.redactions)
+
+
+# ---------------------------------------------------------------------------
+# RedactionFinding model and compatibility
+# ---------------------------------------------------------------------------
+
+def test_redaction_finding_model():
+    """RedactionFinding can be constructed with all fields."""
+    f = RedactionFinding(
+        path="/etc/shadow",
+        source="file",
+        kind="excluded",
+        pattern="EXCLUDED_PATH",
+        remediation="provision",
+        line=None,
+        replacement=None,
+    )
+    assert f.path == "/etc/shadow"
+    assert f.source == "file"
+    assert f.kind == "excluded"
+    assert f.remediation == "provision"
+    assert f.line is None
+    assert f.replacement is None
+
+def test_redaction_finding_dict_compat():
+    """RedactionFinding supports .get() for backwards compat with dict consumers."""
+    f = RedactionFinding(
+        path="/etc/shadow",
+        source="file",
+        kind="excluded",
+        pattern="EXCLUDED_PATH",
+        remediation="provision",
+    )
+    assert f.get("path") == "/etc/shadow"
+    assert f.get("pattern") == "EXCLUDED_PATH"
+    assert f.get("line") is None
+    assert f.get("missing", "default") == "default"
+
+
+def test_redaction_finding_survives_save_load_roundtrip(tmp_path):
+    """RedactionFinding objects survive save_snapshot() -> load_snapshot() round-trip.
+
+    This is the critical durability test: save_snapshot() calls model_dump_json(),
+    load_snapshot() calls model_validate(). Without the field_validator on
+    InspectionSnapshot.redactions, RedactionFinding objects would be deserialized
+    as plain dicts, and all isinstance() checks downstream would fail silently.
+    """
+    from yoinkc.pipeline import save_snapshot, load_snapshot
+
+    snapshot = InspectionSnapshot(meta={"hostname": "test"})
+    snapshot.redactions = [
+        RedactionFinding(
+            path="/etc/cockpit/ws-certs.d/0-self-signed.key",
+            source="file", kind="excluded", pattern="EXCLUDED_PATH",
+            remediation="regenerate",
+        ),
+        RedactionFinding(
+            path="/etc/wireguard/wg0.conf",
+            source="file", kind="inline", pattern="WIREGUARD_KEY",
+            remediation="value-removed", line=3,
+            replacement="REDACTED_WIREGUARD_KEY_1",
+        ),
+        RedactionFinding(
+            path="users:shadow/admin",
+            source="shadow", kind="inline", pattern="SHADOW_HASH",
+            remediation="value-removed",
+            replacement="REDACTED_SHADOW_HASH_1",
+        ),
+        # Legacy dict entry — should pass through unchanged
+        {"path": "/etc/old.conf", "pattern": "PASSWORD", "line": "content",
+         "remediation": "old style"},
+    ]
+
+    # Round-trip through save/load
+    snapshot_path = tmp_path / "inspection-snapshot.json"
+    save_snapshot(snapshot, snapshot_path)
+    loaded = load_snapshot(snapshot_path)
+
+    # Verify RedactionFinding objects survived as typed objects
+    assert len(loaded.redactions) == 4
+
+    # First three should be RedactionFinding instances
+    assert isinstance(loaded.redactions[0], RedactionFinding)
+    assert loaded.redactions[0].path == "/etc/cockpit/ws-certs.d/0-self-signed.key"
+    assert loaded.redactions[0].remediation == "regenerate"
+    assert loaded.redactions[0].kind == "excluded"
+
+    assert isinstance(loaded.redactions[1], RedactionFinding)
+    assert loaded.redactions[1].replacement == "REDACTED_WIREGUARD_KEY_1"
+    assert loaded.redactions[1].line == 3
+
+    assert isinstance(loaded.redactions[2], RedactionFinding)
+    assert loaded.redactions[2].source == "shadow"
+
+    # Fourth should still be a plain dict (legacy, no "source"/"kind" fields)
+    assert isinstance(loaded.redactions[3], dict)
+    assert loaded.redactions[3]["path"] == "/etc/old.conf"
+
+    # Verify isinstance checks work for downstream consumers
+    typed_findings = [r for r in loaded.redactions if isinstance(r, RedactionFinding)]
+    assert len(typed_findings) == 3
+    excluded = [r for r in typed_findings if r.kind == "excluded"]
+    assert len(excluded) == 1
+    inline = [r for r in typed_findings if r.kind == "inline"]
+    assert len(inline) == 2
