@@ -578,7 +578,7 @@ class RedactionFinding(BaseModel):
     """
     path: str              # Original filesystem path or synthetic identifier
     source: str            # "file" | "shadow" | "container-env" | "timer-cmd" | "diff"
-    kind: str              # "excluded" or "inline"
+    kind: str              # "excluded" | "inline" | "flagged"
     pattern: str           # Pattern name that matched
     remediation: str       # "regenerate" | "provision" | "value-removed"
     line: Optional[int] = None       # Line number (inline only, file-backed only)
