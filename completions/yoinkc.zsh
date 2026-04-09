@@ -23,7 +23,9 @@ _yoinkc_inspect() {
         '--push-to-github[Push output to GitHub repository]:repo:' \
         '--github-token[GitHub personal access token]:token:' \
         '--public[Make new repo public]' \
-        '--yes[Skip interactive confirmation prompts]'
+        '--yes[Skip interactive confirmation prompts]' \
+        '--sensitivity[Heuristic detection sensitivity]:sensitivity:(strict moderate)' \
+        '--no-redaction[Disable all redaction — detection still runs]'
 }
 
 _yoinkc_fleet() {

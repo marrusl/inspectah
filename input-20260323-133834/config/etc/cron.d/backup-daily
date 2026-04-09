@@ -1,0 +1,3 @@
+# Daily backup — driftify synthetic fixture
+# yoinkc should convert this to a systemd timer
+0 2 * * * root /usr/local/bin/backup.sh >> /var/log/myapp/backup.log 2>&1

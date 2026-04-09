@@ -1,0 +1,179 @@
+# === Base Image ===
+# Detected: Red Hat Enterprise Linux 9.7 (Plow)
+FROM registry.redhat.io/rhel9/rhel-bootc:9.7
+
+# === Repository Configuration ===
+COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/
+COPY config/etc/yum.repos.d/ /etc/yum.repos.d/
+COPY config/etc/dnf/ /etc/dnf/
+# 5 repo file(s) + 2 GPG key(s) — also included in consolidated COPY config/etc/ below
+
+# === Package Installation ===
+# Detected: 26 explicitly installed packages (+96 dependencies pulled in automatically)
+RUN dnf install -y \
+    at \
+    bat \
+    epel-release \
+    fd-find \
+    git \
+    htop \
+    httpd \
+    info \
+    langpacks-en \
+    man-pages \
+    nginx \
+    nmap-ncat \
+    nodejs \
+    policycoreutils-python-utils \
+    python3-pip \
+    rsync \
+    sssd \
+    strace \
+    tcpdump \
+    the_silver_searcher \
+    tmux \
+    tree \
+    tuned \
+    unzip \
+    vim-enhanced \
+    wget \
+    && dnf clean all && rm -rf /var/cache/dnf /var/lib/dnf/history* /var/log/dnf* /var/log/hawkey.log /var/log/rhsm
+# 96 additional package(s) will be pulled in as dependencies
+# See audit-report.md for full package list
+
+# === Service Enablement ===
+# Note: 1 config-tree unit(s) enabled later in Scheduled Tasks: myapp-report.timer
+# Detected: 4 non-default enabled, 1 disabled
+RUN systemctl enable httpd.service NetworkManager-wait-online.service nginx.service dnf-makecache.timer
+RUN systemctl disable sssd.service
+# insights-client-boot.service — skipped (package insights-client not in dnf install line)
+
+# === Systemd Drop-in Overrides ===
+# Detected: 2 drop-in override(s) — included in COPY config/etc/ below
+#   httpd.service: etc/systemd/system/httpd.service.d/
+#   nginx.service: etc/systemd/system/nginx.service.d/
+
+# === Firewall Configuration (bake into image) ===
+# Detected: 2 zone(s) — included in COPY config/etc/ below
+# See audit-report.md for firewall-offline-cmd equivalents per zone.
+
+# === Scheduled Tasks ===
+COPY config/etc/systemd/system/ /etc/systemd/system/
+# Existing local timers (2): driftify-backup.timer, myapp-report.timer
+# Converted from cron: 3 timer(s): cron-backup-daily, cron-daily-cleanup-sh, cron-appuser
+RUN systemctl enable driftify-backup.timer myapp-report.timer cron-backup-daily.timer cron-daily-cleanup-sh.timer cron-appuser.timer
+
+# === Configuration Files ===
+# Modified RPM-owned configs (11):
+#   etc/security/limits.conf (rpm -Va: S.5....T.)
+#   etc/selinux/targeted/contexts/customizable_types (rpm -Va: .......T.)
+#   etc/rhsm/rhsm.conf (rpm -Va: S.5....T.)
+#   etc/audit/auditd.conf (rpm -Va: SM5....T.)
+#   etc/ssh/sshd_config (rpm -Va: SM5....T.)
+#   etc/nginx/nginx.conf (rpm -Va: S.5....T.)
+#   etc/httpd/conf/httpd.conf (rpm -Va: S.5....T.)
+#   etc/crontab (rpm -Va: S.5....T.)
+#   etc/krb5.conf (rpm -Va: S.5....T.)
+#   etc/selinux/targeted/contexts/files/file_contexts.local (rpm -Va: S.5....T.)
+#   etc/dnf/plugins/versionlock.list (rpm -Va: S.5....T.)
+# Unowned configs (39):
+#   etc/nsswitch.conf.bak
+#   etc/multipath.conf
+#   etc/sysctl.d/99-driftify.conf
+#   etc/grub.d/00_tuned
+#   etc/cron.daily/cleanup.sh
+#   etc/cron.d/backup-daily
+#   etc/nginx/nginx.conf.rpmsave
+#   etc/myapp/database.yml
+#   etc/myapp/server.key
+#   etc/containers/systemd/webapp.container
+#   ... and 29 more
+# Repo files (5):
+#   etc/yum.repos.d/epel-cisco-openh264.repo
+#   etc/yum.repos.d/epel-testing.repo
+#   etc/yum.repos.d/epel.repo
+#   etc/yum.repos.d/redhat.repo
+#   etc/dnf/dnf.conf
+# Firewall zones (2): public, myapp
+# Local systemd timers (2): driftify-backup, myapp-report
+# Cron-converted timers (3): cron-backup-daily, cron-daily-cleanup-sh, cron-appuser
+# modprobe.d: 2 file(s)
+# sysctl overrides: etc/sysctl.d/99-yoinkc.conf (6 value(s))
+# Systemd drop-in overrides (2): httpd.service, nginx.service
+# Audit rules: 2 file(s)
+# Tuned: active=virtual-guest
+# tmpfiles.d: etc/tmpfiles.d/yoinkc-var.conf
+
+COPY config/etc/ /etc/
+COPY config/opt/ /opt/
+COPY config/usr/ /usr/
+
+# === Non-RPM Software ===
+# FIXME: dynamic C/C++ binary at /opt/myapp — needs: libpython3.14.so.1.0, libc.so.6
+# COPY config/opt/myapp /opt/myapp
+# FIXME: Go binary at /usr/local/bin/driftify-probe (statically linked)
+# Obtain source and rebuild for the target image, or COPY the binary directly
+# COPY config/usr/local/bin/driftify-probe /usr/local/bin/driftify-probe
+# Python venv at /opt/myapp/venv: 18 package(s)
+RUN python3 -m venv /opt/myapp/venv
+RUN /opt/myapp/venv/bin/pip install blinker==1.9.0 certifi==2026.2.25 charset-normalizer==3.4.6 click==8.1.8 Flask==3.1.3 gunicorn==23.0.0 idna==3.11 importlib_metadata==8.7.1 itsdangerous==2.2.0 Jinja2==3.1.6 MarkupSafe==3.0.3 packaging==26.0 pip==21.3.1 requests==2.32.5 setuptools==53.0.0 urllib3==2.6.3 Werkzeug==3.1.6 zipp==3.23.0
+# FIXME: verify npm packages in /opt/webapp install correctly
+COPY config/opt/webapp/ /opt/webapp/
+RUN cd /opt/webapp && npm ci
+# FIXME: unknown provenance — determine upstream source and installation method for /opt/tools
+# COPY config/opt/tools /opt/tools
+# FIXME: unknown provenance — determine upstream source and installation method for /usr/local/bin/bundle
+# COPY config/usr/local/bin/bundle /usr/local/bin/bundle
+# FIXME: unknown provenance — determine upstream source and installation method for /usr/local/bin/bundler
+# COPY config/usr/local/bin/bundler /usr/local/bin/bundler
+# FIXME: unknown provenance — determine upstream source and installation method for /usr/local/bin/tilt
+# COPY config/usr/local/bin/tilt /usr/local/bin/tilt
+# FIXME: unknown provenance — determine upstream source and installation method for /usr/local/share
+# COPY config/usr/local/share /usr/local/share
+# FIXME: unknown provenance — determine upstream source and installation method for /usr/local/bin/deploy.sh
+# COPY config/usr/local/bin/deploy.sh /usr/local/bin/deploy.sh
+
+# === Container Workloads ===
+COPY quadlet/ /etc/containers/systemd/
+# Compose file included: opt/myapp/docker-compose.yml
+# Compose file(s) included as-is. For native systemd integration,
+# consider converting to Quadlet units — see https://github.com/containers/podlet
+# or https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html
+
+# === Users and Groups ===
+# Service accounts (1): dbuser
+# Created at boot by systemd-sysusers — declarative, no RUN needed
+COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/yoinkc-users.conf
+# Home directories ensured by tmpfiles.d
+# FIXME: human user 'mrussell' deferred to kickstart/provisioning
+# See kickstart-suggestion.ks or configure via identity provider
+# FIXME: human user 'appuser' deferred to kickstart/provisioning
+# See kickstart-suggestion.ks or configure via identity provider
+# FIXME: 2 sudoers rule(s) — review and bake into /etc/sudoers.d/
+#   root	ALL=(ALL) 	ALL
+#   %wheel	ALL=(ALL)	ALL
+
+# === Kernel Configuration ===
+# 33 non-default kernel module(s) loaded at runtime: bridge, xt_addrtype, xt_mark, xt_conntrack, xt_comment, xt_MASQUERADE, nft_compat, nft_counter, veth, tls
+# FIXME: if these modules are needed, add them to /etc/modules-load.d/ in the image
+# modprobe.d: 2 file(s) — included in COPY config/etc/ above
+# sysctl: 6 non-default value(s) — included in COPY config/etc/ above
+RUN echo "virtual-guest" > /etc/tuned/active_profile
+RUN systemctl enable tuned.service
+
+# === SELinux Customizations ===
+# FIXME: 1 custom fcontext rule(s) detected — apply in image
+# RUN semanage fcontext -a /srv/www(/.*)?    system_u:object_r:httpd_sys_content_t:s0
+# RUN restorecon -Rv /  # apply fcontext changes after all COPYs
+# 2 audit rule file(s) — included in COPY config/etc/ above
+
+# === Network / Kickstart ===
+# NOTE: Interface-specific config (DHCP, DNS) should be applied via kickstart at deploy time.
+# FIXME: review kickstart-suggestion.ks for deployment-time config
+
+# === tmpfiles.d for /var structure ===
+# Directories created on every boot; /var is not updated by bootc after bootstrap.
+# tmpfiles.d/yoinkc-var.conf included in COPY config/etc/ above
+
+# === Validate bootc compatibility ===
+RUN bootc container lint

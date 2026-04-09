@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Set
 from ..executor import Executor
 from ..schema import (
     ScheduledTaskSection, CronJob, SystemdTimer, AtJob, GeneratedTimerUnit,
+    SystemType,
 )
 from .._util import debug as _debug_util, is_debug, safe_iterdir as _safe_iterdir, safe_read as _safe_read
 
@@ -246,13 +247,15 @@ def _parse_unit_field(text: str, field: str) -> str:
 
 
 def _scan_systemd_timers(
-    host_root: Path, base_dir: str, source_label: str,
+    host_root: Path, base_dir: str, source_label: str, system_type: SystemType = SystemType.PACKAGE_MODE,
 ) -> List[dict]:
     """Scan a systemd unit directory for .timer files and their .service pairs."""
     results: List[dict] = []
     d = host_root / base_dir
     if not d.exists():
         return results
+
+    is_ostree = system_type in (SystemType.RPM_OSTREE, SystemType.BOOTC)
 
     for f in _safe_iterdir(d):
         if not f.is_file() or not f.name.endswith(".timer"):
@@ -269,12 +272,17 @@ def _scan_systemd_timers(
         service_text = _safe_read(service_file) if service_file.exists() else ""
         exec_start = _parse_unit_field(service_text, "ExecStart")
 
+        # On ostree systems, timers under /usr/lib/systemd/ are always vendor-provided
+        source = source_label
+        if is_ostree and str(f).startswith(str(host_root / "usr" / "lib" / "systemd")):
+            source = "vendor"
+
         results.append(SystemdTimer(
             name=name,
             on_calendar=on_calendar,
             exec_start=exec_start,
             description=description,
-            source=source_label,
+            source=source,
             path=str(f.relative_to(host_root)),
             timer_content=timer_text,
             service_content=service_text,
@@ -340,6 +348,7 @@ def run(
     host_root: Path,
     executor: Optional[Executor],
     rpm_owned_paths: Optional[Set[str]] = None,
+    system_type: SystemType = SystemType.PACKAGE_MODE,
 ) -> ScheduledTaskSection:
     section = ScheduledTaskSection()
     host_root = Path(host_root)
@@ -409,7 +418,7 @@ def run(
         ("usr/lib/systemd/system", "vendor"),
     ]:
         section.systemd_timers.extend(
-            _scan_systemd_timers(host_root, base_dir, label)
+            _scan_systemd_timers(host_root, base_dir, label, system_type=system_type)
         )
 
     # --- At jobs ---

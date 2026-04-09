@@ -1,0 +1,6 @@
+[Unit]
+Description=Timer from cron etc/cron.d/backup-daily
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/backup.sh >> /var/log/myapp/backup.log 2>&1

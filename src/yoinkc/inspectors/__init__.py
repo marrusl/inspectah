@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Callable, List, Optional, TypeVar
 
 from ..executor import Executor, make_executor
-from ..schema import InspectionSnapshot, OsRelease
+from ..schema import InspectionSnapshot, OsRelease, SystemType
+from ..system_type import detect_system_type, map_ostree_base_image, OstreeDetectionError
 from .._util import make_warning, section_banner as _section_banner, status as _status_fn
 
 T = TypeVar("T")
@@ -123,6 +124,7 @@ def _read_os_release(host_root: Path) -> Optional[OsRelease]:
         id=data.get("ID", ""),
         id_like=data.get("ID_LIKE", ""),
         pretty_name=data.get("PRETTY_NAME", ""),
+        variant_id=data.get("VARIANT_ID", ""),
     )
 
 
@@ -188,6 +190,32 @@ def _baseline_fail_fast(base_image: Optional[str]) -> None:
     sys.exit(1)
 
 
+_COMMON_BASES = [
+    "quay.io/fedora-ostree-desktops/silverblue:41",
+    "quay.io/fedora-ostree-desktops/kinoite:41",
+    "quay.io/fedora/fedora-bootc:41",
+    "quay.io/centos-bootc/centos-bootc:stream10",
+]
+
+
+def _ostree_unknown_base_fail(system_type: "SystemType", os_release: Optional[OsRelease]) -> None:
+    """Print refusal message for unmappable ostree system and exit."""
+    type_label = "bootc" if system_type == SystemType.BOOTC else "rpm-ostree"
+    identity = (os_release.pretty_name or os_release.id) if os_release else "unknown"
+    lines = [
+        f"Detected {type_label} system: {identity}",
+        "Could not map to a known bootc base image.",
+        "",
+        "Specify one with: yoinkc --target-image <registry/image:tag>",
+        "",
+        "Common bases:",
+    ]
+    for base in _COMMON_BASES:
+        lines.append(f"  {base}")
+    print("\n".join(lines), file=sys.stderr)
+    sys.exit(1)
+
+
 def run_all(
     host_root: Path,
     executor: Optional[Executor] = None,
@@ -235,12 +263,43 @@ def run_all(
     err = _validate_supported_host(os_release)
     if err:
         raise ValueError(err)
+    # -- System type detection --
+    try:
+        system_type = detect_system_type(host_root, executor)
+    except OstreeDetectionError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)
+
     snapshot = InspectionSnapshot(
         meta=meta,
         os_release=os_release,
+        system_type=system_type,
     )
 
     w = snapshot.warnings
+
+    # Gate message for ostree systems
+    if system_type != SystemType.PACKAGE_MODE:
+        type_label = "bootc" if system_type == SystemType.BOOTC else "rpm-ostree"
+        print(f"Detected {type_label} system, adapting inspection", file=sys.stderr)
+
+    # Ostree base image mapping
+    if system_type != SystemType.PACKAGE_MODE:
+        mapped_image = map_ostree_base_image(
+            host_root, os_release, system_type,
+            executor=executor, target_image_override=target_image,
+        )
+        if mapped_image is None:
+            if not no_baseline_opt_in:
+                _ostree_unknown_base_fail(system_type, os_release)
+            else:
+                w.append(make_warning(
+                    "pipeline",
+                    "Could not map ostree system to a known base image. "
+                    "Running without baseline.",
+                ))
+        else:
+            target_image = mapped_image
 
     # Cross-major-version warning
     if target_version and os_release and os_release.version_id:
@@ -295,6 +354,7 @@ def run_all(
             target_version=target_version,
             target_image=target_image,
             preflight_baseline=preflight_baseline,
+            system_type=system_type,
         )
     snapshot.rpm = _safe_run("rpm", _run_rpm_inspector, None, w)
 
@@ -316,7 +376,7 @@ def run_all(
     rpm_owned = _build_rpm_owned_paths(executor, host_root, warnings=w)
 
     _section_banner("Config files", 2, _TOTAL_STEPS)
-    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=rpm_owned, config_diffs=config_diffs, warnings=w), None, w)
+    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=rpm_owned, config_diffs=config_diffs, warnings=w, system_type=system_type), None, w)
 
     _section_banner("Services", 3, _TOTAL_STEPS)
     base_image_preset_text = None
@@ -328,19 +388,19 @@ def run_all(
     snapshot.network = _safe_run("network", lambda: run_network(host_root, executor, warnings=w), None, w)
 
     _section_banner("Storage", 5, _TOTAL_STEPS)
-    snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor), None, w)
+    snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor, system_type=system_type), None, w)
 
     _section_banner("Scheduled tasks", 6, _TOTAL_STEPS)
-    snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor, rpm_owned_paths=rpm_owned), None, w)
+    snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor, rpm_owned_paths=rpm_owned, system_type=system_type), None, w)
 
     _section_banner("Containers", 7, _TOTAL_STEPS)
     snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman, warnings=w), None, w)
 
     _section_banner("Non-RPM software", 8, _TOTAL_STEPS)
-    snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan, warnings=w), None, w)
+    snapshot.non_rpm_software = _safe_run("non_rpm_software", lambda: run_non_rpm_software(host_root, executor, deep_binary_scan=deep_binary_scan, warnings=w, system_type=system_type), None, w)
 
     _section_banner("Kernel / boot", 9, _TOTAL_STEPS)
-    snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor, warnings=w), None, w)
+    snapshot.kernel_boot = _safe_run("kernel_boot", lambda: run_kernel_boot(host_root, executor, warnings=w, system_type=system_type), None, w)
 
     _section_banner("SELinux / security", 10, _TOTAL_STEPS)
     snapshot.selinux = _safe_run("selinux", lambda: run_selinux(host_root, executor, warnings=w, rpm_owned_paths=rpm_owned), None, w)

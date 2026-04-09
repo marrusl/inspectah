@@ -4,7 +4,7 @@ from pathlib import Path
 
 from jinja2 import Environment
 
-from ...schema import InspectionSnapshot, RedactionFinding
+from ...schema import InspectionSnapshot, RedactionFinding, SystemType
 from ._helpers import _base_image_from_snapshot, _dhcp_connection_paths
 from ._config_tree import write_config_tree
 from . import (
@@ -126,6 +126,14 @@ def _render_containerfile_content(
         snapshot, base=base, c_ext_pip=c_ext_pip,
         needs_multistage=needs_multistage,
     )
+
+    # bootc label for ostree-desktops base images
+    if snapshot.system_type in (SystemType.RPM_OSTREE, SystemType.BOOTC):
+        if "fedora-ostree-desktops" in base:
+            lines.append("# ostree-desktops images may need bootc label for compatibility")
+            lines.append('LABEL containers.bootc 1')
+            lines.append("")
+
     lines += services.section_lines(snapshot)
     lines += network.section_lines(snapshot, firewall_only=True)
     lines += scheduled_tasks.section_lines(snapshot)
@@ -162,3 +170,16 @@ def render(
     write_config_tree(snapshot, output_dir)
     content = _render_containerfile_content(snapshot, output_dir)
     (output_dir / "Containerfile").write_text(content)
+
+    # Generate flatpaks.list if Flatpak apps were detected
+    if snapshot.containers and snapshot.containers.flatpak_apps:
+        included = [a for a in snapshot.containers.flatpak_apps if a.include]
+        if included:
+            flatpak_lines = [
+                "# Flatpak applications detected by yoinkc",
+                "# Install with: xargs flatpak install < flatpaks.list",
+                "# Or wire into your preferred first-boot mechanism (systemd unit, Brewfile, etc.)",
+            ]
+            for app in sorted(included, key=lambda a: a.app_id):
+                flatpak_lines.append(f"{app.origin} {app.app_id}")
+            (output_dir / "flatpaks.list").write_text("\n".join(flatpak_lines) + "\n")

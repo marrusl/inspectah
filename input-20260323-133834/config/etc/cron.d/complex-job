@@ -1,0 +1,4 @@
+# Complex cron with env deps — driftify kitchen-sink fixture
+MAILTO=ops@example.com
+APP_ENV=production
+30 6 * * 1-5 appuser /opt/myapp/scripts/weekday-report.sh

@@ -1,0 +1,6 @@
+[Unit]
+Description=Timer from cron.daily etc/cron.daily/cleanup.sh
+
+[Service]
+Type=oneshot
+ExecStart=/etc/cron.daily/cleanup.sh

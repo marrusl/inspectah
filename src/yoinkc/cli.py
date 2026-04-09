@@ -163,6 +163,20 @@ def _add_inspect_args(parser: argparse.ArgumentParser) -> None:
         help="Path to unmodified original snapshot for editor diff/reset support "
              "(set by yoinkc refine during re-render)",
     )
+    parser.add_argument(
+        "--sensitivity",
+        type=str,
+        choices=("strict", "moderate"),
+        default="strict",
+        help="Heuristic detection sensitivity: strict (default) redacts high-confidence "
+             "heuristic findings, moderate flags all heuristic findings without redacting.",
+    )
+    parser.add_argument(
+        "--no-redaction",
+        action="store_true",
+        help="Disable all redaction — detection still runs but no content is modified. "
+             "WARNING: output may contain secrets.",
+    )
 
 
 def _add_refine_args(parser: argparse.ArgumentParser) -> None:
@@ -231,6 +245,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         import sys
         argv = sys.argv[1:]
 
+    original_argv = list(argv)
+
     host_root_explicit = any(
         arg == "--host-root" or arg.startswith("--host-root=")
         for arg in argv
@@ -258,5 +274,13 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
                 "--validate and --push-to-github require --output-dir "
                 "(directory output mode)"
             )
+
+        if getattr(args, "no_redaction", False):
+            sensitivity_explicit = any(
+                arg == "--sensitivity" or arg.startswith("--sensitivity=")
+                for arg in original_argv
+            )
+            if sensitivity_explicit:
+                parser.error("--sensitivity has no effect when --no-redaction is set")
 
     return args

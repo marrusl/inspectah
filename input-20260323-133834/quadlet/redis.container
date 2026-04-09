@@ -1,0 +1,18 @@
+[Unit]
+Description=Redis Cache
+Before=webapp.service
+
+[Container]
+Image=docker.io/library/redis:7-alpine
+PublishPort=127.0.0.1:6379:6379
+Volume=redis-data.volume:/data:Z
+Environment=REDIS_REDACTED_PASSWORD_b087d0a7
+# Exercises healthcheck detection
+HealthCmd=/usr/local/bin/redis-cli ping
+HealthInterval=10s
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target default.target

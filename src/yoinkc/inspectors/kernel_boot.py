@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from ..executor import Executor
 from ..schema import (
     AlternativeEntry, KernelBootSection, ConfigSnippet, SysctlOverride, KernelModule,
+    SystemType,
 )
 from .._util import safe_iterdir as _safe_iterdir, safe_read as _safe_read, make_warning
 
@@ -258,6 +259,7 @@ def run(
     host_root: Path,
     executor: Optional[Executor],
     warnings: Optional[list] = None,
+    system_type: SystemType = SystemType.PACKAGE_MODE,
 ) -> KernelBootSection:
     section = KernelBootSection()
     host_root = Path(host_root)
@@ -281,6 +283,11 @@ def run(
             section.grub_defaults = grub.read_text().strip()[:500]
     except (PermissionError, OSError):
         pass
+
+    # On ostree systems, BLS entries are managed by ostree/bootc, not GRUB defaults
+    is_ostree = system_type in (SystemType.RPM_OSTREE, SystemType.BOOTC)
+    if is_ostree:
+        section.grub_defaults = ""
 
     # --- sysctl diff ---
     defaults = _collect_sysctl_defaults(host_root)

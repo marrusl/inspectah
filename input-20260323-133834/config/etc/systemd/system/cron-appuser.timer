@@ -1,0 +1,10 @@
+[Unit]
+Description=Generated from cron: var/spool/cron/appuser
+# Original cron: */15 * * * *
+
+[Timer]
+OnCalendar=*-*-* *:*/15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

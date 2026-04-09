@@ -6,6 +6,7 @@ When config_diffs=True, extracts original from RPM (dnf cache or host) and sets 
 
 import difflib
 import fnmatch
+import os
 import re
 import shutil
 import tempfile
@@ -13,7 +14,7 @@ from pathlib import Path
 from typing import List, Optional, Set
 
 from ..executor import Executor
-from ..schema import ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection, RpmSection
+from ..schema import ConfigCategory, ConfigFileEntry, ConfigFileKind, ConfigSection, RpmSection, SystemType
 from .._util import debug as _debug_fn, make_warning, run_rpm_query as _run_rpm_query
 
 
@@ -404,6 +405,219 @@ def _detect_crypto_policy(host_root: Path, warnings: Optional[list]) -> None:
         ))
 
 
+# ---------------------------------------------------------------------------
+# Ostree / bootc config detection
+# ---------------------------------------------------------------------------
+
+# Volatile files that change every boot — not operator customizations.
+_OSTREE_VOLATILE_NAMES: Set[str] = {
+    "resolv.conf", "hostname", "machine-id", ".updated", "ld.so.cache",
+}
+
+# Files always present on ostree systems that are not customizations.
+_OSTREE_SKIP_BASENAMES: Set[str] = {
+    "os-release",
+}
+
+
+def _run_ostree(
+    host_root: Path,
+    executor: Optional[Executor],
+    warnings: Optional[list] = None,
+) -> ConfigSection:
+    """Ostree/bootc config detection via /usr/etc -> /etc diffing.
+
+    Tier 1: Walk /usr/etc, compare against /etc counterparts.
+    Tier 2: Files in /etc with no /usr/etc counterpart — check RPM ownership.
+    """
+    section = ConfigSection()
+    usr_etc = host_root / "usr" / "etc"
+    etc = host_root / "etc"
+
+    if not etc.exists():
+        return section
+
+    # Track which /etc paths were covered by Tier 1 (have a /usr/etc counterpart)
+    tier1_etc_paths: Set[Path] = set()
+
+    # ── Tier 1: /usr/etc → /etc diff ────────────────────────────────────────
+    if usr_etc.exists():
+        try:
+            usr_etc_files = list(usr_etc.rglob("*"))
+        except (PermissionError, OSError):
+            usr_etc_files = []
+
+        for usr_file in usr_etc_files:
+            # Skip directories — we only care about files and symlinks
+            if usr_file.is_dir():
+                continue
+
+            try:
+                rel = usr_file.relative_to(usr_etc)
+            except ValueError:
+                continue
+
+            # Skip volatile files
+            if rel.name in _OSTREE_VOLATILE_NAMES:
+                continue
+
+            etc_file = etc / rel
+            tier1_etc_paths.add(etc_file)
+
+            # File only in /usr/etc — not reported (normal ostree behavior)
+            if not etc_file.exists() and not etc_file.is_symlink():
+                continue
+
+            rel_path = str(Path("etc") / rel)
+
+            try:
+                # ── Symlink comparison ──────────────────────────────────
+                if usr_file.is_symlink() or etc_file.is_symlink():
+                    usr_target = os.readlink(usr_file) if usr_file.is_symlink() else None
+                    etc_target = os.readlink(etc_file) if etc_file.is_symlink() else None
+                    if usr_target != etc_target:
+                        section.files.append(ConfigFileEntry(
+                            path=rel_path,
+                            kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                            category=classify_config_path("/" + rel_path),
+                            content=f"symlink: {usr_target} -> {etc_target}",
+                        ))
+                    continue
+
+                # ── Content comparison ──────────────────────────────────
+                try:
+                    usr_content = usr_file.read_text()
+                except (PermissionError, OSError, UnicodeDecodeError):
+                    continue
+                try:
+                    etc_content = etc_file.read_text()
+                except (PermissionError, OSError, UnicodeDecodeError):
+                    continue
+
+                if usr_content != etc_content:
+                    diff_text = _unified_diff(usr_content, etc_content, rel_path)
+                    section.files.append(ConfigFileEntry(
+                        path=rel_path,
+                        kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                        category=classify_config_path("/" + rel_path),
+                        content=etc_content,
+                        diff_against_rpm=diff_text,
+                    ))
+                    continue
+
+                # ── Metadata comparison (mode, uid, gid) ────────────────
+                try:
+                    usr_stat = usr_file.stat()
+                    etc_stat = etc_file.stat()
+                except (PermissionError, OSError):
+                    continue
+
+                meta_diffs = []
+                if usr_stat.st_mode != etc_stat.st_mode:
+                    meta_diffs.append(
+                        f"mode: {oct(usr_stat.st_mode)} -> {oct(etc_stat.st_mode)}"
+                    )
+                if usr_stat.st_uid != etc_stat.st_uid:
+                    meta_diffs.append(
+                        f"uid: {usr_stat.st_uid} -> {etc_stat.st_uid}"
+                    )
+                if usr_stat.st_gid != etc_stat.st_gid:
+                    meta_diffs.append(
+                        f"gid: {usr_stat.st_gid} -> {etc_stat.st_gid}"
+                    )
+
+                # ── SELinux context comparison ──────────────────────────
+                try:
+                    usr_selinux = os.getxattr(str(usr_file), "security.selinux")
+                    etc_selinux = os.getxattr(str(etc_file), "security.selinux")
+                    if usr_selinux != etc_selinux:
+                        meta_diffs.append(
+                            f"selinux: {usr_selinux.decode(errors='replace')} -> "
+                            f"{etc_selinux.decode(errors='replace')}"
+                        )
+                except (OSError, AttributeError):
+                    # xattr not available (e.g. macOS, test environments)
+                    pass
+
+                if meta_diffs:
+                    section.files.append(ConfigFileEntry(
+                        path=rel_path,
+                        kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                        category=classify_config_path("/" + rel_path),
+                        content="; ".join(meta_diffs),
+                    ))
+
+            except (PermissionError, OSError):
+                continue
+
+    # ── Tier 2: /etc-only files ─────────────────────────────────────────────
+    try:
+        etc_files = list(etc.rglob("*"))
+    except (PermissionError, OSError):
+        etc_files = []
+
+    for etc_file in etc_files:
+        if etc_file.is_dir():
+            continue
+
+        # Skip if this file had a /usr/etc counterpart (handled in Tier 1)
+        if etc_file in tier1_etc_paths:
+            continue
+
+        try:
+            rel = etc_file.relative_to(etc)
+        except ValueError:
+            continue
+
+        # Skip volatile files
+        if rel.name in _OSTREE_VOLATILE_NAMES:
+            continue
+
+        # Skip os-release (always present, not a customization)
+        if rel.name in _OSTREE_SKIP_BASENAMES:
+            continue
+
+        rel_path = str(Path("etc") / rel)
+
+        # Check RPM ownership via executor
+        if executor is not None:
+            abs_path = "/" + rel_path
+            r = _run_rpm_query(executor, host_root, ["-qf", abs_path])
+            if r.returncode == 0 and r.stdout.strip():
+                # RPM-owned — check if modified with rpm -V
+                pkg = r.stdout.strip().splitlines()[0].strip()
+                v_result = _run_rpm_query(executor, host_root, ["-V", pkg])
+                if v_result.stdout and abs_path in v_result.stdout:
+                    # Modified RPM-owned file
+                    try:
+                        content = etc_file.read_text()
+                    except (PermissionError, OSError, UnicodeDecodeError):
+                        content = ""
+                    section.files.append(ConfigFileEntry(
+                        path=rel_path,
+                        kind=ConfigFileKind.RPM_OWNED_MODIFIED,
+                        category=classify_config_path(abs_path),
+                        content=content,
+                        package=pkg,
+                    ))
+                # If rpm -V passes cleanly, it's unmodified RPM-owned — skip
+                continue
+
+        # Not RPM-owned: classify as UNOWNED (user-created)
+        try:
+            content = etc_file.read_text()
+        except (PermissionError, OSError, UnicodeDecodeError):
+            content = ""
+        section.files.append(ConfigFileEntry(
+            path=rel_path,
+            kind=ConfigFileKind.UNOWNED,
+            category=classify_config_path("/" + rel_path),
+            content=content,
+        ))
+
+    return section
+
+
 def run(
     host_root: Path,
     executor: Optional[Executor],
@@ -411,12 +625,19 @@ def run(
     rpm_owned_paths_override: Optional[Set[str]] = None,
     config_diffs: bool = False,
     warnings: Optional[list] = None,
+    system_type: SystemType = SystemType.PACKAGE_MODE,
 ) -> ConfigSection:
     """
     Run Config inspection. Requires rpm_section for rpm_va and dnf_history_removed.
     If rpm_owned_paths_override is provided (e.g. from tests), use it; else compute via executor.
     """
     host_root = Path(host_root)
+
+    # Branch early for ostree/bootc systems
+    is_ostree = system_type in (SystemType.RPM_OSTREE, SystemType.BOOTC)
+    if is_ostree:
+        return _run_ostree(host_root, executor, warnings=warnings)
+
     section = ConfigSection()
     etc = host_root / "etc"
     if not etc.exists():

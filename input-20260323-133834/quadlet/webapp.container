@@ -1,0 +1,23 @@
+[Unit]
+Description=Web Application
+After=network-online.target
+
+[Container]
+Image=registry.example.com/myorg/webapp:v2.1.3
+PublishPort=8080:8080
+PublishPort=8443:8443
+Environment=APP_ENV=production
+Environment=LOG_LEVEL=info
+# This fake secret should trigger yoinkc's redaction
+Environment=DATABASE_URL=REDACTED_POSTGRES_PASSWORD_1ec1c26bdb.internal:5432/myapp
+Volume=/var/lib/myapp/data:/app/data:Z
+Volume=/var/log/myapp:/app/logs:Z
+Network=myapp.network
+AutoUpdate=registry
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target default.target

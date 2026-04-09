@@ -30,6 +30,8 @@ complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l push-to-gith
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l github-token -r -d "GitHub personal access token"
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l public -d "Make new repo public"
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l yes -d "Skip interactive confirmation prompts"
+complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l sensitivity -r -a "strict moderate" -d "Heuristic detection sensitivity"
+complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l no-redaction -d "Disable all redaction"
 
 # inspect flags
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l host-root -r -d "Root path for host inspection"
@@ -52,6 +54,8 @@ complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l push-to-github -r
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l github-token -r -d "GitHub personal access token"
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l public -d "Make new repo public"
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l yes -d "Skip interactive confirmation prompts"
+complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l sensitivity -r -a "strict moderate" -d "Heuristic detection sensitivity"
+complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l no-redaction -d "Disable all redaction"
 
 # fleet flags
 complete -c yoinkc -n "__fish_seen_subcommand_from fleet" -s p -l min-prevalence -r -d "Include items present on >= PCT% of hosts"

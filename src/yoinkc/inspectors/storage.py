@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..executor import Executor
-from ..schema import StorageSection, FstabEntry, MountPoint, LvmVolume, VarDirectory, CredentialRef
+from ..schema import StorageSection, FstabEntry, MountPoint, LvmVolume, VarDirectory, CredentialRef, SystemType
 from .._util import safe_iterdir as _safe_iterdir
 
 
@@ -26,6 +26,11 @@ _VAR_LIB_SKIP = frozenset({
     "private", "rpm", "rpm-state", "selinux", "sss", "systemd",
     "tuned", "unbound", "tpm2-tss",
 })
+
+# ostree-managed mount points to filter from the storage inventory on
+# rpm-ostree and bootc systems.
+_OSTREE_MANAGED_MOUNTS = frozenset({"/sysroot", "/ostree", "/boot/efi"})
+_OSTREE_MOUNT_PREFIXES = ("/ostree/", "/sysroot/")
 
 
 def _scan_var_directories(host_root: Path) -> List[VarDirectory]:
@@ -114,6 +119,8 @@ def _var_recommendation(path: str, category: str) -> str:
 def run(
     host_root: Path,
     executor: Optional[Executor],
+    *,
+    system_type: SystemType = SystemType.PACKAGE_MODE,
 ) -> StorageSection:
     section = StorageSection()
     host_root = Path(host_root)
@@ -253,5 +260,13 @@ def run(
 
     # /var directory scan for data migration plan
     section.var_directories = _scan_var_directories(host_root)
+
+    # Filter ostree-managed mounts on rpm-ostree/bootc systems
+    if system_type in (SystemType.RPM_OSTREE, SystemType.BOOTC):
+        section.mount_points = [
+            m for m in section.mount_points
+            if m.target not in _OSTREE_MANAGED_MOUNTS
+            and not any(m.target.startswith(p) for p in _OSTREE_MOUNT_PREFIXES)
+        ]
 
     return section

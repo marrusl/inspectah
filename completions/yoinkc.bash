@@ -11,7 +11,8 @@ _yoinkc() {
         --from-snapshot --inspect-only --target-version --target-image
         --baseline-packages --no-baseline --user-strategy --config-diffs
         --deep-binary-scan --query-podman --skip-preflight --validate
-        --push-to-github --github-token --public --yes"
+        --push-to-github --github-token --public --yes
+        --sensitivity --no-redaction"
 
     local fleet_flags="-p --min-prevalence -o --output-file --output-dir
         --json-only --no-hosts"
@@ -52,6 +53,8 @@ _yoinkc() {
                 _filedir
             elif [[ "$prev" == --user-strategy ]]; then
                 COMPREPLY=( $(compgen -W "sysusers blueprint useradd kickstart" -- "$cur") )
+            elif [[ "$prev" == --sensitivity ]]; then
+                COMPREPLY=( $(compgen -W "strict moderate" -- "$cur") )
             fi
             ;;
         fleet)
