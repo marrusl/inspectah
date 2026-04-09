@@ -458,3 +458,61 @@ def test_cli_summary_includes_heuristic_supplement(monkeypatch):
     assert "pattern" in output.lower() or "heuristic" in output.lower()
     # Should show flagged for review count
     assert "Flagged" in output or "flagged" in output
+
+
+def test_no_redaction_warning_printed(monkeypatch):
+    """--no-redaction completion warning prints WARNING and secrets-review.md to stderr."""
+    from yoinkc.pipeline import _print_no_redaction_warning
+    from yoinkc.schema import RedactionFinding
+
+    snap = InspectionSnapshot(meta={})
+    snap.redactions = [
+        RedactionFinding(path="/etc/a.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/b.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/c.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/d.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/e.conf", source="file", kind="flagged",
+                        pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+        RedactionFinding(path="/etc/f.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="high"),
+        RedactionFinding(path="/etc/g.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="high"),
+        RedactionFinding(path="/etc/h.conf", source="file", kind="flagged",
+                        pattern="signing_key", remediation="",
+                        detection_method="heuristic", confidence="high"),
+        RedactionFinding(path="/etc/i.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+        RedactionFinding(path="/etc/j.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+        RedactionFinding(path="/etc/k.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+        RedactionFinding(path="/etc/l.conf", source="file", kind="flagged",
+                        pattern="db_pass", remediation="",
+                        detection_method="heuristic", confidence="low"),
+    ]
+
+    captured = StringIO()
+    monkeypatch.setattr(sys, "stderr", captured)
+    _print_no_redaction_warning(snap)
+    output = captured.getvalue()
+
+    assert "WARNING: Redaction was disabled for this run." in output
+    assert "5 pattern findings were NOT redacted" in output
+    assert "3 high-confidence heuristic findings were NOT redacted" in output
+    assert "4 low-confidence heuristic findings flagged" in output
+    assert "secrets-review.md" in output
+    assert "Do not share, commit, or upload" in output

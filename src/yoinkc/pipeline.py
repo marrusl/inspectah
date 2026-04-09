@@ -237,6 +237,35 @@ def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
     print("  Details: secrets-review.md | Placeholders: redacted/", file=sys.stderr)
 
 
+def _print_no_redaction_warning(snapshot: InspectionSnapshot) -> None:
+    """Print a prominent warning to stderr when --no-redaction was used."""
+    findings = [r for r in snapshot.redactions if isinstance(r, RedactionFinding)]
+    if not findings:
+        return
+
+    # Count by category
+    pattern_findings = [f for f in findings if (f.detection_method or "pattern") == "pattern"]
+    heuristic_high = [f for f in findings if f.detection_method == "heuristic" and f.confidence == "high"]
+    heuristic_low = [f for f in findings if f.detection_method == "heuristic" and f.confidence == "low"]
+
+    print("", file=sys.stderr)
+    print("WARNING: Redaction was disabled for this run.", file=sys.stderr)
+    print("Output may contain passwords, tokens, API keys, and other secrets.", file=sys.stderr)
+    print("", file=sys.stderr)
+    if pattern_findings:
+        n = len(pattern_findings)
+        print(f"  {n} pattern finding{'s' if n != 1 else ''} were NOT redacted", file=sys.stderr)
+    if heuristic_high:
+        n = len(heuristic_high)
+        print(f"  {n} high-confidence heuristic finding{'s' if n != 1 else ''} were NOT redacted", file=sys.stderr)
+    if heuristic_low:
+        n = len(heuristic_low)
+        print(f"  {n} low-confidence heuristic finding{'s' if n != 1 else ''} flagged", file=sys.stderr)
+    print("", file=sys.stderr)
+    print("See secrets-review.md for the full list of detected secrets.", file=sys.stderr)
+    print("Do not share, commit, or upload this output without manual review.", file=sys.stderr)
+
+
 def run_pipeline(
     *,
     host_root: Path,
@@ -312,6 +341,8 @@ def run_pipeline(
         save_snapshot(snapshot, tmp_dir / "inspection-snapshot.json")
         run_renderers(snapshot, tmp_dir)
         _print_secrets_summary(snapshot)
+        if no_redaction:
+            _print_no_redaction_warning(snapshot)
 
         # Bundle subscription certs (skip in --from-snapshot mode where
         # host filesystem may not be mounted)
