@@ -172,6 +172,7 @@ def _redact_shadow_entry(
         pattern="SHADOW_HASH",
         remediation="value-removed",
         replacement=replacement,
+        detection_method="pattern",
     ))
     fields[1] = replacement
     return ":".join(fields)
@@ -224,6 +225,7 @@ def _redact_text(
                 remediation="value-removed",
                 replacement=replacement,
                 line=line_num,
+                detection_method="pattern",
             ))
         # Apply in reverse so earlier positions stay valid.
         for start, end, replacement in reversed(spans):
@@ -286,6 +288,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                         kind="excluded",
                         pattern="EXCLUDED_PATH",
                         remediation=_remediation_for_excluded(entry.path),
+                        detection_method="excluded_path",
                     ))
                 new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
@@ -482,6 +485,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                         kind="excluded",
                         pattern="EXCLUDED_PATH",
                         remediation=_remediation_for_excluded(entry.path),
+                        detection_method="excluded_path",
                     ))
                 new_env_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue

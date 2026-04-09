@@ -1115,6 +1115,56 @@ def test_container_env_finding_has_no_line():
 # Finding 3: scan_directory_for_secrets skips REDACTED_ placeholders
 # ---------------------------------------------------------------------------
 
+def test_pattern_findings_have_detection_method_pattern():
+    """All inline pattern findings have detection_method='pattern'."""
+    content = "password=hunter2\ntoken=abc12345678901234567890\n"
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind=ConfigFileKind.UNOWNED,
+                          content=content, include=True),
+        ]),
+    )
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
+    for f in findings:
+        assert f.detection_method == "pattern", f"Finding {f.path} has detection_method={f.detection_method}"
+        assert f.confidence is None, f"Pattern findings should have confidence=None"
+
+
+def test_excluded_path_findings_have_detection_method_excluded_path():
+    """Excluded path findings have detection_method='excluded_path'."""
+    snapshot = _base_snapshot(
+        config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/shadow", kind=ConfigFileKind.UNOWNED,
+                          content="root:hash:...", include=True),
+        ]),
+    )
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
+    assert len(findings) >= 1
+    excluded = [f for f in findings if f.kind == "excluded"]
+    assert len(excluded) >= 1
+    for f in excluded:
+        assert f.detection_method == "excluded_path"
+        assert f.confidence is None
+
+
+def test_shadow_findings_have_detection_method_pattern():
+    """Shadow hash findings have detection_method='pattern'."""
+    snapshot = _base_snapshot(
+        users_groups=UserGroupSection(
+            shadow_entries=["jdoe:$y$j9T$abc$hash:19700:0:99999:7:::"],
+        ),
+    )
+    result = redact_snapshot(snapshot)
+    findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
+    shadow = [f for f in findings if f.source == "shadow"]
+    assert len(shadow) >= 1
+    for f in shadow:
+        assert f.detection_method == "pattern"
+        assert f.confidence is None
+
+
 def test_scan_directory_ignores_redacted_placeholders(tmp_path):
     """scan_directory_for_secrets skips REDACTED_ placeholder values."""
     from yoinkc.redact import scan_directory_for_secrets
