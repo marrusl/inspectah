@@ -5,6 +5,7 @@ Strongly typed contract between inspectors and renderers.
 All inspectors produce data that fits into this schema; all renderers consume it.
 """
 
+import warnings
 from enum import Enum
 from typing import Dict, List, Optional, Union
 
@@ -637,7 +638,11 @@ class InspectionSnapshot(BaseModel):
             if isinstance(item, dict) and "source" in item and "kind" in item:
                 try:
                     result.append(RedactionFinding(**item))
-                except Exception:
+                except Exception as exc:
+                    warnings.warn(
+                        f"Failed to coerce redaction dict to RedactionFinding: {exc}",
+                        stacklevel=2,
+                    )
                     result.append(item)
             else:
                 result.append(item)

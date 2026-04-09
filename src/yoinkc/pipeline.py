@@ -59,6 +59,9 @@ def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
     if inline:
         n = len(inline)
         print(f"  Inline-redacted: {n} value{'s' if n != 1 else ''} in {inline_files} file{'s' if inline_files != 1 else ''}", file=sys.stderr)
+    legacy = [r for r in snapshot.redactions if not isinstance(r, RedactionFinding)]
+    if legacy:
+        print(f"  Legacy (untyped): {len(legacy)} entries", file=sys.stderr)
     print("  Details: secrets-review.md | Placeholders: redacted/", file=sys.stderr)
 
 

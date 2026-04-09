@@ -917,3 +917,27 @@ def test_key_only_file_excluded():
     ]))
     result = redact_snapshot(snapshot)
     assert result.config.files[0].include is False
+
+
+# ---------------------------------------------------------------------------
+# Coercion fallback warning
+# ---------------------------------------------------------------------------
+
+def test_malformed_near_typed_dict_warns(tmp_path):
+    """A dict that looks typed but fails validation produces a warning."""
+    import warnings
+    from yoinkc.pipeline import save_snapshot, load_snapshot
+
+    snapshot = InspectionSnapshot(meta={"hostname": "test"})
+    snapshot.redactions = [
+        {"source": "file", "kind": "excluded", "pattern": "TEST", "path": "/test",
+         "remediation": "provision", "line": "not-an-int"},  # line should be int or None
+    ]
+    snapshot_path = tmp_path / "inspection-snapshot.json"
+    save_snapshot(snapshot, snapshot_path)
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        loaded = load_snapshot(snapshot_path)
+    assert len(w) >= 1
+    assert "Failed to coerce" in str(w[0].message)
+    assert isinstance(loaded.redactions[0], dict)  # fell back to dict
