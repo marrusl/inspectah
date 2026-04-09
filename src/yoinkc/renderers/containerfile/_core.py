@@ -4,7 +4,7 @@ from pathlib import Path
 
 from jinja2 import Environment
 
-from ...schema import InspectionSnapshot
+from ...schema import InspectionSnapshot, RedactionFinding
 from ._helpers import _base_image_from_snapshot, _dhcp_connection_paths
 from ._config_tree import write_config_tree
 from . import (
@@ -55,6 +55,51 @@ def _validate_lines() -> list[str]:
     ]
 
 
+def _secrets_comment_lines(snapshot: InspectionSnapshot) -> list[str]:
+    """Generate Containerfile comment blocks for redacted secrets.
+
+    Only file-backed findings appear here. Non-file-backed findings
+    (shadow, container-env, timer-cmd) appear only in secrets-review.md.
+    """
+    excluded = [r for r in snapshot.redactions
+                if isinstance(r, RedactionFinding) and r.kind == "excluded" and r.source == "file"]
+    inline = [r for r in snapshot.redactions
+              if isinstance(r, RedactionFinding) and r.kind == "inline" and r.source == "file"]
+
+    if not excluded and not inline:
+        return []
+
+    lines: list[str] = []
+
+    if excluded:
+        lines.append("# === Excluded secrets (not in this image) ===")
+        lines.append("# These files were detected on the source system but excluded from the")
+        lines.append("# image. See redacted/ directory for details.")
+        lines.append("#")
+        regenerate = [r for r in excluded if r.remediation == "regenerate"]
+        provision = [r for r in excluded if r.remediation == "provision"]
+        if regenerate:
+            lines.append("# Regenerate on target (auto-generated, no action needed):")
+            for r in regenerate:
+                lines.append(f"#   {r.path}")
+        if provision:
+            lines.append("# Provision from secret store:")
+            for r in provision:
+                lines.append(f"#   {r.path}")
+        lines.append("")
+
+    if inline:
+        lines.append("# === Inline-redacted values ===")
+        lines.append("# These files ARE in the image but have secret values replaced with")
+        lines.append("# placeholders. Supply actual values at deploy time.")
+        lines.append("#")
+        for r in inline:
+            lines.append(f"#   {r.path} — {r.pattern} ({r.replacement})")
+        lines.append("")
+
+    return lines
+
+
 def _render_containerfile_content(
     snapshot: InspectionSnapshot, output_dir: Path
 ) -> str:
@@ -85,6 +130,9 @@ def _render_containerfile_content(
     lines += kernel_boot.section_lines(snapshot)
     lines += selinux.section_lines(snapshot)
     lines += network.section_lines(snapshot, firewall_only=False)
+
+    # Secrets comment blocks (file-backed findings only)
+    lines += _secrets_comment_lines(snapshot)
 
     # Epilogue
     lines += _tmpfiles_lines()
