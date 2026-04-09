@@ -203,13 +203,20 @@ def _deduplicate_dicts(
     return result
 
 
-def _deduplicate_warning_dicts(all_lists: list[list[dict]]) -> list[dict]:
-    """Deduplicate warning/redaction dicts by (source, message) tuple."""
+def _deduplicate_warning_dicts(all_lists: list[list]) -> list:
+    """Deduplicate warning/redaction items by identity key.
+
+    Supports both plain dicts (warnings) and RedactionFinding objects (redactions).
+    """
     seen = set()
     result = []
     for items in all_lists:
         for item in items:
-            key = (item.get("source", ""), item.get("message", ""))
+            if isinstance(item, dict):
+                key = (item.get("source", ""), item.get("message", ""))
+            else:
+                # RedactionFinding — key on (path, pattern, source)
+                key = (getattr(item, "path", ""), getattr(item, "pattern", ""), getattr(item, "source", ""))
             if key not in seen:
                 seen.add(key)
                 result.append(item)
