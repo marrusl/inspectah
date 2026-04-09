@@ -1,5 +1,7 @@
 """Tests for redact_snapshot — extended section scanning."""
 
+import pytest
+
 from yoinkc.redact import redact_snapshot, _redact_text, _is_excluded_path
 from yoinkc.schema import (
     InspectionSnapshot,
@@ -1205,3 +1207,143 @@ def test_line_number_correct_after_multipass_redaction():
         assert pw[0].line == 2, f"PASSWORD should be line 2, got {pw[0].line}"
     if ak:
         assert ak[0].line == 4, f"API_KEY should be line 4, got {ak[0].line}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3 (heuristic safety net): Vendor token pattern tests
+# ---------------------------------------------------------------------------
+
+def _has_finding(text: str, expected_label: str) -> bool:
+    """Helper: returns True if _redact_text produces a finding with the expected label."""
+    redactions = []
+    _redact_text(text, "test/vendor", redactions)
+    return any(
+        (r.pattern if isinstance(r, RedactionFinding) else r.get("pattern")) == expected_label
+        for r in redactions
+    )
+
+
+@pytest.mark.parametrize("token", [
+    "sk_live_" + "a" * 24,
+    "sk_test_" + "B" * 30,
+    "rk_live_" + "c1D2e3F4G5" + "x" * 10,
+    "rk_test_" + "z" * 50,
+])
+def test_stripe_key_pattern(token):
+    assert _has_finding(token, "STRIPE_KEY"), f"Should detect Stripe key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk_something_else_" + "a" * 24,   # wrong prefix after sk_
+    "sk_live_" + "a" * 5,               # too short (< 10 chars after prefix)
+])
+def test_stripe_key_pattern_negative(token):
+    assert not _has_finding(token, "STRIPE_KEY"), f"Should NOT detect as Stripe key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-ant-api03-" + "a" * 93,
+    "sk-ant-admin01-" + "B" * 80,
+    "sk-ant-api03-" + "a1_-" * 25,
+])
+def test_anthropic_key_pattern(token):
+    assert _has_finding(token, "ANTHROPIC_KEY"), f"Should detect Anthropic key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-ant-api03-" + "a" * 10,         # too short (< 80 chars)
+    "sk-ant-wrong01-" + "a" * 80,       # wrong sub-prefix
+    "sk-ant-" + "a" * 80,               # missing sub-prefix
+])
+def test_anthropic_key_pattern_negative(token):
+    assert not _has_finding(token, "ANTHROPIC_KEY"), f"Should NOT detect as Anthropic key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-proj-" + "a" * 40,
+    "sk-svcacct-" + "B" * 20,
+    "sk-admin-" + "Z1_" * 10,
+])
+def test_openai_key_pattern(token):
+    assert _has_finding(token, "OPENAI_KEY"), f"Should detect OpenAI key: {token}"
+
+
+@pytest.mark.parametrize("token", [
+    "sk-proj-" + "a" * 5,               # too short (< 20 chars)
+    "sk-other-" + "a" * 40,             # wrong sub-prefix
+])
+def test_openai_key_pattern_negative(token):
+    assert not _has_finding(token, "OPENAI_KEY"), f"Should NOT detect as OpenAI key: {token}"
+
+
+@pytest.mark.parametrize("token,expected_label", [
+    # AWS temp session keys
+    ("ASIA" + "A" * 16, "AWS_TEMP_KEY"),
+    ("ABIA" + "B" * 16, "AWS_TEMP_KEY"),
+    ("ACCA" + "C" * 16, "AWS_TEMP_KEY"),
+    # GitHub fine-grained PAT
+    ("github_pat_" + "a" * 40, "GITHUB_TOKEN"),
+    # GitHub app installation
+    ("ghs_" + "a" * 36, "GITHUB_TOKEN"),
+    # GitHub OAuth
+    ("gho_" + "a" * 36, "GITHUB_TOKEN"),
+    # OpenShift
+    ("sha256~" + "a" * 43, "OPENSHIFT_TOKEN"),
+    # Vault service
+    ("hvs." + "a" * 24, "VAULT_TOKEN"),
+    ("hvs." + "a" * 50, "VAULT_TOKEN"),
+    # Vault batch
+    ("hvb." + "a" * 140, "VAULT_TOKEN"),
+    # GitLab
+    ("glpat-" + "a" * 20, "GITLAB_TOKEN"),
+    ("glrt-" + "a" * 20, "GITLAB_TOKEN"),
+    ("gldt-" + "a" * 20, "GITLAB_TOKEN"),
+    ("glptt-" + "a" * 40, "GITLAB_TOKEN"),
+    # Slack
+    ("xoxb-" + "a" * 30, "SLACK_TOKEN"),
+    ("xoxp-" + "a" * 24, "SLACK_TOKEN"),
+    # SendGrid
+    ("SG." + "a" * 22, "SENDGRID_KEY"),
+    # Databricks
+    ("dapi" + "a" * 32, "DATABRICKS_TOKEN"),
+    # Atlassian
+    ("ATATT3" + "a" * 186, "ATLASSIAN_TOKEN"),
+    # Artifactory
+    ("AKCp" + "a" * 69, "ARTIFACTORY_KEY"),
+    # Alibaba
+    ("LTAI" + "a" * 20, "ALIBABA_KEY"),
+    # npm
+    ("npm_" + "a" * 36, "NPM_TOKEN"),
+    # PyPI
+    ("pypi-AgEIcHlwaS5vcmc" + "a" * 50, "PYPI_TOKEN"),
+    # RubyGems
+    ("rubygems_" + "a" * 48, "RUBYGEMS_TOKEN"),
+    # age
+    ("AGE-SECRET-KEY-1" + "q" * 58, "AGE_KEY"),
+])
+def test_tier1_vendor_pattern(token, expected_label):
+    assert _has_finding(token, expected_label), f"Should detect {expected_label}: {token[:30]}..."
+
+
+@pytest.mark.parametrize("token,label", [
+    ("ASIA" + "A" * 5, "AWS_TEMP_KEY"),            # too short
+    ("github_pat_" + "a" * 10, "GITHUB_TOKEN"),     # too short
+    ("ghs_" + "a" * 5, "GITHUB_TOKEN"),             # too short
+    ("gho_" + "a" * 5, "GITHUB_TOKEN"),             # too short
+    ("sha256~" + "a" * 10, "OPENSHIFT_TOKEN"),      # too short
+    ("hvs." + "a" * 5, "VAULT_TOKEN"),              # too short
+    ("hvb." + "a" * 10, "VAULT_TOKEN"),             # too short
+    ("glpat-" + "a" * 5, "GITLAB_TOKEN"),           # too short
+    ("xoxb-" + "a" * 5, "SLACK_TOKEN"),             # too short
+    ("SG." + "a" * 5, "SENDGRID_KEY"),              # too short
+    ("dapi" + "a" * 5, "DATABRICKS_TOKEN"),         # too short
+    ("ATATT3" + "a" * 10, "ATLASSIAN_TOKEN"),       # too short
+    ("AKCp" + "a" * 10, "ARTIFACTORY_KEY"),         # too short
+    ("LTAI" + "a" * 5, "ALIBABA_KEY"),              # too short
+    ("npm_" + "a" * 5, "NPM_TOKEN"),                # too short
+    ("pypi-AgEIcHlwaS5vcmc" + "a" * 5, "PYPI_TOKEN"),  # too short
+    ("rubygems_" + "a" * 5, "RUBYGEMS_TOKEN"),      # too short
+    ("AGE-SECRET-KEY-1" + "q" * 10, "AGE_KEY"),     # too short
+])
+def test_tier1_vendor_pattern_negative(token, label):
+    assert not _has_finding(token, label), f"Should NOT detect {label}: {token[:30]}..."
