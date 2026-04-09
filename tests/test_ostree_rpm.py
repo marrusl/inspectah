@@ -256,3 +256,35 @@ class TestRpmOstreeStatusFailure:
         )
         assert section.ostree_overrides == []
         assert section.ostree_removals == []
+
+
+class TestPureBootcLowConfidenceFallback:
+    """On BOOTC systems without rpm-ostree, emit low-confidence warning."""
+
+    def test_pure_bootc_without_rpmostree_emits_warning(self):
+        """On BOOTC when rpm-ostree is absent, emits low-confidence warning."""
+        spy = OstreeExecutorSpy(rpmostree_rc=127)  # command not found
+        warnings = []
+        section = run_rpm(
+            Path("/fake-root"),
+            spy,
+            system_type=SystemType.BOOTC,
+            warnings=warnings,
+        )
+        warning_msgs = [w.get("message", "") if isinstance(w, dict) else str(w) for w in warnings]
+        assert any("approximate" in m.lower() for m in warning_msgs), \
+            f"Expected low-confidence warning, got: {warning_msgs}"
+        assert section.rpm_va == []
+
+    def test_rpm_ostree_no_warning_when_available(self):
+        """On RPM_OSTREE when rpm-ostree succeeds, no low-confidence warning."""
+        spy = OstreeExecutorSpy()
+        warnings = []
+        section = run_rpm(
+            Path("/fake-root"),
+            spy,
+            system_type=SystemType.RPM_OSTREE,
+            warnings=warnings,
+        )
+        warning_msgs = [w.get("message", "") if isinstance(w, dict) else str(w) for w in warnings]
+        assert not any("approximate" in m.lower() for m in warning_msgs)

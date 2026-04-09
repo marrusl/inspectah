@@ -535,7 +535,12 @@ def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional
     return removed
 
 
-def _parse_rpmostree_package_state(executor: Executor, section: "RpmSection") -> None:
+def _parse_rpmostree_package_state(
+    executor: Executor,
+    section: "RpmSection",
+    warnings: Optional[list] = None,
+    system_type: SystemType = SystemType.PACKAGE_MODE,
+) -> None:
     """Parse rpm-ostree status --json for layered, removed, and overridden packages.
 
     Mutates *section* in place:
@@ -549,6 +554,14 @@ def _parse_rpmostree_package_state(executor: Executor, section: "RpmSection") ->
     result = executor(["rpm-ostree", "status", "--json"])
     if result.returncode != 0:
         _debug(f"rpm-ostree status failed (rc={result.returncode}), skipping ostree package state")
+        if system_type == SystemType.BOOTC and warnings is not None:
+            warnings.append(make_warning(
+                "rpm",
+                "Package diff is approximate -- rpm-ostree status is not available on this bootc system. "
+                "Package detection used rpm -qa against the base image, which may differ due to tag drift "
+                "or NVR skew. Results require manual review.",
+                "warning",
+            ))
         return
 
     try:
@@ -1182,7 +1195,7 @@ def run(
 
     # 3b) rpm-ostree package state (layered, removed, overridden)
     if system_type != SystemType.PACKAGE_MODE and executor is not None:
-        _parse_rpmostree_package_state(executor, section)
+        _parse_rpmostree_package_state(executor, section, warnings=warnings, system_type=system_type)
 
     # 4) Leaf/auto package classification
     if executor is not None and section.packages_added and not section.no_baseline:
