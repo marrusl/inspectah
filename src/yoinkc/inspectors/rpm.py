@@ -3,6 +3,7 @@ RPM inspector: package list, rpm -Va, repo files, dnf history removed.
 Baseline is the target bootc base image package list (or --baseline-packages file).
 """
 
+import json
 import os
 import re
 from pathlib import Path
@@ -19,11 +20,13 @@ from ..baseline import BaselineResolver, load_baseline_packages_file
 from ..executor import Executor
 from ..schema import (
     EnabledModuleStream,
+    OstreePackageOverride,
     PackageEntry,
     PackageState,
     RepoFile,
     RpmSection,
     RpmVaEntry,
+    SystemType,
     VersionLockEntry,
 )
 
@@ -532,6 +535,73 @@ def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional
     return removed
 
 
+def _parse_rpmostree_package_state(executor: Executor, section: "RpmSection") -> None:
+    """Parse rpm-ostree status --json for layered, removed, and overridden packages.
+
+    Mutates *section* in place:
+    - requested-packages → section.packages_added (as PackageEntry with name only,
+      skipping names already present)
+    - base-removals → section.ostree_removals
+    - base-local-replacements → section.ostree_overrides (as OstreePackageOverride)
+
+    Only the booted deployment is inspected.
+    """
+    result = executor(["rpm-ostree", "status", "--json"])
+    if result.returncode != 0:
+        _debug(f"rpm-ostree status failed (rc={result.returncode}), skipping ostree package state")
+        return
+
+    try:
+        data = json.loads(result.stdout)
+    except (json.JSONDecodeError, ValueError) as exc:
+        _debug(f"rpm-ostree status returned invalid JSON: {exc}")
+        return
+
+    deployments = data.get("deployments", [])
+    booted = None
+    for dep in deployments:
+        if dep.get("booted"):
+            booted = dep
+            break
+    if booted is None:
+        _debug("no booted deployment found in rpm-ostree status")
+        return
+
+    # Layered packages
+    existing_names = {p.name for p in section.packages_added}
+    for pkg_name in booted.get("requested-packages", []):
+        if pkg_name not in existing_names:
+            section.packages_added.append(PackageEntry(
+                name=pkg_name,
+                epoch="0",
+                version="",
+                release="",
+                arch="noarch",
+                state=PackageState.ADDED,
+            ))
+            existing_names.add(pkg_name)
+
+    # Removed packages
+    for removal in booted.get("base-removals", []):
+        name = removal.get("name", "")
+        if name:
+            section.ostree_removals.append(name)
+
+    # Overridden packages
+    for replacement in booted.get("base-local-replacements", []):
+        name = replacement.get("name", "")
+        if name:
+            section.ostree_overrides.append(OstreePackageOverride(
+                name=name,
+                to_nevra=replacement.get("nevra", ""),
+                from_nevra=replacement.get("base-nevra", ""),
+            ))
+
+    _debug(f"rpm-ostree state: {len(booted.get('requested-packages', []))} layered, "
+           f"{len(section.ostree_removals)} removals, "
+           f"{len(section.ostree_overrides)} overrides")
+
+
 def _parse_module_ini(text: str) -> Dict[str, str]:
     """Parse concatenated module INI text and return ``{module_name: stream}``
     for sections whose state is ``enabled`` or ``installed``.
@@ -891,6 +961,7 @@ def run(
     target_version: Optional[str] = None,
     target_image: Optional[str] = None,
     preflight_baseline: Optional[Tuple[Optional[Dict[str, "PackageEntry"]], Optional[str], bool]] = None,
+    system_type: SystemType = SystemType.PACKAGE_MODE,
 ) -> RpmSection:
     """Run RPM inspection.
 
@@ -1089,7 +1160,11 @@ def run(
     #    database lives.  Both are needed when the container's rpm binary uses
     #    a different default dbpath than the host (Fedora uses
     #    /usr/lib/sysimage/rpm, RHEL 9 uses /var/lib/rpm).
-    if executor is not None:
+    #    SKIP on ostree/bootc: rpm -Va floods false positives on immutable /usr.
+    if system_type != SystemType.PACKAGE_MODE:
+        _debug("skipping rpm -Va on ostree/bootc system (immutable /usr)")
+        section.rpm_va = []
+    elif executor is not None:
         if str(host_root) == "/":
             cmd_va = ["rpm", "-Va", "--nodeps", "--noscripts"]
         else:
@@ -1104,6 +1179,10 @@ def run(
         section.rpm_va = _parse_rpm_va(result_va.stdout)
     else:
         section.rpm_va = []
+
+    # 3b) rpm-ostree package state (layered, removed, overridden)
+    if system_type != SystemType.PACKAGE_MODE and executor is not None:
+        _parse_rpmostree_package_state(executor, section)
 
     # 4) Leaf/auto package classification
     if executor is not None and section.packages_added and not section.no_baseline:

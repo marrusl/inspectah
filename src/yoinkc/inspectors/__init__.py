@@ -354,6 +354,7 @@ def run_all(
             target_version=target_version,
             target_image=target_image,
             preflight_baseline=preflight_baseline,
+            system_type=system_type,
         )
     snapshot.rpm = _safe_run("rpm", _run_rpm_inspector, None, w)
 
