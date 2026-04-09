@@ -291,4 +291,23 @@ def section_lines(
             lines.append("# See audit-report.md for full package list")
         lines.append("")
 
+    # ostree package overrides (rpm-ostree override replace)
+    if rpm and rpm.ostree_overrides:
+        lines.append("# === Package Overrides (from rpm-ostree) ===")
+        lines.append("# These packages were overridden on the source system.")
+        for ovr in sorted(rpm.ostree_overrides, key=lambda o: o.name):
+            lines.append(f"# Override: {ovr.name}  base: {ovr.from_nevra} -> {ovr.to_nevra}")
+        lines.append("")
+
+    # ostree removed packages (rpm-ostree override remove)
+    if rpm and rpm.ostree_removals:
+        lines.append("# === Removed Packages (from rpm-ostree) ===")
+        removals = sorted(rpm.ostree_removals)
+        lines.append("RUN dnf remove -y \\")
+        for name in removals[:-1]:
+            lines.append(f"    {name} \\")
+        lines.append(f"    {removals[-1]} \\")
+        lines.append("    || true  # Some packages may not be in base image")
+        lines.append("")
+
     return lines
