@@ -43,9 +43,9 @@ When normalized variants collapse during merge, `_merge_content_items()` retains
 
 When variants tie on `fleet.count` after normalization, pick a winner deterministically. The tiebreak procedure:
 
-1. Sort tied variants by the full SHA-256 hex digest of raw content (lexicographic, ascending).
+1. Sort tied variants by the full SHA-256 hex digest used for variant grouping (lexicographic, ascending). For most item types this is the SHA-256 of raw content. For compose files it is the SHA-256 of the serialized sorted `(service, image)` tuple list (matching the `variant_fn` in `merge.py`).
 2. The first variant in sorted order wins.
-3. For 3+ variants tied at the max count (e.g., 3 variants all at count 2), the same rule applies: all tied-at-max variants are sorted by full SHA-256 digest, and the first one wins. The remaining N-1 tied variants stay `include=False`.
+3. For 3+ variants tied at the max count (e.g., 3 variants all at count 2), the same rule applies: all tied-at-max variants are sorted by their variant digest, and the first one wins. The remaining N-1 tied variants stay `include=False`.
 
 **Hash implementation note:** `_content_hash()` currently truncates to 16 hex chars (`merge.py:25-26`). The tiebreaker must use the full 64-character SHA-256 digest for sort comparison to avoid collisions in the tiebreak order. The implementation should either: (a) change `_content_hash()` to return the full digest (used for both variant grouping and tiebreak sort), or (b) compute a separate full digest at tiebreak time. Option (a) is preferred since the truncated hash provides no meaningful performance benefit and the full digest eliminates collision risk for variant grouping as well.
 
@@ -53,7 +53,7 @@ Properties:
 
 - Stable across runs (same input always picks the same winner)
 - Host-order-independent (result does not depend on scan order)
-- Reproducible (any user can verify the pick by computing SHA-256 of the raw content)
+- Reproducible (any user can verify the pick by computing the same per-type digest: SHA-256 of raw content for most items, SHA-256 of the sorted `(service, image)` tuple list for compose files)
 
 The picked variant gets `include=True`. Remaining tied variants stay `include=False`.
 
@@ -119,6 +119,8 @@ Files requiring changes:
 | `renderers/html_report.py` (lines 688-725) | Counts ties by looking for groups with no `include=True` variant | Count ties by checking for `tie=True` on any variant in the group. Separate auto-resolved ties (has `tie_winner=True`) from unresolved ties (no variant has `include=True`). |
 | `templates/report/_services.html.j2` | If it mirrors `_config.html.j2` variant group logic for drop-ins | Apply same `tie`/`tie_winner` flag pattern. |
 | `templates/report/_containers.html.j2` | If it mirrors variant group logic for quadlets/compose | Apply same `tie`/`tie_winner` flag pattern. |
+| `templates/report/_js.html.j2` | Client-side tie/variant toggle logic | Update JS tie-state checks to use `tie`/`tie_winner` data attributes instead of inferring from `include`. Ensure tie badge rendering and interactive variant toggling stay in sync with Jinja-side changes. |
+| `templates/report/_editor_js.html.j2` | Editor/refine JS logic for variant selection | Update any tie-aware editor behavior (e.g., comparison view defaults, auto-selected label) to use the new model flags. |
 
 ### Refine UI
 
@@ -192,6 +194,8 @@ Multiple renderers currently only see `include=False` -- they cannot distinguish
 | HTML report — summary template | `src/yoinkc/templates/report/_summary.html.j2` | 47-53 | Distinguish auto-resolved from unresolved ties |
 | HTML report — services template | `src/yoinkc/templates/report/_services.html.j2` | variant group logic | Apply `tie`/`tie_winner` pattern for drop-ins |
 | HTML report — containers template | `src/yoinkc/templates/report/_containers.html.j2` | variant group logic | Apply `tie`/`tie_winner` pattern for quadlets/compose |
+| HTML report — client JS | `src/yoinkc/templates/report/_js.html.j2` | Client-side tie/variant toggle logic | Update tie-state checks to use `tie`/`tie_winner` data attributes |
+| HTML report — editor JS | `src/yoinkc/templates/report/_editor_js.html.j2` | Editor/refine JS logic | Update tie-aware editor behavior to use new model flags |
 | Audit report | `src/yoinkc/renderers/audit_report.py` | `[EXCLUDED]` labels | Add `[TIE LOSER]` label with precedence rules |
 | Readme artifacts | `src/yoinkc/renderers/readme.py` | artifacts table (~133-141) | Add `merge-notes.md` row for fleet merges |
 | Refine label | `src/yoinkc/refine.py` | UI rendering | Add "(auto-selected: tied)" label |
@@ -216,7 +220,9 @@ Tests must cover three boundaries (per review analysis):
 
 7. **Audit report disambiguation test:** Given a snapshot with a tie loser, a below-threshold item, and a redacted item, assert the audit report labels them `[TIE LOSER]`, `[EXCLUDED]`, and `[REDACTED]` respectively.
 
-8. **Readme artifacts test:** Assert `merge-notes.md` appears in the artifacts table for fleet merges and is absent for single-host renders.
+8. **Redaction × tie winner precedence test:** Given a config file that is both the tie winner (`tie=True, tie_winner=True`) AND redacted (path appears in `snapshot.redactions` with `kind=excluded`), assert the audit report labels it `[REDACTED]`, not as a tie winner. Redaction takes precedence per the renderer precedence rules in the Audit Report Disambiguation section.
+
+9. **Readme artifacts test:** Assert `merge-notes.md` appears in the artifacts table for fleet merges and is absent for single-host renders.
 
 ## Out of Scope
 
