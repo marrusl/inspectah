@@ -23,6 +23,12 @@ EXCLUDED_PATHS = (
     r"/etc/pki/.*\.key",
     r".*\.key$",
     r".*keytab$",
+    # v2 additions
+    r".*\.p12$",
+    r".*\.pfx$",
+    r".*\.jks$",
+    r"/etc/cockpit/ws-certs\.d/.*",
+    r"/etc/containers/auth\.json",
 )
 
 # (pattern, type_label). Order matters: more specific first.
@@ -42,6 +48,12 @@ REDACT_PATTERNS: List[Tuple[str, str]] = [
     (r"(?i)postgres(ql)?://[^:]+:([^@\s]+)@", "POSTGRES_PASSWORD"),
     (r"(?i)mongodb(\+srv)?://[^:]+:([^@\s]+)@", "MONGODB_PASSWORD"),
     (r"(?i)redis://[^:]*:([^@\s]+)@", "REDIS_PASSWORD"),
+    # WireGuard private key (bare base64, not PEM-wrapped)
+    # group(1)=assignment prefix, group(2)=key value
+    (r"(PrivateKey\s*=\s*)([A-Za-z0-9+/]{43}=)", "WIREGUARD_KEY"),
+    # WiFi PSK in NetworkManager connections
+    # group(1)=assignment prefix, group(2)=psk value
+    (r"(psk\s*=\s*)(\S+)", "WIFI_PSK"),
 ]
 
 
@@ -125,6 +137,13 @@ def _redact_text(text: str, path: str, redactions: List[dict]) -> str:
                 if type_label == "PASSWORD" and sub.strip().lower() in _FALSE_POSITIVE_VALUES:
                     continue
                 replacement = f"REDACTED_{type_label}_{_truncated_sha256(sub)}"
+                # Preserve the prefix (group 1) when it captures the
+                # assignment syntax (contains = or :).  Patterns like
+                # WIREGUARD_KEY and WIFI_PSK capture "PrivateKey = " or
+                # "psk=" as group(1) so the output keeps the key name.
+                prefix = m.group(1) if m.lastindex and m.lastindex >= 2 else None
+                if prefix and ("=" in prefix or ":" in prefix):
+                    replacement = prefix + replacement
             spans.append((m.start(), m.end(), replacement))
             redactions.append({
                 "path": path,
@@ -187,7 +206,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                         "line": "entire file",
                         "remediation": "File not included; handle credentials manually (e.g. systemd credential, secret store).",
                     })
-                new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER}))
+                new_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
             new_content = _redact_text(entry.content or "", entry.path, redactions)
             new_diff = _redact_text(
@@ -366,7 +385,7 @@ def redact_snapshot(snapshot: InspectionSnapshot) -> InspectionSnapshot:
                         "line": "entire file",
                         "remediation": "File not included; handle credentials manually.",
                     })
-                new_env_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER}))
+                new_env_files.append(entry.model_copy(update={"content": _EXCLUDED_PLACEHOLDER, "include": False}))
                 continue
             new_content = _redact_text(entry.content or "", entry.path, redactions)
             if new_content != (entry.content or ""):

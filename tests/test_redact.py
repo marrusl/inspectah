@@ -4,6 +4,7 @@ from yoinkc.redact import redact_snapshot, _redact_text, _is_excluded_path
 from yoinkc.schema import (
     InspectionSnapshot,
     RedactionFinding,
+    ConfigSection, ConfigFileEntry, ConfigFileKind,
     NetworkSection, FirewallZone,
     ContainerSection, QuadletUnit, RunningContainer,
     ScheduledTaskSection, GeneratedTimerUnit, SystemdTimer,
@@ -493,3 +494,85 @@ def test_redaction_finding_survives_save_load_roundtrip(tmp_path):
     assert len(excluded) == 1
     inline = [r for r in typed_findings if r.kind == "inline"]
     assert len(inline) == 2
+
+
+# ---------------------------------------------------------------------------
+# Task 2: New EXCLUDED_PATHS detection
+# ---------------------------------------------------------------------------
+
+def test_p12_keystore_excluded():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/tls/private/server.p12", kind=ConfigFileKind.UNOWNED, content="binary-data", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert result.config.files[0].include is False
+
+
+def test_pfx_keystore_excluded():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/tls/private/server.pfx", kind=ConfigFileKind.UNOWNED, content="binary-data", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert result.config.files[0].include is False
+
+
+def test_jks_keystore_excluded():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/java/cacerts.jks", kind=ConfigFileKind.UNOWNED, content="binary-data", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert result.config.files[0].include is False
+
+
+def test_cockpit_ws_certs_excluded():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/cockpit/ws-certs.d/0-self-signed.key", kind=ConfigFileKind.UNOWNED, content="key-data", include=True),
+        ConfigFileEntry(path="/etc/cockpit/ws-certs.d/0-self-signed.cert", kind=ConfigFileKind.UNOWNED, content="cert-data", include=True),
+        ConfigFileEntry(path="/etc/cockpit/ws-certs.d/0-self-signed-ca.pem", kind=ConfigFileKind.UNOWNED, content="ca-data", include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert all(f.include is False for f in result.config.files)
+
+
+def test_containers_auth_json_excluded():
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/containers/auth.json", kind=ConfigFileKind.UNOWNED, content='{"auths":{}}', include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    assert result.config.files[0].include is False
+
+
+# ---------------------------------------------------------------------------
+# Task 2: New REDACT_PATTERNS — WireGuard and WiFi PSK
+# ---------------------------------------------------------------------------
+
+def test_wireguard_private_key_redacted():
+    """WireGuard PrivateKey redacted, assignment syntax preserved."""
+    # Real WireGuard keys are 44 chars: 43 base64 chars + '=' padding (32 bytes)
+    wg_config = "[Interface]\nAddress = 10.0.0.1/24\nPrivateKey = lWcu7GLoyXymjngaiY3JfFMRrTy96Fyonm2K5hW9qoo=\nListenPort = 51820\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/wireguard/wg0.conf", kind=ConfigFileKind.UNOWNED, content=wg_config, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    content = result.config.files[0].content
+    # Secret value must be gone
+    assert "lWcu7GLoyXymjngaiY3JfFMRrTy96Fyonm2K5hW9qoo=" not in content
+    # Assignment syntax must be preserved
+    assert "PrivateKey = REDACTED_WIREGUARD_KEY_" in content or "PrivateKey =REDACTED_WIREGUARD_KEY_" in content
+    # File stays included (inline, not exclusion)
+    assert result.config.files[0].include is True
+
+
+def test_wifi_psk_redacted():
+    """WiFi PSK redacted, assignment syntax preserved."""
+    nm_config = "[wifi-security]\nkey-mgmt=wpa-psk\npsk=mysecretpassword123\n"
+    snapshot = _base_snapshot(config=ConfigSection(files=[
+        ConfigFileEntry(path="/etc/NetworkManager/system-connections/wifi.nmconnection", kind=ConfigFileKind.UNOWNED, content=nm_config, include=True),
+    ]))
+    result = redact_snapshot(snapshot)
+    content = result.config.files[0].content
+    # Secret gone
+    assert "mysecretpassword123" not in content
+    # Assignment syntax preserved: "psk=" still present
+    assert "psk=REDACTED_WIFI_PSK_" in content or "psk= REDACTED_WIFI_PSK_" in content
+    assert result.config.files[0].include is True
