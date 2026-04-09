@@ -376,7 +376,7 @@ def run_all(
     rpm_owned = _build_rpm_owned_paths(executor, host_root, warnings=w)
 
     _section_banner("Config files", 2, _TOTAL_STEPS)
-    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=rpm_owned, config_diffs=config_diffs, warnings=w), None, w)
+    snapshot.config = _safe_run("config", lambda: run_config(host_root, executor, rpm_section=snapshot.rpm, rpm_owned_paths_override=rpm_owned, config_diffs=config_diffs, warnings=w, system_type=system_type), None, w)
 
     _section_banner("Services", 3, _TOTAL_STEPS)
     base_image_preset_text = None
