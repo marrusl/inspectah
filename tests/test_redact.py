@@ -1505,6 +1505,23 @@ def test_scan_directory_catches_secrets_outside_subscription_dirs(tmp_path):
     assert scan_directory_for_secrets(tmp_path) is not None
 
 
+def test_push_gate_uses_heuristic_scan(tmp_path):
+    """push_to_github calls scan_directory_for_secrets with heuristic=True."""
+    from unittest.mock import patch
+    from yoinkc.redact import scan_directory_for_secrets as _real_scan
+
+    with patch("yoinkc.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
+        from yoinkc.git_github import push_to_github
+        push_to_github(
+            tmp_path, "owner/repo",
+            skip_confirmation=True, github_token="fake",
+        )
+        mock_scan.assert_called_once()
+        _, kwargs = mock_scan.call_args
+        assert kwargs.get("heuristic") is True, \
+            "push_to_github must call scan_directory_for_secrets with heuristic=True"
+
+
 def test_heuristic_redaction_moderate_does_not_replace():
     """In moderate mode, heuristic pass flags but does not redact content."""
     from yoinkc.pipeline import _run_heuristic_pass

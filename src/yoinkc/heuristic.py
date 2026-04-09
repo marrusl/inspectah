@@ -117,8 +117,14 @@ class HeuristicCandidate:
 
 @dataclass
 class NoiseControlResult:
-    """Result of applying noise control to a list of candidates."""
+    """Result of applying noise control to a list of candidates.
+
+    ``reported`` is the capped/deduped subset for advisory output.
+    ``all_candidates`` is the full deduped list — use this for
+    redaction and push-block evaluation (caps limit reporting only).
+    """
     reported: list[HeuristicCandidate]
+    all_candidates: list[HeuristicCandidate]
     suppressed_per_file: dict[str, int]
     suppressed_total: int
     dedup_counts: dict[str, int]
@@ -346,6 +352,11 @@ def apply_noise_control(
     Order: (1) dedup identical values, (2) per-file cap, (3) per-run cap.
     Sort order: file-backed by path/line first, then non-file-backed by
     source/path.
+
+    IMPORTANT: Caps limit *reporting* only — not redaction or push-block
+    evaluation.  The ``all_candidates`` field on the result contains every
+    candidate (post-dedup) so callers can still redact and evaluate
+    push-block decisions on the full set.
     """
     # Sort by standard finding order
     def _sort_key(c: HeuristicCandidate) -> tuple:
@@ -385,7 +396,7 @@ def apply_noise_control(
     # (4) Residual prefix graduation — uses ALL candidates (pre-dedup)
     graduation_candidates: dict[str, int] = {}
     for c in candidates:
-        if any("vendor prefix" in s.lower() for s in c.signals):
+        if any("vendor_prefix_residual" in s for s in c.signals):
             idx = c.value.find("_")
             if idx > 0:
                 prefix = c.value[: idx + 1]
@@ -394,6 +405,7 @@ def apply_noise_control(
 
     return NoiseControlResult(
         reported=reported,
+        all_candidates=deduped,
         suppressed_per_file=suppressed_per_file,
         suppressed_total=suppressed_total,
         dedup_counts=dedup_counts,

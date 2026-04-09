@@ -136,17 +136,24 @@ def _run_heuristic_pass(
                 if registry._counters.get(type_label, 0) < counter_val:
                     registry._counters[type_label] = counter_val
 
-    # Convert to RedactionFinding
+    # Convert to RedactionFinding.
+    # Caps limit reporting only — redaction and push-block use ALL candidates.
+    # We iterate all_candidates for redaction decisions, then mark which ones
+    # are in the reported set for advisory output.
+    reported_set = set(id(c) for c in noise_result.reported)
     new_findings: List[RedactionFinding] = []
     # Track which files need content updates: {path: [(old_value, new_token), ...]}
     content_replacements: dict[str, List[tuple[str, str]]] = {}
 
-    for candidate in noise_result.reported:
+    for candidate in noise_result.all_candidates:
         should_redact = (
             sensitivity == "strict"
             and candidate.confidence == "high"
             and not no_redaction
         )
+        is_reported = id(candidate) in reported_set
+        # Redact ALL qualifying candidates (not just reported ones).
+        # Only suppress from *advisory output* (the reported list).
         kind = "inline" if should_redact else "flagged"
         remediation = "value-removed" if should_redact else ""
 
@@ -163,7 +170,7 @@ def _run_heuristic_pass(
             path=candidate.path,
             source=candidate.source,
             kind=kind,
-            pattern=candidate.key_name or "HEURISTIC",
+            pattern=candidate.why_flagged if not should_redact else (candidate.key_name or "HEURISTIC"),
             remediation=remediation,
             replacement=replacement,
             line=candidate.line_number,
@@ -174,7 +181,7 @@ def _run_heuristic_pass(
     if not new_findings:
         return snapshot
 
-    # Apply content replacements to config files
+    # Apply content replacements to config files, container env, and timer commands
     updates: dict = {}
     if content_replacements and snapshot.config and snapshot.config.files:
         new_files: List[ConfigFileEntry] = []
@@ -194,6 +201,84 @@ def _run_heuristic_pass(
                 new_files.append(entry)
         if files_changed:
             updates["config"] = snapshot.config.model_copy(update={"files": new_files})
+
+    # Apply to container env vars
+    if content_replacements and snapshot.containers and snapshot.containers.running_containers:
+        new_containers = []
+        ct_changed = False
+        for container in snapshot.containers.running_containers:
+            name = container.name or container.id[:12]
+            path_key = f"containers:running/{name}:env"
+            replacements = content_replacements.get(path_key)
+            if replacements:
+                new_env = []
+                env_changed = False
+                for env_line in container.env:
+                    new_line = env_line
+                    for old_value, new_token in replacements:
+                        new_line = new_line.replace(old_value, new_token)
+                    new_env.append(new_line)
+                    if new_line != env_line:
+                        env_changed = True
+                if env_changed:
+                    new_containers.append(container.model_copy(update={"env": new_env}))
+                    ct_changed = True
+                else:
+                    new_containers.append(container)
+            else:
+                new_containers.append(container)
+        if ct_changed:
+            updates["containers"] = snapshot.containers.model_copy(
+                update={"running_containers": new_containers}
+            )
+
+    # Apply to timer commands
+    if content_replacements and snapshot.scheduled_tasks:
+        st_updates: dict = {}
+        if snapshot.scheduled_tasks.generated_timer_units:
+            new_gen = []
+            gen_changed = False
+            for unit in snapshot.scheduled_tasks.generated_timer_units:
+                unit_updates: dict = {}
+                for field_name in ("command", "service_content"):
+                    path_key = f"scheduled:timer/{unit.name}:{field_name}"
+                    replacements = content_replacements.get(path_key)
+                    if replacements:
+                        content = getattr(unit, field_name) or ""
+                        for old_value, new_token in replacements:
+                            content = content.replace(old_value, new_token)
+                        if content != (getattr(unit, field_name) or ""):
+                            unit_updates[field_name] = content
+                if unit_updates:
+                    new_gen.append(unit.model_copy(update=unit_updates))
+                    gen_changed = True
+                else:
+                    new_gen.append(unit)
+            if gen_changed:
+                st_updates["generated_timer_units"] = new_gen
+
+        if snapshot.scheduled_tasks.systemd_timers:
+            new_timers = []
+            timer_changed = False
+            for timer in snapshot.scheduled_tasks.systemd_timers:
+                path_key = f"scheduled:systemd_timer/{timer.name}:service_content"
+                replacements = content_replacements.get(path_key)
+                if replacements and timer.service_content:
+                    new_svc = timer.service_content
+                    for old_value, new_token in replacements:
+                        new_svc = new_svc.replace(old_value, new_token)
+                    if new_svc != timer.service_content:
+                        new_timers.append(timer.model_copy(update={"service_content": new_svc}))
+                        timer_changed = True
+                    else:
+                        new_timers.append(timer)
+                else:
+                    new_timers.append(timer)
+            if timer_changed:
+                st_updates["systemd_timers"] = new_timers
+
+        if st_updates:
+            updates["scheduled_tasks"] = snapshot.scheduled_tasks.model_copy(update=st_updates)
 
     updated_redactions = list(snapshot.redactions) + new_findings
     updates["redactions"] = updated_redactions

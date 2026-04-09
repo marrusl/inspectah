@@ -148,10 +148,36 @@ def test_residual_prefix_graduation():
         _make_candidate(path="/etc/c.conf", value="myprefix_" + "c" * 30, line=1),
     ]
     for c in candidates:
-        c.signals = ["Vendor prefix pattern (prefix_randomsuffix)"]
+        c.signals = ["vendor_prefix_residual"]
     result = apply_noise_control(candidates)
     assert "myprefix_" in result.graduation_candidates
     assert result.graduation_candidates["myprefix_"] >= 3
+
+
+def test_caps_do_not_suppress_redaction():
+    """Findings beyond per-file cap are still redacted — caps limit reporting only."""
+    # Create MAX_FINDINGS_PER_FILE + 3 candidates in ONE file, all high-confidence
+    candidates = [
+        _make_candidate(value=f"secretval_{i:030d}", line=i, confidence="high")
+        for i in range(MAX_FINDINGS_PER_FILE + 3)
+    ]
+    result = apply_noise_control(candidates)
+    # reported is capped
+    assert len(result.reported) == MAX_FINDINGS_PER_FILE
+    # all_candidates has the full deduped set (all unique values)
+    assert len(result.all_candidates) == MAX_FINDINGS_PER_FILE + 3
+
+
+def test_all_candidates_available_for_enforcement():
+    """all_candidates includes findings beyond both per-file and per-run caps."""
+    # Exceed per-run cap
+    candidates = [
+        _make_candidate(path=f"/etc/app{i}.conf", value=f"secret_{i:030d}", line=1, confidence="high")
+        for i in range(MAX_FINDINGS_PER_RUN + 5)
+    ]
+    result = apply_noise_control(candidates)
+    assert len(result.reported) == MAX_FINDINGS_PER_RUN
+    assert len(result.all_candidates) == MAX_FINDINGS_PER_RUN + 5
 
 
 def test_subscription_cert_paths_excluded_from_heuristic():

@@ -62,7 +62,7 @@ def push_to_github(
     Returns error message on failure, None on success.
     """
     from .redact import scan_directory_for_secrets
-    secret_path = scan_directory_for_secrets(output_dir)
+    secret_path = scan_directory_for_secrets(output_dir, heuristic=True, sensitivity="strict")
     if secret_path is not None:
         return f"Redaction verification failed: secret pattern found in output at {secret_path}. Aborting push."
     if not skip_confirmation:

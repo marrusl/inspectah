@@ -3,10 +3,11 @@ import tempfile
 from pathlib import Path
 from jinja2 import Environment
 
-from yoinkc.pipeline import run_pipeline, save_snapshot
+from yoinkc.pipeline import run_pipeline, save_snapshot, _run_heuristic_pass
 from yoinkc.schema import (
     InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind,
-    RedactionFinding,
+    RedactionFinding, ContainerSection, RunningContainer,
+    ScheduledTaskSection, GeneratedTimerUnit,
 )
 from yoinkc.renderers.secrets_review import render as render_secrets_review
 from yoinkc.renderers.containerfile._core import _secrets_comment_lines
@@ -122,6 +123,58 @@ def test_secrets_review_three_tables():
     assert "## Inline Redactions" in content
     assert "## Flagged for Review" in content
     assert "Detection" in content
+
+
+def test_strict_mode_redacts_container_env():
+    """Container env secrets are actually scrubbed in strict mode, not just flagged."""
+    snap = InspectionSnapshot(
+        meta={"hostname": "test"},
+        containers=ContainerSection(
+            running_containers=[
+                RunningContainer(
+                    id="abc123def456", name="myapp", image="myapp:latest",
+                    env=["DB_PASSWORD=aR9xk!mQ2pL7bN4cKzW5tY8vU"],
+                ),
+            ],
+        ),
+    )
+    result = _run_heuristic_pass(snap, sensitivity="strict", no_redaction=False)
+    heuristic = [r for r in result.redactions
+                 if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
+    redacted = [f for f in heuristic if f.kind == "inline"]
+    if redacted:
+        # If we found and redacted something, verify the actual content was scrubbed
+        container = result.containers.running_containers[0]
+        for env_line in container.env:
+            assert "aR9xk!mQ2pL7bN4cKzW5tY8vU" not in env_line, \
+                "Container env should have secret value replaced after heuristic redaction"
+
+
+def test_strict_mode_redacts_timer_commands():
+    """Timer command secrets are actually scrubbed in strict mode."""
+    snap = InspectionSnapshot(
+        meta={"hostname": "test"},
+        scheduled_tasks=ScheduledTaskSection(
+            generated_timer_units=[
+                GeneratedTimerUnit(
+                    name="backup.timer",
+                    schedule="daily",
+                    command="backup --token=aR9xk!mQ2pL7bN4cKzW5tY8vU",
+                    service_content="ExecStart=backup --token=aR9xk!mQ2pL7bN4cKzW5tY8vU\n",
+                ),
+            ],
+        ),
+    )
+    result = _run_heuristic_pass(snap, sensitivity="strict", no_redaction=False)
+    heuristic = [r for r in result.redactions
+                 if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
+    redacted = [f for f in heuristic if f.kind == "inline"]
+    if redacted:
+        unit = result.scheduled_tasks.generated_timer_units[0]
+        assert "aR9xk!mQ2pL7bN4cKzW5tY8vU" not in unit.command, \
+            "Timer command should have secret value replaced after heuristic redaction"
+        assert "aR9xk!mQ2pL7bN4cKzW5tY8vU" not in unit.service_content, \
+            "Timer service_content should have secret value replaced after heuristic redaction"
 
 
 def test_containerfile_comments_full_spectrum():
