@@ -4,7 +4,11 @@ from yoinkc.heuristic import (
     shannon_entropy,
     is_secret_keyword,
     find_heuristic_candidates,
+    apply_noise_control,
+    NoiseControlResult,
     HeuristicCandidate,
+    MAX_FINDINGS_PER_FILE,
+    MAX_FINDINGS_PER_RUN,
 )
 
 # --- Shannon entropy ---
@@ -101,3 +105,50 @@ def test_vendor_prefix_residual_detected():
     candidates = find_heuristic_candidates(lines, "/etc/app.conf", source="file")
     residual = [c for c in candidates if "prefix" in c.why_flagged.lower() or "vendor" in c.why_flagged.lower()]
     assert len(residual) >= 1
+
+
+# --- Noise control ---
+
+def _make_candidate(path="/etc/app.conf", value="secret123456789012345", confidence="high", source="file", line=1):
+    return HeuristicCandidate(
+        path=path, source=source, line_number=line,
+        value=value, confidence=confidence,
+        why_flagged="Test finding", key_name="test_key",
+        signals=["test"],
+    )
+
+def test_per_file_cap():
+    candidates = [_make_candidate(value=f"secret_{i:030d}", line=i) for i in range(MAX_FINDINGS_PER_FILE + 5)]
+    result = apply_noise_control(candidates)
+    file_findings = [c for c in result.reported if c.path == "/etc/app.conf"]
+    assert len(file_findings) == MAX_FINDINGS_PER_FILE
+    assert result.suppressed_per_file["/etc/app.conf"] == 5
+
+def test_per_run_cap():
+    candidates = [_make_candidate(path=f"/etc/app{i}.conf", value=f"secret_{i:030d}", line=1) for i in range(MAX_FINDINGS_PER_RUN + 20)]
+    result = apply_noise_control(candidates)
+    assert len(result.reported) == MAX_FINDINGS_PER_RUN
+    assert result.suppressed_total == 20
+
+def test_dedup_identical_values():
+    value = "identical_secret_value_12345678"
+    candidates = [
+        _make_candidate(path="/etc/a.conf", value=value, line=1),
+        _make_candidate(path="/etc/b.conf", value=value, line=5),
+        _make_candidate(path="/etc/c.conf", value=value, line=3),
+    ]
+    result = apply_noise_control(candidates)
+    assert len(result.reported) == 1
+    assert result.dedup_counts[value] == 3
+
+def test_residual_prefix_graduation():
+    candidates = [
+        _make_candidate(path="/etc/a.conf", value="myprefix_" + "a" * 30, line=1),
+        _make_candidate(path="/etc/b.conf", value="myprefix_" + "b" * 30, line=1),
+        _make_candidate(path="/etc/c.conf", value="myprefix_" + "c" * 30, line=1),
+    ]
+    for c in candidates:
+        c.signals = ["Vendor prefix pattern (prefix_randomsuffix)"]
+    result = apply_noise_control(candidates)
+    assert "myprefix_" in result.graduation_candidates
+    assert result.graduation_candidates["myprefix_"] >= 3

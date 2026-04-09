@@ -115,6 +115,16 @@ class HeuristicCandidate:
     signals: list[str] = field(default_factory=list)
 
 
+@dataclass
+class NoiseControlResult:
+    """Result of applying noise control to a list of candidates."""
+    reported: list[HeuristicCandidate]
+    suppressed_per_file: dict[str, int]
+    suppressed_total: int
+    dedup_counts: dict[str, int]
+    graduation_candidates: dict[str, int]
+
+
 # ---------------------------------------------------------------------------
 # Shannon entropy
 # ---------------------------------------------------------------------------
@@ -285,8 +295,8 @@ def find_heuristic_candidates(
     """
     Scan lines for heuristic secret candidates.
 
-    Returns a list of HeuristicCandidate objects, capped at
-    MAX_FINDINGS_PER_FILE.
+    Returns a list of HeuristicCandidate objects.  Per-file and per-run
+    caps are applied externally by ``apply_noise_control()``.
     """
     candidates: list[HeuristicCandidate] = []
 
@@ -321,7 +331,71 @@ def find_heuristic_candidates(
                 signals=signals,
             ))
 
-            if len(candidates) >= MAX_FINDINGS_PER_FILE:
-                return candidates
-
     return candidates
+
+
+# ---------------------------------------------------------------------------
+# Noise control — dedup, caps, graduation
+# ---------------------------------------------------------------------------
+
+def apply_noise_control(
+    candidates: list[HeuristicCandidate],
+) -> NoiseControlResult:
+    """Apply dedup, per-file caps, per-run caps, and residual graduation.
+
+    Order: (1) dedup identical values, (2) per-file cap, (3) per-run cap.
+    Sort order: file-backed by path/line first, then non-file-backed by
+    source/path.
+    """
+    # Sort by standard finding order
+    def _sort_key(c: HeuristicCandidate) -> tuple:
+        is_non_file = c.source != "file"
+        return (is_non_file, c.source if is_non_file else "", c.path, c.line_number or 0)
+
+    sorted_candidates = sorted(candidates, key=_sort_key)
+
+    # (1) Dedup: collapse identical values, keep primary (first by sort)
+    dedup_counts: dict[str, int] = {}
+    seen_values: dict[str, HeuristicCandidate] = {}
+    deduped: list[HeuristicCandidate] = []
+    for c in sorted_candidates:
+        if c.value in seen_values:
+            dedup_counts[c.value] = dedup_counts.get(c.value, 1) + 1
+        else:
+            seen_values[c.value] = c
+            deduped.append(c)
+            dedup_counts[c.value] = 1
+
+    # (2) Per-file cap
+    suppressed_per_file: dict[str, int] = {}
+    file_counts: dict[str, int] = {}
+    file_capped: list[HeuristicCandidate] = []
+    for c in deduped:
+        count = file_counts.get(c.path, 0)
+        if count < MAX_FINDINGS_PER_FILE:
+            file_capped.append(c)
+            file_counts[c.path] = count + 1
+        else:
+            suppressed_per_file[c.path] = suppressed_per_file.get(c.path, 0) + 1
+
+    # (3) Per-run cap
+    suppressed_total = max(0, len(file_capped) - MAX_FINDINGS_PER_RUN)
+    reported = file_capped[:MAX_FINDINGS_PER_RUN]
+
+    # (4) Residual prefix graduation — uses ALL candidates (pre-dedup)
+    graduation_candidates: dict[str, int] = {}
+    for c in candidates:
+        if any("vendor prefix" in s.lower() for s in c.signals):
+            idx = c.value.find("_")
+            if idx > 0:
+                prefix = c.value[: idx + 1]
+                graduation_candidates[prefix] = graduation_candidates.get(prefix, 0) + 1
+    graduation_candidates = {k: v for k, v in graduation_candidates.items() if v >= 3}
+
+    return NoiseControlResult(
+        reported=reported,
+        suppressed_per_file=suppressed_per_file,
+        suppressed_total=suppressed_total,
+        dedup_counts=dedup_counts,
+        graduation_candidates=graduation_candidates,
+    )
