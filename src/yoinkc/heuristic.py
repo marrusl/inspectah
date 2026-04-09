@@ -107,7 +107,7 @@ class HeuristicCandidate:
     """A candidate secret found by heuristic analysis."""
     path: str
     source: str
-    line_number: int
+    line_number: Optional[int]
     value: str
     confidence: str          # "high" or "low"
     why_flagged: str         # human-readable reason
@@ -196,7 +196,7 @@ def _is_false_positive_value(value: str) -> bool:
 def _is_comment_line(line: str) -> bool:
     """Check if a line is a comment."""
     stripped = line.lstrip()
-    return stripped.startswith("#") or stripped.startswith("//") or stripped.startswith(";")
+    return stripped.startswith("#") or stripped.startswith("//") or stripped.startswith(";") or stripped.startswith("!")
 
 
 def _score_candidate(
@@ -313,7 +313,7 @@ def find_heuristic_candidates(
             candidates.append(HeuristicCandidate(
                 path=path,
                 source=source,
-                line_number=line_idx + 1,
+                line_number=line_idx + 1 if source == "file" else None,
                 value=value,
                 confidence=confidence,
                 why_flagged=why_flagged,
