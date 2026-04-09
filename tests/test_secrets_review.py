@@ -159,3 +159,17 @@ def test_secrets_review_no_redaction_header():
         render(snap, Environment(), Path(tmp), no_redaction=True)
         content = (Path(tmp) / "secrets-review.md").read_text()
         assert "> WARNING: Redaction was disabled" in content
+
+
+def test_secrets_review_no_redaction_via_meta():
+    """WARNING header appears when _no_redaction is set in snapshot.meta."""
+    snap = InspectionSnapshot(meta={"_no_redaction": True})
+    snap.redactions = [
+        RedactionFinding(path="/etc/app.conf", source="file",
+                        kind="flagged", pattern="PASSWORD", remediation="",
+                        detection_method="pattern"),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        render(snap, Environment(), Path(tmp))
+        content = (Path(tmp) / "secrets-review.md").read_text()
+    assert "WARNING" in content

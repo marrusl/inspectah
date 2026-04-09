@@ -330,6 +330,12 @@ def run_pipeline(
     # Run heuristic pass after pattern redaction
     snapshot = _run_heuristic_pass(snapshot, sensitivity, no_redaction)
 
+    # Thread no_redaction flag into snapshot.meta for renderers
+    if no_redaction:
+        snapshot = snapshot.model_copy(update={
+            "meta": {**snapshot.meta, "_no_redaction": True},
+        })
+
     # --inspect-only: save snapshot and return
     if inspect_only:
         save_snapshot(snapshot, working_dir / "inspection-snapshot.json")
