@@ -4,7 +4,7 @@
 **Status:** Proposed
 **Author:** Kiwi (orchestrator, synthesizing team input)
 **Contributors:** Thorn (build failure analysis), Fern (UX/interaction design), Ember (product strategy)
-**Revision:** 2 (addresses design review findings 2026-04-09)
+**Revision:** 3 (round-2 tightenings 2026-04-09)
 
 ---
 
@@ -70,7 +70,7 @@ New module: `src/yoinkc/preflight.py`
 @dataclass
 class PreflightResult:
     """Result of package availability check against target repos."""
-    status: str                  # "completed", "partial", "failed"
+    status: str                  # "completed", "partial", "skipped", "failed"
     status_reason: str | None    # Why status is not "completed" (human-readable)
     available: list[str]         # Packages confirmed in target repos
     unavailable: list[str]       # Packages not found in any repo
@@ -98,8 +98,8 @@ class RepoStatus:
 
 | Status | Meaning |
 |--------|---------|
-| `completed` | All packages checked against all configured repos. Results are definitive. |
-| `partial` | Some repos were unreachable or some repo-providing packages couldn't be installed. Results are best-effort — `unverifiable` and `repo_unreachable` list what couldn't be checked. |
+| `completed` | All packages checked against all configured repos. Results are definitive. **Invariant:** `unverifiable` is empty and `repo_unreachable` is empty. Downstream tooling can trust this state without re-deriving it. |
+| `partial` | Some repos were unreachable or some repo-providing packages couldn't be installed. Results are best-effort — `unverifiable` and `repo_unreachable` list what couldn't be checked. **Invariant:** at least one of `unverifiable` or `repo_unreachable` is non-empty. |
 | `failed` | Preflight could not run at all (base image not pullable, no container runtime, etc.). `status_reason` explains why. No package-level results. |
 
 When `--skip-unavailable` is set, the snapshot's preflight field uses a distinct representation (see Snapshot Schema Addition) so downstream tooling can distinguish intentional opt-out from failure.
@@ -132,8 +132,11 @@ Custom repo files and GPG keys from the snapshot are copied into the container's
 podman run \
   -v /path/to/snapshot/config/etc/yum.repos.d/:/etc/yum.repos.d/:Z \
   -v /path/to/snapshot/config/etc/pki/rpm-gpg/:/etc/pki/rpm-gpg/:Z \
+  -v /path/to/snapshot/config/etc/dnf/:/etc/dnf/:Z \
   <base> dnf repoquery --available <packages>
 ```
+
+The `etc/dnf/` mount is required for parity with the renderer, which can emit `COPY config/etc/dnf/ /etc/dnf/`. DNF vars (`/etc/dnf/vars/`), plugin configuration, and module defaults in this tree can affect package resolution. Without it, preflight may disagree with the real build. The same merge semantics apply — base image defaults must not be silently shadowed. If the snapshot has no `etc/dnf/` content, the mount is skipped.
 
 Note: this bind-mount replaces the base image's repo directory entirely. If the base image ships repos in `/etc/yum.repos.d/` that the snapshot does not include, they will be shadowed. The preflight module must merge: copy base image repo files into the snapshot's staging directory before mounting, or use individual file mounts. Implementation should match the renderer's actual `COPY` semantics — the Containerfile layers the snapshot's repo files on top of the base image's, so the preflight must do the same.
 
@@ -235,13 +238,16 @@ Preflight status: PARTIAL — use --skip-unavailable to skip all checks.
 
 **REPO UNREACHABLE** packages are also included in the Containerfile. The preflight can't confirm or deny availability, so it includes them and warns. This avoids false positives when the build environment has different network access than the preflight host.
 
-**Completeness signal:** The diagnostic block footer states the preflight status explicitly:
+**Completeness signal:** The diagnostic block footer uses the exact format shown in the sample block above. The canonical footer format is:
 
 ```
-Preflight status: PARTIAL — 2 packages unverifiable, 1 repo unreachable.
+<N> packages excluded from Containerfile.
+<N> package(s) unverifiable (included but not validated).
+<N> packages from unreachable repos (included but not validated).
+Preflight status: <STATUS> — use --skip-unavailable to skip all checks.
 ```
 
-Machine-readable completeness is in `snapshot.json` via the `preflight.status` field. Downstream tooling should not treat `exit 0 + rendered Containerfile` as "all packages validated" — it must check `preflight.status` to distinguish `completed` from `partial`, `failed`, or `skipped`.
+Lines with zero counts are omitted. Machine-readable completeness is in `snapshot.json` via the `preflight.status` field. Downstream tooling should not treat `exit 0 + rendered Containerfile` as "all packages validated" — it must check `preflight.status` to distinguish `completed` from `partial`, `failed`, or `skipped`.
 
 ---
 
@@ -346,7 +352,7 @@ The architect web UI reads `InspectionSnapshot` data across multiple systems. Si
 - **Unavailable packages by prevalence:** "These 8 packages are unavailable, affecting N of M systems." Sorted by prevalence so the biggest migration decisions surface first.
 - **Direct-install RPMs by prevalence:** Same aggregation. If 30 of 50 systems have `custom-agent` installed via `rpm -i`, that's one fleet-wide decision, not 30 individual ones.
 - **Unverifiable packages by prevalence:** Same aggregation, distinct from unavailable. Shows which repo-provider gaps affect the most systems.
-- **Unreachable repos:** Flagged once at fleet level, not per-system. If `internal-mirror` is unreachable from the preflight host, that's an environment issue, not a per-system issue.
+- **Unreachable repos:** Deduplicated per base image group, not per-system. If `internal-mirror` is unreachable for all F44-targeting systems, that's one environment issue for that base image group, not N individual problems.
 - **Layer decomposition awareness:** When architect recommends base vs. derived layer splits, it factors in availability. No point putting an unavailable package in the shared base layer. Unverifiable packages should be flagged if placed in a base layer — they're higher risk for a shared layer.
 
 ### Aggregation by base image

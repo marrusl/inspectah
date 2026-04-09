@@ -73,3 +73,35 @@ def test_ostree_cmdline_still_captured(tmp_path):
     assert section.cmdline is not None
     assert "mitigations=off" in section.cmdline
     assert "custom.opt=1" in section.cmdline
+
+
+def test_ostree_vendor_timers_from_usr_lib(tmp_path):
+    from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+    vendor_dir = tmp_path / "usr" / "lib" / "systemd" / "system"
+    vendor_dir.mkdir(parents=True)
+    (vendor_dir / "ostree-remount.timer").write_text(
+        "[Timer]\nOnBootSec=0\n[Install]\nWantedBy=timers.target\n"
+    )
+    (vendor_dir / "ostree-remount.service").write_text(
+        "[Service]\nExecStart=/usr/libexec/ostree-remount\n"
+    )
+    user_dir = tmp_path / "etc" / "systemd" / "system"
+    user_dir.mkdir(parents=True)
+    (user_dir / "custom-backup.timer").write_text(
+        "[Timer]\nOnCalendar=daily\n[Install]\nWantedBy=timers.target\n"
+    )
+    (user_dir / "custom-backup.service").write_text(
+        "[Service]\nExecStart=/usr/local/bin/backup.sh\n"
+    )
+    def executor(cmd, *, cwd=None):
+        return RunResult(stdout="", stderr="", returncode=1)
+    section = run_scheduled_tasks(tmp_path, executor, system_type=SystemType.RPM_OSTREE)
+    timer_names = [t.name for t in section.systemd_timers]
+    # If ostree-remount.timer is found, it should be vendor-classified
+    for t in section.systemd_timers:
+        if t.name == "ostree-remount.timer":
+            assert t.source == "vendor", f"Expected vendor, got {t.source}"
+    # custom-backup.timer should be local
+    for t in section.systemd_timers:
+        if t.name == "custom-backup.timer":
+            assert t.source == "local", f"Expected local, got {t.source}"

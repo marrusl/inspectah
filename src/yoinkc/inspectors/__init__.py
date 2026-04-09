@@ -391,7 +391,7 @@ def run_all(
     snapshot.storage = _safe_run("storage", lambda: run_storage(host_root, executor, system_type=system_type), None, w)
 
     _section_banner("Scheduled tasks", 6, _TOTAL_STEPS)
-    snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor, rpm_owned_paths=rpm_owned), None, w)
+    snapshot.scheduled_tasks = _safe_run("scheduled_tasks", lambda: run_scheduled_tasks(host_root, executor, rpm_owned_paths=rpm_owned, system_type=system_type), None, w)
 
     _section_banner("Containers", 7, _TOTAL_STEPS)
     snapshot.containers = _safe_run("containers", lambda: run_container(host_root, executor, query_podman=query_podman, warnings=w), None, w)
