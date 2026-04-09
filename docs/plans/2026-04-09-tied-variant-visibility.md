@@ -106,7 +106,7 @@ class TestTieFlags:
         s3 = _snap("host-3", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="ccc"),
         ]))
-        merged = merge_snapshots([s1, s2], min_prevalence=0)
+        merged = merge_snapshots([s1, s2, s3], min_prevalence=0)
 
         variants = merged.config.files
         assert len(variants) == 3
@@ -1118,29 +1118,25 @@ class TestCliTieSummary:
 
         assert _count_tied_winners(merged) == 1
 
-    def test_tie_summary_printed_to_stdout(self, capsys):
-        """Verify the print output uses the count from _count_tied_winners()."""
+    def test_zero_ties_returns_zero(self):
+        """No ties → _count_tied_winners returns 0."""
         from yoinkc.fleet.merge import merge_snapshots
         from yoinkc.__main__ import _count_tied_winners
 
         s1 = _snap("host-1", config=ConfigSection(files=[
-            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
         ]))
         s2 = _snap("host-2", config=ConfigSection(files=[
-            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
         ]))
         merged = merge_snapshots([s1, s2], min_prevalence=0)
 
-        tie_count = _count_tied_winners(merged)
-        if tie_count:
-            s = "s" if tie_count != 1 else ""
-            print(f"  {tie_count} item{s} with tied variants (auto-resolved by content hash)")
+        assert _count_tied_winners(merged) == 0
 
-        captured = capsys.readouterr()
-        assert "1 item with tied variants" in captured.out
-
-    # Note: The actual CLI print inside _run_fleet() is covered by the
-    # integration test in Task 11 (TestTieRoundTrip).
+    # Note: The actual CLI print line inside _run_fleet() is not directly
+    # testable without filesystem setup. The _count_tied_winners() unit
+    # tests verify the count logic; manual smoke testing (Task 12)
+    # covers the printed output.
 ```
 
 - [ ] **Step 2: Implement tie summary in `_run_fleet()`**
@@ -1217,7 +1213,7 @@ class TestReadmeArtifacts:
 
     def test_merge_notes_in_readme_for_fleet(self):
         from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.readme import render_readme
+        from yoinkc.renderers import render_readme
         from yoinkc.renderers.merge_notes import render_merge_notes
         from jinja2 import Environment, FileSystemLoader
 
@@ -1507,24 +1503,29 @@ class TestTieRoundTrip:
         winner = next(v for v in merged.config.files if v.tie_winner)
         loser = next(v for v in merged.config.files if not v.tie_winner)
 
-        # Simulate refine: user overrides auto-pick — selects the loser
+        # Simulate refine: user overrides auto-pick — selects the loser.
+        # Clear tie state on both variants (refine is an explicit user choice,
+        # so the tie is considered resolved — no longer auto-selected).
+        winner.tie = False
         winner.tie_winner = False
         winner.include = False
+        loser.tie = False
+        loser.tie_winner = False
         loser.include = True
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
             run_all(merged, output_dir)
 
-            # Containerfile should NOT have the tied-items comment block
-            # because the user has made an explicit selection
+            # Containerfile should NOT have the "Tied items" comment block
             containerfile = (output_dir / "Containerfile").read_text()
-            # The loser's content is now the selected variant
-            assert loser.content in (output_dir / "config" / "etc" / "app.conf").read_text()
+            assert "Tied" not in containerfile, \
+                "Tied-items block should be gone after user resolves the tie"
 
-            # The newly selected variant should be in config/
-            config_file = output_dir / "config" / "etc" / "app.conf"
-            assert config_file.exists(), "User-selected variant should be in config/"
+            # The user-selected variant's content should be in config/
+            config_content = (output_dir / "config" / "etc" / "app.conf").read_text()
+            assert loser.content in config_content, \
+                "User-selected variant should be written to config/"
 ```
 
 - [ ] **Step 2: Run integration tests**
