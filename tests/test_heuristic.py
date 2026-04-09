@@ -152,3 +152,23 @@ def test_residual_prefix_graduation():
     result = apply_noise_control(candidates)
     assert "myprefix_" in result.graduation_candidates
     assert result.graduation_candidates["myprefix_"] >= 3
+
+
+def test_subscription_cert_paths_excluded_from_heuristic():
+    from yoinkc.schema import InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind
+    from yoinkc.pipeline import _run_heuristic_pass
+    snap = InspectionSnapshot(meta={"hostname": "test"})
+    snap.config = ConfigSection(files=[
+        ConfigFileEntry(path="/etc/pki/entitlement/1234567890.pem",
+                       kind=ConfigFileKind.UNOWNED, include=True,
+                       content="-----BEGIN RSA PRIVATE KEY-----\nfakekey\n-----END RSA PRIVATE KEY-----\n"),
+        ConfigFileEntry(path="/etc/rhsm/rhsm.conf",
+                       kind=ConfigFileKind.UNOWNED, include=True,
+                       content="password = somecomplexvalue12345678\n"),
+    ])
+    result = _run_heuristic_pass(snap, "strict", False)
+    from yoinkc.schema import RedactionFinding
+    heuristic = [r for r in result.redactions
+                 if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
+    sub_findings = [f for f in heuristic if "entitlement" in f.path or "rhsm" in f.path]
+    assert len(sub_findings) == 0
