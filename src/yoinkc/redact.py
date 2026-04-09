@@ -1,6 +1,7 @@
 """
 Secret redaction pass. Runs over all captured file contents before any output is written.
-Replaces matched values with REDACTED_<TYPE>_<hash> and populates snapshot.redactions.
+Replaces matched values with REDACTED_<TYPE>_<N> sequential counter tokens and populates
+snapshot.redactions. Identical secret values share the same counter across files.
 """
 
 import hashlib
@@ -69,6 +70,12 @@ def _is_excluded_path(path: str) -> bool:
 
 
 def _truncated_sha256(value: str, length: int = 8) -> str:
+    """Legacy fallback for callers that don't pass a _CounterRegistry.
+
+    The primary code path (redact_snapshot) uses sequential counters via
+    _CounterRegistry. This function is retained for direct _redact_text()
+    and _redact_shadow_entry() callers without a registry.
+    """
     return hashlib.sha256(value.encode()).hexdigest()[:length]
 
 
