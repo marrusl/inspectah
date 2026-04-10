@@ -215,6 +215,8 @@ class ConfigFileEntry(BaseModel):
     package: Optional[str] = None
     diff_against_rpm: Optional[str] = None  # unified diff when --config-diffs
     include: bool = True
+    tie: bool = False
+    tie_winner: bool = False
     fleet: Optional[FleetPrevalence] = None
 
 
@@ -246,6 +248,8 @@ class SystemdDropIn(BaseModel):
     path: str          # relative path, e.g. "etc/systemd/system/postgresql.service.d/override.conf"
     content: str = ""
     include: bool = True
+    tie: bool = False
+    tie_winner: bool = False
     fleet: Optional[FleetPrevalence] = None
 
 
@@ -426,6 +430,8 @@ class QuadletUnit(BaseModel):
     content: str = ""
     image: str = ""
     include: bool = True
+    tie: bool = False
+    tie_winner: bool = False
     fleet: Optional[FleetPrevalence] = None
 
 
@@ -438,6 +444,8 @@ class ComposeFile(BaseModel):
     path: str
     images: List[ComposeService] = Field(default_factory=list)
     include: bool = True
+    tie: bool = False
+    tie_winner: bool = False
     fleet: Optional[FleetPrevalence] = None
 
 

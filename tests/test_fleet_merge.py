@@ -1,10 +1,11 @@
 # tests/test_fleet_merge.py
 """Tests for fleet merge engine."""
 
+import pytest
 from yoinkc.schema import (
     InspectionSnapshot, RpmSection, PackageEntry, RepoFile,
     ServiceSection, ServiceStateChange, NetworkSection, FirewallZone,
-    FleetPrevalence, OsRelease,
+    FleetPrevalence, OsRelease, ConfigSection, ConfigFileEntry,
 )
 
 
@@ -759,3 +760,72 @@ class TestStorageSuppression:
         s2 = _snap("host2", storage=StorageSection(fstab_entries=[fstab]))
         merged = merge_snapshots([s1, s2], min_prevalence=100)
         assert merged.storage is None
+
+
+class TestTieFlags:
+    """Verify tie/tie_winner flags are set correctly after fleet merge."""
+
+    @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
+    def test_tied_variants_get_tie_flags(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        variants = merged.config.files
+        assert len(variants) == 2
+        assert all(v.tie for v in variants), "All tied variants must have tie=True"
+        winners = [v for v in variants if v.tie_winner]
+        assert len(winners) == 1, "Exactly one variant should be tie_winner"
+        assert winners[0].include is True, "Tie winner must have include=True"
+        losers = [v for v in variants if not v.tie_winner]
+        assert len(losers) == 1
+        assert losers[0].include is False
+
+    def test_clear_winner_no_tie_flags(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="majority"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="majority"),
+        ]))
+        s3 = _snap("host-3", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="minority"),
+        ]))
+        merged = merge_snapshots([s1, s2, s3], min_prevalence=0)
+
+        for v in merged.config.files:
+            assert v.tie is False, "Clear winners should not have tie=True"
+            assert v.tie_winner is False
+
+    @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
+    def test_three_way_tie_one_winner(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="aaa"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="bbb"),
+        ]))
+        s3 = _snap("host-3", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="ccc"),
+        ]))
+        merged = merge_snapshots([s1, s2, s3], min_prevalence=0)
+
+        variants = merged.config.files
+        assert len(variants) == 3
+        assert all(v.tie for v in variants)
+        winners = [v for v in variants if v.tie_winner]
+        assert len(winners) == 1, "3-way tie: exactly one winner"
+        assert winners[0].include is True
+        losers = [v for v in variants if not v.tie_winner]
+        assert len(losers) == 2
+        assert all(not v.include for v in losers)
