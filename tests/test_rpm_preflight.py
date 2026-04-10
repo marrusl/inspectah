@@ -284,3 +284,19 @@ class TestPackagePreflight:
         result = run_package_preflight(snapshot=snapshot, executor=_make_preflight_executor())
         assert result.status == "failed"
         assert "base image" in result.status_reason.lower()
+
+    def test_synthetic_tuned_not_classified_as_direct_install(self):
+        """Synthetic tuned (from resolve_install_set, not in packages_added)
+        must go through repoquery, not be classified as direct-install."""
+        from yoinkc.schema import KernelBootSection
+
+        snapshot = _make_preflight_snapshot(packages=["httpd"])
+        snapshot.rpm.packages_added[0].source_repo = "baseos"
+        snapshot.kernel_boot = KernelBootSection(tuned_active="throughput-performance")
+        # tuned is NOT in packages_added, but resolve_install_set will inject it
+
+        executor = _make_preflight_executor(repoquery_stdout="httpd\ntuned\n")
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+
+        assert "tuned" not in result.direct_install
+        assert "tuned" in result.available

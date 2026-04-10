@@ -362,6 +362,9 @@ def _run_checks(
         for provider in bootstrap_failed_providers:
             failed_repo_ids.update(provider_repos.get(provider, set()))
 
+        # Pre-compute lowered repo IDs for case-insensitive comparison
+        failed_repo_ids_lower = {r.lower() for r in failed_repo_ids}
+
         # Build source_repo lookup
         source_repos = {}
         for p in snapshot.rpm.packages_added:
@@ -370,7 +373,7 @@ def _run_checks(
 
         for pkg in not_found:
             pkg_source = source_repos.get(pkg, "").strip().lower()
-            if pkg_source in failed_repo_ids or pkg_source in {p.lower() for p in failed_repo_ids}:
+            if pkg_source in failed_repo_ids or pkg_source in failed_repo_ids_lower:
                 unverifiable.append(UnverifiablePackage(
                     name=pkg,
                     reason=f"repo-providing package(s) {', '.join(sorted(bootstrap_failed_providers))} unavailable",
