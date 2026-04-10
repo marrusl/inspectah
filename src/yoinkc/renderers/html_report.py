@@ -5,6 +5,7 @@ templates/report.html.j2 via Jinja2.  A few helpers produce pre-rendered
 Markup for the file-browser tree and audit report.
 """
 
+import hashlib
 import logging
 import re
 from collections import OrderedDict
@@ -356,6 +357,9 @@ def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
             "snap_index": idx,
             "include": f.include,
             "fleet": f.fleet,
+            "tie": f.tie,
+            "tie_winner": f.tie_winner,
+            "content": f.content,
         })
     return result
 
@@ -419,22 +423,50 @@ def _variant_prevalence(item):
     return fleet.count if fleet else 0
 
 
+def _variant_content_hash(item) -> str:
+    """Compute SHA-256 of the item's content for tie-breaking display."""
+    if isinstance(item, dict):
+        content = item.get("content", "")
+    else:
+        content = getattr(item, "content", "")
+    if not content:
+        return ""
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
 def _group_variants(items, path_key="path"):
     """Group items by path for variant display.
 
     Returns OrderedDict[path, list[dict]] where each entry has
-    {"item": item_or_dict, "snap_index": int}. Variants within each
-    group are sorted by prevalence (highest first).
+    {"item": item_or_dict, "snap_index": int, "content_hash_short": str}.
+    Variants within each group are sorted by prevalence (highest first),
+    with a secondary sort putting included variants first among ties.
+    This ensures variants[0] is always the winner/selected variant.
     """
     groups: OrderedDict = OrderedDict()
     for idx, item in enumerate(items):
         path = item[path_key] if isinstance(item, dict) else getattr(item, path_key)
         if path not in groups:
             groups[path] = []
-        groups[path].append({"item": item, "snap_index": idx})
+        full_hash = _variant_content_hash(item)
+        groups[path].append({
+            "item": item,
+            "snap_index": idx,
+            "content_hash_short": full_hash[:8] if full_hash else "",
+        })
 
     for path, variants in groups.items():
-        variants.sort(key=lambda v: _variant_prevalence(v["item"]), reverse=True)
+        # Sort by prevalence descending, then by include descending so the
+        # selected/winner variant is always first (variants[0]).  This matters
+        # for tied groups where prevalence is equal.
+        def _sort_key(v):
+            item = v["item"]
+            if isinstance(item, dict):
+                include = item.get("include", False)
+            else:
+                include = getattr(item, "include", False)
+            return (-_variant_prevalence(item), -int(include))
+        variants.sort(key=_sort_key)
     return groups
 
 
@@ -679,18 +711,29 @@ def _build_context(
         dropin_variant_groups = _group_variants(
             snapshot.services.drop_ins, path_key="path"
         ) if snapshot.services and snapshot.services.drop_ins else OrderedDict()
+        compose_variant_groups = _group_variants(
+            snapshot.containers.compose_files, path_key="path"
+        ) if snapshot.containers and snapshot.containers.compose_files else OrderedDict()
+        env_variant_groups = _group_variants(
+            snapshot.non_rpm_software.env_files, path_key="path"
+        ) if snapshot.non_rpm_software and snapshot.non_rpm_software.env_files else OrderedDict()
     else:
         config_variant_groups = None
         quadlet_variant_groups = None
         dropin_variant_groups = None
+        compose_variant_groups = None
+        env_variant_groups = None
 
     variant_summary = []
+    auto_resolved_ties = 0
     unresolved_ties = 0
     if fleet_meta:
         for label, groups, tab in [
             ("Config files", config_variant_groups, "config"),
             ("Drop-ins", dropin_variant_groups, "drop_ins"),
             ("Quadlet units", quadlet_variant_groups, "containers"),
+            ("Compose files", compose_variant_groups, "containers"),
+            ("Env files", env_variant_groups, "non_rpm"),
         ]:
             if not groups:
                 continue
@@ -702,32 +745,40 @@ def _build_context(
                     "files": len(multi),
                     "variants": sum(len(v) for v in multi.values()),
                 })
-            # Count unresolved ties: variant groups with no selected item
-            # where the top two variants share the same fleet count.
+            # Count ties using the explicit tie/tie_winner model flags.
             # Each entry in `vs` is {"item": <model_or_dict>, "snap_index": int}.
             # Config files pass through _prepare_config_files which yields
             # plain dicts, so we must support both attribute and key access.
             for _path, vs in (groups or {}).items():
                 if len(vs) < 2:
                     continue
-                has_selected = any(
-                    (v["item"].get("include", False) if isinstance(v["item"], dict)
-                     else getattr(v["item"], "include", False))
-                    for v in vs
-                )
-                if has_selected:
+
+                def _get_flag(item, flag):
+                    if isinstance(item, dict):
+                        return item.get(flag, False)
+                    return getattr(item, flag, False)
+
+                has_tie = any(_get_flag(v["item"], "tie") for v in vs)
+                if not has_tie:
                     continue
-                fleet_counts = sorted(
-                    (_variant_prevalence(v["item"]) for v in vs),
-                    reverse=True,
-                )
-                if len(fleet_counts) >= 2 and fleet_counts[0] == fleet_counts[1]:
+                has_winner = any(_get_flag(v["item"], "tie_winner") for v in vs)
+                has_included = any(_get_flag(v["item"], "include") for v in vs)
+                if has_winner and has_included:
+                    auto_resolved_ties += 1
+                else:
                     unresolved_ties += 1
 
-    # Inject unresolved ties into triage_detail for the summary priority list
+    # Inject tie counts into triage_detail for the summary priority list
+    if auto_resolved_ties > 0:
+        triage_detail.append({
+            "label": "Auto-resolved ties",
+            "count": auto_resolved_ties,
+            "tab": "config",
+            "status": "auto",
+        })
     if unresolved_ties > 0:
         triage_detail.append({
-            "label": "Variant ties",
+            "label": "Unresolved ties",
             "count": unresolved_ties,
             "tab": "config",
             "status": "manual",
@@ -760,7 +811,10 @@ def _build_context(
         "config_variant_groups": config_variant_groups,
         "quadlet_variant_groups": quadlet_variant_groups,
         "dropin_variant_groups": dropin_variant_groups,
+        "compose_variant_groups": compose_variant_groups,
+        "env_variant_groups": env_variant_groups,
         "variant_summary": variant_summary,
+        "auto_resolved_ties": auto_resolved_ties,
         "unresolved_ties": unresolved_ties,
         "containers_data": _prepare_containers(snapshot),
         "non_rpm_data": _prepare_non_rpm(snapshot),

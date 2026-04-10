@@ -22,8 +22,14 @@ def _prevalence_include(count: int, total: int, min_prevalence: int) -> bool:
     return (count * 100) >= (min_prevalence * total)
 
 
+def _normalize_content(text: str) -> str:
+    """Level 1 normalization: strip trailing whitespace per line, normalize line endings."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\n".join(line.rstrip() for line in lines)
+
+
 def _content_hash(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _merge_identity_items(
@@ -122,7 +128,8 @@ def _auto_select_variants(items: list) -> None:
     Groups items by ``path``. Within each group:
     - Single variant: always selected (``include=True``).
     - Clear winner (strictly highest ``fleet.count``): winner selected, rest deselected.
-    - Tie at the top: all deselected (``include=False``).
+    - Tie at the top: winner picked by lowest full SHA-256 digest; all tied
+      variants get ``tie=True``, winner also gets ``tie_winner=True``.
 
     Items lacking ``path``, ``fleet``, or ``include`` attributes are skipped.
     """
@@ -145,8 +152,30 @@ def _auto_select_variants(items: list) -> None:
             variants[0].include = True
             continue
         variants.sort(key=lambda v: v.fleet.count, reverse=True)
+        top_count = variants[0].fleet.count
         if variants[0].fleet.count == variants[1].fleet.count:
-            for v in variants:
+            # Tie at the top — collect all variants tied at max count
+            tied = [v for v in variants if v.fleet.count == top_count]
+            non_tied = [v for v in variants if v.fleet.count != top_count]
+
+            # Sort tied variants by full content hash for deterministic pick
+            tied.sort(key=lambda v: _content_hash(
+                _normalize_content(v.content) if hasattr(v, "content")
+                else str(sorted((img.service, img.image) for img in v.images))
+            ))
+
+            # Mark all tied variants
+            for v in tied:
+                v.tie = True
+                v.tie_winner = False
+                v.include = False
+
+            # First in hash order wins
+            tied[0].tie_winner = True
+            tied[0].include = True
+
+            # Non-tied variants below the top are just losers
+            for v in non_tied:
                 v.include = False
         else:
             variants[0].include = True
@@ -347,7 +376,7 @@ def merge_snapshots(
         files = _merge_content_items(
             _collect_section_lists(snapshots, "config", "files"),
             identity_fn=lambda f: f.path,
-            variant_fn=lambda f: _content_hash(f.content),
+            variant_fn=lambda f: _content_hash(_normalize_content(f.content)),
             total=total, min_prevalence=min_prevalence, host_names=host_names,
         )
         _auto_select_variants(files)
@@ -365,7 +394,7 @@ def merge_snapshots(
         drop_ins = _merge_content_items(
             _collect_section_lists(snapshots, "services", "drop_ins"),
             identity_fn=lambda d: d.path,
-            variant_fn=lambda d: _content_hash(d.content),
+            variant_fn=lambda d: _content_hash(_normalize_content(d.content)),
             total=total, min_prevalence=min_prevalence, host_names=host_names,
         )
         enabled_units = _deduplicate_strings(
@@ -426,7 +455,7 @@ def merge_snapshots(
         quadlet_units = _merge_content_items(
             _collect_section_lists(snapshots, "containers", "quadlet_units"),
             identity_fn=lambda q: q.path,
-            variant_fn=lambda q: _content_hash(q.content),
+            variant_fn=lambda q: _content_hash(_normalize_content(q.content)),
             total=total, min_prevalence=min_prevalence, host_names=host_names,
         )
         compose_files = _merge_content_items(
@@ -456,7 +485,7 @@ def merge_snapshots(
         non_rpm_env_files = _merge_content_items(
             _collect_section_lists(snapshots, "non_rpm_software", "env_files"),
             identity_fn=lambda f: f.path,
-            variant_fn=lambda f: _content_hash(f.content),
+            variant_fn=lambda f: _content_hash(_normalize_content(f.content)),
             total=total, min_prevalence=min_prevalence, host_names=host_names,
         )
         _auto_select_variants(non_rpm_env_files)

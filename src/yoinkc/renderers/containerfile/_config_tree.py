@@ -354,6 +354,42 @@ def config_inventory_comment(snapshot: InspectionSnapshot, dhcp_paths: set) -> l
             for f in orphaned[:5]:
                 lines.append(f"#   {f.path.lstrip('/')}")
 
+    # Tied items (across all variant-bearing sections)
+    tied_items = []
+    if snapshot.config and snapshot.config.files:
+        tied_configs = [f for f in snapshot.config.files if getattr(f, "tie_winner", False)]
+        for f in tied_configs:
+            path_variants = [v for v in snapshot.config.files if v.path == f.path]
+            tied_items.append((f.path.lstrip("/"), "config", f.fleet, len(path_variants)))
+    if snapshot.services and snapshot.services.drop_ins:
+        tied_dropins = [d for d in snapshot.services.drop_ins if getattr(d, "tie_winner", False)]
+        for d in tied_dropins:
+            path_variants = [v for v in snapshot.services.drop_ins if v.path == d.path]
+            tied_items.append((d.path.lstrip("/"), "drop-in", d.fleet, len(path_variants)))
+    if snapshot.containers:
+        if snapshot.containers.quadlet_units:
+            tied_quads = [q for q in snapshot.containers.quadlet_units if getattr(q, "tie_winner", False)]
+            for q in tied_quads:
+                path_variants = [v for v in snapshot.containers.quadlet_units if v.path == q.path]
+                tied_items.append((q.path.lstrip("/"), "quadlet", q.fleet, len(path_variants)))
+        if snapshot.containers.compose_files:
+            tied_compose = [c for c in snapshot.containers.compose_files if getattr(c, "tie_winner", False)]
+            for c in tied_compose:
+                path_variants = [v for v in snapshot.containers.compose_files if v.path == c.path]
+                tied_items.append((c.path.lstrip("/"), "compose", c.fleet, len(path_variants)))
+    if snapshot.non_rpm_software and snapshot.non_rpm_software.env_files:
+        tied_envs = [f for f in snapshot.non_rpm_software.env_files if getattr(f, "tie_winner", False)]
+        for f in tied_envs:
+            path_variants = [v for v in snapshot.non_rpm_software.env_files if v.path == f.path]
+            tied_items.append((f.path.lstrip("/"), "env", f.fleet, len(path_variants)))
+
+    if tied_items:
+        lines.append(f"# Tied items resolved by content-hash tiebreaker ({len(tied_items)}):")
+        for path, item_type, fleet, variant_count in tied_items:
+            lines.append(f"#   {path}  ({item_type}, {fleet.count}/{fleet.total} hosts each, {variant_count} variants)")
+        lines.append("#   See merge-notes.md for tie details")
+        lines.append("#   Review in report.html or run `yoinkc refine` to change selection")
+
     # Repo files
     if snapshot.rpm and snapshot.rpm.repo_files:
         included_repos = [r for r in snapshot.rpm.repo_files if r.include]

@@ -46,10 +46,15 @@
     <div class="summary-card-value">
       <span id="summary-attention-count" class="counter-animate">{{ triage.fixme + triage.manual + unresolved_ties }}</span>
     </div>
+    {%- if auto_resolved_ties %}
+    <div class="summary-ties-resolved-callout">
+      <span id="summary-auto-ties-count" class="counter-animate">{{ auto_resolved_ties }}</span> tied item{{ 's' if auto_resolved_ties != 1 else '' }} auto-resolved by content hash
+    </div>
+    {%- endif %}
     {%- if unresolved_ties %}
     <div class="summary-ties-callout">
       <span class="summary-ties-icon">&#x26A0;</span>
-      <span id="summary-ties-count" class="counter-animate">{{ unresolved_ties }}</span> config tie{{ 's' if unresolved_ties != 1 else '' }} must be resolved
+      <span id="summary-ties-count" class="counter-animate">{{ unresolved_ties }}</span> unresolved tie{{ 's' if unresolved_ties != 1 else '' }} &mdash; review recommended
     </div>
     {%- endif %}
     <div class="summary-card-detail">

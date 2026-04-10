@@ -17,6 +17,7 @@ from .html_report import render as render_html_report
 from .readme import render as render_readme
 from .kickstart import render as render_kickstart
 from .secrets_review import render as render_secrets_review
+from .merge_notes import render_merge_notes
 
 
 def run_all(
@@ -46,6 +47,7 @@ def run_all(
     _status_fn("Rendering output…")
     render_containerfile(snapshot, env, output_dir)
     write_redacted_dir(snapshot, output_dir)
+    render_merge_notes(snapshot, output_dir)
     render_audit_report(snapshot, env, output_dir, original_snapshot=original_snapshot)
     render_html_report(
         snapshot, env, output_dir,

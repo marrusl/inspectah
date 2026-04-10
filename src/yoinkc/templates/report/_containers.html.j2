@@ -17,12 +17,14 @@
       {%- if variants | length > 1 %}
         {%- set primary = variants[0] %}
         {%- set group_has_selected = variants | selectattr('item.include', 'equalto', true) | list | length > 0 %}
-        {%- set sorted_variants = variants | sort(attribute='item.fleet.count', reverse=true) if variants[0].item.fleet else variants %}
-        {%- set is_tied = (not group_has_selected) and (variants | length >= 2) and sorted_variants[0].item.fleet and sorted_variants[1].item.fleet and (sorted_variants[0].item.fleet.count == sorted_variants[1].item.fleet.count) %}
-        <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}{% if is_tied %} variant-tied{% endif %}"
+        {%- set is_tied = variants | selectattr('item.tie', 'equalto', true) | list | length > 0 %}
+        {%- set tie_winner_variant = variants | selectattr('item.tie_winner', 'equalto', true) | first | default(none) %}
+        <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}{% if is_tied and not tie_winner_variant %} variant-tied{% endif %}"
             data-search-text="{{ path }}"
             data-snap-section="containers" data-snap-list="quadlet_units"
-            data-snap-index="{{ primary.snap_index }}">
+            data-snap-index="{{ primary.snap_index }}"
+            {% if is_tied %}data-tie="true"{% endif %}
+            {% if tie_winner_variant %}data-tie-winner="true"{% endif %}>
           <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if primary.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
           {% if refine_mode %}<td></td>{% endif %}
           <td colspan="3">
@@ -31,8 +33,10 @@
                   aria-expanded="false">
               <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
             </span>
-            {% if is_tied %}
+            {% if is_tied and not tie_winner_variant %}
             <span class="variant-tie-badge"><span class="tie-icon">&#x26A0;</span> tied &mdash; compare &amp; choose</span>
+            {% elif is_tied and tie_winner_variant %}
+            <span class="variant-auto-badge">tie winner ({{ tie_winner_variant.content_hash_short or 'hash' }})</span>
             {% elif group_has_selected %}
             {# Show auto-selected badge when there's a winner (not tied) and multiple variants #}
             <span class="variant-auto-badge">auto-selected</span>
@@ -48,10 +52,13 @@
               <tr{% if not v.item.include %} class="excluded"{% endif %}
                   data-snap-section="containers" data-snap-list="quadlet_units"
                   data-snap-index="{{ v.snap_index }}"
-                  data-variant-group="{{ path }}">
+                  data-variant-group="{{ path }}"
+                  {% if v.item.tie %}data-tie="true"{% endif %}
+                  {% if v.item.tie_winner %}data-tie-winner="true"{% endif %}
+                  {% if v.content_hash_short %}data-content-hash="{{ v.content_hash_short }}"{% endif %}>
                 <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if v.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
                 {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="{% if v.item.include %}Edit in editor{% else %}View in editor (read-only){% endif %}" data-section="containers" data-list="quadlet_units" data-index="{{ v.snap_index }}" data-path="{{ path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
-                <td>{{ v.item.name }} <span class="variant-index">(variant {{ loop.index }})</span></td>
+                <td>{{ v.item.name }} <span class="variant-index">(variant {{ loop.index }})</span>{% if v.item.tie_winner %} <span class="badge" style="background-color: #e67e22; color: #fff;">(auto-selected: tied)</span>{% endif %}</td>
                 {{ fleet_cell(v.item) }}
                 <td class="variant-action-cell">
                   {% if v.item.include %}
@@ -108,8 +115,135 @@
   <div class="pf-v6-c-card pf-v6-c-expandable-section pf-m-expanded">
     <div class="pf-v6-c-card__header">{{ card_toggle("card-ct-compose-files", "Compose Files") }}</div>
     <div class="pf-v6-c-expandable-section__content" id="card-ct-compose-files">
-    {{ card_toolbar("card-ct-compose-items", ct.compose_files|length, "Compose files") }}
+    {%- set compose_count = compose_variant_groups|length if (fleet_meta and compose_variant_groups) else ct.compose_files|length %}
+    {{ card_toolbar("card-ct-compose-items", compose_count, "Compose files") }}
     <div class="pf-v6-c-card__body" id="card-ct-compose-items">
+    {% if fleet_meta and compose_variant_groups %}
+      {%- for path, variants in compose_variant_groups.items() %}
+      {%- if variants | length > 1 %}
+        {%- set primary = variants[0] %}
+        {%- set group_has_selected = variants | selectattr('item.include', 'equalto', true) | list | length > 0 %}
+        {%- set is_tied = variants | selectattr('item.tie', 'equalto', true) | list | length > 0 %}
+        {%- set tie_winner_variant = variants | selectattr('item.tie_winner', 'equalto', true) | first | default(none) %}
+        <div class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}{% if is_tied and not tie_winner_variant %} variant-tied{% endif %}"
+            data-search-text="{{ path }}"
+            data-snap-section="containers" data-snap-list="compose_files"
+            data-snap-index="{{ primary.snap_index }}"
+            {% if is_tied %}data-tie="true"{% endif %}
+            {% if tie_winner_variant %}data-tie-winner="true"{% endif %}>
+          <label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if primary.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label>
+          <span class="text-bold"><code>{{ path }}</code></span>
+          <span class="pf-v6-c-label pf-m-compact pf-m-outline fleet-variant-toggle" tabindex="0" role="button" aria-label="Toggle variants"
+                aria-expanded="false">
+            <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
+          </span>
+          {% if is_tied and not tie_winner_variant %}
+          <span class="variant-tie-badge"><span class="tie-icon">&#x26A0;</span> tied &mdash; compare &amp; choose</span>
+          {% elif is_tied and tie_winner_variant %}
+          <span class="variant-auto-badge">tie winner ({{ tie_winner_variant.content_hash_short or 'hash' }})</span>
+          {% elif group_has_selected %}
+          <span class="variant-auto-badge">auto-selected</span>
+          {% endif %}
+          {% if fleet_meta and primary.item.fleet %}
+          <div class="fleet-prevalence fleet-prevalence-inline">
+            <div class="fleet-bar"
+                 data-count="{{ primary.item.fleet.count }}"
+                 data-total="{{ primary.item.fleet.total }}"
+                 data-hosts="{{ primary.item.fleet.hosts | join(', ') }}"
+                 data-host-titles="{% for host in primary.item.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}"
+                 title="{% for host in primary.item.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}">
+              <div class="fleet-bar-track">
+                <div class="fleet-bar-fill {{ primary.item.fleet | fleet_color }}"
+                     style="width: {{ (primary.item.fleet.count * 100 // primary.item.fleet.total) if primary.item.fleet.total > 0 else 100 }}%"></div>
+              </div>
+              <span class="fleet-bar-label">{{ primary.item.fleet.count }}/{{ primary.item.fleet.total }}</span>
+            </div>
+          </div>
+          {% endif %}
+        </div>
+        <div class="fleet-variant-children" style="display:none;">
+          {%- for v in variants %}
+          <div{% if not v.item.include %} class="excluded"{% endif %}
+              data-snap-section="containers" data-snap-list="compose_files"
+              data-snap-index="{{ v.snap_index }}"
+              data-variant-group="{{ path }}"
+              {% if v.item.tie %}data-tie="true"{% endif %}
+              {% if v.item.tie_winner %}data-tie-winner="true"{% endif %}
+              {% if v.content_hash_short %}data-content-hash="{{ v.content_hash_short }}"{% endif %}>
+            <label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if v.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label>
+            <span class="text-bold"><code>{{ v.item.path }}</code></span> <span class="variant-index">(variant {{ loop.index }})</span>
+            {% if v.item.tie_winner %} <span class="badge" style="background-color: #e67e22; color: #fff;">(auto-selected: tied)</span>{% endif %}
+            {% if fleet_meta and v.item.fleet %}
+            <div class="fleet-prevalence fleet-prevalence-inline">
+              <div class="fleet-bar"
+                   data-count="{{ v.item.fleet.count }}"
+                   data-total="{{ v.item.fleet.total }}"
+                   data-hosts="{{ v.item.fleet.hosts | join(', ') }}"
+                   data-host-titles="{% for host in v.item.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}"
+                   title="{% for host in v.item.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}">
+                <div class="fleet-bar-track">
+                  <div class="fleet-bar-fill {{ v.item.fleet | fleet_color }}"
+                       style="width: {{ (v.item.fleet.count * 100 // v.item.fleet.total) if v.item.fleet.total > 0 else 100 }}%"></div>
+                </div>
+                <span class="fleet-bar-label">{{ v.item.fleet.count }}/{{ v.item.fleet.total }}</span>
+              </div>
+            </div>
+            {% endif %}
+            {%- if v.item.images %}
+            <table class="pf-v6-c-table"><thead><tr><th scope="col">Service</th><th scope="col">Image</th></tr></thead><tbody>
+              {%- for img in v.item.images %}
+              <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
+              {%- endfor %}
+            </tbody></table>
+            {%- else %}
+            <p>No image references found.</p>
+            {%- endif %}
+            <div class="variant-action-cell">
+              {% if v.item.include %}
+                <span class="variant-selected-label">selected</span>
+              {% elif group_has_selected %}
+                <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn">Compare</button>
+              {% else %}
+                <button class="pf-v6-c-button pf-m-link pf-m-small variant-display-btn">Display</button>
+              {% endif %}
+            </div>
+          </div>
+          {%- endfor %}
+        </div>
+      {%- else %}
+        {%- set c = variants[0].item %}
+        <div{% if not c.include %} class="excluded"{% endif %} data-search-text="{{ c.path }}" data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ variants[0].snap_index }}">
+        <label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if c.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label>
+        <span class="text-bold"><code>{{ c.path }}</code></span>
+        {% if fleet_meta and c.fleet %}
+        <div class="fleet-prevalence fleet-prevalence-inline">
+          <div class="fleet-bar"
+               data-count="{{ c.fleet.count }}"
+               data-total="{{ c.fleet.total }}"
+               data-hosts="{{ c.fleet.hosts | join(', ') }}"
+               data-host-titles="{% for host in c.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}"
+               title="{% for host in c.fleet.hosts %}{{ host_title_map.get(host, host) }}{% if not loop.last %}, {% endif %}{% endfor %}">
+            <div class="fleet-bar-track">
+              <div class="fleet-bar-fill {{ c.fleet | fleet_color }}"
+                   style="width: {{ (c.fleet.count * 100 // c.fleet.total) if c.fleet.total > 0 else 100 }}%"></div>
+            </div>
+            <span class="fleet-bar-label">{{ c.fleet.count }}/{{ c.fleet.total }}</span>
+          </div>
+        </div>
+        {% endif %}
+        {%- if c.images %}
+        <table class="pf-v6-c-table"><thead><tr><th scope="col">Service</th><th scope="col">Image</th></tr></thead><tbody>
+          {%- for img in c.images %}
+          <tr><td>{{ img.service }}</td><td><code>{{ img.image }}</code></td></tr>
+          {%- endfor %}
+        </tbody></table>
+        {%- else %}
+        <p>No image references found.</p>
+        {%- endif %}
+        </div>
+      {%- endif %}
+      {%- endfor %}
+    {% else %}
     {%- for c in ct.compose_files %}
     <div{% if not c.include %} class="excluded"{% endif %} data-search-text="{{ c.path }}" data-snap-section="containers" data-snap-list="compose_files" data-snap-index="{{ loop.index0 }}">
     <label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if c.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label>
@@ -141,6 +275,7 @@
     {%- endif %}
     </div>
     {%- endfor %}
+    {% endif %}
     </div></div>
   </div>
   {%- endif %}

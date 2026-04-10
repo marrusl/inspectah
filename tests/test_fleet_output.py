@@ -490,8 +490,9 @@ class TestVariantTieResolution:
     def _make_tied_snapshot(self, *, resolved: bool):
         """Build a snapshot with a 2-way tie on /etc/app.conf.
 
-        If *resolved* is True, one variant has include=True (user chose it).
-        If False, both have include=False (unresolved tie).
+        If *resolved* is True, one variant has include=True (user chose it)
+        and tie_winner=True (auto-resolved by tiebreaker).
+        If False, both have include=False (unresolved tie) and tie=True.
         """
         return InspectionSnapshot(
             schema_version=1,
@@ -514,6 +515,8 @@ class TestVariantTieResolution:
                         content="variant-A",
                         include=resolved,  # user picked this one (or not)
                         fleet=FleetPrevalence(count=1, total=2, hosts=["web-01"]),
+                        tie=True,
+                        tie_winner=resolved,
                     ),
                     ConfigFileEntry(
                         path="/etc/app.conf",
@@ -521,6 +524,7 @@ class TestVariantTieResolution:
                         content="variant-B",
                         include=False,
                         fleet=FleetPrevalence(count=1, total=2, hosts=["web-02"]),
+                        tie=True,
                     ),
                 ],
             ),

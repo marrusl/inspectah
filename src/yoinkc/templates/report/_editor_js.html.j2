@@ -85,7 +85,9 @@
           entries.sort(function(a, b) {
             var ac = (a.item.fleet && a.item.fleet.count) || 0;
             var bc = (b.item.fleet && b.item.fleet.count) || 0;
-            return bc - ac;
+            if (bc !== ac) return bc - ac;
+            // Secondary sort: included variant first among ties
+            return (b.item.include ? 1 : 0) - (a.item.include ? 1 : 0);
           });
 
           var group = document.createElement('div');
@@ -101,20 +103,32 @@
             '<span class="path-file">' + escapeHtml(pp.name) + '</span>' +
             ' <span class="pf-v6-c-badge pf-m-read">' + entries.length + ' variants</span>';
 
-          var hasSelected = entries.some(function(e) { return e.item.include === true; });
-          if (!hasSelected && entries.length >= 2) {
-            var sortedForTie = entries.slice().sort(function(a, b) {
-              return (b.item.fleet ? b.item.fleet.count : 0) - (a.item.fleet ? a.item.fleet.count : 0);
-            });
-            var topCount = sortedForTie[0].item.fleet ? sortedForTie[0].item.fleet.count : 0;
-            var secondCount = sortedForTie[1].item.fleet ? sortedForTie[1].item.fleet.count : 0;
-            if (topCount === secondCount) {
-              group.classList.add('variant-tied');
-              var tieBadge = document.createElement('span');
-              tieBadge.className = 'variant-tie-badge';
-              tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare & choose';
-              headerDiv.appendChild(tieBadge);
+          // Use tie/tie_winner flags from the snapshot model
+          var hasTie = entries.some(function(e) { return e.item.tie === true; });
+          var hasTieWinner = entries.some(function(e) { return e.item.tie_winner === true; });
+          var winnerHashShort = '';
+          if (hasTieWinner) {
+            // Look up the truncated content hash from the rendered variant row
+            var winnerEntry = entries.find(function(e) { return e.item.tie_winner === true; });
+            if (winnerEntry) {
+              var variantRow = document.querySelector(
+                '[data-variant-group="' + CSS.escape(path) + '"][data-tie-winner="true"][data-content-hash]'
+              );
+              if (variantRow) winnerHashShort = variantRow.getAttribute('data-content-hash') || '';
             }
+          }
+          var tieWinnerLabel = winnerHashShort ? 'tie winner (' + winnerHashShort + ')' : 'tie winner (hash)';
+          if (hasTie && !hasTieWinner) {
+            group.classList.add('variant-tied');
+            var tieBadge = document.createElement('span');
+            tieBadge.className = 'variant-tie-badge';
+            tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare & choose';
+            headerDiv.appendChild(tieBadge);
+          } else if (hasTie && hasTieWinner) {
+            var tieWinnerBadge = document.createElement('span');
+            tieWinnerBadge.className = 'variant-auto-badge';
+            tieWinnerBadge.textContent = tieWinnerLabel;
+            headerDiv.appendChild(tieWinnerBadge);
           }
 
           headerDiv.addEventListener('click', function() { toggleAccordion(this); });
@@ -135,6 +149,8 @@
             row.dataset.list = sec.list;
             row.dataset.index = e.idx;
             row.dataset.path = path;
+            if (item.tie) row.dataset.tie = 'true';
+            if (item.tie_winner) row.dataset.tieWinner = 'true';
 
             if (item.fleet) {
               var pct = Math.round((item.fleet.count / item.fleet.total) * 100);
@@ -161,7 +177,8 @@
             if (isSelected) {
               var badge = document.createElement('span');
               badge.className = 'pf-v6-c-badge pf-m-read selected-badge';
-              badge.textContent = 'selected';
+              badge.textContent = item.tie_winner ? '(auto-selected: tied)' : 'selected';
+              badge.style.cssText = item.tie_winner ? 'background-color: #e67e22; color: #fff;' : '';
               row.appendChild(badge);
             } else {
               var groupHasSelected = entries.some(function(s) { return s.item.include === true; });
@@ -345,6 +362,24 @@
         }
       }
       return;
+    }
+
+    // For tied variants, default comparison is tie_winner vs first non-winner tied variant
+    if (selectedItem.tie_winner) {
+      var tiedNonWinners = siblings.filter(function(s) {
+        return s.item.tie === true && !s.item.tie_winner;
+      });
+      if (tiedNonWinners.length > 0) {
+        // If the user clicked a tied non-winner, compare against that
+        // Otherwise use the first tied non-winner
+        var defaultComparison = comparisonItem.tie && !comparisonItem.tie_winner
+          ? comparisonItem
+          : tiedNonWinners[0].item;
+        if (typeof showCompareModal === 'function') {
+          showCompareModal(path, selectedItem, defaultComparison);
+        }
+        return;
+      }
     }
 
     if (typeof showCompareModal === 'function') {
