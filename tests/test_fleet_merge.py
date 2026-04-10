@@ -375,7 +375,11 @@ class TestMergeConfigVariants:
         assert paths == {"/etc/httpd/conf/httpd.conf"}
         for f in merged.config.files:
             assert f.fleet.count == 1
-            assert f.include is False  # 1/2 < 100%
+        # Tied variants: one winner (include=True), one loser (include=False)
+        winners = [f for f in merged.config.files if f.include]
+        losers = [f for f in merged.config.files if not f.include]
+        assert len(winners) == 1
+        assert len(losers) == 1
 
     def test_majority_variant_included_at_threshold(self):
         from yoinkc.fleet.merge import merge_snapshots
@@ -541,7 +545,11 @@ class TestMergeNonRpmSoftware:
         assert len(merged.non_rpm_software.env_files) == 2
         for ef in merged.non_rpm_software.env_files:
             assert ef.fleet.count == 1
-            assert ef.include is False
+        # Tied variants: one winner, one loser
+        winners = [ef for ef in merged.non_rpm_software.env_files if ef.include]
+        losers = [ef for ef in merged.non_rpm_software.env_files if not ef.include]
+        assert len(winners) == 1
+        assert len(losers) == 1
 
     def test_non_rpm_env_files_identical_deduped(self):
         """env_files with same path and content are deduplicated with correct prevalence."""
@@ -709,14 +717,14 @@ class TestAutoSelectVariants:
     @pytest.mark.parametrize("counts,expected_include", [
         # Clear winner: count=3 wins over count=1
         ([3, 1], [True, False]),
-        # 2-way tie: both deselected
-        ([2, 2], [False, False]),
-        # 3-way tie: all deselected
-        ([1, 1, 1], [False, False, False]),
+        # 2-way tie: winner gets True
+        ([2, 2], [True, False]),
+        # 3-way tie: one winner
+        ([1, 1, 1], [True, False, False]),
         # Single variant: always selected
         ([3], [True]),
-        # Mixed [3, 3, 1]: top two tied, all deselected
-        ([3, 3, 1], [False, False, False]),
+        # Mixed [3, 3, 1]: top-two tied, one wins
+        ([3, 3, 1], [True, False, False]),
     ])
     def test_auto_select_config_variants(self, counts, expected_include):
         from yoinkc.fleet.merge import merge_snapshots
@@ -740,8 +748,8 @@ class TestAutoSelectVariants:
         by_content = {f.content: f for f in merged.config.files}
 
         # Map expected_include indices back to sorted-by-count order
-        # variants are in the merged list; sort by fleet.count descending to match spec order
-        sorted_variants = sorted(merged.config.files, key=lambda f: f.fleet.count, reverse=True)
+        # Sort by fleet.count descending, then include descending (winner first among ties)
+        sorted_variants = sorted(merged.config.files, key=lambda f: (f.fleet.count, f.include), reverse=True)
 
         for i, expected in enumerate(expected_include):
             assert sorted_variants[i].include is expected, (
@@ -765,7 +773,6 @@ class TestStorageSuppression:
 class TestTieFlags:
     """Verify tie/tie_winner flags are set correctly after fleet merge."""
 
-    @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
     def test_tied_variants_get_tie_flags(self):
         from yoinkc.fleet.merge import merge_snapshots
 
@@ -805,7 +812,6 @@ class TestTieFlags:
             assert v.tie is False, "Clear winners should not have tie=True"
             assert v.tie_winner is False
 
-    @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
     def test_three_way_tie_one_winner(self):
         from yoinkc.fleet.merge import merge_snapshots
 
@@ -829,6 +835,58 @@ class TestTieFlags:
         losers = [v for v in variants if not v.tie_winner]
         assert len(losers) == 2
         assert all(not v.include for v in losers)
+
+
+class TestDeterministicTiebreaker:
+    """Tiebreaker picks winner by full SHA-256 digest sort."""
+
+    def test_same_winner_regardless_of_input_order(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        content_a = "variant-alpha"
+        content_b = "variant-beta"
+
+        s1a = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_a),
+        ]))
+        s1b = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_b),
+        ]))
+        merged1 = merge_snapshots([s1a, s1b], min_prevalence=0)
+        winner1 = [v for v in merged1.config.files if v.tie_winner][0].content
+
+        s2a = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_b),
+        ]))
+        s2b = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_a),
+        ]))
+        merged2 = merge_snapshots([s2a, s2b], min_prevalence=0)
+        winner2 = [v for v in merged2.config.files if v.tie_winner][0].content
+
+        assert winner1 == winner2, "Tiebreaker must be order-independent"
+
+    def test_tiebreaker_picks_lowest_hash(self):
+        import hashlib
+        from yoinkc.fleet.merge import merge_snapshots, _normalize_content
+
+        content_a = "aaa-content"
+        content_b = "bbb-content"
+
+        hash_a = hashlib.sha256(_normalize_content(content_a).encode()).hexdigest()
+        hash_b = hashlib.sha256(_normalize_content(content_b).encode()).hexdigest()
+        expected_winner = content_a if hash_a < hash_b else content_b
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_a),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_b),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+        winner = [v for v in merged.config.files if v.tie_winner][0]
+
+        assert winner.content == expected_winner
 
 
 class TestNormalization:

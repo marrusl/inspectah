@@ -128,7 +128,8 @@ def _auto_select_variants(items: list) -> None:
     Groups items by ``path``. Within each group:
     - Single variant: always selected (``include=True``).
     - Clear winner (strictly highest ``fleet.count``): winner selected, rest deselected.
-    - Tie at the top: all deselected (``include=False``).
+    - Tie at the top: winner picked by lowest full SHA-256 digest; all tied
+      variants get ``tie=True``, winner also gets ``tie_winner=True``.
 
     Items lacking ``path``, ``fleet``, or ``include`` attributes are skipped.
     """
@@ -151,8 +152,30 @@ def _auto_select_variants(items: list) -> None:
             variants[0].include = True
             continue
         variants.sort(key=lambda v: v.fleet.count, reverse=True)
+        top_count = variants[0].fleet.count
         if variants[0].fleet.count == variants[1].fleet.count:
-            for v in variants:
+            # Tie at the top — collect all variants tied at max count
+            tied = [v for v in variants if v.fleet.count == top_count]
+            non_tied = [v for v in variants if v.fleet.count != top_count]
+
+            # Sort tied variants by full content hash for deterministic pick
+            tied.sort(key=lambda v: _content_hash(
+                _normalize_content(v.content) if hasattr(v, "content")
+                else str(sorted((img.service, img.image) for img in v.images))
+            ))
+
+            # Mark all tied variants
+            for v in tied:
+                v.tie = True
+                v.tie_winner = False
+                v.include = False
+
+            # First in hash order wins
+            tied[0].tie_winner = True
+            tied[0].include = True
+
+            # Non-tied variants below the top are just losers
+            for v in non_tied:
                 v.include = False
         else:
             variants[0].include = True
