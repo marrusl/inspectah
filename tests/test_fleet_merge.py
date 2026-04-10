@@ -2,6 +2,8 @@
 """Tests for fleet merge engine."""
 
 import pytest
+import tempfile
+from pathlib import Path
 from yoinkc.schema import (
     InspectionSnapshot, RpmSection, PackageEntry, RepoFile,
     ServiceSection, ServiceStateChange, NetworkSection, FirewallZone,
@@ -978,3 +980,80 @@ class TestContainerfileTieComment:
         comment_text = "\n".join(lines)
 
         assert "Tied" not in comment_text
+
+
+class TestMergeNotes:
+    """merge-notes.md is generated with tie and non-unanimous details."""
+
+    def test_merge_notes_contains_tied_item(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers.merge_notes import render_merge_notes
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            render_merge_notes(merged, output_dir)
+            notes_path = output_dir / "merge-notes.md"
+            assert notes_path.exists(), "merge-notes.md should be created"
+            content = notes_path.read_text()
+            assert "/etc/test.conf" in content
+            assert "tie" in content.lower()
+            assert "variant" in content.lower()
+
+    def test_merge_notes_contains_non_unanimous_item(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers.merge_notes import render_merge_notes
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="majority"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="majority"),
+        ]))
+        s3 = _snap("host-3", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="minority"),
+        ]))
+        merged = merge_snapshots([s1, s2, s3], min_prevalence=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            render_merge_notes(merged, output_dir)
+            content = (output_dir / "merge-notes.md").read_text()
+            assert "/etc/test.conf" in content
+            assert "2/3" in content
+
+    def test_no_merge_notes_when_all_unanimous(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers.merge_notes import render_merge_notes
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            render_merge_notes(merged, output_dir)
+            assert not (output_dir / "merge-notes.md").exists()
+
+    def test_merge_notes_absent_for_single_host(self):
+        from yoinkc.renderers.merge_notes import render_merge_notes
+
+        snap = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="val"),
+        ]))
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            render_merge_notes(snap, output_dir)
+            assert not (output_dir / "merge-notes.md").exists()
