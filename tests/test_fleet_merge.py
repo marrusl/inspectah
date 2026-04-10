@@ -982,6 +982,31 @@ class TestContainerfileTieComment:
         assert "Tied" not in comment_text
 
 
+class TestAuditReportDisambiguation:
+    """Audit report distinguishes [EXCLUDED], [TIE LOSER], and [REDACTED]."""
+
+    def test_tie_loser_labeled_in_audit_report(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers.audit_report import render
+        from jinja2 import Environment, FileSystemLoader
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
+            env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
+            render(merged, env, output_dir)
+            content = (output_dir / "audit-report.md").read_text()
+            assert "[TIE LOSER]" in content, "Tie losers should be labeled [TIE LOSER]"
+
+
 class TestMergeNotes:
     """merge-notes.md is generated with tie and non-unanimous details."""
 

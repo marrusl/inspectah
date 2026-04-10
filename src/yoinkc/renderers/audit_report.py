@@ -9,6 +9,21 @@ from ..schema import ConfigFileKind, InspectionSnapshot
 from ._triage import compute_triage, _config_file_count, _QUADLET_PREFIX
 
 
+def _item_label(item, redacted_paths: set[str]) -> str:
+    """Return the appropriate label prefix for an item.
+
+    Precedence: [REDACTED] > [TIE LOSER] > [EXCLUDED] > ""
+    """
+    path = getattr(item, "path", "")
+    if path in redacted_paths:
+        return "[REDACTED] "
+    if not item.include:
+        if getattr(item, "tie", False) and not getattr(item, "tie_winner", False):
+            return "[TIE LOSER] "
+        return "[EXCLUDED] "
+    return ""
+
+
 def _storage_recommendation(mount_point: str, fstype: str, device: str) -> str:
     """Map a mount point to a migration recommendation."""
     mp = mount_point
@@ -83,6 +98,13 @@ def render(
     original_snapshot: Optional[InspectionSnapshot] = None,
 ) -> None:
     output_dir = Path(output_dir)
+
+    # Build redacted paths set for item labeling
+    redacted_paths = {
+        f.path for f in snapshot.redactions
+        if hasattr(f, "source") and f.source == "file" and hasattr(f, "kind") and f.kind == "excluded"
+    }
+
     lines = ["# Audit Report", ""]
     if snapshot.os_release:
         lines.append(f"**OS:** {snapshot.os_release.pretty_name or snapshot.os_release.name}")
@@ -240,7 +262,8 @@ def render(
                     lines.append("```")
                 lines.append("")
             for di in excluded:
-                lines.append(f"[EXCLUDED] **{di.unit}** — `{di.path}`")
+                prefix = _item_label(di, redacted_paths)
+                lines.append(f"{prefix}**{di.unit}** — `{di.path}`")
                 lines.append("")
 
     config_files = [
@@ -264,7 +287,7 @@ def render(
             lines.append(f"- **Custom CA certificates** ({len(ca_anchors)}): {names}")
             lines.append("  `update-ca-trust` will be run in the Containerfile after COPYing these files.")
         for f in config_files:
-            prefix = "[EXCLUDED] " if not f.include else ""
+            prefix = _item_label(f, redacted_paths)
             flags_note = f" — rpm -Va flags: `{f.rpm_va_flags}`" if f.rpm_va_flags else ""
             pkg_note = f" (package: {f.package})" if f.package else ""
             lines.append(f"- {prefix}`{f.path}` ({f.kind.value}{flags_note}{pkg_note})")
@@ -483,7 +506,7 @@ def render(
             lines.append("| Unit | Image | Path |")
             lines.append("|------|-------|------|")
             for u in ct.quadlet_units:
-                prefix = "[EXCLUDED] " if not u.include else ""
+                prefix = _item_label(u, redacted_paths)
                 lines.append(f"| {prefix}{u.name} | `{u.image or '*none*'}` | `{u.path}` |")
             lines.append("")
 
@@ -491,7 +514,7 @@ def render(
             lines.append("### Compose files")
             lines.append("")
             for c in ct.compose_files:
-                prefix = "[EXCLUDED] " if not c.include else ""
+                prefix = _item_label(c, redacted_paths)
                 lines.append(f"{prefix}**`{c.path}`**")
                 if c.images:
                     lines.append("")
