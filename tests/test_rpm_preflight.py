@@ -414,3 +414,76 @@ class TestArchitectPreflightAggregation:
         assert fi.unavailable_packages == ["mcelog"]
         assert fi.direct_install_packages == ["custom-agent"]
         assert fi.preflight_status == "completed"
+
+
+class TestEndToEnd:
+    def test_preflight_roundtrip_via_snapshot(self, tmp_path):
+        """Preflight data survives: inspect -> save snapshot -> load -> render."""
+        from yoinkc.pipeline import save_snapshot, load_snapshot
+
+        snapshot = InspectionSnapshot(
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="1.0",
+                                 release="1", arch="x86_64", source_repo="baseos"),
+                    PackageEntry(name="mcelog", epoch="0", version="1.0",
+                                 release="1", arch="x86_64", source_repo="baseos"),
+                ],
+                base_image="quay.io/fedora/fedora-bootc:44",
+                no_baseline=True,
+            ),
+            preflight=PreflightResult(
+                status="completed",
+                available=["httpd"],
+                unavailable=["mcelog"],
+                base_image="quay.io/fedora/fedora-bootc:44",
+                repos_queried=["fedora"],
+                timestamp="2026-04-09T17:00:00Z",
+            ),
+        )
+
+        # Save and reload
+        path = tmp_path / "snapshot.json"
+        save_snapshot(snapshot, path)
+        loaded = load_snapshot(path)
+
+        assert loaded.preflight.status == "completed"
+        assert loaded.preflight.unavailable == ["mcelog"]
+        assert loaded.preflight.available == ["httpd"]
+
+        # Render — mcelog should be excluded
+        lines = section_lines(
+            loaded, base="quay.io/fedora/fedora-bootc:44",
+            c_ext_pip=[], needs_multistage=False,
+        )
+        install_block = [l.strip().rstrip(" \\") for l in lines
+                         if l.startswith("    ") and not l.strip().startswith("#")
+                         and not l.strip().startswith("&&")]
+        assert "mcelog" not in install_block
+        assert "httpd" in install_block
+
+    def test_skip_unavailable_preserves_all_packages(self):
+        """With skipped preflight, renderer includes all packages."""
+        snapshot = InspectionSnapshot(
+            rpm=RpmSection(
+                packages_added=[
+                    PackageEntry(name="httpd", epoch="0", version="1.0",
+                                 release="1", arch="x86_64"),
+                    PackageEntry(name="mcelog", epoch="0", version="1.0",
+                                 release="1", arch="x86_64"),
+                ],
+                base_image="quay.io/fedora/fedora-bootc:44",
+                no_baseline=True,
+            ),
+            preflight=PreflightResult(
+                status="skipped",
+                status_reason="user passed --skip-unavailable",
+            ),
+        )
+        lines = section_lines(
+            snapshot, base="quay.io/fedora/fedora-bootc:44",
+            c_ext_pip=[], needs_multistage=False,
+        )
+        joined = "\n".join(lines)
+        assert "httpd" in joined
+        assert "mcelog" in joined
