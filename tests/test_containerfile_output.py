@@ -803,6 +803,28 @@ class TestTunedProfile:
         assert 'RUN echo "virtual-guest" > /etc/tuned/active_profile' in cf
         assert "RUN systemctl enable tuned.service" in cf
 
+    def test_profile_mode_set_to_manual(self):
+        """profile_mode must be written as 'manual' alongside active_profile."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
+        )
+        cf = self._render(snap)
+        assert 'RUN echo "manual" > /etc/tuned/profile_mode' in cf
+        # profile_mode must come after active_profile
+        ap_pos = cf.index("/etc/tuned/active_profile")
+        pm_pos = cf.index("/etc/tuned/profile_mode")
+        assert pm_pos > ap_pos, "profile_mode must be written after active_profile"
+
+    def test_profile_mode_absent_when_no_active_profile(self):
+        """No tuned_active → no profile_mode line either."""
+        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        snap = InspectionSnapshot(
+            kernel_boot=KernelBootSection(tuned_active=""),
+        )
+        cf = self._render(snap)
+        assert "/etc/tuned/profile_mode" not in cf
+
     def test_tuned_package_in_main_install_block(self):
         """tuned appears inside the multi-package dnf install block, not standalone."""
         from yoinkc.schema import InspectionSnapshot, KernelBootSection

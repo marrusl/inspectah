@@ -54,6 +54,7 @@ def section_lines(snapshot: InspectionSnapshot) -> list[str]:
                 if kb.tuned_custom_profiles:
                     lines.append("COPY config/etc/tuned/ /etc/tuned/")
                 lines.append(f'RUN echo "{kb.tuned_active}" > /etc/tuned/active_profile')
+                lines.append('RUN echo "manual" > /etc/tuned/profile_mode')
                 lines.append("RUN systemctl enable tuned.service")
             else:
                 lines.append(f"# FIXME: tuned profile name contains unsafe characters: {kb.tuned_active!r}")
