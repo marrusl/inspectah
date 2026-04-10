@@ -501,6 +501,45 @@ def _collect_gpg_keys(host_root: Path, repo_files: List[RepoFile]) -> List[RepoF
     return [RepoFile(path=p, content=c) for p, c in sorted(seen.items())]
 
 
+def _detect_repo_providing_packages(
+    executor: "Executor",
+    host_root: Path,
+) -> List[str]:
+    """Detect packages that own .repo files in /etc/yum.repos.d/.
+
+    These are repo-providing packages (e.g., epel-release) that need
+    to be bootstrapped in the preflight container before checking
+    availability of packages from their repos.
+    """
+    repo_dir = host_root / "etc" / "yum.repos.d"
+    if not repo_dir.is_dir():
+        return []
+
+    repo_files = [f for f in repo_dir.iterdir() if f.suffix == ".repo" and f.is_file()]
+    if not repo_files:
+        return []
+
+    dbpath = detect_rpmdb_path(host_root, relative=False)
+    cmd = ["rpm", "--dbpath", dbpath, "-qf", "--queryformat", "%{NAME}\n"]
+    cmd += [str(f) for f in repo_files]
+
+    _debug(f"detecting repo-providing packages: {len(repo_files)} repo files")
+    result = executor(cmd)
+    if result.returncode != 0:
+        _debug(f"rpm -qf failed (rc={result.returncode}): {result.stderr[:200]}")
+        if not result.stdout.strip():
+            return []
+
+    owners: set = set()
+    for line in result.stdout.splitlines():
+        name = line.strip()
+        if name and "is not owned by" not in name:
+            owners.add(name)
+
+    _debug(f"repo-providing packages: {sorted(owners)}")
+    return sorted(owners)
+
+
 def _dnf_history_removed(executor: Executor, host_root: Path, warnings: Optional[list] = None) -> List[str]:
     """Run dnf history and collect package names from Remove transactions."""
     result = executor(["dnf", "history", "list", "-q"], cwd=str(host_root))
@@ -1230,6 +1269,11 @@ def run(
     # 5) Repo files
     section.repo_files = _collect_repo_files(host_root)
     section.gpg_keys = _collect_gpg_keys(host_root, section.repo_files)
+
+    # 5-rpp) Repo-providing packages
+    if executor is not None:
+        section.repo_providing_packages = _detect_repo_providing_packages(executor, host_root)
+        _debug(f"repo-providing packages: {section.repo_providing_packages}")
 
     # 5a) DNF module streams
     section.module_streams = _collect_module_streams(host_root)

@@ -25,7 +25,8 @@ _yoinkc_inspect() {
         '--public[Make new repo public]' \
         '--yes[Skip interactive confirmation prompts]' \
         '--sensitivity[Heuristic detection sensitivity]:sensitivity:(strict moderate)' \
-        '--no-redaction[Disable all redaction — detection still runs]'
+        '--no-redaction[Disable all redaction — detection still runs]' \
+        '--skip-unavailable[Skip the package availability preflight check]'
 }
 
 _yoinkc_fleet() {

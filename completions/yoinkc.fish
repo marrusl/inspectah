@@ -32,6 +32,7 @@ complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l public -d "M
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l yes -d "Skip interactive confirmation prompts"
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l sensitivity -r -a "strict moderate" -d "Heuristic detection sensitivity"
 complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l no-redaction -d "Disable all redaction"
+complete -c yoinkc -n "not __fish_seen_subcommand_from $subcmds" -l skip-unavailable -d "Skip the package availability preflight check"
 
 # inspect flags
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l host-root -r -d "Root path for host inspection"
@@ -56,6 +57,7 @@ complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l public -d "Make n
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l yes -d "Skip interactive confirmation prompts"
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l sensitivity -r -a "strict moderate" -d "Heuristic detection sensitivity"
 complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l no-redaction -d "Disable all redaction"
+complete -c yoinkc -n "__fish_seen_subcommand_from inspect" -l skip-unavailable -d "Skip the package availability preflight check"
 
 # fleet flags
 complete -c yoinkc -n "__fish_seen_subcommand_from fleet" -s p -l min-prevalence -r -d "Include items present on >= PCT% of hosts"

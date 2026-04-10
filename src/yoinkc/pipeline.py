@@ -438,6 +438,8 @@ def run_pipeline(
         save_snapshot(snapshot, tmp_dir / "inspection-snapshot.json")
         run_renderers(snapshot, tmp_dir)
         _print_secrets_summary(snapshot)
+        from .renderers.containerfile.packages import emit_preflight_diagnostics
+        emit_preflight_diagnostics(snapshot)
         if no_redaction:
             _print_no_redaction_warning(snapshot)
 

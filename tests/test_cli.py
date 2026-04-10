@@ -395,6 +395,20 @@ class TestRefineSubcommand:
         assert "tarball" in out.lower()
 
 
+def test_skip_unavailable_flag():
+    """--skip-unavailable is parsed correctly."""
+    from yoinkc.cli import parse_args
+    args = parse_args(["inspect", "--skip-unavailable"])
+    assert args.skip_unavailable is True
+
+
+def test_skip_unavailable_default_false():
+    """--skip-unavailable defaults to False."""
+    from yoinkc.cli import parse_args
+    args = parse_args(["inspect"])
+    assert args.skip_unavailable is False
+
+
 class TestMainModule:
     """Verify `python -m yoinkc` works via __main__.py guard."""
 

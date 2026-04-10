@@ -2,6 +2,7 @@
 
 import functools
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import List
@@ -207,25 +208,24 @@ def section_lines(
 
     # Package Installation
     if has_pkgs or included_version_locks or needs_tuned_pkg:
+        from ...install_set import resolve_install_set
+
         # Leaf/auto classification (only relevant when packages exist)
         install_names: List[str] = []
         auto_count = 0
         if has_pkgs:
+            # FIXME comments for unsafe package names
             included_pkgs = [p for p in rpm.packages_added if p.include]
-            raw_names = sorted(set(p.name for p in included_pkgs))
-            safe_names: List[str] = []
-            for n in raw_names:
-                if _sanitize_shell_value(n, "dnf install") is not None:
-                    safe_names.append(n)
-                else:
-                    lines.append(f"# FIXME: package name contains unsafe characters, skipped: {n!r}")
+            for p in included_pkgs:
+                if _sanitize_shell_value(p.name, "dnf install") is None:
+                    lines.append(f"# FIXME: package name contains unsafe characters, skipped: {p.name!r}")
 
+            # Compute auto_count for the comment (resolve_install_set handles filtering)
             leaf_set = set(rpm.leaf_packages) if rpm.leaf_packages is not None else None
             dep_tree = rpm.leaf_dep_tree or {}
             if leaf_set is not None and not getattr(rpm, "no_baseline", False):
-                included_name_set = set(raw_names)
+                included_name_set = set(p.name for p in included_pkgs)
                 included_leaf_names = leaf_set & included_name_set
-                install_names = [n for n in safe_names if n in included_leaf_names]
                 if dep_tree:
                     remaining_auto: set = set()
                     for lf in included_leaf_names:
@@ -234,16 +234,25 @@ def section_lines(
                 else:
                     all_auto = set(rpm.auto_packages) if rpm.auto_packages else set()
                     auto_count = len(all_auto & included_name_set)
-            else:
-                install_names = safe_names
 
-        # Snapshot-derived count, recorded before synthetic prerequisites are added,
-        # so the comment accurately reflects host-observed state.
-        observed_count = len(install_names)
+        # Use resolve_install_set for all package filtering + tuned injection
+        install_names = resolve_install_set(snapshot)
 
-        if needs_tuned_pkg and "tuned" not in install_names:
-            install_names.append("tuned")
-            install_names.sort()
+        # Apply preflight filtering (exclude unavailable and direct-install)
+        preflight = snapshot.preflight
+        if preflight.status in ("completed", "partial"):
+            exclude_set = set(preflight.unavailable) | set(preflight.direct_install)
+            if exclude_set:
+                install_names = [n for n in install_names if n not in exclude_set]
+
+        # Snapshot-derived count excludes synthetically injected tuned
+        # (reflects host-observed packages only)
+        if has_pkgs:
+            included_pkgs = [p for p in rpm.packages_added if p.include]
+            tuned_on_host = any(p.name == "tuned" for p in included_pkgs)
+            observed_count = len(install_names) if tuned_on_host else len(install_names) - (1 if "tuned" in install_names else 0)
+        else:
+            observed_count = 0
 
         lines.append("# === Package Installation ===")
         if has_pkgs:
@@ -311,3 +320,63 @@ def section_lines(
         lines.append("")
 
     return lines
+
+
+def emit_preflight_diagnostics(snapshot: InspectionSnapshot) -> None:
+    """Emit the preflight diagnostic block to stderr."""
+    preflight = snapshot.preflight
+    if preflight.status == "skipped":
+        return
+    if preflight.status == "failed":
+        print(f"\nPreflight check failed: {preflight.status_reason}", file=sys.stderr)
+        return
+
+    has_issues = (
+        preflight.direct_install or preflight.unavailable
+        or preflight.unverifiable or preflight.repo_unreachable
+    )
+    if not has_issues:
+        return
+
+    print("\n=== Package Availability Report ===\n", file=sys.stderr)
+    excluded_count = 0
+
+    if preflight.direct_install:
+        print("NOT IN ANY REPO (installed directly via rpm — cannot be installed from repos):", file=sys.stderr)
+        for pkg in sorted(preflight.direct_install):
+            print(f"  {pkg}", file=sys.stderr)
+        excluded_count += len(preflight.direct_install)
+        print("", file=sys.stderr)
+
+    if preflight.unavailable:
+        print("UNAVAILABLE in target repos:", file=sys.stderr)
+        for pkg in sorted(preflight.unavailable):
+            print(f"  {pkg}", file=sys.stderr)
+        excluded_count += len(preflight.unavailable)
+        print("", file=sys.stderr)
+
+    if preflight.unverifiable:
+        print("UNVERIFIABLE (could not check — included in Containerfile but not validated):", file=sys.stderr)
+        for uv in preflight.unverifiable:
+            print(f"  {uv.name} ({uv.reason})", file=sys.stderr)
+        print("", file=sys.stderr)
+
+    if preflight.repo_unreachable:
+        print("REPO UNREACHABLE (could not verify — packages from these repos not validated):", file=sys.stderr)
+        for repo in preflight.repo_unreachable:
+            print(f"  {repo.repo_id} (error: {repo.error})", file=sys.stderr)
+            if repo.affected_packages:
+                print(f"    Packages from this repo: {', '.join(sorted(repo.affected_packages))}", file=sys.stderr)
+        print("", file=sys.stderr)
+
+    if excluded_count:
+        print(f"{excluded_count} packages excluded from Containerfile.", file=sys.stderr)
+    unverifiable_count = len(preflight.unverifiable)
+    if unverifiable_count:
+        s = "s" if unverifiable_count != 1 else ""
+        print(f"{unverifiable_count} package{s} unverifiable (included but not validated).", file=sys.stderr)
+    repo_unreachable_pkg_count = sum(len(r.affected_packages) for r in preflight.repo_unreachable)
+    if repo_unreachable_pkg_count:
+        print(f"{repo_unreachable_pkg_count} packages from unreachable repos (included but not validated).", file=sys.stderr)
+    print(f"Preflight status: {preflight.status.upper()} — use --skip-unavailable to skip all checks.", file=sys.stderr)
+    print("===", file=sys.stderr)
