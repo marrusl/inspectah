@@ -145,3 +145,142 @@ class TestRepoProvidingPackages:
 
         result = _detect_repo_providing_packages(executor, host_root)
         assert result == []
+
+
+# --- Preflight module tests ---
+
+from datetime import datetime, timezone
+from unittest.mock import patch, MagicMock
+
+from yoinkc.rpm_preflight import run_package_preflight
+from yoinkc.schema import PackageEntry, PackageState, RepoFile
+
+
+def _make_preflight_snapshot(
+    packages=None,
+    base_image="quay.io/fedora/fedora-bootc:44",
+    repo_providing_packages=None,
+):
+    """Build a snapshot suitable for preflight testing."""
+    entries = []
+    for name in (packages or []):
+        entries.append(PackageEntry(
+            name=name, epoch="0", version="1.0", release="1.fc44",
+            arch="x86_64", state=PackageState.ADDED, include=True, source_repo="baseos",
+        ))
+    section = RpmSection(
+        packages_added=entries, no_baseline=True, base_image=base_image,
+        repo_providing_packages=repo_providing_packages or [],
+    )
+    return InspectionSnapshot(rpm=section)
+
+
+def _make_preflight_executor(
+    repoquery_stdout="",
+    repoquery_rc=0,
+    repoquery_stderr="",
+    pull_rc=0,
+    bootstrap_rc=0,
+    repos_stdout="fedora\nupdates\n",
+):
+    """Build a mock executor for preflight subprocess calls.
+    repoquery_stdout should contain plain package names (one per line),
+    matching the --queryformat "%{name}" output format.
+    """
+    def executor(cmd, cwd=None):
+        cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
+        if "podman" in cmd_str and "pull" in cmd_str:
+            return RunResult(stdout="", stderr="" if pull_rc == 0 else "pull failed", returncode=pull_rc)
+        if "podman" in cmd_str and "run" in cmd_str and "dnf install" in cmd_str:
+            return RunResult(stdout="", stderr="" if bootstrap_rc == 0 else "install failed", returncode=bootstrap_rc)
+        if "podman" in cmd_str and "run" in cmd_str and "repoquery" in cmd_str:
+            return RunResult(stdout=repoquery_stdout, stderr=repoquery_stderr, returncode=repoquery_rc)
+        if "podman" in cmd_str and "run" in cmd_str and "repolist" in cmd_str:
+            return RunResult(stdout=repos_stdout, stderr="", returncode=0)
+        if "podman" in cmd_str and "rm" in cmd_str:
+            return RunResult(stdout="", stderr="", returncode=0)
+        return RunResult(stdout="", stderr="unknown cmd", returncode=1)
+    return executor
+
+
+class TestPackagePreflight:
+    def test_all_available(self):
+        snapshot = _make_preflight_snapshot(packages=["httpd", "nginx"])
+        executor = _make_preflight_executor(repoquery_stdout="httpd\nnginx\n")
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert result.status == "completed"
+        assert sorted(result.available) == ["httpd", "nginx"]
+        assert result.unavailable == []
+
+    def test_some_unavailable(self):
+        snapshot = _make_preflight_snapshot(packages=["httpd", "mcelog", "nginx"])
+        executor = _make_preflight_executor(repoquery_stdout="httpd\nnginx\n")
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert result.status == "completed"
+        assert result.unavailable == ["mcelog"]
+        assert sorted(result.available) == ["httpd", "nginx"]
+
+    def test_base_image_pull_fails(self):
+        snapshot = _make_preflight_snapshot(packages=["httpd"])
+        executor = _make_preflight_executor(pull_rc=1)
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert result.status == "failed"
+        assert "pull" in result.status_reason.lower()
+
+    def test_direct_install_excluded(self):
+        entries = [
+            PackageEntry(name="httpd", epoch="0", version="1.0", release="1", arch="x86_64", source_repo="baseos"),
+            PackageEntry(name="custom-agent", epoch="0", version="1.0", release="1", arch="x86_64", source_repo=""),
+            PackageEntry(name="local-tool", epoch="0", version="1.0", release="1", arch="x86_64", source_repo="(none)"),
+        ]
+        snapshot = InspectionSnapshot(rpm=RpmSection(
+            packages_added=entries, no_baseline=True, base_image="quay.io/fedora/fedora-bootc:44",
+        ))
+        executor = _make_preflight_executor(repoquery_stdout="httpd\n")
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert sorted(result.direct_install) == ["custom-agent", "local-tool"]
+        assert "custom-agent" not in result.available
+        assert "custom-agent" not in result.unavailable
+
+    def test_repo_provider_bootstrap_failure_classifies_correctly(self):
+        snapshot = _make_preflight_snapshot(
+            packages=["httpd", "some-epel-pkg"],
+            repo_providing_packages=["epel-release"],
+        )
+        snapshot.rpm.packages_added[0].source_repo = "baseos"
+        snapshot.rpm.packages_added[1].source_repo = "epel"
+        snapshot.rpm.repo_files = [
+            RepoFile(path="etc/yum.repos.d/epel.repo", content="[epel]\nname=EPEL\n", is_default_repo=False),
+        ]
+        executor = _make_preflight_executor(bootstrap_rc=1, repoquery_stdout="httpd\n")
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert result.status == "partial"
+        assert "epel-release" in result.status_reason
+        assert "httpd" in result.available
+        unverifiable_names = [uv.name for uv in result.unverifiable]
+        assert "some-epel-pkg" in unverifiable_names
+        assert "some-epel-pkg" not in result.unavailable
+
+    def test_repo_unreachable_detected(self):
+        snapshot = _make_preflight_snapshot(packages=["httpd", "internal-app"])
+        executor = _make_preflight_executor(
+            repoquery_stdout="httpd\n",
+            repoquery_stderr="Failed to synchronize cache for repo 'internal-mirror': connection timed out\n",
+        )
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert result.status == "partial"
+        assert len(result.repo_unreachable) == 1
+        assert result.repo_unreachable[0].repo_id == "internal-mirror"
+
+    def test_empty_install_set_returns_completed(self):
+        snapshot = InspectionSnapshot(rpm=RpmSection(base_image="quay.io/fedora/fedora-bootc:44"))
+        result = run_package_preflight(snapshot=snapshot, executor=_make_preflight_executor())
+        assert result.status == "completed"
+        assert result.available == []
+
+    def test_no_base_image_returns_failed(self):
+        snapshot = _make_preflight_snapshot(packages=["httpd"])
+        snapshot.rpm.base_image = None
+        result = run_package_preflight(snapshot=snapshot, executor=_make_preflight_executor())
+        assert result.status == "failed"
+        assert "base image" in result.status_reason.lower()
