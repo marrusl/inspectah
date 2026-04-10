@@ -45,6 +45,7 @@ def _run_inspectors(host_root: Path, args) -> InspectionSnapshot:
         target_image=args.target_image,
         user_strategy=args.user_strategy,
         no_baseline_opt_in=args.no_baseline,
+        skip_unavailable=getattr(args, "skip_unavailable", False),
     )
 
 

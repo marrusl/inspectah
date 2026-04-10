@@ -300,3 +300,18 @@ class TestPackagePreflight:
 
         assert "tuned" not in result.direct_install
         assert "tuned" in result.available
+
+
+class TestPreflightIntegration:
+    def test_skip_unavailable_sets_skipped(self, fixture_executor, host_root):
+        """When skip_unavailable=True, snapshot.preflight.status is 'skipped'."""
+        from yoinkc.inspectors import run_all
+
+        snapshot = run_all(
+            host_root,
+            executor=fixture_executor,
+            no_baseline_opt_in=True,
+            skip_unavailable=True,
+        )
+        assert snapshot.preflight.status == "skipped"
+        assert "skip-unavailable" in snapshot.preflight.status_reason

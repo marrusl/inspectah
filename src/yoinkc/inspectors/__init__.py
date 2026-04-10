@@ -227,6 +227,7 @@ def run_all(
     target_image: Optional[str] = None,
     user_strategy: Optional[str] = None,
     no_baseline_opt_in: bool = False,
+    skip_unavailable: bool = False,
 ) -> InspectionSnapshot:
     """Run all inspectors and return a merged snapshot."""
     host_root = Path(host_root)
@@ -369,6 +370,29 @@ def run_all(
             "Running without baseline (--no-baseline). All installed packages "
             "will be included in the Containerfile.",
         ))
+
+    # 1.5) Package availability preflight
+    if skip_unavailable:
+        from ..schema import PreflightResult
+        snapshot.preflight = PreflightResult(
+            status="skipped",
+            status_reason="user passed --skip-unavailable",
+        )
+    elif snapshot.rpm and snapshot.rpm.base_image and executor is not None:
+        _section_banner("Package preflight", 1, _TOTAL_STEPS)
+        from ..rpm_preflight import run_package_preflight
+        try:
+            snapshot.preflight = run_package_preflight(
+                snapshot=snapshot,
+                executor=executor,
+            )
+        except Exception as exc:
+            from ..schema import PreflightResult
+            snapshot.preflight = PreflightResult(
+                status="failed",
+                status_reason=f"Preflight check failed: {exc}",
+            )
+            print(f"WARNING: package preflight failed: {exc}", file=sys.stderr)
 
     # Build RPM-owned path set once; shared by config and scheduled_tasks inspectors
     # to avoid issuing two separate rpm -qa queries.
