@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import signal
 import socket
 import subprocess as sp
 import tarfile
@@ -519,10 +520,14 @@ class TestRunRefine:
             result = run_refine(args)
 
         assert result == 0
-        assert len(registered_handlers) == 2
-        for handler in registered_handlers:
+        assert len(registered_handlers) == 4
+        # First two are the cleanup handlers (SIGINT, SIGTERM)
+        for handler in registered_handlers[:2]:
             with pytest.raises(KeyboardInterrupt):
                 handler()
+        # Last two are SIG_IGN (cleanup-phase ignore)
+        assert registered_handlers[2] == signal.SIG_IGN
+        assert registered_handlers[3] == signal.SIG_IGN
 
     def test_waits_for_server_health_before_opening_browser(self, tmp_path):
         tarball = _minimal_tarball(tmp_path)

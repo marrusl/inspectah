@@ -292,7 +292,7 @@ class TestPencilReorder:
         config_start = html.find('id="section-config"')
         config_html = html[config_start:config_start + 5000]
         pencil_pos = config_html.find("editor-icon")
-        path_pos = config_html.find("/etc/test.conf")
+        path_pos = config_html.find("<code>/etc/test.conf</code>")
         assert pencil_pos != -1, "pencil icon not found in config section"
         assert path_pos != -1, "path not found in config section"
         assert pencil_pos < path_pos, "pencil should appear before path in config DOM order"
@@ -313,7 +313,7 @@ class TestPencilReorder:
         services_start = html.find('id="section-services"')
         services_html = html[services_start:services_start + 6000]
         pencil_pos = services_html.find("editor-icon")
-        path_pos = services_html.find("override.conf")
+        path_pos = services_html.find("<code>etc/systemd/system/postgresql.service.d/override.conf</code>")
         assert pencil_pos != -1, "pencil icon not found in services section"
         assert path_pos != -1, "drop-in path not found in services section"
         assert pencil_pos < path_pos, "pencil should appear before drop-in path in services DOM order"
@@ -335,7 +335,7 @@ class TestPencilReorder:
         containers_start = html.find('id="section-containers"')
         containers_html = html[containers_start:containers_start + 6000]
         pencil_pos = containers_html.find("editor-icon")
-        path_pos = containers_html.find("/etc/containers/systemd/myapp.container")
+        path_pos = containers_html.find("<code>/etc/containers/systemd/myapp.container</code>")
         assert pencil_pos != -1, "pencil icon not found in containers section"
         assert path_pos != -1, "quadlet path not found in containers section"
         assert pencil_pos < path_pos, "pencil should appear before path in containers DOM order"

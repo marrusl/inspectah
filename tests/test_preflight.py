@@ -43,6 +43,8 @@ def _make_inspect_args(**overrides):
         public=False,
         yes=False,
         github_token=None,
+        sensitivity=None,
+        no_redaction=False,
     )
     for key, value in overrides.items():
         setattr(args, key, value)
