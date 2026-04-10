@@ -23,26 +23,26 @@ def resolve_install_set(snapshot: InspectionSnapshot) -> List[str]:
     line and the preflight module will validate against target repos.
     """
     rpm = snapshot.rpm
-    if not rpm or not rpm.packages_added:
-        return []
+    result: List[str] = []
 
-    # 1. Include filter
-    included = [p for p in rpm.packages_added if p.include]
-    raw_names = sorted(set(p.name for p in included))
+    if rpm and rpm.packages_added:
+        # 1. Include filter
+        included = [p for p in rpm.packages_added if p.include]
+        raw_names = sorted(set(p.name for p in included))
 
-    # 2. Shell safety filter
-    safe_names = [n for n in raw_names if _sanitize_shell_value(n, "dnf install") is not None]
+        # 2. Shell safety filter
+        safe_names = [n for n in raw_names if _sanitize_shell_value(n, "dnf install") is not None]
 
-    # 3. Leaf filter (only when baseline exists)
-    leaf_set = set(rpm.leaf_packages) if rpm.leaf_packages is not None else None
-    if leaf_set is not None and not getattr(rpm, "no_baseline", False):
-        included_name_set = set(raw_names)
-        included_leaf_names = leaf_set & included_name_set
-        result = sorted(n for n in safe_names if n in included_leaf_names)
-    else:
-        result = safe_names
+        # 3. Leaf filter (only when baseline exists)
+        leaf_set = set(rpm.leaf_packages) if rpm.leaf_packages is not None else None
+        if leaf_set is not None and not getattr(rpm, "no_baseline", False):
+            included_name_set = set(raw_names)
+            included_leaf_names = leaf_set & included_name_set
+            result = sorted(n for n in safe_names if n in included_leaf_names)
+        else:
+            result = safe_names
 
-    # 4. Synthetic prerequisite: tuned
+    # 4. Synthetic prerequisite: tuned (even when no packages exist)
     needs_tuned = bool(
         snapshot.kernel_boot and snapshot.kernel_boot.tuned_active
         and _TUNED_PROFILE_RE.match(snapshot.kernel_boot.tuned_active)

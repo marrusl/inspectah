@@ -207,25 +207,24 @@ def section_lines(
 
     # Package Installation
     if has_pkgs or included_version_locks or needs_tuned_pkg:
+        from ...install_set import resolve_install_set
+
         # Leaf/auto classification (only relevant when packages exist)
         install_names: List[str] = []
         auto_count = 0
         if has_pkgs:
+            # FIXME comments for unsafe package names
             included_pkgs = [p for p in rpm.packages_added if p.include]
-            raw_names = sorted(set(p.name for p in included_pkgs))
-            safe_names: List[str] = []
-            for n in raw_names:
-                if _sanitize_shell_value(n, "dnf install") is not None:
-                    safe_names.append(n)
-                else:
-                    lines.append(f"# FIXME: package name contains unsafe characters, skipped: {n!r}")
+            for p in included_pkgs:
+                if _sanitize_shell_value(p.name, "dnf install") is None:
+                    lines.append(f"# FIXME: package name contains unsafe characters, skipped: {p.name!r}")
 
+            # Compute auto_count for the comment (resolve_install_set handles filtering)
             leaf_set = set(rpm.leaf_packages) if rpm.leaf_packages is not None else None
             dep_tree = rpm.leaf_dep_tree or {}
             if leaf_set is not None and not getattr(rpm, "no_baseline", False):
-                included_name_set = set(raw_names)
+                included_name_set = set(p.name for p in included_pkgs)
                 included_leaf_names = leaf_set & included_name_set
-                install_names = [n for n in safe_names if n in included_leaf_names]
                 if dep_tree:
                     remaining_auto: set = set()
                     for lf in included_leaf_names:
@@ -234,16 +233,18 @@ def section_lines(
                 else:
                     all_auto = set(rpm.auto_packages) if rpm.auto_packages else set()
                     auto_count = len(all_auto & included_name_set)
-            else:
-                install_names = safe_names
 
-        # Snapshot-derived count, recorded before synthetic prerequisites are added,
-        # so the comment accurately reflects host-observed state.
-        observed_count = len(install_names)
+        # Use resolve_install_set for all package filtering + tuned injection
+        install_names = resolve_install_set(snapshot)
 
-        if needs_tuned_pkg and "tuned" not in install_names:
-            install_names.append("tuned")
-            install_names.sort()
+        # Snapshot-derived count excludes synthetically injected tuned
+        # (reflects host-observed packages only)
+        if has_pkgs:
+            included_pkgs = [p for p in rpm.packages_added if p.include]
+            tuned_on_host = any(p.name == "tuned" for p in included_pkgs)
+            observed_count = len(install_names) if tuned_on_host else len(install_names) - (1 if "tuned" in install_names else 0)
+        else:
+            observed_count = 0
 
         lines.append("# === Package Installation ===")
         if has_pkgs:
