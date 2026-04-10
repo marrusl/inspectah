@@ -128,6 +128,34 @@ class RpmVaEntry(BaseModel):
     package: Optional[str] = None
 
 
+class UnverifiablePackage(BaseModel):
+    """A package that could not be checked during preflight."""
+    name: str
+    reason: str
+
+
+class RepoStatus(BaseModel):
+    """Status of a repo that could not be queried during preflight."""
+    repo_id: str
+    repo_name: str
+    error: str
+    affected_packages: List[str] = Field(default_factory=list)
+
+
+class PreflightResult(BaseModel):
+    """Result of package availability check against target repos."""
+    status: str = "skipped"
+    status_reason: Optional[str] = None
+    available: List[str] = Field(default_factory=list)
+    unavailable: List[str] = Field(default_factory=list)
+    unverifiable: List[UnverifiablePackage] = Field(default_factory=list)
+    direct_install: List[str] = Field(default_factory=list)
+    repo_unreachable: List[RepoStatus] = Field(default_factory=list)
+    base_image: str = ""
+    repos_queried: List[str] = Field(default_factory=list)
+    timestamp: str = ""
+
+
 class OstreePackageOverride(BaseModel):
     """An rpm-ostree package override (layered, replaced, or removed)."""
 
@@ -168,6 +196,7 @@ class RpmSection(BaseModel):
 
     multiarch_packages: List[str] = Field(default_factory=list)
     duplicate_packages: List[str] = Field(default_factory=list)
+    repo_providing_packages: List[str] = Field(default_factory=list)
 
     # Ostree-specific fields
     ostree_overrides: List[OstreePackageOverride] = Field(default_factory=list)
@@ -635,7 +664,7 @@ class RedactionFinding(BaseModel):
 # --- Root snapshot ---
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class InspectionSnapshot(BaseModel):
@@ -661,6 +690,7 @@ class InspectionSnapshot(BaseModel):
     kernel_boot: Optional[KernelBootSection] = None
     selinux: Optional[SelinuxSection] = None
     users_groups: Optional[UserGroupSection] = None
+    preflight: PreflightResult = Field(default_factory=PreflightResult)
 
     # Populated after redaction pass
     warnings: List[dict] = Field(default_factory=list)
