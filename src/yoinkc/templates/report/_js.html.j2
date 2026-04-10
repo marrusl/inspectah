@@ -323,10 +323,11 @@ function trapFocus(modalElement, closeHandler) {
   }
 
   /**
-   * Check whether a variant group is in a tied state (no variant selected
-   * and top two fleet counts are equal).  If so, restore the gold highlight
-   * and tie badge on the parent group row.  If a variant IS selected,
-   * ensure the tied state is removed.
+   * Check whether a variant group is in a tied state using the tie/tie_winner
+   * data attributes (set from model flags).  If no variant is selected and
+   * the group has tied variants, restore the gold highlight and tie badge on
+   * the parent group row.  If a variant IS selected, ensure the tied state
+   * is removed.
    *
    * @param {string} variantGroup - The data-variant-group value
    */
@@ -351,17 +352,25 @@ function trapFocus(modalElement, closeHandler) {
     });
 
     if (!hasSelected) {
-      // No variant selected — check if it's actually a tie (top two counts equal)
-      var counts = [];
+      // No variant selected — check if the group has tie flags
+      var hasTie = false;
+      var hasTieWinner = false;
       variantEls.forEach(function(el) {
-        var sec = el.getAttribute('data-snap-section');
-        var lst = el.getAttribute('data-snap-list');
-        var ix = parseInt(el.getAttribute('data-snap-index'), 10);
-        var ar = resolveSnapshotRef(sec, lst);
-        if (ar && ar[ix] && ar[ix].fleet) counts.push(ar[ix].fleet.count);
+        if (el.getAttribute('data-tie') === 'true') hasTie = true;
+        if (el.getAttribute('data-tie-winner') === 'true') hasTieWinner = true;
       });
-      counts.sort(function(a, b) { return b - a; });
-      if (counts.length >= 2 && counts[0] === counts[1]) {
+      // Also check snapshot-level tie flags
+      if (!hasTie) {
+        variantEls.forEach(function(el) {
+          var sec = el.getAttribute('data-snap-section');
+          var lst = el.getAttribute('data-snap-list');
+          var ix = parseInt(el.getAttribute('data-snap-index'), 10);
+          var ar = resolveSnapshotRef(sec, lst);
+          if (ar && ar[ix] && ar[ix].tie) hasTie = true;
+          if (ar && ar[ix] && ar[ix].tie_winner) hasTieWinner = true;
+        });
+      }
+      if (hasTie && !hasTieWinner) {
         parentRow.classList.add('variant-tied');
         // Replace any "selected" badge with tie badge
         var selBadge = parentRow.querySelector('.variant-selected-badge');
@@ -777,53 +786,67 @@ function trapFocus(modalElement, closeHandler) {
       });
       Object.keys(seen).forEach(function(g) { updateCompareButtons(g); });
     }
-    // Restore tie state on parent group rows after reset
+    // Restore tie state on parent group rows after reset using tie/tie_winner flags
     document.querySelectorAll('.fleet-variant-group').forEach(function(parentRow) {
       var childRows = parentRow.nextElementSibling;
       if (!childRows || !childRows.classList.contains('fleet-variant-children')) return;
       var variantEls = childRows.querySelectorAll('[data-variant-group]');
       if (variantEls.length < 2) return;
 
-      // Check if any variant is now selected after reset
+      // Check tie flags from snapshot data
+      var hasTie = false;
+      var hasTieWinner = false;
       var hasSelected = false;
       variantEls.forEach(function(el) {
         var sec = el.getAttribute('data-snap-section');
         var lst = el.getAttribute('data-snap-list');
         var ix = parseInt(el.getAttribute('data-snap-index'), 10);
         var ar = resolveSnapshotRef(sec, lst);
-        if (ar && ar[ix] && ar[ix].include) hasSelected = true;
+        if (ar && ar[ix]) {
+          if (ar[ix].include) hasSelected = true;
+          if (ar[ix].tie) hasTie = true;
+          if (ar[ix].tie_winner) hasTieWinner = true;
+        }
       });
 
-      if (!hasSelected) {
-        // Check if it's actually a tie (top two counts equal)
-        var counts = [];
-        variantEls.forEach(function(el) {
-          var sec = el.getAttribute('data-snap-section');
-          var lst = el.getAttribute('data-snap-list');
-          var ix = parseInt(el.getAttribute('data-snap-index'), 10);
-          var ar = resolveSnapshotRef(sec, lst);
-          if (ar && ar[ix] && ar[ix].fleet) counts.push(ar[ix].fleet.count);
-        });
-        counts.sort(function(a, b) { return b - a; });
-        if (counts.length >= 2 && counts[0] === counts[1]) {
-          parentRow.classList.add('variant-tied');
-          // Replace any "selected" badge with tie badge
-          var selBadge = parentRow.querySelector('.variant-selected-badge');
-          if (selBadge) {
-            var tieBadge = document.createElement('span');
-            tieBadge.className = 'variant-tie-badge';
-            tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare &amp; choose';
-            selBadge.replaceWith(tieBadge);
-          }
+      if (hasTie && !hasSelected && !hasTieWinner) {
+        // Unresolved tie — show tied state
+        parentRow.classList.add('variant-tied');
+        var selBadge = parentRow.querySelector('.variant-selected-badge');
+        if (selBadge) {
+          var tieBadge = document.createElement('span');
+          tieBadge.className = 'variant-tie-badge';
+          tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare &amp; choose';
+          selBadge.replaceWith(tieBadge);
         }
-      } else {
-        // Has a selected variant — remove tied state if present
+      } else if (hasTie && hasTieWinner) {
+        // Auto-resolved tie — show tie winner badge
+        parentRow.classList.remove('variant-tied');
+        var tieBadge = parentRow.querySelector('.variant-tie-badge');
+        if (tieBadge) {
+          var autoBadge = document.createElement('span');
+          autoBadge.className = 'variant-auto-badge';
+          autoBadge.textContent = 'tie winner (hash)';
+          tieBadge.replaceWith(autoBadge);
+        }
+      } else if (hasSelected && !hasTie) {
+        // Has a selected variant, not a tie — remove tied state if present
         parentRow.classList.remove('variant-tied');
         var tieBadge = parentRow.querySelector('.variant-tie-badge');
         if (tieBadge) {
           var autoBadge = document.createElement('span');
           autoBadge.className = 'variant-auto-badge';
           autoBadge.textContent = 'auto-selected';
+          tieBadge.replaceWith(autoBadge);
+        }
+      } else {
+        // Has a selected variant (tie winner selected) — clear tied state
+        parentRow.classList.remove('variant-tied');
+        var tieBadge = parentRow.querySelector('.variant-tie-badge');
+        if (tieBadge) {
+          var autoBadge = document.createElement('span');
+          autoBadge.className = 'variant-auto-badge';
+          autoBadge.textContent = 'tie winner (hash)';
           tieBadge.replaceWith(autoBadge);
         }
       }
@@ -2361,18 +2384,32 @@ function countAtThreshold(threshold) {
           }
         });
       } else {
-        // No single user selection — fall back to prevalence-based logic.
-        var topCount = variants[0].item.fleet ? variants[0].item.fleet.count : 0;
-        var isTied = variants.length >= 2 &&
-          (variants[1].item.fleet ? variants[1].item.fleet.count : 0) === topCount;
+        // No single user selection — check tie flags first, fall back to prevalence.
+        var isTied = variants.some(function(v) { return v.item.tie === true; });
+        var hasTieWinner = variants.some(function(v) { return v.item.tie_winner === true; });
+        // If no tie flags, fall back to fleet count comparison
+        if (!isTied) {
+          var topCount = variants[0].item.fleet ? variants[0].item.fleet.count : 0;
+          isTied = variants.length >= 2 &&
+            (variants[1].item.fleet ? variants[1].item.fleet.count : 0) === topCount;
+        }
 
-        if (isTied) {
-          // Tied with no user resolution — deselect all.
+        if (isTied && !hasTieWinner) {
+          // Unresolved tie with no user resolution — deselect all.
           variants.forEach(function(v) {
             v.item.include = false;
             var cb = v.el.querySelector('.include-toggle');
             if (cb) cb.checked = false;
             v.el.classList.add('excluded');
+          });
+        } else if (isTied && hasTieWinner) {
+          // Auto-resolved tie — select the tie winner.
+          variants.forEach(function(v) {
+            var isWinner = v.item.tie_winner === true;
+            v.item.include = isWinner;
+            var cb = v.el.querySelector('.include-toggle');
+            if (cb) cb.checked = isWinner;
+            v.el.classList.toggle('excluded', !isWinner);
           });
         } else {
           // Clear winner — promote highest-prevalence variant.

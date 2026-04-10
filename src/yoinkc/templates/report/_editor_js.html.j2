@@ -101,20 +101,20 @@
             '<span class="path-file">' + escapeHtml(pp.name) + '</span>' +
             ' <span class="pf-v6-c-badge pf-m-read">' + entries.length + ' variants</span>';
 
-          var hasSelected = entries.some(function(e) { return e.item.include === true; });
-          if (!hasSelected && entries.length >= 2) {
-            var sortedForTie = entries.slice().sort(function(a, b) {
-              return (b.item.fleet ? b.item.fleet.count : 0) - (a.item.fleet ? a.item.fleet.count : 0);
-            });
-            var topCount = sortedForTie[0].item.fleet ? sortedForTie[0].item.fleet.count : 0;
-            var secondCount = sortedForTie[1].item.fleet ? sortedForTie[1].item.fleet.count : 0;
-            if (topCount === secondCount) {
-              group.classList.add('variant-tied');
-              var tieBadge = document.createElement('span');
-              tieBadge.className = 'variant-tie-badge';
-              tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare & choose';
-              headerDiv.appendChild(tieBadge);
-            }
+          // Use tie/tie_winner flags from the snapshot model
+          var hasTie = entries.some(function(e) { return e.item.tie === true; });
+          var hasTieWinner = entries.some(function(e) { return e.item.tie_winner === true; });
+          if (hasTie && !hasTieWinner) {
+            group.classList.add('variant-tied');
+            var tieBadge = document.createElement('span');
+            tieBadge.className = 'variant-tie-badge';
+            tieBadge.innerHTML = '<span class="tie-icon">\u26A0</span> tied \u2014 compare & choose';
+            headerDiv.appendChild(tieBadge);
+          } else if (hasTie && hasTieWinner) {
+            var tieWinnerBadge = document.createElement('span');
+            tieWinnerBadge.className = 'variant-auto-badge';
+            tieWinnerBadge.textContent = 'tie winner (hash)';
+            headerDiv.appendChild(tieWinnerBadge);
           }
 
           headerDiv.addEventListener('click', function() { toggleAccordion(this); });
@@ -135,6 +135,8 @@
             row.dataset.list = sec.list;
             row.dataset.index = e.idx;
             row.dataset.path = path;
+            if (item.tie) row.dataset.tie = 'true';
+            if (item.tie_winner) row.dataset.tieWinner = 'true';
 
             if (item.fleet) {
               var pct = Math.round((item.fleet.count / item.fleet.total) * 100);
@@ -161,7 +163,7 @@
             if (isSelected) {
               var badge = document.createElement('span');
               badge.className = 'pf-v6-c-badge pf-m-read selected-badge';
-              badge.textContent = 'selected';
+              badge.textContent = item.tie_winner ? 'tie winner (hash)' : 'selected';
               row.appendChild(badge);
             } else {
               var groupHasSelected = entries.some(function(s) { return s.item.include === true; });

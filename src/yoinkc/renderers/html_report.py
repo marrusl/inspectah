@@ -356,6 +356,8 @@ def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
             "snap_index": idx,
             "include": f.include,
             "fleet": f.fleet,
+            "tie": f.tie,
+            "tie_winner": f.tie_winner,
         })
     return result
 
@@ -685,6 +687,7 @@ def _build_context(
         dropin_variant_groups = None
 
     variant_summary = []
+    auto_resolved_ties = 0
     unresolved_ties = 0
     if fleet_meta:
         for label, groups, tab in [
@@ -702,32 +705,40 @@ def _build_context(
                     "files": len(multi),
                     "variants": sum(len(v) for v in multi.values()),
                 })
-            # Count unresolved ties: variant groups with no selected item
-            # where the top two variants share the same fleet count.
+            # Count ties using the explicit tie/tie_winner model flags.
             # Each entry in `vs` is {"item": <model_or_dict>, "snap_index": int}.
             # Config files pass through _prepare_config_files which yields
             # plain dicts, so we must support both attribute and key access.
             for _path, vs in (groups or {}).items():
                 if len(vs) < 2:
                     continue
-                has_selected = any(
-                    (v["item"].get("include", False) if isinstance(v["item"], dict)
-                     else getattr(v["item"], "include", False))
-                    for v in vs
-                )
-                if has_selected:
+
+                def _get_flag(item, flag):
+                    if isinstance(item, dict):
+                        return item.get(flag, False)
+                    return getattr(item, flag, False)
+
+                has_tie = any(_get_flag(v["item"], "tie") for v in vs)
+                if not has_tie:
                     continue
-                fleet_counts = sorted(
-                    (_variant_prevalence(v["item"]) for v in vs),
-                    reverse=True,
-                )
-                if len(fleet_counts) >= 2 and fleet_counts[0] == fleet_counts[1]:
+                has_winner = any(_get_flag(v["item"], "tie_winner") for v in vs)
+                has_included = any(_get_flag(v["item"], "include") for v in vs)
+                if has_winner and has_included:
+                    auto_resolved_ties += 1
+                else:
                     unresolved_ties += 1
 
-    # Inject unresolved ties into triage_detail for the summary priority list
+    # Inject tie counts into triage_detail for the summary priority list
+    if auto_resolved_ties > 0:
+        triage_detail.append({
+            "label": "Auto-resolved ties",
+            "count": auto_resolved_ties,
+            "tab": "config",
+            "status": "auto",
+        })
     if unresolved_ties > 0:
         triage_detail.append({
-            "label": "Variant ties",
+            "label": "Unresolved ties",
             "count": unresolved_ties,
             "tab": "config",
             "status": "manual",
@@ -761,6 +772,7 @@ def _build_context(
         "quadlet_variant_groups": quadlet_variant_groups,
         "dropin_variant_groups": dropin_variant_groups,
         "variant_summary": variant_summary,
+        "auto_resolved_ties": auto_resolved_ties,
         "unresolved_ties": unresolved_ties,
         "containers_data": _prepare_containers(snapshot),
         "non_rpm_data": _prepare_non_rpm(snapshot),
