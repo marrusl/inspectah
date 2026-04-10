@@ -76,10 +76,22 @@ def _snapshot_to_fleet_input(snapshot: dict) -> FleetInput:
 
     base_image = rpm.get("base_image", "")
 
+    # Extract preflight data
+    preflight = snapshot.get("preflight", {})
+    unavailable_packages = list(preflight.get("unavailable", [])) if preflight else []
+    direct_install_packages = list(preflight.get("direct_install", [])) if preflight else []
+    unverifiable = preflight.get("unverifiable", []) if preflight else []
+    unverifiable_packages = [uv.get("name", "") for uv in unverifiable if uv.get("name")]
+    preflight_status = preflight.get("status", "skipped") if preflight else "skipped"
+
     return FleetInput(
         name=hostname,
         packages=packages,
         configs=configs,
         host_count=host_count,
         base_image=base_image if isinstance(base_image, str) else "",
+        unavailable_packages=unavailable_packages,
+        direct_install_packages=direct_install_packages,
+        unverifiable_packages=unverifiable_packages,
+        preflight_status=preflight_status,
     )

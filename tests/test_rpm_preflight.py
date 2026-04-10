@@ -397,3 +397,20 @@ class TestRendererPreflightConsumption:
         assert "httpd" in joined
         assert "mcelog" in joined
         assert "nginx" in joined
+
+
+from yoinkc.architect.analyzer import FleetInput
+
+
+class TestArchitectPreflightAggregation:
+    def test_fleet_input_has_preflight_fields(self):
+        fi = FleetInput(
+            name="fleet-1", packages=["httpd"], configs=[],
+            unavailable_packages=["mcelog"],
+            direct_install_packages=["custom-agent"],
+            preflight_status="completed",
+            base_image="quay.io/fedora/fedora-bootc:44",
+        )
+        assert fi.unavailable_packages == ["mcelog"]
+        assert fi.direct_install_packages == ["custom-agent"]
+        assert fi.preflight_status == "completed"

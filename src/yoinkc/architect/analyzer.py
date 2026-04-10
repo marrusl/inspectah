@@ -15,6 +15,10 @@ class FleetInput:
     configs: list[str]
     host_count: int = 0
     base_image: str = ""
+    unavailable_packages: list[str] = field(default_factory=list)
+    direct_install_packages: list[str] = field(default_factory=list)
+    unverifiable_packages: list[str] = field(default_factory=list)
+    preflight_status: str = "skipped"
 
 
 @dataclass
