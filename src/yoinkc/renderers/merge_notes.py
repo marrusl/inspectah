@@ -7,6 +7,12 @@ from typing import NamedTuple
 from ..schema import InspectionSnapshot
 
 
+def _normalize(text: str) -> str:
+    """Match fleet/merge.py normalization for consistent hashes."""
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    return "\n".join(line.rstrip() for line in lines)
+
+
 class _VariantInfo(NamedTuple):
     path: str
     item_type: str
@@ -37,7 +43,7 @@ def _collect_variant_items(snapshot: InspectionSnapshot) -> list[_VariantInfo]:
                 continue
             for v in variants:
                 c_hash = hashlib.sha256(
-                    content_fn(v).encode()
+                    _normalize(content_fn(v)).encode()
                 ).hexdigest()  # Full 64-char SHA-256
                 items.append(_VariantInfo(
                     path=v.path,
