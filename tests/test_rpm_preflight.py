@@ -1,5 +1,7 @@
 """Tests for RPM preflight check: schema, install set, and preflight module."""
 
+from pathlib import Path
+from yoinkc.executor import RunResult
 from yoinkc.schema import (
     InspectionSnapshot,
     PreflightResult,
@@ -104,3 +106,42 @@ class TestPreflightSchema:
         data = section.model_dump()
         loaded = RpmSection.model_validate(data)
         assert loaded.repo_providing_packages == ["epel-release", "rpmfusion-free-release"]
+
+
+class TestRepoProvidingPackages:
+    def test_detects_repo_providing_packages(self, host_root, fixture_executor):
+        """Packages that own .repo files in /etc/yum.repos.d/ are detected."""
+        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+
+        def executor(cmd, cwd=None):
+            cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
+            if "rpm" in cmd_str and "-qf" in cmd_str and "yum.repos.d" in cmd_str:
+                return RunResult(
+                    stdout="epel-release\nepel-release\nrpmfusion-free-release\n",
+                    stderr="", returncode=0,
+                )
+            return fixture_executor(cmd, cwd=cwd)
+
+        result = _detect_repo_providing_packages(executor, host_root)
+        assert "epel-release" in result
+        assert "rpmfusion-free-release" in result
+
+    def test_no_repo_files(self, tmp_path):
+        """When no repo files exist, returns empty list."""
+        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+
+        def executor(cmd, cwd=None):
+            return RunResult(stdout="", stderr="", returncode=1)
+
+        result = _detect_repo_providing_packages(executor, tmp_path)
+        assert result == []
+
+    def test_rpm_qf_failure_returns_empty(self, host_root):
+        """When rpm -qf fails, returns empty list gracefully."""
+        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+
+        def executor(cmd, cwd=None):
+            return RunResult(stdout="", stderr="error", returncode=1)
+
+        result = _detect_repo_providing_packages(executor, host_root)
+        assert result == []
