@@ -177,6 +177,12 @@ def _add_inspect_args(parser: argparse.ArgumentParser) -> None:
         help="Disable all redaction — detection still runs but no content is modified. "
              "WARNING: output may contain secrets.",
     )
+    parser.add_argument(
+        "--skip-unavailable",
+        action="store_true",
+        help="Skip the package availability preflight check. All packages "
+             "included in the Containerfile without validation.",
+    )
 
 
 def _add_refine_args(parser: argparse.ArgumentParser) -> None:

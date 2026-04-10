@@ -12,7 +12,7 @@ _yoinkc() {
         --baseline-packages --no-baseline --user-strategy --config-diffs
         --deep-binary-scan --query-podman --skip-preflight --validate
         --push-to-github --github-token --public --yes
-        --sensitivity --no-redaction"
+        --sensitivity --no-redaction --skip-unavailable"
 
     local fleet_flags="-p --min-prevalence -o --output-file --output-dir
         --json-only --no-hosts"

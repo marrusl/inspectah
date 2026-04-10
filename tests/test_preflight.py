@@ -23,6 +23,7 @@ def _make_inspect_args(**overrides):
         push_to_github=None,
         from_snapshot=None,
         skip_preflight=False,
+        skip_unavailable=False,
         host_root=Path("/host"),
         host_root_explicit=False,
         config_diffs=False,
