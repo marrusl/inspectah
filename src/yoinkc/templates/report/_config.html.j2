@@ -67,7 +67,7 @@
                 </label>
               </td>
               {% if refine_mode %}<td><button class="pf-v6-c-button pf-m-plain editor-icon" title="{% if v.item.include %}Edit in editor{% else %}View in editor (read-only){% endif %}" data-section="config" data-list="files" data-index="{{ v.item.snap_index }}" data-path="{{ path }}" onclick="navigateToEditor(this)">✏️</button></td>{% endif %}
-              <td><code>{{ path }}</code> <span class="variant-index">(variant {{ loop.index }})</span>{% if v.item.tie_winner %} <span class="variant-auto-badge">tie winner (hash)</span>{% endif %}</td>
+              <td><code>{{ path }}</code> <span class="variant-index">(variant {{ loop.index }})</span>{% if v.item.tie_winner %} <span class="badge" style="background-color: #e67e22; color: #fff;">(auto-selected: tied)</span>{% endif %}</td>
               <td>{{ v.item.kind }}{% if v.item.flags and ('M' in v.item.flags or 'U' in v.item.flags or 'G' in v.item.flags) %} <span class="pf-v6-c-label pf-m-compact pf-m-gold"><span class="pf-v6-c-label__content">permissions</span></span>{% endif %}</td>
               <td>{{ v.item.category | replace('_', ' ') | title }}</td>
               {{ fleet_cell(v.item) }}

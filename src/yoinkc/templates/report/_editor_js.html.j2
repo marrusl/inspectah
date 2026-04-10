@@ -163,7 +163,8 @@
             if (isSelected) {
               var badge = document.createElement('span');
               badge.className = 'pf-v6-c-badge pf-m-read selected-badge';
-              badge.textContent = item.tie_winner ? 'tie winner (hash)' : 'selected';
+              badge.textContent = item.tie_winner ? '(auto-selected: tied)' : 'selected';
+              badge.style.cssText = item.tie_winner ? 'background-color: #e67e22; color: #fff;' : '';
               row.appendChild(badge);
             } else {
               var groupHasSelected = entries.some(function(s) { return s.item.include === true; });
@@ -347,6 +348,24 @@
         }
       }
       return;
+    }
+
+    // For tied variants, default comparison is tie_winner vs first non-winner tied variant
+    if (selectedItem.tie_winner) {
+      var tiedNonWinners = siblings.filter(function(s) {
+        return s.item.tie === true && !s.item.tie_winner;
+      });
+      if (tiedNonWinners.length > 0) {
+        // If the user clicked a tied non-winner, compare against that
+        // Otherwise use the first tied non-winner
+        var defaultComparison = comparisonItem.tie && !comparisonItem.tie_winner
+          ? comparisonItem
+          : tiedNonWinners[0].item;
+        if (typeof showCompareModal === 'function') {
+          showCompareModal(path, selectedItem, defaultComparison);
+        }
+        return;
+      }
     }
 
     if (typeof showCompareModal === 'function') {
