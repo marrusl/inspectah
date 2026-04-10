@@ -404,5 +404,3 @@ These are not design decisions — they are hygiene notes for whoever implements
 - **argv-based subprocess invocation.** All `podman` and `dnf` commands must use argv lists (`subprocess.run(["podman", "run", ...])`) — never shell strings. This avoids injection risks from package names or repo paths containing shell metacharacters.
 
 ---
-
-Closes https://github.com/marrusl/yoinkc/issues/2
