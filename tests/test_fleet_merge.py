@@ -1139,3 +1139,82 @@ class TestMergeNotes:
             output_dir = Path(tmpdir)
             render_merge_notes(snap, output_dir)
             assert not (output_dir / "merge-notes.md").exists()
+
+
+class TestTieRoundTrip:
+    """Full pipeline: merge with ties → render → verify all surfaces."""
+
+    def test_full_render_with_ties(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers import run_all
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=alpha"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=beta"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            run_all(merged, output_dir)
+
+            # Containerfile has tie comment
+            containerfile = (output_dir / "Containerfile").read_text()
+            assert "Tied" in containerfile
+            assert "etc/app.conf" in containerfile
+
+            # merge-notes.md exists with tie details
+            merge_notes = (output_dir / "merge-notes.md").read_text()
+            assert "/etc/app.conf" in merge_notes
+            assert "tie" in merge_notes.lower()
+
+            # Config file is present in output (winner was included)
+            config_file = output_dir / "config" / "etc" / "app.conf"
+            assert config_file.exists(), "Tie winner should be written to config/"
+
+            # audit-report.md has [TIE LOSER]
+            audit = (output_dir / "audit-report.md").read_text()
+            assert "[TIE LOSER]" in audit
+
+    def test_refine_round_trip_resolves_tie(self):
+        """A tie resolved via refine removes the tied-items comment block."""
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers import run_all
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=alpha"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=beta"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        # Identify the auto-picked winner and the loser
+        winner = next(v for v in merged.config.files if v.tie_winner)
+        loser = next(v for v in merged.config.files if not v.tie_winner)
+
+        # Simulate refine: user overrides auto-pick — selects the loser.
+        # Clear tie state on both variants (refine is an explicit user choice,
+        # so the tie is considered resolved — no longer auto-selected).
+        winner.tie = False
+        winner.tie_winner = False
+        winner.include = False
+        loser.tie = False
+        loser.tie_winner = False
+        loser.include = True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            run_all(merged, output_dir)
+
+            # Containerfile should NOT have the "Tied items" comment block
+            containerfile = (output_dir / "Containerfile").read_text()
+            assert "Tied" not in containerfile, \
+                "Tied-items block should be gone after user resolves the tie"
+
+            # The user-selected variant's content should be in config/
+            config_content = (output_dir / "config" / "etc" / "app.conf").read_text()
+            assert loser.content in config_content, \
+                "User-selected variant should be written to config/"
