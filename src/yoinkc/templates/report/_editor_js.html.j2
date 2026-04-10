@@ -85,7 +85,9 @@
           entries.sort(function(a, b) {
             var ac = (a.item.fleet && a.item.fleet.count) || 0;
             var bc = (b.item.fleet && b.item.fleet.count) || 0;
-            return bc - ac;
+            if (bc !== ac) return bc - ac;
+            // Secondary sort: included variant first among ties
+            return (b.item.include ? 1 : 0) - (a.item.include ? 1 : 0);
           });
 
           var group = document.createElement('div');
@@ -104,6 +106,18 @@
           // Use tie/tie_winner flags from the snapshot model
           var hasTie = entries.some(function(e) { return e.item.tie === true; });
           var hasTieWinner = entries.some(function(e) { return e.item.tie_winner === true; });
+          var winnerHashShort = '';
+          if (hasTieWinner) {
+            // Look up the truncated content hash from the rendered variant row
+            var winnerEntry = entries.find(function(e) { return e.item.tie_winner === true; });
+            if (winnerEntry) {
+              var variantRow = document.querySelector(
+                '[data-variant-group="' + CSS.escape(path) + '"][data-tie-winner="true"][data-content-hash]'
+              );
+              if (variantRow) winnerHashShort = variantRow.getAttribute('data-content-hash') || '';
+            }
+          }
+          var tieWinnerLabel = winnerHashShort ? 'tie winner (' + winnerHashShort + ')' : 'tie winner (hash)';
           if (hasTie && !hasTieWinner) {
             group.classList.add('variant-tied');
             var tieBadge = document.createElement('span');
@@ -113,7 +127,7 @@
           } else if (hasTie && hasTieWinner) {
             var tieWinnerBadge = document.createElement('span');
             tieWinnerBadge.className = 'variant-auto-badge';
-            tieWinnerBadge.textContent = 'tie winner (hash)';
+            tieWinnerBadge.textContent = tieWinnerLabel;
             headerDiv.appendChild(tieWinnerBadge);
           }
 

@@ -40,7 +40,7 @@
           {% if is_tied and not tie_winner_variant %}
           <span class="variant-tie-badge"><span class="tie-icon">&#x26A0;</span> tied &mdash; compare &amp; choose</span>
           {% elif is_tied and tie_winner_variant %}
-          <span class="variant-auto-badge">tie winner (hash)</span>
+          <span class="variant-auto-badge">tie winner ({{ tie_winner_variant.content_hash_short or 'hash' }})</span>
           {% elif group_has_selected %}
           {# Show auto-selected badge when there's a winner (not tied) and multiple variants #}
           <span class="variant-auto-badge">auto-selected</span>
@@ -58,7 +58,8 @@
                 data-snap-index="{{ v.item.snap_index }}"
                 data-variant-group="{{ path }}"
                 {% if v.item.tie %}data-tie="true"{% endif %}
-                {% if v.item.tie_winner %}data-tie-winner="true"{% endif %}>
+                {% if v.item.tie_winner %}data-tie-winner="true"{% endif %}
+                {% if v.content_hash_short %}data-content-hash="{{ v.content_hash_short }}"{% endif %}>
               <td class="pf-v6-c-table__check">
                 <label class="pf-v6-c-switch include-toggle-wrap">
                   <input type="checkbox" class="pf-v6-c-switch__input include-toggle"

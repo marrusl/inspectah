@@ -5,6 +5,7 @@ templates/report.html.j2 via Jinja2.  A few helpers produce pre-rendered
 Markup for the file-browser tree and audit report.
 """
 
+import hashlib
 import logging
 import re
 from collections import OrderedDict
@@ -358,6 +359,7 @@ def _prepare_config_files(snapshot: InspectionSnapshot) -> List[dict]:
             "fleet": f.fleet,
             "tie": f.tie,
             "tie_winner": f.tie_winner,
+            "content": f.content,
         })
     return result
 
@@ -421,22 +423,50 @@ def _variant_prevalence(item):
     return fleet.count if fleet else 0
 
 
+def _variant_content_hash(item) -> str:
+    """Compute SHA-256 of the item's content for tie-breaking display."""
+    if isinstance(item, dict):
+        content = item.get("content", "")
+    else:
+        content = getattr(item, "content", "")
+    if not content:
+        return ""
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
 def _group_variants(items, path_key="path"):
     """Group items by path for variant display.
 
     Returns OrderedDict[path, list[dict]] where each entry has
-    {"item": item_or_dict, "snap_index": int}. Variants within each
-    group are sorted by prevalence (highest first).
+    {"item": item_or_dict, "snap_index": int, "content_hash_short": str}.
+    Variants within each group are sorted by prevalence (highest first),
+    with a secondary sort putting included variants first among ties.
+    This ensures variants[0] is always the winner/selected variant.
     """
     groups: OrderedDict = OrderedDict()
     for idx, item in enumerate(items):
         path = item[path_key] if isinstance(item, dict) else getattr(item, path_key)
         if path not in groups:
             groups[path] = []
-        groups[path].append({"item": item, "snap_index": idx})
+        full_hash = _variant_content_hash(item)
+        groups[path].append({
+            "item": item,
+            "snap_index": idx,
+            "content_hash_short": full_hash[:8] if full_hash else "",
+        })
 
     for path, variants in groups.items():
-        variants.sort(key=lambda v: _variant_prevalence(v["item"]), reverse=True)
+        # Sort by prevalence descending, then by include descending so the
+        # selected/winner variant is always first (variants[0]).  This matters
+        # for tied groups where prevalence is equal.
+        def _sort_key(v):
+            item = v["item"]
+            if isinstance(item, dict):
+                include = item.get("include", False)
+            else:
+                include = getattr(item, "include", False)
+            return (-_variant_prevalence(item), -int(include))
+        variants.sort(key=_sort_key)
     return groups
 
 

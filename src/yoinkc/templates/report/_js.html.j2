@@ -797,6 +797,7 @@ function trapFocus(modalElement, closeHandler) {
       var hasTie = false;
       var hasTieWinner = false;
       var hasSelected = false;
+      var winnerHash = '';
       variantEls.forEach(function(el) {
         var sec = el.getAttribute('data-snap-section');
         var lst = el.getAttribute('data-snap-list');
@@ -805,9 +806,14 @@ function trapFocus(modalElement, closeHandler) {
         if (ar && ar[ix]) {
           if (ar[ix].include) hasSelected = true;
           if (ar[ix].tie) hasTie = true;
-          if (ar[ix].tie_winner) hasTieWinner = true;
+          if (ar[ix].tie_winner) {
+            hasTieWinner = true;
+            winnerHash = el.getAttribute('data-content-hash') || '';
+          }
         }
       });
+
+      var tieWinnerLabel = winnerHash ? 'tie winner (' + winnerHash + ')' : 'tie winner (hash)';
 
       if (hasTie && !hasSelected && !hasTieWinner) {
         // Unresolved tie — show tied state
@@ -826,7 +832,7 @@ function trapFocus(modalElement, closeHandler) {
         if (tieBadge) {
           var autoBadge = document.createElement('span');
           autoBadge.className = 'variant-auto-badge';
-          autoBadge.textContent = 'tie winner (hash)';
+          autoBadge.textContent = tieWinnerLabel;
           tieBadge.replaceWith(autoBadge);
         }
       } else if (hasSelected && !hasTie) {
@@ -846,7 +852,7 @@ function trapFocus(modalElement, closeHandler) {
         if (tieBadge) {
           var autoBadge = document.createElement('span');
           autoBadge.className = 'variant-auto-badge';
-          autoBadge.textContent = 'tie winner (hash)';
+          autoBadge.textContent = tieWinnerLabel;
           tieBadge.replaceWith(autoBadge);
         }
       }
