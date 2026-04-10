@@ -14,6 +14,23 @@ from .pipeline import run_pipeline
 from .schema import InspectionSnapshot
 
 
+def _count_tied_winners(snapshot) -> int:
+    """Count items with tie_winner=True across all variant-bearing sections."""
+    count = 0
+    if snapshot.config and snapshot.config.files:
+        count += sum(1 for f in snapshot.config.files if getattr(f, "tie_winner", False))
+    if snapshot.services and snapshot.services.drop_ins:
+        count += sum(1 for d in snapshot.services.drop_ins if getattr(d, "tie_winner", False))
+    if snapshot.containers:
+        if snapshot.containers.quadlet_units:
+            count += sum(1 for q in snapshot.containers.quadlet_units if getattr(q, "tie_winner", False))
+        if snapshot.containers.compose_files:
+            count += sum(1 for c in snapshot.containers.compose_files if getattr(c, "tie_winner", False))
+    if snapshot.non_rpm_software and snapshot.non_rpm_software.env_files:
+        count += sum(1 for f in snapshot.non_rpm_software.env_files if getattr(f, "tie_winner", False))
+    return count
+
+
 def _run_inspectors(host_root: Path, args) -> InspectionSnapshot:
     """Run all inspectors and merge into one snapshot."""
     from .inspectors import run_all
@@ -223,6 +240,10 @@ def _run_fleet(args, cwd: Optional[Path] = None) -> int:
         output_path.write_text(merged.model_dump_json(indent=2))
         print(f"Fleet snapshot written to {output_path}")
         print(f"  {len(snapshots)} hosts merged, threshold {args.min_prevalence}%")
+        tie_count = _count_tied_winners(merged)
+        if tie_count:
+            s = "s" if tie_count != 1 else ""
+            print(f"  {tie_count} item{s} with tied variants (auto-resolved by content hash)")
         return 0
 
     def _fleet_renderers(snapshot, output_dir):
@@ -230,6 +251,10 @@ def _run_fleet(args, cwd: Optional[Path] = None) -> int:
         run_all(snapshot, output_dir)
 
     print(f"Merged {len(snapshots)} hosts (threshold {args.min_prevalence}%)")
+    tie_count = _count_tied_winners(merged)
+    if tie_count:
+        s = "s" if tie_count != 1 else ""
+        print(f"  {tie_count} item{s} with tied variants (auto-resolved by content hash)")
 
     with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
         tmp.write(merged.model_dump_json(indent=2).encode())

@@ -942,6 +942,63 @@ class TestNormalization:
         assert len(merged.config.files) == 2
 
 
+class TestCliTieSummary:
+    """CLI prints tie summary when ties exist."""
+
+    def test_count_tied_winners_returns_correct_count(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.__main__ import _count_tied_winners
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+        assert _count_tied_winners(merged) == 1
+
+    def test_zero_ties_returns_zero(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.__main__ import _count_tied_winners
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+        assert _count_tied_winners(merged) == 0
+
+
+class TestReadmeArtifacts:
+    """merge-notes.md appears in readme artifacts for fleet merges."""
+
+    def test_merge_notes_in_readme_for_fleet(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers import render_readme
+        from yoinkc.renderers.merge_notes import render_merge_notes
+        from jinja2 import Environment, FileSystemLoader
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
+            env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
+            render_merge_notes(merged, output_dir)
+            render_readme(merged, env, output_dir)
+            content = (output_dir / "README.md").read_text()
+            assert "merge-notes.md" in content
+
+
 class TestContainerfileTieComment:
     """Containerfile inventory comment includes tied items block."""
 
