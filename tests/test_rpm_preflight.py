@@ -315,3 +315,85 @@ class TestPreflightIntegration:
         )
         assert snapshot.preflight.status == "skipped"
         assert "skip-unavailable" in snapshot.preflight.status_reason
+
+
+from yoinkc.renderers.containerfile.packages import section_lines
+
+
+class TestRendererPreflightConsumption:
+    def _make_renderer_snapshot(self, packages, unavailable=None, direct_install=None, unverifiable=None):
+        """Build a snapshot with preflight data for renderer testing."""
+        entries = []
+        for name in packages:
+            entries.append(PackageEntry(
+                name=name, epoch="0", version="1.0", release="1",
+                arch="x86_64", state=PackageState.ADDED, include=True,
+                source_repo="baseos",
+            ))
+        section = RpmSection(
+            packages_added=entries, no_baseline=True,
+            base_image="quay.io/fedora/fedora-bootc:44",
+        )
+        preflight = PreflightResult(
+            status="completed",
+            available=[p for p in packages if p not in (unavailable or []) and p not in (direct_install or [])],
+            unavailable=unavailable or [],
+            direct_install=direct_install or [],
+            unverifiable=[UnverifiablePackage(name=n, reason="test") for n in (unverifiable or [])],
+            base_image="quay.io/fedora/fedora-bootc:44",
+            repos_queried=["fedora", "updates"],
+            timestamp="2026-04-09T17:00:00Z",
+        )
+        return InspectionSnapshot(rpm=section, preflight=preflight)
+
+    def test_unavailable_excluded_from_dnf_install(self):
+        """Unavailable packages are NOT in the dnf install line."""
+        snapshot = self._make_renderer_snapshot(
+            packages=["httpd", "mcelog", "nginx"], unavailable=["mcelog"],
+        )
+        lines = section_lines(
+            snapshot, base="quay.io/fedora/fedora-bootc:44",
+            c_ext_pip=[], needs_multistage=False,
+        )
+        install_block = [l.strip().rstrip(" \\") for l in lines
+                         if l.startswith("    ") and not l.strip().startswith("#")
+                         and not l.strip().startswith("&&")]
+        assert "mcelog" not in install_block
+        assert "httpd" in install_block
+        assert "nginx" in install_block
+
+    def test_direct_install_excluded_from_dnf_install(self):
+        """Direct-install RPMs are NOT in the dnf install line."""
+        snapshot = self._make_renderer_snapshot(
+            packages=["httpd", "custom-agent"], direct_install=["custom-agent"],
+        )
+        lines = section_lines(
+            snapshot, base="quay.io/fedora/fedora-bootc:44",
+            c_ext_pip=[], needs_multistage=False,
+        )
+        install_block = [l.strip().rstrip(" \\") for l in lines
+                         if l.startswith("    ") and not l.strip().startswith("#")
+                         and not l.strip().startswith("&&")]
+        assert "custom-agent" not in install_block
+
+    def test_skipped_preflight_includes_all(self):
+        """With preflight skipped, all packages are included."""
+        entries = [
+            PackageEntry(name=n, epoch="0", version="1.0", release="1",
+                         arch="x86_64", state=PackageState.ADDED, include=True)
+            for n in ["httpd", "mcelog", "nginx"]
+        ]
+        snapshot = InspectionSnapshot(
+            rpm=RpmSection(packages_added=entries, no_baseline=True,
+                           base_image="quay.io/fedora/fedora-bootc:44"),
+            preflight=PreflightResult(status="skipped",
+                                      status_reason="user passed --skip-unavailable"),
+        )
+        lines = section_lines(
+            snapshot, base="quay.io/fedora/fedora-bootc:44",
+            c_ext_pip=[], needs_multistage=False,
+        )
+        joined = "\n".join(lines)
+        assert "httpd" in joined
+        assert "mcelog" in joined
+        assert "nginx" in joined

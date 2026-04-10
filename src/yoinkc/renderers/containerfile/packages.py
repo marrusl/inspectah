@@ -2,6 +2,7 @@
 
 import functools
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import List
@@ -237,6 +238,13 @@ def section_lines(
         # Use resolve_install_set for all package filtering + tuned injection
         install_names = resolve_install_set(snapshot)
 
+        # Apply preflight filtering (exclude unavailable and direct-install)
+        preflight = snapshot.preflight
+        if preflight.status in ("completed", "partial"):
+            exclude_set = set(preflight.unavailable) | set(preflight.direct_install)
+            if exclude_set:
+                install_names = [n for n in install_names if n not in exclude_set]
+
         # Snapshot-derived count excludes synthetically injected tuned
         # (reflects host-observed packages only)
         if has_pkgs:
@@ -312,3 +320,63 @@ def section_lines(
         lines.append("")
 
     return lines
+
+
+def emit_preflight_diagnostics(snapshot: InspectionSnapshot) -> None:
+    """Emit the preflight diagnostic block to stderr."""
+    preflight = snapshot.preflight
+    if preflight.status == "skipped":
+        return
+    if preflight.status == "failed":
+        print(f"\nPreflight check failed: {preflight.status_reason}", file=sys.stderr)
+        return
+
+    has_issues = (
+        preflight.direct_install or preflight.unavailable
+        or preflight.unverifiable or preflight.repo_unreachable
+    )
+    if not has_issues:
+        return
+
+    print("\n=== Package Availability Report ===\n", file=sys.stderr)
+    excluded_count = 0
+
+    if preflight.direct_install:
+        print("NOT IN ANY REPO (installed directly via rpm — cannot be installed from repos):", file=sys.stderr)
+        for pkg in sorted(preflight.direct_install):
+            print(f"  {pkg}", file=sys.stderr)
+        excluded_count += len(preflight.direct_install)
+        print("", file=sys.stderr)
+
+    if preflight.unavailable:
+        print("UNAVAILABLE in target repos:", file=sys.stderr)
+        for pkg in sorted(preflight.unavailable):
+            print(f"  {pkg}", file=sys.stderr)
+        excluded_count += len(preflight.unavailable)
+        print("", file=sys.stderr)
+
+    if preflight.unverifiable:
+        print("UNVERIFIABLE (could not check — included in Containerfile but not validated):", file=sys.stderr)
+        for uv in preflight.unverifiable:
+            print(f"  {uv.name} ({uv.reason})", file=sys.stderr)
+        print("", file=sys.stderr)
+
+    if preflight.repo_unreachable:
+        print("REPO UNREACHABLE (could not verify — packages from these repos not validated):", file=sys.stderr)
+        for repo in preflight.repo_unreachable:
+            print(f"  {repo.repo_id} (error: {repo.error})", file=sys.stderr)
+            if repo.affected_packages:
+                print(f"    Packages from this repo: {', '.join(sorted(repo.affected_packages))}", file=sys.stderr)
+        print("", file=sys.stderr)
+
+    if excluded_count:
+        print(f"{excluded_count} packages excluded from Containerfile.", file=sys.stderr)
+    unverifiable_count = len(preflight.unverifiable)
+    if unverifiable_count:
+        s = "s" if unverifiable_count != 1 else ""
+        print(f"{unverifiable_count} package{s} unverifiable (included but not validated).", file=sys.stderr)
+    repo_unreachable_pkg_count = sum(len(r.affected_packages) for r in preflight.repo_unreachable)
+    if repo_unreachable_pkg_count:
+        print(f"{repo_unreachable_pkg_count} packages from unreachable repos (included but not validated).", file=sys.stderr)
+    print(f"Preflight status: {preflight.status.upper()} — use --skip-unavailable to skip all checks.", file=sys.stderr)
+    print("===", file=sys.stderr)
