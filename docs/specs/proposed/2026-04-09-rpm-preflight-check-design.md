@@ -392,3 +392,17 @@ The preflight check is best-effort. It never blocks rendering. A failed prefligh
 - **Version compatibility checking.** The preflight checks name-level availability, not whether a specific version exists. Version lock conflicts are a separate concern.
 - **Multi-step Containerfile simulation.** Repos added via `RUN` commands during the build (e.g., `dnf install epel-release && dnf install epel-pkg`) are handled via the repo-providing package detection, but arbitrary Containerfile logic is out of scope.
 - **Standalone `yoinkc preflight` subcommand.** The module supports this structurally, but v1 exposes it only through `yoinkc inspect`. A subcommand can be added later if there's demand.
+
+---
+
+## Implementation Notes
+
+These are not design decisions — they are hygiene notes for whoever implements this spec.
+
+- **stderr is not a machine contract.** The diagnostic block format is for human consumption. Implementation may evolve wording, spacing, and ordering without a breaking change. Machine consumers use `snapshot.json`'s `preflight` field exclusively.
+- **Merge parity for partial `etc/dnf/` trees.** When the snapshot has a partial `etc/dnf/` tree (e.g., `vars/` but no `dnf.conf`), the implementation must merge with the base image's existing `etc/dnf/` contents, not replace the entire directory. Same merge semantics as `etc/yum.repos.d/`.
+- **argv-based subprocess invocation.** All `podman` and `dnf` commands must use argv lists (`subprocess.run(["podman", "run", ...])`) — never shell strings. This avoids injection risks from package names or repo paths containing shell metacharacters.
+
+---
+
+Closes https://github.com/marrusl/yoinkc/issues/2
