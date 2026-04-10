@@ -184,6 +184,15 @@ def _make_preflight_executor(
     repos_stdout="fedora\nupdates\n",
 ):
     """Build a mock executor for preflight subprocess calls.
+
+    Matches the persistent container pattern:
+      podman pull → pull response
+      podman run -d → container name (stdout)
+      podman exec ... dnf install → bootstrap response
+      podman exec ... repoquery → repoquery response
+      podman exec ... repolist → repolist response
+      podman rm → cleanup response
+
     repoquery_stdout should contain plain package names (one per line),
     matching the --queryformat "%{name}" output format.
     """
@@ -191,11 +200,14 @@ def _make_preflight_executor(
         cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
         if "podman" in cmd_str and "pull" in cmd_str:
             return RunResult(stdout="", stderr="" if pull_rc == 0 else "pull failed", returncode=pull_rc)
-        if "podman" in cmd_str and "run" in cmd_str and "dnf install" in cmd_str:
+        if "podman" in cmd_str and "run" in cmd_str and "-d" in cmd_str:
+            # Persistent container creation
+            return RunResult(stdout="yoinkc-preflight-test1234\n", stderr="", returncode=0)
+        if "podman" in cmd_str and "exec" in cmd_str and "dnf install" in cmd_str:
             return RunResult(stdout="", stderr="" if bootstrap_rc == 0 else "install failed", returncode=bootstrap_rc)
-        if "podman" in cmd_str and "run" in cmd_str and "repoquery" in cmd_str:
+        if "podman" in cmd_str and "exec" in cmd_str and "repoquery" in cmd_str:
             return RunResult(stdout=repoquery_stdout, stderr=repoquery_stderr, returncode=repoquery_rc)
-        if "podman" in cmd_str and "run" in cmd_str and "repolist" in cmd_str:
+        if "podman" in cmd_str and "exec" in cmd_str and "repolist" in cmd_str:
             return RunResult(stdout=repos_stdout, stderr="", returncode=0)
         if "podman" in cmd_str and "rm" in cmd_str:
             return RunResult(stdout="", stderr="", returncode=0)
@@ -285,6 +297,67 @@ class TestPackagePreflight:
         assert result.status == "failed"
         assert "base image" in result.status_reason.lower()
 
+    def test_unreachable_repo_packages_not_in_unavailable(self):
+        """Packages from unreachable repos stay OUT of unavailable
+        (they remain in the Containerfile with a warning)."""
+        snapshot = _make_preflight_snapshot(packages=["httpd", "internal-app"])
+        snapshot.rpm.packages_added[1].source_repo = "internal-mirror"
+        executor = _make_preflight_executor(
+            repoquery_stdout="httpd\n",
+            repoquery_stderr="Failed to synchronize cache for repo 'internal-mirror': connection timed out\n",
+        )
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert result.status == "partial"
+        assert "internal-app" not in result.unavailable  # NOT excluded
+        assert "httpd" in result.available
+        assert result.repo_unreachable[0].repo_id == "internal-mirror"
+
+    def test_all_repos_unreachable_returns_failed(self):
+        """When ALL repos are unreachable, status is 'failed', not 'partial'."""
+        snapshot = _make_preflight_snapshot(packages=["httpd"])
+        snapshot.rpm.packages_added[0].source_repo = "fedora"
+        executor = _make_preflight_executor(
+            repoquery_stdout="",
+            repoquery_rc=1,
+            repoquery_stderr="Failed to synchronize cache for repo 'fedora': connection timed out\nFailed to synchronize cache for repo 'updates': timeout\n",
+            repos_stdout="",
+        )
+        result = run_package_preflight(snapshot=snapshot, executor=executor)
+        assert result.status == "failed"
+        assert "all repos unreachable" in result.status_reason.lower() or "no meaningful" in result.status_reason.lower()
+
+    def test_persistent_container_used(self):
+        """Preflight uses podman run -d + exec pattern (not --rm)."""
+        commands_seen = []
+
+        def tracking_executor(cmd, cwd=None):
+            cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
+            commands_seen.append(cmd_str)
+            if "podman" in cmd_str and "pull" in cmd_str:
+                return RunResult(stdout="", stderr="", returncode=0)
+            if "podman" in cmd_str and "run" in cmd_str and "-d" in cmd_str:
+                return RunResult(stdout="test-container\n", stderr="", returncode=0)
+            if "podman" in cmd_str and "exec" in cmd_str and "repoquery" in cmd_str:
+                return RunResult(stdout="httpd\n", stderr="", returncode=0)
+            if "podman" in cmd_str and "exec" in cmd_str and "repolist" in cmd_str:
+                return RunResult(stdout="fedora\n", stderr="", returncode=0)
+            if "podman" in cmd_str and "rm" in cmd_str:
+                return RunResult(stdout="", stderr="", returncode=0)
+            return RunResult(stdout="", stderr="", returncode=0)
+
+        snapshot = _make_preflight_snapshot(packages=["httpd"])
+        result = run_package_preflight(snapshot=snapshot, executor=tracking_executor)
+        assert result.status == "completed"
+
+        # Verify persistent container pattern
+        run_cmds = [c for c in commands_seen if "podman" in c and "run" in c]
+        assert any("-d" in c for c in run_cmds), "Expected podman run -d for persistent container"
+        assert not any("--rm" in c for c in run_cmds), "Should not use --rm with persistent container"
+        exec_cmds = [c for c in commands_seen if "podman" in c and "exec" in c]
+        assert len(exec_cmds) >= 1, "Expected at least one podman exec command"
+        rm_cmds = [c for c in commands_seen if "podman" in c and " rm " in c]
+        assert len(rm_cmds) == 1, "Expected one podman rm -f for cleanup"
+
     def test_synthetic_tuned_not_classified_as_direct_install(self):
         """Synthetic tuned (from resolve_install_set, not in packages_added)
         must go through repoquery, not be classified as direct-install."""
@@ -315,6 +388,34 @@ class TestPreflightIntegration:
         )
         assert snapshot.preflight.status == "skipped"
         assert "skip-unavailable" in snapshot.preflight.status_reason
+
+    def test_preflight_runs_after_all_inspectors(self, fixture_executor, host_root):
+        """Preflight runs after all inspectors, so it sees config and kernel_boot."""
+        from unittest.mock import patch
+
+        preflight_snapshot_state = {}
+
+        def spy_preflight(*, snapshot, executor):
+            # Record what snapshot state preflight sees at call time
+            preflight_snapshot_state['has_config'] = snapshot.config is not None
+            preflight_snapshot_state['has_kernel_boot'] = snapshot.kernel_boot is not None
+            preflight_snapshot_state['has_services'] = snapshot.services is not None
+            # Return a minimal result so preflight doesn't actually run podman
+            return PreflightResult(status="failed", status_reason="spy")
+
+        with patch('yoinkc.rpm_preflight.run_package_preflight', side_effect=spy_preflight):
+            from yoinkc.inspectors import run_all
+
+            snapshot = run_all(
+                host_root,
+                executor=fixture_executor,
+                no_baseline_opt_in=True,
+            )
+
+        # Preflight should have seen all inspector outputs
+        assert preflight_snapshot_state.get('has_config') is True
+        assert preflight_snapshot_state.get('has_kernel_boot') is True
+        assert preflight_snapshot_state.get('has_services') is True
 
 
 from yoinkc.renderers.containerfile.packages import section_lines

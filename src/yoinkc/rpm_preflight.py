@@ -13,6 +13,7 @@ Results are stored as PreflightResult in the InspectionSnapshot.
 import configparser
 import shutil
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
@@ -276,21 +277,69 @@ def _run_checks(
     staging_dir: Optional[Path],
     timestamp: str,
 ) -> PreflightResult:
-    """Run the two-phase check (extracted for staging_dir cleanup)."""
+    """Run the two-phase check inside a persistent container.
 
-    # Build the podman run command with volume mounts for custom repos
-    run_base = ["podman", "run", "--rm"]
+    Uses ``podman run -d`` + ``podman exec`` so that phase-1 bootstrap
+    (repo-providing packages) persists into phase-2 repoquery.
+    """
+
+    container_name = f"yoinkc-preflight-{uuid.uuid4().hex[:8]}"
+
+    # Build the podman run -d command with volume mounts
+    run_cmd = ["podman", "run", "-d", "--name", container_name]
 
     if staging_dir:
         repo_dir = staging_dir / "etc" / "yum.repos.d"
         gpg_dir = staging_dir / "etc" / "pki" / "rpm-gpg"
         dnf_dir = staging_dir / "etc" / "dnf"
         if repo_dir.is_dir():
-            run_base += ["-v", f"{repo_dir}:/etc/yum.repos.d/:Z"]
+            run_cmd += ["-v", f"{repo_dir}:/etc/yum.repos.d/:Z"]
         if gpg_dir.is_dir():
-            run_base += ["-v", f"{gpg_dir}:/etc/pki/rpm-gpg/:Z"]
+            run_cmd += ["-v", f"{gpg_dir}:/etc/pki/rpm-gpg/:Z"]
         if dnf_dir.is_dir():
-            run_base += ["-v", f"{dnf_dir}:/etc/dnf/:Z"]
+            run_cmd += ["-v", f"{dnf_dir}:/etc/dnf/:Z"]
+
+    run_cmd += [base_image, "sleep", "infinity"]
+
+    # Start persistent container
+    start_result = executor(run_cmd)
+    if start_result.returncode != 0:
+        return PreflightResult(
+            status="failed",
+            status_reason=f"Could not start preflight container: {start_result.stderr.strip()[:200]}",
+            direct_install=direct_installs,
+            base_image=base_image,
+            timestamp=timestamp,
+        )
+
+    exec_base = ["podman", "exec", container_name]
+
+    try:
+        return _run_checks_in_container(
+            snapshot=snapshot,
+            executor=executor,
+            exec_base=exec_base,
+            base_image=base_image,
+            repo_packages=repo_packages,
+            direct_installs=direct_installs,
+            timestamp=timestamp,
+        )
+    finally:
+        # Always clean up the container
+        executor(["podman", "rm", "-f", container_name])
+
+
+def _run_checks_in_container(
+    *,
+    snapshot: InspectionSnapshot,
+    executor: Executor,
+    exec_base: list[str],
+    base_image: str,
+    repo_packages: list[str],
+    direct_installs: list[str],
+    timestamp: str,
+) -> PreflightResult:
+    """Run bootstrap + repoquery inside an already-running container."""
 
     # Phase 1: Bootstrap repo-providing packages
     repo_providers = snapshot.rpm.repo_providing_packages if snapshot.rpm else []
@@ -299,7 +348,7 @@ def _run_checks(
 
     if repo_providers:
         _debug(f"phase 1: bootstrapping {repo_providers}")
-        bootstrap_cmd = run_base + [base_image, "dnf", "install", "-y"] + list(repo_providers)
+        bootstrap_cmd = exec_base + ["dnf", "install", "-y"] + list(repo_providers)
         bootstrap_result = executor(bootstrap_cmd)
         if bootstrap_result.returncode != 0:
             _debug(f"repo-provider bootstrap failed: {bootstrap_result.stderr[:200]}")
@@ -310,8 +359,8 @@ def _run_checks(
     # Avoids NEVRA parsing pitfalls with hyphenated package names.
     _debug(f"phase 2: checking {len(repo_packages)} packages")
 
-    repoquery_cmd = run_base + [
-        base_image, "dnf", "repoquery", "--available",
+    repoquery_cmd = exec_base + [
+        "dnf", "repoquery", "--available",
         "--queryformat", "%{name}",
     ] + repo_packages
 
@@ -320,16 +369,54 @@ def _run_checks(
     # Detect unreachable repos from stderr
     repo_unreachable = _detect_unreachable_repos(repoquery_result.stderr or "")
 
+    # Build source_repo lookup (used in multiple places below)
+    source_repos: dict[str, str] = {}
+    if snapshot.rpm and snapshot.rpm.packages_added:
+        for p in snapshot.rpm.packages_added:
+            if p.name not in source_repos:
+                source_repos[p.name] = p.source_repo
+
+    # Populate affected_packages on unreachable repos
+    if repo_unreachable:
+        for repo_status in repo_unreachable:
+            repo_status.affected_packages = sorted(
+                name for name in repo_packages
+                if source_repos.get(name, "") == repo_status.repo_id
+            )
+
+    # Query available repo IDs (do this before early-return paths)
+    repolist_cmd = exec_base + ["dnf", "repolist", "--quiet"]
+    repolist_result = executor(repolist_cmd)
+    repos_queried: list[str] = []
+    if repolist_result.returncode == 0:
+        for line in repolist_result.stdout.splitlines():
+            repo_id = line.strip().split()[0] if line.strip() else ""
+            if repo_id:
+                repos_queried.append(repo_id)
+
     if repoquery_result.returncode != 0 and not repoquery_result.stdout.strip():
         # Total failure — no results at all
         if repo_unreachable:
-            # Some repos failed — report partial, not failed
+            # Check if ALL queried repos are unreachable
+            unreachable_ids = {rs.repo_id for rs in repo_unreachable}
+            all_repo_ids = set(repos_queried) | unreachable_ids
+            if all_repo_ids and unreachable_ids >= all_repo_ids:
+                return PreflightResult(
+                    status="failed",
+                    status_reason="all repos unreachable — no meaningful validation possible",
+                    direct_install=direct_installs,
+                    repo_unreachable=repo_unreachable,
+                    base_image=base_image,
+                    repos_queried=repos_queried,
+                    timestamp=timestamp,
+                )
             return PreflightResult(
                 status="partial",
                 status_reason=f"{len(repo_unreachable)} repo(s) unreachable",
                 direct_install=direct_installs,
                 repo_unreachable=repo_unreachable,
                 base_image=base_image,
+                repos_queried=repos_queried,
                 timestamp=timestamp,
             )
         return PreflightResult(
@@ -337,6 +424,7 @@ def _run_checks(
             status_reason=f"dnf repoquery failed: {repoquery_result.stderr.strip()[:200]}",
             direct_install=direct_installs,
             base_image=base_image,
+            repos_queried=repos_queried,
             timestamp=timestamp,
         )
 
@@ -365,12 +453,6 @@ def _run_checks(
         # Pre-compute lowered repo IDs for case-insensitive comparison
         failed_repo_ids_lower = {r.lower() for r in failed_repo_ids}
 
-        # Build source_repo lookup
-        source_repos = {}
-        for p in snapshot.rpm.packages_added:
-            if p.name not in source_repos:
-                source_repos[p.name] = p.source_repo
-
         for pkg in not_found:
             pkg_source = source_repos.get(pkg, "").strip().lower()
             if pkg_source in failed_repo_ids or pkg_source in failed_repo_ids_lower:
@@ -383,27 +465,15 @@ def _run_checks(
     else:
         unavailable = not_found
 
-    # Populate affected_packages on unreachable repos
-    if repo_unreachable:
-        source_repos = {}
-        for p in snapshot.rpm.packages_added:
-            if p.name not in source_repos:
-                source_repos[p.name] = p.source_repo
-        for repo_status in repo_unreachable:
-            repo_status.affected_packages = sorted(
-                name for name in repo_packages
-                if source_repos.get(name, "") == repo_status.repo_id
-            )
-
-    # Query available repo IDs
-    repolist_cmd = run_base + [base_image, "dnf", "repolist", "--quiet"]
-    repolist_result = executor(repolist_cmd)
-    repos_queried: list[str] = []
-    if repolist_result.returncode == 0:
-        for line in repolist_result.stdout.splitlines():
-            repo_id = line.strip().split()[0] if line.strip() else ""
-            if repo_id:
-                repos_queried.append(repo_id)
+    # Fix: Remove packages from unavailable whose source_repo matches
+    # an unreachable repo. These packages should NOT be excluded from
+    # the Containerfile — they're tracked via repo_unreachable[].affected_packages.
+    if repo_unreachable and unavailable:
+        unreachable_ids = {rs.repo_id for rs in repo_unreachable}
+        unavailable = [
+            pkg for pkg in unavailable
+            if source_repos.get(pkg, "") not in unreachable_ids
+        ]
 
     # Determine status
     if unverifiable or repo_unreachable:
