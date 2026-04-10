@@ -1,4 +1,4 @@
-{% from "report/_macros.html.j2" import section, card_toggle, card_toolbar with context -%}
+{% from "report/_macros.html.j2" import section, fleet_cell, card_toggle, card_toolbar with context -%}
 {# ── Non-RPM software ────────────────────────────────────────────────────── #}
 {% call section("non_rpm", "Non-RPM software", triageable=true) %}
   {%- set nr = snapshot.non_rpm_software %}
@@ -123,13 +123,85 @@
     <div class="pf-v6-c-card__header">{{ card_toggle("card-nr-env-files", "Dotenv / Secret Files") }}</div>
     <div class="pf-v6-c-expandable-section__content" id="card-nr-env-files"><div class="pf-v6-c-card__body">
     <p>These files may contain API keys or passwords. Secrets have been redacted; inject them at deploy time via a secret store or systemd credentials.</p>
-    <table class="pf-v6-c-table"><thead><tr><th scope="col">Path</th><th scope="col">Status</th></tr></thead><tbody>
+    {%- set env_count = env_variant_groups|length if (fleet_meta and env_variant_groups) else nr.env_files|length %}
+    <table class="pf-v6-c-table"><thead><tr><th class="pf-v6-c-table__check pf-m-fit-content" scope="col"></th><th scope="col">Path</th><th scope="col">Status</th>{% if fleet_meta %}<th scope="col">Fleet</th>{% endif %}</tr></thead><tbody>
+    {% if fleet_meta and env_variant_groups %}
+      {%- for path, variants in env_variant_groups.items() %}
+      {%- if variants | length > 1 %}
+        {%- set primary = variants[0] %}
+        {%- set group_has_selected = variants | selectattr('item.include', 'equalto', true) | list | length > 0 %}
+        {%- set is_tied = variants | selectattr('item.tie', 'equalto', true) | list | length > 0 %}
+        {%- set tie_winner_variant = variants | selectattr('item.tie_winner', 'equalto', true) | first | default(none) %}
+        <tr class="fleet-variant-group{% if not primary.item.include %} excluded{% endif %}{% if is_tied and not tie_winner_variant %} variant-tied{% endif %}"
+            data-search-text="{{ path }}"
+            data-snap-section="non_rpm_software" data-snap-list="env_files"
+            data-snap-index="{{ primary.snap_index }}"
+            {% if is_tied %}data-tie="true"{% endif %}
+            {% if tie_winner_variant %}data-tie-winner="true"{% endif %}>
+          <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if primary.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
+          <td>
+            <code>{{ path }}</code>
+            <span class="pf-v6-c-label pf-m-compact pf-m-outline fleet-variant-toggle" tabindex="0" role="button" aria-label="Toggle variants"
+                  aria-expanded="false">
+              <span class="pf-v6-c-label__content">{{ variants | length }} variants</span>
+            </span>
+            {% if is_tied and not tie_winner_variant %}
+            <span class="variant-tie-badge"><span class="tie-icon">&#x26A0;</span> tied &mdash; compare &amp; choose</span>
+            {% elif is_tied and tie_winner_variant %}
+            <span class="variant-auto-badge">tie winner (hash)</span>
+            {% elif group_has_selected %}
+            <span class="variant-auto-badge">auto-selected</span>
+            {% endif %}
+          </td>
+          <td>captured &amp; redacted</td>
+          {{ fleet_cell(primary.item) }}
+        </tr>
+        <tr class="fleet-variant-children">
+          <td colspan="{{ 4 if fleet_meta else 3 }}">
+            <table class="pf-v6-c-table pf-m-compact fleet-variant-table">
+              {%- for v in variants %}
+              <tr{% if not v.item.include %} class="excluded"{% endif %}
+                  data-snap-section="non_rpm_software" data-snap-list="env_files"
+                  data-snap-index="{{ v.snap_index }}"
+                  data-variant-group="{{ path }}"
+                  {% if v.item.tie %}data-tie="true"{% endif %}
+                  {% if v.item.tie_winner %}data-tie-winner="true"{% endif %}>
+                <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if v.item.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
+                <td><code>{{ v.item.path }}</code> <span class="variant-index">(variant {{ loop.index }})</span>{% if v.item.tie_winner %} <span class="badge" style="background-color: #e67e22; color: #fff;">(auto-selected: tied)</span>{% endif %}</td>
+                {{ fleet_cell(v.item) }}
+                <td class="variant-action-cell">
+                  {% if v.item.include %}
+                    <span class="variant-selected-label">selected</span>
+                  {% elif group_has_selected %}
+                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-compare-btn">Compare</button>
+                  {% else %}
+                    <button class="pf-v6-c-button pf-m-link pf-m-small variant-display-btn">Display</button>
+                  {% endif %}
+                </td>
+              </tr>
+              {%- endfor %}
+            </table>
+          </td>
+        </tr>
+      {%- else %}
+        {%- set ef = variants[0].item %}
+        <tr{% if not ef.include %} class="excluded"{% endif %} data-search-text="{{ ef.path }}" data-snap-section="non_rpm_software" data-snap-list="env_files" data-snap-index="{{ variants[0].snap_index }}">
+          <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if ef.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
+          <td><code>{{ ef.path }}</code></td>
+          <td>captured &amp; redacted</td>
+          {{ fleet_cell(ef) }}
+        </tr>
+      {%- endif %}
+      {%- endfor %}
+    {% else %}
       {%- for ef in nr.env_files %}
-      <tr>
+      <tr data-search-text="{{ ef.path }}" data-snap-section="non_rpm_software" data-snap-list="env_files" data-snap-index="{{ loop.index0 }}">
+        <td class="pf-v6-c-table__check"><label class="pf-v6-c-switch include-toggle-wrap"><input type="checkbox" class="pf-v6-c-switch__input include-toggle" {{ 'checked' if ef.include else '' }}/><span class="pf-v6-c-switch__toggle"></span></label></td>
         <td><code>{{ ef.path }}</code></td>
         <td>captured &amp; redacted</td>
       </tr>
       {%- endfor %}
+    {% endif %}
     </tbody></table>
     </div></div>
   </div>

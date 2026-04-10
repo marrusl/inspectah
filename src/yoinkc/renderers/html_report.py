@@ -681,10 +681,18 @@ def _build_context(
         dropin_variant_groups = _group_variants(
             snapshot.services.drop_ins, path_key="path"
         ) if snapshot.services and snapshot.services.drop_ins else OrderedDict()
+        compose_variant_groups = _group_variants(
+            snapshot.containers.compose_files, path_key="path"
+        ) if snapshot.containers and snapshot.containers.compose_files else OrderedDict()
+        env_variant_groups = _group_variants(
+            snapshot.non_rpm_software.env_files, path_key="path"
+        ) if snapshot.non_rpm_software and snapshot.non_rpm_software.env_files else OrderedDict()
     else:
         config_variant_groups = None
         quadlet_variant_groups = None
         dropin_variant_groups = None
+        compose_variant_groups = None
+        env_variant_groups = None
 
     variant_summary = []
     auto_resolved_ties = 0
@@ -694,6 +702,8 @@ def _build_context(
             ("Config files", config_variant_groups, "config"),
             ("Drop-ins", dropin_variant_groups, "drop_ins"),
             ("Quadlet units", quadlet_variant_groups, "containers"),
+            ("Compose files", compose_variant_groups, "containers"),
+            ("Env files", env_variant_groups, "non_rpm"),
         ]:
             if not groups:
                 continue
@@ -771,6 +781,8 @@ def _build_context(
         "config_variant_groups": config_variant_groups,
         "quadlet_variant_groups": quadlet_variant_groups,
         "dropin_variant_groups": dropin_variant_groups,
+        "compose_variant_groups": compose_variant_groups,
+        "env_variant_groups": env_variant_groups,
         "variant_summary": variant_summary,
         "auto_resolved_ties": auto_resolved_ties,
         "unresolved_ties": unresolved_ties,
