@@ -938,3 +938,43 @@ class TestNormalization:
         merged = merge_snapshots([s1, s2], min_prevalence=0)
 
         assert len(merged.config.files) == 2
+
+
+class TestContainerfileTieComment:
+    """Containerfile inventory comment includes tied items block."""
+
+    def test_tied_config_appears_in_inventory_comment(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers.containerfile._config_tree import config_inventory_comment
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-b"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        lines = config_inventory_comment(merged, dhcp_paths=set())
+        comment_text = "\n".join(lines)
+
+        assert "Tied" in comment_text, "Should mention tied items"
+        assert "etc/test.conf" in comment_text, "Should list the tied path"
+        assert "merge-notes.md" in comment_text, "Should point to merge-notes.md"
+
+    def test_no_tie_block_when_no_ties(self):
+        from yoinkc.fleet.merge import merge_snapshots
+        from yoinkc.renderers.containerfile._config_tree import config_inventory_comment
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        lines = config_inventory_comment(merged, dhcp_paths=set())
+        comment_text = "\n".join(lines)
+
+        assert "Tied" not in comment_text
