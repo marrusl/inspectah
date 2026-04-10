@@ -829,3 +829,54 @@ class TestTieFlags:
         losers = [v for v in variants if not v.tie_winner]
         assert len(losers) == 2
         assert all(not v.include for v in losers)
+
+
+class TestNormalization:
+    """Level 1 normalization: trailing whitespace + line endings."""
+
+    def test_trailing_whitespace_collapses_variants(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        content_a = "key=value\nsetting=on\n"
+        content_b = "key=value\nsetting=on   \n"
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_a),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_b),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        assert len(merged.config.files) == 1
+        assert merged.config.files[0].fleet.count == 2
+
+    def test_line_ending_normalization(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        content_unix = "key=value\nsetting=on\n"
+        content_dos = "key=value\r\nsetting=on\r\n"
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_unix),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content=content_dos),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        assert len(merged.config.files) == 1
+        assert merged.config.files[0].fleet.count == 2
+
+    def test_genuine_content_difference_not_collapsed(self):
+        from yoinkc.fleet.merge import merge_snapshots
+
+        s1 = _snap("host-1", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="key=value1\n"),
+        ]))
+        s2 = _snap("host-2", config=ConfigSection(files=[
+            ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="key=value2\n"),
+        ]))
+        merged = merge_snapshots([s1, s2], min_prevalence=0)
+
+        assert len(merged.config.files) == 2
