@@ -139,6 +139,9 @@ def render(
     lines.append("| `secrets-review.md` | Redacted items requiring manual handling |")
     lines.append("| `kickstart-suggestion.ks` | Suggested deploy-time settings |")
     lines.append("| `inspection-snapshot.json` | Raw data for re-rendering (`--from-snapshot`) |")
+    # Merge notes — present when merge-notes.md was generated (ties or non-unanimous items)
+    if (output_dir / "merge-notes.md").exists():
+        lines.append("| `merge-notes.md` | Fleet merge decisions — ties, non-unanimous items |")
     lines.append("")
 
     # --- FIXME items ---
