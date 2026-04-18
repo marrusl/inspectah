@@ -243,5 +243,5 @@ Questions? Start here:
 ---
 
 **Last Updated**: April 2026  
-**inspectah Version**: 0.5.0-rc1  
+**inspectah Version**: 0.5.1  
 **Python**: 3.11+

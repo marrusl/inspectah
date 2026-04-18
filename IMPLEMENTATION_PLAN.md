@@ -337,7 +337,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "inspectah"
-version = "0.5.0-rc1"
+version = "0.5.1"
 requires-python = ">=3.11"
 dependencies = ["pydantic>=2.0", "jinja2>=3.1"]
 
