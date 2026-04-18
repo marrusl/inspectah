@@ -27,17 +27,17 @@ jobs:
 
       - name: Build SRPM
         run: |
-          SPEC_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' yoinkc.spec)
+          SPEC_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' inspectah.spec)
           PYPROJECT_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           if [ "$SPEC_VERSION" != "$PYPROJECT_VERSION" ]; then
-            echo "Version mismatch: yoinkc.spec=$SPEC_VERSION pyproject.toml=$PYPROJECT_VERSION" >&2
+            echo "Version mismatch: inspectah.spec=$SPEC_VERSION pyproject.toml=$PYPROJECT_VERSION" >&2
             exit 1
           fi
           VERSION=$SPEC_VERSION
           mkdir -p ~/rpmbuild/SOURCES
-          tar czf ~/rpmbuild/SOURCES/yoinkc-${VERSION}.tar.gz \
-            --transform "s,^\.,yoinkc-${VERSION}," --exclude-vcs .
-          rpmbuild -bs yoinkc.spec
+          tar czf ~/rpmbuild/SOURCES/inspectah-${VERSION}.tar.gz \
+            --transform "s,^\.,inspectah-${VERSION}," --exclude-vcs .
+          rpmbuild -bs inspectah.spec
           cp ~/rpmbuild/SRPMS/*.src.rpm .
 
       - name: Upload SRPM to release
@@ -151,7 +151,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.release.tag_name }}
-          path: yoinkc-src
+          path: inspectah-src
 
       - name: Compute source tarball metadata
         id: source_tarball
@@ -167,7 +167,7 @@ jobs:
       - name: Checkout tap repo
         uses: actions/checkout@v4
         with:
-          repository: marrusl/homebrew-yoinkc
+          repository: marrusl/homebrew-inspectah
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
@@ -180,12 +180,12 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           SOURCE_TARBALL_SHA: ${{ steps.source_tarball.outputs.sha256 }}
           SOURCE_TARBALL_URL: ${{ steps.source_tarball.outputs.url }}
-        working-directory: yoinkc-src
+        working-directory: inspectah-src
         run: |
           python3 -m venv /tmp/resolve
           /tmp/resolve/bin/pip install --quiet .
           /tmp/resolve/bin/python3 - "$SOURCE_TARBALL_URL" "$SOURCE_TARBALL_SHA" \
-            ../homebrew-tap/Formula/yoinkc.rb << 'PYEOF'
+            ../homebrew-tap/Formula/inspectah.rb << 'PYEOF'
           import importlib.metadata
           import json
           import re
@@ -199,7 +199,7 @@ jobs:
           _, tarball_url, tarball_sha, formula_path = sys.argv
           formula_path = Path(formula_path)
 
-          SKIP = {"yoinkc", "pip", "setuptools", "wheel"}
+          SKIP = {"inspectah", "pip", "setuptools", "wheel"}
 
           packages = sorted(
               (
@@ -261,20 +261,20 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin "$BRANCH":"refs/remotes/origin/$BRANCH" || true
           git checkout -B "$BRANCH"
-          git add Formula/yoinkc.rb
+          git add Formula/inspectah.rb
           if git diff --cached --quiet; then
             echo "No formula changes to commit"
             exit 0
           fi
-          git commit -m "Update yoinkc to ${TAG}"
+          git commit -m "Update inspectah to ${TAG}"
           git push -u origin "HEAD:${BRANCH}" --force-with-lease
-          PR_BODY="Automated formula update from [yoinkc ${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG})."
+          PR_BODY="Automated formula update from [inspectah ${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG})."
           if gh pr view "$BRANCH" >/dev/null 2>&1; then
             gh pr edit "$BRANCH" \
-              --title "Update yoinkc to ${TAG}" \
+              --title "Update inspectah to ${TAG}" \
               --body "$PR_BODY"
           else
             gh pr create \
-              --title "Update yoinkc to ${TAG}" \
+              --title "Update inspectah to ${TAG}" \
               --body "$PR_BODY"
           fi
