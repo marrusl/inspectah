@@ -1,6 +1,6 @@
 .PHONY: srpm
 
-NAME     := yoinkc
+NAME     := inspectah
 SPECFILE := $(NAME).spec
 VERSION  := $(shell sed -n 's/^Version:[[:space:]]*//p' $(SPECFILE))
 PYPROJECT_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' pyproject.toml)

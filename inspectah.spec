@@ -1,10 +1,10 @@
-Name:           yoinkc
+Name:           inspectah
 Version:        0.5.0-rc1
 Release:        1%{?dist}
 Summary:        Inspect RHEL/CentOS hosts and produce bootc image artifacts
 
 License:        MIT
-URL:            https://github.com/marrusl/yoinkc
+URL:            https://github.com/marrusl/inspectah
 Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
 
 BuildArch:      noarch
@@ -21,7 +21,7 @@ Requires:       python3-jinja2 >= 3.1
 Requires:       podman
 
 %description
-yoinkc inspects package-based RHEL, CentOS, and Fedora hosts and produces
+inspectah inspects package-based RHEL, CentOS, and Fedora hosts and produces
 bootc-compatible image artifacts including Containerfiles, configuration trees,
 and migration reports.
 
@@ -36,16 +36,16 @@ and migration reports.
 
 %install
 %pyproject_install
-mkdir -p %{buildroot}%{_datadir}/yoinkc
-touch %{buildroot}%{_datadir}/yoinkc/.packaged
-%pyproject_save_files yoinkc
+mkdir -p %{buildroot}%{_datadir}/inspectah
+touch %{buildroot}%{_datadir}/inspectah/.packaged
+%pyproject_save_files inspectah
 
-install -Dpm 0644 completions/yoinkc.bash \
-    %{buildroot}%{_datadir}/bash-completion/completions/yoinkc
-install -Dpm 0644 completions/yoinkc.zsh \
-    %{buildroot}%{_datadir}/zsh/site-functions/_yoinkc
-install -Dpm 0644 completions/yoinkc.fish \
-    %{buildroot}%{_datadir}/fish/vendor_completions.d/yoinkc.fish
+install -Dpm 0644 completions/inspectah.bash \
+    %{buildroot}%{_datadir}/bash-completion/completions/inspectah
+install -Dpm 0644 completions/inspectah.zsh \
+    %{buildroot}%{_datadir}/zsh/site-functions/_inspectah
+install -Dpm 0644 completions/inspectah.fish \
+    %{buildroot}%{_datadir}/fish/vendor_completions.d/inspectah.fish
 
 %check
 %pytest
@@ -53,12 +53,12 @@ install -Dpm 0644 completions/yoinkc.fish \
 %files -f %{pyproject_files}
 %license LICENSE
 %doc README.md
-%{_bindir}/yoinkc
-%dir %{_datadir}/yoinkc
-%{_datadir}/yoinkc/.packaged
-%{_datadir}/bash-completion/completions/yoinkc
-%{_datadir}/zsh/site-functions/_yoinkc
-%{_datadir}/fish/vendor_completions.d/yoinkc.fish
+%{_bindir}/inspectah
+%dir %{_datadir}/inspectah
+%{_datadir}/inspectah/.packaged
+%{_datadir}/bash-completion/completions/inspectah
+%{_datadir}/zsh/site-functions/_inspectah
+%{_datadir}/fish/vendor_completions.d/inspectah.fish
 
 %changelog
 %autochangelog
