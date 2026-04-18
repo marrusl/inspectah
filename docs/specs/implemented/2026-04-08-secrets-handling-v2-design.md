@@ -4,7 +4,7 @@
 **Status:** Proposed
 **Author:** Kiwi (orchestrator, synthesizing team input)
 **Reviewers:** Kit (code audit), Slate (security assessment), Thorn (test coverage audit), Fern (UX), Ember (product strategy)
-**Synthesis thread:** `comms/threads/2026-04-08-yoinkc-secrets-in-output-review.md`
+**Synthesis thread:** `comms/threads/2026-04-08-inspectah-secrets-in-output-review.md`
 **Supersedes:** v1 of this spec (pre-review draft)
 
 ---
@@ -31,7 +31,7 @@ Redactions are logged to `snapshot.redactions[]` and rendered into `secrets-revi
 
 ### What's wrong
 
-A real user ran yoinkc on a Kinoite machine. The output tarball contained cockpit self-signed cert files including a `.key` file. Investigation revealed:
+A real user ran inspectah on a Kinoite machine. The output tarball contained cockpit self-signed cert files including a `.key` file. Investigation revealed:
 
 - **The system worked**: the `.key` file content was correctly replaced with a placeholder. No actual key material leaked.
 - **The UX is confusing**: the placeholder file still appears in the tarball with its original name, alarming users who see a `.key` file and assume their private key was included.
@@ -106,7 +106,7 @@ Each redaction record carries its remediation state. The state is assigned by pa
 
 **Current:** `REDACTED_{TYPE}_{truncated_sha256_hash}` (e.g., `REDACTED_PASSWORD_a3b2c1d4`)
 
-**New:** `REDACTED_{TYPE}_{N}` where `N` is a sequential counter per type, assigned deterministically within a single yoinkc run (sorted by discovery order: file path, then line number).
+**New:** `REDACTED_{TYPE}_{N}` where `N` is a sequential counter per type, assigned deterministically within a single inspectah run (sorted by discovery order: file path, then line number).
 
 Examples:
 ```
@@ -189,7 +189,7 @@ Content varies by remediation state:
 
 **Regenerate on target:**
 ```
-# REDACTED by yoinkc — auto-generated credential
+# REDACTED by inspectah — auto-generated credential
 # Original path: /etc/cockpit/ws-certs.d/0-self-signed.key
 # Action: no action needed — this file is regenerated automatically on the target system
 # See secrets-review.md for details
@@ -197,7 +197,7 @@ Content varies by remediation state:
 
 **Provision from secret store:**
 ```
-# REDACTED by yoinkc — sensitive file detected
+# REDACTED by inspectah — sensitive file detected
 # Original path: /etc/pki/tls/private/server.key
 # Action: provision this file on the target system from your secrets management process
 # See secrets-review.md for details
@@ -308,14 +308,14 @@ the action specified for each item.
 
 - **Independent heuristic safety net** (entropy analysis, broad PEM detection, binary file detection, known secret filenames): deferred to separate spec. Different precision/recall tradeoff from primary detection.
 - **`--include-secrets` opt-in flag**: may be useful eventually, not needed for v2.
-- **ostree/rpm-ostree source system handling**: separate workstream (see `comms/threads/2026-04-08-yoinkc-image-mode-source-audit.md`).
+- **ostree/rpm-ostree source system handling**: separate workstream (see `comms/threads/2026-04-08-inspectah-image-mode-source-audit.md`).
 - **Inspector scope expansion**: only `/etc/containers/auth.json` is in scope. No inspector changes to scan home directories.
 
 ---
 
 ## Migration / Backwards Compatibility
 
-- **Output structure**: new `redacted/` top-level directory. Existing `config/` directory no longer contains excluded files. Scripts that parse the config tree by filename may need updates, but yoinkc does not guarantee a stable output API.
+- **Output structure**: new `redacted/` top-level directory. Existing `config/` directory no longer contains excluded files. Scripts that parse the config tree by filename may need updates, but inspectah does not guarantee a stable output API.
 - **Placeholder format**: `REDACTED_{TYPE}_{hash}` → `REDACTED_{TYPE}_{N}`. Any downstream tooling matching on hash tokens will need to match on sequential counters instead.
 - **`secrets-review.md`**: new format with separate Excluded/Inline tables and remediation guidance. Existing format replaced.
 - **Containerfile**: gains comment blocks. No structural changes to COPY directives beyond excluding redacted files.

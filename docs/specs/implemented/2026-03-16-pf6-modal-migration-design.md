@@ -5,7 +5,7 @@
 
 ## Problem
 
-All four modals in the yoinkc HTML report use custom inline styles for
+All four modals in the inspectah HTML report use custom inline styles for
 positioning, backdrop, centering, border-radius, shadows, and spacing.
 PF6 ships a fully-featured `pf-v6-c-modal-box` component that handles
 all of this. Migrating removes ~30 inline style declarations, improves

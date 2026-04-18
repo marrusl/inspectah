@@ -19,7 +19,7 @@ Where this spec and v2 would conflict, v2 wins unless explicitly amended.
 
 ## Problem
 
-yoinkc's pattern-based redaction catches secrets with known formats (PEM keys, AWS keys, GitHub tokens, connection strings, etc.). But secrets without a known regex shape — custom API keys, generated passwords in config files, embedded tokens from less-common vendors — pass through undetected. The safety net is a second detection layer that uses heuristic signals (entropy analysis, keyword proximity) to catch what patterns miss.
+inspectah's pattern-based redaction catches secrets with known formats (PEM keys, AWS keys, GitHub tokens, connection strings, etc.). But secrets without a known regex shape — custom API keys, generated passwords in config files, embedded tokens from less-common vendors — pass through undetected. The safety net is a second detection layer that uses heuristic signals (entropy analysis, keyword proximity) to catch what patterns miss.
 
 ## Architecture
 
@@ -332,5 +332,5 @@ Subscription certificates are handled by `subscription.py`'s `bundle_subscriptio
 - **Subscription certificate inclusion default** — separate decision, separate spec if changed
 - **Interactive override workflow** (e.g., per-finding allow/deny prompts) — not needed for v1
 - **Custom user-defined patterns** — possible future extension, not needed now
-- **Network-based secret detection** (e.g., calling external scanning APIs) — yoinkc is offline-capable
+- **Network-based secret detection** (e.g., calling external scanning APIs) — inspectah is offline-capable
 - **Binary keystore detection** (`.p12`, `.jks`, etc.) — handled by v2's excluded paths, not heuristic layer

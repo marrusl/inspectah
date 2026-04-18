@@ -2,11 +2,11 @@
 
 ## Goal
 
-Surface fleet metadata (prevalence counts, host lists, content variants) in the yoinkc HTML report so users can understand and refine fleet-aggregated snapshots.
+Surface fleet metadata (prevalence counts, host lists, content variants) in the inspectah HTML report so users can understand and refine fleet-aggregated snapshots.
 
 ## Prerequisites
 
-- Fleet analysis engine (`yoinkc-fleet aggregate`) is implemented and produces merged snapshots with `FleetPrevalence` on items and `FleetMeta` in `meta["fleet"]`.
+- Fleet analysis engine (`inspectah-fleet aggregate`) is implemented and produces merged snapshots with `FleetPrevalence` on items and `FleetMeta` in `meta["fleet"]`.
 
 ## Design Decisions
 
@@ -23,7 +23,7 @@ Surface fleet metadata (prevalence counts, host lists, content variants) in the 
 ## Out of Scope
 
 - Prevalence-based filtering/sorting (future fleet-refine work)
-- `yoinkc-fleet aggregate` producing tarballs directly (separate spec)
+- `inspectah-fleet aggregate` producing tarballs directly (separate spec)
 - Package version spread display (separate spec)
 - Fleet-specific triage logic
 - Users/groups fleet badges (they use `List[dict]` not typed models; fleet data is stored as a plain `"fleet"` dict key — rendering this requires different handling and is deferred)
@@ -247,9 +247,9 @@ Added to existing `tests/test_renderer_outputs.py`:
 
 ## Future Work (Separate Specs)
 
-- `yoinkc-fleet aggregate` producing tarballs directly (render pipeline integration)
+- `inspectah-fleet aggregate` producing tarballs directly (render pipeline integration)
 - Package version spread display across fleet
-- Prevalence-based interactive filtering/sorting in yoinkc-refine
+- Prevalence-based interactive filtering/sorting in inspectah-refine
 - Fleet-specific triage logic (e.g., "items on <50% of hosts flagged as fixme")
 - Layered image hierarchy (common base + role-specific variants)
 - Users/groups fleet prevalence badges

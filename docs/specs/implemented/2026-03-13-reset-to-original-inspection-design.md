@@ -5,7 +5,7 @@
 
 ## Problem
 
-During interactive refinement (`yoinkc-refine`), users toggle include/exclude
+During interactive refinement (`inspectah-refine`), users toggle include/exclude
 checkboxes and change provisioning strategies. There is no way to undo all
 changes and return to the state the inspectors originally produced. Users
 who want to start over must re-run the inspection or manually re-check
@@ -95,7 +95,7 @@ order: `[status text] [Reset] [Download Modified Snapshot] [Re-render]
 - `updateToolbar()` gains one line: set `btn-reset.disabled` based on
   `isSnapshotClean()`.
 - On click: `confirm("Reset all selections to their initial state? This cannot be undone.")`. If confirmed, calls `resetToOriginal()`.
-- The button is only interactive when yoinkc-refine is active (checkboxes
+- The button is only interactive when inspectah-refine is active (checkboxes
   are hidden in standalone mode, so no changes can be made and the button
   stays disabled). No special visibility handling needed beyond the
   existing toolbar visibility logic.

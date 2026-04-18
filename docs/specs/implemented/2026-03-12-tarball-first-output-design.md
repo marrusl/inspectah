@@ -1,18 +1,18 @@
-# Tarball-First Output & run-yoinkc.sh Consolidation
+# Tarball-First Output & run-inspectah.sh Consolidation
 
 **Date:** 2026-03-12
 **Status:** Implemented
 
 ## Problem
 
-yoinkc currently writes output to a directory, and the wrapper script
-`run-yoinkc.sh` handles tarball creation, entitlement cert bundling, and
-argument wrangling after yoinkc exits. This split means:
+inspectah currently writes output to a directory, and the wrapper script
+`run-inspectah.sh` handles tarball creation, entitlement cert bundling, and
+argument wrangling after inspectah exits. This split means:
 
-- Users must create an output directory before running yoinkc.
-- The tarball — the artifact that flows into `yoinkc-refine` and
-  `yoinkc-build` — is a second-class post-processing step.
-- `run-yoinkc.sh` has a fragile positional argument interface (first arg
+- Users must create an output directory before running inspectah.
+- The tarball — the artifact that flows into `inspectah-refine` and
+  `inspectah-build` — is a second-class post-processing step.
+- `run-inspectah.sh` has a fragile positional argument interface (first arg
   is the output dir, everything else is forwarded).
 - Tool prerequisites installed by the wrapper (e.g. `tar`) can leak into
   the migration artifact as if they were user intent.
@@ -40,12 +40,12 @@ This was chosen over two alternatives:
 
 **Current:**
 ```
-yoinkc -o ./output [--inspect-only] [--from-snapshot FILE]
+inspectah -o ./output [--inspect-only] [--from-snapshot FILE]
 ```
 
 **New:**
 ```
-yoinkc [-o FILE] [--output-dir DIR] [--inspect-only] [--from-snapshot FILE] [--no-entitlement]
+inspectah [-o FILE] [--output-dir DIR] [--inspect-only] [--from-snapshot FILE] [--no-entitlement]
 ```
 
 | Flag | Behavior |
@@ -62,7 +62,7 @@ error.
 
 **Breaking change:** `-o` currently means `--output-dir`. This change
 reassigns `-o` to mean "output tarball file." Anyone using `-o ./dir`
-must switch to `--output-dir ./dir`. This is acceptable because yoinkc
+must switch to `--output-dir ./dir`. This is acceptable because inspectah
 is pre-1.0 and the tarball is now the primary output mode. The long form
 `--output-dir` continues to work unchanged.
 
@@ -73,7 +73,7 @@ is pre-1.0 and the tarball is now the primary output mode. The long form
 pushes it. Both require a persistent directory, not a tarball.
 
 These flags **require `--output-dir`** when used. If either is provided
-without `--output-dir`, yoinkc errors with a message explaining that
+without `--output-dir`, inspectah errors with a message explaining that
 directory output mode is needed. This keeps the tarball path clean and
 avoids hidden temp directories that outlive the process.
 
@@ -102,7 +102,7 @@ up on failure.
 
 ### Entitlement Cert Bundling
 
-Moves from `run-yoinkc.sh` into yoinkc as a pipeline step between
+Moves from `run-inspectah.sh` into inspectah as a pipeline step between
 rendering and tarring.
 
 Detection paths (relative to `HOST_ROOT`):
@@ -116,13 +116,13 @@ Detection paths (relative to `HOST_ROOT`):
 - `HOST_ROOT` does not exist or the cert paths are not found (non-RHEL
   host, minimal image). Silently skipped, no warning.
 - `--from-snapshot` mode where `HOST_ROOT` is not a real host mount.
-  The re-render path (used by `yoinkc-refine`) runs without host
+  The re-render path (used by `inspectah-refine`) runs without host
   filesystem access; entitlement bundling is silently skipped.
 
-**Behavioral change from `run-yoinkc.sh`:** The current wrapper copies
+**Behavioral change from `run-inspectah.sh`:** The current wrapper copies
 certs from the machine running the script (the host, outside the
 container). The new code copies from `{HOST_ROOT}` inside the container
-(i.e. `/host/etc/pki/entitlement/`). When yoinkc runs directly on the
+(i.e. `/host/etc/pki/entitlement/`). When inspectah runs directly on the
 host (`HOST_ROOT=/`), behavior is identical. When running in a
 container, certs come from the inspected host's filesystem via the bind
 mount. This is the correct semantic — the certs belong to the host being
@@ -130,7 +130,7 @@ migrated, not the build machine.
 
 ### Tarball Format
 
-The tarball uses the same structure that `run-yoinkc.sh` currently
+The tarball uses the same structure that `run-inspectah.sh` currently
 produces. A single top-level directory named `${HOSTNAME}-${TIMESTAMP}`
 containing all output files:
 
@@ -146,7 +146,7 @@ hostname-YYYYMMDD-HHMMSS.tar.gz
     ├── secrets-review.md
     ├── kickstart-suggestion.ks      (conditional)
     ├── quadlet/                     (conditional, when quadlet units exist)
-    ├── yoinkc-users.toml            (conditional, when blueprint-strategy users exist)
+    ├── inspectah-users.toml            (conditional, when blueprint-strategy users exist)
     ├── entitlement/                 (conditional, RHEL only)
     └── rhsm/                        (conditional, RHEL only)
 ```
@@ -159,23 +159,23 @@ similar to the current shell logic: `socket.gethostname()`, falling back
 to reading `/etc/hostname`, falling back to `"unknown"`. The hostname is
 sanitized to remove characters unsafe for filenames.
 
-### run-yoinkc.sh Slimdown
+### run-inspectah.sh Slimdown
 
 **Retains:**
 - Check for and install `podman` if missing, with
-  `YOINKC_EXCLUDE_PREREQS` tracking so yoinkc excludes tool
+  `INSPECTAH_EXCLUDE_PREREQS` tracking so inspectah excludes tool
   prerequisites from the migration artifact.
 - `registry.redhat.io` login checks.
 - The `podman run` invocation.
 
 **Removes:**
 - `tar` installation (Python `tarfile` replaces it). This also means
-  `tar` no longer appears in `YOINKC_EXCLUDE_PREREQS`, making the
+  `tar` no longer appears in `INSPECTAH_EXCLUDE_PREREQS`, making the
   exclusion list shorter and more accurate.
 - Output directory creation and handling.
-- Entitlement cert bundling (moved into yoinkc).
-- Tarball creation (moved into yoinkc).
-- `--no-entitlement` flag stripping (now a real yoinkc flag, passed
+- Entitlement cert bundling (moved into inspectah).
+- Tarball creation (moved into inspectah).
+- `--no-entitlement` flag stripping (now a real inspectah flag, passed
   through).
 
 **Simplified invocation:**
@@ -183,15 +183,15 @@ sanitized to remove characters unsafe for filenames.
 podman run --rm --pull=always \
   --pid=host --privileged --security-opt label=disable \
   -w /output \
-  ${YOINKC_DEBUG:+-e YOINKC_DEBUG=1} \
-  ${YOINKC_EXCLUDE_PREREQS:+--env YOINKC_EXCLUDE_PREREQS} \
+  ${INSPECTAH_DEBUG:+-e INSPECTAH_DEBUG=1} \
+  ${INSPECTAH_EXCLUDE_PREREQS:+--env INSPECTAH_EXCLUDE_PREREQS} \
   -v /:/host:ro \
   -v "$(pwd):/output" \
   "$IMAGE" "$@"
 ```
 
 The user's current directory is mounted at `/output` and `-w /output`
-sets the container's working directory to match, so yoinkc's default
+sets the container's working directory to match, so inspectah's default
 tarball output lands directly in the user's directory with no setup
 required. No `:z` volume flag — `--security-opt label=disable` already
 disables SELinux confinement, making relabeling unnecessary. Relabeling
@@ -203,11 +203,11 @@ available, handle registry auth, launch the container.
 
 ## Compatibility
 
-- `yoinkc-refine` and `yoinkc-build` already accept tarballs — no
+- `inspectah-refine` and `inspectah-build` already accept tarballs — no
   changes needed.
 - `--output-dir` preserves the old directory behavior for users or
   scripts that depend on it.
-- The tarball internal structure matches what `run-yoinkc.sh` currently
+- The tarball internal structure matches what `run-inspectah.sh` currently
   produces, so existing workflows are unaffected.
 - **Breaking:** `-o` changes meaning from `--output-dir` to "output
   tarball file." The long form `--output-dir` is unaffected.
@@ -221,7 +221,7 @@ available, handle registry auth, launch the container.
   suppressed with `--no-entitlement`, skipped in `--from-snapshot` mode.
 - CLI tests: `-o` and `--output-dir` mutual exclusivity, default naming
   convention, `--validate`/`--push-to-github` require `--output-dir`.
-- Integration: round-trip test — yoinkc produces tarball, `yoinkc-build`
+- Integration: round-trip test — inspectah produces tarball, `inspectah-build`
   consumes it.
 - Error path: tarball write failure preserves temp directory and reports
   its location.
@@ -230,4 +230,4 @@ available, handle registry auth, launch the container.
 
 - Changes to `--inspect-only` / `--from-snapshot` behavior.
 - stdout/pipe output mode.
-- Changes to how `yoinkc-refine` or `yoinkc-build` consume tarballs.
+- Changes to how `inspectah-refine` or `inspectah-build` consume tarballs.

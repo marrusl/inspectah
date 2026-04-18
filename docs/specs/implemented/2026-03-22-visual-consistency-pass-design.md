@@ -34,7 +34,7 @@ PF6 uses CSS logical properties (block/inline) rather than physical (top/left). 
 
 ### B1: Drop `rpm -Va` Column
 
-Remove the `rpm -Va` flags column from `_config.html.j2`. The raw verification output (`S.5.....`) is an implementation detail — how yoinkc detected the change, not what the user needs to act on. The information it provides is either redundant (file content changed → it's in the list) or better surfaced differently (see B3).
+Remove the `rpm -Va` flags column from `_config.html.j2`. The raw verification output (`S.5.....`) is an implementation detail — how inspectah detected the change, not what the user needs to act on. The information it provides is either redundant (file content changed → it's in the list) or better surfaced differently (see B3).
 
 ### B2: Drop Diff Preview Column
 

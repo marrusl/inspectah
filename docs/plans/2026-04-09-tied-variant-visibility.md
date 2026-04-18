@@ -15,10 +15,10 @@
 ### Task 1: Add `tie` and `tie_winner` Model Flags
 
 **Files:**
-- Modify: `src/yoinkc/schema.py:207-218` (ConfigFileEntry)
-- Modify: `src/yoinkc/schema.py:242-249` (SystemdDropIn)
-- Modify: `src/yoinkc/schema.py:423-429` (QuadletUnit)
-- Modify: `src/yoinkc/schema.py:437-441` (ComposeFile)
+- Modify: `src/inspectah/schema.py:207-218` (ConfigFileEntry)
+- Modify: `src/inspectah/schema.py:242-249` (SystemdDropIn)
+- Modify: `src/inspectah/schema.py:423-429` (QuadletUnit)
+- Modify: `src/inspectah/schema.py:437-441` (ComposeFile)
 - Test: `tests/test_fleet_merge.py`
 
 Note: Non-RPM env files reuse `ConfigFileEntry` (see `schema.py:513`), so they get the flags automatically.
@@ -28,7 +28,7 @@ Note: Non-RPM env files reuse `ConfigFileEntry` (see `schema.py:513`), so they g
 In `tests/test_fleet_merge.py`, add at the top imports:
 
 ```python
-from yoinkc.schema import ConfigSection, ConfigFileEntry
+from inspectah.schema import ConfigSection, ConfigFileEntry
 ```
 
 (ConfigSection and ConfigFileEntry are already imported if used by existing tests — verify and add only if missing.)
@@ -47,7 +47,7 @@ class TestTieFlags:
     # each commit green.  The xfail markers are removed in Task 3 Step 4.
     @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
     def test_tied_variants_get_tie_flags(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         # Two hosts with different content for the same path → tie
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -75,7 +75,7 @@ class TestTieFlags:
         assert losers[0].include is False
 
     def test_clear_winner_no_tie_flags(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         # 2 hosts with content A, 1 host with content B → clear winner, no tie
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -95,7 +95,7 @@ class TestTieFlags:
 
     @pytest.mark.xfail(reason="tie flags not yet set by merge logic")
     def test_three_way_tie_one_winner(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="aaa"),
@@ -123,13 +123,13 @@ class TestTieFlags:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestTieFlags -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestTieFlags -v`
 
 Expected: FAIL — `ConfigFileEntry` has no attribute `tie`.
 
 - [ ] **Step 3: Add tie and tie_winner fields to all four models**
 
-In `src/yoinkc/schema.py`, add fields to each model:
+In `src/inspectah/schema.py`, add fields to each model:
 
 For `ConfigFileEntry` (after line 218, before `fleet`):
 ```python
@@ -157,15 +157,15 @@ For `ComposeFile` (after line 440, before `fleet`):
 
 - [ ] **Step 4: Run tests to verify xfail tests are expected-fail, others pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestTieFlags -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestTieFlags -v`
 
 Expected: Two tests `xfail` (flags exist but merge logic doesn't set them yet), one test passes (`test_clear_winner_no_tie_flags` passes because tie defaults are False).
 
 - [ ] **Step 5: Commit model changes**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/schema.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/schema.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(schema): add tie and tie_winner flags to variant models
 
@@ -186,8 +186,8 @@ EOF
 ### Task 2: Switch `_content_hash()` to Full SHA-256 and Add Normalization
 
 **Files:**
-- Modify: `src/yoinkc/fleet/merge.py:25-26` (_content_hash)
-- Modify: `src/yoinkc/fleet/merge.py:347-352,365-369,426-431,456-460` (variant_fn call sites)
+- Modify: `src/inspectah/fleet/merge.py:25-26` (_content_hash)
+- Modify: `src/inspectah/fleet/merge.py:347-352,365-369,426-431,456-460` (variant_fn call sites)
 - Test: `tests/test_fleet_merge.py`
 
 - [ ] **Step 1: Write failing test for whitespace normalization**
@@ -199,7 +199,7 @@ class TestNormalization:
     """Level 1 normalization: trailing whitespace + line endings."""
 
     def test_trailing_whitespace_collapses_variants(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         # Same content except trailing spaces on line 2
         content_a = "key=value\nsetting=on\n"
@@ -218,7 +218,7 @@ class TestNormalization:
         assert merged.config.files[0].fleet.count == 2
 
     def test_line_ending_normalization(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         content_unix = "key=value\nsetting=on\n"
         content_dos = "key=value\r\nsetting=on\r\n"
@@ -235,7 +235,7 @@ class TestNormalization:
         assert merged.config.files[0].fleet.count == 2
 
     def test_genuine_content_difference_not_collapsed(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="key=value1\n"),
@@ -250,13 +250,13 @@ class TestNormalization:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestNormalization -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestNormalization -v`
 
 Expected: FAIL — trailing whitespace variants are not collapsed.
 
 - [ ] **Step 3: Implement `_normalize_content()` and update `_content_hash()`**
 
-In `src/yoinkc/fleet/merge.py`, replace the `_content_hash` function and add normalization:
+In `src/inspectah/fleet/merge.py`, replace the `_content_hash` function and add normalization:
 
 ```python
 def _normalize_content(text: str) -> str:
@@ -300,21 +300,21 @@ variant_fn=lambda c: _content_hash(
 
 - [ ] **Step 4: Run normalization tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestNormalization -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestNormalization -v`
 
 Expected: PASS
 
 - [ ] **Step 5: Run full test suite to check for regressions from full-hash change**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py -v`
 
 Expected: PASS (existing tests should not depend on truncated hash length).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/fleet/merge.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/fleet/merge.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(fleet): add Level 1 normalization and switch to full SHA-256
 
@@ -339,7 +339,7 @@ EOF
 ### Task 3: Implement Deterministic Tiebreaker in `_auto_select_variants()`
 
 **Files:**
-- Modify: `src/yoinkc/fleet/merge.py:119-155` (_auto_select_variants)
+- Modify: `src/inspectah/fleet/merge.py:119-155` (_auto_select_variants)
 - Test: `tests/test_fleet_merge.py`
 
 - [ ] **Step 1: Write failing test for deterministic tiebreaker**
@@ -351,7 +351,7 @@ class TestDeterministicTiebreaker:
     """Tiebreaker picks winner by full SHA-256 digest sort."""
 
     def test_same_winner_regardless_of_input_order(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         content_a = "variant-alpha"
         content_b = "variant-beta"
@@ -380,7 +380,7 @@ class TestDeterministicTiebreaker:
 
     def test_tiebreaker_picks_lowest_hash(self):
         import hashlib
-        from yoinkc.fleet.merge import merge_snapshots, _normalize_content
+        from inspectah.fleet.merge import merge_snapshots, _normalize_content
 
         content_a = "aaa-content"
         content_b = "bbb-content"
@@ -403,13 +403,13 @@ class TestDeterministicTiebreaker:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestDeterministicTiebreaker -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestDeterministicTiebreaker -v`
 
 Expected: FAIL — no variant has `tie_winner=True`.
 
 - [ ] **Step 3: Implement tiebreaker in `_auto_select_variants()`**
 
-Replace the function in `src/yoinkc/fleet/merge.py`:
+Replace the function in `src/inspectah/fleet/merge.py`:
 
 ```python
 def _auto_select_variants(items: list) -> None:
@@ -477,7 +477,7 @@ def _auto_select_variants(items: list) -> None:
 
 In `tests/test_fleet_merge.py`, remove the two `@pytest.mark.xfail(reason="tie flags not yet set by merge logic")` decorators from `TestTieFlags.test_tied_variants_get_tie_flags` and `TestTieFlags.test_three_way_tie_one_winner`. The merge logic now sets the flags, so these tests should pass.
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestDeterministicTiebreaker tests/test_fleet_merge.py::TestTieFlags -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestDeterministicTiebreaker tests/test_fleet_merge.py::TestTieFlags -v`
 
 Expected: PASS (all tests, no xfail)
 
@@ -494,15 +494,15 @@ Note: For `[3, 3, 1]`, the sort is by fleet.count descending. After tiebreaker, 
 
 - [ ] **Step 6: Run full merge test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py -v`
 
 Expected: PASS
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/fleet/merge.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/fleet/merge.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(fleet): deterministic tiebreaker for variant auto-selection
 
@@ -527,7 +527,7 @@ EOF
 ### Task 4: Containerfile Inventory Comment — Tied Items Block
 
 **Files:**
-- Modify: `src/yoinkc/renderers/containerfile/_config_tree.py:319-437` (config_inventory_comment)
+- Modify: `src/inspectah/renderers/containerfile/_config_tree.py:319-437` (config_inventory_comment)
 - Test: `tests/test_fleet_merge.py` (or a new test file for renderer output)
 
 - [ ] **Step 1: Write failing test for tied items in Containerfile comment**
@@ -539,8 +539,8 @@ class TestContainerfileTieComment:
     """Containerfile inventory comment includes tied items block."""
 
     def test_tied_config_appears_in_inventory_comment(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.containerfile._config_tree import config_inventory_comment
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.containerfile._config_tree import config_inventory_comment
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -558,8 +558,8 @@ class TestContainerfileTieComment:
         assert "merge-notes.md" in comment_text, "Should point to merge-notes.md"
 
     def test_no_tie_block_when_no_ties(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.containerfile._config_tree import config_inventory_comment
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.containerfile._config_tree import config_inventory_comment
 
         # 2 hosts with identical content → no tie
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -578,13 +578,13 @@ class TestContainerfileTieComment:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestContainerfileTieComment -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestContainerfileTieComment -v`
 
 Expected: FAIL — "Tied" not in comment text.
 
 - [ ] **Step 3: Add tied items block to `config_inventory_comment()`**
 
-In `src/yoinkc/renderers/containerfile/_config_tree.py`, add the following block inside `config_inventory_comment()`, after the existing config file categories (after the orphaned block around line 355) but before the repo files block (line 357):
+In `src/inspectah/renderers/containerfile/_config_tree.py`, add the following block inside `config_inventory_comment()`, after the existing config file categories (after the orphaned block around line 355) but before the repo files block (line 357):
 
 ```python
     # Tied items (across all variant-bearing sections)
@@ -625,20 +625,20 @@ In `src/yoinkc/renderers/containerfile/_config_tree.py`, add the following block
         for path, item_type, fleet, variant_count in tied_items:
             lines.append(f"#   {path}  ({item_type}, {fleet.count}/{fleet.total} hosts each, {variant_count} variants)")
         lines.append("#   See merge-notes.md for tie details")
-        lines.append("#   Review in report.html or run `yoinkc refine` to change selection")
+        lines.append("#   Review in report.html or run `inspectah refine` to change selection")
 ```
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestContainerfileTieComment -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestContainerfileTieComment -v`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/renderers/containerfile/_config_tree.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/renderers/containerfile/_config_tree.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(containerfile): add tied items block to inventory comment
 
@@ -657,8 +657,8 @@ EOF
 ### Task 5: New `merge-notes.md` Renderer
 
 **Files:**
-- Create: `src/yoinkc/renderers/merge_notes.py`
-- Modify: `src/yoinkc/renderers/__init__.py:22-58` (run_all — add render call)
+- Create: `src/inspectah/renderers/merge_notes.py`
+- Modify: `src/inspectah/renderers/__init__.py:22-58` (run_all — add render call)
 - Test: `tests/test_fleet_merge.py`
 
 - [ ] **Step 1: Write failing test for merge-notes.md generation**
@@ -674,8 +674,8 @@ class TestMergeNotes:
     """merge-notes.md is generated with tie and non-unanimous details."""
 
     def test_merge_notes_contains_tied_item(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -696,8 +696,8 @@ class TestMergeNotes:
             assert "variant" in content.lower()
 
     def test_merge_notes_contains_non_unanimous_item(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         # 2 hosts same, 1 different → clear winner at 2/3, non-unanimous
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -719,8 +719,8 @@ class TestMergeNotes:
             assert "2/3" in content
 
     def test_no_merge_notes_when_all_unanimous(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
@@ -738,7 +738,7 @@ class TestMergeNotes:
 
     def test_merge_notes_absent_for_single_host(self):
         """Single-host snapshots have no fleet metadata → no merge notes."""
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         snap = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="val"),
@@ -752,13 +752,13 @@ class TestMergeNotes:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestMergeNotes -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestMergeNotes -v`
 
-Expected: FAIL — `ModuleNotFoundError: No module named 'yoinkc.renderers.merge_notes'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'inspectah.renderers.merge_notes'`
 
 - [ ] **Step 3: Implement `render_merge_notes()`**
 
-Create `src/yoinkc/renderers/merge_notes.py`:
+Create `src/inspectah/renderers/merge_notes.py`:
 
 ```python
 """Render merge-notes.md — fleet merge ambiguity drill-down."""
@@ -898,13 +898,13 @@ def render_merge_notes(snapshot: InspectionSnapshot, output_dir: Path) -> None:
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestMergeNotes -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestMergeNotes -v`
 
 Expected: PASS
 
 - [ ] **Step 5: Wire into `run_all()` in renderers/__init__.py**
 
-In `src/yoinkc/renderers/__init__.py`, add the import and call:
+In `src/inspectah/renderers/__init__.py`, add the import and call:
 
 After the existing import of `write_redacted_dir` (or wherever imports are), add:
 ```python
@@ -919,8 +919,8 @@ In the `run_all()` function, add after `write_redacted_dir(snapshot, output_dir)
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/renderers/merge_notes.py src/yoinkc/renderers/__init__.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/renderers/merge_notes.py src/inspectah/renderers/__init__.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(renderers): add merge-notes.md for fleet ambiguity drill-down
 
@@ -939,7 +939,7 @@ EOF
 ### Task 6: Audit Report Disambiguation (`[TIE LOSER]` labels)
 
 **Files:**
-- Modify: `src/yoinkc/renderers/audit_report.py` (multiple `[EXCLUDED]` sites)
+- Modify: `src/inspectah/renderers/audit_report.py` (multiple `[EXCLUDED]` sites)
 - Test: `tests/test_fleet_merge.py`
 
 - [ ] **Step 1: Write failing test for audit report labels**
@@ -951,8 +951,8 @@ class TestAuditReportDisambiguation:
     """Audit report distinguishes [EXCLUDED], [TIE LOSER], and [REDACTED]."""
 
     def test_tie_loser_labeled_in_audit_report(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.audit_report import render_audit_report
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.audit_report import render_audit_report
         from jinja2 import Environment, FileSystemLoader
 
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -965,7 +965,7 @@ class TestAuditReportDisambiguation:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
-            templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
+            templates_dir = Path(__file__).resolve().parent.parent / "src" / "inspectah" / "templates"
             env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
             render_audit_report(merged, env, output_dir)
             content = (output_dir / "audit-report.md").read_text()
@@ -976,9 +976,9 @@ class TestAuditReportDisambiguation:
 
     def test_redacted_takes_precedence_over_tie(self):
         """A file that is both a tie winner and redacted should show [REDACTED]."""
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.audit_report import render_audit_report
-        from yoinkc.schema import RedactionFinding
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.audit_report import render_audit_report
+        from inspectah.schema import RedactionFinding
         from jinja2 import Environment, FileSystemLoader
 
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -997,7 +997,7 @@ class TestAuditReportDisambiguation:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
-            templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
+            templates_dir = Path(__file__).resolve().parent.parent / "src" / "inspectah" / "templates"
             env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
             render_audit_report(merged, env, output_dir)
             content = (output_dir / "audit-report.md").read_text()
@@ -1009,13 +1009,13 @@ class TestAuditReportDisambiguation:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestAuditReportDisambiguation -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestAuditReportDisambiguation -v`
 
 Expected: FAIL — "[TIE LOSER]" not found in audit report.
 
 - [ ] **Step 3: Add `_item_label()` helper to audit_report.py**
 
-In `src/yoinkc/renderers/audit_report.py`, add a helper function near the top of the file (after imports):
+In `src/inspectah/renderers/audit_report.py`, add a helper function near the top of the file (after imports):
 
 ```python
 def _item_label(item, redacted_paths: set[str]) -> str:
@@ -1056,21 +1056,21 @@ Note: Not every `[EXCLUDED]` in the audit report is for variant items. Only repl
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestAuditReportDisambiguation -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestAuditReportDisambiguation -v`
 
 Expected: PASS
 
 - [ ] **Step 5: Run full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest -v`
 
 Expected: PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/renderers/audit_report.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/renderers/audit_report.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(audit-report): disambiguate [EXCLUDED] vs [TIE LOSER] vs [REDACTED]
 
@@ -1092,7 +1092,7 @@ EOF
 ### Task 7: CLI Output — Tie Summary Line
 
 **Files:**
-- Modify: `src/yoinkc/__main__.py:183-242` (_run_fleet)
+- Modify: `src/inspectah/__main__.py:183-242` (_run_fleet)
 - Test: `tests/test_fleet_merge.py`
 
 - [ ] **Step 1: Write failing test for CLI tie summary**
@@ -1105,8 +1105,8 @@ class TestCliTieSummary:
 
     def test_count_tied_winners_returns_correct_count(self):
         """Unit test _count_tied_winners() as a pure function on a snapshot."""
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.__main__ import _count_tied_winners
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.__main__ import _count_tied_winners
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -1120,8 +1120,8 @@ class TestCliTieSummary:
 
     def test_zero_ties_returns_zero(self):
         """No ties → _count_tied_winners returns 0."""
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.__main__ import _count_tied_winners
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.__main__ import _count_tied_winners
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
@@ -1141,7 +1141,7 @@ class TestCliTieSummary:
 
 - [ ] **Step 2: Implement tie summary in `_run_fleet()`**
 
-In `src/yoinkc/__main__.py`, add a helper function:
+In `src/inspectah/__main__.py`, add a helper function:
 
 ```python
 def _count_tied_winners(snapshot) -> int:
@@ -1174,15 +1174,15 @@ And similarly after the `--json-only` print on line 225, add the same logic.
 
 - [ ] **Step 3: Run test**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestCliTieSummary -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestCliTieSummary -v`
 
 Expected: PASS
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/__main__.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/__main__.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(cli): print tie summary after fleet merge
 
@@ -1200,7 +1200,7 @@ EOF
 ### Task 8: Readme Artifacts Table — merge-notes.md Row
 
 **Files:**
-- Modify: `src/yoinkc/renderers/readme.py:68-89` (artifacts table)
+- Modify: `src/inspectah/renderers/readme.py:68-89` (artifacts table)
 - Test: `tests/test_fleet_merge.py`
 
 - [ ] **Step 1: Write failing test**
@@ -1212,9 +1212,9 @@ class TestReadmeArtifacts:
     """merge-notes.md appears in readme artifacts for fleet merges."""
 
     def test_merge_notes_in_readme_for_fleet(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers import render_readme
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers import render_readme
+        from inspectah.renderers.merge_notes import render_merge_notes
         from jinja2 import Environment, FileSystemLoader
 
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -1227,7 +1227,7 @@ class TestReadmeArtifacts:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
-            templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
+            templates_dir = Path(__file__).resolve().parent.parent / "src" / "inspectah" / "templates"
             env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
             # render_merge_notes() must run first — render_readme() checks
             # whether merge-notes.md exists on disk (see Step 3 above).
@@ -1239,13 +1239,13 @@ class TestReadmeArtifacts:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestReadmeArtifacts -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestReadmeArtifacts -v`
 
 Expected: FAIL — "merge-notes.md" not in README.
 
 - [ ] **Step 3: Add merge-notes row to readme artifacts**
 
-In `src/yoinkc/renderers/readme.py`, after the warnings row (around line 87), add a conditional row for fleet merges:
+In `src/inspectah/renderers/readme.py`, after the warnings row (around line 87), add a conditional row for fleet merges:
 
 ```python
     # Merge notes (fleet merges with ties or non-unanimous items)
@@ -1265,15 +1265,15 @@ Note: `render_readme()` must accept the `output_dir` path (it already does for w
 
 - [ ] **Step 4: Run test**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestReadmeArtifacts -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestReadmeArtifacts -v`
 
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/renderers/readme.py tests/test_fleet_merge.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/renderers/readme.py tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 feat(readme): add merge-notes.md to artifacts table for fleet merges
 
@@ -1290,19 +1290,19 @@ EOF
 ### Task 9: HTML Report — Tie Badges and Homogeneity Labels
 
 **Files:**
-- Modify: `src/yoinkc/renderers/html_report.py:688-725` (tie detection)
-- Modify: `src/yoinkc/templates/report/_config.html.j2:16-18` (is_tied logic)
-- Modify: `src/yoinkc/templates/report/_summary.html.j2:47-53` (tie count display)
-- Modify: `src/yoinkc/templates/report/_services.html.j2` (drop-in variant logic)
-- Modify: `src/yoinkc/templates/report/_containers.html.j2` (quadlet/compose variant logic)
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (client-side tie state)
-- Modify: `src/yoinkc/templates/report/_editor_js.html.j2` (editor tie state)
+- Modify: `src/inspectah/renderers/html_report.py:688-725` (tie detection)
+- Modify: `src/inspectah/templates/report/_config.html.j2:16-18` (is_tied logic)
+- Modify: `src/inspectah/templates/report/_summary.html.j2:47-53` (tie count display)
+- Modify: `src/inspectah/templates/report/_services.html.j2` (drop-in variant logic)
+- Modify: `src/inspectah/templates/report/_containers.html.j2` (quadlet/compose variant logic)
+- Modify: `src/inspectah/templates/report/_js.html.j2` (client-side tie state)
+- Modify: `src/inspectah/templates/report/_editor_js.html.j2` (editor tie state)
 
 This is the largest task. The core change: replace `is_tied = (not group_has_selected)` inference with explicit `tie`/`tie_winner` flag checks.
 
 - [ ] **Step 1: Update `html_report.py` — switch tie detection to flag-based**
 
-In `src/yoinkc/renderers/html_report.py`, find the section where `unresolved_ties` is computed (around lines 705-725). The current logic checks for variant groups where no item has `include=True`. Replace with flag-based detection:
+In `src/inspectah/renderers/html_report.py`, find the section where `unresolved_ties` is computed (around lines 705-725). The current logic checks for variant groups where no item has `include=True`. Replace with flag-based detection:
 
 ```python
     # Count tie groups (groups where any variant has tie=True)
@@ -1362,13 +1362,13 @@ In the JS, replace any logic that checks for "no selected variant in group" as a
 
 - [ ] **Step 6: Run full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest -v`
 
 Expected: PASS. If HTML report tests exist, they should pass with the updated tie logic.
 
 - [ ] **Step 7: Manual smoke test**
 
-If a test fleet snapshot is available, run `yoinkc fleet` against it and open the generated `report.html` to verify:
+If a test fleet snapshot is available, run `inspectah fleet` against it and open the generated `report.html` to verify:
 - Tied items show "tie winner (hash)" badge
 - Non-unanimous items show fleet ratio labels
 - Unanimous items have no badge
@@ -1377,8 +1377,8 @@ If a test fleet snapshot is available, run `yoinkc fleet` against it and open th
 - [ ] **Step 8: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/renderers/html_report.py src/yoinkc/templates/report/
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/renderers/html_report.py src/inspectah/templates/report/
 git commit -m "$(cat <<'EOF'
 feat(report): flag-based tie detection and homogeneity labels
 
@@ -1400,8 +1400,8 @@ EOF
 ### Task 10: Refine UI — "(auto-selected: tied)" Label
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_config.html.j2` (variant display in refine mode)
-- Modify: `src/yoinkc/templates/report/_editor_js.html.j2` (comparison view default)
+- Modify: `src/inspectah/templates/report/_config.html.j2` (variant display in refine mode)
+- Modify: `src/inspectah/templates/report/_editor_js.html.j2` (comparison view default)
 
 This builds on Task 9's template changes. The refine UI reuses the same templates in `refine_mode=True`.
 
@@ -1424,8 +1424,8 @@ In `_editor_js.html.j2`, when a variant group has `data-tie="true"`, default the
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/templates/report/
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/templates/report/
 git commit -m "$(cat <<'EOF'
 feat(refine): add (auto-selected: tied) label and comparison default
 
@@ -1452,8 +1452,8 @@ class TestTieRoundTrip:
     """Full pipeline: merge with ties → render → verify all surfaces."""
 
     def test_full_render_with_ties(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers import run_all
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers import run_all
         from jinja2 import Environment, FileSystemLoader
 
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -1488,8 +1488,8 @@ class TestTieRoundTrip:
 
     def test_refine_round_trip_resolves_tie(self):
         """A tie resolved via refine removes the tied-items comment block."""
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers import run_all
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers import run_all
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=alpha"),
@@ -1530,14 +1530,14 @@ class TestTieRoundTrip:
 
 - [ ] **Step 2: Run integration tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_fleet_merge.py::TestTieRoundTrip -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_fleet_merge.py::TestTieRoundTrip -v`
 
 Expected: PASS
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 git add tests/test_fleet_merge.py
 git commit -m "$(cat <<'EOF'
 test(fleet): add round-trip integration test for tied variants
@@ -1557,13 +1557,13 @@ EOF
 
 - [ ] **Step 1: Run the complete test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest -v`
 
 Expected: All tests PASS.
 
 - [ ] **Step 2: Run a quick manual smoke test if fleet test data is available**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m yoinkc fleet <test-fleet-dir>` (if test data exists)
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m inspectah fleet <test-fleet-dir>` (if test data exists)
 
 Verify:
 - CLI prints tie summary

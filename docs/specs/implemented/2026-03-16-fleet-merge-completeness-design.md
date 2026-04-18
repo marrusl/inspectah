@@ -6,7 +6,7 @@
 
 ## Problem
 
-Fleet merge (`yoinkc-fleet aggregate`) currently omits three sections from
+Fleet merge (`inspectah-fleet aggregate`) currently omits three sections from
 merged snapshots: storage, selinux, and non_rpm_software. This means fleet
 reports are incomplete — users see blank sections for data that exists in the
 source snapshots. More critically, enabling fleet refine mode (Spec 2) on an

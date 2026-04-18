@@ -12,13 +12,13 @@
 
 Validate that all packages in the generated install list actually exist in the target repos before rendering the Containerfile. Surface unavailable packages, direct-install RPMs, and unreachable repos as structured diagnostics so users can resolve migration gaps before burning a build cycle.
 
-**Scope:** CLI preflight check (single-system) and architect fleet aggregation. No replacement mapping or fix suggestions — yoinkc reports what doesn't resolve and gets out of the way.
+**Scope:** CLI preflight check (single-system) and architect fleet aggregation. No replacement mapping or fix suggestions — inspectah reports what doesn't resolve and gets out of the way.
 
 ## Context
 
 ### The problem
 
-yoinkc inspects a source system, collects installed packages, and renders a Containerfile with `dnf install` lines. Today, there is no validation that those packages exist in the target base image's repos. The first signal a user gets is a failed `podman build` — potentially minutes into the build after pulling images and installing dozens of packages.
+inspectah inspects a source system, collects installed packages, and renders a Containerfile with `dnf install` lines. Today, there is no validation that those packages exist in the target base image's repos. The first signal a user gets is a failed `podman build` — potentially minutes into the build after pulling images and installing dozens of packages.
 
 Real-world example: a Containerfile included `mcelog`, which was deprecated and removed from Fedora. The `dnf install` step failed, wasting the entire build. The fix was trivial (remove one package), but the feedback loop was slow and frustrating.
 
@@ -31,7 +31,7 @@ Real-world example: a Containerfile included `mcelog`, which was deprecated and 
 
 ### Strategic context
 
-This feature shifts yoinkc from a translation tool ("here's your Containerfile") to a migration advisor ("here's your Containerfile, and here's what won't survive the transition"). Understanding the destination, not just the source, is where the tool earns trust with operators running real migrations.
+This feature shifts inspectah from a translation tool ("here's your Containerfile") to a migration advisor ("here's your Containerfile, and here's what won't survive the transition"). Understanding the destination, not just the source, is where the tool earns trust with operators running real migrations.
 
 ---
 
@@ -43,9 +43,9 @@ This feature shifts yoinkc from a translation tool ("here's your Containerfile")
 | 2 | Check runs by default during inspection | Optional validation steps are discovered after the first failure, not before. Run by default; let users skip it. (Fern) |
 | 3 | Warn-and-continue default, not hard fail | The user asked for a Containerfile; the tool should hand them one that works. Unavailable packages are excluded with loud warnings. No modes to choose between. (Fern) |
 | 4 | Single flag: `--skip-unavailable` | Matches `dnf`'s own vocabulary — sysadmins already have this term in muscle memory. Describes the user-facing behavior, not implementation internals. Override flags (`--strict`, `--fail-unavailable`, `--keep-unavailable`) were considered and dropped — they create decision points that don't earn their complexity. (Fern) |
-| 5 | No replacement map or fix suggestions | "We can't program in advice for every situation." A curated replacement map is maintenance-heavy and one wrong suggestion undermines trust in the whole tool. yoinkc reports what doesn't resolve; the user knows their systems. (Mark) |
+| 5 | No replacement map or fix suggestions | "We can't program in advice for every situation." A curated replacement map is maintenance-heavy and one wrong suggestion undermines trust in the whole tool. inspectah reports what doesn't resolve; the user knows their systems. (Mark) |
 | 6 | Diagnostics go to stderr, never into the Containerfile | The Containerfile is a build artifact. Diagnostics stay in the diagnostic block. (Fern) |
-| 7 | Detect and flag direct-install RPMs as a separate category | Packages installed via `rpm -i` (not through dnf) have no repo metadata. yoinkc can't reproduce the install from a repo. This is a harder problem than "unavailable" and requires different user action. (Mark) |
+| 7 | Detect and flag direct-install RPMs as a separate category | Packages installed via `rpm -i` (not through dnf) have no repo metadata. inspectah can't reproduce the install from a repo. This is a harder problem than "unavailable" and requires different user action. (Mark) |
 | 8 | Detect package-added repos (e.g., `epel-release`) | Common pattern: installing a package drops repo files into `/etc/yum.repos.d/`. Preflight must install repo-providing packages first, then check availability against the complete repo set. (Mark) |
 | 9 | Custom repo configs from the snapshot are mounted into the preflight container | Ensures preflight queries the same repo set the Containerfile will use. `$releasever` resolves correctly inside the target base image container. (Design discussion) |
 | 10 | Machine-parseable output via snapshot, not a separate JSON flag | Preflight results are stored in the `InspectionSnapshot`. Architect and fleet tooling already read snapshots. A separate `--output-json` flag is redundant. (Mark) |
@@ -62,7 +62,7 @@ This feature shifts yoinkc from a translation tool ("here's your Containerfile")
 
 ### Location
 
-New module: `src/yoinkc/preflight.py`
+New module: `src/inspectah/preflight.py`
 
 ### Interface
 
@@ -142,7 +142,7 @@ Note: this bind-mount replaces the base image's repo directory entirely. If the 
 
 This ensures `$releasever` and `$basearch` resolve against the target, not the source. The preflight container sees the same repo set the rendered Containerfile will configure.
 
-**Trust model:** The snapshot's `.repo` files and GPG keys are active configuration from the inspected host — not inert data. This design assumes the inspected host and its snapshot are trusted. Preflight mounts these files into a temporary container and executes `dnf` against them. If the snapshot is compromised, malicious repo configs could point `dnf` at hostile repos. This is acceptable because yoinkc already trusts the snapshot for rendering — the Containerfile `COPY`s the same files into the built image.
+**Trust model:** The snapshot's `.repo` files and GPG keys are active configuration from the inspected host — not inert data. This design assumes the inspected host and its snapshot are trusted. Preflight mounts these files into a temporary container and executes `dnf` against them. If the snapshot is compromised, malicious repo configs could point `dnf` at hostile repos. This is acceptable because inspectah already trusts the snapshot for rendering — the Containerfile `COPY`s the same files into the built image.
 
 **Environment skew:** Preflight runs in the current host's network and auth context, which may differ from the build environment. Key skew scenarios:
 - **RHEL entitlements:** The preflight host may not have the same RHEL subscription entitlements as the build host. Entitled repos may appear unreachable.
@@ -154,7 +154,7 @@ Preflight is a best-effort check in the current environment, not a build guarant
 
 ### Direct-install RPM detection
 
-During inspection, the RPM inspector checks the `from_repo` metadata for each package (from `rpm -qi` or equivalent). Packages with no repo origin (showing `(none)`, `commandline`, or equivalent) are classified as direct-install RPMs. These are excluded from the `dnf repoquery` check and flagged separately — yoinkc cannot reproduce their installation from a repo.
+During inspection, the RPM inspector checks the `from_repo` metadata for each package (from `rpm -qi` or equivalent). Packages with no repo origin (showing `(none)`, `commandline`, or equivalent) are classified as direct-install RPMs. These are excluded from the `dnf repoquery` check and flagged separately — inspectah cannot reproduce their installation from a repo.
 
 ### Input set: preflight checks what the renderer will emit
 
@@ -259,11 +259,11 @@ Lines with zero counts are omitted. Machine-readable completeness is in `snapsho
 |------|--------|
 | `--skip-unavailable` | Skip the preflight check entirely. All packages included in the Containerfile without validation. No diagnostic block. |
 
-No other flags. The preflight check runs by default during `yoinkc inspect`. The default behavior (warn-and-continue) is the only mode.
+No other flags. The preflight check runs by default during `inspectah inspect`. The default behavior (warn-and-continue) is the only mode.
 
 ### Exit codes
 
-The preflight check does **not** change the exit code. yoinkc exits 0 even if unavailable packages are found — the Containerfile was rendered successfully (with those packages excluded). The diagnostic block on stderr provides the signal.
+The preflight check does **not** change the exit code. inspectah exits 0 even if unavailable packages are found — the Containerfile was rendered successfully (with those packages excluded). The diagnostic block on stderr provides the signal.
 
 If the user needs to detect unavailable packages programmatically, they read the `preflight` field in `snapshot.json`.
 
@@ -388,10 +388,10 @@ The preflight check is best-effort. It never blocks rendering. A failed prefligh
 
 ## What This Spec Does NOT Cover
 
-- **Replacement suggestions or mapping.** yoinkc does not suggest what to use instead of an unavailable package. The user knows their systems.
+- **Replacement suggestions or mapping.** inspectah does not suggest what to use instead of an unavailable package. The user knows their systems.
 - **Version compatibility checking.** The preflight checks name-level availability, not whether a specific version exists. Version lock conflicts are a separate concern.
 - **Multi-step Containerfile simulation.** Repos added via `RUN` commands during the build (e.g., `dnf install epel-release && dnf install epel-pkg`) are handled via the repo-providing package detection, but arbitrary Containerfile logic is out of scope.
-- **Standalone `yoinkc preflight` subcommand.** The module supports this structurally, but v1 exposes it only through `yoinkc inspect`. A subcommand can be added later if there's demand.
+- **Standalone `inspectah preflight` subcommand.** The module supports this structurally, but v1 exposes it only through `inspectah inspect`. A subcommand can be added later if there's demand.
 
 ---
 

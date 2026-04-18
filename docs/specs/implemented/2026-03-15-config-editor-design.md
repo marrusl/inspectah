@@ -3,11 +3,11 @@
 **Date:** 2026-03-15
 **Status:** Implemented
 **Branch:** `feature/config-editor-chunk1` (merged to main, 13 commits, 604 tests)
-**Scope:** Transform the read-only file browser into an interactive config editor in yoinkc-refine mode.
+**Scope:** Transform the read-only file browser into an interactive config editor in inspectah-refine mode.
 
 ## Overview
 
-The yoinkc HTML report includes a file browser tab that displays config files, quadlet units, and systemd drop-ins. The file browser was read-only and largely redundant with the config/quadlet/drop-in tabs that showed the same content inline. This design transforms the file browser into an interactive editor that lets operators modify file content, create new files, and re-render the report—producing export-ready output with all edits baked into the tarball.
+The inspectah HTML report includes a file browser tab that displays config files, quadlet units, and systemd drop-ins. The file browser was read-only and largely redundant with the config/quadlet/drop-in tabs that showed the same content inline. This design transforms the file browser into an interactive editor that lets operators modify file content, create new files, and re-render the report—producing export-ready output with all edits baked into the tarball.
 
 The editor is a refine-mode feature only. The static HTML report is unaffected.
 
@@ -32,7 +32,7 @@ The editor is a refine-mode feature only. The static HTML report is unaffected.
 All editing happens in the browser. The report page holds the full inspection snapshot in a `snapshot` JavaScript object (already embedded for the reset-to-original-inspection feature). Edits update this object directly.
 
 - **Save** writes the CodeMirror buffer into `snapshot`—instant, no network round-trip.
-- **Re-render** POSTs `{"snapshot": {...}, "original": {...}}` to the `POST /api/re-render` endpoint on yoinkc-refine. The server runs yoinkc with `--from-snapshot` and `--original-snapshot`, passing both snapshots so the original can be re-embedded and the audit diff can be computed.
+- **Re-render** POSTs `{"snapshot": {...}, "original": {...}}` to the `POST /api/re-render` endpoint on inspectah-refine. The server runs inspectah with `--from-snapshot` and `--original-snapshot`, passing both snapshots so the original can be re-embedded and the audit diff can be computed.
 
 This approach requires no new API endpoints for editing. The single source of truth is the in-memory `snapshot` object.
 
@@ -49,8 +49,8 @@ The report page embeds two copies of the snapshot: `snapshot` (mutable, receives
 The re-render flow does a full page replacement (`document.open(); document.write(html); document.close()`). To preserve the original across re-renders:
 
 - The re-render request sends both `snapshot` and `originalSnapshot` as `{"snapshot": {...}, "original": {...}}`.
-- yoinkc-refine writes `original-snapshot.json` to the temp input dir and passes `--original-snapshot /input/original-snapshot.json` to yoinkc.
-- yoinkc reads the original snapshot file and embeds it as `original_snapshot_json` in the template context.
+- inspectah-refine writes `original-snapshot.json` to the temp input dir and passes `--original-snapshot /input/original-snapshot.json` to inspectah.
+- inspectah reads the original snapshot file and embeds it as `original_snapshot_json` in the template context.
 - The template embeds them as two separate variables (no deep copy):
 
 ```javascript
@@ -62,9 +62,9 @@ var originalSnapshot = {{ original_snapshot_json|safe }};
 
 The `--refine-mode` CLI flag threads through: `cli.py` → `__main__.py` (via `functools.partial`) → `run_all()` → `html_report.render()` → `_build_context()`. The template uses `{% if refine_mode %}` blocks to conditionally render editor UI.
 
-yoinkc-refine passes `--refine-mode` to the yoinkc container command during re-render.
+inspectah-refine passes `--refine-mode` to the inspectah container command during re-render.
 
-### yoinkc-refine Changes
+### inspectah-refine Changes
 
 - **Re-render API:** Accepts wrapper format `{"snapshot": {...}, "original": {...}}` with backward compatibility for bare snapshot JSON. Mounts `original-snapshot.json` alongside the snapshot. Passes `--refine-mode` and `--original-snapshot` flags.
 - **Re-render button:** Added to the toolbar alongside Reset to Original Inspection. Displays a count of files in `not rendered` state. Only saved files count.
@@ -75,15 +75,15 @@ yoinkc-refine passes `--refine-mode` to the yoinkc container command during re-r
 Operator edits file in CodeMirror
   → clicks Save → snapshot.config.files[i].content updated (instant)
   → clicks Re-render → POST /api/re-render with {snapshot, original}
-  → yoinkc-refine writes both to temp dir
-  → yoinkc runs --from-snapshot --original-snapshot --refine-mode
+  → inspectah-refine writes both to temp dir
+  → inspectah runs --from-snapshot --original-snapshot --refine-mode
   → writes config/, quadlet/, drop-in files with modified content
   → generates Containerfile with COPY directives for all files
   → returns new report.html (with originalSnapshot re-embedded)
   → browser replaces page content
 ```
 
-Tarball output includes the modified files automatically since yoinkc writes snapshot content to disk.
+Tarball output includes the modified files automatically since inspectah writes snapshot content to disk.
 
 **Re-render failure:** The browser shows an error via `alert()` (placeholder — PF6 error banner planned). All `not rendered` labels remain — no state is cleared on failure.
 
@@ -199,7 +199,7 @@ The section only appears if there are modifications. Computed server-side during
 ## CodeMirror 6 Integration
 
 - **Bundle:** CodeMirror 6 via the `codemirror` meta-package (~373KB minified IIFE). Built by `scripts/build-codemirror.sh` for reproducibility.
-- **Delivery:** Vendored at `src/yoinkc/static/codemirror/codemirror.min.js`. Inlined in the report HTML via `<script>{{ codemirror_js }}</script>` — same pattern as the PatternFly CSS. No separate CSS file (CM6 themes are JS-based). No `/static/` route needed on yoinkc-refine.
+- **Delivery:** Vendored at `src/inspectah/static/codemirror/codemirror.min.js`. Inlined in the report HTML via `<script>{{ codemirror_js }}</script>` — same pattern as the PatternFly CSS. No separate CSS file (CM6 themes are JS-based). No `/static/` route needed on inspectah-refine.
 - **Loading:** Conditionally inlined when `refine_mode` is true. Static reports never include it.
 - **Instance management:** One CodeMirror instance, content swapped per file. Undo history resets on file switch.
 - **Keyboard shortcuts:** Ctrl+S / Cmd+S triggers Save.
@@ -223,14 +223,14 @@ The static HTML report is completely unaffected by this feature:
 - `tests/test_editor.py` — editor tab rendering, CM6 embedding, dirty tracking, cross-tab links, new file modal, re-render button, integration.
 - `tests/test_html_report_output.py` — original snapshot embedding, refine_mode defaults, drop-ins tree.
 - `tests/test_audit_report_output.py` — modifications section (edited/added/unchanged).
-- `tests/test_yoinkc_refine.py` — wrapper format re-render.
+- `tests/test_inspectah_refine.py` — wrapper format re-render.
 
 ## Future Considerations
 
 - **Checkboxes → toggle switches:** Convert include/exclude checkboxes to PF6 toggle switches.
 - **Persistence across page refresh:** `POST /api/snapshot` endpoint to persist in-memory snapshot to disk.
 - **Syntax-aware editing:** CodeMirror language modes for INI, TOML, systemd unit files.
-- **Consolidate companion tools:** Fold yoinkc-refine and yoinkc-fleet into yoinkc as subcommands (`yoinkc refine`, `yoinkc fleet`). Both are pure Python — refine becomes simpler (re-render is a function call, not container-in-container). Leave build separate (needs podman/buildah on host).
+- **Consolidate companion tools:** Fold inspectah-refine and inspectah-fleet into inspectah as subcommands (`inspectah refine`, `inspectah fleet`). Both are pure Python — refine becomes simpler (re-render is a function call, not container-in-container). Leave build separate (needs podman/buildah on host).
 - **`confirm()` → PF6 modal:** Replace browser `confirm()` for unsaved-changes navigation guard with a proper PF6 modal (save/discard/cancel).
 - **`alert()` → PF6 error banner:** Replace browser `alert()` for re-render errors with an inline PF6 alert banner.
 - **CM6 dirty tracking:** Replace keyup polling with CM6's `updateListener` extension by extending `build.mjs` to accept an onChange callback.

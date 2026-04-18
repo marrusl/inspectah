@@ -6,7 +6,7 @@
 
 **Architecture:** Extend the existing `redact_snapshot()` pipeline with new patterns, a typed `RedactionFinding` model, and remediation state tracking. Add a `redacted/` output directory for excluded files. Update all downstream renderers and consumers to use the new model.
 
-**Tech Stack:** Python 3.10+, Pydantic BaseModel, pytest, existing yoinkc schema/renderer infrastructure.
+**Tech Stack:** Python 3.10+, Pydantic BaseModel, pytest, existing inspectah schema/renderer infrastructure.
 
 **Spec:** `docs/specs/proposed/2026-04-08-secrets-handling-v2-design.md`
 
@@ -18,16 +18,16 @@
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `src/yoinkc/schema.py` | Modify | Add `RedactionFinding` model, update `InspectionSnapshot.redactions` type to `List[Union[dict, RedactionFinding]]` |
-| `src/yoinkc/redact.py` | Modify | New patterns, sequential counters (incl shadow), remediation states, `include=False` for excluded |
-| `src/yoinkc/renderers/secrets_review.py` | Modify | New format with separate Excluded/Inline tables, attribute access |
-| `src/yoinkc/renderers/html_report.py` | Modify | Update `r.get(...)` calls to handle `RedactionFinding` attributes |
-| `src/yoinkc/renderers/audit_report.py` | Modify | Update `r.get(...)` calls to handle `RedactionFinding` attributes |
-| `src/yoinkc/fleet/merge.py` | Modify | Update `_deduplicate_warning_dicts()` to handle `RedactionFinding` objects |
-| `src/yoinkc/renderers/containerfile/_config_tree.py` | Modify | Add `write_redacted_dir()` for `.REDACTED` files |
-| `src/yoinkc/renderers/containerfile/_core.py` | Modify | Add secrets comment blocks to Containerfile |
-| `src/yoinkc/renderers/__init__.py` | Modify | Wire `write_redacted_dir()` into renderer pipeline |
-| `src/yoinkc/pipeline.py` | Modify | Add `_print_secrets_summary()` CLI output |
+| `src/inspectah/schema.py` | Modify | Add `RedactionFinding` model, update `InspectionSnapshot.redactions` type to `List[Union[dict, RedactionFinding]]` |
+| `src/inspectah/redact.py` | Modify | New patterns, sequential counters (incl shadow), remediation states, `include=False` for excluded |
+| `src/inspectah/renderers/secrets_review.py` | Modify | New format with separate Excluded/Inline tables, attribute access |
+| `src/inspectah/renderers/html_report.py` | Modify | Update `r.get(...)` calls to handle `RedactionFinding` attributes |
+| `src/inspectah/renderers/audit_report.py` | Modify | Update `r.get(...)` calls to handle `RedactionFinding` attributes |
+| `src/inspectah/fleet/merge.py` | Modify | Update `_deduplicate_warning_dicts()` to handle `RedactionFinding` objects |
+| `src/inspectah/renderers/containerfile/_config_tree.py` | Modify | Add `write_redacted_dir()` for `.REDACTED` files |
+| `src/inspectah/renderers/containerfile/_core.py` | Modify | Add secrets comment blocks to Containerfile |
+| `src/inspectah/renderers/__init__.py` | Modify | Wire `write_redacted_dir()` into renderer pipeline |
+| `src/inspectah/pipeline.py` | Modify | Add `_print_secrets_summary()` CLI output |
 | `tests/test_redact.py` | Modify | Detection gap tests, counter tests, remediation state tests |
 | `tests/test_secrets_review.py` | Create | Renderer output tests for new format |
 | `tests/test_redacted_dir.py` | Create | `.REDACTED` file placement and content tests |
@@ -45,14 +45,14 @@ This milestone adds the typed model and a compatibility helper so that all exist
 ### Task 1: Add RedactionFinding model to schema + compatibility helper
 
 **Files:**
-- Modify: `src/yoinkc/schema.py`
+- Modify: `src/inspectah/schema.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
 # Add to tests/test_redact.py at the top imports
-from yoinkc.schema import RedactionFinding
+from inspectah.schema import RedactionFinding
 
 def test_redaction_finding_model():
     """RedactionFinding can be constructed with all fields."""
@@ -94,7 +94,7 @@ Expected: FAIL — `ImportError: cannot import name 'RedactionFinding'`
 
 - [ ] **Step 3: Add RedactionFinding to schema.py**
 
-Add after the existing model definitions, before the `InspectionSnapshot` class (before line 578 in `src/yoinkc/schema.py`):
+Add after the existing model definitions, before the `InspectionSnapshot` class (before line 578 in `src/inspectah/schema.py`):
 
 ```python
 class RedactionFinding(BaseModel):
@@ -122,7 +122,7 @@ Note: This uses Pydantic `BaseModel` (like all other models in schema.py), NOT `
 
 The `redactions` field must be changed from `List[dict]` to a proper Union type so that `RedactionFinding` objects survive serialization round-trips. Without this, `save_snapshot()` calls `model_dump_json()` which serializes `RedactionFinding` to JSON objects, and `load_snapshot()` calls `model_validate()` which reconstructs them as plain dicts — causing all downstream `isinstance(RedactionFinding)` checks to fail silently.
 
-In `src/yoinkc/schema.py`, add the `Union` import at the top (line 3):
+In `src/inspectah/schema.py`, add the `Union` import at the top (line 3):
 
 ```python
 from typing import Dict, List, Optional, Union
@@ -174,8 +174,8 @@ Note: `RedactionFinding` is defined earlier in the same file (added in Step 3), 
 Add to `tests/test_redact.py`:
 
 ```python
-from yoinkc.pipeline import save_snapshot, load_snapshot
-from yoinkc.schema import RedactionFinding, InspectionSnapshot
+from inspectah.pipeline import save_snapshot, load_snapshot
+from inspectah.schema import RedactionFinding, InspectionSnapshot
 
 def test_redaction_finding_survives_save_load_roundtrip(tmp_path):
     """RedactionFinding objects survive save_snapshot() -> load_snapshot() round-trip.
@@ -256,7 +256,7 @@ Expected: PASS — the Union type and validator are backwards compatible with ex
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/yoinkc/schema.py tests/test_redact.py
+git add src/inspectah/schema.py tests/test_redact.py
 git commit -m "feat(schema): add RedactionFinding model with Union type and round-trip validator
 
 Typed redaction model for source provenance, remediation state, and kind.
@@ -277,14 +277,14 @@ This milestone adds new detection patterns, replaces hash tokens with sequential
 ### Task 2: Add new detection patterns and `include=False` for excluded paths
 
 **Files:**
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/redact.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write failing tests for new EXCLUDED_PATHS**
 
 ```python
 # Add these imports to tests/test_redact.py if not already present
-from yoinkc.schema import ConfigSection, ConfigFileEntry, ConfigFileKind
+from inspectah.schema import ConfigSection, ConfigFileEntry, ConfigFileKind
 
 def test_p12_keystore_excluded():
     snapshot = _base_snapshot(config=ConfigSection(files=[
@@ -366,7 +366,7 @@ Expected: FAIL — new patterns not yet added
 
 - [ ] **Step 4: Add new patterns to redact.py**
 
-In `src/yoinkc/redact.py`, update `EXCLUDED_PATHS` (after line 26):
+In `src/inspectah/redact.py`, update `EXCLUDED_PATHS` (after line 26):
 
 ```python
 EXCLUDED_PATHS = (
@@ -398,7 +398,7 @@ Add to `REDACT_PATTERNS` list (append after the REDIS_PASSWORD entry at line 44)
 
 - [ ] **Step 5: Update `redact_snapshot()` to set `include=False` for excluded paths**
 
-In `redact_snapshot()`, in the config files loop (around line 182-190 of `src/yoinkc/redact.py`), where `_is_excluded_path(entry.path)` matches, change the line that creates the new file copy to also set `include=False`:
+In `redact_snapshot()`, in the config files loop (around line 182-190 of `src/inspectah/redact.py`), where `_is_excluded_path(entry.path)` matches, change the line that creates the new file copy to also set `include=False`:
 
 ```python
 # Current line ~190:
@@ -429,7 +429,7 @@ Expected: PASS — existing tests unaffected (existing excluded paths didn't che
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/yoinkc/redact.py tests/test_redact.py
+git add src/inspectah/redact.py tests/test_redact.py
 git commit -m "feat(redact): add detection for keystores, cockpit certs, auth.json, WireGuard, WiFi PSK
 
 New EXCLUDED_PATHS: .p12, .pfx, .jks, cockpit ws-certs.d/*, containers/auth.json
@@ -459,7 +459,7 @@ This task replaces `_truncated_sha256()` with a shared counter registry used by 
 - If the same secret value appears in multiple files, it gets the same token everywhere (`_CounterRegistry` dedup by `(type_label, value)`).
 
 **Files:**
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/redact.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write failing tests for sequential counters**
@@ -556,7 +556,7 @@ Expected: FAIL — still using hash tokens
 
 - [ ] **Step 3: Implement the counter registry**
 
-Add to `src/yoinkc/redact.py` (after the `_truncated_sha256` function, around line 60):
+Add to `src/inspectah/redact.py` (after the `_truncated_sha256` function, around line 60):
 
 ```python
 class _CounterRegistry:
@@ -584,7 +584,7 @@ class _CounterRegistry:
 
 - [ ] **Step 4: Update `_redact_text()` to accept and use the registry**
 
-Change the signature of `_redact_text()` in `src/yoinkc/redact.py` (line 113):
+Change the signature of `_redact_text()` in `src/inspectah/redact.py` (line 113):
 
 ```python
 def _redact_text(
@@ -863,7 +863,7 @@ Expected: Some existing tests may need updates because token format changed from
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/yoinkc/redact.py tests/test_redact.py
+git add src/inspectah/redact.py tests/test_redact.py
 git commit -m "feat(redact): replace hash tokens with sequential counters and deterministic ordering
 
 Shared _CounterRegistry used by both _redact_text() and
@@ -883,13 +883,13 @@ dictionary oracle risk for weak secrets."
 This task converts all `redactions.append({...})` sites in `redact_snapshot()` to emit `RedactionFinding` objects. The `.get()` compatibility method ensures existing consumers still work.
 
 **Files:**
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/redact.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write failing tests for remediation states**
 
 ```python
-from yoinkc.schema import RedactionFinding
+from inspectah.schema import RedactionFinding
 
 def test_cockpit_gets_regenerate_remediation():
     snapshot = _base_snapshot(config=ConfigSection(files=[
@@ -999,7 +999,7 @@ Expected: FAIL — redactions are still plain dicts
 
 - [ ] **Step 3: Add remediation mapping to redact.py**
 
-Add after the `_CounterRegistry` class in `src/yoinkc/redact.py`:
+Add after the `_CounterRegistry` class in `src/inspectah/redact.py`:
 
 ```python
 from .schema import RedactionFinding
@@ -1187,7 +1187,7 @@ Expected: PASS
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/yoinkc/redact.py tests/test_redact.py
+git add src/inspectah/redact.py tests/test_redact.py
 git commit -m "feat(redact): emit typed RedactionFinding with remediation states
 
 Each finding carries source provenance, remediation state, and kind.
@@ -1206,12 +1206,12 @@ This milestone updates every consumer of `snapshot.redactions` to work correctly
 ### Task 5: Update html_report.py redaction consumers
 
 **Files:**
-- Modify: `src/yoinkc/renderers/html_report.py`
+- Modify: `src/inspectah/renderers/html_report.py`
 - Test: `tests/test_html_report_output.py`
 
 The HTML report accesses `snapshot.redactions` in two places:
 
-1. **`_build_context()` warnings loop** (lines 554-558 of `src/yoinkc/renderers/html_report.py`):
+1. **`_build_context()` warnings loop** (lines 554-558 of `src/inspectah/renderers/html_report.py`):
    ```python
    for r in snapshot.redactions:
        w = make_warning("redaction", f"Redacted: {r.get('path') or ''}")
@@ -1240,8 +1240,8 @@ Add to `tests/test_html_report_output.py`:
 def test_html_report_with_typed_redaction_findings(self):
     """HTML report renders correctly with RedactionFinding objects in snapshot.redactions."""
     import tempfile
-    from yoinkc.schema import InspectionSnapshot, OsRelease, RedactionFinding
-    from yoinkc.renderers import run_all as run_all_renderers
+    from inspectah.schema import InspectionSnapshot, OsRelease, RedactionFinding
+    from inspectah.renderers import run_all as run_all_renderers
 
     snapshot = InspectionSnapshot(
         meta={"host_root": "/host"},
@@ -1286,7 +1286,7 @@ Test confirms typed findings render correctly."
 ### Task 6: Update audit_report.py redaction consumers
 
 **Files:**
-- Modify: `src/yoinkc/renderers/audit_report.py`
+- Modify: `src/inspectah/renderers/audit_report.py`
 - Test: `tests/test_audit_report_output.py`
 
 The audit report accesses `snapshot.redactions` in two places:
@@ -1316,8 +1316,8 @@ Add to `tests/test_audit_report_output.py`:
 def test_audit_report_with_typed_redaction_findings(self):
     """Audit report renders correctly with RedactionFinding objects."""
     import tempfile
-    from yoinkc.schema import InspectionSnapshot, OsRelease, RedactionFinding
-    from yoinkc.renderers.audit_report import render
+    from inspectah.schema import InspectionSnapshot, OsRelease, RedactionFinding
+    from inspectah.renderers.audit_report import render
 
     snapshot = InspectionSnapshot(
         meta={},
@@ -1358,9 +1358,9 @@ Test confirms typed findings render correctly."
 ### Task 7: Update fleet/merge.py redaction handling
 
 **Files:**
-- Modify: `src/yoinkc/fleet/merge.py`
+- Modify: `src/inspectah/fleet/merge.py`
 
-The fleet merge module uses `_deduplicate_warning_dicts()` for both warnings and redactions (lines 524-529 of `src/yoinkc/fleet/merge.py`):
+The fleet merge module uses `_deduplicate_warning_dicts()` for both warnings and redactions (lines 524-529 of `src/inspectah/fleet/merge.py`):
 
 ```python
 warnings_merged = _deduplicate_warning_dicts(
@@ -1379,10 +1379,10 @@ Create `tests/test_fleet_merge_redactions.py`:
 
 ```python
 """Test that fleet merge handles RedactionFinding objects correctly."""
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, OsRelease, RedactionFinding,
 )
-from yoinkc.fleet.merge import merge_snapshots
+from inspectah.fleet.merge import merge_snapshots
 
 
 def _snap_with_redactions(hostname, redactions):
@@ -1433,7 +1433,7 @@ Expected: FAIL — dedup uses wrong keys for `RedactionFinding`
 
 - [ ] **Step 3: Update `_deduplicate_warning_dicts()` to handle both types**
 
-In `src/yoinkc/fleet/merge.py` (lines 206-216), update to handle both dicts and `RedactionFinding`:
+In `src/inspectah/fleet/merge.py` (lines 206-216), update to handle both dicts and `RedactionFinding`:
 
 ```python
 def _deduplicate_warning_dicts(all_lists: list[list]) -> list:
@@ -1467,7 +1467,7 @@ Expected: PASS — no regressions
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/fleet/merge.py tests/test_fleet_merge_redactions.py
+git add src/inspectah/fleet/merge.py tests/test_fleet_merge_redactions.py
 git commit -m "fix(fleet): update redaction dedup to handle RedactionFinding objects
 
 _deduplicate_warning_dicts() now uses (path, pattern, source) as the
@@ -1481,7 +1481,7 @@ collapsed to one due to missing 'message' field."
 ### Task 8: Rewrite secrets_review.py renderer
 
 **Files:**
-- Modify: `src/yoinkc/renderers/secrets_review.py`
+- Modify: `src/inspectah/renderers/secrets_review.py`
 - Test: `tests/test_secrets_review.py` (create)
 
 - [ ] **Step 1: Write tests**
@@ -1491,8 +1491,8 @@ collapsed to one due to missing 'message' field."
 import tempfile
 from pathlib import Path
 from jinja2 import Environment
-from yoinkc.schema import InspectionSnapshot, RedactionFinding
-from yoinkc.renderers.secrets_review import render
+from inspectah.schema import InspectionSnapshot, RedactionFinding
+from inspectah.renderers.secrets_review import render
 
 
 def _snapshot_with_findings():
@@ -1572,7 +1572,7 @@ def test_secrets_review_legacy_dict_compat():
 Run: `pytest tests/test_secrets_review.py -v`
 Expected: FAIL — old format doesn't have separate tables
 
-- [ ] **Step 3: Rewrite `render()` in `src/yoinkc/renderers/secrets_review.py`**
+- [ ] **Step 3: Rewrite `render()` in `src/inspectah/renderers/secrets_review.py`**
 
 Replace the entire file content:
 
@@ -1667,7 +1667,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/renderers/secrets_review.py tests/test_secrets_review.py
+git add src/inspectah/renderers/secrets_review.py tests/test_secrets_review.py
 git commit -m "feat(render): rewrite secrets-review.md with separate Excluded/Inline tables
 
 Excluded files show Action (Regenerate/Provision) and Reason.
@@ -1683,8 +1683,8 @@ backwards compat with older snapshot data."
 ### Task 9: Write `redacted/` directory with `.REDACTED` files
 
 **Files:**
-- Modify: `src/yoinkc/renderers/containerfile/_config_tree.py`
-- Modify: `src/yoinkc/renderers/__init__.py`
+- Modify: `src/inspectah/renderers/containerfile/_config_tree.py`
+- Modify: `src/inspectah/renderers/__init__.py`
 - Test: `tests/test_redacted_dir.py` (create)
 
 - [ ] **Step 1: Write tests**
@@ -1693,11 +1693,11 @@ backwards compat with older snapshot data."
 # tests/test_redacted_dir.py
 import tempfile
 from pathlib import Path
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind,
     RedactionFinding,
 )
-from yoinkc.renderers.containerfile._config_tree import write_config_tree, write_redacted_dir
+from inspectah.renderers.containerfile._config_tree import write_config_tree, write_redacted_dir
 
 
 def _snapshot_with_excluded():
@@ -1747,7 +1747,7 @@ def test_regenerate_placeholder_content():
         out = Path(tmp)
         write_redacted_dir(snap, out)
         content = (out / "redacted" / "etc" / "cockpit" / "ws-certs.d" / "0-self-signed.key.REDACTED").read_text()
-        assert "REDACTED by yoinkc" in content
+        assert "REDACTED by inspectah" in content
         assert "auto-generated credential" in content
         assert "no action needed" in content
         assert "/etc/cockpit/ws-certs.d/0-self-signed.key" in content
@@ -1759,7 +1759,7 @@ def test_provision_placeholder_content():
         out = Path(tmp)
         write_redacted_dir(snap, out)
         content = (out / "redacted" / "etc" / "pki" / "tls" / "private" / "server.key.REDACTED").read_text()
-        assert "REDACTED by yoinkc" in content
+        assert "REDACTED by inspectah" in content
         assert "sensitive file detected" in content
         assert "provision" in content
         assert "/etc/pki/tls/private/server.key" in content
@@ -1787,18 +1787,18 @@ Expected: FAIL — `write_redacted_dir` not defined
 
 - [ ] **Step 3: Implement `write_redacted_dir()`**
 
-Add to `src/yoinkc/renderers/containerfile/_config_tree.py` (at the end of the file, after `config_inventory_comment`):
+Add to `src/inspectah/renderers/containerfile/_config_tree.py` (at the end of the file, after `config_inventory_comment`):
 
 ```python
 _REGENERATE_TEMPLATE = """\
-# REDACTED by yoinkc — auto-generated credential
+# REDACTED by inspectah — auto-generated credential
 # Original path: {path}
 # Action: no action needed — this file is regenerated automatically on the target system
 # See secrets-review.md for details
 """
 
 _PROVISION_TEMPLATE = """\
-# REDACTED by yoinkc — sensitive file detected
+# REDACTED by inspectah — sensitive file detected
 # Original path: {path}
 # Action: provision this file on the target system from your secrets management process
 # See secrets-review.md for details
@@ -1829,7 +1829,7 @@ def write_redacted_dir(snapshot: InspectionSnapshot, output_dir: Path) -> None:
 
 - [ ] **Step 4: Wire `write_redacted_dir` into the renderer pipeline**
 
-In `src/yoinkc/renderers/__init__.py`, add the import and call. After the existing `render_containerfile` call (line 46):
+In `src/inspectah/renderers/__init__.py`, add the import and call. After the existing `render_containerfile` call (line 46):
 
 ```python
 # Add import at top (after other containerfile imports):
@@ -1851,7 +1851,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/renderers/containerfile/_config_tree.py src/yoinkc/renderers/__init__.py tests/test_redacted_dir.py
+git add src/inspectah/renderers/containerfile/_config_tree.py src/inspectah/renderers/__init__.py tests/test_redacted_dir.py
 git commit -m "feat(render): write redacted/ directory with .REDACTED placeholder files
 
 Excluded secrets go to redacted/ (outside config/ COPY tree) with
@@ -1867,7 +1867,7 @@ render_containerfile()."
 ### Task 10: Add Containerfile secrets comment blocks
 
 **Files:**
-- Modify: `src/yoinkc/renderers/containerfile/_core.py`
+- Modify: `src/inspectah/renderers/containerfile/_core.py`
 - Test: `tests/test_containerfile_secrets_comments.py` (create)
 
 - [ ] **Step 1: Write tests**
@@ -1876,11 +1876,11 @@ render_containerfile()."
 # tests/test_containerfile_secrets_comments.py
 import tempfile
 from pathlib import Path
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
     RedactionFinding,
 )
-from yoinkc.renderers.containerfile._core import _render_containerfile_content
+from inspectah.renderers.containerfile._core import _render_containerfile_content
 
 
 def _snapshot_with_secrets():
@@ -1958,7 +1958,7 @@ Expected: FAIL — no comment blocks generated
 
 - [ ] **Step 3: Add `_secrets_comment_lines()` to `_core.py`**
 
-Add to `src/yoinkc/renderers/containerfile/_core.py` (before `_render_containerfile_content`, around line 57):
+Add to `src/inspectah/renderers/containerfile/_core.py` (before `_render_containerfile_content`, around line 57):
 
 ```python
 def _secrets_comment_lines(snapshot: InspectionSnapshot) -> list[str]:
@@ -2010,7 +2010,7 @@ def _secrets_comment_lines(snapshot: InspectionSnapshot) -> list[str]:
 
 - [ ] **Step 4: Wire into `_render_containerfile_content()`**
 
-In `_render_containerfile_content()` (around line 87 in `src/yoinkc/renderers/containerfile/_core.py`), add the secrets comment lines before the epilogue:
+In `_render_containerfile_content()` (around line 87 in `src/inspectah/renderers/containerfile/_core.py`), add the secrets comment lines before the epilogue:
 
 ```python
     # Current (around line 87-88):
@@ -2032,7 +2032,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/renderers/containerfile/_core.py tests/test_containerfile_secrets_comments.py
+git add src/inspectah/renderers/containerfile/_core.py tests/test_containerfile_secrets_comments.py
 git commit -m "feat(render): add secrets comment blocks to Containerfile
 
 Separate blocks for excluded (grouped by regenerate/provision) and
@@ -2046,7 +2046,7 @@ secrets-review.md only. Comment blocks added before epilogue."
 ### Task 11: Add CLI output summary with automated test
 
 **Files:**
-- Modify: `src/yoinkc/pipeline.py`
+- Modify: `src/inspectah/pipeline.py`
 - Test: `tests/test_pipeline.py`
 
 - [ ] **Step 1: Write the automated test**
@@ -2060,8 +2060,8 @@ from io import StringIO
 
 def test_cli_secrets_summary(monkeypatch):
     """CLI summary prints correct counts to stderr."""
-    from yoinkc.pipeline import _print_secrets_summary
-    from yoinkc.schema import InspectionSnapshot, RedactionFinding
+    from inspectah.pipeline import _print_secrets_summary
+    from inspectah.schema import InspectionSnapshot, RedactionFinding
 
     snap = InspectionSnapshot(meta={})
     snap.redactions = [
@@ -2098,8 +2098,8 @@ def test_cli_secrets_summary(monkeypatch):
 
 def test_cli_secrets_summary_no_findings(monkeypatch):
     """CLI summary prints nothing when there are no findings."""
-    from yoinkc.pipeline import _print_secrets_summary
-    from yoinkc.schema import InspectionSnapshot
+    from inspectah.pipeline import _print_secrets_summary
+    from inspectah.schema import InspectionSnapshot
 
     snap = InspectionSnapshot(meta={})
     snap.redactions = []
@@ -2118,7 +2118,7 @@ Expected: FAIL — `_print_secrets_summary` not defined
 
 - [ ] **Step 3: Implement `_print_secrets_summary()` in pipeline.py**
 
-Add to `src/yoinkc/pipeline.py` (before `run_pipeline`, around line 39):
+Add to `src/inspectah/pipeline.py` (before `run_pipeline`, around line 39):
 
 ```python
 def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
@@ -2149,7 +2149,7 @@ def _print_secrets_summary(snapshot: InspectionSnapshot) -> None:
 
 - [ ] **Step 4: Call `_print_secrets_summary()` in the pipeline**
 
-In `run_pipeline()`, after the `run_renderers(snapshot, tmp_dir)` call (line 81 of `src/yoinkc/pipeline.py`), add:
+In `run_pipeline()`, after the `run_renderers(snapshot, tmp_dir)` call (line 81 of `src/inspectah/pipeline.py`), add:
 
 ```python
         run_renderers(snapshot, tmp_dir)
@@ -2164,7 +2164,7 @@ Expected: PASS
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/pipeline.py tests/test_pipeline.py
+git add src/inspectah/pipeline.py tests/test_pipeline.py
 git commit -m "feat(pipeline): add CLI secrets handling summary with automated test
 
 Prints count of excluded (regenerate/provision) and inline-redacted
@@ -2266,13 +2266,13 @@ Expected: All tests pass. Fix any regressions from the dict→RedactionFinding m
 Check each consumer file for any remaining bare `r["key"]` subscript access that would fail with `RedactionFinding`:
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-grep -rn '\[.*"path"\|"pattern"\|"remediation"\|"line"\|"source"\|"message"' src/yoinkc/renderers/ src/yoinkc/fleet/ src/yoinkc/pipeline.py | grep -v '.get(' | grep -v '# '
+cd /Users/mrussell/Work/bootc-migration/inspectah
+grep -rn '\[.*"path"\|"pattern"\|"remediation"\|"line"\|"source"\|"message"' src/inspectah/renderers/ src/inspectah/fleet/ src/inspectah/pipeline.py | grep -v '.get(' | grep -v '# '
 ```
 
 Any hits need to be converted to `.get()` or `getattr()`.
 
-- [ ] **Step 3: Run yoinkc against a test fixture (if available)**
+- [ ] **Step 3: Run inspectah against a test fixture (if available)**
 
 If a test fixture tarball is available, run the full pipeline and verify:
 - `redacted/` directory exists with `.REDACTED` files

@@ -1,8 +1,8 @@
-# Tool Design: yoinkc
+# Tool Design: inspectah
 
 ## 1. Overview & Principles
 
-yoinkc inspects package-based RHEL, CentOS Stream, and Fedora hosts and produces bootc migration artifacts: a Containerfile, a config tree mirroring operator-modified files, human-readable reports (markdown audit report, interactive HTML report, secrets review), and a structured JSON inspection snapshot that preserves every finding for re-rendering and fleet aggregation.
+inspectah inspects package-based RHEL, CentOS Stream, and Fedora hosts and produces bootc migration artifacts: a Containerfile, a config tree mirroring operator-modified files, human-readable reports (markdown audit report, interactive HTML report, secrets review), and a structured JSON inspection snapshot that preserves every finding for re-rendering and fleet aggregation.
 
 **Baseline subtraction.** The tool's output should represent operator intent, not system state. Wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the Containerfile and reports. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there. Items that reflect hardware-specific or host-specific state (autoloaded kernel modules, DHCP interfaces) are flagged as deploy-time concerns rather than baked into the image.
 
@@ -10,9 +10,9 @@ yoinkc inspects package-based RHEL, CentOS Stream, and Fedora hosts and produces
 
 **Companion tools.** Three companion entry points complete the workflow:
 
-- **`yoinkc refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
-- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling for building on non-RHEL hosts.
-- **`yoinkc fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
+- **`inspectah refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
+- **`inspectah-build`** builds a bootc container image from inspectah output, with automatic RHEL subscription cert handling for building on non-RHEL hosts.
+- **`inspectah fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
 
 ## 2. Architecture
 
@@ -47,7 +47,7 @@ During inspection, the tool emits styled progress output to stderr using ANSI co
 
 The default output is a tarball (`HOSTNAME-YYYYMMDD-HHMMSS.tar.gz`) containing the Containerfile, config tree, reports, snapshot, and RHEL subscription certs (if present on the inspected host). Use `--output-dir` for unpacked directory output, which is required for `--validate` and `--push-to-github`.
 
-The tool itself ships as a container: `ghcr.io/marrusl/yoinkc:latest`.
+The tool itself ships as a container: `ghcr.io/marrusl/inspectah:latest`.
 
 ### Executor
 
@@ -118,17 +118,17 @@ This is called out prominently in the audit report's "Data Migration Plan" secti
 One entry point is registered in `pyproject.toml`:
 
 ```
-yoinkc = "yoinkc.__main__:main"
+inspectah = "inspectah.__main__:main"
 ```
 
-Subcommands: `yoinkc inspect` (default), `yoinkc fleet`, `yoinkc refine`. The `fleet` and `refine` subcommands were previously separate entry points (`yoinkc-fleet`, `yoinkc-refine`) and are now integrated.
+Subcommands: `inspectah inspect` (default), `inspectah fleet`, `inspectah refine`. The `fleet` and `refine` subcommands were previously separate entry points (`inspectah-fleet`, `inspectah-refine`) and are now integrated.
 
-`yoinkc-build` is a standalone companion script (not yet a subcommand) — it builds a bootc container image from yoinkc output with automatic RHEL subscription cert handling (see [Building on Non-RHEL Hosts](#building-on-non-rhel-hosts)).
+`inspectah-build` is a standalone companion script (not yet a subcommand) — it builds a bootc container image from inspectah output with automatic RHEL subscription cert handling (see [Building on Non-RHEL Hosts](#building-on-non-rhel-hosts)).
 
-### `yoinkc` — Host Inspection
+### `inspectah` — Host Inspection
 
 ```
-yoinkc [flags]
+inspectah [flags]
 ```
 
 Inspects a RHEL/CentOS/Fedora host mounted at `--host-root` and produces a tarball (default) or directory of migration artifacts.
@@ -216,17 +216,17 @@ When podman is not installed, `--validate` reports failure with an explanatory w
 | `--github-token TOKEN` | `GITHUB_TOKEN` env | GitHub personal access token for repo creation. Falls back to the `GITHUB_TOKEN` environment variable. |
 | `--public` | off | When creating a new GitHub repo, make it public instead of private. |
 
-### `yoinkc fleet` — Fleet Aggregation
+### `inspectah fleet` — Fleet Aggregation
 
 ```
-yoinkc fleet <input_dir> [flags]
+inspectah fleet <input_dir> [flags]
 ```
 
-Merges multiple yoinkc inspection snapshots into a single fleet-level snapshot with prevalence metadata. Produces a tarball (default) containing a Containerfile, HTML report, and merged snapshot.
+Merges multiple inspectah inspection snapshots into a single fleet-level snapshot with prevalence metadata. Produces a tarball (default) containing a Containerfile, HTML report, and merged snapshot.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `input_dir` (positional) | required | Directory containing yoinkc tarballs (`.tar.gz`) and/or JSON snapshot files. |
+| `input_dir` (positional) | required | Directory containing inspectah tarballs (`.tar.gz`) and/or JSON snapshot files. |
 | `-p`, `--min-prevalence PCT` | `100` | Include items present on >= PCT% of hosts. Range: 1-100. |
 | `-o`, `--output FILE` | auto | Output path for tarball (or JSON with `--json-only`). Default: auto-named in CWD. |
 | `--output-dir DIR` | off | Write rendered files to a directory instead of tarball. |
@@ -237,34 +237,34 @@ Merges multiple yoinkc inspection snapshots into a single fleet-level snapshot w
 
 | Variable | Used by | Effect |
 |---|---|---|
-| `YOINKC_DEBUG` | `yoinkc` (Python), `run-yoinkc.sh` | When set, prints full Python tracebacks on error instead of a one-line summary. The wrapper script forwards it into the container as `YOINKC_DEBUG=1`. |
-| `YOINKC_HOSTNAME` | `run-yoinkc.sh`, inspectors | Overrides hostname detection. The wrapper defaults to `$(hostnamectl hostname)` and falls back to `$(hostname -f)` before passing it into the container. Inside the container, the inspector reads this as the top-priority hostname source, then falls back to `/etc/hostname`, then `hostnamectl hostname`. |
-| `YOINKC_IMAGE` | `run-yoinkc.sh` | Container image to use. Default: `ghcr.io/marrusl/yoinkc:latest`. |
-| `YOINKC_HOST_CWD` | `run-yoinkc.sh`, pipeline | The host's working directory, passed into the container by the wrapper. Used by the pipeline to name output files relative to the host filesystem. |
-| `YOINKC_EXCLUDE_PREREQS` | `run-yoinkc.sh`, RPM inspector | Space-separated list of packages that the wrapper installed as prerequisites (e.g. `podman`). The RPM inspector excludes these from the "operator-added" package list so they don't end up in the Containerfile. |
-| `YOINKC_OUTPUT_DIR` | `run-yoinkc.sh fleet` | Destination directory for fleet output tarball. Default: current working directory. |
-| `GITHUB_TOKEN` | `yoinkc` (Python) | Fallback for `--github-token` when pushing to GitHub. |
+| `INSPECTAH_DEBUG` | `inspectah` (Python), `run-inspectah.sh` | When set, prints full Python tracebacks on error instead of a one-line summary. The wrapper script forwards it into the container as `INSPECTAH_DEBUG=1`. |
+| `INSPECTAH_HOSTNAME` | `run-inspectah.sh`, inspectors | Overrides hostname detection. The wrapper defaults to `$(hostnamectl hostname)` and falls back to `$(hostname -f)` before passing it into the container. Inside the container, the inspector reads this as the top-priority hostname source, then falls back to `/etc/hostname`, then `hostnamectl hostname`. |
+| `INSPECTAH_IMAGE` | `run-inspectah.sh` | Container image to use. Default: `ghcr.io/marrusl/inspectah:latest`. |
+| `INSPECTAH_HOST_CWD` | `run-inspectah.sh`, pipeline | The host's working directory, passed into the container by the wrapper. Used by the pipeline to name output files relative to the host filesystem. |
+| `INSPECTAH_EXCLUDE_PREREQS` | `run-inspectah.sh`, RPM inspector | Space-separated list of packages that the wrapper installed as prerequisites (e.g. `podman`). The RPM inspector excludes these from the "operator-added" package list so they don't end up in the Containerfile. |
+| `INSPECTAH_OUTPUT_DIR` | `run-inspectah.sh fleet` | Destination directory for fleet output tarball. Default: current working directory. |
+| `GITHUB_TOKEN` | `inspectah` (Python) | Fallback for `--github-token` when pushing to GitHub. |
 
 ### Wrapper Scripts
 
-#### `run-yoinkc.sh`
+#### `run-inspectah.sh`
 
-A self-contained shell script (POSIX `sh`) for running yoinkc on a host without any prior installation. It:
+A self-contained shell script (POSIX `sh`) for running inspectah on a host without any prior installation. It:
 
 1. Installs `podman` via `dnf` or `yum` if not already present
-2. Tracks just-installed packages in `YOINKC_EXCLUDE_PREREQS` so they are excluded from inspection results
+2. Tracks just-installed packages in `INSPECTAH_EXCLUDE_PREREQS` so they are excluded from inspection results
 3. Checks/prompts for `registry.redhat.io` login when using RHEL base images
-4. Launches the yoinkc container with the required privileges (`--pid=host`, `--privileged`, `--security-opt label=disable`)
-5. Forwards all extra arguments to the `yoinkc` entry point
-6. Detects subcommands (`fleet`, `refine`) and routes accordingly — `run-yoinkc.sh fleet` maps to `yoinkc fleet`, `run-yoinkc.sh refine` maps to `yoinkc refine`
+4. Launches the inspectah container with the required privileges (`--pid=host`, `--privileged`, `--security-opt label=disable`)
+5. Forwards all extra arguments to the `inspectah` entry point
+6. Detects subcommands (`fleet`, `refine`) and routes accordingly — `run-inspectah.sh fleet` maps to `inspectah fleet`, `run-inspectah.sh refine` maps to `inspectah refine`
 
 Usage:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/marrusl/yoinkc/main/run-yoinkc.sh | sudo sh
-curl -fsSL ... | sudo YOINKC_HOSTNAME=webserver01 sh -s -- --inspect-only
-./run-yoinkc.sh fleet ./snapshots/ -p 80
-./run-yoinkc.sh refine hostname-*.tar.gz
+curl -fsSL https://raw.githubusercontent.com/marrusl/inspectah/main/run-inspectah.sh | sudo sh
+curl -fsSL ... | sudo INSPECTAH_HOSTNAME=webserver01 sh -s -- --inspect-only
+./run-inspectah.sh fleet ./snapshots/ -p 80
+./run-inspectah.sh refine hostname-*.tar.gz
 ```
 
 ## 4. Schema
@@ -299,7 +299,7 @@ Fleet-aggregated snapshots carry additional metadata at two levels:
 
 - **`FleetMeta`** on `InspectionSnapshot.meta` — contains `source_hosts` (list of hostnames), `total_hosts`, and `min_prevalence` (the `--min-prevalence` threshold used during aggregation).
 
-- **`FleetPrevalence`** on individual item models — contains `count` (how many hosts had this item), `total` (total hosts in the fleet), and `hosts` (list of hostnames). Exactly **10 item models** carry an `Optional[FleetPrevalence]` field: `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, and `ComposeFile`. These are the models that support deduplication and prevalence tracking during fleet merge. The `fleet` field is `None` in single-host snapshots and populated only by `yoinkc fleet`.
+- **`FleetPrevalence`** on individual item models — contains `count` (how many hosts had this item), `total` (total hosts in the fleet), and `hosts` (list of hostnames). Exactly **10 item models** carry an `Optional[FleetPrevalence]` field: `PackageEntry`, `RepoFile`, `ConfigFileEntry`, `ServiceStateChange`, `SystemdDropIn`, `FirewallZone`, `CronJob`, `GeneratedTimerUnit`, `QuadletUnit`, and `ComposeFile`. These are the models that support deduplication and prevalence tracking during fleet merge. The `fleet` field is `None` in single-host snapshots and populated only by `inspectah fleet`.
 
 The source code (`schema.py`) is the authoritative reference for individual field names and types.
 
@@ -347,7 +347,7 @@ The second category is particularly important. These are the files that represen
 
 Rather than running `rpm -qf` per-file across `/etc` (which is O(n) RPM database lookups and painfully slow on large systems), the inspector builds a set of all RPM-owned paths in a single pass via `rpm -qla` and then diffs that set against the actual filesystem listing. This reduces thousands of individual RPM queries to one bulk query plus a set subtraction — typically seconds instead of minutes.
 
-A maintainable exclusion list filters out known system-generated files that are not operator-placed configs. The lists cover machine identity files, systemd state, PKI/subscription certs, SELinux policy store, PAM base configs, package manager state, installer artifacts, and more. See `src/yoinkc/inspectors/config.py` for the full current list.
+A maintainable exclusion list filters out known system-generated files that are not operator-placed configs. The lists cover machine identity files, systemd state, PKI/subscription certs, SELinux policy store, PAM base configs, package manager state, installer artifacts, and more. See `src/inspectah/inspectors/config.py` for the full current list.
 
 The exclusion list is defined as two data structures (exact paths and glob patterns) at the top of the config inspector source, making it easy to extend as new false positives are discovered.
 
@@ -521,7 +521,7 @@ Each user is assigned a provisioning strategy:
 | Strategy | Mechanism | When |
 |---|---|---|
 | `sysusers` | `systemd-sysusers` drop-in file under `/usr/lib/sysusers.d/`, applied at boot | Service accounts |
-| `blueprint` | `bootc-image-builder` TOML user definition (`yoinkc-users.toml`) | Optional alternative for service accounts |
+| `blueprint` | `bootc-image-builder` TOML user definition (`inspectah-users.toml`) | Optional alternative for service accounts |
 | `useradd` | Explicit `RUN useradd ...` in the Containerfile | Ambiguous accounts |
 | `kickstart` | Deploy-time provisioning via kickstart `user --name=...` directives | Human users |
 Default assignment: service → `sysusers`, human → `kickstart`, ambiguous → `useradd`. The `--user-strategy STRATEGY` flag overrides the strategy for all users (e.g., `--user-strategy useradd` to use explicit `useradd` commands for everything).
@@ -532,7 +532,7 @@ The generated README includes an opinionated strategy guide explaining the trade
 
 ## 6. Renderers
 
-Renderers consume the complete `InspectionSnapshot` and produce the output artifacts that operators actually work with. Each renderer is a module in `src/yoinkc/renderers/` with a `render(snapshot, env, output_dir)` function that takes the snapshot, a Jinja2 `Environment`, and the output directory.
+Renderers consume the complete `InspectionSnapshot` and produce the output artifacts that operators actually work with. Each renderer is a module in `src/inspectah/renderers/` with a `render(snapshot, env, output_dir)` function that takes the snapshot, a Jinja2 `Environment`, and the output directory.
 
 ### Orchestration
 
@@ -549,7 +549,7 @@ Order matters: the Containerfile renderer runs first because subsequent renderer
 
 ### Jinja2 Setup
 
-`run_all()` creates a single `Environment` with `FileSystemLoader` pointing to `src/yoinkc/templates/` and `autoescape=True`. This environment is passed to every renderer. The HTML report renderer adds a custom `fleet_color` filter for fleet prevalence color bars. If a renderer is called directly (e.g., in tests) without a loader, it sets one up from the package's templates directory.
+`run_all()` creates a single `Environment` with `FileSystemLoader` pointing to `src/inspectah/templates/` and `autoescape=True`. This environment is passed to every renderer. The HTML report renderer adds a custom `fleet_color` filter for fleet prevalence color bars. If a renderer is called directly (e.g., in tests) without a loader, it sets one up from the package's templates directory.
 
 ### Containerfile Renderer (`renderers/containerfile/`)
 
@@ -654,7 +654,7 @@ discover_snapshots()  →  validate_snapshots()  →  merge_snapshots()  →  ru
      (loader.py)            (loader.py)             (merge.py)         (reuse existing)
 ```
 
-The entry point is `yoinkc fleet <input_dir>`, implemented in `fleet/__main__.py`. It calls the loader, validates compatibility, merges, and delegates to `run_pipeline()` for rendering and tarball packaging.
+The entry point is `inspectah fleet <input_dir>`, implemented in `fleet/__main__.py`. It calls the loader, validates compatibility, merges, and delegates to `run_pipeline()` for rendering and tarball packaging.
 
 ### Loader (`fleet/loader.py`)
 
@@ -758,10 +758,10 @@ In non-fleet mode, none of these elements appear — the template renders exactl
 
 ### CLI (`fleet/cli.py`)
 
-The `yoinkc fleet` subcommand accepts:
+The `inspectah fleet` subcommand accepts:
 
 ```
-yoinkc fleet <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json-only] [--no-hosts]
+inspectah fleet <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json-only] [--no-hosts]
 ```
 
 | Flag | Default | Effect |
@@ -775,16 +775,16 @@ yoinkc fleet <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json-only] [--
 
 Default output is a tarball containing Containerfile, HTML report, and merged snapshot — matching the single-host output format.
 
-### Container Wrapper (`run-yoinkc.sh fleet`)
+### Container Wrapper (`run-inspectah.sh fleet`)
 
-For zero-install workstation use, `run-yoinkc.sh fleet` runs the fleet aggregation inside the yoinkc container image. It:
+For zero-install workstation use, `run-inspectah.sh fleet` runs the fleet aggregation inside the inspectah container image. It:
 
 1. Requires `podman` (does not auto-install).
 2. Bind-mounts the input directory read-only and a temp directory for output.
-3. Runs `yoinkc fleet` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
-4. Copies the result tarball to `YOINKC_OUTPUT_DIR` (default: current working directory).
+3. Runs `inspectah fleet` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
+4. Copies the result tarball to `INSPECTAH_OUTPUT_DIR` (default: current working directory).
 
-Usage: `./run-yoinkc.sh fleet ./snapshots/ -p 80 --no-hosts`
+Usage: `./run-inspectah.sh fleet ./snapshots/ -p 80 --no-hosts`
 
 ## 8. Pipeline & Packaging
 
@@ -806,7 +806,7 @@ After the snapshot is ready, the pipeline branches:
 
 Output is mutually exclusive among three modes:
 
-- **Tarball (default)**: `create_tarball()` in `packaging.py` produces a `.tar.gz` with all entries under a `HOSTNAME-YYYYMMDD-HHMMSS/` prefix directory. The stamp is generated by `get_output_stamp()`, which resolves the hostname from the snapshot metadata (preferred), falling back to `{host_root}/etc/hostname`, then `socket.gethostname()`, then `"unknown"`. Characters unsafe for filenames are stripped by `sanitize_hostname()`. After writing the tarball, the pipeline prints next-step instructions: an `scp` command (using `YOINKC_HOST_CWD` if set), a `yoinkc refine` command, and a `yoinkc-build` command.
+- **Tarball (default)**: `create_tarball()` in `packaging.py` produces a `.tar.gz` with all entries under a `HOSTNAME-YYYYMMDD-HHMMSS/` prefix directory. The stamp is generated by `get_output_stamp()`, which resolves the hostname from the snapshot metadata (preferred), falling back to `{host_root}/etc/hostname`, then `socket.gethostname()`, then `"unknown"`. Characters unsafe for filenames are stripped by `sanitize_hostname()`. After writing the tarball, the pipeline prints next-step instructions: an `scp` command (using `INSPECTAH_HOST_CWD` if set), a `inspectah refine` command, and a `inspectah-build` command.
 - **Explicit tarball path** (`--output-file PATH`): same as above but writes to the specified path instead of auto-generating the name.
 - **Directory** (`--output-dir PATH`): copies rendered files directly to the target directory instead of creating a tarball. Useful for development and testing.
 
@@ -831,7 +831,7 @@ HOSTNAME-YYYYMMDD-HHMMSS/
 │   ├── opt/                   # non-RPM software (where COPYed)
 │   └── usr/
 │       └── lib/sysusers.d/    # systemd-sysusers drop-ins (sysusers strategy)
-├── yoinkc-users.toml           # bootc-image-builder user definitions (blueprint strategy)
+├── inspectah-users.toml           # bootc-image-builder user definitions (blueprint strategy)
 ├── quadlet/                   # container unit files
 ├── kickstart-suggestion.ks     # suggested kickstart snippet for deploy-time settings
 ├── report.html                # interactive HTML report (open in browser)
@@ -849,39 +849,39 @@ RHEL hosts require subscription certificates to install packages from `registry.
 - Both steps silently skip if the source paths don't exist (non-RHEL hosts, or hosts without active subscriptions).
 - Bundling is skipped in `--from-snapshot` mode (the host filesystem isn't mounted) and when `--no-subscription` is passed.
 
-When building the Containerfile, `yoinkc-build` searches for certificates in a priority cascade: bundled in the yoinkc output (placed there by this step) → host-local (`/etc/pki/entitlement`) → `./entitlement/` in the current directory → the `YOINKC_ENTITLEMENT` environment variable. Found certificates are bind-mounted into the build container transparently. Certificate expiry is validated via `openssl x509 -checkend` so the operator gets a clear warning before a build fails due to stale credentials.
+When building the Containerfile, `inspectah-build` searches for certificates in a priority cascade: bundled in the inspectah output (placed there by this step) → host-local (`/etc/pki/entitlement`) → `./entitlement/` in the current directory → the `INSPECTAH_ENTITLEMENT` environment variable. Found certificates are bind-mounted into the build container transparently. Certificate expiry is validated via `openssl x509 -checkend` so the operator gets a clear warning before a build fails due to stale credentials.
 
 ### Wrapper Scripts
 
-`run-yoinkc.sh` is the single zero-install entry point. It detects subcommands (`fleet`, `refine`) via a case statement and routes accordingly:
+`run-inspectah.sh` is the single zero-install entry point. It detects subcommands (`fleet`, `refine`) via a case statement and routes accordingly:
 
 **Default (inspect):**
 
 1. Installs `podman` if missing (via `dnf` or `yum`).
-2. Tracks just-installed tools in `YOINKC_EXCLUDE_PREREQS` so yoinkc can exclude them from the RPM output (they're tool prerequisites, not operator additions).
+2. Tracks just-installed tools in `INSPECTAH_EXCLUDE_PREREQS` so inspectah can exclude them from the RPM output (they're tool prerequisites, not operator additions).
 3. Checks/prompts for `registry.redhat.io` login when using Red Hat base images.
-4. Runs the yoinkc container with `--privileged`, `--pid=host`, and the host root bind-mounted at `/host:ro`. Passes through `YOINKC_DEBUG`, `YOINKC_HOST_CWD`, and `YOINKC_HOSTNAME` (defaulting to `hostnamectl hostname`, then `hostname -f`).
+4. Runs the inspectah container with `--privileged`, `--pid=host`, and the host root bind-mounted at `/host:ro`. Passes through `INSPECTAH_DEBUG`, `INSPECTAH_HOST_CWD`, and `INSPECTAH_HOSTNAME` (defaulting to `hostnamectl hostname`, then `hostname -f`).
 
-**`run-yoinkc.sh fleet`:**
+**`run-inspectah.sh fleet`:**
 
 1. Requires `podman` (does not auto-install).
 2. Bind-mounts the input directory read-only and a temp directory for output.
-3. Runs `yoinkc fleet` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
-4. Copies the result tarball to `YOINKC_OUTPUT_DIR` (default: current working directory).
+3. Runs `inspectah fleet` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
+4. Copies the result tarball to `INSPECTAH_OUTPUT_DIR` (default: current working directory).
 
-**`run-yoinkc.sh refine`:**
+**`run-inspectah.sh refine`:**
 
-1. Runs `yoinkc refine` inside the container with port 8642 mapped.
+1. Runs `inspectah refine` inside the container with port 8642 mapped.
 2. Passes through `--no-browser`, `--port`, and the tarball path.
 
 ### Image Build
 
-The `Containerfile` at the repository root defines the yoinkc tool image:
+The `Containerfile` at the repository root defines the inspectah tool image:
 
 - **Base image**: `fedora:latest` — chosen because it's in the Red Hat family (compatible tooling and package ecosystem) but doesn't require a subscription, and works on both `amd64` and `aarch64`.
 - **Dependencies**: `python3`, `python3-pip`, `systemd` (for systemd-related inspection), `binutils` and `file` (for binary analysis).
-- **Install**: the yoinkc package is installed in editable mode (`pip install -e .`).
-- **Entry point**: `yoinkc`. Subcommands `fleet` and `refine` are routed by `run-yoinkc.sh` via a case statement.
+- **Install**: the inspectah package is installed in editable mode (`pip install -e .`).
+- **Entry point**: `inspectah`. Subcommands `fleet` and `refine` are routed by `run-inspectah.sh` via a case statement.
 
 ### Interactive Refinement
 
@@ -889,15 +889,15 @@ The HTML report embeds the full inspection snapshot and exposes include/exclude 
 
 **Workflow:**
 
-1. **Inspect on host:** run yoinkc, collect the output tarball.
+1. **Inspect on host:** run inspectah, collect the output tarball.
 2. **Copy to workstation:** `scp target-host:~/hostname-*.tar.gz .`
-3. **Start refine:** `./run-yoinkc.sh refine hostname-*.tar.gz` — runs `yoinkc refine` inside the container, serves the report at `http://localhost:8642`, and auto-opens the browser.
+3. **Start refine:** `./run-inspectah.sh refine hostname-*.tar.gz` — runs `inspectah refine` inside the container, serves the report at `http://localhost:8642`, and auto-opens the browser.
 4. **Iterate in browser:** toggle items with checkboxes, click Re-render to apply changes, download a refined tarball when done.
 
-**`yoinkc refine`** (`src/yoinkc/refine.py`) is an HTTP server module that:
+**`inspectah refine`** (`src/inspectah/refine.py`) is an HTTP server module that:
 - Extracts the tarball into a temporary directory and serves `report.html`
 - Auto-opens the browser after the server is ready
-- Handles re-render requests by calling `yoinkc inspect --from-snapshot --refine-mode` as a subprocess
+- Handles re-render requests by calling `inspectah inspect --from-snapshot --refine-mode` as a subprocess
 - Serves the download tarball of the current output state
 - Exposes `/api/health` for readiness detection (polled by the JavaScript UI on startup)
 - Sets `Cache-Control: no-cache, no-store, must-revalidate` on all responses to prevent stale content after re-renders
@@ -961,9 +961,9 @@ Pushing to GitHub means network egress from a container with read access to the 
 
 **Cross-stream targeting.** The spec at `docs/specs/proposed/2026-03-13-cross-stream-targeting-design.md` is paused at "propose approaches" with 6 open questions. Most impactful unbuilt feature — unlocks RHEL 9→10 upgrades, CentOS→RHEL lateral moves, Fedora→CentOS targeting. Infrastructure partially ready: `baseline.py` has OS→image mapping, schema has `os_release` metadata.
 
-**CI integration.** GitHub Actions workflow: driftify → yoinkc → validate output on CentOS Stream 9, 10, and Fedora. Catches regressions unit tests can't.
+**CI integration.** GitHub Actions workflow: driftify → inspectah → validate output on CentOS Stream 9, 10, and Fedora. Catches regressions unit tests can't.
 
-**Containerless re-rendering.** `yoinkc-render` entry point: takes snapshot JSON, produces artifacts using only Python. Rendering pipeline is already pure Python — mostly CLI/packaging exercise.
+**Containerless re-rendering.** `inspectah-render` entry point: takes snapshot JSON, produces artifacts using only Python. Rendering pipeline is already pure Python — mostly CLI/packaging exercise.
 
 ### Medium Priority
 
@@ -977,7 +977,7 @@ Pushing to GitHub means network egress from a container with read access to the 
 
 ### Lower Priority
 
-**In-place migration.** Run yoinkc on one host, refine, apply across fleet.
+**In-place migration.** Run inspectah on one host, refine, apply across fleet.
 
 **Snapshot diffing.** Compare snapshots across hosts or time for compliance auditing.
 

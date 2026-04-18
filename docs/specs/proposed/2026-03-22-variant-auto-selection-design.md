@@ -59,7 +59,7 @@ Replace the fixed `width:300px` editor tree pane with a PF6 drawer component.
 - Min/max: 240px–600px via PF6 CSS variables (`--pf-v6-c-drawer__panel--md--FlexBasis--min` / `--max`)
 - The code editing pane becomes the drawer content (takes remaining space)
 - PF6 provides the splitter markup and cursor styling; drag-to-resize requires custom JS (mousedown/mousemove/mouseup on the splitter handle)
-- Persist width in `localStorage` (key: `yoinkc-editor-drawer-width`) so it survives page navigation and re-renders
+- Persist width in `localStorage` (key: `inspectah-editor-drawer-width`) so it survives page navigation and re-renders
 
 ### Affected files
 

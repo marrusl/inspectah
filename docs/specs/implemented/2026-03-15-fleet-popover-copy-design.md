@@ -56,7 +56,7 @@ Current popover is a plain `<ul><li>` host list in a dynamically created `<div>`
 | Comma-separated | `comma` | `host-01,host-02,host-03` |
 | Space-separated | `space` | `host-01 host-02 host-03` |
 
-No trailing delimiter. No quoting. Hostnames are passed through as-is from `FleetPrevalence.hosts` (short or fully-qualified depending on what `YOINKC_HOSTNAME` provided).
+No trailing delimiter. No quoting. Hostnames are passed through as-is from `FleetPrevalence.hosts` (short or fully-qualified depending on what `INSPECTAH_HOSTNAME` provided).
 
 ## Format Memory
 
@@ -79,8 +79,8 @@ Reuse the existing clipboard pattern from the Containerfile copy button (`_js.ht
 
 | File | Change |
 |------|--------|
-| `src/yoinkc/templates/report/_js.html.j2` | Modify popover creation (~lines 611-651): add header, split button, dropdown, format state, clipboard call |
-| `src/yoinkc/templates/report/_css.html.j2` | Add styles: split button, dropdown menu, active item checkmark, "Copied!" state |
+| `src/inspectah/templates/report/_js.html.j2` | Modify popover creation (~lines 611-651): add header, split button, dropdown, format state, clipboard call |
+| `src/inspectah/templates/report/_css.html.j2` | Add styles: split button, dropdown menu, active item checkmark, "Copied!" state |
 
 No template changes. No schema changes. No Python changes. Purely JS + CSS in the report.
 

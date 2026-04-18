@@ -5,9 +5,9 @@
 
 ## Problem
 
-The README front-loads architecture and inspector internals before the reader understands what yoinkc does or what they get. The four-step user journey (inspect → refine → build → fleet) is scattered across the document — refine at line 256, build at line 286, fleet at line 309. A sysadmin, enthusiast, or technical architect evaluating bootc migration has to wade through ~100 lines of inspector detail before reaching the workflow sections.
+The README front-loads architecture and inspector internals before the reader understands what inspectah does or what they get. The four-step user journey (inspect → refine → build → fleet) is scattered across the document — refine at line 256, build at line 286, fleet at line 309. A sysadmin, enthusiast, or technical architect evaluating bootc migration has to wade through ~100 lines of inspector detail before reaching the workflow sections.
 
-Separately, several docs have fallen out of step with the code: `design.md` references the deleted `run-yoinkc-fleet.sh` script, the Interactive Refinement section predates auto-open browser and several refine fixes, the template partial count is wrong (29, not 23), and the visual consistency spec is partially implemented but still marked "Proposed."
+Separately, several docs have fallen out of step with the code: `design.md` references the deleted `run-inspectah-fleet.sh` script, the Interactive Refinement section predates auto-open browser and several refine fixes, the template partial count is wrong (29, not 23), and the visual consistency spec is partially implemented but still marked "Proposed."
 
 ## Scope
 
@@ -23,7 +23,7 @@ Two deliverables:
 ### New Section Order
 
 ```
-1.  What is yoinkc (value prop, 3-4 sentences)
+1.  What is inspectah (value prop, 3-4 sentences)
 2.  Workflow overview (inspect → refine → build → fleet diagram)
 3.  Inspect (current Quick Start, lightly tightened)
 4.  Refine (pulled up from current line 256)
@@ -37,7 +37,7 @@ Two deliverables:
 11. License
 ```
 
-### Section 1: What is yoinkc
+### Section 1: What is inspectah
 
 New section. 3-4 sentences covering:
 
@@ -57,7 +57,7 @@ New section. A text diagram showing the four steps with one-liner descriptions a
  Scan a host,        Edit findings       Build the bootc     Merge multiple
  get a tarball       in the browser      image               hosts into one
 
- run-yoinkc.sh       run-yoinkc.sh       yoinkc-build        run-yoinkc.sh
+ run-inspectah.sh       run-inspectah.sh       inspectah-build        run-inspectah.sh
                      refine *.tar.gz     *.tar.gz tag        fleet dir/ -p 80
 ```
 
@@ -70,7 +70,7 @@ Current Quick Start content with minor tightening:
 - The `curl | sudo sh` one-liner
 - "That's it" paragraph (tarball contents summary)
 - `sudo` caveat and RHEL auth note as callouts
-- Env vars table (`YOINKC_IMAGE`, `YOINKC_HOSTNAME`, `YOINKC_DEBUG`)
+- Env vars table (`INSPECTAH_IMAGE`, `INSPECTAH_HOSTNAME`, `INSPECTAH_DEBUG`)
 - "Download the script first" variant for passing flags
 
 No new content; this is a relabel and light edit of the existing Quick Start.
@@ -79,10 +79,10 @@ No new content; this is a relabel and light edit of the existing Quick Start.
 
 Pulled up and tightened from current Interactive Refinement section. Keep:
 
-- Two commands: `scp` the tarball, `./run-yoinkc.sh refine hostname-*.tar.gz`
+- Two commands: `scp` the tarball, `./run-inspectah.sh refine hostname-*.tar.gz`
 - One sentence: browser auto-opens (updated from current "Open http://localhost:8642" to reflect auto-open behavior from 282370d)
 - What you can do: toggle packages/configs/services, click Re-render, download updated tarball
-- Direct usage commands (`yoinkc refine --no-browser --port 9000`)
+- Direct usage commands (`inspectah refine --no-browser --port 9000`)
 
 Move to "How It Works" section: detailed UI feature list (toolbar states, standalone mode detection, strategy dropdowns, dirty/clean/standalone state descriptions, leaf package cascade behavior).
 
@@ -90,7 +90,7 @@ Move to "How It Works" section: detailed UI feature list (toolbar states, standa
 
 Pulled up and tightened from current Building the Image section. Keep:
 
-- One command: `./yoinkc-build hostname-*.tar.gz my-bootc-image:latest`
+- One command: `./inspectah-build hostname-*.tar.gz my-bootc-image:latest`
 - RHEL cert handling in one sentence (auto-detected, bind-mounted)
 - Push variant: `--push registry.example.com/...`
 - Requirements: Python 3.9+, podman or docker
@@ -101,7 +101,7 @@ Move to "How It Works": cert search order, `openssl x509 -checkend` validation, 
 
 Pulled up from current Fleet Analysis section. Keep:
 
-- Two-step workflow (run yoinkc per host, collect tarballs, run fleet)
+- Two-step workflow (run inspectah per host, collect tarballs, run fleet)
 - Prevalence threshold in one sentence
 - Container wrapper note (no Python needed)
 - Env vars table and flags table (both compact)
@@ -117,11 +117,11 @@ Current content, unchanged. Positioned after the four journey steps as the natur
 
 Three subsections:
 
-- **`yoinkc` (inspect)** — current Core Options, Target Image, Inspection Options, and Output Options tables (already in README, just relocated)
-- **`yoinkc refine`** — flags table: `--no-browser`, `--port` (currently buried in prose)
-- **`yoinkc fleet`** — current fleet flags table (already in README, just relocated)
+- **`inspectah` (inspect)** — current Core Options, Target Image, Inspection Options, and Output Options tables (already in README, just relocated)
+- **`inspectah refine`** — flags table: `--no-browser`, `--port` (currently buried in prose)
+- **`inspectah fleet`** — current fleet flags table (already in README, just relocated)
 
-`yoinkc-build` is a standalone companion script, not a subcommand. Its usage is covered in the Build section (Section 5) rather than this CLI Reference — it has only two positional args and two flags, which fit naturally in the prose.
+`inspectah-build` is a standalone companion script, not a subcommand. Its usage is covered in the Build section (Section 5) rather than this CLI Reference — it has only two positional args and two flags, which fit naturally in the prose.
 
 ### Section 9: How It Works
 
@@ -154,13 +154,13 @@ Unchanged.
 
 ### 2A: design.md Updates
 
-**Sweep all `run-yoinkc-fleet.sh` and standalone `yoinkc-fleet` references.** The deleted script and old entry point are referenced in multiple locations. All must be updated to reflect the consolidated `run-yoinkc.sh` with subcommand routing:
+**Sweep all `run-inspectah-fleet.sh` and standalone `inspectah-fleet` references.** The deleted script and old entry point are referenced in multiple locations. All must be updated to reflect the consolidated `run-inspectah.sh` with subcommand routing:
 
-- **Section 3, Wrapper Scripts** — remove the `run-yoinkc-fleet.sh` subsection entirely. Update the `run-yoinkc.sh` subsection to mention subcommand routing (`run-yoinkc.sh fleet`, `run-yoinkc.sh refine`).
-- **Section 3, CLI Reference > `yoinkc-fleet` heading** — rename to `yoinkc fleet` (subcommand, not separate entry point). Update the command syntax from `yoinkc-fleet aggregate <input_dir>` to `yoinkc fleet <input_dir>`.
-- **Section 7, Fleet Analysis > Container Wrapper** — heading currently says "Container Wrapper (`run-yoinkc-fleet.sh`)". Change to reference `run-yoinkc.sh fleet`.
-- **Section 8, Wrapper Scripts** — currently describes two shell scripts. Rewrite to describe `run-yoinkc.sh` as the single entry point with subcommand detection (`fleet|refine` case statement).
-- **Section 8, Image Build** — currently says "For fleet operations, run-yoinkc-fleet.sh overrides the entry point to yoinkc-fleet." Remove or rewrite to reflect that fleet is now `run-yoinkc.sh fleet` routing to `yoinkc fleet`.
+- **Section 3, Wrapper Scripts** — remove the `run-inspectah-fleet.sh` subsection entirely. Update the `run-inspectah.sh` subsection to mention subcommand routing (`run-inspectah.sh fleet`, `run-inspectah.sh refine`).
+- **Section 3, CLI Reference > `inspectah-fleet` heading** — rename to `inspectah fleet` (subcommand, not separate entry point). Update the command syntax from `inspectah-fleet aggregate <input_dir>` to `inspectah fleet <input_dir>`.
+- **Section 7, Fleet Analysis > Container Wrapper** — heading currently says "Container Wrapper (`run-inspectah-fleet.sh`)". Change to reference `run-inspectah.sh fleet`.
+- **Section 8, Wrapper Scripts** — currently describes two shell scripts. Rewrite to describe `run-inspectah.sh` as the single entry point with subcommand detection (`fleet|refine` case statement).
+- **Section 8, Image Build** — currently says "For fleet operations, run-inspectah-fleet.sh overrides the entry point to inspectah-fleet." Remove or rewrite to reflect that fleet is now `run-inspectah.sh fleet` routing to `inspectah fleet`.
 
 **Section 8, Interactive Refinement — add missing behaviors:**
 - Auto-open browser on startup (282370d)
@@ -225,7 +225,7 @@ Items still requiring verification should be tested before marking resolved.
 
 - All internal anchor links resolve correctly after section reordering (grep for `](#` and verify each target exists)
 - No content from the current README is missing in the new version (diff review — changes should be moves and additions, not deletions)
-- The "What is yoinkc" section exists and is non-empty
+- The "What is inspectah" section exists and is non-empty
 - The workflow diagram exists and shows all four steps
 - The first 40 lines cover: what it is, workflow diagram, and the start of the Inspect section
 - CLI Reference tables are complete (all flags from current README present, including refine and fleet flags now consolidated)
@@ -237,12 +237,12 @@ Items still requiring verification should be tested before marking resolved.
 
 ```bash
 # Must return 0 matches:
-grep -c 'run-yoinkc-fleet\.sh' design.md
+grep -c 'run-inspectah-fleet\.sh' design.md
 
 # Must return 0 matches (standalone entry point references).
 # Allowed exception: the historical note "were previously separate
-# entry points (`yoinkc-fleet`, `yoinkc-refine`)" in Section 3.
-grep -n 'yoinkc-fleet' design.md | grep -v 'previously separate entry points'
+# entry points (`inspectah-fleet`, `inspectah-refine`)" in Section 3.
+grep -n 'inspectah-fleet' design.md | grep -v 'previously separate entry points'
 ```
 
 **Partial count (exact command):**
@@ -250,7 +250,7 @@ grep -n 'yoinkc-fleet' design.md | grep -v 'previously separate entry points'
 ```bash
 # The count reported in design.md Section 6 > HTML Report Renderer
 # and Section 10 > Tech Debt must both equal this number:
-ls src/yoinkc/templates/report/ | wc -l
+ls src/inspectah/templates/report/ | wc -l
 ```
 
 The count includes all partials — content (`_packages.html.j2`) and infrastructure (`_css.html.j2`, `_js.html.j2`, `_macros.html.j2`).

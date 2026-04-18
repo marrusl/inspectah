@@ -8,33 +8,33 @@
   - `docs/getting-started.md` — Install, first run, quickstart for one host
   - `docs/how-to/` — Task-oriented guides (fleet aggregation, refining findings, building images, architecting layers)
   - `docs/reference/cli.md` — Complete CLI flag reference extracted from argparse
-  - `docs/explanation/architecture.md` — How yoinkc works (inspector/renderer pipeline, baseline subtraction, layer ordering)
+  - `docs/explanation/architecture.md` — How inspectah works (inspector/renderer pipeline, baseline subtraction, layer ordering)
   - Keep README as landing page with project overview + links to detailed docs
 
-- [ ] **Cross-repo coherence** — Ensure yoinkc and driftify READMEs reference each other clearly:
-  - yoinkc README should mention driftify as the testing/validation companion tool
-  - driftify README already links to yoinkc but could add examples showing the full workflow (driftify → yoinkc inspect → yoinkc fleet → yoinkc architect)
+- [ ] **Cross-repo coherence** — Ensure inspectah and driftify READMEs reference each other clearly:
+  - inspectah README should mention driftify as the testing/validation companion tool
+  - driftify README already links to inspectah but could add examples showing the full workflow (driftify → inspectah inspect → inspectah fleet → inspectah architect)
   - Shared glossary of terms across both projects (drift profile, inspector, baseline, architect layer, fleet aggregation, prevalence)
 
 - [ ] **Changelog ownership setup** — Establish CHANGELOG.md maintenance workflow:
-  - Create initial CHANGELOG.md for both yoinkc and driftify
+  - Create initial CHANGELOG.md for both inspectah and driftify
   - Follow conventional commits format (Added, Changed, Fixed, Removed sections per version)
   - Decide: automated from git log, manual curation, or hybrid approach?
   - Document changelog update process in CONTRIBUTING.md
 
 ## Priority 2 (Do When Time Allows)
 
-- [ ] **API reference docs** — Document HTTP endpoints for `yoinkc refine` and `yoinkc architect`:
+- [ ] **API reference docs** — Document HTTP endpoints for `inspectah refine` and `inspectah architect`:
   - Refine server: `GET /`, `POST /api/re-render`, `GET /api/tarball`
   - Architect server: `GET /` (index), `GET /api/health`, `GET /api/topology`, `POST /api/move`, `POST /api/copy`, `GET /api/preview/{layer}`, `GET /api/export`
   - Include request/response schemas, error codes, example curl commands
   - Decision: separate `docs/reference/api.md` or embed in how-to guides?
 
-- [ ] **Container wrapper documentation** — Document run-yoinkc.sh, run-fleet-test.sh, and run-architect-test.sh usage patterns:
+- [ ] **Container wrapper documentation** — Document run-inspectah.sh, run-fleet-test.sh, and run-architect-test.sh usage patterns:
   - When to use container wrapper vs native install
-  - Environment variable reference (YOINKC_IMAGE, YOINKC_HOSTNAME, YOINKC_OUTPUT_DIR, etc.)
+  - Environment variable reference (INSPECTAH_IMAGE, INSPECTAH_HOSTNAME, INSPECTAH_OUTPUT_DIR, etc.)
   - Port exposure details for refine/architect when running via container
-  - How wrapper scripts map to direct `yoinkc` commands
+  - How wrapper scripts map to direct `inspectah` commands
 
 - [ ] **Man page strategy decision** — Evaluate and decide on man page generation:
   - Option 1: argparse-manpage (auto-generate from CLI definitions)
@@ -73,9 +73,9 @@
   - Fleet aggregation, layer decomposition, derived images
   - Keep it beginner-friendly with links to upstream docs for deep dives
 
-- [ ] **Integration examples** — Show yoinkc in broader workflows:
+- [ ] **Integration examples** — Show inspectah in broader workflows:
   - CI/CD pipeline integration (GitLab CI, GitHub Actions, Jenkins)
-  - Ansible playbook for running yoinkc across a fleet
+  - Ansible playbook for running inspectah across a fleet
   - Image registry setup and bootc deployment examples
   - Connecting to bootc-image-builder for disk image generation
 

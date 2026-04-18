@@ -1,14 +1,14 @@
-# yoinkc Report: Search & Bulk Controls (v3)
+# inspectah Report: Search & Bulk Controls (v3)
 
 **Date:** 2026-04-07 (v3 — targeted fixes from round-2 review)
 **Scope:** Per-card search/filter + bulk Include All / Exclude All controls
-**Target:** yoinkc HTML report (`src/yoinkc/templates/report/`)
+**Target:** inspectah HTML report (`src/inspectah/templates/report/`)
 
 ---
 
 ## Summary
 
-Two complementary features for the yoinkc interactive HTML report:
+Two complementary features for the inspectah interactive HTML report:
 
 1. **Search/filter** — a text input on each filterable card that filters items by a dedicated search attribute, hiding non-matching rows while preserving repo grouping in the packages card.
 2. **Bulk controls** — Include All / Exclude All buttons that act on visible items when a filter is active, or all items when unfiltered.

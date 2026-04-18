@@ -1,6 +1,6 @@
 # Future Inspection Coverage
 
-Gap analysis of system elements not currently captured or fully surfaced by yoinkc inspectors. Organized by priority for bootc migration correctness.
+Gap analysis of system elements not currently captured or fully surfaced by inspectah inspectors. Organized by priority for bootc migration correctness.
 
 Last audited: 2026-03-17
 
@@ -43,13 +43,13 @@ If the system was hardened to a DISA STIG or CIS benchmark, that's a holistic co
 Which cloud (AWS, Azure, GCP, on-prem) the source system runs on. Not currently detected at all. Detection cascade: DMI strings (`/sys/class/dmi/id/product_name`, `sys_vendor`) → cloud-specific packages (already in RPM list) → `/etc/cloud/cloud.cfg`. Schema: `cloud_provider` on `SnapshotMeta`. Improves base image auto-selection. Reference: leapp `CheckRHUI` actor (uses package-based detection), Facter `cloud` fact (uses DMI). **Needs its own spec.**
 
 ### Raw iptables/nftables Rules (from gap audit)
-Systems bypassing firewalld entirely. yoinkc captures firewalld zones but not raw rules. Detection: check if firewalld is active (already known from service inspector), if not, capture `/etc/sysconfig/iptables`, `/etc/sysconfig/ip6tables`, `nft list ruleset`. Low prevalence on modern RHEL but real when present. Reference: osquery `iptables` table. **Needs its own spec.**
+Systems bypassing firewalld entirely. inspectah captures firewalld zones but not raw rules. Detection: check if firewalld is active (already known from service inspector), if not, capture `/etc/sysconfig/iptables`, `/etc/sysconfig/ip6tables`, `nft list ruleset`. Low prevalence on modern RHEL but real when present. Reference: osquery `iptables` table. **Needs its own spec.**
 
 ### firewalld.conf Coverage (from gap audit)
 Main firewalld config file contains `DefaultZone`, `FirewallBackend` (iptables vs nftables), `CleanupModulesOnExit`. Probably caught by `rpm -Va` if modified, but not verified. If host has `FirewallBackend=iptables` and base image defaults to `nftables`, behavior changes silently. Reference: convert2rhel `check_firewalld_availability.py`. **Very low effort — verify existing coverage.**
 
 ### kdump.conf (from gap audit)
-Kernel crash dump config. yoinkc captures GRUB cmdline (which includes `crashkernel=`) but not `/etc/kdump.conf` or kdump service state. Production RHEL servers need this for Red Hat support. Probably caught if RPM-modified. Reference: Augeas `kdump.aug`, leapp actors. **Very low effort — verify + surface in report.**
+Kernel crash dump config. inspectah captures GRUB cmdline (which includes `crashkernel=`) but not `/etc/kdump.conf` or kdump service state. Production RHEL servers need this for Red Hat support. Probably caught if RPM-modified. Reference: Augeas `kdump.aug`, leapp actors. **Very low effort — verify + surface in report.**
 
 ### TLS Certificate Inventory (from gap audit)
 CA trust anchors in `/etc/pki/ca-trust/source/anchors/` already handled (Containerfile emits `update-ca-trust`). Gap is application-specific cert stores (`/etc/nginx/ssl/`, `/etc/httpd/ssl/`). Most caught by unowned-file scan if under `/etc/`. Certs outside `/etc/` (e.g., `/opt/app/ssl/`) would be missed. Low priority.
@@ -144,7 +144,7 @@ The following were previously on this list but confirmed fully detected during a
 
 ## Cleanup Tasks
 
-- **Remove podman prerequisite detection:** bootc depends on podman, so checking for it is redundant. Remove "podman not found" error messages, auto-install logic in `run-yoinkc.sh`, and `YOINKC_EXCLUDE_PREREQS` handling. Keep the `podman` vs `docker` binary selection logic (some environments may have docker instead).
+- **Remove podman prerequisite detection:** bootc depends on podman, so checking for it is redundant. Remove "podman not found" error messages, auto-install logic in `run-inspectah.sh`, and `INSPECTAH_EXCLUDE_PREREQS` handling. Keep the `podman` vs `docker` binary selection logic (some environments may have docker instead).
 
 ## Naming Standardization
 

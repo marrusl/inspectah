@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add per-card search/filter and bulk Include All / Exclude All controls to the yoinkc interactive HTML report.
+**Goal:** Add per-card search/filter and bulk Include All / Exclude All controls to the inspectah interactive HTML report.
 
 **Architecture:** Pure client-side. A new Jinja2 macro renders a toolbar (search + bulk buttons) inside each filterable card. JavaScript handles filtering via `data-search-text` attributes, batched mutations for bulk operations, and a state machine for repo-grouped packages. No server-side changes.
 
@@ -16,17 +16,17 @@
 
 | File | Action | Responsibility |
 |------|--------|----------------|
-| `src/yoinkc/templates/report/_macros.html.j2` | Modify | New `card_toolbar()` macro |
-| `src/yoinkc/templates/report/_packages.html.j2` | Modify | `data-search-text`, `data-group`, toolbar insertion |
-| `src/yoinkc/templates/report/_services.html.j2` | Modify | `data-search-text`, toolbar insertion (2 cards) |
-| `src/yoinkc/templates/report/_config.html.j2` | Modify | `data-search-text`, toolbar insertion |
-| `src/yoinkc/templates/report/_network.html.j2` | Modify | `data-search-text`, toolbar insertion (firewall direct rules only) |
-| `src/yoinkc/templates/report/_containers.html.j2` | Modify | `data-search-text`, toolbar insertion (2 cards) |
-| `src/yoinkc/templates/report/_non_rpm.html.j2` | Modify | `data-search-text`, toolbar insertion (2 cards) |
-| `src/yoinkc/templates/report/_kernel_boot.html.j2` | Modify | `data-search-text`, toolbar insertion (sysctl only) |
-| `src/yoinkc/templates/report/_users_groups.html.j2` | Modify | `data-search-text`, toolbar insertion (2 tables) |
-| `src/yoinkc/templates/report/_js.html.j2` | Modify | `initCardSearch()`, `syncToolbar()`, `batchToggleItems()`, `updateGroupState()`, integration hooks |
-| `src/yoinkc/templates/report/_toolbar.html.j2` | Modify | CSS for card toolbar row |
+| `src/inspectah/templates/report/_macros.html.j2` | Modify | New `card_toolbar()` macro |
+| `src/inspectah/templates/report/_packages.html.j2` | Modify | `data-search-text`, `data-group`, toolbar insertion |
+| `src/inspectah/templates/report/_services.html.j2` | Modify | `data-search-text`, toolbar insertion (2 cards) |
+| `src/inspectah/templates/report/_config.html.j2` | Modify | `data-search-text`, toolbar insertion |
+| `src/inspectah/templates/report/_network.html.j2` | Modify | `data-search-text`, toolbar insertion (firewall direct rules only) |
+| `src/inspectah/templates/report/_containers.html.j2` | Modify | `data-search-text`, toolbar insertion (2 cards) |
+| `src/inspectah/templates/report/_non_rpm.html.j2` | Modify | `data-search-text`, toolbar insertion (2 cards) |
+| `src/inspectah/templates/report/_kernel_boot.html.j2` | Modify | `data-search-text`, toolbar insertion (sysctl only) |
+| `src/inspectah/templates/report/_users_groups.html.j2` | Modify | `data-search-text`, toolbar insertion (2 tables) |
+| `src/inspectah/templates/report/_js.html.j2` | Modify | `initCardSearch()`, `syncToolbar()`, `batchToggleItems()`, `updateGroupState()`, integration hooks |
+| `src/inspectah/templates/report/_toolbar.html.j2` | Modify | CSS for card toolbar row |
 
 ---
 
@@ -35,14 +35,14 @@
 This is the foundation. Every filterable row/div gets a `data-search-text` attribute set by the Jinja2 renderer to the item's primary identifier. No JavaScript yet — just wiring up the search targets.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_packages.html.j2`
-- Modify: `src/yoinkc/templates/report/_services.html.j2`
-- Modify: `src/yoinkc/templates/report/_config.html.j2`
-- Modify: `src/yoinkc/templates/report/_network.html.j2`
-- Modify: `src/yoinkc/templates/report/_containers.html.j2`
-- Modify: `src/yoinkc/templates/report/_non_rpm.html.j2`
-- Modify: `src/yoinkc/templates/report/_kernel_boot.html.j2`
-- Modify: `src/yoinkc/templates/report/_users_groups.html.j2`
+- Modify: `src/inspectah/templates/report/_packages.html.j2`
+- Modify: `src/inspectah/templates/report/_services.html.j2`
+- Modify: `src/inspectah/templates/report/_config.html.j2`
+- Modify: `src/inspectah/templates/report/_network.html.j2`
+- Modify: `src/inspectah/templates/report/_containers.html.j2`
+- Modify: `src/inspectah/templates/report/_non_rpm.html.j2`
+- Modify: `src/inspectah/templates/report/_kernel_boot.html.j2`
+- Modify: `src/inspectah/templates/report/_users_groups.html.j2`
 
 - [ ] **Step 1: Add `data-search-text` to package rows in `_packages.html.j2`**
 
@@ -87,13 +87,13 @@ For groups table: add `data-search-text="{{ g.name }}"` on group rows.
 
 - [ ] **Step 9: Verify by generating a report**
 
-Run: `yoinkc inspect --from-snapshot tests/fixtures/<snapshot>.json -o /tmp/test-report`
+Run: `inspectah inspect --from-snapshot tests/fixtures/<snapshot>.json -o /tmp/test-report`
 Open the generated HTML and verify `data-search-text` attributes appear on the expected rows via browser dev tools.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/
+git add src/inspectah/templates/report/
 git commit -m "feat(report): add data-search-text attributes to all filterable cards"
 ```
 
@@ -104,8 +104,8 @@ git commit -m "feat(report): add data-search-text attributes to all filterable c
 Build the toolbar component that will be inserted into each filterable card. This task covers the HTML macro and the CSS styling. No JavaScript wiring yet — the buttons and search input render but don't function.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_macros.html.j2`
-- Modify: `src/yoinkc/templates/report/_toolbar.html.j2` (CSS)
+- Modify: `src/inspectah/templates/report/_macros.html.j2`
+- Modify: `src/inspectah/templates/report/_toolbar.html.j2` (CSS)
 
 - [ ] **Step 1: Add `card_toolbar` macro to `_macros.html.j2`**
 
@@ -206,7 +206,7 @@ In `_toolbar.html.j2` (which contains the top toolbar CSS), add styles for the c
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_macros.html.j2 src/yoinkc/templates/report/_toolbar.html.j2
+git add src/inspectah/templates/report/_macros.html.j2 src/inspectah/templates/report/_toolbar.html.j2
 git commit -m "feat(report): add card_toolbar macro and CSS"
 ```
 
@@ -306,7 +306,7 @@ Generate a report and open it. Verify each filterable card shows the toolbar row
 - [ ] **Step 10: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/
+git add src/inspectah/templates/report/
 git commit -m "feat(report): insert card_toolbar into all filterable cards"
 ```
 
@@ -317,7 +317,7 @@ git commit -m "feat(report): insert card_toolbar into all filterable cards"
 Build the core search and toolbar sync logic. Start with flat (non-grouped, non-variant) cards: sysctl overrides, firewall rules, binaries, pip packages, users, groups.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Add `initCardSearch()` function**
 
@@ -462,7 +462,7 @@ document.querySelectorAll('.card-toolbar').forEach(function(toolbar) {
 
 - [ ] **Step 4: Verify flat card search works**
 
-Generate a report with a driftify-standard snapshot. Open via `yoinkc refine`. Test:
+Generate a report with a driftify-standard snapshot. Open via `inspectah refine`. Test:
 - Type in the sysctl search box → rows filter
 - Clear with Escape → all rows return
 - Included count updates correctly
@@ -471,7 +471,7 @@ Generate a report with a driftify-standard snapshot. Open via `yoinkc refine`. T
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(report): implement initCardSearch and syncToolbar for flat cards"
 ```
 
@@ -482,7 +482,7 @@ git commit -m "feat(report): implement initCardSearch and syncToolbar for flat c
 The packages card groups items by repo with collapsible headers. Search needs to filter within groups, update group headers, and hide empty groups.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Add repo-group-aware filtering to `initCardSearch()`**
 
@@ -609,7 +609,7 @@ if (container) {
 
 - [ ] **Step 5: Verify grouped search works**
 
-Generate a report, open via `yoinkc refine`. In the packages section:
+Generate a report, open via `inspectah refine`. In the packages section:
 - Search "http" → only matching packages visible, group headers update to "N of M matching"
 - Groups with no matches show "RepoName — no matches" italic stub
 - Clear with Escape → everything restored, group headers show original text
@@ -617,7 +617,7 @@ Generate a report, open via `yoinkc refine`. In the packages section:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(report): extend search to handle repo-grouped package cards"
 ```
 
@@ -628,7 +628,7 @@ git commit -m "feat(report): extend search to handle repo-grouped package cards"
 This is the prerequisite refactoring for bulk operations. Extract a batched mutation path that sets multiple checkboxes without per-item side effects, runs one cascade pass, and shows one notification.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Add `batchToggleItems()` function**
 
@@ -722,7 +722,7 @@ function syncAllPackageCheckboxes() {
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "refactor(report): extract batchToggleItems for bulk operations"
 ```
 
@@ -733,7 +733,7 @@ git commit -m "refactor(report): extract batchToggleItems for bulk operations"
 Connect the Include All / Exclude All buttons to `batchToggleItems()`. Handle three card types: flat cards, packages (with cascade), and fleet variant cards.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Add bulk button click handlers**
 
@@ -913,7 +913,7 @@ Test in the refine UI:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(report): wire bulk Include/Exclude controls for all card types"
 ```
 
@@ -924,7 +924,7 @@ git commit -m "feat(report): wire bulk Include/Exclude controls for all card typ
 The packages card needs the state machine from the spec: search overrides manual collapse, excluded groups show stubs, stubs are expandable.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Add group state tracking**
 
@@ -1113,7 +1113,7 @@ Test in the refine UI:
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(report): implement repo group state machine with excluded stubs"
 ```
 
@@ -1124,7 +1124,7 @@ git commit -m "feat(report): implement repo group state machine with excluded st
 When filtered results hide rows with warnings or redaction indicators, the toolbar shows a persistent badge.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Add warning tracking to `syncToolbar()`**
 
@@ -1158,7 +1158,7 @@ Generate a report from a driftify snapshot that has secrets/warnings. Filter to 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(report): add hidden warning/redaction indicator to card toolbar"
 ```
 
@@ -1169,7 +1169,7 @@ git commit -m "feat(report): add hidden warning/redaction indicator to card tool
 Ensure search on fleet-variant cards (config, services drop-ins, quadlets) matches against parent rows and shows/hides variant children accordingly.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Extend `filterFlatCard()` to handle variant parent/child rows**
 
@@ -1211,7 +1211,7 @@ In a fleet report, search in the config files card → parent rows filter, child
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(report): support fleet variant parent/child search filtering"
 ```
 
@@ -1222,10 +1222,10 @@ git commit -m "feat(report): support fleet variant parent/child search filtering
 After all tasks are complete, run through the verification matrix from the spec (`docs/specs/proposed/2026-04-07-report-search-bulk-controls-design.md`, "Verification Matrix" section). Each scenario (S1-S7, B1-B10, G1-G9, W1-W3, R1-R3, A1-A5) should pass via manual testing in the refine UI.
 
 **Test environments:**
-1. Single-host report: `yoinkc inspect --from-snapshot` with a driftify-standard snapshot
-2. Fleet report: `yoinkc fleet` output with 2-3 driftify profiles
-3. Standalone mode: open the HTML directly without `yoinkc refine`
-4. Refine mode: serve via `yoinkc refine` and test interactive operations
+1. Single-host report: `inspectah inspect --from-snapshot` with a driftify-standard snapshot
+2. Fleet report: `inspectah fleet` output with 2-3 driftify profiles
+3. Standalone mode: open the HTML directly without `inspectah refine`
+4. Refine mode: serve via `inspectah refine` and test interactive operations
 
 ---
 

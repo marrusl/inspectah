@@ -25,13 +25,13 @@ All changes in client-side JS and one line of toolbar HTML. No Python
 or server-side changes.
 
 **Files:**
-- `src/yoinkc/templates/report/_toolbar.html.j2` — add Cancel button
-- `src/yoinkc/templates/report/_js.html.j2` — slider handlers, re-render
+- `src/inspectah/templates/report/_toolbar.html.j2` — add Cancel button
+- `src/inspectah/templates/report/_js.html.j2` — slider handlers, re-render
   handler
 
 ## Fix 1: Slider survives re-render
 
-**File:** `src/yoinkc/templates/report/_js.html.j2` — re-render click
+**File:** `src/inspectah/templates/report/_js.html.j2` — re-render click
 handler (lines ~503-521)
 
 Before the `fetch()` call that sends the snapshot to `/api/re-render`,
@@ -43,7 +43,7 @@ if (snapshot.meta && snapshot.meta.fleet) {
 }
 ```
 
-This persists the user's chosen threshold into the snapshot. When yoinkc
+This persists the user's chosen threshold into the snapshot. When inspectah
 re-renders, the new HTML will have
 `value="{{ fleet_meta.min_prevalence }}"` set to the correct value.
 The slider renders at the user's chosen position after page reload.
@@ -54,7 +54,7 @@ snapshot should reflect the user's refinement choices.
 
 ## Fix 2: Cancel button
 
-**File:** `src/yoinkc/templates/report/_toolbar.html.j2`
+**File:** `src/inspectah/templates/report/_toolbar.html.j2`
 
 Add a Cancel button next to the existing Apply button, also hidden by
 default:
@@ -64,7 +64,7 @@ default:
         style="display: none;">Cancel</button>
 ```
 
-**File:** `src/yoinkc/templates/report/_js.html.j2` — slider handlers
+**File:** `src/inspectah/templates/report/_js.html.j2` — slider handlers
 
 Behavior:
 - On slider `input`: if value differs from `data-current-threshold`,
@@ -79,7 +79,7 @@ Both buttons disappear after either action.
 
 ## Fix 3: Apply registers as pending change
 
-**File:** `src/yoinkc/templates/report/_js.html.j2` — Apply click
+**File:** `src/inspectah/templates/report/_js.html.j2` — Apply click
 handler (lines ~1127-1180)
 
 The Apply handler's Phase 3 already calls `setDirty(!isSnapshotClean())`

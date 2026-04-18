@@ -6,7 +6,7 @@
 
 **Architecture:** New `heuristic.py` module runs post-pattern-pass on surviving content, scoring candidates by entropy + keyword proximity + vendor prefix residuals. `RedactionFinding` gains `detection_method` and `confidence` fields. Heuristic findings feed into existing renderers with a third "Flagged for Review" table in `secrets-review.md`, flagged-note line in Containerfile comments, and supplementary CLI summary line.
 
-**Tech Stack:** Python 3.10+, Pydantic BaseModel, pytest, math (Shannon entropy), existing yoinkc schema/renderer/pipeline infrastructure.
+**Tech Stack:** Python 3.10+, Pydantic BaseModel, pytest, math (Shannon entropy), existing inspectah schema/renderer/pipeline infrastructure.
 
 **Spec:** `docs/specs/implemented/2026-04-08-heuristic-secrets-safety-net-design.md`
 
@@ -16,13 +16,13 @@
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `src/yoinkc/schema.py` | Modify | Add `detection_method` and `confidence` fields to `RedactionFinding` |
-| `src/yoinkc/redact.py` | Modify | Add vendor token patterns (Tier 1 + Tier 2), fix Stripe/Anthropic/OpenAI, set `detection_method="pattern"` on all findings, subscription cert exclusion in `scan_directory_for_secrets()` |
-| `src/yoinkc/heuristic.py` | Create | Entropy analysis, keyword proximity, vendor prefix residual detection, false positive filters, confidence scoring, noise control |
-| `src/yoinkc/pipeline.py` | Modify | Wire heuristic pass after pattern pass, pass sensitivity/no-redaction to redact + heuristic, update `_print_secrets_summary()`, add `--no-redaction` warning |
-| `src/yoinkc/cli.py` | Modify | Add `--sensitivity` and `--no-redaction` flags, mutual exclusion validation |
-| `src/yoinkc/renderers/secrets_review.py` | Modify | Add Detection column to Inline table, add Flagged for Review table, add summary line, `--no-redaction` header |
-| `src/yoinkc/renderers/containerfile/_core.py` | Modify | Add flagged-note line after inline block |
+| `src/inspectah/schema.py` | Modify | Add `detection_method` and `confidence` fields to `RedactionFinding` |
+| `src/inspectah/redact.py` | Modify | Add vendor token patterns (Tier 1 + Tier 2), fix Stripe/Anthropic/OpenAI, set `detection_method="pattern"` on all findings, subscription cert exclusion in `scan_directory_for_secrets()` |
+| `src/inspectah/heuristic.py` | Create | Entropy analysis, keyword proximity, vendor prefix residual detection, false positive filters, confidence scoring, noise control |
+| `src/inspectah/pipeline.py` | Modify | Wire heuristic pass after pattern pass, pass sensitivity/no-redaction to redact + heuristic, update `_print_secrets_summary()`, add `--no-redaction` warning |
+| `src/inspectah/cli.py` | Modify | Add `--sensitivity` and `--no-redaction` flags, mutual exclusion validation |
+| `src/inspectah/renderers/secrets_review.py` | Modify | Add Detection column to Inline table, add Flagged for Review table, add summary line, `--no-redaction` header |
+| `src/inspectah/renderers/containerfile/_core.py` | Modify | Add flagged-note line after inline block |
 | `tests/test_redact.py` | Modify | Vendor pattern positive/negative tests, `detection_method` field on pattern findings |
 | `tests/test_heuristic.py` | Create | Entropy, keyword proximity, confidence scoring, false positive filters, noise control |
 | `tests/test_sensitivity.py` | Create | Sensitivity levels, `--no-redaction`, mutual exclusion |
@@ -37,7 +37,7 @@
 ### Task 1: Add `detection_method` and `confidence` fields to `RedactionFinding`
 
 **Files:**
-- Modify: `src/yoinkc/schema.py`
+- Modify: `src/inspectah/schema.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -123,7 +123,7 @@ def test_redaction_finding_detection_method_in_get():
 
 def test_redaction_finding_roundtrip_with_new_fields(tmp_path):
     """New fields survive save_snapshot -> load_snapshot round-trip."""
-    from yoinkc.pipeline import save_snapshot, load_snapshot
+    from inspectah.pipeline import save_snapshot, load_snapshot
 
     snapshot = InspectionSnapshot(meta={"hostname": "test"})
     snapshot.redactions = [
@@ -165,13 +165,13 @@ def test_redaction_finding_roundtrip_with_new_fields(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_redaction_finding_detection_method_field tests/test_redact.py::test_redaction_finding_heuristic_fields tests/test_redact.py::test_redaction_finding_excluded_path_detection_method tests/test_redact.py::test_redaction_finding_detection_method_defaults tests/test_redact.py::test_redaction_finding_detection_method_in_get tests/test_redact.py::test_redaction_finding_roundtrip_with_new_fields -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_redaction_finding_detection_method_field tests/test_redact.py::test_redaction_finding_heuristic_fields tests/test_redact.py::test_redaction_finding_excluded_path_detection_method tests/test_redact.py::test_redaction_finding_detection_method_defaults tests/test_redact.py::test_redaction_finding_detection_method_in_get tests/test_redact.py::test_redaction_finding_roundtrip_with_new_fields -v`
 
 Expected: FAIL — `TypeError: RedactionFinding.__init__() got an unexpected keyword argument 'detection_method'`
 
 - [ ] **Step 3: Add fields to RedactionFinding in schema.py**
 
-In `src/yoinkc/schema.py`, modify the `RedactionFinding` class (currently at line 573) to add the two new fields after `replacement`:
+In `src/inspectah/schema.py`, modify the `RedactionFinding` class (currently at line 573) to add the two new fields after `replacement`:
 
 ```python
 class RedactionFinding(BaseModel):
@@ -197,21 +197,21 @@ class RedactionFinding(BaseModel):
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_redaction_finding_detection_method_field tests/test_redact.py::test_redaction_finding_heuristic_fields tests/test_redact.py::test_redaction_finding_excluded_path_detection_method tests/test_redact.py::test_redaction_finding_detection_method_defaults tests/test_redact.py::test_redaction_finding_detection_method_in_get tests/test_redact.py::test_redaction_finding_roundtrip_with_new_fields -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_redaction_finding_detection_method_field tests/test_redact.py::test_redaction_finding_heuristic_fields tests/test_redact.py::test_redaction_finding_excluded_path_detection_method tests/test_redact.py::test_redaction_finding_detection_method_defaults tests/test_redact.py::test_redaction_finding_detection_method_in_get tests/test_redact.py::test_redaction_finding_roundtrip_with_new_fields -v`
 
 Expected: All 6 pass.
 
 - [ ] **Step 5: Run the full test suite to check for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py tests/test_secrets_review.py tests/test_containerfile_secrets_comments.py tests/test_pipeline.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py tests/test_secrets_review.py tests/test_containerfile_secrets_comments.py tests/test_pipeline.py -v`
 
 Expected: All existing tests still pass. The new fields have defaults (`detection_method="pattern"`, `confidence=None`), so existing `RedactionFinding` constructions throughout the codebase remain valid.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/schema.py tests/test_redact.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/schema.py tests/test_redact.py
 git commit -m "feat(schema): add detection_method and confidence to RedactionFinding
 
 Extends the RedactionFinding model with detection_method ('pattern' |
@@ -229,7 +229,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 2: Set `detection_method` on all existing `RedactionFinding` emissions in `redact.py`
 
 **Files:**
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/redact.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -289,13 +289,13 @@ def test_shadow_findings_have_detection_method_pattern():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_pattern_findings_have_detection_method_pattern tests/test_redact.py::test_excluded_path_findings_have_detection_method_excluded_path tests/test_redact.py::test_shadow_findings_have_detection_method_pattern -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_pattern_findings_have_detection_method_pattern tests/test_redact.py::test_excluded_path_findings_have_detection_method_excluded_path tests/test_redact.py::test_shadow_findings_have_detection_method_pattern -v`
 
 Expected: FAIL — `detection_method` is `"pattern"` (the default), but excluded path findings should have `"excluded_path"`. The excluded path test will fail because `detection_method` defaults to `"pattern"` instead of `"excluded_path"`.
 
 - [ ] **Step 3: Set `detection_method` in all `RedactionFinding` constructions in `redact.py`**
 
-In `src/yoinkc/redact.py`, update every `RedactionFinding(...)` construction:
+In `src/inspectah/redact.py`, update every `RedactionFinding(...)` construction:
 
 1. **Excluded path findings in config.files** (line ~267): Add `detection_method="excluded_path"`:
 
@@ -353,21 +353,21 @@ In `src/yoinkc/redact.py`, update every `RedactionFinding(...)` construction:
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_pattern_findings_have_detection_method_pattern tests/test_redact.py::test_excluded_path_findings_have_detection_method_excluded_path tests/test_redact.py::test_shadow_findings_have_detection_method_pattern -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_pattern_findings_have_detection_method_pattern tests/test_redact.py::test_excluded_path_findings_have_detection_method_excluded_path tests/test_redact.py::test_shadow_findings_have_detection_method_pattern -v`
 
 Expected: All 3 pass.
 
 - [ ] **Step 5: Run full redaction test suite for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/redact.py tests/test_redact.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/redact.py tests/test_redact.py
 git commit -m "feat(redact): backfill detection_method on all existing findings
 
 Set detection_method='excluded_path' on path exclusion findings and
@@ -383,7 +383,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 3: Fix Stripe/Anthropic/OpenAI patterns and add Tier 1 vendor token patterns
 
 **Files:**
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/redact.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write the failing tests for fixed and new patterns**
@@ -522,13 +522,13 @@ Note: Add `import pytest` at the top of `tests/test_redact.py` if not already pr
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_stripe_key_pattern tests/test_redact.py::test_anthropic_key_pattern tests/test_redact.py::test_openai_key_pattern tests/test_redact.py::test_tier1_vendor_pattern tests/test_redact.py::test_tier1_vendor_pattern_negative -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_stripe_key_pattern tests/test_redact.py::test_anthropic_key_pattern tests/test_redact.py::test_openai_key_pattern tests/test_redact.py::test_tier1_vendor_pattern tests/test_redact.py::test_tier1_vendor_pattern_negative -v`
 
 Expected: FAIL — patterns not found, `STRIPE_KEY`, `ANTHROPIC_KEY`, `OPENAI_KEY`, etc. labels don't exist.
 
 - [ ] **Step 3: Add vendor patterns to `REDACT_PATTERNS` in `redact.py`**
 
-In `src/yoinkc/redact.py`, replace the current `REDACT_PATTERNS` list (lines 35–57) with the expanded version. Keep all existing patterns, add the new ones after the WIFI_PSK entry. Insert the Stripe/Anthropic/OpenAI patterns **before** the existing generic TOKEN pattern so they match first (more-specific-first rule):
+In `src/inspectah/redact.py`, replace the current `REDACT_PATTERNS` list (lines 35–57) with the expanded version. Keep all existing patterns, add the new ones after the WIFI_PSK entry. Insert the Stripe/Anthropic/OpenAI patterns **before** the existing generic TOKEN pattern so they match first (more-specific-first rule):
 
 ```python
 # (pattern, type_label). Order matters: more specific first.
@@ -606,21 +606,21 @@ Important note: The spec uses `\|` for readability in Markdown tables, but Pytho
 
 - [ ] **Step 4: Run the vendor pattern tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_stripe_key_pattern tests/test_redact.py::test_anthropic_key_pattern tests/test_redact.py::test_openai_key_pattern tests/test_redact.py::test_tier1_vendor_pattern tests/test_redact.py::test_tier1_vendor_pattern_negative -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_stripe_key_pattern tests/test_redact.py::test_anthropic_key_pattern tests/test_redact.py::test_openai_key_pattern tests/test_redact.py::test_tier1_vendor_pattern tests/test_redact.py::test_tier1_vendor_pattern_negative -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Run full redaction test suite for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py -v`
 
 Expected: All pass. Verify that existing tests still pass — the new vendor patterns are more specific than the generics and are placed before them, so existing generic-pattern test vectors should still match their original labels.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/redact.py tests/test_redact.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/redact.py tests/test_redact.py
 git commit -m "feat(redact): add Stripe/Anthropic/OpenAI fixes and Tier 1 vendor token patterns
 
 Adds 25+ vendor-specific token prefix patterns (Stripe, Anthropic,
@@ -635,7 +635,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 4: Add Tier 2 vendor token patterns
 
 **Files:**
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/redact.py`
 - Test: `tests/test_redact.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -688,13 +688,13 @@ def test_tier2_vendor_pattern_negative(value, expected_label):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_tier2_vendor_pattern tests/test_redact.py::test_tier2_vendor_pattern_negative -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_tier2_vendor_pattern tests/test_redact.py::test_tier2_vendor_pattern_negative -v`
 
 Expected: FAIL — labels not found.
 
 - [ ] **Step 3: Add Tier 2 patterns to `REDACT_PATTERNS`**
 
-In `src/yoinkc/redact.py`, add the Tier 2 patterns after the age encryption pattern and before the generic credential patterns section comment:
+In `src/inspectah/redact.py`, add the Tier 2 patterns after the age encryption pattern and before the generic credential patterns section comment:
 
 ```python
     # === Tier 2: Enterprise/DevOps environments ===
@@ -719,21 +719,21 @@ In `src/yoinkc/redact.py`, add the Tier 2 patterns after the age encryption patt
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_tier2_vendor_pattern tests/test_redact.py::test_tier2_vendor_pattern_negative -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_tier2_vendor_pattern tests/test_redact.py::test_tier2_vendor_pattern_negative -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Run full test suite for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/redact.py tests/test_redact.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/redact.py tests/test_redact.py
 git commit -m "feat(redact): add Tier 2 vendor token patterns
 
 Adds DigitalOcean, Heroku, Grafana, New Relic, Sentry, Doppler, and
@@ -749,7 +749,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 5: Create `heuristic.py` — entropy analysis and keyword proximity
 
 **Files:**
-- Create: `src/yoinkc/heuristic.py`
+- Create: `src/inspectah/heuristic.py`
 - Create: `tests/test_heuristic.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -760,7 +760,7 @@ Create `tests/test_heuristic.py`:
 """Tests for heuristic secret detection engine."""
 
 import pytest
-from yoinkc.heuristic import (
+from inspectah.heuristic import (
     shannon_entropy,
     is_secret_keyword,
     find_heuristic_candidates,
@@ -869,13 +869,13 @@ def test_no_finding_for_numeric_after_keyword():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_heuristic.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_heuristic.py -v`
 
-Expected: FAIL — `ModuleNotFoundError: No module named 'yoinkc.heuristic'`
+Expected: FAIL — `ModuleNotFoundError: No module named 'inspectah.heuristic'`
 
-- [ ] **Step 3: Implement `src/yoinkc/heuristic.py` — entropy, keywords, candidate finding**
+- [ ] **Step 3: Implement `src/inspectah/heuristic.py` — entropy, keywords, candidate finding**
 
-Create `src/yoinkc/heuristic.py`:
+Create `src/inspectah/heuristic.py`:
 
 ```python
 """
@@ -1151,15 +1151,15 @@ def find_heuristic_candidates(
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_heuristic.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_heuristic.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/heuristic.py tests/test_heuristic.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/heuristic.py tests/test_heuristic.py
 git commit -m "feat(heuristic): add heuristic secret detection engine
 
 New module with Shannon entropy analysis, keyword proximity detection,
@@ -1227,14 +1227,14 @@ def test_vendor_prefix_residual_detected():
 
 - [ ] **Step 2: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_heuristic.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_heuristic.py -v`
 
 Expected: All pass (these test existing functionality from Task 5).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 git add tests/test_heuristic.py
 git commit -m "test(heuristic): add false positive filter and vendor prefix residual tests
 
@@ -1247,7 +1247,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 7: Add noise control — per-file cap, per-run cap, dedup, residual graduation
 
 **Files:**
-- Modify: `src/yoinkc/heuristic.py`
+- Modify: `src/inspectah/heuristic.py`
 - Modify: `tests/test_heuristic.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1255,7 +1255,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 Add to `tests/test_heuristic.py`:
 
 ```python
-from yoinkc.heuristic import (
+from inspectah.heuristic import (
     apply_noise_control,
     NoiseControlResult,
     MAX_FINDINGS_PER_FILE,
@@ -1326,13 +1326,13 @@ def test_residual_prefix_graduation():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_heuristic.py::test_per_file_cap tests/test_heuristic.py::test_per_run_cap tests/test_heuristic.py::test_dedup_identical_values tests/test_heuristic.py::test_residual_prefix_graduation -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_heuristic.py::test_per_file_cap tests/test_heuristic.py::test_per_run_cap tests/test_heuristic.py::test_dedup_identical_values tests/test_heuristic.py::test_residual_prefix_graduation -v`
 
 Expected: FAIL — `ImportError: cannot import name 'apply_noise_control'`
 
 - [ ] **Step 3: Implement noise control in `heuristic.py`**
 
-Add to the end of `src/yoinkc/heuristic.py`:
+Add to the end of `src/inspectah/heuristic.py`:
 
 ```python
 @dataclass
@@ -1420,15 +1420,15 @@ def apply_noise_control(
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_heuristic.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_heuristic.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/heuristic.py tests/test_heuristic.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/heuristic.py tests/test_heuristic.py
 git commit -m "feat(heuristic): add noise control — dedup, per-file/per-run caps, graduation
 
 apply_noise_control() deduplicates identical values, enforces per-file
@@ -1445,7 +1445,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 8: Add CLI flags and mutual exclusion validation
 
 **Files:**
-- Modify: `src/yoinkc/cli.py`
+- Modify: `src/inspectah/cli.py`
 - Create: `tests/test_sensitivity.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1456,7 +1456,7 @@ Create `tests/test_sensitivity.py`:
 """Tests for --sensitivity and --no-redaction CLI flags."""
 
 import pytest
-from yoinkc.cli import parse_args
+from inspectah.cli import parse_args
 
 
 def test_sensitivity_default_strict():
@@ -1506,13 +1506,13 @@ def test_backward_compat_bare_flags():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_sensitivity.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_sensitivity.py -v`
 
 Expected: FAIL — `AttributeError: 'Namespace' object has no attribute 'sensitivity'`
 
 - [ ] **Step 3: Add flags to `_add_inspect_args()` in `cli.py`**
 
-In `src/yoinkc/cli.py`, add the following arguments to `_add_inspect_args()`, after the `--original-snapshot` argument (end of the function):
+In `src/inspectah/cli.py`, add the following arguments to `_add_inspect_args()`, after the `--original-snapshot` argument (end of the function):
 
 ```python
     parser.add_argument(
@@ -1556,7 +1556,7 @@ Actually, re-reading the spec: "If `--sensitivity` and `--no-redaction` are both
 
 This requires passing `argv` to the validation block. The current code already has `argv` available in `parse_args()`. Add the check:
 
-In `src/yoinkc/cli.py`, modify the `parse_args` function to include:
+In `src/inspectah/cli.py`, modify the `parse_args` function to include:
 
 ```python
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -1606,21 +1606,21 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_sensitivity.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_sensitivity.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Run existing CLI tests for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_cli.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_cli.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/cli.py tests/test_sensitivity.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/cli.py tests/test_sensitivity.py
 git commit -m "feat(cli): add --sensitivity and --no-redaction flags
 
 --sensitivity strict|moderate controls heuristic detection behavior.
@@ -1637,8 +1637,8 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 9: Wire heuristic pass into pipeline, handle sensitivity and no-redaction
 
 **Files:**
-- Modify: `src/yoinkc/pipeline.py`
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/pipeline.py`
+- Modify: `src/inspectah/redact.py`
 - Modify: `tests/test_pipeline.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1652,8 +1652,8 @@ import tempfile
 from pathlib import Path
 from io import StringIO
 
-from yoinkc.pipeline import run_pipeline, save_snapshot, load_snapshot, _print_secrets_summary
-from yoinkc.schema import (
+from inspectah.pipeline import run_pipeline, save_snapshot, load_snapshot, _print_secrets_summary
+from inspectah.schema import (
     InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind,
     RedactionFinding,
 )
@@ -1746,13 +1746,13 @@ def test_cli_summary_heuristic_supplement(capsys):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_pipeline.py::test_pipeline_heuristic_findings_present tests/test_pipeline.py::test_pipeline_no_redaction_mode tests/test_pipeline.py::test_cli_summary_heuristic_supplement -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_pipeline.py::test_pipeline_heuristic_findings_present tests/test_pipeline.py::test_pipeline_no_redaction_mode tests/test_pipeline.py::test_cli_summary_heuristic_supplement -v`
 
 Expected: FAIL — `run_pipeline()` doesn't accept `sensitivity` or `no_redaction` kwargs.
 
 - [ ] **Step 3: Add `sensitivity` and `no_redaction` parameters to `run_pipeline()`**
 
-In `src/yoinkc/pipeline.py`, modify the `run_pipeline()` signature to accept new parameters:
+In `src/inspectah/pipeline.py`, modify the `run_pipeline()` signature to accept new parameters:
 
 ```python
 def run_pipeline(
@@ -1952,7 +1952,7 @@ Note: The `kind="flagged"` value is new — this represents heuristic findings t
 
 - [ ] **Step 4: Update `RedactionFinding.kind` documentation in schema.py**
 
-In `src/yoinkc/schema.py`, update the comment on the `kind` field:
+In `src/inspectah/schema.py`, update the comment on the `kind` field:
 
 ```python
     kind: str              # "excluded" | "inline" | "flagged"
@@ -1960,21 +1960,21 @@ In `src/yoinkc/schema.py`, update the comment on the `kind` field:
 
 - [ ] **Step 5: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_pipeline.py::test_pipeline_heuristic_findings_present tests/test_pipeline.py::test_pipeline_no_redaction_mode tests/test_pipeline.py::test_cli_summary_heuristic_supplement -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_pipeline.py::test_pipeline_heuristic_findings_present tests/test_pipeline.py::test_pipeline_no_redaction_mode tests/test_pipeline.py::test_cli_summary_heuristic_supplement -v`
 
 Expected: All pass.
 
 - [ ] **Step 6: Run full pipeline test suite for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_pipeline.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_pipeline.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/pipeline.py src/yoinkc/schema.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/pipeline.py src/inspectah/schema.py
 git commit -m "feat(pipeline): wire heuristic pass with sensitivity and no-redaction support
 
 Heuristic engine runs after pattern pass. sensitivity=strict redacts
@@ -1988,7 +1988,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 10: Heuristic content redaction with counter ordering
 
 **Files:**
-- Modify: `src/yoinkc/pipeline.py`
+- Modify: `src/inspectah/pipeline.py`
 - Modify: `tests/test_redact.py` (counter ordering tests)
 
 - [ ] **Step 1: Write the failing tests**
@@ -1998,7 +1998,7 @@ Add to `tests/test_redact.py`:
 ```python
 def test_counter_ordering_pattern_before_heuristic():
     """Pattern findings get counters first, then heuristic findings."""
-    from yoinkc.pipeline import _run_heuristic_pass
+    from inspectah.pipeline import _run_heuristic_pass
     # Build a snapshot with both pattern-redacted content and heuristic targets
     content_pattern = "password=hunter2\n"
     content_heuristic = "db_password = aR9xk!mQ2pL7bN4cKzW\n"
@@ -2011,7 +2011,7 @@ def test_counter_ordering_pattern_before_heuristic():
         ]),
     )
     # First run pattern pass
-    from yoinkc.redact import redact_snapshot
+    from inspectah.redact import redact_snapshot
     result = redact_snapshot(snapshot)
     # Pattern findings should have lower counter numbers
     pattern_findings = [r for r in result.redactions
@@ -2038,13 +2038,13 @@ def test_flagged_findings_no_counter():
 
 - [ ] **Step 2: Run tests to verify they fail (or pass if already correct)**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_counter_ordering_pattern_before_heuristic tests/test_redact.py::test_flagged_findings_no_counter -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_counter_ordering_pattern_before_heuristic tests/test_redact.py::test_flagged_findings_no_counter -v`
 
 Expected: The counter ordering test may pass already (pattern pass generates counters). The flagged findings test should pass since flagged findings have `replacement=None` by construction.
 
 - [ ] **Step 3: Implement heuristic content redaction in `_run_heuristic_pass()`**
 
-In `src/yoinkc/pipeline.py`, update the `_run_heuristic_pass()` function to actually perform redaction on content when `should_redact=True`. Replace the `# TODO: Actually redact content` comment with actual redaction logic:
+In `src/inspectah/pipeline.py`, update the `_run_heuristic_pass()` function to actually perform redaction on content when `should_redact=True`. Replace the `# TODO: Actually redact content` comment with actual redaction logic:
 
 ```python
     # For redacted findings, we need to modify content and assign counters
@@ -2099,15 +2099,15 @@ Note: This is a simplified version. The actual implementation should handle the 
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_counter_ordering_pattern_before_heuristic tests/test_redact.py::test_flagged_findings_no_counter -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_counter_ordering_pattern_before_heuristic tests/test_redact.py::test_flagged_findings_no_counter -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/pipeline.py tests/test_redact.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/pipeline.py tests/test_redact.py
 git commit -m "feat(pipeline): heuristic content redaction with counter ordering
 
 High-confidence heuristic findings in strict mode are redacted with
@@ -2124,7 +2124,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 11: Update `secrets-review.md` renderer
 
 **Files:**
-- Modify: `src/yoinkc/renderers/secrets_review.py`
+- Modify: `src/inspectah/renderers/secrets_review.py`
 - Modify: `tests/test_secrets_review.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2222,13 +2222,13 @@ def test_secrets_review_no_redaction_header():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_secrets_review.py::test_secrets_review_has_detection_column tests/test_secrets_review.py::test_secrets_review_has_flagged_table tests/test_secrets_review.py::test_secrets_review_summary_line tests/test_secrets_review.py::test_secrets_review_no_flagged_table_when_no_flagged tests/test_secrets_review.py::test_secrets_review_no_redaction_header -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_secrets_review.py::test_secrets_review_has_detection_column tests/test_secrets_review.py::test_secrets_review_has_flagged_table tests/test_secrets_review.py::test_secrets_review_summary_line tests/test_secrets_review.py::test_secrets_review_no_flagged_table_when_no_flagged tests/test_secrets_review.py::test_secrets_review_no_redaction_header -v`
 
 Expected: FAIL — Detection column not present, no Flagged table, `render()` doesn't accept `no_redaction` parameter.
 
 - [ ] **Step 3: Update `secrets_review.py` renderer**
 
-Replace `src/yoinkc/renderers/secrets_review.py` with:
+Replace `src/inspectah/renderers/secrets_review.py` with:
 
 ```python
 """secrets-review.md renderer: list of redacted items and remediation."""
@@ -2354,15 +2354,15 @@ def render(
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_secrets_review.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_secrets_review.py -v`
 
 Expected: All pass (both old and new tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/renderers/secrets_review.py tests/test_secrets_review.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/renderers/secrets_review.py tests/test_secrets_review.py
 git commit -m "feat(renderer): add Detection column, Flagged table, and summary to secrets-review.md
 
 Inline Redactions table gains a Detection column (pattern / heuristic).
@@ -2376,7 +2376,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 12: Update Containerfile comments with flagged-note line
 
 **Files:**
-- Modify: `src/yoinkc/renderers/containerfile/_core.py`
+- Modify: `src/inspectah/renderers/containerfile/_core.py`
 - Modify: `tests/test_containerfile_secrets_comments.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2435,13 +2435,13 @@ def test_containerfile_heuristic_inline_in_inline_block():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_containerfile_secrets_comments.py::test_containerfile_flagged_note_present tests/test_containerfile_secrets_comments.py::test_containerfile_no_flagged_note_when_no_flagged tests/test_containerfile_secrets_comments.py::test_containerfile_heuristic_inline_in_inline_block -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_containerfile_secrets_comments.py::test_containerfile_flagged_note_present tests/test_containerfile_secrets_comments.py::test_containerfile_no_flagged_note_when_no_flagged tests/test_containerfile_secrets_comments.py::test_containerfile_heuristic_inline_in_inline_block -v`
 
 Expected: FAIL — flagged note not present.
 
 - [ ] **Step 3: Update `_secrets_comment_lines()` in `_core.py`**
 
-In `src/yoinkc/renderers/containerfile/_core.py`, modify `_secrets_comment_lines()`:
+In `src/inspectah/renderers/containerfile/_core.py`, modify `_secrets_comment_lines()`:
 
 ```python
 def _secrets_comment_lines(snapshot: InspectionSnapshot) -> list[str]:
@@ -2499,15 +2499,15 @@ def _secrets_comment_lines(snapshot: InspectionSnapshot) -> list[str]:
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_containerfile_secrets_comments.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_containerfile_secrets_comments.py -v`
 
 Expected: All pass (both old and new tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/renderers/containerfile/_core.py tests/test_containerfile_secrets_comments.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/renderers/containerfile/_core.py tests/test_containerfile_secrets_comments.py
 git commit -m "feat(containerfile): add flagged-note line for heuristic advisory findings
 
 When heuristic findings are flagged but not redacted, a note line
@@ -2521,7 +2521,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 13: Update `_print_secrets_summary()` and add `--no-redaction` warning
 
 **Files:**
-- Modify: `src/yoinkc/pipeline.py`
+- Modify: `src/inspectah/pipeline.py`
 - Modify: `tests/test_pipeline.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2543,7 +2543,7 @@ def test_no_redaction_warning_printed(capsys):
                         pattern="HEURISTIC", remediation="",
                         detection_method="heuristic", confidence="low"),
     ]
-    from yoinkc.pipeline import _print_no_redaction_warning
+    from inspectah.pipeline import _print_no_redaction_warning
     _print_no_redaction_warning(snap)
     captured = capsys.readouterr()
     assert "WARNING" in captured.err
@@ -2553,13 +2553,13 @@ def test_no_redaction_warning_printed(capsys):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_pipeline.py::test_no_redaction_warning_printed -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_pipeline.py::test_no_redaction_warning_printed -v`
 
 Expected: FAIL — `cannot import name '_print_no_redaction_warning'`
 
 - [ ] **Step 3: Implement `_print_no_redaction_warning()` in `pipeline.py`**
 
-Add to `src/yoinkc/pipeline.py`:
+Add to `src/inspectah/pipeline.py`:
 
 ```python
 def _print_no_redaction_warning(snapshot: InspectionSnapshot) -> None:
@@ -2598,15 +2598,15 @@ Wire into `run_pipeline()`: after `_print_secrets_summary(snapshot)`, add:
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_pipeline.py::test_no_redaction_warning_printed -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_pipeline.py::test_no_redaction_warning_printed -v`
 
 Expected: Pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/pipeline.py tests/test_pipeline.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/pipeline.py tests/test_pipeline.py
 git commit -m "feat(pipeline): add --no-redaction completion warning
 
 Prints a WARNING to stderr when --no-redaction is used, quantifying
@@ -2623,7 +2623,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 14: Extend `scan_directory_for_secrets()` with heuristic scan and subscription exclusion
 
 **Files:**
-- Modify: `src/yoinkc/redact.py`
+- Modify: `src/inspectah/redact.py`
 - Modify: `tests/test_redact.py`
 
 - [ ] **Step 1: Write the failing tests**
@@ -2631,7 +2631,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 Add to `tests/test_redact.py`:
 
 ```python
-from yoinkc.redact import scan_directory_for_secrets
+from inspectah.redact import scan_directory_for_secrets
 
 
 def test_scan_directory_skips_subscription_dirs(tmp_path):
@@ -2675,13 +2675,13 @@ def test_scan_directory_with_heuristic(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_scan_directory_skips_subscription_dirs tests/test_redact.py::test_scan_directory_catches_secrets_outside_subscription_dirs tests/test_redact.py::test_scan_directory_with_heuristic -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_scan_directory_skips_subscription_dirs tests/test_redact.py::test_scan_directory_catches_secrets_outside_subscription_dirs tests/test_redact.py::test_scan_directory_with_heuristic -v`
 
 Expected: FAIL — `scan_directory_for_secrets()` doesn't skip subscription dirs, doesn't accept `heuristic` parameter.
 
 - [ ] **Step 3: Update `scan_directory_for_secrets()` in `redact.py`**
 
-Replace the existing `scan_directory_for_secrets()` function in `src/yoinkc/redact.py`:
+Replace the existing `scan_directory_for_secrets()` function in `src/inspectah/redact.py`:
 
 ```python
 # Subscription cert directories to skip in output tree scans
@@ -2738,21 +2738,21 @@ def scan_directory_for_secrets(
 
 - [ ] **Step 4: Run the tests and verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py::test_scan_directory_skips_subscription_dirs tests/test_redact.py::test_scan_directory_catches_secrets_outside_subscription_dirs tests/test_redact.py::test_scan_directory_with_heuristic -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py::test_scan_directory_skips_subscription_dirs tests/test_redact.py::test_scan_directory_catches_secrets_outside_subscription_dirs tests/test_redact.py::test_scan_directory_with_heuristic -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Run full test suite for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_redact.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_redact.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/redact.py tests/test_redact.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/redact.py tests/test_redact.py
 git commit -m "feat(redact): extend output verification with heuristic scan and subscription exclusion
 
 scan_directory_for_secrets() now skips entitlement/ and rhsm/ dirs,
@@ -2770,12 +2770,12 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 15: Thread `no_redaction` through to `secrets_review` renderer call
 
 **Files:**
-- Modify: `src/yoinkc/renderers/__init__.py`
+- Modify: `src/inspectah/renderers/__init__.py`
 - Modify: `tests/test_secrets_review.py`
 
 - [ ] **Step 1: Check how renderers are called**
 
-Read `src/yoinkc/renderers/__init__.py` to understand how `render()` functions are invoked. The `no_redaction` flag needs to flow from `run_pipeline()` through the renderer dispatcher to the `secrets_review.render()` call.
+Read `src/inspectah/renderers/__init__.py` to understand how `render()` functions are invoked. The `no_redaction` flag needs to flow from `run_pipeline()` through the renderer dispatcher to the `secrets_review.render()` call.
 
 - [ ] **Step 2: Update renderer dispatcher to pass `no_redaction`**
 
@@ -2783,7 +2783,7 @@ The exact changes depend on how the renderer is dispatched. If there's a central
 
 The simplest approach: store `no_redaction` in `snapshot.meta` so renderers can access it without signature changes:
 
-In `src/yoinkc/pipeline.py`, before calling `run_renderers(snapshot, tmp_dir)`, add:
+In `src/inspectah/pipeline.py`, before calling `run_renderers(snapshot, tmp_dir)`, add:
 
 ```python
         # Store redaction mode flag for renderers
@@ -2793,7 +2793,7 @@ In `src/yoinkc/pipeline.py`, before calling `run_renderers(snapshot, tmp_dir)`, 
             })
 ```
 
-Then in `src/yoinkc/renderers/secrets_review.py`, read it:
+Then in `src/inspectah/renderers/secrets_review.py`, read it:
 
 ```python
 def render(
@@ -2827,15 +2827,15 @@ def test_secrets_review_no_redaction_via_meta():
 
 - [ ] **Step 4: Run the test**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_secrets_review.py::test_secrets_review_no_redaction_via_meta -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_secrets_review.py::test_secrets_review_no_redaction_via_meta -v`
 
 Expected: Pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/pipeline.py src/yoinkc/renderers/secrets_review.py tests/test_secrets_review.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/pipeline.py src/inspectah/renderers/secrets_review.py tests/test_secrets_review.py
 git commit -m "feat(pipeline): thread no_redaction flag through to renderers via snapshot.meta
 
 Stores _no_redaction in snapshot.meta so the secrets_review renderer
@@ -2852,12 +2852,12 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 16: Pass CLI args through `__main__.py` to `run_pipeline()`
 
 **Files:**
-- Modify: `src/yoinkc/__main__.py` (or wherever `run_pipeline()` is called from CLI)
+- Modify: `src/inspectah/__main__.py` (or wherever `run_pipeline()` is called from CLI)
 - Modify: `tests/test_sensitivity.py`
 
 - [ ] **Step 1: Find the CLI entry point**
 
-Read `src/yoinkc/__main__.py` to see how CLI args are passed to `run_pipeline()`.
+Read `src/inspectah/__main__.py` to see how CLI args are passed to `run_pipeline()`.
 
 - [ ] **Step 2: Write integration test**
 
@@ -2866,7 +2866,7 @@ Add to `tests/test_sensitivity.py`:
 ```python
 def test_sensitivity_passed_to_pipeline(tmp_path, monkeypatch):
     """--sensitivity flag value reaches run_pipeline()."""
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     args = parse_args(["inspect", "--from-snapshot", str(tmp_path / "test.json"),
                        "--output-dir", str(tmp_path / "output"),
                        "--sensitivity", "moderate"])
@@ -2876,7 +2876,7 @@ def test_sensitivity_passed_to_pipeline(tmp_path, monkeypatch):
 
 def test_no_redaction_passed_to_pipeline(tmp_path):
     """--no-redaction flag value reaches run_pipeline()."""
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     args = parse_args(["inspect", "--from-snapshot", str(tmp_path / "test.json"),
                        "--output-dir", str(tmp_path / "output"),
                        "--no-redaction"])
@@ -2894,15 +2894,15 @@ Find the call to `run_pipeline()` in the inspect subcommand handler and add:
 
 - [ ] **Step 4: Run the tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_sensitivity.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_sensitivity.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/__main__.py tests/test_sensitivity.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/__main__.py tests/test_sensitivity.py
 git commit -m "feat(cli): wire --sensitivity and --no-redaction to run_pipeline()
 
 CLI entry point now passes sensitivity and no_redaction arguments
@@ -2918,7 +2918,7 @@ Assisted-by: Cursor (claude-sonnet-4-20250514)"
 ### Task 17: Skip subscription cert paths in heuristic snapshot scan
 
 **Files:**
-- Modify: `src/yoinkc/pipeline.py`
+- Modify: `src/inspectah/pipeline.py`
 - Modify: `tests/test_heuristic.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -2928,8 +2928,8 @@ Add to `tests/test_heuristic.py`:
 ```python
 def test_subscription_cert_paths_excluded_from_heuristic():
     """Config files under /etc/pki/entitlement/ and /etc/rhsm/ are skipped."""
-    from yoinkc.schema import InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind
-    from yoinkc.pipeline import _run_heuristic_pass
+    from inspectah.schema import InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind
+    from inspectah.pipeline import _run_heuristic_pass
 
     snap = InspectionSnapshot(meta={"hostname": "test"})
     snap.config = ConfigSection(files=[
@@ -2950,7 +2950,7 @@ def test_subscription_cert_paths_excluded_from_heuristic():
         ),
     ])
     result = _run_heuristic_pass(snap)
-    from yoinkc.schema import RedactionFinding
+    from inspectah.schema import RedactionFinding
     heuristic = [r for r in result.redactions
                  if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
     # Subscription cert paths should NOT produce heuristic findings
@@ -2960,14 +2960,14 @@ def test_subscription_cert_paths_excluded_from_heuristic():
 
 - [ ] **Step 2: Run test to verify it passes (should already work from Task 9)**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_heuristic.py::test_subscription_cert_paths_excluded_from_heuristic -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_heuristic.py::test_subscription_cert_paths_excluded_from_heuristic -v`
 
 Expected: Pass (the exclusion was implemented in Task 9's `_run_heuristic_pass()`).
 
 - [ ] **Step 3: Commit (if test needed adjustments)**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 git add tests/test_heuristic.py
 git commit -m "test(heuristic): verify subscription cert path exclusion
 
@@ -2998,13 +2998,13 @@ from pathlib import Path
 
 from jinja2 import Environment
 
-from yoinkc.pipeline import run_pipeline, save_snapshot
-from yoinkc.schema import (
+from inspectah.pipeline import run_pipeline, save_snapshot
+from inspectah.schema import (
     InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind,
     RedactionFinding, UserGroupSection,
 )
-from yoinkc.renderers.secrets_review import render as render_secrets_review
-from yoinkc.renderers.containerfile._core import _render_containerfile_content, _secrets_comment_lines
+from inspectah.renderers.secrets_review import render as render_secrets_review
+from inspectah.renderers.containerfile._core import _render_containerfile_content, _secrets_comment_lines
 
 
 def _full_snapshot():
@@ -3164,20 +3164,20 @@ def test_containerfile_comments_full_spectrum():
 
 - [ ] **Step 2: Run integration tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_heuristic_integration.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_heuristic_integration.py -v`
 
 Expected: All pass.
 
 - [ ] **Step 3: Run the complete test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -v --tb=short`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -v --tb=short`
 
 Expected: All tests pass. Address any failures before committing.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 git add tests/test_heuristic_integration.py
 git commit -m "test: add end-to-end integration tests for heuristic secrets safety net
 

@@ -7,7 +7,7 @@ partials — one per content section, plus CSS, JS, and macros.
 
 ## Motivation
 
-`report.html.j2` is the largest file in yoinkc. It contains embedded CSS
+`report.html.j2` is the largest file in inspectah. It contains embedded CSS
 (220 lines), JavaScript (656 lines), 3 macros, and 20+ content sections in a
 single template. Fleet prevalence UI added significant complexity. Splitting
 into partials improves navigability without changing the rendered output — the
@@ -110,7 +110,7 @@ to all context variables automatically:
 After splitting, `report.html.j2` becomes:
 
 ```jinja2
-{# report.html.j2 — yoinkc self-contained inspection report.
+{# report.html.j2 — inspectah self-contained inspection report.
    Split into partials under report/. See report/_macros.html.j2 for shared macros.
    Rendered by renderers/html_report.py via _build_context().
 #}
@@ -118,7 +118,7 @@ After splitting, `report.html.j2` becomes:
 <html lang="en" class="pf-v6-theme-dark">
 <head>
   <meta charset="UTF-8">
-  <title>yoinkc inspection report — {{ meta.hostname }}</title>
+  <title>inspectah inspection report — {{ meta.hostname }}</title>
   <style>{{ patternfly_css }}</style>
   {% include "report/_css.html.j2" %}
 </head>

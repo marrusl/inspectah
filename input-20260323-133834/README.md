@@ -1,4 +1,4 @@
-# yoinkc output
+# inspectah output
 
 Generated from **Red Hat Enterprise Linux 9.7 (Plow)**.
 

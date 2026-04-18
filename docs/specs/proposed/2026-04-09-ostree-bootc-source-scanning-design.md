@@ -2,7 +2,7 @@
 
 **Status:** Proposed (revised after Seal + Collins review)
 **Date:** 2026-04-09
-**Related:** Kit's code audit (`marks-inbox/reviews/2026-04-08-yoinkc-code-audit-ostree-assumptions.md`), Seal's filesystem analysis (`marks-inbox/reviews/2026-04-08-yoinkc-ostree-filesystem-analysis.md`), Plum's desktop base image research (`marks-inbox/research/2026-04-09-bootc-desktop-base-flatpak-research.md`), Seal review (`marks-inbox/reviews/2026-04-09-seal-review-ostree-bootc-source-scanning-design.md`), Collins review (`marks-inbox/reviews/2026-04-09-collins-review-ostree-bootc-source-scanning-design.md`)
+**Related:** Kit's code audit (`marks-inbox/reviews/2026-04-08-inspectah-code-audit-ostree-assumptions.md`), Seal's filesystem analysis (`marks-inbox/reviews/2026-04-08-inspectah-ostree-filesystem-analysis.md`), Plum's desktop base image research (`marks-inbox/research/2026-04-09-bootc-desktop-base-flatpak-research.md`), Seal review (`marks-inbox/reviews/2026-04-09-seal-review-ostree-bootc-source-scanning-design.md`), Collins review (`marks-inbox/reviews/2026-04-09-collins-review-ostree-bootc-source-scanning-design.md`)
 
 ## Design Principle
 
@@ -10,7 +10,7 @@ bootc is always the target. This spec enables users to capture customizations fr
 
 ## Problem
 
-yoinkc assumes traditional package-mode RHEL as the source system. Running on rpm-ostree systems (Silverblue, Kinoite, Universal Blue) or bootc systems produces wrong results (9 issues) and noise (6 issues) across inspectors. The primary user story: a desktop Linux user who's been managing their system manually wants to capture their customizations into a Containerfile for a pipelined bootc build via GitHub Actions.
+inspectah assumes traditional package-mode RHEL as the source system. Running on rpm-ostree systems (Silverblue, Kinoite, Universal Blue) or bootc systems produces wrong results (9 issues) and noise (6 issues) across inspectors. The primary user story: a desktop Linux user who's been managing their system manually wants to capture their customizations into a Containerfile for a pipelined bootc build via GitHub Actions.
 
 ## Scope
 
@@ -18,7 +18,7 @@ This spec covers detection and adaptation for both rpm-ostree and bootc source s
 
 ## System Type Detection
 
-On startup, yoinkc detects the source system type:
+On startup, inspectah detects the source system type:
 
 1. Check for `/ostree` directory — if absent, proceed as package-mode (existing behavior unchanged).
 2. If present, check `bootc status` exit code — if it succeeds, classify as **bootc system**.
@@ -28,7 +28,7 @@ On startup, yoinkc detects the source system type:
    Error: Detected ostree system (/ostree exists) but could not determine
    system type — both 'bootc status' and 'rpm-ostree status' failed.
 
-   This system may use an ostree configuration yoinkc does not yet support.
+   This system may use an ostree configuration inspectah does not yet support.
    ```
    Do not fall back to package-mode behavior — an ostree system misidentified as package-mode would produce silently wrong results.
 5. Print a gate message: `Detected bootc system, adapting inspection` or `Detected rpm-ostree system, adapting inspection`.
@@ -37,7 +37,7 @@ The system type is stored on the snapshot and flows through to inspectors, rende
 
 ## Base Image Mapping
 
-When scanning an rpm-ostree/bootc system, yoinkc determines the target base image for baseline subtraction (separating user customizations from base image content).
+When scanning an rpm-ostree/bootc system, inspectah determines the target base image for baseline subtraction (separating user customizations from base image content).
 
 ### Auto-mapping for known systems
 
@@ -55,17 +55,17 @@ When scanning an rpm-ostree/bootc system, yoinkc determines the target base imag
 - CentOS Stream: `VERSION_ID` is a plain integer (e.g., `10`) — prefix with `stream` (e.g., `stream10`).
 - RHEL: `VERSION_ID` is `major.minor` (e.g., `9.4`) — use the major version only for tag matching (e.g., `9`).
 
-For RHEL bootc, the source ref from `bootc status` may contain private/authed registry paths that won't work in CI. yoinkc normalizes RHEL refs to their public equivalent (e.g., `registry.redhat.io/rhel9/rhel-bootc:9.4`) in the generated Containerfile. If normalization isn't possible, emit the ref as-is with a comment: `# NOTE: This image ref may require authentication in CI.`
+For RHEL bootc, the source ref from `bootc status` may contain private/authed registry paths that won't work in CI. inspectah normalizes RHEL refs to their public equivalent (e.g., `registry.redhat.io/rhel9/rhel-bootc:9.4`) in the generated Containerfile. If normalization isn't possible, emit the ref as-is with a comment: `# NOTE: This image ref may require authentication in CI.`
 
 ### Unknown systems
 
-When yoinkc cannot map the source to a known base image, refuse with helpful guidance:
+When inspectah cannot map the source to a known base image, refuse with helpful guidance:
 
 ```
 Detected rpm-ostree system: <image-ref>
 Could not map to a known bootc base image.
 
-Specify one with: yoinkc --base-image <registry/image:tag>
+Specify one with: inspectah --base-image <registry/image:tag>
 
 Common bases:
   quay.io/fedora-ostree-desktops/silverblue:41
@@ -82,7 +82,7 @@ Always available as an override, even for known systems. User-provided value tak
 
 ### bootc label for ostree-desktops bases
 
-The `fedora-ostree-desktops` images are ostree-native containers that work as bootc `FROM` bases in practice (Universal Blue uses them this way), but may not carry bootc labels. When the detected or specified base is an ostree-desktops image, yoinkc emits `LABEL containers.bootc 1` in the generated Containerfile to ensure bootc compatibility.
+The `fedora-ostree-desktops` images are ostree-native containers that work as bootc `FROM` bases in practice (Universal Blue uses them this way), but may not carry bootc labels. When the detected or specified base is an ostree-desktops image, inspectah emits `LABEL containers.bootc 1` in the generated Containerfile to ensure bootc compatibility.
 
 **Caveat:** This is community-proven but not officially documented by Fedora as a supported path. Verify at implementation time that current image versions work correctly as bootc build bases. If they don't, the fallback is `fedora-bootc:NN` + desktop package layering.
 
@@ -99,7 +99,7 @@ The `fedora-ostree-desktops` images are ostree-native containers that work as bo
 
 - `bootc status --json` for image ref and metadata.
 - If `rpm-ostree status` is available (typical on current bootc systems): use it for layered/overridden/removed packages, same as rpm-ostree systems.
-- If `rpm-ostree status` is not available (pure bootc without rpm-ostree): fall back to diffing `rpm -qa` against the target base image's package list. **This path is explicitly low-confidence.** Tag drift, NVR skew, and arch differences between the running system and the resolved base image can produce noisy diffs. yoinkc must:
+- If `rpm-ostree status` is not available (pure bootc without rpm-ostree): fall back to diffing `rpm -qa` against the target base image's package list. **This path is explicitly low-confidence.** Tag drift, NVR skew, and arch differences between the running system and the resolved base image can produce noisy diffs. inspectah must:
   - Resolve the base image ref to a specific digest and surface both the ref and digest in the output header.
   - Print a warning: `Package diff is approximate — base image was resolved to <digest> at scan time. Results may differ if the base image tag has moved.`
   - Note in `secrets-review.md` / report output that package detection used the low-confidence fallback path.
@@ -116,7 +116,7 @@ Three-tier approach for ostree/bootc systems. Replaces the current RPM-based con
 
 Walk `/usr/etc` and `/etc` in parallel. Any file that exists in both but differs in content, permissions, ownership, or SELinux context is a user customization.
 
-This is the native ostree mechanism — fast, no RPM queries, no false positives from immutable `/usr`. Diffs are captured the same way yoinkc currently captures config diffs on package-mode systems: content goes into the snapshot, the delta goes into the Containerfile's config tree.
+This is the native ostree mechanism — fast, no RPM queries, no false positives from immutable `/usr`. Diffs are captured the same way inspectah currently captures config diffs on package-mode systems: content goes into the snapshot, the delta goes into the Containerfile's config tree.
 
 Metadata comparison (permissions, ownership, SELinux contexts) via `stat` and `ls -Z` between `/usr/etc` and `/etc` entries. No RPM verification needed for files present in both trees.
 
@@ -137,7 +137,7 @@ Run targeted `rpm -V` against these specific files only (not `rpm -Va` full scan
 
 ostree does not track `/var` at all — it is fully mutable state. `/usr/local` is similarly outside ostree's purview. `rpm -Va` does not help here either since RPMs do not install to these paths.
 
-yoinkc's existing non-RPM software inspector scans these areas. On ostree/bootc systems, it needs filtering to suppress ostree-internal paths (see Inspector Adaptations).
+inspectah's existing non-RPM software inspector scans these areas. On ostree/bootc systems, it needs filtering to suppress ostree-internal paths (see Inspector Adaptations).
 
 ## Flatpak Support
 
@@ -155,7 +155,7 @@ Flatpaks cannot be installed at Containerfile build time — they require a runn
 `flatpaks.list` — one app ID per line, annotated with remote name:
 
 ```
-# Flatpak applications detected by yoinkc
+# Flatpak applications detected by inspectah
 # Install with: xargs flatpak install < flatpaks.list
 # Or wire into your preferred first-boot mechanism (systemd unit, Brewfile, etc.)
 flathub org.mozilla.firefox
@@ -163,7 +163,7 @@ flathub org.gnome.Calculator
 fedora org.fedoraproject.MediaWriter
 ```
 
-yoinkc captures what is installed. The installation mechanism (systemd oneshot unit, Universal Blue Brewfile, Ansible playbook, manual install) is the user's choice. yoinkc provides the data, not the plumbing.
+inspectah captures what is installed. The installation mechanism (systemd oneshot unit, Universal Blue Brewfile, Ansible playbook, manual install) is the user's choice. inspectah provides the data, not the plumbing.
 
 ### Not included
 
@@ -252,6 +252,6 @@ Slice 2 boot/timer filtering tests must use real captured fixtures from bootc an
 
 - **Containerfile build verification** (does the generated Containerfile actually build and boot?) — valuable but a separate capability
 - **User home directory scanning** — `~/.config`, `~/.local`, Flatpak user data
-- **Multi-user system support** — yoinkc captures system-level state, not per-user customizations
+- **Multi-user system support** — inspectah captures system-level state, not per-user customizations
 - **ostree-desktops → fedora-bootc migration path** — if ostree-desktops images stop working as bootc bases, a separate spec will address the `fedora-bootc:NN` + desktop package layering approach
 - **Brewfile or other ecosystem-specific Flatpak manifest formats** — add if there's demand via a `--flatpak-format` flag

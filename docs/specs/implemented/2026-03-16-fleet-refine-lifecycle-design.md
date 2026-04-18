@@ -7,10 +7,10 @@
 
 ## Problem
 
-Fleet reports from `yoinkc-fleet aggregate` are currently read-only. Users can
+Fleet reports from `inspectah-fleet aggregate` are currently read-only. Users can
 see prevalence data (which items are on how many hosts) but cannot act on it —
 no toggles, no threshold adjustment, no re-render. The refine workflow that
-exists for single-host snapshots (`yoinkc-refine`) does not activate fleet-
+exists for single-host snapshots (`inspectah-refine`) does not activate fleet-
 specific controls when given a fleet snapshot.
 
 This spec enables full refine mode on fleet snapshots: toggles, reset,
@@ -30,10 +30,10 @@ variant selection for content-bearing items.
 
 ### Fleet Detection & Refine Mode Entry
 
-`yoinkc-refine` (the HTTP wrapper) does not change. It remains a dumb server
-that extracts tarballs, invokes yoinkc for re-renders, and serves the result.
+`inspectah-refine` (the HTTP wrapper) does not change. It remains a dumb server
+that extracts tarballs, invokes inspectah for re-renders, and serves the result.
 
-yoinkc itself detects fleet mode by checking `snapshot.meta.get("fleet")`.
+inspectah itself detects fleet mode by checking `snapshot.meta.get("fleet")`.
 When fleet metadata is present AND `--refine-mode` is set, the template
 renders fleet-specific refine controls in addition to all existing refine
 controls (toggles, reset, re-render, editor).
@@ -70,12 +70,12 @@ present and `refine_mode` is true.
    `include: true` (see Variant Radio Groups below).
 
 **Initial value:** `snapshot.meta.fleet.min_prevalence` — the threshold used
-during `yoinkc-fleet aggregate`.
+during `inspectah-fleet aggregate`.
 
 **State tracking:** The slider value is tracked client-side only. It is not
 persisted in the snapshot. The snapshot records the resulting `include` values,
 which is what matters for Containerfile generation. When re-render is
-triggered, the modified snapshot (with updated includes) is sent to yoinkc.
+triggered, the modified snapshot (with updated includes) is sent to inspectah.
 
 ### Reset Interaction
 
@@ -134,7 +134,7 @@ All existing refine controls work as-is on fleet snapshots:
 - **Toggles** — already rendered but hidden via CSS unless `refine_mode` is
   true. Enabling refine mode on a fleet snapshot shows them. No changes needed
   beyond the variant radio-group behavior above.
-- **Re-render** — same POST to `/api/re-render` with modified snapshot. yoinkc
+- **Re-render** — same POST to `/api/re-render` with modified snapshot. inspectah
   renders the Containerfile from included items.
 - **Editor** — works on individual items. Content variant awareness is Spec 3.
 
@@ -154,7 +154,7 @@ All existing refine controls work as-is on fleet snapshots:
   changes on Apply
 
 ### Integration Tests (refine lifecycle)
-- Fleet tarball via `yoinkc-refine` loads fleet-aware refine UI (slider
+- Fleet tarball via `inspectah-refine` loads fleet-aware refine UI (slider
   present, prevalence bars visible, toggles enabled)
 - Slider change, Apply, then re-render produces correct Containerfile with
   new threshold's included items
@@ -162,7 +162,7 @@ All existing refine controls work as-is on fleet snapshots:
   original state
 
 ### Not Tested (covered elsewhere)
-- `yoinkc-refine` wrapper — no changes
+- `inspectah-refine` wrapper — no changes
 - Fleet merge engine — covered by Spec 1
 - Basic toggle/reset/re-render mechanics — already tested in single-host
   refine
@@ -171,7 +171,7 @@ All existing refine controls work as-is on fleet snapshots:
 
 - Variant comparison/diff UI (Spec 3)
 - Config editor variant awareness (Spec 3)
-- `yoinkc-refine` wrapper changes (none needed)
+- `inspectah-refine` wrapper changes (none needed)
 - New CLI flags (none needed)
 - Slider value persistence in snapshot (UI-only state)
 - Per-section prevalence thresholds (global slider only)

@@ -1,16 +1,16 @@
-# yoinkc architect Implementation Plan
+# inspectah architect Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add `yoinkc architect` subcommand that loads multiple refined fleet tarballs, proposes a base+derived layer topology, and serves an interactive PatternFly 6 web UI with click-to-move package reassignment and Containerfile tree export.
+**Goal:** Add `inspectah architect` subcommand that loads multiple refined fleet tarballs, proposes a base+derived layer topology, and serves an interactive PatternFly 6 web UI with click-to-move package reassignment and Containerfile tree export.
 
-**Architecture:** New `src/yoinkc/architect/` package following the fleet/refine patterns. Loader discovers refined tarballs, analyzer computes 100% prevalence split, server exposes topology/move/export APIs via BaseHTTPRequestHandler, Jinja2+PatternFly 6 templates provide the interactive UI. Driftify gets multi-fleet fixture generation as a prerequisite.
+**Architecture:** New `src/inspectah/architect/` package following the fleet/refine patterns. Loader discovers refined tarballs, analyzer computes 100% prevalence split, server exposes topology/move/export APIs via BaseHTTPRequestHandler, Jinja2+PatternFly 6 templates provide the interactive UI. Driftify gets multi-fleet fixture generation as a prerequisite.
 
 **Tech Stack:** Python 3.11+, dataclasses, argparse, BaseHTTPRequestHandler, Jinja2, PatternFly 6 CSS (bundled), pytest. Driftify is stdlib-only Python.
 
 **Spec:** `docs/specs/proposed/2026-03-29-architect-design.md`
 
-**Project conventions:** `AGENTS.md` at workspace root. Conventional commits, `Assisted-by:` attribution, TDD, no AI slop. Two separate git repos: `yoinkc/` and `driftify/`.
+**Project conventions:** `AGENTS.md` at workspace root. Conventional commits, `Assisted-by:` attribution, TDD, no AI slop. Two separate git repos: `inspectah/` and `driftify/`.
 
 ---
 
@@ -23,20 +23,20 @@
 | Modify | `driftify/driftify.py` | Add multi-fleet profile sets and exclusive package support |
 | Create | `driftify/tests/test_multi_fleet.py` | Tests for new fleet topology generation |
 
-### Yoinkc (repo: `yoinkc/`)
+### Inspectah (repo: `inspectah/`)
 
 | Action | File | Responsibility |
 |--------|------|----------------|
-| Create | `src/yoinkc/architect/__init__.py` | Package marker |
-| Create | `src/yoinkc/architect/cli.py` | CLI subcommand registration |
-| Create | `src/yoinkc/architect/loader.py` | Load refined fleet tarballs |
-| Create | `src/yoinkc/architect/analyzer.py` | Cross-fleet analysis + LayerTopology model |
-| Create | `src/yoinkc/architect/server.py` | HTTP server with API routes |
-| Create | `src/yoinkc/architect/export.py` | Containerfile tree + build.sh generation |
-| Create | `src/yoinkc/templates/architect/architect.html.j2` | Main template |
-| Create | `src/yoinkc/templates/architect/_css.html.j2` | Custom CSS |
-| Create | `src/yoinkc/templates/architect/_js.html.j2` | Interactive JS |
-| Modify | `src/yoinkc/cli.py` | Register architect subcommand |
+| Create | `src/inspectah/architect/__init__.py` | Package marker |
+| Create | `src/inspectah/architect/cli.py` | CLI subcommand registration |
+| Create | `src/inspectah/architect/loader.py` | Load refined fleet tarballs |
+| Create | `src/inspectah/architect/analyzer.py` | Cross-fleet analysis + LayerTopology model |
+| Create | `src/inspectah/architect/server.py` | HTTP server with API routes |
+| Create | `src/inspectah/architect/export.py` | Containerfile tree + build.sh generation |
+| Create | `src/inspectah/templates/architect/architect.html.j2` | Main template |
+| Create | `src/inspectah/templates/architect/_css.html.j2` | Custom CSS |
+| Create | `src/inspectah/templates/architect/_js.html.j2` | Interactive JS |
+| Modify | `src/inspectah/cli.py` | Register architect subcommand |
 | Create | `tests/test_architect_loader.py` | Loader tests |
 | Create | `tests/test_architect_analyzer.py` | Analyzer tests |
 | Create | `tests/test_architect_server.py` | Server API tests |
@@ -171,7 +171,7 @@ Add to `driftify/driftify.py` — the topology definitions and generator functio
 
 ```python
 # --- Multi-Fleet Topology Fixtures ---
-# Used by yoinkc architect to demonstrate cross-fleet layer decomposition.
+# Used by inspectah architect to demonstrate cross-fleet layer decomposition.
 # Each topology defines multiple fleets with shared + exclusive packages.
 # Hosts within a fleet are identical (different hostnames only) — simulates
 # the post-fleet+refine "cooking show" state.
@@ -350,16 +350,16 @@ Assisted-by: Claude Code (opus)"
 **Context:** Core decomposition logic. Takes loaded fleet data, builds cross-fleet package index, applies 100% prevalence heuristic. This is the analytical heart of architect.
 
 **Files:**
-- Create: `src/yoinkc/architect/__init__.py`
-- Create: `src/yoinkc/architect/analyzer.py`
+- Create: `src/inspectah/architect/__init__.py`
+- Create: `src/inspectah/architect/analyzer.py`
 - Create: `tests/test_architect_analyzer.py`
 
 - [ ] **Step 1: Create package marker**
 
-Create `src/yoinkc/architect/__init__.py`:
+Create `src/inspectah/architect/__init__.py`:
 
 ```python
-"""yoinkc architect — layer topology planner for multi-fleet decomposition."""
+"""inspectah architect — layer topology planner for multi-fleet decomposition."""
 ```
 
 - [ ] **Step 2: Write failing tests for the analyzer**
@@ -371,7 +371,7 @@ Create `tests/test_architect_analyzer.py`:
 
 import pytest
 
-from yoinkc.architect.analyzer import (
+from inspectah.architect.analyzer import (
     FleetInput,
     Layer,
     LayerTopology,
@@ -530,12 +530,12 @@ class TestTopologyJson:
 
 - [ ] **Step 3: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_analyzer.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_analyzer.py -v`
 Expected: FAIL — `ImportError`
 
 - [ ] **Step 4: Implement the analyzer**
 
-Create `src/yoinkc/architect/analyzer.py`:
+Create `src/inspectah/architect/analyzer.py`:
 
 ```python
 """Cross-fleet analyzer for layer topology decomposition."""
@@ -717,14 +717,14 @@ def analyze_fleets(fleets: list[FleetInput]) -> LayerTopology:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_analyzer.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_analyzer.py -v`
 Expected: All PASS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/architect/__init__.py src/yoinkc/architect/analyzer.py tests/test_architect_analyzer.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/architect/__init__.py src/inspectah/architect/analyzer.py tests/test_architect_analyzer.py
 git commit -m "feat(architect): Add layer topology analyzer with cross-fleet decomposition
 
 Implements FleetInput, Layer, LayerTopology dataclasses and analyze_fleets()
@@ -742,7 +742,7 @@ Assisted-by: Claude Code (opus)"
 **Context:** Reads refined fleet tarballs from a directory, extracts the InspectionSnapshot from each, and converts to FleetInput for the analyzer.
 
 **Files:**
-- Create: `src/yoinkc/architect/loader.py`
+- Create: `src/inspectah/architect/loader.py`
 - Create: `tests/test_architect_loader.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -758,8 +758,8 @@ import pytest
 from io import BytesIO
 from pathlib import Path
 
-from yoinkc.architect.loader import load_refined_fleets
-from yoinkc.architect.analyzer import FleetInput
+from inspectah.architect.loader import load_refined_fleets
+from inspectah.architect.analyzer import FleetInput
 
 
 def _make_snapshot(hostname: str, packages: list[str], fleet_name: str = "test-fleet") -> dict:
@@ -849,12 +849,12 @@ class TestLoadRefinedFleets:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_loader.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_loader.py -v`
 Expected: FAIL — `ImportError`
 
 - [ ] **Step 3: Implement the loader**
 
-Create `src/yoinkc/architect/loader.py`:
+Create `src/inspectah/architect/loader.py`:
 
 ```python
 """Load refined fleet tarballs for architect analysis."""
@@ -866,7 +866,7 @@ import logging
 import tarfile
 from pathlib import Path
 
-from yoinkc.architect.analyzer import FleetInput
+from inspectah.architect.analyzer import FleetInput
 
 logger = logging.getLogger(__name__)
 
@@ -943,14 +943,14 @@ def _snapshot_to_fleet_input(snapshot: dict) -> FleetInput:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_loader.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_loader.py -v`
 Expected: All PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/architect/loader.py tests/test_architect_loader.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/architect/loader.py tests/test_architect_loader.py
 git commit -m "feat(architect): Add refined fleet tarball loader
 
 Discovers .tar.gz files in input directory, extracts inspection-snapshot.json,
@@ -967,7 +967,7 @@ Assisted-by: Claude Code (opus)"
 **Context:** Generates a tarball containing Containerfiles + tree/ directories per layer, plus a build.sh with ordered build commands.
 
 **Files:**
-- Create: `src/yoinkc/architect/export.py`
+- Create: `src/inspectah/architect/export.py`
 - Create: `tests/test_architect_export.py`
 
 - [ ] **Step 1: Write failing tests**
@@ -981,8 +981,8 @@ import io
 import tarfile
 import pytest
 
-from yoinkc.architect.analyzer import FleetInput, Layer, LayerTopology, analyze_fleets
-from yoinkc.architect.export import export_topology
+from inspectah.architect.analyzer import FleetInput, Layer, LayerTopology, analyze_fleets
+from inspectah.architect.export import export_topology
 
 
 def _make_topology() -> LayerTopology:
@@ -1077,12 +1077,12 @@ class TestExportTopology:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_export.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_export.py -v`
 Expected: FAIL — `ImportError`
 
 - [ ] **Step 3: Implement export**
 
-Create `src/yoinkc/architect/export.py`:
+Create `src/inspectah/architect/export.py`:
 
 ```python
 """Export layer topology as a Containerfile tree tarball."""
@@ -1091,7 +1091,7 @@ from __future__ import annotations
 
 import io
 import tarfile
-from yoinkc.architect.analyzer import LayerTopology
+from inspectah.architect.analyzer import LayerTopology
 
 
 def export_topology(topo: LayerTopology, base_image: str) -> bytes:
@@ -1165,14 +1165,14 @@ def _add_string_to_tar(tar: tarfile.TarFile, name: str, content: str) -> None:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_export.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_export.py -v`
 Expected: All PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/architect/export.py tests/test_architect_export.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/architect/export.py tests/test_architect_export.py
 git commit -m "feat(architect): Add Containerfile tree export as tarball
 
 Generates architect-export.tar.gz with Containerfile per layer (base FROM
@@ -1189,9 +1189,9 @@ Assisted-by: Claude Code (opus)"
 **Context:** HTTP server serving the API routes and the template-rendered UI. CLI subcommand registration. This wires everything together.
 
 **Files:**
-- Create: `src/yoinkc/architect/server.py`
-- Create: `src/yoinkc/architect/cli.py`
-- Modify: `src/yoinkc/cli.py`
+- Create: `src/inspectah/architect/server.py`
+- Create: `src/inspectah/architect/cli.py`
+- Modify: `src/inspectah/cli.py`
 - Create: `tests/test_architect_server.py`
 
 - [ ] **Step 1: Write failing tests for server API**
@@ -1209,8 +1209,8 @@ import urllib.error
 import pytest
 from pathlib import Path
 
-from yoinkc.architect.analyzer import FleetInput, analyze_fleets
-from yoinkc.architect.server import create_handler, start_server
+from inspectah.architect.analyzer import FleetInput, analyze_fleets
+from inspectah.architect.server import create_handler, start_server
 
 
 def _make_topology():
@@ -1228,7 +1228,7 @@ def server_url(tmp_path):
     port, httpd = start_server(
         topo,
         base_image="registry.redhat.io/rhel9/rhel-bootc:9.4",
-        template_dir=Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates",
+        template_dir=Path(__file__).resolve().parent.parent / "src" / "inspectah" / "templates",
         patternfly_css="/* test */",
         bind="127.0.0.1",
         port=0,  # let OS pick a free port
@@ -1311,20 +1311,20 @@ class TestIndexEndpoint:
         resp = urllib.request.urlopen(f"{server_url}/")
         assert resp.status == 200
         content = resp.read().decode()
-        assert "yoinkc Architect" in content
+        assert "inspectah Architect" in content
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_server.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_server.py -v`
 Expected: FAIL — `ImportError`
 
 - [ ] **Step 3: Implement the server**
 
-Create `src/yoinkc/architect/server.py`:
+Create `src/inspectah/architect/server.py`:
 
 ```python
-"""HTTP server for yoinkc architect interactive UI."""
+"""HTTP server for inspectah architect interactive UI."""
 
 from __future__ import annotations
 
@@ -1338,8 +1338,8 @@ from typing import TYPE_CHECKING
 
 import jinja2
 
-from yoinkc.architect.analyzer import LayerTopology
-from yoinkc.architect.export import export_topology
+from inspectah.architect.analyzer import LayerTopology
+from inspectah.architect.export import export_topology
 
 if TYPE_CHECKING:
     pass
@@ -1469,14 +1469,14 @@ def start_server(
 
 - [ ] **Step 4: Create minimal template for tests**
 
-Create `src/yoinkc/templates/architect/architect.html.j2`:
+Create `src/inspectah/templates/architect/architect.html.j2`:
 
 ```jinja2
 <!DOCTYPE html>
 <html lang="en" class="pf-v6-theme-dark">
 <head>
   <meta charset="UTF-8"/>
-  <title>yoinkc Architect</title>
+  <title>inspectah Architect</title>
   <style>{{ patternfly_css }}</style>
   {% include "architect/_css.html.j2" %}
 </head>
@@ -1484,7 +1484,7 @@ Create `src/yoinkc/templates/architect/architect.html.j2`:
   <div class="pf-v6-c-page">
     <header class="pf-v6-c-masthead">
       <div class="pf-v6-c-masthead__main">
-        <span class="pf-v6-c-masthead__brand">yoinkc Architect</span>
+        <span class="pf-v6-c-masthead__brand">inspectah Architect</span>
       </div>
       <div class="pf-v6-c-masthead__content">
         <button id="theme-toggle" class="pf-v6-c-button pf-m-plain">&#9728;</button>
@@ -1503,7 +1503,7 @@ Create `src/yoinkc/templates/architect/architect.html.j2`:
 </html>
 ```
 
-Create `src/yoinkc/templates/architect/_css.html.j2`:
+Create `src/inspectah/templates/architect/_css.html.j2`:
 
 ```jinja2
 <style>
@@ -1511,19 +1511,19 @@ Create `src/yoinkc/templates/architect/_css.html.j2`:
 </style>
 ```
 
-Create `src/yoinkc/templates/architect/_js.html.j2`:
+Create `src/inspectah/templates/architect/_js.html.j2`:
 
 ```jinja2
 <script>
 (function(){
   // Theme toggle
-  var t = localStorage.getItem('yoinkc-architect-theme');
+  var t = localStorage.getItem('inspectah-architect-theme');
   if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark');
   var btn = document.getElementById('theme-toggle');
   if (btn) btn.addEventListener('click', function() {
     var html = document.documentElement;
     html.classList.toggle('pf-v6-theme-dark');
-    localStorage.setItem('yoinkc-architect-theme',
+    localStorage.setItem('inspectah-architect-theme',
       html.classList.contains('pf-v6-theme-dark') ? 'dark' : 'light');
   });
 })();
@@ -1534,10 +1534,10 @@ Create `src/yoinkc/templates/architect/_js.html.j2`:
 
 - [ ] **Step 5: Implement CLI registration**
 
-Create `src/yoinkc/architect/cli.py`:
+Create `src/inspectah/architect/cli.py`:
 
 ```python
-"""CLI registration for yoinkc architect subcommand."""
+"""CLI registration for inspectah architect subcommand."""
 
 from __future__ import annotations
 
@@ -1577,9 +1577,9 @@ def add_architect_args(parser: argparse.ArgumentParser) -> None:
 
 def run_architect(args: argparse.Namespace) -> int:
     """Entry point for the architect subcommand."""
-    from yoinkc.architect.loader import load_refined_fleets
-    from yoinkc.architect.analyzer import analyze_fleets
-    from yoinkc.architect.server import start_server
+    from inspectah.architect.loader import load_refined_fleets
+    from inspectah.architect.analyzer import analyze_fleets
+    from inspectah.architect.server import start_server
 
     input_dir = args.input_dir
     if not input_dir.exists():
@@ -1638,14 +1638,14 @@ def run_architect(args: argparse.Namespace) -> int:
 
 - [ ] **Step 6: Register architect in main CLI**
 
-Read `src/yoinkc/cli.py` and find the `SUBCOMMANDS` tuple and the subparser setup section. Add `"architect"` to `SUBCOMMANDS` and register the subparser. The exact edit depends on the current code structure — find where `fleet` is registered and add `architect` following the same pattern:
+Read `src/inspectah/cli.py` and find the `SUBCOMMANDS` tuple and the subparser setup section. Add `"architect"` to `SUBCOMMANDS` and register the subparser. The exact edit depends on the current code structure — find where `fleet` is registered and add `architect` following the same pattern:
 
 ```python
 # In cli.py, add to SUBCOMMANDS:
 SUBCOMMANDS = ("inspect", "fleet", "refine", "architect")
 
 # In the subparser setup section, add:
-from yoinkc.architect.cli import add_architect_args, run_architect
+from inspectah.architect.cli import add_architect_args, run_architect
 
 architect_parser = subparsers.add_parser("architect", help="Plan layer decomposition from refined fleets")
 add_architect_args(architect_parser)
@@ -1654,20 +1654,20 @@ architect_parser.set_defaults(func=run_architect)
 
 - [ ] **Step 7: Run server tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_server.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_server.py -v`
 Expected: All PASS
 
 - [ ] **Step 8: Run full test suite for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest -v`
 Expected: All tests pass (existing + new)
 
 - [ ] **Step 9: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/architect/cli.py src/yoinkc/architect/server.py \
-        src/yoinkc/templates/architect/ src/yoinkc/cli.py \
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/architect/cli.py src/inspectah/architect/server.py \
+        src/inspectah/templates/architect/ src/inspectah/cli.py \
         tests/test_architect_server.py
 git commit -m "feat(architect): Add HTTP server, CLI registration, and minimal templates
 
@@ -1686,15 +1686,15 @@ Assisted-by: Claude Code (opus)"
 **Context:** The PatternFly 6 web UI with sidebar (fleets), center (layer tree), drawer (packages), click-to-move interaction, and export button. This is the biggest single task.
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/architect.html.j2`
-- Modify: `src/yoinkc/templates/architect/_css.html.j2`
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/architect.html.j2`
+- Modify: `src/inspectah/templates/architect/_css.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
 
 - [ ] **Step 1: Implement the full HTML template**
 
-Replace `src/yoinkc/templates/architect/architect.html.j2` with the complete PatternFly 6 page layout. This is a large template — follow the exact structure from the refine `report.html.j2` for PatternFly class patterns, theme toggle, and masthead. The key sections:
+Replace `src/inspectah/templates/architect/architect.html.j2` with the complete PatternFly 6 page layout. This is a large template — follow the exact structure from the refine `report.html.j2` for PatternFly class patterns, theme toggle, and masthead. The key sections:
 
-- Masthead with "yoinkc Architect" branding and theme toggle
+- Masthead with "inspectah Architect" branding and theme toggle
 - PF6 page body with sidebar, main content, and drawer
 - Sidebar: fleet list rendered from `window.__TOPOLOGY__.fleets`
 - Center: layer tree rendered from `window.__TOPOLOGY__.layers`
@@ -1712,7 +1712,7 @@ The template receives `{{ topology_json }}` and `{{ patternfly_css }}` from the 
 
 - [ ] **Step 2: Implement the CSS**
 
-Replace `src/yoinkc/templates/architect/_css.html.j2` with custom styles. Reference refine's `_css.html.j2` for patterns. Key styles needed:
+Replace `src/inspectah/templates/architect/_css.html.j2` with custom styles. Reference refine's `_css.html.j2` for patterns. Key styles needed:
 
 - Fleet cards in sidebar with colored left borders
 - Layer tree cards with left border accents (red for base, fleet colors for derived)
@@ -1724,7 +1724,7 @@ Replace `src/yoinkc/templates/architect/_css.html.j2` with custom styles. Refere
 
 - [ ] **Step 3: Implement the JavaScript**
 
-Replace `src/yoinkc/templates/architect/_js.html.j2` with the interactive JS. Key functions:
+Replace `src/inspectah/templates/architect/_js.html.j2` with the interactive JS. Key functions:
 
 ```javascript
 // State
@@ -1779,7 +1779,7 @@ render();
 
 - [ ] **Step 4: Verify the server serves the updated templates**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_server.py::TestIndexEndpoint -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_server.py::TestIndexEndpoint -v`
 Expected: PASS (template renders without Jinja2 errors)
 
 - [ ] **Step 5: Manual verification**
@@ -1787,7 +1787,7 @@ Expected: PASS (template renders without Jinja2 errors)
 Prepare test data and launch the server manually to verify the UI. This creates mock refined fleet tarballs directly (bypassing the full driftify → inspect → fleet → refine pipeline):
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 
 # Generate mock refined fleet tarballs
 python -c "
@@ -1820,7 +1820,7 @@ print(f'Created {len(fleets)} mock fleet tarballs in {out}')
 "
 
 # Launch architect
-python -m yoinkc architect /tmp/architect-test --no-browser
+python -m inspectah architect /tmp/architect-test --no-browser
 # Open http://localhost:8643 manually and verify:
 # - Three fleets show in sidebar
 # - Base layer has ~25 shared packages
@@ -1832,8 +1832,8 @@ python -m yoinkc architect /tmp/architect-test --no-browser
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/templates/architect/
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/templates/architect/
 git commit -m "feat(architect): Add interactive PatternFly 6 web UI
 
 Three-column layout: fleet sidebar, layer topology tree, package drawer.
@@ -1866,9 +1866,9 @@ import tarfile
 import pytest
 from pathlib import Path
 
-from yoinkc.architect.loader import load_refined_fleets
-from yoinkc.architect.analyzer import analyze_fleets
-from yoinkc.architect.export import export_topology
+from inspectah.architect.loader import load_refined_fleets
+from inspectah.architect.analyzer import analyze_fleets
+from inspectah.architect.export import export_topology
 
 
 @pytest.fixture()
@@ -1963,18 +1963,18 @@ class TestEndToEnd:
 
 - [ ] **Step 2: Run integration test**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_integration.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_integration.py -v`
 Expected: All PASS
 
 - [ ] **Step 3: Run full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest -v`
 Expected: All tests pass
 
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 git add tests/test_architect_integration.py
 git commit -m "test(architect): Add end-to-end integration test
 
@@ -1994,12 +1994,12 @@ Assisted-by: Claude Code (opus)"
 | # | Task | Repo | Days | Risk |
 |---|------|------|------|------|
 | 1 | Driftify multi-fleet fixtures | driftify | 0.5 | Low |
-| 2 | Analyzer + data model | yoinkc | 1 | Low |
-| 3 | Loader | yoinkc | 0.5 | Low |
-| 4 | Export | yoinkc | 0.5 | Low |
-| 5 | Server + CLI | yoinkc | 1.5 | Medium |
-| 6 | Interactive frontend | yoinkc | 3-4 | **High** |
-| 7 | Integration test | yoinkc | 0.5 | Low |
+| 2 | Analyzer + data model | inspectah | 1 | Low |
+| 3 | Loader | inspectah | 0.5 | Low |
+| 4 | Export | inspectah | 0.5 | Low |
+| 5 | Server + CLI | inspectah | 1.5 | Medium |
+| 6 | Interactive frontend | inspectah | 3-4 | **High** |
+| 7 | Integration test | inspectah | 0.5 | Low |
 
 **Total: ~8 days.** Task 6 (frontend) is the riskiest and largest — if time gets tight, the click-to-move interaction can be simplified to a basic dropdown without tooltips.
 

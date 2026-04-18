@@ -18,10 +18,10 @@ The summary tab has three issues:
 ## Scope
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_summary.html.j2` — full rewrite
-- Modify: `src/yoinkc/templates/report/_css.html.j2` — remove custom
+- Modify: `src/inspectah/templates/report/_summary.html.j2` — full rewrite
+- Modify: `src/inspectah/templates/report/_css.html.j2` — remove custom
   summary classes
-- Modify: `src/yoinkc/renderers/html_report.py` — add `variant_summary`
+- Modify: `src/inspectah/renderers/html_report.py` — add `variant_summary`
   to template context
 
 ### Out of scope
@@ -137,16 +137,16 @@ Full-width `pf-v6-c-card` at the bottom. Three ordered steps:
 
 1. **Review** — "Check the Audit report tab for warnings and review
    any FIXME comments in the generated Containerfile."
-2. **Refine** (optional) — "Use `yoinkc-refine` to interactively
+2. **Refine** (optional) — "Use `inspectah-refine` to interactively
    toggle package and config inclusions, then re-render the
    Containerfile."
-   - Single host: `./yoinkc-refine hostname-*.tar.gz`
-   - Fleet: `./yoinkc-refine fleet-*.tar.gz`
+   - Single host: `./inspectah-refine hostname-*.tar.gz`
+   - Fleet: `./inspectah-refine fleet-*.tar.gz`
    - Template uses `{% if fleet_meta %}` to show the appropriate
      command.
 3. **Build** — "Build your bootc image from the generated tarball."
-   - Single host: `./yoinkc-build hostname-*.tar.gz my-image:latest`
-   - Fleet: `./yoinkc-build fleet-*.tar.gz my-image:latest`
+   - Single host: `./inspectah-build hostname-*.tar.gz my-image:latest`
+   - Fleet: `./inspectah-build fleet-*.tar.gz my-image:latest`
    - Same conditional for the command.
 
 Rendered as an ordered list inside the card body. Code snippets use

@@ -68,11 +68,11 @@ dashboard grid layout.
   `prevalenceInclude()` to determine which items meet the current threshold
 - No `data-prevalence` DOM attributes are involved — all prevalence data lives
   in the `snapshot` object already available to JS at render time
-- This is an approximation — it won't match `src/yoinkc/renderers/_triage.py` exactly (misses
+- This is an approximation — it won't match `src/inspectah/renderers/_triage.py` exactly (misses
   Containerfile FIXME counts, for example)
 - Cards should signal this is a preview (e.g., counts update smoothly but the
   Re-render button is the "commit" action)
-- **Backlog item:** Full client-side reimplementation of `src/yoinkc/renderers/_triage.py`
+- **Backlog item:** Full client-side reimplementation of `src/inspectah/renderers/_triage.py`
   logic for exact parity. Low priority, post-talk.
 
 **Single-host mode:**
@@ -142,7 +142,7 @@ appropriate background token.
 
 **Hardcoded `rgba()` values:**
 - `.diff-line-add` and `.diff-line-remove` — replace with theme-aware custom
-  properties (e.g., `--yoinkc-diff-add-bg`, `--yoinkc-diff-remove-bg`) that
+  properties (e.g., `--inspectah-diff-add-bg`, `--inspectah-diff-remove-bg`) that
   resolve differently in light vs dark mode. Current hardcoded values (`#c9190b`
   for remove, `#4dabf7` for add) must map to theme-aware tokens.
 - Fleet bar segment colors — same treatment.
@@ -167,8 +167,8 @@ extraction. Priority order:
 
 **Magic number elimination:**
 Replace hardcoded dimension values with CSS custom properties:
-- `padding-bottom: 5rem` → `var(--yoinkc-content-bottom-padding)`
-- `calc(100vh - 200px)` → `var(--yoinkc-content-max-height)`
+- `padding-bottom: 5rem` → `var(--inspectah-content-bottom-padding)`
+- `calc(100vh - 200px)` → `var(--inspectah-content-max-height)`
 - Other one-off values as discovered during the sweep
 
 ### 5. Polish
@@ -176,7 +176,7 @@ Replace hardcoded dimension values with CSS custom properties:
 These are nice-to-have items that elevate quality if time permits, ranked by
 priority (highest first):
 
-1. **Masthead branding:** Update text to "yoinkc Refine" with the shared
+1. **Masthead branding:** Update text to "inspectah Refine" with the shared
    typography spec (`1.125rem`, `700`, `0.03em`) — visible immediately on load
 2. **Warning dismiss transition:** 150ms `ease-out` opacity+height fade instead
    of instant `display:none`
@@ -206,7 +206,7 @@ Items explicitly deferred past April 8:
   migration.
 - **Editor polish pass.** Dedicated spec for CodeMirror integration, drawer
   behavior, and theme consistency in the file editor.
-- **Full client-side triage parity.** Reimplement `src/yoinkc/renderers/_triage.py` logic in JS so
+- **Full client-side triage parity.** Reimplement `src/inspectah/renderers/_triage.py` logic in JS so
   prevalence slider updates are exact, not approximations. Eliminates the need
   for Re-render entirely.
 - **Fleet split button migration.** Replace custom fleet split button with PF6
@@ -228,30 +228,30 @@ Suggested sequence to maximize visual impact early and reduce rework:
 ## Files Affected
 
 **Primary targets (heavy changes):**
-- `src/yoinkc/templates/report/_css.html.j2` — token sweep, hex audit, new classes
-- `src/yoinkc/templates/report/_summary.html.j2` — complete redesign
-- `src/yoinkc/templates/report/_js.html.j2` — prevalence slider logic, live update JS
-- `src/yoinkc/templates/report/_toolbar.html.j2` — remove prevalence slider
-- `src/yoinkc/templates/report/_sidebar.html.j2` — badge upgrades, inline style extraction
+- `src/inspectah/templates/report/_css.html.j2` — token sweep, hex audit, new classes
+- `src/inspectah/templates/report/_summary.html.j2` — complete redesign
+- `src/inspectah/templates/report/_js.html.j2` — prevalence slider logic, live update JS
+- `src/inspectah/templates/report/_toolbar.html.j2` — remove prevalence slider
+- `src/inspectah/templates/report/_sidebar.html.j2` — badge upgrades, inline style extraction
 
 **Secondary targets (moderate changes):**
-- `src/yoinkc/templates/report/_banner.html.j2` — inline style extraction
-- `src/yoinkc/templates/report/_warnings.html.j2` — dismiss animation
-- `src/yoinkc/templates/report/_macros.html.j2` — badge/spinner macro updates
-- `src/yoinkc/templates/report.html.j2` — masthead branding
+- `src/inspectah/templates/report/_banner.html.j2` — inline style extraction
+- `src/inspectah/templates/report/_warnings.html.j2` — dismiss animation
+- `src/inspectah/templates/report/_macros.html.j2` — badge/spinner macro updates
+- `src/inspectah/templates/report.html.j2` — masthead branding
 
 **Light touch (token fixes only):**
-- `src/yoinkc/templates/report/_packages.html.j2`
-- `src/yoinkc/templates/report/_services.html.j2`
-- `src/yoinkc/templates/report/_config.html.j2`
-- `src/yoinkc/templates/report/_containers.html.j2`
-- `src/yoinkc/templates/report/_module_streams.html.j2`
-- `src/yoinkc/templates/report/_version_locks.html.j2`
-- `src/yoinkc/templates/report/_audit_report.html.j2`
-- `src/yoinkc/templates/report/_compare_modal.html.j2`
-- `src/yoinkc/templates/report/_new_file_modal.html.j2`
-- `src/yoinkc/templates/report/_file_browser.html.j2` — theme-breaking colors only
-- `src/yoinkc/templates/report/_editor.html.j2` — theme-breaking colors only
+- `src/inspectah/templates/report/_packages.html.j2`
+- `src/inspectah/templates/report/_services.html.j2`
+- `src/inspectah/templates/report/_config.html.j2`
+- `src/inspectah/templates/report/_containers.html.j2`
+- `src/inspectah/templates/report/_module_streams.html.j2`
+- `src/inspectah/templates/report/_version_locks.html.j2`
+- `src/inspectah/templates/report/_audit_report.html.j2`
+- `src/inspectah/templates/report/_compare_modal.html.j2`
+- `src/inspectah/templates/report/_new_file_modal.html.j2`
+- `src/inspectah/templates/report/_file_browser.html.j2` — theme-breaking colors only
+- `src/inspectah/templates/report/_editor.html.j2` — theme-breaking colors only
 
 ## Testing
 

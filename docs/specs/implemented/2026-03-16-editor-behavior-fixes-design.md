@@ -30,7 +30,7 @@ to Python code, rendering pipeline, or snapshot schema.
 
 ## Fix 1: Revert exits edit mode
 
-**File:** `src/yoinkc/templates/report/_editor_js.html.j2`
+**File:** `src/inspectah/templates/report/_editor_js.html.j2`
 **Function:** `editorRevert()` (lines ~248-268)
 
 Current behavior:
@@ -56,7 +56,7 @@ the user wants to edit again from clean, they click Edit.
 
 ## Fix 2: File list ordering and path display
 
-**File:** `src/yoinkc/templates/report/_editor_js.html.j2`
+**File:** `src/inspectah/templates/report/_editor_js.html.j2`
 **Function:** `buildTree()` (lines ~12-58)
 
 ### Category order
@@ -93,7 +93,7 @@ Implementation:
 
 ## Fix 3: Re-render button activation
 
-**File:** `src/yoinkc/templates/report/_editor_js.html.j2`
+**File:** `src/inspectah/templates/report/_editor_js.html.j2`
 **Function:** `updateChangedCount()` (lines ~389-392)
 
 Current behavior:

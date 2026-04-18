@@ -10,7 +10,7 @@ Eliminate the re-render cycle for previewing Containerfile changes. When the use
 
 ## Context
 
-Currently, every include/exclude toggle requires clicking Re-render, which spawns a full subprocess (`yoinkc inspect --from-snapshot`), rebuilds all 6 output artifacts, replaces the entire page via `document.write()`, and takes 1-3 seconds. This breaks flow for iterative decisions.
+Currently, every include/exclude toggle requires clicking Re-render, which spawns a full subprocess (`inspectah inspect --from-snapshot`), rebuilds all 6 output artifacts, replaces the entire page via `document.write()`, and takes 1-3 seconds. This breaks flow for iterative decisions.
 
 The snapshot object is already in `window.snapshot` as a JS object. The Containerfile is displayed in a plain `<pre id="containerfile-pre">` block with no syntax highlighting. All the data needed to generate a preview is already client-side.
 
@@ -160,10 +160,10 @@ The audit report's **detail tables** are NOT live-previewed — they stay server
 
 ## Files to Modify
 
-- `src/yoinkc/templates/report/_js.html.j2` — add `generateContainerfilePreview()`, hook into events; remove Copy-to-clipboard logic for the Containerfile tab
-- `src/yoinkc/templates/report/_containerfile.html.j2` — add preview helper line above `#containerfile-pre` (exact copy per spec); remove Copy button (`#btn-copy-cf`)
-- `src/yoinkc/templates/report/_toolbar.html.j2` — rename Re-render, remove Download Tarball; drop `.btn-copy-cf` styling if it becomes unused
-- `src/yoinkc/templates/report/_css.html.j2` — confirmation dialog styling (if needed)
+- `src/inspectah/templates/report/_js.html.j2` — add `generateContainerfilePreview()`, hook into events; remove Copy-to-clipboard logic for the Containerfile tab
+- `src/inspectah/templates/report/_containerfile.html.j2` — add preview helper line above `#containerfile-pre` (exact copy per spec); remove Copy button (`#btn-copy-cf`)
+- `src/inspectah/templates/report/_toolbar.html.j2` — rename Re-render, remove Download Tarball; drop `.btn-copy-cf` styling if it becomes unused
+- `src/inspectah/templates/report/_css.html.j2` — confirmation dialog styling (if needed)
 - `tests/e2e/tests/re-render-cycle.spec.ts` — update for new button labels and behavior
 - New or extended E2E tests for live preview behavior and no Copy control on Containerfile tab
 

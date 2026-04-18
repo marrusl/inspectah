@@ -1,6 +1,6 @@
 # Architecture
 
-This document covers yoinkc internals: inspectors, renderers, baseline subtraction, Containerfile layer ordering, and build cert handling. For usage, see the [README](../../README.md). For the full technical design, see [design.md](../../design.md).
+This document covers inspectah internals: inspectors, renderers, baseline subtraction, Containerfile layer ordering, and build cert handling. For usage, see the [README](../../README.md). For the full technical design, see [design.md](../../design.md).
 
 ## Overview
 
@@ -11,10 +11,10 @@ A core design principle is **baseline subtraction**: wherever possible, the tool
 
 Three subcommands and one companion tool complete the workflow:
 
-- **`yoinkc refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
-- **`yoinkc fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
-- **`yoinkc architect`** takes multiple refined fleets and proposes a layered image topology (base + derived layers), with an interactive web UI for adjusting the decomposition.
-- **`yoinkc-build`** builds a bootc container image from yoinkc output, with automatic RHEL subscription cert handling.
+- **`inspectah refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
+- **`inspectah fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
+- **`inspectah architect`** takes multiple refined fleets and proposes a layered image topology (base + derived layers), with an interactive web UI for adjusting the decomposition.
+- **`inspectah-build`** builds a bootc container image from inspectah output, with automatic RHEL subscription cert handling.
 
 ## Refine UI Internals
 
@@ -22,7 +22,7 @@ Every inspected item (packages, config files, services, repos, etc.) has an incl
 
 ## Build Cert Handling
 
-For RHEL base images (`registry.redhat.io`), `yoinkc-build` searches for subscription certificates in this order: bundled in the yoinkc output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `YOINKC_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, cert access is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
+For RHEL base images (`registry.redhat.io`), `inspectah-build` searches for subscription certificates in this order: bundled in the inspectah output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `INSPECTAH_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, cert access is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
 
 ## Fleet Report Features
 
@@ -164,7 +164,7 @@ The tool generates a package baseline by querying the target **bootc base image*
 
 **Source/target version separation:** The source host (what you're inspecting) and the target image (your Containerfile's FROM line) can differ. A RHEL 9.4 host auto-targets `rhel-bootc:9.6` (the minimum bootc release). Override with `--target-version 9.8` or `--target-image` for full control. Cross-major-version migrations (e.g. RHEL 9 to 10) produce a prominent warning since package names, services, and config formats may differ.
 
-**RHEL registry authentication:** RHEL base images on `registry.redhat.io` require authentication. The tool checks for credentials before attempting to pull and will exit with instructions if credentials are missing. Run `sudo podman login registry.redhat.io` on the host before running yoinkc, or use `--baseline-packages FILE` as an alternative. CentOS Stream and Fedora images are on public registries and need no authentication.
+**RHEL registry authentication:** RHEL base images on `registry.redhat.io` require authentication. The tool checks for credentials before attempting to pull and will exit with instructions if credentials are missing. Run `sudo podman login registry.redhat.io` on the host before running inspectah, or use `--baseline-packages FILE` as an alternative. CentOS Stream and Fedora images are on public registries and need no authentication.
 
 When running inside a container, the tool uses `nsenter` to execute `podman` in the host's namespaces. This requires `sudo`, `--pid=host`, and `--privileged` on the outer container. Before attempting `nsenter`, the tool runs a fast probe to detect rootless containers and missing capabilities, and provides specific guidance if the probe fails.
 
@@ -181,7 +181,7 @@ The resolved baseline (including the base image package list) is cached in the i
 The pre-built image is published to GHCR on every push to `main`:
 
 ```
-ghcr.io/marrusl/yoinkc:latest
+ghcr.io/marrusl/inspectah:latest
 ```
 
 Multi-arch (amd64 + arm64). To run it directly without the wrapper script:
@@ -194,13 +194,13 @@ sudo podman run --rm \
   -w /output \
   -v /:/host:ro \
   -v "$(pwd):/output" \
-  ghcr.io/marrusl/yoinkc:latest
+  ghcr.io/marrusl/inspectah:latest
 ```
 
 To build locally:
 
 ```bash
-podman build -t yoinkc .
+podman build -t inspectah .
 ```
 
 **Required flags:**

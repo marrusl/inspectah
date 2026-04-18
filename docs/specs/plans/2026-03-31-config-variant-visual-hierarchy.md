@@ -15,7 +15,7 @@
 ### Task 1: Auto-Selected Badge CSS + Chevron CSS
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_css.html.j2`
+- Modify: `src/inspectah/templates/report/_css.html.j2`
 
 - [ ] **Step 1: Add auto-selected badge CSS**
 
@@ -68,7 +68,7 @@ Expected: all tests pass (no functional changes yet, just CSS).
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_css.html.j2
+git add src/inspectah/templates/report/_css.html.j2
 git commit -m "feat(refine): Add auto-selected badge and chevron CSS
 
 Tier 2 info-blue badge for auto-selected variant groups.
@@ -82,7 +82,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 2: Template Changes — Badge + Chevron Rendering
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_config.html.j2`
+- Modify: `src/inspectah/templates/report/_config.html.j2`
 
 Before making changes, read the file to understand the current structure. Key elements:
 - Line ~16: `.fleet-variant-group` parent row with `.variant-tied` class for ties
@@ -127,7 +127,7 @@ uv run --extra dev pytest -q
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_config.html.j2
+git add src/inspectah/templates/report/_config.html.j2
 git commit -m "feat(refine): Render auto-selected badge and aria-expanded on variant groups
 
 Show 'N variants · auto-selected' badge on non-tied variant groups.
@@ -141,7 +141,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 3: JS — Chevron Toggle + Tie Pre-Expansion
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Update the variant toggle click handler**
 
@@ -200,7 +200,7 @@ uv run --extra dev pytest -q
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(refine): Add chevron toggle behavior and pre-expand tied groups
 
 Toggle .expanded class and aria-expanded on variant expand/collapse.
@@ -215,7 +215,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 4: Renderer Verification
 
 **Files:**
-- Read only: `src/yoinkc/renderers/html_report.py`
+- Read only: `src/inspectah/renderers/html_report.py`
 
 This is a verification task, not a code change. The spec requires confirming the renderer provides correct variant state.
 
@@ -233,7 +233,7 @@ Confirm:
 Start refine on the fleet fixture and test:
 ```bash
 uv run python tests/e2e/generate-fixtures.py
-uv run yoinkc refine tests/e2e/fixtures/fleet-3host.tar.gz --no-browser --port 9200 &
+uv run inspectah refine tests/e2e/fixtures/fleet-3host.tar.gz --no-browser --port 9200 &
 ```
 
 Open http://localhost:9200, make a change, re-render, verify that:
@@ -253,7 +253,7 @@ If any issues found, report as BLOCKED with specifics.
 ### Task 5: Revert Tie Styling to Gold
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_css.html.j2`
+- Modify: `src/inspectah/templates/report/_css.html.j2`
 
 The UI overhaul changed tie styling from gold (`#cc8800`) to red/danger (`#c9190b`). The spec requires reverting to gold.
 
@@ -310,7 +310,7 @@ Some tests may reference specific colors or badge text — update assertions if 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_css.html.j2 src/yoinkc/templates/report/_config.html.j2 src/yoinkc/templates/report/_summary.html.j2
+git add src/inspectah/templates/report/_css.html.j2 src/inspectah/templates/report/_config.html.j2 src/inspectah/templates/report/_summary.html.j2
 git commit -m "fix(refine): Revert tie styling from red to gold
 
 Ties are decision points, not errors. Gold (#cc8800) matches the

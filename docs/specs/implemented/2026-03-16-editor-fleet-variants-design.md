@@ -25,7 +25,7 @@ All changes in `_editor_js.html.j2` (client-side JS). No Python, schema,
 or rendering pipeline changes.
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_editor_js.html.j2` — rewrite
+- Modify: `src/inspectah/templates/report/_editor_js.html.j2` — rewrite
   `buildTree()`, update `doSelectFile()` for variant-aware behavior
 
 ### Out of scope

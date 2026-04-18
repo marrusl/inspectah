@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Expand `yoinkc architect` from package-only decomposition to full multi-artifact decomposition covering packages, configs, services, firewall zones, quadlets, users/groups, and sysctls. 7-tab drawer UI with move/copy, tied-change semantics, and export via renderer adapter.
+**Goal:** Expand `inspectah architect` from package-only decomposition to full multi-artifact decomposition covering packages, configs, services, firewall zones, quadlets, users/groups, and sysctls. 7-tab drawer UI with move/copy, tied-change semantics, and export via renderer adapter.
 
 **Spec:** `docs/specs/proposed/2026-04-07-architect-v2-multi-artifact-design.md`
 
 **UX Spec:** Review file at `marks-inbox/reviews/2026-04-07-architect-v2-ux-spec.md` (5-tab recommendation superseded by spec's 7-tab design)
 
-**Project conventions:** `AGENTS.md` at workspace root. Conventional commits, `Assisted-by:` attribution, TDD, no AI slop. Two separate git repos: `yoinkc/` and `driftify/`.
+**Project conventions:** `AGENTS.md` at workspace root. Conventional commits, `Assisted-by:` attribution, TDD, no AI slop. Two separate git repos: `inspectah/` and `driftify/`.
 
 ---
 
@@ -21,19 +21,19 @@
 | Modify | `driftify/driftify.py` | Expand architect fixture profiles with multi-artifact data |
 | Modify | `driftify/tests/test_multi_fleet.py` | Tests for expanded fixture data |
 
-### Yoinkc (repo: `yoinkc/`)
+### Inspectah (repo: `inspectah/`)
 
 | Action | File | Responsibility |
 |--------|------|----------------|
-| Modify | `src/yoinkc/inspectors/config.py` | Add `rpm -qf` enrichment on main path |
-| Modify | `src/yoinkc/architect/analyzer.py` | Input dataclasses, Layer expansion, decomposition rules, move/copy, variant detection, export class |
-| Modify | `src/yoinkc/architect/loader.py` | Extract all 6 artifact types from snapshots, build `fleet_tarball_paths` |
-| Modify | `src/yoinkc/architect/server.py` | Generalize handlers, expand API, serve new tabs |
-| Modify | `src/yoinkc/architect/export.py` | Delegate to render adapter instead of inline rendering |
-| Create | `src/yoinkc/architect/render_adapter.py` | Adapter layer between architect and `renderers/containerfile/` |
-| Modify | `src/yoinkc/templates/architect/architect.html.j2` | 7-tab drawer structure, confirmation strip, reverse prompt |
-| Modify | `src/yoinkc/templates/architect/_js.html.j2` | Tab switching, panel renderers, tied-change UI, related indicators |
-| Modify | `src/yoinkc/templates/architect/_css.html.j2` | Tab styles, badge styles, confirmation strip, highlight-fade |
+| Modify | `src/inspectah/inspectors/config.py` | Add `rpm -qf` enrichment on main path |
+| Modify | `src/inspectah/architect/analyzer.py` | Input dataclasses, Layer expansion, decomposition rules, move/copy, variant detection, export class |
+| Modify | `src/inspectah/architect/loader.py` | Extract all 6 artifact types from snapshots, build `fleet_tarball_paths` |
+| Modify | `src/inspectah/architect/server.py` | Generalize handlers, expand API, serve new tabs |
+| Modify | `src/inspectah/architect/export.py` | Delegate to render adapter instead of inline rendering |
+| Create | `src/inspectah/architect/render_adapter.py` | Adapter layer between architect and `renderers/containerfile/` |
+| Modify | `src/inspectah/templates/architect/architect.html.j2` | 7-tab drawer structure, confirmation strip, reverse prompt |
+| Modify | `src/inspectah/templates/architect/_js.html.j2` | Tab switching, panel renderers, tied-change UI, related indicators |
+| Modify | `src/inspectah/templates/architect/_css.html.j2` | Tab styles, badge styles, confirmation strip, highlight-fade |
 | Create | `tests/architect/test_multi_artifact.py` | Decomposition, variant detection, export class tests |
 | Create | `tests/architect/test_move_copy.py` | Move/copy for all types, tied changes, dependents |
 | Create | `tests/architect/test_render_adapter.py` | Adapter contract tests |
@@ -62,7 +62,7 @@ Before reading the tasks, understand the baseline:
 The `ConfigFileEntry.package` field is only populated when `--config-diffs` is enabled. Architect v2 needs this field always populated for RPM-owned-modified configs so the parent-follows decomposition rule works.
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/config.py`
+- Modify: `src/inspectah/inspectors/config.py`
 
 - [ ] **Step 1: Move `rpm -qf` lookup to the main code path**
 
@@ -187,7 +187,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 1.1: Add input dataclasses to `analyzer.py`
 
 **Files:**
-- Modify: `src/yoinkc/architect/analyzer.py`
+- Modify: `src/inspectah/architect/analyzer.py`
 
 - [ ] **Step 1: Add 6 new input dataclasses**
 
@@ -256,7 +256,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 1.2: Expand `FleetInput` and `Layer` dataclasses
 
 **Files:**
-- Modify: `src/yoinkc/architect/analyzer.py`
+- Modify: `src/inspectah/architect/analyzer.py`
 
 - [ ] **Step 1: Expand `FleetInput`**
 
@@ -339,7 +339,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 1.3: Update `analyze_fleets()` with multi-artifact decomposition
 
 **Files:**
-- Modify: `src/yoinkc/architect/analyzer.py`
+- Modify: `src/inspectah/architect/analyzer.py`
 
 - [ ] **Step 1: Add parent-follows decomposition for owned artifacts**
 
@@ -504,7 +504,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 1.4: Expand `_snapshot_to_fleet_input()` in `loader.py`
 
 **Files:**
-- Modify: `src/yoinkc/architect/loader.py`
+- Modify: `src/inspectah/architect/loader.py`
 
 - [ ] **Step 1: Extract all 6 artifact types from snapshot JSON**
 
@@ -659,7 +659,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 
   Add imports for the new dataclasses:
   ```python
-  from yoinkc.architect.analyzer import (
+  from inspectah.architect.analyzer import (
       FleetInput, ConfigInput, ServiceInput, FirewallInput,
       QuadletInput, UserGroupInput, SysctlInput,
   )
@@ -676,7 +676,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 1.5: Expand `LayerTopology.to_dict()` for multi-artifact JSON
 
 **Files:**
-- Modify: `src/yoinkc/architect/analyzer.py`
+- Modify: `src/inspectah/architect/analyzer.py`
 
 - [ ] **Step 1: Expand `to_dict()` to serialize all artifact types with badge fields**
 
@@ -779,8 +779,8 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 1.6: Update `cli.py` and `server.py` for loader return type change
 
 **Files:**
-- Modify: `src/yoinkc/architect/cli.py` (primary call site for `load_refined_fleets()`)
-- Modify: `src/yoinkc/architect/server.py` (rename handler, Phase 1 restrictions)
+- Modify: `src/inspectah/architect/cli.py` (primary call site for `load_refined_fleets()`)
+- Modify: `src/inspectah/architect/server.py` (rename handler, Phase 1 restrictions)
 
 - [ ] **Step 1: Update loader call site in `cli.py`**
 
@@ -831,9 +831,9 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 1.7: Add 7-tab drawer UI (read-only)
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/architect.html.j2`
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
-- Modify: `src/yoinkc/templates/architect/_css.html.j2`
+- Modify: `src/inspectah/templates/architect/architect.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_css.html.j2`
 
 - [ ] **Step 1: Add tab bar HTML structure**
 
@@ -995,7 +995,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 2.1: Implement `move_artifact()` and `copy_artifact()` on `LayerTopology`
 
 **Files:**
-- Modify: `src/yoinkc/architect/analyzer.py`
+- Modify: `src/inspectah/architect/analyzer.py`
 
 - [ ] **Step 1: Add `move_artifact()` method**
 
@@ -1138,7 +1138,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 2.2: Update server API for multi-type operations
 
 **Files:**
-- Modify: `src/yoinkc/architect/server.py`
+- Modify: `src/inspectah/architect/server.py`
 
 - [ ] **Step 1: Expand `_handle_artifact_operation()` for Phase 2 types**
 
@@ -1199,7 +1199,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 2.3: Enable move/copy buttons on independent-type tabs
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
 
 - [ ] **Step 1: Add move/copy UI to independent-type panels**
 
@@ -1243,13 +1243,13 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 2.4: Create render adapter (`render_adapter.py`)
 
 **Files:**
-- Create: `src/yoinkc/architect/render_adapter.py`
+- Create: `src/inspectah/architect/render_adapter.py`
 
 - [ ] **Step 1: Implement `LayerRenderInput` dataclass**
 
   ```python
   from dataclasses import dataclass, field
-  from yoinkc.architect.analyzer import (
+  from inspectah.architect.analyzer import (
       Layer, ConfigInput, ServiceInput, QuadletInput,
   )
 
@@ -1356,7 +1356,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 - [ ] **Step 4: Implement `render_layer_containerfile()` using existing renderer modules**
 
   ```python
-  from yoinkc.renderers.containerfile import (
+  from inspectah.renderers.containerfile import (
       packages, services, config, containers,
   )
 
@@ -1441,7 +1441,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
       # Users/groups: display-only, NO output
   ```
 
-  **Key difference from previous version:** The renderer modules (`packages.section_lines()`, `services.section_lines()`, `containers.section_lines()`) do the actual Containerfile generation. The adapter only builds the snapshot shim and emits advisory comments. This prevents renderer drift between architect export and the main yoinkc rendering path.
+  **Key difference from previous version:** The renderer modules (`packages.section_lines()`, `services.section_lines()`, `containers.section_lines()`) do the actual Containerfile generation. The adapter only builds the snapshot shim and emits advisory comments. This prevents renderer drift between architect export and the main inspectah rendering path.
 
   **Implementation note:** `_shim_to_snapshot()` needs to construct a minimal `InspectionSnapshot` from the dict. The exact shape depends on which fields each `section_lines()` function actually accesses — read each renderer module to determine the minimum viable shim. Some modules may need additional fields (e.g., `packages.section_lines()` takes extra kwargs like `c_ext_pip` and `needs_multistage` — for architect export, these default to empty/False since we're only handling RPM packages).
 
@@ -1490,12 +1490,12 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 ### Task 2.5: Update `export.py` to use render adapter
 
 **Files:**
-- Modify: `src/yoinkc/architect/export.py`
+- Modify: `src/inspectah/architect/export.py`
 
 - [ ] **Step 1: Replace inline rendering with adapter calls**
 
   ```python
-  from yoinkc.architect.render_adapter import render_layer_containerfile, stage_layer_files
+  from inspectah.architect.render_adapter import render_layer_containerfile, stage_layer_files
 
   def export_topology(topo: LayerTopology, base_image: str) -> bytes:
       buf = io.BytesIO()
@@ -1527,7 +1527,7 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 
   ```python
   # In do_GET, preview handler:
-  from yoinkc.architect.render_adapter import render_layer_containerfile
+  from inspectah.architect.render_adapter import render_layer_containerfile
   content = render_layer_containerfile(layer, layer.parent, self._base_image)
   ```
 
@@ -1571,12 +1571,12 @@ The existing architect fixtures (e.g., "three-role-overlap") only have packages 
 
 ### Cross-Repo Fixture/Provenance Gate (before Phase 2 export tasks)
 
-Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the driftify→yoinkc fixture contract is sound end-to-end. Export correctness depends on the provenance chain working — this gate must pass before any export code is written.
+Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the driftify→inspectah fixture contract is sound end-to-end. Export correctness depends on the provenance chain working — this gate must pass before any export code is written.
 
 - [ ] **Gate 1: Tarball member layout matches `source_ref` assumptions.** For each driftify fixture tarball, verify that config files live at `config/{path}` and quadlet files live at `quadlet/{name}` — matching the `source_ref` format the loader populates.
 - [ ] **Gate 2: One config round-trip.** Generate a fixture with a modified RPM-owned config → load via `load_refined_fleets()` → verify `ConfigInput.source_fleet` and `source_ref` are populated → call `stage_layer_files()` → verify the staged file matches the original fixture content byte-for-byte.
 - [ ] **Gate 3: One quadlet round-trip.** Same as Gate 2 but for a quadlet unit file.
-- [ ] **Gate 4: Fixture ownership decision.** Driftify tarballs are the canonical source — yoinkc consumes them directly via `load_refined_fleets()`. No separate `tests/e2e/generate-fixtures.py` is needed. If a fixture translation step is ever required, it becomes a concrete task at that time.
+- [ ] **Gate 4: Fixture ownership decision.** Driftify tarballs are the canonical source — inspectah consumes them directly via `load_refined_fleets()`. No separate `tests/e2e/generate-fixtures.py` is needed. If a fixture translation step is ever required, it becomes a concrete task at that time.
 
 **Commit:** `test(architect): verify driftify fixture provenance round-trip`
 
@@ -1591,8 +1591,8 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 3.1: Enable package and owned-artifact moves WITH tied-change validation
 
 **Files:**
-- Modify: `src/yoinkc/architect/server.py`
-- Modify: `src/yoinkc/architect/analyzer.py` (add dependent validation)
+- Modify: `src/inspectah/architect/server.py`
+- Modify: `src/inspectah/architect/analyzer.py` (add dependent validation)
 
 **IMPORTANT:** Phase 2 restrictions on package/RPM-owned-config/owned-service moves stay in place until this task is COMPLETE — meaning the tied-change validation, confirmation strip UI, and reverse prompt all land together. Do NOT remove restrictions in a separate commit before the UX and validation exist.
 
@@ -1672,7 +1672,7 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 3.2: Build `pkgDependents` index in frontend
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
 
 - [ ] **Step 1: Build dependents index from topology data**
 
@@ -1736,8 +1736,8 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 3.3: Implement confirmation strip (package move)
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
-- Modify: `src/yoinkc/templates/architect/_css.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_css.html.j2`
 
 - [ ] **Step 1: Replace immediate move with confirmation flow**
 
@@ -1842,8 +1842,8 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 3.4: Implement reverse prompt (config/service move)
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
-- Modify: `src/yoinkc/templates/architect/_css.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_css.html.j2`
 
 - [ ] **Step 1: Add reverse prompt for RPM-owned config move**
 
@@ -2034,8 +2034,8 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 4.1: Add related-artifacts indicator on package rows
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
-- Modify: `src/yoinkc/templates/architect/_css.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_css.html.j2`
 
 - [ ] **Step 1: Add related indicator to package rows**
 
@@ -2098,8 +2098,8 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 4.2: Implement highlight-fade animation
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
-- Modify: `src/yoinkc/templates/architect/_css.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_css.html.j2`
 
 - [ ] **Step 1: Add highlight class and animation**
 
@@ -2142,7 +2142,7 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 4.3: Add keyboard navigation
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
 
 - [ ] **Step 1: Tab switching with arrow keys**
 
@@ -2190,8 +2190,8 @@ Before starting Task 2.4 (render adapter) and Task 2.5 (export), verify the drif
 ### Task 4.4: Polish and cleanup
 
 **Files:**
-- Modify: `src/yoinkc/templates/architect/_css.html.j2`
-- Modify: `src/yoinkc/templates/architect/_js.html.j2`
+- Modify: `src/inspectah/templates/architect/_css.html.j2`
+- Modify: `src/inspectah/templates/architect/_js.html.j2`
 
 - [ ] **Step 1: Add "Back to [tab]" breadcrumb**
 

@@ -10,7 +10,7 @@ Generate a plain-English, half-page migration summary alongside the technical ar
 
 ## Context
 
-yoinkc produces technical artifacts (Containerfile, audit report, secrets review) but nothing that a non-technical stakeholder can read. The sysadmin has to manually translate findings into a summary for their manager. This renderer automates that translation.
+inspectah produces technical artifacts (Containerfile, audit report, secrets review) but nothing that a non-technical stakeholder can read. The sysadmin has to manually translate findings into a summary for their manager. This renderer automates that translation.
 
 ## Design
 
@@ -186,7 +186,7 @@ Note: The original spec listed `<80% automatic` as a Medium trigger, but `<80% a
 
 ### Dual Render Targets
 
-**1. Standalone file:** `executive-summary.md` in the output tarball. Rendered by a new renderer function in `src/yoinkc/renderers/`. Uses the same Jinja2 environment as other renderers.
+**1. Standalone file:** `executive-summary.md` in the output tarball. Rendered by a new renderer function in `src/inspectah/renderers/`. Uses the same Jinja2 environment as other renderers.
 
 **2. HTML report embed:** A `<details open>` section at the top of the summary tab in the HTML report, above the dashboard cards. Expanded by default — the summary IS the stakeholder artifact, so it should be visible immediately. Evidence and detail sections use plain `<details>` (collapsed). Uses the same data, rendered as HTML rather than markdown.
 
@@ -205,8 +205,8 @@ All data comes from the existing `_build_context()` output, plus two fields that
 ## Scope
 
 **In scope:**
-- New renderer: `src/yoinkc/renderers/executive_summary.py`
-- New Jinja2 template: `src/yoinkc/templates/executive-summary.md.j2`
+- New renderer: `src/inspectah/renderers/executive_summary.py`
+- New Jinja2 template: `src/inspectah/templates/executive-summary.md.j2`
 - HTML embed in `_summary.html.j2` (collapsible section)
 - Register in `run_all()`
 - E2E test: verify summary appears in HTML report
@@ -219,14 +219,14 @@ All data comes from the existing `_build_context()` output, plus two fields that
 
 ## Files to Modify
 
-- Create: `src/yoinkc/renderers/_summary_context.py` — `SummaryContext` dataclass, `build_summary_context()`, `_score_complexity()`
-- Create: `src/yoinkc/renderers/executive_summary.py` — standalone markdown renderer
-- Create: `src/yoinkc/templates/executive-summary.md.j2` — standalone markdown template
-- Modify: `src/yoinkc/renderers/__init__.py` — add to `run_all()`, ensure ordering (after Containerfile, before HTML)
-- Modify: `src/yoinkc/renderers/html_report.py` — build `SummaryContext` in `_build_context()`, add `quadlet_units`/`compose_files` to `_summary_counts()`
-- Modify: `src/yoinkc/templates/report/_summary.html.j2` — add `<details open>` collapsible embed consuming `summary.*`
-- Modify: `src/yoinkc/templates/report/_css.html.j2` — embed styling
-- ~~Modify: `src/yoinkc/templates/report/_js.html.j2` — collapse/expand toggle~~ (not needed — use native `<details>`/`<details open>` instead of custom JS)
+- Create: `src/inspectah/renderers/_summary_context.py` — `SummaryContext` dataclass, `build_summary_context()`, `_score_complexity()`
+- Create: `src/inspectah/renderers/executive_summary.py` — standalone markdown renderer
+- Create: `src/inspectah/templates/executive-summary.md.j2` — standalone markdown template
+- Modify: `src/inspectah/renderers/__init__.py` — add to `run_all()`, ensure ordering (after Containerfile, before HTML)
+- Modify: `src/inspectah/renderers/html_report.py` — build `SummaryContext` in `_build_context()`, add `quadlet_units`/`compose_files` to `_summary_counts()`
+- Modify: `src/inspectah/templates/report/_summary.html.j2` — add `<details open>` collapsible embed consuming `summary.*`
+- Modify: `src/inspectah/templates/report/_css.html.j2` — embed styling
+- ~~Modify: `src/inspectah/templates/report/_js.html.j2` — collapse/expand toggle~~ (not needed — use native `<details>`/`<details open>` instead of custom JS)
 
 ## Implementation Notes
 

@@ -175,7 +175,7 @@ drives the existing subtraction, `matched_keys` drives version comparison.
 
 Implementation strategy:
 - Use `rpm.labelCompare()` from the `rpm` Python bindings if available
-  (likely present since yoinkc runs on RPM-based hosts)
+  (likely present since inspectah runs on RPM-based hosts)
 - Pure-Python fallback implementing `rpmvercmp` for testing and portability
 - The `rpmvercmp` algorithm is well-documented and stable
 

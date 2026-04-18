@@ -9,7 +9,7 @@
 
 ## Problem
 
-yoinkc does not detect DNF module streams or version lock pins. Both cause silent wrong-version installs in the generated Containerfile:
+inspectah does not detect DNF module streams or version lock pins. Both cause silent wrong-version installs in the generated Containerfile:
 
 - **Module streams:** If the host has `postgresql:15` enabled and the Containerfile runs `dnf install postgresql-server`, DNF resolves to the default stream (e.g., `postgresql:13`) instead of the intended stream 15. The generated image silently runs the wrong version.
 - **Version locks:** If the host has `curl` pinned to `7.76.1-26.el9`, the Containerfile's `dnf install curl` pulls the latest available version. The pin — which likely exists for a reason — is silently ignored.
@@ -214,7 +214,7 @@ Both lists contribute to the packages tab triage count, filtered by `.include` a
 
 ## References
 
-- Gap audit: `yoinkc-gap-audit.md` items #1 and #2
+- Gap audit: `inspectah-gap-audit.md` items #1 and #2
 - insights-core `parsers/dnf_modules.py` (confirms INI format)
 - leapp `GetEnabledModules` actor (libdnf API approach — not used, file parse preferred)
 - convert2rhel `pkghandler.py` (versionlock file path — uses YUM path with DNF symlink)
@@ -223,6 +223,6 @@ Both lists contribute to the packages tab triage count, filtered by `.include` a
 
 ## Out of Scope
 
-- Module stream *installation* (profiles) in Containerfile — yoinkc already handles individual package installs; `dnf module enable` is sufficient
+- Module stream *installation* (profiles) in Containerfile — inspectah already handles individual package installs; `dnf module enable` is sufficient
 - Automatic versionlock reproduction in single-host mode — operator decision, surfaced as FIXME
 - Fleet package version variant picking (separate future spec — different problem shape)

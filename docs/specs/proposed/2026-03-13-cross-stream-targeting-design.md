@@ -5,7 +5,7 @@
 
 ## Problem
 
-yoinkc currently assumes source and target are the same OS stream: a
+inspectah currently assumes source and target are the same OS stream: a
 RHEL 9 host produces a RHEL 9 bootc image. Users migrating between
 streams — CentOS Stream 9 → RHEL 9, RHEL 9 → RHEL 10, Fedora →
 CentOS — must manually adjust the output. Package names, base images,
@@ -31,7 +31,7 @@ structure, and base image selection.
 The target distro and version are derived from the base image's
 `/etc/os-release` during the existing base image pull. When the user
 specifies `--base-image registry.redhat.io/rhel9/rhel-bootc:9.6`,
-yoinkc reads the image's os-release and knows the target is RHEL 9.6.
+inspectah reads the image's os-release and knows the target is RHEL 9.6.
 
 Explicit overrides (`--target-distro`, `--target-version`) are available
 for edge cases: `--inspect-only` mode, custom base images without
@@ -45,7 +45,7 @@ baseline package comparison.
 
 ### Package Name Mapping
 
-A bundled TOML or JSON data file shipped with yoinkc, containing known
+A bundled TOML or JSON data file shipped with inspectah, containing known
 package name mappings between streams. Versioned alongside the code,
 testable, and community-contributable via PRs.
 
@@ -73,14 +73,14 @@ package equivalence, or automatic discovery of renamed packages.
    same capability as package Y on RHEL)?
 
 3. **Config file differences:** Between major versions (e.g., RHEL 9 →
-   10), config file formats may change. How does yoinkc handle config
+   10), config file formats may change. How does inspectah handle config
    files that are valid on the source but not on the target?
 
 4. **Repo file handling:** Source repo files (e.g., CentOS repos) are
    meaningless on the target (RHEL). Should the renderer strip them
    and substitute target-appropriate repos, or just flag them?
 
-5. **Validation:** Should `yoinkc --validate` (podman build) use the
+5. **Validation:** Should `inspectah --validate` (podman build) use the
    target's base image to verify the generated Containerfile works?
 
 6. **Report presentation:** How does the HTML report surface

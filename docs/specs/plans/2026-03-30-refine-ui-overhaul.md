@@ -4,7 +4,7 @@
 
 **Goal:** Bring the refine report UI to architect's quality level — cohesive PF6 design tokens, redesigned summary tab with live-updating prevalence control, upgraded components, and visual polish.
 
-**Architecture:** Template-only changes across 16+ Jinja2 files in `src/yoinkc/templates/report/`. No renderer changes needed — `triage_detail` already provides per-section breakdown data in the existing context. CSS token migration is the foundation; summary tab redesign is the centerpiece; component swaps and polish follow. All prevalence live-update logic uses the existing `snapshot` object and a hoisted `countAtThreshold()` function.
+**Architecture:** Template-only changes across 16+ Jinja2 files in `src/inspectah/templates/report/`. No renderer changes needed — `triage_detail` already provides per-section breakdown data in the existing context. CSS token migration is the foundation; summary tab redesign is the centerpiece; component swaps and polish follow. All prevalence live-update logic uses the existing `snapshot` object and a hoisted `countAtThreshold()` function.
 
 **Tech Stack:** Jinja2 templates, PatternFly 6 CSS/components, vanilla JS, CSS custom properties
 
@@ -15,7 +15,7 @@
 ### Task 1: CSS Token Sweep + Hex Audit
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_css.html.j2` (all 472 lines)
+- Modify: `src/inspectah/templates/report/_css.html.j2` (all 472 lines)
 - Modify: Any template file with inline `<style>` blocks
 
 This is the foundation — every subsequent task builds on clean, theme-aware tokens.
@@ -25,10 +25,10 @@ This is the foundation — every subsequent task builds on clean, theme-aware to
 Run from the repo root:
 
 ```bash
-cd ~/Work/bootc-migration/yoinkc
-grep -c 'pf-v6-global' src/yoinkc/templates/report/_css.html.j2
-grep -c 'pf-t--global' src/yoinkc/templates/report/_css.html.j2
-grep -oE '#[0-9a-fA-F]{3,6}' src/yoinkc/templates/report/_css.html.j2 | sort | uniq -c | sort -rn
+cd ~/Work/bootc-migration/inspectah
+grep -c 'pf-v6-global' src/inspectah/templates/report/_css.html.j2
+grep -c 'pf-t--global' src/inspectah/templates/report/_css.html.j2
+grep -oE '#[0-9a-fA-F]{3,6}' src/inspectah/templates/report/_css.html.j2 | sort | uniq -c | sort -rn
 ```
 
 Record the counts as a baseline.
@@ -67,24 +67,24 @@ Add to the top of `_css.html.j2`:
 
 ```css
 :root {
-  --yoinkc-diff-add-bg: rgba(77, 171, 247, 0.12);
-  --yoinkc-diff-remove-bg: rgba(201, 25, 11, 0.12);
-  --yoinkc-diff-add-border: #4dabf7;
-  --yoinkc-diff-remove-border: #c9190b;
-  --yoinkc-content-bottom-padding: 5rem;
-  --yoinkc-content-max-height: calc(100vh - 200px);
+  --inspectah-diff-add-bg: rgba(77, 171, 247, 0.12);
+  --inspectah-diff-remove-bg: rgba(201, 25, 11, 0.12);
+  --inspectah-diff-add-border: #4dabf7;
+  --inspectah-diff-remove-border: #c9190b;
+  --inspectah-content-bottom-padding: 5rem;
+  --inspectah-content-max-height: calc(100vh - 200px);
 }
 
 html:not(.pf-v6-theme-dark) {
-  --yoinkc-diff-add-bg: rgba(43, 154, 243, 0.08);
-  --yoinkc-diff-remove-bg: rgba(201, 25, 11, 0.08);
+  --inspectah-diff-add-bg: rgba(43, 154, 243, 0.08);
+  --inspectah-diff-remove-bg: rgba(201, 25, 11, 0.08);
 }
 ```
 
 Replace hardcoded `rgba()` values in `.diff-line-add`, `.diff-line-remove`, `.diff-legend-selected`, `.diff-legend-comparison` with the new custom properties.
 
-Replace `padding-bottom: 5rem` with `var(--yoinkc-content-bottom-padding)`.
-Replace `calc(100vh - 200px)` with `var(--yoinkc-content-max-height)`.
+Replace `padding-bottom: 5rem` with `var(--inspectah-content-bottom-padding)`.
+Replace `calc(100vh - 200px)` with `var(--inspectah-content-max-height)`.
 
 - [ ] **Step 5: Fix fleet popover and fleet bar hardcoded colors**
 
@@ -109,7 +109,7 @@ uv run --extra dev pytest -q
 Expected: 1028 passed. Visually verify: open a refine report, toggle dark/light theme, check fleet popover and diff colors in both modes.
 
 ```bash
-git add src/yoinkc/templates/report/_css.html.j2
+git add src/inspectah/templates/report/_css.html.j2
 git commit -m "refactor(refine): Migrate CSS to PF6 design tokens and theme-aware properties
 
 Replace --pf-v6-global-- with --pf-t--global-- semantic tokens.
@@ -124,10 +124,10 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 2: Inline Style Extraction
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_css.html.j2` (add new classes)
-- Modify: `src/yoinkc/templates/report/_sidebar.html.j2`
-- Modify: `src/yoinkc/templates/report/_summary.html.j2`
-- Modify: `src/yoinkc/templates/report/_banner.html.j2`
+- Modify: `src/inspectah/templates/report/_css.html.j2` (add new classes)
+- Modify: `src/inspectah/templates/report/_sidebar.html.j2`
+- Modify: `src/inspectah/templates/report/_summary.html.j2`
+- Modify: `src/inspectah/templates/report/_banner.html.j2`
 - Modify: Other templates as discovered
 
 **Exclusion:** Do NOT extract computed/dynamic inline styles (e.g., `style="width: X%"` for fleet-bar widths in `_macros.html.j2`, or JS-set progress bar widths).
@@ -135,9 +135,9 @@ Assisted-by: Claude Code (Opus 4.6)"
 - [ ] **Step 1: Audit inline styles in priority templates**
 
 ```bash
-grep -n 'style="' src/yoinkc/templates/report/_sidebar.html.j2
-grep -n 'style="' src/yoinkc/templates/report/_summary.html.j2
-grep -n 'style="' src/yoinkc/templates/report/_banner.html.j2
+grep -n 'style="' src/inspectah/templates/report/_sidebar.html.j2
+grep -n 'style="' src/inspectah/templates/report/_summary.html.j2
+grep -n 'style="' src/inspectah/templates/report/_banner.html.j2
 ```
 
 Record each inline style, its purpose, and proposed class name.
@@ -197,7 +197,7 @@ uv run --extra dev pytest -q
 Visually verify sidebar, summary, and banner render identically.
 
 ```bash
-git add src/yoinkc/templates/report/_css.html.j2 src/yoinkc/templates/report/_sidebar.html.j2 src/yoinkc/templates/report/_summary.html.j2 src/yoinkc/templates/report/_banner.html.j2
+git add src/inspectah/templates/report/_css.html.j2 src/inspectah/templates/report/_sidebar.html.j2 src/inspectah/templates/report/_summary.html.j2 src/inspectah/templates/report/_banner.html.j2
 git commit -m "refactor(refine): Extract inline styles to named CSS classes
 
 Move inline style attributes from sidebar, summary, and banner templates
@@ -211,9 +211,9 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 3: Summary Tab Redesign
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_summary.html.j2` (complete rewrite)
-- Modify: `src/yoinkc/templates/report/_css.html.j2` (new summary card styles)
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (hoist `countAtThreshold`, live prevalence update logic)
+- Modify: `src/inspectah/templates/report/_summary.html.j2` (complete rewrite)
+- Modify: `src/inspectah/templates/report/_css.html.j2` (new summary card styles)
+- Modify: `src/inspectah/templates/report/_js.html.j2` (hoist `countAtThreshold`, live prevalence update logic)
 
 This is the largest task — the centerpiece of the overhaul.
 
@@ -445,8 +445,8 @@ Replace the entire template content. This template uses variables that actually 
   <div class="pf-v6-c-card__body">
     <ol>
       <li><strong>Review</strong> — Check the Audit report tab for warnings and review any FIXME comments in the generated Containerfile.</li>
-      <li><strong>Refine</strong> (optional) — Use <code>./run-yoinkc.sh refine {% if fleet_meta %}fleet-*.tar.gz{% else %}hostname-*.tar.gz{% endif %}</code> to interactively toggle package and config inclusions, then re-render the Containerfile.</li>
-      <li><strong>Build</strong> — Build your bootc image: <code>./yoinkc-build {% if fleet_meta %}fleet-*.tar.gz{% else %}hostname-*.tar.gz{% endif %} my-image:latest</code></li>
+      <li><strong>Refine</strong> (optional) — Use <code>./run-inspectah.sh refine {% if fleet_meta %}fleet-*.tar.gz{% else %}hostname-*.tar.gz{% endif %}</code> to interactively toggle package and config inclusions, then re-render the Containerfile.</li>
+      <li><strong>Build</strong> — Build your bootc image: <code>./inspectah-build {% if fleet_meta %}fleet-*.tar.gz{% else %}hostname-*.tar.gz{% endif %} my-image:latest</code></li>
     </ol>
   </div>
 </div>
@@ -635,7 +635,7 @@ uv run --extra dev pytest -q
 Visually verify: Summary tab shows 4-card grid (fleet) or 3-card grid (single-host). Prevalence slider updates card numbers live with counter animation. Section priority list is clickable and navigates correctly. Next Steps card is preserved below the priority list. Toggle dark/light theme.
 
 ```bash
-git add src/yoinkc/templates/report/_summary.html.j2 src/yoinkc/templates/report/_css.html.j2 src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_summary.html.j2 src/inspectah/templates/report/_css.html.j2 src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(refine): Redesign summary tab with dashboard grid and live prevalence
 
 Replace flat description list with 4-card dashboard grid: system, prevalence
@@ -652,10 +652,10 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 4: Prevalence Control Migration
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_toolbar.html.j2` (remove slider, keep other controls)
-- Modify: `src/yoinkc/templates/report/_macros.html.j2` (add threshold badge to section headers)
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (migrate ALL prevalence-slider references, sync summary slider with re-render)
-- Modify: `src/yoinkc/templates/report/_editor_js.html.j2` (update prevalence-slider reference in re-render handler)
+- Modify: `src/inspectah/templates/report/_toolbar.html.j2` (remove slider, keep other controls)
+- Modify: `src/inspectah/templates/report/_macros.html.j2` (add threshold badge to section headers)
+- Modify: `src/inspectah/templates/report/_js.html.j2` (migrate ALL prevalence-slider references, sync summary slider with re-render)
+- Modify: `src/inspectah/templates/report/_editor_js.html.j2` (update prevalence-slider reference in re-render handler)
 
 **This task fully migrates the prevalence pipeline.** Every reference to `#prevalence-slider`, `#btn-apply-prevalence`, `#btn-cancel-prevalence`, `#prevalence-value`, and `#prevalence-preview` must be updated or removed.
 
@@ -678,12 +678,12 @@ After removal, the toolbar structure should be:
   <span class="toolbar-status" id="toolbar-status-text"></span>
   <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   {% if not refine_mode %}
-  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start yoinkc refine to enable live re-render">Re-render</button>
+  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start inspectah refine to enable live re-render">Re-render</button>
   {% endif %}
   {% if refine_mode %}
   <button id="btn-re-render" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Re-render with editor changes">Re-render</button>
   {% endif %}
-  <button id="btn-tarball" class="pf-v6-c-button pf-m-secondary" type="button" disabled title="Start yoinkc refine to enable tarball download">Download Tarball</button>
+  <button id="btn-tarball" class="pf-v6-c-button pf-m-secondary" type="button" disabled title="Start inspectah refine to enable tarball download">Download Tarball</button>
 </div>
 <div id="toast" class="pf-v6-c-alert pf-m-danger toast"></div>
 ```
@@ -934,16 +934,16 @@ Before committing, verify ALL references are migrated:
 
 ```bash
 # These should return ZERO results:
-grep -n 'prevalence-slider' src/yoinkc/templates/report/_toolbar.html.j2
-grep -n 'btn-apply-prevalence' src/yoinkc/templates/report/_js.html.j2
-grep -n 'btn-cancel-prevalence' src/yoinkc/templates/report/_js.html.j2
-grep -n 'prevalence-preview' src/yoinkc/templates/report/_js.html.j2
-grep -n 'prevalence-value"' src/yoinkc/templates/report/_js.html.j2
+grep -n 'prevalence-slider' src/inspectah/templates/report/_toolbar.html.j2
+grep -n 'btn-apply-prevalence' src/inspectah/templates/report/_js.html.j2
+grep -n 'btn-cancel-prevalence' src/inspectah/templates/report/_js.html.j2
+grep -n 'prevalence-preview' src/inspectah/templates/report/_js.html.j2
+grep -n 'prevalence-value"' src/inspectah/templates/report/_js.html.j2
 
 # These should show ONLY the summary slider:
-grep -n 'prevalence-slider' src/yoinkc/templates/report/_js.html.j2
-grep -n 'prevalence-slider' src/yoinkc/templates/report/_editor_js.html.j2
-grep -n 'prevalence-slider' src/yoinkc/templates/report/_summary.html.j2
+grep -n 'prevalence-slider' src/inspectah/templates/report/_js.html.j2
+grep -n 'prevalence-slider' src/inspectah/templates/report/_editor_js.html.j2
+grep -n 'prevalence-slider' src/inspectah/templates/report/_summary.html.j2
 ```
 
 - [ ] **Step 8: Verify and commit**
@@ -955,7 +955,7 @@ uv run --extra dev pytest -q
 Visually verify: Toolbar no longer shows prevalence slider. Section headers show "Prevalence: 80%" badge in fleet mode (not on summary tab itself). Badge click navigates to Summary. Badge value updates when Summary slider moves. Re-render still works correctly (reads from summary slider). Reset button restores summary slider to original value.
 
 ```bash
-git add src/yoinkc/templates/report/_toolbar.html.j2 src/yoinkc/templates/report/_macros.html.j2 src/yoinkc/templates/report/_js.html.j2 src/yoinkc/templates/report/_editor_js.html.j2 src/yoinkc/templates/report/_css.html.j2
+git add src/inspectah/templates/report/_toolbar.html.j2 src/inspectah/templates/report/_macros.html.j2 src/inspectah/templates/report/_js.html.j2 src/inspectah/templates/report/_editor_js.html.j2 src/inspectah/templates/report/_css.html.j2
 git commit -m "feat(refine): Move prevalence control from toolbar to summary tab
 
 Remove prevalence slider and Apply/Cancel buttons from bottom toolbar.
@@ -972,11 +972,11 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 5: Component Upgrades
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_css.html.j2` (remove custom component styles, add PF6)
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (update component selectors)
-- Modify: `src/yoinkc/templates/report/_macros.html.j2` (spinner macro)
-- Modify: `src/yoinkc/templates/report/_sidebar.html.j2` (badge upgrade)
-- Modify: `src/yoinkc/templates/report/_warnings.html.j2` (dismiss animation)
+- Modify: `src/inspectah/templates/report/_css.html.j2` (remove custom component styles, add PF6)
+- Modify: `src/inspectah/templates/report/_js.html.j2` (update component selectors)
+- Modify: `src/inspectah/templates/report/_macros.html.j2` (spinner macro)
+- Modify: `src/inspectah/templates/report/_sidebar.html.j2` (badge upgrade)
+- Modify: `src/inspectah/templates/report/_warnings.html.j2` (dismiss animation)
 
 Each sub-step is an independent component swap.
 
@@ -1151,7 +1151,7 @@ uv run --extra dev pytest -q
 Visually verify each component: spinner appears during re-render, toast shows on actions, sidebar badges show correct counts with colors, warnings fade out on dismiss, fleet popover opens/closes correctly in both themes.
 
 ```bash
-git add src/yoinkc/templates/report/_css.html.j2 src/yoinkc/templates/report/_js.html.j2 src/yoinkc/templates/report/_macros.html.j2 src/yoinkc/templates/report/_sidebar.html.j2 src/yoinkc/templates/report/_warnings.html.j2
+git add src/inspectah/templates/report/_css.html.j2 src/inspectah/templates/report/_js.html.j2 src/inspectah/templates/report/_macros.html.j2 src/inspectah/templates/report/_sidebar.html.j2 src/inspectah/templates/report/_warnings.html.j2
 git commit -m "feat(refine): Upgrade hand-rolled components to PF6 equivalents
 
 Replace custom spinner, toast, and fleet popover with PF6 components.
@@ -1166,9 +1166,9 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 6: Polish
 
 **Files:**
-- Modify: `src/yoinkc/templates/report.html.j2` (masthead branding)
-- Modify: `src/yoinkc/templates/report/_css.html.j2` (typography, active states, accents)
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (fleet bar active state)
+- Modify: `src/inspectah/templates/report.html.j2` (masthead branding)
+- Modify: `src/inspectah/templates/report/_css.html.j2` (typography, active states, accents)
+- Modify: `src/inspectah/templates/report/_js.html.j2` (fleet bar active state)
 
 Ranked by priority — implement in order, stop if time runs out.
 
@@ -1177,7 +1177,7 @@ Ranked by priority — implement in order, stop if time runs out.
 In `report.html.j2`, change the masthead brand text and add typography:
 
 ```html
-<span class="pf-v6-c-masthead__brand">yoinkc Refine</span>
+<span class="pf-v6-c-masthead__brand">inspectah Refine</span>
 ```
 
 In `_css.html.j2`, add masthead typography to match architect:
@@ -1253,13 +1253,13 @@ Use different accent colors for different group types if the group type is disti
 uv run --extra dev pytest -q
 ```
 
-Full visual check: masthead says "yoinkc Refine" with correct typography, section headings are consistently styled, fleet bars highlight when popover is open, package groups have accent borders. Toggle dark/light theme. Check single-host and fleet modes.
+Full visual check: masthead says "inspectah Refine" with correct typography, section headings are consistently styled, fleet bars highlight when popover is open, package groups have accent borders. Toggle dark/light theme. Check single-host and fleet modes.
 
 ```bash
-git add src/yoinkc/templates/report.html.j2 src/yoinkc/templates/report/_css.html.j2 src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report.html.j2 src/inspectah/templates/report/_css.html.j2 src/inspectah/templates/report/_js.html.j2
 git commit -m "feat(refine): Polish — masthead branding, section headings, fleet bar states
 
-Update masthead to 'yoinkc Refine' with shared typography spec.
+Update masthead to 'inspectah Refine' with shared typography spec.
 Add uppercase letter-spaced section subheadings. Add fleet bar
 active state on popover open. Add group header border accents.
 

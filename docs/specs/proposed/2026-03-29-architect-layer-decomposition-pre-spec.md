@@ -1,18 +1,18 @@
-# yoinkc architect: Enterprise Image Layer Decomposition
+# inspectah architect: Enterprise Image Layer Decomposition
 
 **Date:** 2026-03-29
 **Status:** Pre-spec (early thinking, not ready for formal brainstorm)
 
 ## Summary
 
-A new tool (working names: `yoinkc architect`, `yoinkc factor`) that takes
+A new tool (working names: `inspectah architect`, `inspectah factor`) that takes
 refined fleet outputs and helps enterprise architects decompose them into a
 layered bootc image hierarchy: a base image plus derived role/hardware-specific
 images.
 
 ## Motivation
 
-The current yoinkc flow is bottom-up aggregation:
+The current inspectah flow is bottom-up aggregation:
 
     hosts -> inspect -> fleet -> refine -> Containerfile
 
@@ -163,7 +163,7 @@ Architect consumes refine outputs. It does not replace or subsume refine.
   the human role; "factor" implies the mathematical operation.
 - **Collaboration**: is this single-seat or does it need sharing/review
   workflows? Enterprise layer decisions involve multiple stakeholders.
-- **Subcommand or standalone?** It may not belong in the yoinkc CLI at all
+- **Subcommand or standalone?** It may not belong in the inspectah CLI at all
   given that it doesn't need containerization and has different runtime
   requirements (connected workstation, web UI).
 - **What makes a "good" decomposition?** Architects will likely want to match

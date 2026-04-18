@@ -5,16 +5,16 @@
 
 ## Problem
 
-Both `yoinkc/design.md` and `driftify/design.md` were written before most
+Both `inspectah/design.md` and `driftify/design.md` were written before most
 features existed. Major capabilities — fleet analysis, tarball-first output,
 prevalence UI, entitlement bundling, fleet testing — are implemented but not
-reflected in the design docs. The yoinkc design doc also buries its
+reflected in the design docs. The inspectah design doc also buries its
 architecture overview under inspector-level details, making it hard to get
 the big picture without reading the whole thing.
 
 ## Scope
 
-1. Restructure and update `yoinkc/design.md` as the living system doc
+1. Restructure and update `inspectah/design.md` as the living system doc
 2. Targeted update of `driftify/design.md`
 3. Refresh Future Work sections with a prioritized backlog and tech debt items
 
@@ -28,7 +28,7 @@ historical artifacts.
 
 ---
 
-## yoinkc design.md — New Structure
+## inspectah design.md — New Structure
 
 ### 1. Overview & Principles
 
@@ -40,8 +40,8 @@ Contents:
 - Core design principle: **baseline subtraction** (currently buried in
   README's Architecture section)
 - The inspect → schema → render pipeline as the organizing concept
-- Three companion tools in one sentence each: `yoinkc-refine`,
-  `yoinkc-build`, `yoinkc-fleet`
+- Three companion tools in one sentence each: `inspectah-refine`,
+  `inspectah-build`, `inspectah-fleet`
 
 ### 2. Architecture
 
@@ -62,11 +62,11 @@ Contents:
 
 Contents:
 - Verify against actual argument parser and update
-- All current entry points: `yoinkc`, `yoinkc-fleet`, `yoinkc-refine`,
-  `yoinkc-build` (future entry points like `yoinkc-render` are documented
+- All current entry points: `inspectah`, `inspectah-fleet`, `inspectah-refine`,
+  `inspectah-build` (future entry points like `inspectah-render` are documented
   in section 10, not here)
-- Environment variables (`YOINKC_HOSTNAME`, `YOINKC_IMAGE`, `YOINKC_DEBUG`)
-- Wrapper scripts (`run-yoinkc.sh`, `run-yoinkc-fleet.sh`)
+- Environment variables (`INSPECTAH_HOSTNAME`, `INSPECTAH_IMAGE`, `INSPECTAH_DEBUG`)
+- Wrapper scripts (`run-inspectah.sh`, `run-inspectah-fleet.sh`)
 
 ### 4. Schema
 
@@ -120,7 +120,7 @@ Contents:
 - Prevalence threshold (`-p`) and its effect on Containerfile inclusion
 - Fleet UI: summary banner, color bars, toggle, host popovers, content
   variant grouping
-- `run-yoinkc-fleet.sh` container wrapper
+- `run-inspectah-fleet.sh` container wrapper
 
 ### 8. Pipeline & Packaging
 
@@ -130,7 +130,7 @@ Contents:
 - `pipeline.py` orchestrator: inspect-or-load → redact → render → package
 - Tarball-first output (new default, replaces old directory-based default)
 - Entitlement cert bundling (moved from wrapper into pipeline)
-- `run-yoinkc.sh` wrapper script and its env vars
+- `run-inspectah.sh` wrapper script and its env vars
 - `--validate` build validation
 - `--push-to-github` flow
 - Containerfile/image build (`Containerfile` at repo root)
@@ -171,7 +171,7 @@ The existing structure stays the same. Targeted updates:
 
 ### New Section: Fleet Testing
 - Document `run-fleet-test.sh`: what it does, how it works
-- Curls driftify + run-yoinkc.sh, runs 3 profiles with unique hostnames,
+- Curls driftify + run-inspectah.sh, runs 3 profiles with unique hostnames,
   aggregates results
 - Place after CLI Interface or as subsection of Coverage Verification
 
@@ -181,7 +181,7 @@ The existing structure stays the same. Targeted updates:
 
 ### CLI Interface
 - Verify flags match current `argparse` block
-- Check `--run-yoinkc` behavior
+- Check `--run-inspectah` behavior
 
 ### Future Work
 - Fleet drift variations: partially addressed by `run-fleet-test.sh`, true
@@ -209,14 +209,14 @@ validation against target image, report presentation.
 **2. CI integration (both projects)**
 
 Neither project has CI. Both design docs identify this as future work. GitHub
-Actions workflow: driftify → yoinkc → validate output on CentOS Stream 9, 10,
+Actions workflow: driftify → inspectah → validate output on CentOS Stream 9, 10,
 and Fedora. Catches regressions unit tests can't (real package installs, real
 service state, real SELinux). Biggest quality-of-life improvement for ongoing
 development.
 
 **3. Containerless re-rendering**
 
-`yoinkc-render` entry point: takes snapshot JSON, produces output artifacts
+`inspectah-render` entry point: takes snapshot JSON, produces output artifacts
 using only Python (no container, no `nsenter`). Enables tarball-only
 workflows on machines without podman. Rendering pipeline is already pure
 Python — mostly a CLI/packaging exercise.
@@ -246,7 +246,7 @@ scope.
 
 **7. In-place migration mode**
 
-Run yoinkc on one representative host, refine, apply across fleet. Large
+Run inspectah on one representative host, refine, apply across fleet. Large
 feature depending on cross-stream targeting.
 
 **8. Snapshot diffing / drift detection**

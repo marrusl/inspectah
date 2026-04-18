@@ -2,14 +2,14 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Enable yoinkc to correctly detect and scan rpm-ostree and bootc source systems, producing accurate Containerfiles for migration to pipelined bootc builds.
+**Goal:** Enable inspectah to correctly detect and scan rpm-ostree and bootc source systems, producing accurate Containerfiles for migration to pipelined bootc builds.
 
 **Architecture:** System type detection runs early in `run_all()` and stores the result on the snapshot. The detected type drives ostree base image mapping, which resolves to a ref that feeds into the existing `BaselineResolver.resolve()` pipeline — same path as `--target-image` on package-mode. Each inspector branches on `system_type` where behavior differs. Flatpak detection runs on all system types. Two slices: Slice 1 fixes wrong results (RPM, config, non-RPM), Slice 2 fixes noise and adds Flatpak (storage, kernel/boot, timers, containers).
 
 **Tech Stack:** Python 3.11+, Pydantic 2.0+, pytest, pathlib, json (for rpm-ostree/bootc status parsing)
 
 **Spec:** `docs/specs/proposed/2026-04-09-ostree-bootc-source-scanning-design.md`
-**Round-2 follow-ups:** `workflow/backlog/yoinkc-image-mode-source-scanning-round2-followups.md` (PKA repo)
+**Round-2 follow-ups:** `workflow/backlog/inspectah-image-mode-source-scanning-round2-followups.md` (PKA repo)
 
 **Revision 2** — revised after Kit + Thorn + Collins round-1 plan review. Key changes:
 - Wired `map_ostree_base_image()` into `BaselineResolver` / `snapshot.rpm.base_image` / renderer `FROM` (was disconnected)
@@ -30,7 +30,7 @@
 ## File Structure
 
 **Create:**
-- `src/yoinkc/system_type.py` — `detect_system_type()`, `map_ostree_base_image()`, `OstreeDetectionError`
+- `src/inspectah/system_type.py` — `detect_system_type()`, `map_ostree_base_image()`, `OstreeDetectionError`
 - `tests/test_system_type.py` — System type detection + base image mapping tests
 - `tests/test_ostree_rpm.py` — RPM inspector ostree-mode tests
 - `tests/test_ostree_config.py` — Config inspector ostree-mode tests
@@ -41,17 +41,17 @@
 - `tests/test_ostree_integration.py` — End-to-end integration with ostree fixtures
 
 **Modify:**
-- `src/yoinkc/schema.py` — `SystemType` enum, `OsRelease.variant_id`, `FlatpakApp`, `OstreePackageOverride`, `system_type` on `InspectionSnapshot`, ostree fields on `RpmSection`, `flatpak_apps` on `ContainerSection`
-- `src/yoinkc/inspectors/__init__.py` — `_read_os_release` captures `VARIANT_ID`; `run_all` calls system detection, maps base image, enforces refusal, passes `system_type` to inspectors
-- `src/yoinkc/inspectors/rpm.py` — `system_type` param, skip `rpm -Va`, parse `rpm-ostree status --json`
-- `src/yoinkc/inspectors/config.py` — `system_type` param, `/usr/etc` → `/etc` diff with SELinux contexts, Tier 2 `rpm -qf` + `rpm -V`
-- `src/yoinkc/inspectors/non_rpm_software.py` — `system_type` param, skip immutable `/usr` + `/usr/lib/python3*`
-- `src/yoinkc/inspectors/container.py` — Flatpak detection (all system types)
-- `src/yoinkc/inspectors/storage.py` — `system_type` param, filter ostree mounts
-- `src/yoinkc/inspectors/kernel_boot.py` — `system_type` param, filter BLS entries
-- `src/yoinkc/inspectors/scheduled_tasks.py` — `system_type` param, vendor timer filter
-- `src/yoinkc/renderers/containerfile/packages.py` — ostree override/removal output
-- `src/yoinkc/renderers/containerfile/_core.py` — bootc label, `flatpaks.list` generation
+- `src/inspectah/schema.py` — `SystemType` enum, `OsRelease.variant_id`, `FlatpakApp`, `OstreePackageOverride`, `system_type` on `InspectionSnapshot`, ostree fields on `RpmSection`, `flatpak_apps` on `ContainerSection`
+- `src/inspectah/inspectors/__init__.py` — `_read_os_release` captures `VARIANT_ID`; `run_all` calls system detection, maps base image, enforces refusal, passes `system_type` to inspectors
+- `src/inspectah/inspectors/rpm.py` — `system_type` param, skip `rpm -Va`, parse `rpm-ostree status --json`
+- `src/inspectah/inspectors/config.py` — `system_type` param, `/usr/etc` → `/etc` diff with SELinux contexts, Tier 2 `rpm -qf` + `rpm -V`
+- `src/inspectah/inspectors/non_rpm_software.py` — `system_type` param, skip immutable `/usr` + `/usr/lib/python3*`
+- `src/inspectah/inspectors/container.py` — Flatpak detection (all system types)
+- `src/inspectah/inspectors/storage.py` — `system_type` param, filter ostree mounts
+- `src/inspectah/inspectors/kernel_boot.py` — `system_type` param, filter BLS entries
+- `src/inspectah/inspectors/scheduled_tasks.py` — `system_type` param, vendor timer filter
+- `src/inspectah/renderers/containerfile/packages.py` — ostree override/removal output
+- `src/inspectah/renderers/containerfile/_core.py` — bootc label, `flatpaks.list` generation
 - `tests/conftest.py` — ostree fixture executor
 
 **Explicit deviation:** Slice 2 tests (storage, kernel/boot, timers) use synthetic fixtures for v1. The spec calls for real captured fixtures — follow-up task to vendor snapshots from Silverblue/bootc systems. Risk: layout drift in synthetic fixtures; acceptable for initial implementation.
@@ -61,7 +61,7 @@
 ## Task 1: Schema Additions
 
 **Files:**
-- Modify: `src/yoinkc/schema.py`
+- Modify: `src/inspectah/schema.py`
 - Test: `tests/test_system_type.py` (schema smoke test)
 
 - [ ] **Step 1: Write smoke test for new schema types**
@@ -70,7 +70,7 @@
 # tests/test_system_type.py
 """System type detection and ostree base image mapping tests."""
 
-from yoinkc.schema import SystemType, FlatpakApp, OstreePackageOverride
+from inspectah.schema import SystemType, FlatpakApp, OstreePackageOverride
 
 
 def test_system_type_enum_values():
@@ -95,25 +95,25 @@ def test_ostree_package_override_model():
 
 
 def test_os_release_has_variant_id():
-    from yoinkc.schema import OsRelease
+    from inspectah.schema import OsRelease
     osr = OsRelease(name="Fedora", version_id="41", variant_id="silverblue")
     assert osr.variant_id == "silverblue"
 
 
 def test_snapshot_system_type_default():
-    from yoinkc.schema import InspectionSnapshot
+    from inspectah.schema import InspectionSnapshot
     snap = InspectionSnapshot()
     assert snap.system_type == SystemType.PACKAGE_MODE
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py::test_system_type_enum_values -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py::test_system_type_enum_values -v`
 Expected: FAIL with `ImportError: cannot import name 'SystemType'`
 
 - [ ] **Step 3: Add SystemType enum and new models to schema.py**
 
-In `src/yoinkc/schema.py`, after existing imports, add:
+In `src/inspectah/schema.py`, after existing imports, add:
 
 ```python
 from enum import Enum
@@ -181,7 +181,7 @@ Add to `InspectionSnapshot`:
 
 - [ ] **Step 4: Update _read_os_release to capture VARIANT_ID**
 
-In `src/yoinkc/inspectors/__init__.py`, in `_read_os_release()`:
+In `src/inspectah/inspectors/__init__.py`, in `_read_os_release()`:
 
 ```python
     return OsRelease(
@@ -197,19 +197,19 @@ In `src/yoinkc/inspectors/__init__.py`, in `_read_os_release()`:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Run existing tests for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 Expected: All existing tests pass
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/schema.py src/yoinkc/inspectors/__init__.py tests/test_system_type.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/schema.py src/inspectah/inspectors/__init__.py tests/test_system_type.py
 git commit -m "feat(schema): add SystemType enum, ostree models, variant_id on OsRelease"
 ```
 
@@ -218,7 +218,7 @@ git commit -m "feat(schema): add SystemType enum, ostree models, variant_id on O
 ## Task 2: System Type Detection
 
 **Files:**
-- Create: `src/yoinkc/system_type.py`
+- Create: `src/inspectah/system_type.py`
 - Test: `tests/test_system_type.py` (append)
 
 - [ ] **Step 1: Write detection tests**
@@ -228,8 +228,8 @@ Append to `tests/test_system_type.py`:
 ```python
 import pytest
 from pathlib import Path
-from yoinkc.executor import RunResult
-from yoinkc.system_type import detect_system_type, OstreeDetectionError
+from inspectah.executor import RunResult
+from inspectah.system_type import detect_system_type, OstreeDetectionError
 
 
 def _mock_executor(bootc_rc=1, rpmostree_rc=1):
@@ -283,12 +283,12 @@ def test_detect_bootc_preferred_over_rpmostree(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py::test_detect_package_mode -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py::test_detect_package_mode -v`
 Expected: FAIL with `ImportError: cannot import name 'detect_system_type'`
 
 - [ ] **Step 3: Implement detect_system_type**
 
-Create `src/yoinkc/system_type.py`:
+Create `src/inspectah/system_type.py`:
 
 ```python
 """Source system type detection and ostree base image mapping."""
@@ -337,20 +337,20 @@ def detect_system_type(host_root: Path, executor: Executor) -> SystemType:
         "Detected ostree system (/ostree exists) but could not determine\n"
         "system type -- both 'bootc status' and 'rpm-ostree status' failed.\n"
         "\n"
-        "This system may use an ostree configuration yoinkc does not yet support."
+        "This system may use an ostree configuration inspectah does not yet support."
     )
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/system_type.py tests/test_system_type.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/system_type.py tests/test_system_type.py
 git commit -m "feat(detection): add system type detection with OstreeDetectionError"
 ```
 
@@ -359,7 +359,7 @@ git commit -m "feat(detection): add system type detection with OstreeDetectionEr
 ## Task 3: ostree Base Image Mapping
 
 **Files:**
-- Modify: `src/yoinkc/system_type.py`
+- Modify: `src/inspectah/system_type.py`
 - Test: `tests/test_system_type.py` (append)
 
 This task implements the mapping logic and tests all variants. It does NOT wire into the pipeline (Task 4 does that). The spec's `--base-image` is served by the existing `--target-image` flag — no new CLI flag needed.
@@ -370,11 +370,11 @@ Append to `tests/test_system_type.py`:
 
 ```python
 import json
-from yoinkc.system_type import map_ostree_base_image
+from inspectah.system_type import map_ostree_base_image
 
 
 def _make_os_release(**kwargs):
-    from yoinkc.schema import OsRelease
+    from inspectah.schema import OsRelease
     defaults = {
         "name": "Fedora Linux", "version_id": "41",
         "id": "fedora", "variant_id": "",
@@ -515,12 +515,12 @@ def test_map_target_image_override(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py::test_map_silverblue -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py::test_map_silverblue -v`
 Expected: FAIL with `ImportError: cannot import name 'map_ostree_base_image'`
 
 - [ ] **Step 3: Implement map_ostree_base_image**
 
-Add to `src/yoinkc/system_type.py`:
+Add to `src/inspectah/system_type.py`:
 
 ```python
 # Known Fedora Atomic Desktop variants -> ostree-desktops base images
@@ -641,14 +641,14 @@ def map_ostree_base_image(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/system_type.py tests/test_system_type.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/system_type.py tests/test_system_type.py
 git commit -m "feat(detection): ostree/bootc base image mapping with UBlue and bootc status support"
 ```
 
@@ -659,7 +659,7 @@ git commit -m "feat(detection): ostree/bootc base image mapping with UBlue and b
 This is the critical integration task. It wires `detect_system_type` and `map_ostree_base_image` into `run_all()`, feeding the resolved ref into the existing `BaselineResolver` path. It enforces the spec's hard refusal when mapping fails.
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/__init__.py`
+- Modify: `src/inspectah/inspectors/__init__.py`
 - Test: `tests/test_system_type.py` (append pipeline tests)
 
 - [ ] **Step 1: Write pipeline wiring + refusal tests**
@@ -668,8 +668,8 @@ Append to `tests/test_system_type.py`:
 
 ```python
 from unittest.mock import patch
-from yoinkc.inspectors import run_all, _read_os_release
-import yoinkc.preflight as preflight_mod
+from inspectah.inspectors import run_all, _read_os_release
+import inspectah.preflight as preflight_mod
 
 
 def test_read_os_release_captures_variant_id(tmp_path):
@@ -791,12 +791,12 @@ def test_run_all_target_image_overrides_ostree_mapping(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py::test_run_all_unknown_ostree_refuses_without_no_baseline -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py::test_run_all_unknown_ostree_refuses_without_no_baseline -v`
 Expected: FAIL — `run_all` does not yet enforce refusal
 
 - [ ] **Step 3: Wire detection + mapping + refusal into run_all**
 
-In `src/yoinkc/inspectors/__init__.py`, add imports:
+In `src/inspectah/inspectors/__init__.py`, add imports:
 
 ```python
 from ..schema import InspectionSnapshot, OsRelease, SystemType
@@ -856,7 +856,7 @@ def _ostree_unknown_base_fail(
         f"Detected {gate_label} system{desc}",
         "Could not map to a known bootc base image.",
         "",
-        "Specify one with: yoinkc --target-image <registry/image:tag>",
+        "Specify one with: inspectah --target-image <registry/image:tag>",
         "",
         "Common bases:",
         "  quay.io/fedora-ostree-desktops/silverblue:41",
@@ -870,19 +870,19 @@ def _ostree_unknown_base_fail(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_system_type.py -v -k "run_all"`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_system_type.py -v -k "run_all"`
 Expected: PASS
 
 - [ ] **Step 5: Run full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 Expected: All tests pass
 
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/inspectors/__init__.py tests/test_system_type.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/inspectors/__init__.py tests/test_system_type.py
 git commit -m "feat(pipeline): wire ostree base image into baseline resolver, enforce unknown-base refusal"
 ```
 
@@ -891,8 +891,8 @@ git commit -m "feat(pipeline): wire ostree base image into baseline resolver, en
 ## Task 5: RPM Inspector Adaptation (Slice 1)
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/rpm.py`
-- Modify: `src/yoinkc/inspectors/__init__.py` (pass system_type)
+- Modify: `src/inspectah/inspectors/rpm.py`
+- Modify: `src/inspectah/inspectors/__init__.py` (pass system_type)
 - Create: `tests/test_ostree_rpm.py`
 
 - [ ] **Step 1: Write RPM ostree-mode tests**
@@ -907,8 +907,8 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.executor import RunResult
-from yoinkc.schema import SystemType
+from inspectah.executor import RunResult
+from inspectah.schema import SystemType
 
 _RPMOSTREE_STATUS_JSON = json.dumps({
     "deployments": [{
@@ -965,7 +965,7 @@ def _setup_fedora_root(tmp_path):
 
 def test_rpm_va_not_called_on_ostree(tmp_path):
     """rpm -Va must not be invoked on ostree systems (spy-based check)."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
     spy = OstreeExecutorSpy()
     section = run_rpm(tmp_path, spy, system_type=SystemType.RPM_OSTREE)
@@ -974,7 +974,7 @@ def test_rpm_va_not_called_on_ostree(tmp_path):
 
 
 def test_layered_packages_from_rpmostree_status(tmp_path):
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
     spy = OstreeExecutorSpy()
     section = run_rpm(tmp_path, spy, system_type=SystemType.RPM_OSTREE)
@@ -985,14 +985,14 @@ def test_layered_packages_from_rpmostree_status(tmp_path):
 
 
 def test_removed_packages_captured(tmp_path):
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
     section = run_rpm(tmp_path, OstreeExecutorSpy(), system_type=SystemType.RPM_OSTREE)
     assert "nano" in section.ostree_removals
 
 
 def test_overridden_packages_captured(tmp_path):
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
     section = run_rpm(tmp_path, OstreeExecutorSpy(), system_type=SystemType.RPM_OSTREE)
     override_names = [o.name for o in section.ostree_overrides]
@@ -1004,7 +1004,7 @@ def test_overridden_packages_captured(tmp_path):
 
 def test_rpmostree_status_failure_handled(tmp_path):
     """rpm-ostree status --json failure -> empty overrides/removals, no crash."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
 
     def failing_executor(cmd, *, cwd=None):
@@ -1023,7 +1023,7 @@ def test_rpmostree_status_failure_handled(tmp_path):
 
 def test_rpmostree_status_invalid_json_handled(tmp_path):
     """Invalid JSON from rpm-ostree status -> graceful fallback."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
 
     def bad_json_executor(cmd, *, cwd=None):
@@ -1042,12 +1042,12 @@ def test_rpmostree_status_invalid_json_handled(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_ostree_rpm.py::test_rpm_va_not_called_on_ostree -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_ostree_rpm.py::test_rpm_va_not_called_on_ostree -v`
 Expected: FAIL — `run_rpm` does not accept `system_type`
 
 - [ ] **Step 3: Implement RPM inspector ostree adaptation**
 
-In `src/yoinkc/inspectors/rpm.py`:
+In `src/inspectah/inspectors/rpm.py`:
 
 Add to imports:
 ```python
@@ -1088,7 +1088,7 @@ Add the parsing function (see Task 5 Step 3 in revision 1 for full code — same
 
 - [ ] **Step 4: Pass system_type in run_all**
 
-In `src/yoinkc/inspectors/__init__.py`, update `_run_rpm_inspector`:
+In `src/inspectah/inspectors/__init__.py`, update `_run_rpm_inspector`:
 ```python
     def _run_rpm_inspector():
         return run_rpm(
@@ -1104,19 +1104,19 @@ In `src/yoinkc/inspectors/__init__.py`, update `_run_rpm_inspector`:
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_ostree_rpm.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_ostree_rpm.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 Expected: All pass
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/inspectors/rpm.py src/yoinkc/inspectors/__init__.py tests/test_ostree_rpm.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/inspectors/rpm.py src/inspectah/inspectors/__init__.py tests/test_ostree_rpm.py
 git commit -m "feat(rpm): skip rpm -Va on ostree, parse rpm-ostree status for layered/overridden/removed"
 ```
 
@@ -1125,8 +1125,8 @@ git commit -m "feat(rpm): skip rpm -Va on ostree, parse rpm-ostree status for la
 ## Task 6: Config Inspector Adaptation (Slice 1)
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/config.py`
-- Modify: `src/yoinkc/inspectors/__init__.py` (pass system_type)
+- Modify: `src/inspectah/inspectors/config.py`
+- Modify: `src/inspectah/inspectors/__init__.py` (pass system_type)
 - Create: `tests/test_ostree_config.py`
 
 Key differences from revision 1:
@@ -1143,8 +1143,8 @@ Create `tests/test_ostree_config.py`:
 import os
 from pathlib import Path
 
-from yoinkc.executor import RunResult
-from yoinkc.schema import SystemType
+from inspectah.executor import RunResult
+from inspectah.schema import SystemType
 
 
 def _config_executor(cmd, *, cwd=None):
@@ -1206,7 +1206,7 @@ def _setup_ostree_config(tmp_path):
 
 
 def test_ostree_modified_config_detected(tmp_path):
-    from yoinkc.inspectors.config import run as run_config
+    from inspectah.inspectors.config import run as run_config
     host_root = _setup_ostree_config(tmp_path)
     section = run_config(host_root, _config_executor, system_type=SystemType.RPM_OSTREE)
     paths = [e.path for e in section.files]
@@ -1214,7 +1214,7 @@ def test_ostree_modified_config_detected(tmp_path):
 
 
 def test_ostree_unmodified_config_not_reported(tmp_path):
-    from yoinkc.inspectors.config import run as run_config
+    from inspectah.inspectors.config import run as run_config
     host_root = _setup_ostree_config(tmp_path)
     section = run_config(host_root, _config_executor, system_type=SystemType.RPM_OSTREE)
     paths = [e.path for e in section.files]
@@ -1222,7 +1222,7 @@ def test_ostree_unmodified_config_not_reported(tmp_path):
 
 
 def test_ostree_usr_etc_only_file_not_reported(tmp_path):
-    from yoinkc.inspectors.config import run as run_config
+    from inspectah.inspectors.config import run as run_config
     host_root = _setup_ostree_config(tmp_path)
     section = run_config(host_root, _config_executor, system_type=SystemType.RPM_OSTREE)
     paths = [e.path for e in section.files]
@@ -1230,7 +1230,7 @@ def test_ostree_usr_etc_only_file_not_reported(tmp_path):
 
 
 def test_ostree_etc_only_unowned_file_detected(tmp_path):
-    from yoinkc.inspectors.config import run as run_config
+    from inspectah.inspectors.config import run as run_config
     host_root = _setup_ostree_config(tmp_path)
     section = run_config(host_root, _config_executor, system_type=SystemType.RPM_OSTREE)
     paths = [e.path for e in section.files]
@@ -1239,7 +1239,7 @@ def test_ostree_etc_only_unowned_file_detected(tmp_path):
 
 def test_ostree_etc_only_rpm_owned_post_detected(tmp_path):
     """RPM-owned file in /etc with no /usr/etc counterpart (rare %post case) is detected."""
-    from yoinkc.inspectors.config import run as run_config
+    from inspectah.inspectors.config import run as run_config
     host_root = _setup_ostree_config(tmp_path)
     section = run_config(host_root, _config_executor, system_type=SystemType.RPM_OSTREE)
     paths = [e.path for e in section.files]
@@ -1247,7 +1247,7 @@ def test_ostree_etc_only_rpm_owned_post_detected(tmp_path):
 
 
 def test_ostree_volatile_files_skipped(tmp_path):
-    from yoinkc.inspectors.config import run as run_config
+    from inspectah.inspectors.config import run as run_config
     host_root = _setup_ostree_config(tmp_path)
     section = run_config(host_root, _config_executor, system_type=SystemType.RPM_OSTREE)
     paths = [e.path for e in section.files]
@@ -1257,7 +1257,7 @@ def test_ostree_volatile_files_skipped(tmp_path):
 
 
 def test_ostree_symlink_target_change_detected(tmp_path):
-    from yoinkc.inspectors.config import run as run_config
+    from inspectah.inspectors.config import run as run_config
     usr_etc = tmp_path / "usr" / "etc"
     etc = tmp_path / "etc"
     usr_etc.mkdir(parents=True)
@@ -1272,12 +1272,12 @@ def test_ostree_symlink_target_change_detected(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_ostree_config.py::test_ostree_modified_config_detected -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_ostree_config.py::test_ostree_modified_config_detected -v`
 Expected: FAIL — `run_config` does not accept `system_type`
 
 - [ ] **Step 3: Implement ostree config diffing in config.py**
 
-In `src/yoinkc/inspectors/config.py`, add `SystemType` import, `system_type` parameter to `run()`, and the ostree code path. The implementation follows the same structure as revision 1 but with these additions:
+In `src/inspectah/inspectors/config.py`, add `SystemType` import, `system_type` parameter to `run()`, and the ostree code path. The implementation follows the same structure as revision 1 but with these additions:
 
 **Tier 1 SELinux context comparison** — after content/metadata comparison, add:
 
@@ -1322,7 +1322,7 @@ In `src/yoinkc/inspectors/config.py`, add `SystemType` import, `system_type` par
 
 - [ ] **Step 4: Pass system_type to config inspector in run_all**
 
-In `src/yoinkc/inspectors/__init__.py`:
+In `src/inspectah/inspectors/__init__.py`:
 ```python
     snapshot.config = _safe_run("config", lambda: run_config(
         host_root, executor,
@@ -1333,18 +1333,18 @@ In `src/yoinkc/inspectors/__init__.py`:
 
 - [ ] **Step 5: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_ostree_config.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_ostree_config.py -v`
 Expected: PASS
 
 - [ ] **Step 6: Full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
-git add src/yoinkc/inspectors/config.py src/yoinkc/inspectors/__init__.py tests/test_ostree_config.py
+cd /Users/mrussell/Work/bootc-migration/inspectah
+git add src/inspectah/inspectors/config.py src/inspectah/inspectors/__init__.py tests/test_ostree_config.py
 git commit -m "feat(config): ostree /usr/etc diffing with SELinux context + Tier 2 rpm -V"
 ```
 
@@ -1353,8 +1353,8 @@ git commit -m "feat(config): ostree /usr/etc diffing with SELinux context + Tier
 ## Task 7: Non-RPM Software Inspector Adaptation (Slice 1)
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/non_rpm_software.py`
-- Modify: `src/yoinkc/inspectors/__init__.py`
+- Modify: `src/inspectah/inspectors/non_rpm_software.py`
+- Modify: `src/inspectah/inspectors/__init__.py`
 - Create: `tests/test_ostree_non_rpm.py`
 
 Key difference from revision 1: adds `/usr/lib/python3*` and `/usr/lib64/python3*` to the ostree skip list (per spec table and Collins finding).
@@ -1367,8 +1367,8 @@ Create `tests/test_ostree_non_rpm.py`:
 """Non-RPM software inspector tests for ostree/bootc source systems."""
 
 from pathlib import Path
-from yoinkc.executor import RunResult
-from yoinkc.schema import SystemType
+from inspectah.executor import RunResult
+from inspectah.schema import SystemType
 
 
 def _non_rpm_executor(cmd, *, cwd=None):
@@ -1376,7 +1376,7 @@ def _non_rpm_executor(cmd, *, cwd=None):
 
 
 def test_immutable_usr_local_skipped_on_ostree(tmp_path):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     usr_local = tmp_path / "usr" / "local" / "bin"
     usr_local.mkdir(parents=True)
     (usr_local / "custom-app").write_text("#!/bin/bash\n")
@@ -1392,7 +1392,7 @@ def test_immutable_usr_local_skipped_on_ostree(tmp_path):
 
 def test_immutable_usr_lib_python_skipped_on_ostree(tmp_path):
     """Spec: skip /usr/lib/python3 immutable content on ostree."""
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     pydir = tmp_path / "usr" / "lib" / "python3.12" / "site-packages" / "mylib"
     pydir.mkdir(parents=True)
     (pydir / "__init__.py").write_text("# immutable\n")
@@ -1407,7 +1407,7 @@ def test_immutable_usr_lib_python_skipped_on_ostree(tmp_path):
 
 
 def test_ostree_var_internal_paths_skipped(tmp_path):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     for internal in ["var/lib/ostree", "var/lib/rpm-ostree", "var/lib/flatpak"]:
         p = tmp_path / internal / "data"
         p.mkdir(parents=True)
@@ -1420,7 +1420,7 @@ def test_ostree_var_internal_paths_skipped(tmp_path):
 
 
 def test_package_mode_usr_local_still_scanned(tmp_path):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     usr_local = tmp_path / "usr" / "local" / "bin"
     usr_local.mkdir(parents=True)
     (usr_local / "custom-tool").write_text("#!/bin/bash\n")
@@ -1431,12 +1431,12 @@ def test_package_mode_usr_local_still_scanned(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_ostree_non_rpm.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_ostree_non_rpm.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement ostree filtering**
 
-In `src/yoinkc/inspectors/non_rpm_software.py`:
+In `src/inspectah/inspectors/non_rpm_software.py`:
 
 Add `SystemType` import and `system_type` parameter. Add skip lists:
 
@@ -1472,10 +1472,10 @@ git commit -m "feat(non-rpm): skip immutable /usr and /usr/lib/python3* on ostre
 
 ## Task 8: Pure-bootc Low-Confidence Fallback
 
-This is a dedicated task for the pure-bootc path where `rpm-ostree status` is unavailable and yoinkc must fall back to `rpm -qa` diffing against the base image. Per spec, this path is explicitly low-confidence and must surface warnings and digest info.
+This is a dedicated task for the pure-bootc path where `rpm-ostree status` is unavailable and inspectah must fall back to `rpm -qa` diffing against the base image. Per spec, this path is explicitly low-confidence and must surface warnings and digest info.
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/rpm.py`
+- Modify: `src/inspectah/inspectors/rpm.py`
 - Create: `tests/test_ostree_rpm.py` (append pure-bootc tests)
 
 - [ ] **Step 1: Write pure-bootc fallback tests**
@@ -1485,7 +1485,7 @@ Append to `tests/test_ostree_rpm.py`:
 ```python
 def test_pure_bootc_without_rpmostree_uses_rpm_qa(tmp_path):
     """On BOOTC when rpm-ostree is absent, falls back to rpm -qa for package detection."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
 
     class BootcOnlyExecutor:
@@ -1522,7 +1522,7 @@ def test_pure_bootc_without_rpmostree_uses_rpm_qa(tmp_path):
 
 def test_pure_bootc_emits_digest_info_when_available(tmp_path):
     """Pure-bootc fallback should surface the resolved base ref in output metadata."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     _setup_fedora_root(tmp_path)
 
     def executor(cmd, *, cwd=None):
@@ -1546,12 +1546,12 @@ def test_pure_bootc_emits_digest_info_when_available(tmp_path):
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_ostree_rpm.py::test_pure_bootc_without_rpmostree_uses_rpm_qa -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_ostree_rpm.py::test_pure_bootc_without_rpmostree_uses_rpm_qa -v`
 Expected: FAIL — warning plumbing not yet implemented
 
 - [ ] **Step 3: Implement pure-bootc fallback logic**
 
-In `src/yoinkc/inspectors/rpm.py`, in `_parse_rpmostree_package_state()`:
+In `src/inspectah/inspectors/rpm.py`, in `_parse_rpmostree_package_state()`:
 
 When `rpm-ostree status --json` returns rc != 0, emit a low-confidence warning instead of silently falling back:
 
@@ -1591,7 +1591,7 @@ Pass `warnings` and `system_type` through from `run()`:
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_ostree_rpm.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_ostree_rpm.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
@@ -1605,7 +1605,7 @@ git commit -m "feat(rpm): pure-bootc low-confidence fallback with warning when r
 ## Task 9: Flatpak Detection (Slice 2)
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/container.py`
+- Modify: `src/inspectah/inspectors/container.py`
 - Create: `tests/test_flatpak.py`
 
 Key difference from revision 1: adds negative-case tests for malformed output and nonzero exit.
@@ -1618,7 +1618,7 @@ Create `tests/test_flatpak.py`:
 """Flatpak detection tests -- runs on all system types."""
 
 from pathlib import Path
-from yoinkc.executor import RunResult
+from inspectah.executor import RunResult
 
 
 _FLATPAK_LIST_OUTPUT = (
@@ -1643,7 +1643,7 @@ def _no_flatpak_executor(cmd, *, cwd=None):
 
 
 def test_flatpak_apps_detected(tmp_path):
-    from yoinkc.inspectors.container import run as run_container
+    from inspectah.inspectors.container import run as run_container
     section = run_container(tmp_path, _flatpak_executor)
     assert len(section.flatpak_apps) == 3
     ids = {a.app_id for a in section.flatpak_apps}
@@ -1651,21 +1651,21 @@ def test_flatpak_apps_detected(tmp_path):
 
 
 def test_flatpak_origin_captured(tmp_path):
-    from yoinkc.inspectors.container import run as run_container
+    from inspectah.inspectors.container import run as run_container
     section = run_container(tmp_path, _flatpak_executor)
     firefox = next(a for a in section.flatpak_apps if a.app_id == "org.mozilla.firefox")
     assert firefox.origin == "flathub"
 
 
 def test_flatpak_not_present_silently_skipped(tmp_path):
-    from yoinkc.inspectors.container import run as run_container
+    from inspectah.inspectors.container import run as run_container
     section = run_container(tmp_path, _no_flatpak_executor)
     assert section.flatpak_apps == []
 
 
 def test_flatpak_list_nonzero_exit_handled(tmp_path):
     """flatpak list returns error -- no crash, no partial data."""
-    from yoinkc.inspectors.container import run as run_container
+    from inspectah.inspectors.container import run as run_container
 
     def failing_executor(cmd, *, cwd=None):
         if cmd == ["which", "flatpak"]:
@@ -1680,7 +1680,7 @@ def test_flatpak_list_nonzero_exit_handled(tmp_path):
 
 def test_flatpak_malformed_output_no_crash(tmp_path):
     """Malformed flatpak list output -- no crash, skip bad rows."""
-    from yoinkc.inspectors.container import run as run_container
+    from inspectah.inspectors.container import run as run_container
 
     def bad_output_executor(cmd, *, cwd=None):
         if cmd == ["which", "flatpak"]:
@@ -1720,7 +1720,7 @@ git commit -m "feat(storage): filter ostree-managed mounts from storage inventor
 Key difference from revision 1: actually implements BLS entry filtering instead of just suppressing `grub_defaults`.
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/kernel_boot.py`
+- Modify: `src/inspectah/inspectors/kernel_boot.py`
 - Test: `tests/test_ostree_slice2.py` (append)
 
 - [ ] **Step 1: Write kernel/boot BLS filtering tests**
@@ -1730,7 +1730,7 @@ Append to `tests/test_ostree_slice2.py`:
 ```python
 def test_ostree_grub_defaults_suppressed(tmp_path):
     """GRUB defaults suppressed on ostree (BLS-managed)."""
-    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    from inspectah.inspectors.kernel_boot import run as run_kernel_boot
     etc = tmp_path / "etc"
     etc.mkdir()
     (etc / "default").mkdir()
@@ -1750,7 +1750,7 @@ def test_ostree_grub_defaults_suppressed(tmp_path):
 
 def test_ostree_bls_entries_not_in_snapshot(tmp_path):
     """BLS entries from /boot/loader/entries/ are ostree-managed -- not included in snapshot."""
-    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    from inspectah.inspectors.kernel_boot import run as run_kernel_boot
     loader = tmp_path / "boot" / "loader" / "entries"
     loader.mkdir(parents=True)
     (loader / "ostree-1-6.8.1.conf").write_text(
@@ -1780,7 +1780,7 @@ def test_ostree_bls_entries_not_in_snapshot(tmp_path):
 
 def test_ostree_user_kargs_preserved(tmp_path):
     """User-added kernel args are preserved through the pipeline."""
-    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    from inspectah.inspectors.kernel_boot import run as run_kernel_boot
     proc = tmp_path / "proc"
     proc.mkdir()
     (proc / "cmdline").write_text(
@@ -1800,7 +1800,7 @@ def test_ostree_user_kargs_preserved(tmp_path):
 
 - [ ] **Step 3: Implement BLS filtering**
 
-In `src/yoinkc/inspectors/kernel_boot.py`, on ostree:
+In `src/inspectah/inspectors/kernel_boot.py`, on ostree:
 - Suppress `grub_defaults` (BLS-managed, no user-facing GRUB config)
 - Skip BLS entry enumeration from `/boot/loader/entries/` (ostree-managed boot entries should not appear in the snapshot as user customizations)
 - cmdline is still captured — the renderer's existing `_operator_kargs()` filter in `_helpers.py` separates user kargs from bootloader-managed ones
@@ -1824,8 +1824,8 @@ git commit -m "feat(timers): extend vendor timer filter to /usr/lib/systemd/ on 
 ## Task 13: Containerfile Renderer Adaptations
 
 **Files:**
-- Modify: `src/yoinkc/renderers/containerfile/packages.py`
-- Modify: `src/yoinkc/renderers/containerfile/_core.py`
+- Modify: `src/inspectah/renderers/containerfile/packages.py`
+- Modify: `src/inspectah/renderers/containerfile/_core.py`
 - Create: `tests/test_ostree_renderer.py`
 
 Key differences from revision 1:
@@ -1839,7 +1839,7 @@ Create `tests/test_ostree_renderer.py` with all tests from revision 1 plus:
 ```python
 def test_ostree_layered_packages_in_dnf_install(tmp_path):
     """Layered packages from rpm-ostree appear as RUN dnf install lines."""
-    from yoinkc.renderers.containerfile._core import _render_containerfile_content
+    from inspectah.renderers.containerfile._core import _render_containerfile_content
     snapshot = _make_ostree_snapshot()
     content = _render_containerfile_content(snapshot, tmp_path)
     assert "RUN dnf install -y" in content
@@ -1849,7 +1849,7 @@ def test_ostree_layered_packages_in_dnf_install(tmp_path):
 
 def test_renderer_integration_from_ostree_snapshot(tmp_path):
     """Full render on ostree snapshot produces Containerfile + flatpaks.list."""
-    from yoinkc.renderers.containerfile._core import render
+    from inspectah.renderers.containerfile._core import render
     from jinja2 import Environment
     snapshot = _make_ostree_snapshot()
     render(snapshot, Environment(autoescape=True), tmp_path)
@@ -1897,11 +1897,11 @@ from unittest.mock import patch
 import pytest
 from jinja2 import Environment
 
-from yoinkc.executor import RunResult
-from yoinkc.inspectors import run_all
-from yoinkc.renderers import run_all as run_all_renderers
-from yoinkc.schema import SystemType
-import yoinkc.preflight as preflight_mod
+from inspectah.executor import RunResult
+from inspectah.inspectors import run_all
+from inspectah.renderers import run_all as run_all_renderers
+from inspectah.schema import SystemType
+import inspectah.preflight as preflight_mod
 
 
 def _setup_silverblue_root(tmp_path):

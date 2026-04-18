@@ -1,18 +1,18 @@
-# RPM & Homebrew Packaging for yoinkc
+# RPM & Homebrew Packaging for inspectah
 
 **Date:** 2026-03-24
 **Status:** Proposed
 
 ## Summary
 
-Package yoinkc as an RPM (for Fedora, RHEL 9, RHEL 10 / CentOS Stream) and
+Package inspectah as an RPM (for Fedora, RHEL 9, RHEL 10 / CentOS Stream) and
 a Homebrew formula (for macOS), providing native `dnf install` and
 `brew install` experiences alongside the existing container-based workflow.
 
 ## Motivation
 
-Today yoinkc is distributed exclusively as a container image on GHCR.
-Users run it via `run-yoinkc.sh`, which pulls the image and orchestrates
+Today inspectah is distributed exclusively as a container image on GHCR.
+Users run it via `run-inspectah.sh`, which pulls the image and orchestrates
 podman. This works but adds indirection:
 
 - Container-in-container overhead for what is fundamentally a CLI tool
@@ -30,7 +30,7 @@ The packaged CLI supports the full subcommand surface (`inspect`, `fleet`,
 
 - **RPM (Linux):** All three subcommands. `inspect` is the primary use case
   — sysadmins run it on the hosts they are migrating. Podman is a hard
-  package dependency. `inspect` requires root (`sudo yoinkc inspect`) for
+  package dependency. `inspect` requires root (`sudo inspectah inspect`) for
   namespace access and reading protected host paths.
 - **Homebrew (macOS):** `fleet` and `refine` are the primary use cases —
   processing collected tarballs on a workstation. `inspect` works if podman
@@ -73,7 +73,7 @@ The packaged CLI supports the full subcommand surface (`inspect`, `fleet`,
 
 ### Spec file
 
-`yoinkc.spec` at repository root. Uses Fedora's `%pyproject_*` macros
+`inspectah.spec` at repository root. Uses Fedora's `%pyproject_*` macros
 (standard for Python RPM packaging on Fedora/EPEL).
 
 ### Dependencies
@@ -93,32 +93,32 @@ shell workflow (commit and push the output directory manually).
 
 ### Installed files
 
-- `/usr/bin/yoinkc` — console script entry point
-- `/usr/lib/python3.X/site-packages/yoinkc/` — package (including
+- `/usr/bin/inspectah` — console script entry point
+- `/usr/lib/python3.X/site-packages/inspectah/` — package (including
   templates and static assets)
-- `/usr/share/bash-completion/completions/yoinkc` — bash completion
-- `/usr/share/zsh/site-functions/_yoinkc` — zsh completion
-- `/usr/share/fish/vendor_completions.d/yoinkc.fish` — fish completion
+- `/usr/share/bash-completion/completions/inspectah` — bash completion
+- `/usr/share/zsh/site-functions/_inspectah` — zsh completion
+- `/usr/share/fish/vendor_completions.d/inspectah.fish` — fish completion
 
 No wrapper script, no systemd units, no config files.
 
 ### COPR
 
-- Project: `marrusl/yoinkc`
+- Project: `marrusl/inspectah`
 - Build targets: Fedora latest + rawhide, EPEL 9, EPEL 10
 - Auto-build from GitHub webhook on published releases
-- User install: `dnf copr enable marrusl/yoinkc && dnf install yoinkc`
+- User install: `dnf copr enable marrusl/inspectah && dnf install inspectah`
 
 ## Homebrew Packaging
 
 ### Tap repository
 
-`marrusl/homebrew-yoinkc` on GitHub (separate repo). Contains a single
+`marrusl/homebrew-inspectah` on GitHub (separate repo). Contains a single
 formula.
 
 ### Formula
 
-`Formula/yoinkc.rb` — standard Python formula pattern:
+`Formula/inspectah.rb` — standard Python formula pattern:
 
 - `depends_on "python@3.13"`
 - `resource` blocks for PyPI dependencies: pydantic, pydantic-core, jinja2,
@@ -130,14 +130,14 @@ formula.
 ### User experience
 
 ```
-brew tap marrusl/yoinkc
-brew install yoinkc
+brew tap marrusl/inspectah
+brew install inspectah
 ```
 
 ### macOS use cases
 
-Primarily `yoinkc fleet` and `yoinkc refine` (processing collected
-tarballs). `yoinkc inspect` works if pointed at a Linux podman machine but
+Primarily `inspectah fleet` and `inspectah refine` (processing collected
+tarballs). `inspectah inspect` works if pointed at a Linux podman machine but
 is an edge case.
 
 ### Formula updates
@@ -169,7 +169,7 @@ not need to call the COPR API.
 
 **`update-homebrew`** (runs on `ubuntu-latest`):
 - Computes SHA256 of the GitHub-generated source tarball
-- Checks out the `homebrew-yoinkc` tap repo
+- Checks out the `homebrew-inspectah` tap repo
 - Updates `url` and `sha256` in the formula
 - Regenerates `resource` blocks from `pyproject.toml` dependencies
   (using `brew update-python-resources` or equivalent scripting) so that
@@ -190,17 +190,17 @@ Container image always updates; packages only update on published releases.
 
 ### Internalize wrapper logic
 
-The following logic moves from `run-yoinkc.sh` into Python code:
+The following logic moves from `run-inspectah.sh` into Python code:
 
 **Podman preflight** (in `preflight.py` or similar):
 - `inspect` subcommand checks `podman` is on PATH before proceeding
-- Clear error: "yoinkc requires podman. Install it with:
+- Clear error: "inspectah requires podman. Install it with:
   dnf install podman / brew install podman"
 
 **Root privilege check:**
 - Only for `inspect` subcommand in native (non-container) installs
-- Checks `os.geteuid() == 0`, exits with: "yoinkc inspect requires root.
-  Run with: sudo yoinkc inspect"
+- Checks `os.geteuid() == 0`, exits with: "inspectah inspect requires root.
+  Run with: sudo inspectah inspect"
 - Skipped for fleet, refine, `--from-snapshot`, and `--skip-preflight`
 
 **Registry login check:**
@@ -214,7 +214,7 @@ The following logic moves from `run-yoinkc.sh` into Python code:
 
 ### Wrapper script
 
-`run-yoinkc.sh` continues to exist for the container-based workflow.
+`run-inspectah.sh` continues to exist for the container-based workflow.
 No changes to the wrapper itself. Users who don't install the RPM or
 Homebrew formula use it exactly as before.
 
@@ -225,9 +225,9 @@ repository. The CLI surface is small (three subcommands with a handful of
 flags each), so static scripts are easy to maintain and avoid adding a
 dependency on argcomplete or similar libraries.
 
-- `completions/yoinkc.bash` — bash completion
-- `completions/yoinkc.zsh` — zsh completion
-- `completions/yoinkc.fish` — fish completion
+- `completions/inspectah.bash` — bash completion
+- `completions/inspectah.zsh` — zsh completion
+- `completions/inspectah.fish` — fish completion
 
 All three cover the subcommands (`inspect`, `fleet`, `refine`) and their
 flags.
@@ -238,9 +238,9 @@ completion scripts. This runs on every PR, so CLI changes that forget to
 update completions fail CI.
 
 **RPM install paths:**
-- `/usr/share/bash-completion/completions/yoinkc`
-- `/usr/share/zsh/site-functions/_yoinkc`
-- `/usr/share/fish/vendor_completions.d/yoinkc.fish`
+- `/usr/share/bash-completion/completions/inspectah`
+- `/usr/share/zsh/site-functions/_inspectah`
+- `/usr/share/fish/vendor_completions.d/inspectah.fish`
 
 **Homebrew:** Uses `bash_completion.install`, `zsh_completion.install`,
 and `fish_completion.install` blocks in the formula.
@@ -248,7 +248,7 @@ and `fish_completion.install` blocks in the formula.
 ## What This Does NOT Change
 
 - Container image build and distribution (GHCR) — unchanged
-- `run-yoinkc.sh` wrapper — unchanged, remains available
+- `run-inspectah.sh` wrapper — unchanged, remains available
 - `pyproject.toml` structure — unchanged (RPM spec reads from it)
 - Python source code — unchanged except for the preflight additions
 - Fleet and refine subcommand behavior — unchanged

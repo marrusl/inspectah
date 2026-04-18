@@ -1,4 +1,4 @@
-# yoinkc architect: Layer Topology Planner — Design Spec
+# inspectah architect: Layer Topology Planner — Design Spec
 
 **Date:** 2026-03-29
 **Status:** Approved
@@ -7,7 +7,7 @@
 
 ## Overview
 
-A new `yoinkc architect` subcommand that takes multiple refined fleet outputs and helps enterprise architects decompose them into a layered bootc image hierarchy: a base image plus derived role/hardware-specific images. Ships with an interactive web UI for exploring and adjusting the proposed topology.
+A new `inspectah architect` subcommand that takes multiple refined fleet outputs and helps enterprise architects decompose them into a layered bootc image hierarchy: a base image plus derived role/hardware-specific images. Ships with an interactive web UI for exploring and adjusting the proposed topology.
 
 ## Pipeline Position
 
@@ -28,7 +28,7 @@ Architect consumes refined fleet outputs. It does not replace or subsume refine.
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Architecture | New package in yoinkc, not standalone app | Follows existing patterns, fastest path, extract later |
+| Architecture | New package in inspectah, not standalone app | Follows existing patterns, fastest path, extract later |
 | Server | Raw BaseHTTPRequestHandler, port 8643 | Matches refine pattern |
 | UI framework | PatternFly 6 bundled + Jinja2 templates | Matches refine, Red Hat look |
 | Layout | Sidebar + tree + drawer (3-column) | Matches refine pattern, approved via mockup |
@@ -46,7 +46,7 @@ Architect consumes refined fleet outputs. It does not replace or subsume refine.
 ## Data Flow
 
 ```
-yoinkc architect ./refined-fleets/
+inspectah architect ./refined-fleets/
     ↓ loads refined fleet tarballs from directory
     ↓ cross-fleet commonality analysis
     ↓ prevalence-based base/derived split (100% → base)
@@ -58,7 +58,7 @@ yoinkc architect ./refined-fleets/
 ### CLI
 
 ```
-yoinkc architect <input_dir>
+inspectah architect <input_dir>
 ```
 
 - `input_dir`: directory containing refined fleet tarballs (`.tar.gz`)
@@ -70,7 +70,7 @@ yoinkc architect <input_dir>
 
 ## Backend Architecture
 
-New package: `src/yoinkc/architect/`
+New package: `src/inspectah/architect/`
 
 ### `__init__.py`
 Package marker.
@@ -78,12 +78,12 @@ Package marker.
 ### `cli.py`
 Registers the `architect` subcommand with argparse. Takes `input_dir` argument. Calls `run_architect()`.
 
-Follows existing pattern in `src/yoinkc/fleet/cli.py` for subcommand registration.
+Follows existing pattern in `src/inspectah/fleet/cli.py` for subcommand registration.
 
 ### `loader.py`
 Reads refined fleet tarballs from the input directory. Each tarball contains a refined `inspection-snapshot.json` with fleet metadata and prevalence data.
 
-Reuses patterns from `src/yoinkc/fleet/loader.py` (tarball discovery, JSON extraction, schema validation).
+Reuses patterns from `src/inspectah/fleet/loader.py` (tarball discovery, JSON extraction, schema validation).
 
 Returns: list of fleet objects, each with identity (name, host count) and their refined packages/configs.
 
@@ -157,7 +157,7 @@ All JS/CSS is inlined via Jinja2 template partials (matching refine's pattern). 
 
 ### Templates
 
-`src/yoinkc/templates/architect/` — Jinja2 templates following refine's pattern:
+`src/inspectah/templates/architect/` — Jinja2 templates following refine's pattern:
 
 - `architect.html.j2` — main page template
 - `architect/_css.html.j2` — custom CSS overrides
@@ -165,18 +165,18 @@ All JS/CSS is inlined via Jinja2 template partials (matching refine's pattern). 
 
 All JS/CSS inlined via partials — no separate static directory. Matches refine's approach. Confirm Jinja2 loader search path includes the `architect/` subdirectory.
 
-Uses bundled PatternFly 6 CSS from `src/yoinkc/templates/patternfly.css` (already in project).
+Uses bundled PatternFly 6 CSS from `src/inspectah/templates/patternfly.css` (already in project).
 
 ## Frontend Design
 
 ### Theme
-Dark/light toggle matching refine: `pf-v6-theme-dark` class on `<html>`, persisted to `localStorage` key `yoinkc-architect-theme`.
+Dark/light toggle matching refine: `pf-v6-theme-dark` class on `<html>`, persisted to `localStorage` key `inspectah-architect-theme`.
 
 ### Layout (PatternFly 6 page layout)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Masthead: yoinkc Architect              [☀️ theme]     │
+│  Masthead: inspectah Architect              [☀️ theme]     │
 ├──────────────┬──────────────────────┬───────────────────┤
 │  Sidebar     │  Layer Topology      │  Package Drawer   │
 │  (fleets)    │  (tree view)         │  (selected layer) │
@@ -259,7 +259,7 @@ podman build -t localhost/db-servers:latest db-servers/
 podman build -t localhost/gpu-nodes:latest gpu-nodes/
 ```
 
-Reuses existing Containerfile rendering patterns from `src/yoinkc/renderers/`.
+Reuses existing Containerfile rendering patterns from `src/inspectah/renderers/`.
 
 **Config/directive assignment (v1):** Config files and service directives stay with their original fleet. No directive-follows-package logic. Known limitation — user hand-edits edge cases. Flagged for v2.
 
@@ -292,7 +292,7 @@ Demonstrates hardware tier — architect proposes base + two derived layers wher
 
 ## Container Integration
 
-The demo runs via the containerized yoinkc wrapper. Port 8643 must be exposed in the container for the architect web UI. No packaging changes needed — deferred.
+The demo runs via the containerized inspectah wrapper. Port 8643 must be exposed in the container for the architect web UI. No packaging changes needed — deferred.
 
 ## Deferred (v2+)
 

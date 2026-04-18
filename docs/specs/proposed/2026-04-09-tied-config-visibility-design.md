@@ -21,7 +21,7 @@ This affects all item types processed through `_auto_select_variants()` in `flee
 
 All five share the same tie-at-the-top behavior: when the top two variants have equal fleet counts, every variant is set to `include=False`. The design in this spec applies uniformly to all five item types. Where an item type requires different treatment, that is called out explicitly.
 
-This is silent data loss in migration output. It violates the user's reasonable expectation: "if yoinkc didn't warn me, my image has everything it needs."
+This is silent data loss in migration output. It violates the user's reasonable expectation: "if inspectah didn't warn me, my image has everything it needs."
 
 **Discovery:** Identified during review of fleet merge behavior (2026-04-09). Did not surface during Container Guild demo but is a real UX/safety gap.
 
@@ -37,7 +37,7 @@ When normalized variants collapse during merge, `_merge_content_items()` retains
 
 **Scope:** Trailing whitespace stripping and line ending normalization only. No comment stripping (comments are intentional operator state). No format-aware canonicalization (order-sensitive formats like PAM make this unsafe). Higher-level normalization is out of scope for this spec.
 
-**Risk:** Low. Trailing whitespace is rarely semantically meaningful in the file formats yoinkc handles (INI, shell, sysctl, PAM, audit rules, systemd units, quadlet units, dotenv files). Edge cases could exist in formats where trailing whitespace is load-bearing (e.g., Makefile-derived files, heredoc content in shell scripts); these are unlikely in the config/drop-in/env-file paths yoinkc processes but cannot be categorically ruled out.
+**Risk:** Low. Trailing whitespace is rarely semantically meaningful in the file formats inspectah handles (INI, shell, sysctl, PAM, audit rules, systemd units, quadlet units, dotenv files). Edge cases could exist in formats where trailing whitespace is load-bearing (e.g., Makefile-derived files, heredoc content in shell scripts); these are unlikely in the config/drop-in/env-file paths inspectah processes but cannot be categorically ruled out.
 
 ### 2. Deterministic Tiebreaker
 
@@ -92,7 +92,7 @@ Add a "Tied items" category to the existing `config_inventory_comment()` block, 
 #   etc/sysconfig/network-scripts/ifcfg-eth0  (config, 3/6 hosts each, 2 variants)
 #   etc/systemd/system/app.service.d/override.conf  (drop-in, 2/4 hosts each, 2 variants)
 #   See merge-notes.md for tie details
-#   Review in report.html or run `yoinkc refine` to change selection
+#   Review in report.html or run `inspectah refine` to change selection
 ```
 
 The picked winner is written to `config/` (or `quadlet/`, `drop-ins/`) as normal. Existing bulk COPY lines stay untouched. No per-file COPY restructuring.
@@ -184,21 +184,21 @@ Multiple renderers currently only see `include=False` -- they cannot distinguish
 
 | Component | File | Lines | Change |
 |-----------|------|-------|--------|
-| Content hash | `src/yoinkc/fleet/merge.py` | 25-26 | Switch from truncated (16 hex) to full SHA-256 digest |
-| Normalization | `src/yoinkc/fleet/merge.py` | ~347-352, 365-369, 426-435, 456-460 | Inject normalize() into variant_fn lambdas for configs, drop-ins, quadlets, env files |
-| Tiebreaker | `src/yoinkc/fleet/merge.py` | 119-155 | Add full-digest sort in `_auto_select_variants`, set `tie`/`tie_winner` flags |
+| Content hash | `src/inspectah/fleet/merge.py` | 25-26 | Switch from truncated (16 hex) to full SHA-256 digest |
+| Normalization | `src/inspectah/fleet/merge.py` | ~347-352, 365-369, 426-435, 456-460 | Inject normalize() into variant_fn lambdas for configs, drop-ins, quadlets, env files |
+| Tiebreaker | `src/inspectah/fleet/merge.py` | 119-155 | Add full-digest sort in `_auto_select_variants`, set `tie`/`tie_winner` flags |
 | Model flags | Schema models for ConfigFileEntry, SystemdDropIn, QuadletUnit, ComposeFile, env file model | TBD | Add `tie`, `tie_winner` fields |
-| Containerfile comment | `src/yoinkc/renderers/containerfile/_config_tree.py` | `config_inventory_comment()` | Add "Tied items" category with merge-notes.md pointer |
-| HTML report — renderer | `src/yoinkc/renderers/html_report.py` | 688-725 | Switch tie detection from include-based to flag-based |
-| HTML report — config template | `src/yoinkc/templates/report/_config.html.j2` | 16-18 | Replace `not group_has_selected` tie check with `tie`/`tie_winner` flag checks |
-| HTML report — summary template | `src/yoinkc/templates/report/_summary.html.j2` | 47-53 | Distinguish auto-resolved from unresolved ties |
-| HTML report — services template | `src/yoinkc/templates/report/_services.html.j2` | variant group logic | Apply `tie`/`tie_winner` pattern for drop-ins |
-| HTML report — containers template | `src/yoinkc/templates/report/_containers.html.j2` | variant group logic | Apply `tie`/`tie_winner` pattern for quadlets/compose |
-| HTML report — client JS | `src/yoinkc/templates/report/_js.html.j2` | Client-side tie/variant toggle logic | Update tie-state checks to use `tie`/`tie_winner` data attributes |
-| HTML report — editor JS | `src/yoinkc/templates/report/_editor_js.html.j2` | Editor/refine JS logic | Update tie-aware editor behavior to use new model flags |
-| Audit report | `src/yoinkc/renderers/audit_report.py` | `[EXCLUDED]` labels | Add `[TIE LOSER]` label with precedence rules |
-| Readme artifacts | `src/yoinkc/renderers/readme.py` | artifacts table (~133-141) | Add `merge-notes.md` row for fleet merges |
-| Refine label | `src/yoinkc/refine.py` | UI rendering | Add "(auto-selected: tied)" label |
+| Containerfile comment | `src/inspectah/renderers/containerfile/_config_tree.py` | `config_inventory_comment()` | Add "Tied items" category with merge-notes.md pointer |
+| HTML report — renderer | `src/inspectah/renderers/html_report.py` | 688-725 | Switch tie detection from include-based to flag-based |
+| HTML report — config template | `src/inspectah/templates/report/_config.html.j2` | 16-18 | Replace `not group_has_selected` tie check with `tie`/`tie_winner` flag checks |
+| HTML report — summary template | `src/inspectah/templates/report/_summary.html.j2` | 47-53 | Distinguish auto-resolved from unresolved ties |
+| HTML report — services template | `src/inspectah/templates/report/_services.html.j2` | variant group logic | Apply `tie`/`tie_winner` pattern for drop-ins |
+| HTML report — containers template | `src/inspectah/templates/report/_containers.html.j2` | variant group logic | Apply `tie`/`tie_winner` pattern for quadlets/compose |
+| HTML report — client JS | `src/inspectah/templates/report/_js.html.j2` | Client-side tie/variant toggle logic | Update tie-state checks to use `tie`/`tie_winner` data attributes |
+| HTML report — editor JS | `src/inspectah/templates/report/_editor_js.html.j2` | Editor/refine JS logic | Update tie-aware editor behavior to use new model flags |
+| Audit report | `src/inspectah/renderers/audit_report.py` | `[EXCLUDED]` labels | Add `[TIE LOSER]` label with precedence rules |
+| Readme artifacts | `src/inspectah/renderers/readme.py` | artifacts table (~133-141) | Add `merge-notes.md` row for fleet merges |
+| Refine label | `src/inspectah/refine.py` | UI rendering | Add "(auto-selected: tied)" label |
 | CLI warning | Fleet merge CLI entry point | TBD | One-line tie summary |
 | Merge notes | New renderer | New file | `merge-notes.md` generation |
 
@@ -227,5 +227,5 @@ Tests must cover three boundaries (per review analysis):
 ## Out of Scope
 
 - **Level 2+ normalization** (comment stripping, format-aware canonicalization): Stripping comments changes semantic content. Format-aware canonicalization is risky for order-sensitive formats (PAM). Both are future work if ever.
-- **Non-zero exit codes for ties:** The yoinkc workflow is inspect -> refine -> export. The user can't resolve ties until refine is running, so blocking the initial inspect with a non-zero exit serves no purpose.
+- **Non-zero exit codes for ties:** The inspectah workflow is inspect -> refine -> export. The user can't resolve ties until refine is running, so blocking the initial inspect with a non-zero exit serves no purpose.
 - **Pre-resolution of ties via CLI flags:** Future enhancement. For now, resolution happens in refine.

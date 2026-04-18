@@ -24,7 +24,7 @@
 
 ```json
 {
-  "name": "yoinkc-e2e",
+  "name": "inspectah-e2e",
   "private": true,
   "scripts": {
     "test": "playwright test",
@@ -147,8 +147,8 @@ import sys
 import tarfile
 from pathlib import Path
 
-from yoinkc.renderers import run_all
-from yoinkc.schema import (
+from inspectah.renderers import run_all
+from inspectah.schema import (
     SCHEMA_VERSION,
     ConfigFileEntry,
     ConfigFileKind,
@@ -485,12 +485,12 @@ if __name__ == "__main__":
     generate(force=args.force)
 ```
 
-**Note:** The exact model fields (`PackageState`, `ServiceEntry`, etc.) must match the current schema. If any import fails, check `src/yoinkc/schema.py` for the actual class names and field names, and adjust the imports and field values accordingly. The fixture data intentionally creates specific variant tie scenarios that the Playwright tests depend on.
+**Note:** The exact model fields (`PackageState`, `ServiceEntry`, etc.) must match the current schema. If any import fails, check `src/inspectah/schema.py` for the actual class names and field names, and adjust the imports and field values accordingly. The fixture data intentionally creates specific variant tie scenarios that the Playwright tests depend on.
 
 - [ ] **Step 2: Test fixture generation**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 uv run python tests/e2e/generate-fixtures.py --force
 ```
 
@@ -553,7 +553,7 @@ const servers: ChildProcess[] = [];
 
 function getCurrentSchemaVersion(): string {
   const result = execSync(
-    'uv run python -c "from yoinkc.schema import SCHEMA_VERSION; print(SCHEMA_VERSION)"',
+    'uv run python -c "from inspectah.schema import SCHEMA_VERSION; print(SCHEMA_VERSION)"',
     { cwd: REPO_ROOT, encoding: 'utf-8' }
   );
   return result.trim();
@@ -599,7 +599,7 @@ function waitForHealth(port: number, timeoutMs = 15_000): Promise<void> {
 }
 
 function startServer(args: string[], port: number): ChildProcess {
-  const proc = spawn('uv', ['run', 'yoinkc', ...args], {
+  const proc = spawn('uv', ['run', 'inspectah', ...args], {
     cwd: REPO_ROOT,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -728,19 +728,19 @@ const ARCHITECT_URL = envVars.ARCHITECT_URL || process.env.ARCHITECT_URL || 'htt
 test.describe('Smoke tests', () => {
   test('fleet refine server loads report', async ({ page }) => {
     await page.goto(FLEET_URL);
-    await expect(page.locator('.pf-v6-c-masthead__brand')).toContainText('yoinkc');
+    await expect(page.locator('.pf-v6-c-masthead__brand')).toContainText('inspectah');
     await expect(page.locator('.summary-dashboard')).toBeVisible();
   });
 
   test('single-host refine server loads report', async ({ page }) => {
     await page.goto(SINGLE_URL);
-    await expect(page.locator('.pf-v6-c-masthead__brand')).toContainText('yoinkc');
+    await expect(page.locator('.pf-v6-c-masthead__brand')).toContainText('inspectah');
     await expect(page.locator('.summary-dashboard')).toBeVisible();
   });
 
   test('architect server loads UI', async ({ page }) => {
     await page.goto(ARCHITECT_URL);
-    await expect(page).toHaveTitle(/yoinkc/i);
+    await expect(page).toHaveTitle(/inspectah/i);
   });
 
   test('fleet report has 4 summary cards', async ({ page }) => {
@@ -1756,7 +1756,7 @@ Expected: all specs pass (smoke + 10 refine + 5 architect).
 - [ ] **Step 2: Run alongside Python tests to verify no interference**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/yoinkc
+cd /Users/mrussell/Work/bootc-migration/inspectah
 uv run --extra dev pytest -q
 cd tests/e2e && npx playwright test
 ```

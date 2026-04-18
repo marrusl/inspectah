@@ -5,7 +5,7 @@
 
 ## Problem
 
-yoinkc detects config files but only classifies them by RPM lifecycle (`rpm_owned_modified`, `unowned`, `orphaned`). Files like `/etc/audit/rules.d/custom.rules` or `/etc/tmpfiles.d/myapp.conf` appear as generic entries with no semantic meaning. Users — especially those unfamiliar with what's on their systems — can't quickly identify what category of configuration they're looking at.
+inspectah detects config files but only classifies them by RPM lifecycle (`rpm_owned_modified`, `unowned`, `orphaned`). Files like `/etc/audit/rules.d/custom.rules` or `/etc/tmpfiles.d/myapp.conf` appear as generic entries with no semantic meaning. Users — especially those unfamiliar with what's on their systems — can't quickly identify what category of configuration they're looking at.
 
 Additionally, several system properties (locale, timezone, alternatives) aren't captured at all. These are simple to detect and important for migration correctness.
 
@@ -105,7 +105,7 @@ All fields optional with defaults — existing snapshots remain valid.
 
 ### Detection
 
-yoinkc runs inside a container with the host filesystem mounted at `host_root`. Commands like `localectl` won't work — must use file-based detection.
+inspectah runs inside a container with the host filesystem mounted at `host_root`. Commands like `localectl` won't work — must use file-based detection.
 
 | Property | Source | Method |
 |----------|--------|--------|

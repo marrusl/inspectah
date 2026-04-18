@@ -7,7 +7,7 @@ domain-specific modules mirroring the inspectors structure.
 
 ## Motivation
 
-`containerfile.py` is the largest source file in yoinkc. It renders every
+`containerfile.py` is the largest source file in inspectah. It renders every
 Containerfile section — packages, services, config, firewall, SELinux, etc. —
 in a single 730-line function (`_render_containerfile_content`) plus ~550 lines
 of helpers. Cross-stream targeting (next on the backlog) will add conditional
@@ -178,8 +178,8 @@ Zero breaking changes:
 - **`test_plan_items.py`** tests internal logic (cron conversion, sanitize
   shell value, user strategies). One known import to update:
   `test_plan_items.py` L865 imports `_sanitize_shell_value` from
-  `yoinkc.renderers.containerfile` — after the split this becomes
-  `yoinkc.renderers.containerfile._helpers`. Any other internal imports
+  `inspectah.renderers.containerfile` — after the split this becomes
+  `inspectah.renderers.containerfile._helpers`. Any other internal imports
   discovered during implementation follow the same pattern.
 - **No new tests** needed for the refactor — the existing suite is the
   correctness check.

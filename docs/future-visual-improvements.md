@@ -1,6 +1,6 @@
 # Future Visual Improvements
 
-UI/UX improvements for the yoinkc HTML report, organized by effort.
+UI/UX improvements for the inspectah HTML report, organized by effort.
 
 Last audited: 2026-03-17
 

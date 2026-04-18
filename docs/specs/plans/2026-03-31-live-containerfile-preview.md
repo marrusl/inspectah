@@ -16,10 +16,10 @@
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `src/yoinkc/templates/report/_js.html.j2` | Modify | Add `generateContainerfilePreview()`, hook into events, remove Copy clipboard logic, add Discard confirmation dialog, change Rebuild & Download behavior to in-place update |
-| `src/yoinkc/templates/report/_containerfile.html.j2` | Modify | Add preview helper line, remove Copy button |
-| `src/yoinkc/templates/report/_toolbar.html.j2` | Modify | Rename Re-render → Rebuild & Download, remove Download Tarball button, update Reset → Discard |
-| `src/yoinkc/templates/report/_css.html.j2` | Modify | Add confirmation dialog styling, preview helper line styling |
+| `src/inspectah/templates/report/_js.html.j2` | Modify | Add `generateContainerfilePreview()`, hook into events, remove Copy clipboard logic, add Discard confirmation dialog, change Rebuild & Download behavior to in-place update |
+| `src/inspectah/templates/report/_containerfile.html.j2` | Modify | Add preview helper line, remove Copy button |
+| `src/inspectah/templates/report/_toolbar.html.j2` | Modify | Rename Re-render → Rebuild & Download, remove Download Tarball button, update Reset → Discard |
+| `src/inspectah/templates/report/_css.html.j2` | Modify | Add confirmation dialog styling, preview helper line styling |
 | `tests/e2e/tests/live-preview.spec.ts` | Create | E2E tests for live preview, Discard, Rebuild & Download, audit count updates, no Copy button |
 | `tests/e2e/tests/re-render-cycle.spec.ts` | Modify | Update for renamed buttons and changed behavior |
 
@@ -28,8 +28,8 @@
 ## Task 1: Remove Copy Button and Add Preview Helper Line
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_containerfile.html.j2`
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (lines 838-873 — Copy clipboard IIFE)
+- Modify: `src/inspectah/templates/report/_containerfile.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2` (lines 838-873 — Copy clipboard IIFE)
 
 - [ ] **Step 1: Write failing E2E test — no Copy button on Containerfile tab**
 
@@ -64,7 +64,7 @@ test.describe('Live Containerfile Preview', () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && npx playwright test tests/e2e/tests/live-preview.spec.ts --reporter=line`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && npx playwright test tests/e2e/tests/live-preview.spec.ts --reporter=line`
 Expected: FAIL — `#btn-copy-cf` still exists, `#containerfile-preview-cue` doesn't exist
 
 - [ ] **Step 3: Remove Copy button from template**
@@ -134,7 +134,7 @@ Expected: All existing tests pass (Copy button wasn't tested elsewhere)
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_containerfile.html.j2 src/yoinkc/templates/report/_js.html.j2 src/yoinkc/templates/report/_css.html.j2 tests/e2e/tests/live-preview.spec.ts
+git add src/inspectah/templates/report/_containerfile.html.j2 src/inspectah/templates/report/_js.html.j2 src/inspectah/templates/report/_css.html.j2 tests/e2e/tests/live-preview.spec.ts
 git commit -m "feat: remove Containerfile Copy button, add preview helper line"
 ```
 
@@ -143,9 +143,9 @@ git commit -m "feat: remove Containerfile Copy button, add preview helper line"
 ## Task 2: Toolbar Restructuring
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_toolbar.html.j2`
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (Reset handler at ~664, Re-render handler at ~684, Tarball handler at ~720)
-- Modify: `src/yoinkc/templates/report/_css.html.j2`
+- Modify: `src/inspectah/templates/report/_toolbar.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2` (Reset handler at ~664, Re-render handler at ~684, Tarball handler at ~720)
+- Modify: `src/inspectah/templates/report/_css.html.j2`
 - Modify: `tests/e2e/tests/live-preview.spec.ts`
 - Modify: `tests/e2e/tests/re-render-cycle.spec.ts`
 
@@ -219,7 +219,7 @@ Replace the full content of `_toolbar.html.j2`:
   <span class="toolbar-status" id="toolbar-status-text"></span>
   <button id="btn-download-snapshot" class="pf-v6-c-button pf-m-secondary" type="button" title="Download snapshot with current selections as JSON">Download Modified Snapshot</button>
   {% if not refine_mode %}
-  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start yoinkc refine to enable Rebuild & Download">Rebuild &amp; Download</button>
+  <button id="btn-rerender" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Start inspectah refine to enable Rebuild & Download">Rebuild &amp; Download</button>
   {% endif %}
   {% if refine_mode %}
   <button id="btn-re-render" class="pf-v6-c-button pf-m-primary" type="button" disabled title="Rebuild with current edits and download tarball">Rebuild &amp; Download</button>
@@ -383,7 +383,7 @@ In `_js.html.j2`, replace the Re-render handler (lines ~683-717) and remove the 
         }).then(function(blob) {
           var a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
-          a.download = 'yoinkc-output.tar.gz';
+          a.download = 'inspectah-output.tar.gz';
           a.click();
           URL.revokeObjectURL(a.href);
           showToast('Rebuilt and downloaded successfully');
@@ -555,7 +555,7 @@ Expected: All tests pass
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_toolbar.html.j2 src/yoinkc/templates/report/_js.html.j2 src/yoinkc/templates/report/_css.html.j2 tests/e2e/tests/live-preview.spec.ts tests/e2e/tests/re-render-cycle.spec.ts
+git add src/inspectah/templates/report/_toolbar.html.j2 src/inspectah/templates/report/_js.html.j2 src/inspectah/templates/report/_css.html.j2 tests/e2e/tests/live-preview.spec.ts tests/e2e/tests/re-render-cycle.spec.ts
 git commit -m "feat: toolbar restructure — Rebuild & Download, Discard with confirmation"
 ```
 
@@ -564,7 +564,7 @@ git commit -m "feat: toolbar restructure — Rebuild & Download, Discard with co
 ## Task 3: Client-Side Containerfile Preview Generator
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 - Modify: `tests/e2e/tests/live-preview.spec.ts`
 
 This is the core feature. The generator reads `window.snapshot` and produces Containerfile text matching the Python renderer's section order, with the documented simplifications (no FIXMEs, no multistage, no DHCP filtering, no detailed comments).
@@ -742,7 +742,7 @@ In `_js.html.j2`, add the following function **after** the `recalcTriageCounts()
         var sysusers = includedUsers.filter(function(u) { return u.strategy === 'sysusers'; });
         var useradd = includedUsers.filter(function(u) { return u.strategy === 'useradd'; });
         if (sysusers.length > 0) {
-          lines.push('COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/yoinkc-users.conf');
+          lines.push('COPY config/usr/lib/sysusers.d/inspectah-users.conf /usr/lib/sysusers.d/inspectah-users.conf');
         }
         useradd.forEach(function(u) {
           var cmd = 'RUN useradd -m -u ' + u.uid;
@@ -758,7 +758,7 @@ In `_js.html.j2`, add the following function **after** the `recalcTriageCounts()
     // 9. Kernel boot — kargs.d
     if (snapshot.kernel_boot && snapshot.kernel_boot.cmdline) {
       lines.push('RUN mkdir -p /usr/lib/bootc/kargs.d');
-      lines.push('COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/');
+      lines.push('COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/');
       lines.push('');
     }
 
@@ -829,7 +829,7 @@ Expected: All tests pass
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2 tests/e2e/tests/live-preview.spec.ts
+git add src/inspectah/templates/report/_js.html.j2 tests/e2e/tests/live-preview.spec.ts
 git commit -m "feat: client-side Containerfile preview generator with live updates"
 ```
 
@@ -838,7 +838,7 @@ git commit -m "feat: client-side Containerfile preview generator with live updat
 ## Task 4: Hook Preview into Variant Selection, Config Editor, and Prevalence Slider
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 - Modify: `tests/e2e/tests/live-preview.spec.ts`
 
 - [ ] **Step 1: Write failing E2E tests**
@@ -933,7 +933,7 @@ Expected: All tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2 tests/e2e/tests/live-preview.spec.ts
+git add src/inspectah/templates/report/_js.html.j2 tests/e2e/tests/live-preview.spec.ts
 git commit -m "feat: hook preview into variant selection, config editor, prevalence slider"
 ```
 
@@ -942,7 +942,7 @@ git commit -m "feat: hook preview into variant selection, config editor, prevale
 ## Task 5: Audit Summary Count Updates and Audit Preview Cue
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2` (verify `recalcTriageCounts()` already runs on all events)
+- Modify: `src/inspectah/templates/report/_js.html.j2` (verify `recalcTriageCounts()` already runs on all events)
 - Modify: audit report template (for preview cue line)
 - Modify: `tests/e2e/tests/live-preview.spec.ts`
 
@@ -988,7 +988,7 @@ Expected: The counts test may already pass (recalcTriageCounts already runs on t
 Find the audit report template. Search for the audit section heading:
 
 ```bash
-grep -rn "audit" src/yoinkc/templates/report/ --include="*.j2" -l
+grep -rn "audit" src/inspectah/templates/report/ --include="*.j2" -l
 ```
 
 In the audit report template (likely `_audit_report.html.j2`), add the preview cue after the section heading:
@@ -1021,7 +1021,7 @@ Expected: All tests pass
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/ tests/e2e/tests/live-preview.spec.ts
+git add src/inspectah/templates/report/ tests/e2e/tests/live-preview.spec.ts
 git commit -m "feat: audit preview cue, verify live triage count updates"
 ```
 
@@ -1030,7 +1030,7 @@ git commit -m "feat: audit preview cue, verify live triage count updates"
 ## Task 6: Dirty State Lifecycle and Baseline Refresh
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 - Modify: `tests/e2e/tests/live-preview.spec.ts`
 
 This task ensures the dirty state lifecycle from the spec is correct:
@@ -1111,7 +1111,7 @@ Expected: All tests pass
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2 tests/e2e/tests/live-preview.spec.ts
+git add src/inspectah/templates/report/_js.html.j2 tests/e2e/tests/live-preview.spec.ts
 git commit -m "feat: dirty state lifecycle — Discard baseline refreshes after Rebuild"
 ```
 
@@ -1120,7 +1120,7 @@ git commit -m "feat: dirty state lifecycle — Discard baseline refreshes after 
 ## Task 7: Deep Clone for Original Snapshot and Edge Cases
 
 **Files:**
-- Modify: `src/yoinkc/templates/report/_js.html.j2`
+- Modify: `src/inspectah/templates/report/_js.html.j2`
 
 - [ ] **Step 1: Ensure `window.originalSnapshot` is a deep clone on page load**
 
@@ -1146,13 +1146,13 @@ Expected: All tests pass
 
 - [ ] **Step 4: Run Python tests to verify nothing is broken server-side**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q --tb=short`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q --tb=short`
 Expected: All Python tests pass (no server-side changes)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/templates/report/_js.html.j2
+git add src/inspectah/templates/report/_js.html.j2
 git commit -m "fix: deep clone originalSnapshot on page load for state isolation"
 ```
 

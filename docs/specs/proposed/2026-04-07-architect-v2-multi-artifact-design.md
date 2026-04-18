@@ -680,7 +680,7 @@ The existing containerfile renderer package has domain modules that each accept 
 
 #### Adapter contract: three functions
 
-The adapter lives in a new file `src/yoinkc/architect/render_adapter.py` and exposes three public functions:
+The adapter lives in a new file `src/inspectah/architect/render_adapter.py` and exposes three public functions:
 
 ```python
 @dataclass
@@ -1003,7 +1003,7 @@ Minimal additions to `_css.html.j2`:
 **Change:** Move the `rpm -qf` lookup to always run for files detected by `rpm -Va`. This populates `ConfigFileEntry.package` for all RPM_OWNED_MODIFIED configs regardless of flags.
 
 **Files affected:**
-- `src/yoinkc/inspectors/config.py` or `src/yoinkc/inspectors/rpm.py` -- add `rpm -qf` for each `rpm -Va` path on the main path
+- `src/inspectah/inspectors/config.py` or `src/inspectah/inspectors/rpm.py` -- add `rpm -qf` for each `rpm -Va` path on the main path
 - Performance note: `rpm -qf` is fast (< 1ms per file), and `rpm -Va` typically returns fewer than 50 files. Total overhead: negligible.
 
 **Schema impact:** None. `ConfigFileEntry.package` already exists as `Optional[str]`. We are just populating it more consistently.
@@ -1178,20 +1178,20 @@ Each architect fixture fleet needs:
 
 | File | Changes |
 |------|--------|
-| `src/yoinkc/architect/analyzer.py` | Add input dataclasses (with `source_fleet`/`source_ref` on `ConfigInput`/`QuadletInput`), expand `FleetInput`, `Layer`, `LayerTopology` (add `fleet_tarball_paths`), `to_dict()`, `analyze_fleets()`. Add `move_artifact()`, `copy_artifact()`. Add variant detection. Add export class helpers. |
-| `src/yoinkc/architect/loader.py` | Expand `_snapshot_to_fleet_input()` to extract all 6 artifact types from snapshot. Populate `source_fleet` and `source_ref` for configs/quadlets. Build `fleet_tarball_paths` mapping. Populate `strategy` and `shell` for users. |
-| `src/yoinkc/architect/render_adapter.py` | **New file.** Adapter layer between architect `Layer` data and existing `renderers/containerfile/` domain modules. |
-| `src/yoinkc/architect/export.py` | Replace inline rendering with calls to `render_adapter.render_layer_containerfile()`. Expand `export_topology()` for file artifacts in `tree/`. |
-| `src/yoinkc/architect/server.py` | Generalize `_handle_pkg_operation()` to `_handle_artifact_operation()`. Accept `type` and `dependents` in request body. Wire `/api/preview` to render adapter. |
-| `src/yoinkc/inspectors/config.py` | Run `rpm -qf` on the main inspection path to populate `ConfigFileEntry.package`. |
+| `src/inspectah/architect/analyzer.py` | Add input dataclasses (with `source_fleet`/`source_ref` on `ConfigInput`/`QuadletInput`), expand `FleetInput`, `Layer`, `LayerTopology` (add `fleet_tarball_paths`), `to_dict()`, `analyze_fleets()`. Add `move_artifact()`, `copy_artifact()`. Add variant detection. Add export class helpers. |
+| `src/inspectah/architect/loader.py` | Expand `_snapshot_to_fleet_input()` to extract all 6 artifact types from snapshot. Populate `source_fleet` and `source_ref` for configs/quadlets. Build `fleet_tarball_paths` mapping. Populate `strategy` and `shell` for users. |
+| `src/inspectah/architect/render_adapter.py` | **New file.** Adapter layer between architect `Layer` data and existing `renderers/containerfile/` domain modules. |
+| `src/inspectah/architect/export.py` | Replace inline rendering with calls to `render_adapter.render_layer_containerfile()`. Expand `export_topology()` for file artifacts in `tree/`. |
+| `src/inspectah/architect/server.py` | Generalize `_handle_pkg_operation()` to `_handle_artifact_operation()`. Accept `type` and `dependents` in request body. Wire `/api/preview` to render adapter. |
+| `src/inspectah/inspectors/config.py` | Run `rpm -qf` on the main inspection path to populate `ConfigFileEntry.package`. |
 
 ### Templates (Frontend)
 
 | File | Changes |
 |------|--------|
-| `src/yoinkc/templates/architect/architect.html.j2` | Add tab bar markup to drawer. |
-| `src/yoinkc/templates/architect/_js.html.j2` | Tab switching, per-type panel renderers, badge rendering, confirmation strip, reverse prompt, related indicators, highlight animation. |
-| `src/yoinkc/templates/architect/_css.html.j2` | Confirmation strip, reverse prompt, highlight fade, tab badge styles, approximation badge styles. |
+| `src/inspectah/templates/architect/architect.html.j2` | Add tab bar markup to drawer. |
+| `src/inspectah/templates/architect/_js.html.j2` | Tab switching, per-type panel renderers, badge rendering, confirmation strip, reverse prompt, related indicators, highlight animation. |
+| `src/inspectah/templates/architect/_css.html.j2` | Confirmation strip, reverse prompt, highlight fade, tab badge styles, approximation badge styles. |
 
 ### Tests / Fixtures
 

@@ -1,4 +1,4 @@
-# Playwright E2E Test Suite for yoinkc
+# Playwright E2E Test Suite for inspectah
 
 **Date:** 2026-03-31
 **Status:** Proposed
@@ -68,12 +68,12 @@ tests/e2e/
 ### Test Lifecycle
 
 **globalSetup.ts:**
-1. Check `.schema-version` against `yoinkc.schema.SCHEMA_VERSION` (read via `uv run python -c "from yoinkc.schema import SCHEMA_VERSION; print(SCHEMA_VERSION)"`)
+1. Check `.schema-version` against `inspectah.schema.SCHEMA_VERSION` (read via `uv run python -c "from inspectah.schema import SCHEMA_VERSION; print(SCHEMA_VERSION)"`)
 2. If stale or missing: run `uv run python tests/e2e/generate-fixtures.py` to regenerate all fixtures
 3. Start **three** servers via subprocess:
-   - Refine (fleet): `uv run yoinkc refine <fleet-fixture.tar.gz> --no-browser --port <deterministic-port>`
-   - Refine (single-host): `uv run yoinkc refine <single-host.tar.gz> --no-browser --port <deterministic-port+1>`
-   - Architect: `uv run yoinkc architect <topology-dir> --no-browser --port <deterministic-port+2>`
+   - Refine (fleet): `uv run inspectah refine <fleet-fixture.tar.gz> --no-browser --port <deterministic-port>`
+   - Refine (single-host): `uv run inspectah refine <single-host.tar.gz> --no-browser --port <deterministic-port+1>`
+   - Architect: `uv run inspectah architect <topology-dir> --no-browser --port <deterministic-port+2>`
 4. Wait for each server's `/api/health` endpoint to respond before proceeding
 5. Store URLs in named environment variables:
    - `REFINE_FLEET_URL` — fleet refine server (e.g., `http://localhost:9100`)
@@ -110,7 +110,7 @@ Within each spec file, tests that mutate state (re-render, package move) should 
 
 This ensures fixtures are always schema-current. Cached tarballs are used when `.schema-version` matches, avoiding regeneration overhead on every test run.
 
-**Cache key:** The `.schema-version` file stores `yoinkc.schema.SCHEMA_VERSION` (the module-level constant, not the instance field default). Template or static asset changes that don't bump the schema version won't trigger regeneration — those are caught by the tests themselves failing against the new markup, at which point a manual `uv run python tests/e2e/generate-fixtures.py --force` regenerates.
+**Cache key:** The `.schema-version` file stores `inspectah.schema.SCHEMA_VERSION` (the module-level constant, not the instance field default). Template or static asset changes that don't bump the schema version won't trigger regeneration — those are caught by the tests themselves failing against the new markup, at which point a manual `uv run python tests/e2e/generate-fixtures.py --force` regenerates.
 
 ## Fixture Data
 
@@ -168,17 +168,17 @@ This ensures fixtures are always schema-current. Cached tarballs are used when `
 
 ## Server Management
 
-Three servers started via `globalSetup.ts` using the actual yoinkc CLI:
+Three servers started via `globalSetup.ts` using the actual inspectah CLI:
 
 ```bash
 # Refine server (fleet mode)
-uv run yoinkc refine <fleet-fixture.tar.gz> --no-browser --port 9100
+uv run inspectah refine <fleet-fixture.tar.gz> --no-browser --port 9100
 
 # Refine server (single-host mode)
-uv run yoinkc refine <single-host.tar.gz> --no-browser --port 9101
+uv run inspectah refine <single-host.tar.gz> --no-browser --port 9101
 
 # Architect server
-uv run yoinkc architect <topology-dir> --no-browser --port 9102
+uv run inspectah architect <topology-dir> --no-browser --port 9102
 ```
 
 **Key flags:**
@@ -207,8 +207,8 @@ uv run yoinkc architect <topology-dir> --no-browser --port 9102
 
 ### Python
 - Invoked via `uv run` (consistent with existing pytest workflow)
-- `generate-fixtures.py` imports from the `yoinkc` package. `uv run` handles the Python path — the package is installed in the virtualenv via `uv sync`. Run from repo root: `uv run python tests/e2e/generate-fixtures.py`
-- Server processes started via `uv run yoinkc refine|architect`
+- `generate-fixtures.py` imports from the `inspectah` package. `uv run` handles the Python path — the package is installed in the virtualenv via `uv sync`. Run from repo root: `uv run python tests/e2e/generate-fixtures.py`
+- Server processes started via `uv run inspectah refine|architect`
 
 ### Working Directory
 - All commands assume repo root as working directory

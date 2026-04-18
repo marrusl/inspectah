@@ -9,7 +9,7 @@
 
 ## Problem
 
-Six detection gaps identified in the gap audit where the data either already exists or is trivially capturable, but yoinkc doesn't flag, classify, or surface it. Each is a very low effort fix — classification logic, group-by queries on existing data, single-command captures, or one-line enum additions.
+Six detection gaps identified in the gap audit where the data either already exists or is trivially capturable, but inspectah doesn't flag, classify, or surface it. Each is a very low effort fix — classification logic, group-by queries on existing data, single-command captures, or one-line enum additions.
 
 ---
 
@@ -17,7 +17,7 @@ Six detection gaps identified in the gap audit where the data either already exi
 
 ### 1. Mixed 32/64-bit Packages (Gap #7)
 
-**Problem:** Both `foo.x86_64` and `foo.i686` can be installed simultaneously. 32-bit packages may not be available in base image repos. yoinkc captures `arch` per `PackageEntry` but never flags multi-arch coexistence.
+**Problem:** Both `foo.x86_64` and `foo.i686` can be installed simultaneously. 32-bit packages may not be available in base image repos. inspectah captures `arch` per `PackageEntry` but never flags multi-arch coexistence.
 
 **Detection:** Run on the **full installed package list** (all `PackageEntry` items from `rpm -qa`, before baseline diffing into `packages_added`/`base_image_only`). Group by `name`. Flag any name where both `.x86_64` and `.i686` (or other multi-arch pairs like `.s390x`/`.ppc64le`) exist. This must run before baseline filtering — if `foo.x86_64` is in the base image but `foo.i686` is not, the multiarch pair is still a migration concern.
 
@@ -51,7 +51,7 @@ duplicate_packages: List[str] = Field(default_factory=list)
 
 ### 3. System-wide Crypto Policy (Gap E)
 
-**Problem:** yoinkc does not capture the active crypto policy. If the host runs `LEGACY` (common for talking to old TLS endpoints) and the base image enforces `DEFAULT`, TLS connections break silently after bootc switch. Custom subpolicies are also not captured.
+**Problem:** inspectah does not capture the active crypto policy. If the host runs `LEGACY` (common for talking to old TLS endpoints) and the base image enforces `DEFAULT`, TLS connections break silently after bootc switch. Custom subpolicies are also not captured.
 
 **Detection:** Two sources:
 1. Read `/host/etc/crypto-policies/config` — single line containing the policy name (e.g., `LEGACY`, `DEFAULT`, `FUTURE`, `FIPS`, or a custom name)
@@ -85,7 +85,7 @@ If custom `.pol` files exist under `/etc/crypto-policies/policies/`, emit a COPY
 
 ### 4. nsswitch.conf (Gap I)
 
-**Problem:** `/etc/nsswitch.conf` defines name resolution order (passwd, group, hosts, etc.). A host with `passwd: files sss` (SSSD-integrated) and a base image with `passwd: files` means domain users silently can't log in. yoinkc doesn't detect this file at all (it only appears in `redact.py` as a false-positive filter).
+**Problem:** `/etc/nsswitch.conf` defines name resolution order (passwd, group, hosts, etc.). A host with `passwd: files sss` (SSSD-integrated) and a base image with `passwd: files` means domain users silently can't log in. inspectah doesn't detect this file at all (it only appears in `redact.py` as a false-positive filter).
 
 **Detection:** `/etc/nsswitch.conf` is RPM-owned. If modified, `rpm -Va` will flag it and the config inspector will capture it as `RPM_OWNED_MODIFIED`. The gap is classification — it currently gets `ConfigCategory.OTHER`.
 

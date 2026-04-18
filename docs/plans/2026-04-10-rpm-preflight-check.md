@@ -18,8 +18,8 @@
 
 | File | Responsibility |
 |------|---------------|
-| `src/yoinkc/install_set.py` | Shared `resolve_install_set(snapshot) -> list[str]` function — single source of truth for the filtered package list that both preflight and renderer use |
-| `src/yoinkc/rpm_preflight.py` | Package availability preflight module — runs container-based `dnf repoquery` check, produces `PreflightResult` |
+| `src/inspectah/install_set.py` | Shared `resolve_install_set(snapshot) -> list[str]` function — single source of truth for the filtered package list that both preflight and renderer use |
+| `src/inspectah/rpm_preflight.py` | Package availability preflight module — runs container-based `dnf repoquery` check, produces `PreflightResult` |
 | `tests/test_install_set.py` | Tests for `resolve_install_set()` |
 | `tests/test_rpm_preflight.py` | Tests for the package availability preflight module |
 
@@ -27,14 +27,14 @@
 
 | File | Changes |
 |------|---------|
-| `src/yoinkc/schema.py` | Add `PreflightResult`, `UnverifiablePackage`, `RepoStatus` models; add `preflight` field to `InspectionSnapshot`; add `repo_providing_packages` field to `RpmSection`; bump `SCHEMA_VERSION` to 11 |
-| `src/yoinkc/inspectors/rpm.py` | Add repo-providing package detection (`rpm -qf /etc/yum.repos.d/*.repo`); classify direct-install RPMs |
-| `src/yoinkc/cli.py` | Add `--skip-unavailable` flag to `_add_inspect_args` |
-| `src/yoinkc/__main__.py` | Thread `skip_unavailable` arg through to `run_all()` |
-| `src/yoinkc/inspectors/__init__.py` | Call `run_package_preflight()` after all inspectors complete, store result in snapshot |
-| `src/yoinkc/pipeline.py` | Call `emit_preflight_diagnostics()` after secrets summary |
-| `src/yoinkc/renderers/containerfile/packages.py` | Use `resolve_install_set()`, consume preflight results, exclude unavailable/direct-install, emit diagnostic block to stderr |
-| `src/yoinkc/architect/analyzer.py` | Add preflight data to `FleetInput`, aggregate per base image |
+| `src/inspectah/schema.py` | Add `PreflightResult`, `UnverifiablePackage`, `RepoStatus` models; add `preflight` field to `InspectionSnapshot`; add `repo_providing_packages` field to `RpmSection`; bump `SCHEMA_VERSION` to 11 |
+| `src/inspectah/inspectors/rpm.py` | Add repo-providing package detection (`rpm -qf /etc/yum.repos.d/*.repo`); classify direct-install RPMs |
+| `src/inspectah/cli.py` | Add `--skip-unavailable` flag to `_add_inspect_args` |
+| `src/inspectah/__main__.py` | Thread `skip_unavailable` arg through to `run_all()` |
+| `src/inspectah/inspectors/__init__.py` | Call `run_package_preflight()` after all inspectors complete, store result in snapshot |
+| `src/inspectah/pipeline.py` | Call `emit_preflight_diagnostics()` after secrets summary |
+| `src/inspectah/renderers/containerfile/packages.py` | Use `resolve_install_set()`, consume preflight results, exclude unavailable/direct-install, emit diagnostic block to stderr |
+| `src/inspectah/architect/analyzer.py` | Add preflight data to `FleetInput`, aggregate per base image |
 | `tests/test_preflight.py` | Update `_make_inspect_args` with `skip_unavailable` default |
 
 ---
@@ -42,7 +42,7 @@
 ### Task 1: Schema — preflight models
 
 **Files:**
-- Modify: `src/yoinkc/schema.py:59-180` (RPM section area and root snapshot)
+- Modify: `src/inspectah/schema.py:59-180` (RPM section area and root snapshot)
 - Test: `tests/test_rpm_preflight.py` (new file)
 
 - [ ] **Step 1: Write failing test for schema models**
@@ -52,7 +52,7 @@ Create `tests/test_rpm_preflight.py`:
 ```python
 """Tests for RPM preflight check: schema, install set, and preflight module."""
 
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot,
     PreflightResult,
     RepoStatus,
@@ -160,13 +160,13 @@ class TestPreflightSchema:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestPreflightSchema -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestPreflightSchema -v`
 
-Expected: FAIL — `PreflightResult`, `UnverifiablePackage`, `RepoStatus` not importable from `yoinkc.schema`.
+Expected: FAIL — `PreflightResult`, `UnverifiablePackage`, `RepoStatus` not importable from `inspectah.schema`.
 
 - [ ] **Step 3: Implement schema models**
 
-In `src/yoinkc/schema.py`, add after the `RpmVaEntry` class (around line 128) and before `OstreePackageOverride`:
+In `src/inspectah/schema.py`, add after the `RpmVaEntry` class (around line 128) and before `OstreePackageOverride`:
 
 ```python
 class UnverifiablePackage(BaseModel):
@@ -216,13 +216,13 @@ Bump `SCHEMA_VERSION` from `10` to `11`.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestPreflightSchema -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestPreflightSchema -v`
 
 Expected: All PASS.
 
 - [ ] **Step 5: Run full test suite to check for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 
 Expected: Some tests that hardcode `SCHEMA_VERSION = 10` may break. Fix any snapshot version mismatches in test fixtures by updating `schema_version` values in fixture JSON files. The `load_snapshot` function in `pipeline.py` rejects snapshots with mismatched versions, so any fixture `.json` files need updating.
 
@@ -231,7 +231,7 @@ NOTE: Search for `"schema_version": 10` in `tests/fixtures/` and update to `11`.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/schema.py tests/test_rpm_preflight.py
+git add src/inspectah/schema.py tests/test_rpm_preflight.py
 git commit -m "feat(preflight): add PreflightResult schema models and snapshot field
 
 Add PreflightResult, UnverifiablePackage, RepoStatus models to schema.
@@ -245,7 +245,7 @@ Bump SCHEMA_VERSION to 11."
 ### Task 2: Shared resolve_install_set() function
 
 **Files:**
-- Create: `src/yoinkc/install_set.py`
+- Create: `src/inspectah/install_set.py`
 - Test: `tests/test_install_set.py` (new file)
 
 - [ ] **Step 1: Write failing tests for resolve_install_set**
@@ -255,8 +255,8 @@ Create `tests/test_install_set.py`:
 ```python
 """Tests for resolve_install_set — the shared package list that preflight and renderer use."""
 
-from yoinkc.install_set import resolve_install_set
-from yoinkc.schema import InspectionSnapshot, PackageEntry, PackageState, RpmSection
+from inspectah.install_set import resolve_install_set
+from inspectah.schema import InspectionSnapshot, PackageEntry, PackageState, RpmSection
 
 
 def _make_snapshot(
@@ -375,7 +375,7 @@ def test_result_is_sorted():
 
 def test_tuned_injected_when_active():
     """tuned is injected when snapshot has an active tuned profile."""
-    from yoinkc.schema import KernelBootSection
+    from inspectah.schema import KernelBootSection
 
     snapshot = _make_snapshot(
         packages=[("httpd", True)],
@@ -388,7 +388,7 @@ def test_tuned_injected_when_active():
 
 def test_tuned_not_duplicated():
     """tuned is not duplicated if already in the install set."""
-    from yoinkc.schema import KernelBootSection
+    from inspectah.schema import KernelBootSection
 
     snapshot = _make_snapshot(
         packages=[("httpd", True), ("tuned", True)],
@@ -401,13 +401,13 @@ def test_tuned_not_duplicated():
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_install_set.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_install_set.py -v`
 
-Expected: FAIL — `yoinkc.install_set` does not exist.
+Expected: FAIL — `inspectah.install_set` does not exist.
 
 - [ ] **Step 3: Implement resolve_install_set**
 
-Create `src/yoinkc/install_set.py`:
+Create `src/inspectah/install_set.py`:
 
 ```python
 """Shared install-set resolution used by both preflight and the packages renderer.
@@ -467,14 +467,14 @@ def resolve_install_set(snapshot: InspectionSnapshot) -> List[str]:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_install_set.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_install_set.py -v`
 
 Expected: All PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/install_set.py tests/test_install_set.py
+git add src/inspectah/install_set.py tests/test_install_set.py
 git commit -m "feat(preflight): add resolve_install_set shared function
 
 Single source of truth for the filtered package list. Applies include,
@@ -486,17 +486,17 @@ leaf, and shell-safety filters. Used by both preflight and renderer."
 ### Task 3: Refactor renderer to use resolve_install_set()
 
 **Files:**
-- Modify: `src/yoinkc/renderers/containerfile/packages.py:208-238`
+- Modify: `src/inspectah/renderers/containerfile/packages.py:208-238`
 
 - [ ] **Step 1: Run existing renderer tests to establish baseline**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_containerfile_output.py tests/test_plan_packages.py -v -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_containerfile_output.py tests/test_plan_packages.py -v -q`
 
 Expected: All PASS (establish baseline before refactor).
 
 - [ ] **Step 2: Refactor section_lines to use resolve_install_set**
 
-In `src/yoinkc/renderers/containerfile/packages.py`, replace the inline filtering block (approximately lines 210-238) with a call to `resolve_install_set`:
+In `src/inspectah/renderers/containerfile/packages.py`, replace the inline filtering block (approximately lines 210-238) with a call to `resolve_install_set`:
 
 Replace this block inside `section_lines()`:
 
@@ -565,14 +565,14 @@ With:
 
 - [ ] **Step 3: Run existing tests to verify no regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_containerfile_output.py tests/test_plan_packages.py tests/test_plan_containerfile.py -v -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_containerfile_output.py tests/test_plan_packages.py tests/test_plan_containerfile.py -v -q`
 
 Expected: All PASS — output should be identical.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/yoinkc/renderers/containerfile/packages.py
+git add src/inspectah/renderers/containerfile/packages.py
 git commit -m "refactor(renderer): use resolve_install_set for package filtering
 
 Replace inline filtering with shared resolve_install_set() call.
@@ -584,7 +584,7 @@ Ensures preflight and renderer always operate on the same package list."
 ### Task 4: RPM inspector — repo-providing package detection
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/rpm.py:1230-1232` (after repo file collection)
+- Modify: `src/inspectah/inspectors/rpm.py:1230-1232` (after repo file collection)
 - Test: `tests/test_rpm_preflight.py` (add to existing file)
 
 - [ ] **Step 1: Write failing test**
@@ -593,13 +593,13 @@ Append to `tests/test_rpm_preflight.py`:
 
 ```python
 from pathlib import Path
-from yoinkc.executor import RunResult
+from inspectah.executor import RunResult
 
 
 class TestRepoProvidingPackages:
     def test_detects_repo_providing_packages(self, host_root, fixture_executor):
         """Packages that own .repo files in /etc/yum.repos.d/ are detected."""
-        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+        from inspectah.inspectors.rpm import _detect_repo_providing_packages
 
         # Fixture has repo files; executor returns epel-release as owner
         def executor(cmd, cwd=None):
@@ -618,7 +618,7 @@ class TestRepoProvidingPackages:
 
     def test_no_repo_files(self, tmp_path):
         """When no repo files exist, returns empty list."""
-        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+        from inspectah.inspectors.rpm import _detect_repo_providing_packages
 
         def executor(cmd, cwd=None):
             return RunResult(stdout="", stderr="", returncode=1)
@@ -628,7 +628,7 @@ class TestRepoProvidingPackages:
 
     def test_rpm_qf_failure_returns_empty(self, host_root):
         """When rpm -qf fails, returns empty list gracefully."""
-        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+        from inspectah.inspectors.rpm import _detect_repo_providing_packages
 
         def executor(cmd, cwd=None):
             return RunResult(stdout="", stderr="error", returncode=1)
@@ -639,13 +639,13 @@ class TestRepoProvidingPackages:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestRepoProvidingPackages -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestRepoProvidingPackages -v`
 
 Expected: FAIL — `_detect_repo_providing_packages` not importable.
 
 - [ ] **Step 3: Implement _detect_repo_providing_packages**
 
-In `src/yoinkc/inspectors/rpm.py`, add after the `_collect_gpg_keys` function (around line 500):
+In `src/inspectah/inspectors/rpm.py`, add after the `_collect_gpg_keys` function (around line 500):
 
 ```python
 def _detect_repo_providing_packages(
@@ -702,14 +702,14 @@ Then in the `run()` function, after step 5 (repo files collection, around line 1
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestRepoProvidingPackages -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestRepoProvidingPackages -v`
 
 Expected: All PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/inspectors/rpm.py tests/test_rpm_preflight.py
+git add src/inspectah/inspectors/rpm.py tests/test_rpm_preflight.py
 git commit -m "feat(preflight): detect repo-providing packages in RPM inspector
 
 Identify packages that own .repo files in /etc/yum.repos.d/ via rpm -qf.
@@ -722,7 +722,7 @@ preflight container before checking availability of their repo's packages."
 ### Task 5: CLI — add --skip-unavailable flag
 
 **Files:**
-- Modify: `src/yoinkc/cli.py:175-180` (after `--no-redaction` flag)
+- Modify: `src/inspectah/cli.py:175-180` (after `--no-redaction` flag)
 - Modify: `tests/test_preflight.py` (update `_make_inspect_args` defaults)
 - Test: `tests/test_cli.py`
 
@@ -733,27 +733,27 @@ Add to `tests/test_cli.py` (find the appropriate location for new parse_args tes
 ```python
 def test_skip_unavailable_flag():
     """--skip-unavailable is parsed correctly."""
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     args = parse_args(["inspect", "--skip-unavailable"])
     assert args.skip_unavailable is True
 
 
 def test_skip_unavailable_default_false():
     """--skip-unavailable defaults to False."""
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     args = parse_args(["inspect"])
     assert args.skip_unavailable is False
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_cli.py::test_skip_unavailable_flag -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_cli.py::test_skip_unavailable_flag -v`
 
 Expected: FAIL — `skip_unavailable` attribute not on args.
 
 - [ ] **Step 3: Add --skip-unavailable flag**
 
-In `src/yoinkc/cli.py`, in `_add_inspect_args()`, add after the `--no-redaction` argument (around line 179):
+In `src/inspectah/cli.py`, in `_add_inspect_args()`, add after the `--no-redaction` argument (around line 179):
 
 ```python
     parser.add_argument(
@@ -766,7 +766,7 @@ In `src/yoinkc/cli.py`, in `_add_inspect_args()`, add after the `--no-redaction`
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_cli.py -v -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_cli.py -v -q`
 
 Expected: All PASS.
 
@@ -784,14 +784,14 @@ In `tests/test_preflight.py`, update `_make_inspect_args` to include `skip_unava
 
 - [ ] **Step 6: Run full suite to check for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 
 Expected: All PASS.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/yoinkc/cli.py tests/test_cli.py tests/test_preflight.py
+git add src/inspectah/cli.py tests/test_cli.py tests/test_preflight.py
 git commit -m "feat(preflight): add --skip-unavailable CLI flag
 
 Skips the package availability preflight check. All packages are
@@ -803,7 +803,7 @@ included in the Containerfile without validation."
 ### Task 6: Core preflight module — run_package_preflight()
 
 **Files:**
-- Create: `src/yoinkc/rpm_preflight.py`
+- Create: `src/inspectah/rpm_preflight.py`
 - Test: `tests/test_rpm_preflight.py` (append to existing)
 
 This is the largest task. The module runs a two-phase container check:
@@ -818,7 +818,7 @@ Append to `tests/test_rpm_preflight.py`:
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
-from yoinkc.rpm_preflight import run_package_preflight
+from inspectah.rpm_preflight import run_package_preflight
 
 
 def _make_preflight_snapshot(
@@ -960,7 +960,7 @@ class TestPackagePreflight:
     def test_repo_provider_bootstrap_failure_classifies_correctly(self):
         """Bootstrap failure: base-repo packages stay unavailable,
         provider-dependent packages become unverifiable."""
-        from yoinkc.schema import RepoFile
+        from inspectah.schema import RepoFile
 
         snapshot = _make_preflight_snapshot(
             packages=["httpd", "some-epel-pkg"],
@@ -1032,13 +1032,13 @@ class TestPackagePreflight:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestPackagePreflight -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestPackagePreflight -v`
 
-Expected: FAIL — `yoinkc.rpm_preflight` does not exist.
+Expected: FAIL — `inspectah.rpm_preflight` does not exist.
 
 - [ ] **Step 3: Implement run_package_preflight**
 
-Create `src/yoinkc/rpm_preflight.py`:
+Create `src/inspectah/rpm_preflight.py`:
 
 ```python
 """
@@ -1107,7 +1107,7 @@ def _stage_config_tree(snapshot: InspectionSnapshot) -> Optional[Path]:
     if not has_repos and not has_gpg and not has_dnf_conf:
         return None
 
-    staging = Path(tempfile.mkdtemp(prefix="yoinkc-preflight-"))
+    staging = Path(tempfile.mkdtemp(prefix="inspectah-preflight-"))
 
     if has_repos:
         for repo in snapshot.rpm.repo_files:
@@ -1478,14 +1478,14 @@ def _run_checks(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestPackagePreflight -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestPackagePreflight -v`
 
 Expected: All PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/rpm_preflight.py tests/test_rpm_preflight.py
+git add src/inspectah/rpm_preflight.py tests/test_rpm_preflight.py
 git commit -m "feat(preflight): implement run_package_preflight module
 
 Two-phase container-based availability check:
@@ -1499,8 +1499,8 @@ Classifies direct-install RPMs, handles partial/failed status."
 ### Task 7: Integration — call preflight from run_all()
 
 **Files:**
-- Modify: `src/yoinkc/inspectors/__init__.py:359-371` (after RPM inspector step)
-- Modify: `src/yoinkc/__main__.py:34-48` (thread skip_unavailable)
+- Modify: `src/inspectah/inspectors/__init__.py:359-371` (after RPM inspector step)
+- Modify: `src/inspectah/__main__.py:34-48` (thread skip_unavailable)
 
 - [ ] **Step 1: Write failing integration test**
 
@@ -1510,7 +1510,7 @@ Append to `tests/test_rpm_preflight.py`:
 class TestPreflightIntegration:
     def test_skip_unavailable_sets_skipped(self, fixture_executor, host_root):
         """When skip_unavailable=True, snapshot.preflight.status is 'skipped'."""
-        from yoinkc.inspectors import run_all
+        from inspectah.inspectors import run_all
 
         snapshot = run_all(
             host_root,
@@ -1524,13 +1524,13 @@ class TestPreflightIntegration:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestPreflightIntegration -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestPreflightIntegration -v`
 
 Expected: FAIL — `run_all()` does not accept `skip_unavailable`.
 
 - [ ] **Step 3: Thread skip_unavailable through the stack**
 
-**In `src/yoinkc/inspectors/__init__.py`**, add `skip_unavailable` parameter to `run_all()`:
+**In `src/inspectah/inspectors/__init__.py`**, add `skip_unavailable` parameter to `run_all()`:
 
 At the function signature (line 219), add `skip_unavailable: bool = False`:
 
@@ -1577,7 +1577,7 @@ After the RPM inspector step (after line 371, after post-inspector baseline fall
             print(f"WARNING: package preflight failed: {exc}", file=sys.stderr)
 ```
 
-**In `src/yoinkc/__main__.py`**, thread `skip_unavailable` to `_run_inspectors`:
+**In `src/inspectah/__main__.py`**, thread `skip_unavailable` to `_run_inspectors`:
 
 In `_run_inspectors()` (line 34), add the parameter:
 
@@ -1602,13 +1602,13 @@ def _run_inspectors(host_root: Path, args) -> InspectionSnapshot:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestPreflightIntegration -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestPreflightIntegration -v`
 
 Expected: PASS.
 
 - [ ] **Step 5: Run full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 
 Expected: All PASS. Existing tests should not be affected because `skip_unavailable` defaults to `False` and the preflight runs only when `base_image` is set and executor is available. In tests using fixture executors, the podman pull command will fail (fixture executor doesn't handle it), so preflight will return `failed` status — which is fine for existing tests.
 
@@ -1617,7 +1617,7 @@ NOTE: If existing tests break because the preflight tries to run podman commands
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/inspectors/__init__.py src/yoinkc/__main__.py
+git add src/inspectah/inspectors/__init__.py src/inspectah/__main__.py
 git commit -m "feat(preflight): integrate package preflight into inspection pipeline
 
 Call run_package_preflight after RPM inspector completes. Respects
@@ -1630,8 +1630,8 @@ preflight never blocks inspection."
 ### Task 8: Renderer — consume preflight results
 
 **Files:**
-- Modify: `src/yoinkc/renderers/containerfile/packages.py`
-- Modify: `src/yoinkc/pipeline.py`
+- Modify: `src/inspectah/renderers/containerfile/packages.py`
+- Modify: `src/inspectah/pipeline.py`
 - Test: `tests/test_rpm_preflight.py` (append)
 
 - [ ] **Step 1: Write failing tests for renderer preflight consumption**
@@ -1639,7 +1639,7 @@ preflight never blocks inspection."
 Append to `tests/test_rpm_preflight.py`:
 
 ```python
-from yoinkc.renderers.containerfile.packages import section_lines
+from inspectah.renderers.containerfile.packages import section_lines
 
 
 class TestRendererPreflightConsumption:
@@ -1731,13 +1731,13 @@ class TestRendererPreflightConsumption:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestRendererPreflightConsumption -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestRendererPreflightConsumption -v`
 
 Expected: FAIL — renderer doesn't yet consume preflight data.
 
 - [ ] **Step 3: Modify renderer to consume preflight results**
 
-In `src/yoinkc/renderers/containerfile/packages.py`, after computing `install_names` via `resolve_install_set(snapshot)`, add preflight filtering:
+In `src/inspectah/renderers/containerfile/packages.py`, after computing `install_names` via `resolve_install_set(snapshot)`, add preflight filtering:
 
 ```python
             install_names = resolve_install_set(snapshot)
@@ -1752,7 +1752,7 @@ In `src/yoinkc/renderers/containerfile/packages.py`, after computing `install_na
 
 - [ ] **Step 4: Add diagnostic block emission**
 
-Add `emit_preflight_diagnostics` function to `src/yoinkc/renderers/containerfile/packages.py`:
+Add `emit_preflight_diagnostics` function to `src/inspectah/renderers/containerfile/packages.py`:
 
 ```python
 import sys
@@ -1826,7 +1826,7 @@ def emit_preflight_diagnostics(snapshot: InspectionSnapshot) -> None:
     print("===", file=sys.stderr)
 ```
 
-In `src/yoinkc/pipeline.py`, call `emit_preflight_diagnostics` after `_print_secrets_summary(snapshot)` (around line 440):
+In `src/inspectah/pipeline.py`, call `emit_preflight_diagnostics` after `_print_secrets_summary(snapshot)` (around line 440):
 
 ```python
         from .renderers.containerfile.packages import emit_preflight_diagnostics
@@ -1835,20 +1835,20 @@ In `src/yoinkc/pipeline.py`, call `emit_preflight_diagnostics` after `_print_sec
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestRendererPreflightConsumption -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestRendererPreflightConsumption -v`
 
 Expected: All PASS.
 
 - [ ] **Step 6: Run full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 
 Expected: All PASS. Existing tests have `preflight.status == "skipped"` by default, so the renderer won't filter anything.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/yoinkc/renderers/containerfile/packages.py src/yoinkc/pipeline.py tests/test_rpm_preflight.py
+git add src/inspectah/renderers/containerfile/packages.py src/inspectah/pipeline.py tests/test_rpm_preflight.py
 git commit -m "feat(preflight): renderer excludes unavailable packages, emits diagnostics
 
 Packages marked unavailable or direct-install by preflight are excluded
@@ -1867,7 +1867,7 @@ categorized package status and footer summary."
 > part of this branch.
 
 **Files:**
-- Modify: `src/yoinkc/architect/analyzer.py`
+- Modify: `src/inspectah/architect/analyzer.py`
 - Test: `tests/test_rpm_preflight.py` (append)
 
 - [ ] **Step 1: Write failing test**
@@ -1875,7 +1875,7 @@ categorized package status and footer summary."
 Append to `tests/test_rpm_preflight.py`:
 
 ```python
-from yoinkc.architect.analyzer import FleetInput
+from inspectah.architect.analyzer import FleetInput
 
 
 class TestArchitectPreflightAggregation:
@@ -1897,13 +1897,13 @@ class TestArchitectPreflightAggregation:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestArchitectPreflightAggregation -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestArchitectPreflightAggregation -v`
 
 Expected: FAIL — `FleetInput` does not have `unavailable_packages`.
 
 - [ ] **Step 3: Add preflight fields to FleetInput**
 
-In `src/yoinkc/architect/analyzer.py`, update `FleetInput`:
+In `src/inspectah/architect/analyzer.py`, update `FleetInput`:
 
 ```python
 @dataclass
@@ -1923,14 +1923,14 @@ class FleetInput:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestArchitectPreflightAggregation tests/test_architect_analyzer.py -v -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestArchitectPreflightAggregation tests/test_architect_analyzer.py -v -q`
 
 Expected: All PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/yoinkc/architect/analyzer.py tests/test_rpm_preflight.py
+git add src/inspectah/architect/analyzer.py tests/test_rpm_preflight.py
 git commit -m "feat(preflight): add preflight data to architect FleetInput
 
 FleetInput now carries unavailable_packages, direct_install_packages,
@@ -1942,12 +1942,12 @@ unverifiable_packages, and preflight_status for fleet-level aggregation."
 ### Task 10: Architect loader — populate preflight data from snapshots
 
 **Files:**
-- Modify: `src/yoinkc/architect/loader.py`
+- Modify: `src/inspectah/architect/loader.py`
 - Test: `tests/test_rpm_preflight.py` (append)
 
 - [ ] **Step 1: Read the architect loader to understand existing API**
 
-Read `src/yoinkc/architect/loader.py` to find where `FleetInput` objects are constructed from snapshots. Identify the exact function and line where preflight data should be extracted.
+Read `src/inspectah/architect/loader.py` to find where `FleetInput` objects are constructed from snapshots. Identify the exact function and line where preflight data should be extracted.
 
 - [ ] **Step 2: Write failing test**
 
@@ -1957,7 +1957,7 @@ Append to `tests/test_rpm_preflight.py` (adjust based on actual loader API found
 class TestArchitectLoaderPreflight:
     def test_loader_extracts_preflight(self, tmp_path):
         """Architect loader populates FleetInput with preflight data from snapshot."""
-        from yoinkc.architect.loader import load_fleet_inputs  # adjust to actual API
+        from inspectah.architect.loader import load_fleet_inputs  # adjust to actual API
 
         snapshot_data = InspectionSnapshot(
             rpm=RpmSection(
@@ -2006,20 +2006,20 @@ In the function that constructs `FleetInput` from snapshots, add:
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py::TestArchitectLoaderPreflight tests/test_architect_loader.py -v -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py::TestArchitectLoaderPreflight tests/test_architect_loader.py -v -q`
 
 Expected: All PASS.
 
 - [ ] **Step 5: Run full architect test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_architect_*.py -v -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_architect_*.py -v -q`
 
 Expected: All PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/yoinkc/architect/loader.py tests/test_rpm_preflight.py
+git add src/inspectah/architect/loader.py tests/test_rpm_preflight.py
 git commit -m "feat(preflight): architect loader extracts preflight data from snapshots
 
 Populates FleetInput with unavailable_packages, direct_install_packages,
@@ -2041,7 +2041,7 @@ Append to `tests/test_rpm_preflight.py`:
 class TestEndToEnd:
     def test_preflight_roundtrip_via_snapshot(self, tmp_path):
         """Preflight data survives: inspect -> save snapshot -> load -> render."""
-        from yoinkc.pipeline import save_snapshot, load_snapshot
+        from inspectah.pipeline import save_snapshot, load_snapshot
 
         snapshot = InspectionSnapshot(
             rpm=RpmSection(
@@ -2111,13 +2111,13 @@ class TestEndToEnd:
 
 - [ ] **Step 2: Run all preflight tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/test_rpm_preflight.py -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/test_rpm_preflight.py -v`
 
 Expected: All PASS.
 
 - [ ] **Step 3: Run the full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/yoinkc && python -m pytest tests/ -x -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -x -q`
 
 Expected: All PASS.
 
@@ -2136,7 +2136,7 @@ all when preflight is skipped)."
 
 ## Implementation Notes
 
-- **Naming:** The new module is `rpm_preflight.py` (not added to `preflight.py`) because the existing `preflight.py` handles container privilege checks — a completely different concern. The spec's "New module: `src/yoinkc/preflight.py`" predates the existing file.
+- **Naming:** The new module is `rpm_preflight.py` (not added to `preflight.py`) because the existing `preflight.py` handles container privilege checks — a completely different concern. The spec's "New module: `src/inspectah/preflight.py`" predates the existing file.
 
 - **Repoquery format:** Uses `--queryformat "%{name}"` to output plain package names, one per line. This avoids all NEVRA parsing ambiguity with hyphenated package names like `xorg-x11-server-Xvfb` or `compat-libstdc++-33`. Parsing is trivial: each non-empty line is a name.
 

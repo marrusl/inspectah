@@ -7,12 +7,12 @@
 
 Migrating hosts one-by-one with a 1:1 host:image ratio is an anti-pattern
 with bootc. For a fleet of 100 similar web servers, the user needs a single
-golden image, not 100 Containerfiles. yoinkc currently produces per-host
+golden image, not 100 Containerfiles. inspectah currently produces per-host
 output with no way to find commonality across hosts.
 
 This spec covers **fleet aggregation** — analyzing N inspection snapshots to
 produce a merged snapshot representing the fleet. Fleet **collection**
-(orchestrating yoinkc across hosts and gathering tarballs) is a separate
+(orchestrating inspectah across hosts and gathering tarballs) is a separate
 sub-project with its own future spec.
 
 ## Decisions
@@ -21,12 +21,12 @@ sub-project with its own future spec.
 
 A merged `InspectionSnapshot` with fleet metadata (prevalence counts, source
 hosts) on each item. The merged snapshot is a valid snapshot that flows
-through the existing yoinkc pipeline: `yoinkc --from-snapshot` for rendering,
-`yoinkc-refine` for interactive refinement.
+through the existing inspectah pipeline: `inspectah --from-snapshot` for rendering,
+`inspectah-refine` for interactive refinement.
 
 Fleet metadata is embedded in the snapshot so downstream consumers can surface
 it (e.g., "httpd: 98/100 hosts") without needing separate data files. No
-fleet-specific UI for v1 — the existing yoinkc-refine works as-is.
+fleet-specific UI for v1 — the existing inspectah-refine works as-is.
 
 ### Grouping
 
@@ -49,14 +49,14 @@ can see and re-include them during refinement.
 
 ### Tool
 
-Separate entry point: `yoinkc-fleet`. Same repo, same package, imports from
-yoinkc (schema, etc.). Registered as a console script in `pyproject.toml`
-alongside `yoinkc` and `yoinkc-refine`.
+Separate entry point: `inspectah-fleet`. Same repo, same package, imports from
+inspectah (schema, etc.). Registered as a console script in `pyproject.toml`
+alongside `inspectah` and `inspectah-refine`.
 
-Rationale: `yoinkc` is associated with "run on a host, inspect the host"
-inside a privileged container. `yoinkc-fleet` runs on the admin's workstation,
+Rationale: `inspectah` is associated with "run on a host, inspect the host"
+inside a privileged container. `inspectah-fleet` runs on the admin's workstation,
 reading snapshot files from a directory. Different runtime context warrants a
-distinct entry point, paralleling how `yoinkc-refine` is separate because
+distinct entry point, paralleling how `inspectah-refine` is separate because
 it's a live HTTP server.
 
 ### Scale
@@ -302,11 +302,11 @@ If skipping invalid inputs reduces the count below 2, exit with error.
 ### CLI Interface
 
 ```
-yoinkc-fleet aggregate <input-dir> [options]
+inspectah-fleet aggregate <input-dir> [options]
 ```
 
 **Arguments:**
-- `<input-dir>` — directory containing yoinkc tarballs (`.tar.gz`) and/or
+- `<input-dir>` — directory containing inspectah tarballs (`.tar.gz`) and/or
   bare `inspection-snapshot.json` files.
 
 **Options:**
@@ -332,19 +332,19 @@ selinux, non_rpm_software). The existing renderers already handle `None`
 sections gracefully — each section is guarded by `if snapshot.section:` checks.
 No prerequisite changes needed.
 
-`yoinkc --from-snapshot` accepts a bare JSON file path (not just tarballs).
+`inspectah --from-snapshot` accepts a bare JSON file path (not just tarballs).
 The merged snapshot is a valid `InspectionSnapshot` and flows through the
 existing pipeline without modification.
 
 ### Workflow
 
 ```
-1. Run yoinkc on each host → one tarball per host
+1. Run inspectah on each host → one tarball per host
 2. Collect tarballs onto workstation: mkdir web-servers/ && scp ...
-3. yoinkc-fleet aggregate ./web-servers/ -p 90 -o merged.json
-4. yoinkc --from-snapshot merged.json    # render Containerfile
+3. inspectah-fleet aggregate ./web-servers/ -p 90 -o merged.json
+4. inspectah --from-snapshot merged.json    # render Containerfile
    — or —
-   yoinkc-refine merged.json            # interactive refinement
+   inspectah-refine merged.json            # interactive refinement
 ```
 
 ## Scope
@@ -360,7 +360,7 @@ existing pipeline without modification.
 - Compose files (with content variants)
 - Users/groups (deduplicated by name)
 - `FleetPrevalence` and `FleetMeta` Pydantic models in schema
-- `yoinkc-fleet` CLI tool with argparse
+- `inspectah-fleet` CLI tool with argparse
 - Warnings/redactions (deduplicated by message)
 
 **Out of scope:**
@@ -398,9 +398,9 @@ existing pipeline without modification.
 
 ## Future Work
 
-- **Fleet collection:** `yoinkc-collect` tool or Ansible playbook to push
-  yoinkc to hosts and gather tarballs automatically.
-- **Fleet-aware refinement UI:** surface prevalence data in yoinkc-refine
+- **Fleet collection:** `inspectah-collect` tool or Ansible playbook to push
+  inspectah to hosts and gather tarballs automatically.
+- **Fleet-aware refinement UI:** surface prevalence data in inspectah-refine
   (e.g., "98/100 hosts" badges, prevalence threshold slider, outlier
   highlighting).
 - **Layered image hierarchy:** analyze multiple role groups to produce a
