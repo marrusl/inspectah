@@ -8,11 +8,11 @@ from unittest.mock import patch
 import pytest
 from jinja2 import Environment
 
-import yoinkc.preflight as preflight_mod
-from yoinkc.executor import Executor, RunResult
-from yoinkc.inspectors import run_all as run_all_inspectors
-from yoinkc.redact import redact_snapshot
-from yoinkc.renderers import run_all as run_all_renderers
+import inspectah.preflight as preflight_mod
+from inspectah.executor import Executor, RunResult
+from inspectah.inspectors import run_all as run_all_inspectors
+from inspectah.redact import redact_snapshot
+from inspectah.renderers import run_all as run_all_renderers
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

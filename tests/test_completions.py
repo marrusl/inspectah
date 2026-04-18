@@ -5,13 +5,13 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.cli import SUBCOMMANDS, build_parser
+from inspectah.cli import SUBCOMMANDS, build_parser
 
 COMPLETIONS_DIR = Path(__file__).parent.parent / "completions"
 COMPLETION_FILES = {
-    "bash": COMPLETIONS_DIR / "yoinkc.bash",
-    "zsh": COMPLETIONS_DIR / "yoinkc.zsh",
-    "fish": COMPLETIONS_DIR / "yoinkc.fish",
+    "bash": COMPLETIONS_DIR / "inspectah.bash",
+    "zsh": COMPLETIONS_DIR / "inspectah.zsh",
+    "fish": COMPLETIONS_DIR / "inspectah.fish",
 }
 
 # Flags that are suppressed or strictly internal (set programmatically, never
@@ -96,11 +96,11 @@ def test_build_parser_exposes_real_subcommands_and_flags():
 
 
 def test_zsh_completion_supports_top_level_inspect_flags():
-    """zsh should complete inspect flags for `yoinkc --flag` as well as `yoinkc inspect --flag`."""
+    """zsh should complete inspect flags for `inspectah --flag` as well as `inspectah inspect --flag`."""
     content = COMPLETION_FILES["zsh"].read_text()
     assert 'CURRENT == 2' in content
     assert '$PREFIX' in content or '${words[CURRENT]}' in content
-    assert '_yoinkc_inspect' in content
+    assert '_inspectah_inspect' in content
 
 
 def test_fish_completion_supports_top_level_inspect_flags():

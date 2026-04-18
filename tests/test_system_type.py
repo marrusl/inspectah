@@ -1,6 +1,6 @@
 """System type detection and ostree base image mapping tests."""
 
-from yoinkc.schema import SystemType, FlatpakApp, OstreePackageOverride
+from inspectah.schema import SystemType, FlatpakApp, OstreePackageOverride
 
 
 def test_system_type_enum_values():
@@ -25,21 +25,21 @@ def test_ostree_package_override_model():
 
 
 def test_os_release_has_variant_id():
-    from yoinkc.schema import OsRelease
+    from inspectah.schema import OsRelease
     osr = OsRelease(name="Fedora", version_id="41", variant_id="silverblue")
     assert osr.variant_id == "silverblue"
 
 
 def test_snapshot_system_type_default():
-    from yoinkc.schema import InspectionSnapshot
+    from inspectah.schema import InspectionSnapshot
     snap = InspectionSnapshot()
     assert snap.system_type == SystemType.PACKAGE_MODE
 
 
 import pytest
 from pathlib import Path
-from yoinkc.executor import RunResult
-from yoinkc.system_type import detect_system_type, OstreeDetectionError
+from inspectah.executor import RunResult
+from inspectah.system_type import detect_system_type, OstreeDetectionError
 
 
 def _mock_executor(bootc_rc=1, rpmostree_rc=1):
@@ -96,11 +96,11 @@ def test_detect_bootc_preferred_over_rpmostree(tmp_path):
 # =====================================================================
 
 import json
-from yoinkc.system_type import map_ostree_base_image
+from inspectah.system_type import map_ostree_base_image
 
 
 def _make_os_release(**kwargs):
-    from yoinkc.schema import OsRelease
+    from inspectah.schema import OsRelease
     defaults = {
         "name": "Fedora Linux", "version_id": "41",
         "id": "fedora", "variant_id": "",
@@ -228,8 +228,8 @@ def test_map_target_image_override(tmp_path):
 # =====================================================================
 
 from unittest.mock import patch
-from yoinkc.inspectors import run_all, _read_os_release
-import yoinkc.preflight as preflight_mod
+from inspectah.inspectors import run_all, _read_os_release
+import inspectah.preflight as preflight_mod
 
 
 def test_read_os_release_captures_variant_id(tmp_path):

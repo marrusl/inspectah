@@ -1,5 +1,5 @@
 """
-Tests for the yoinkc.refine module.
+Tests for the inspectah.refine module.
 
 Covers tarball extraction, validation, HTTP server routes, and the
 re-render subprocess pipeline.
@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from yoinkc.refine import (
+from inspectah.refine import (
     _DEFAULT_PORT,
     _Handler,
     _build_tarball,
@@ -53,7 +53,7 @@ def _make_tarball(files: dict[str, str], dest: Path) -> Path:
 
 def _minimal_tarball(tmp_path: Path, extra: dict | None = None) -> Path:
     files = {
-        "report.html": "<html><body>yoinkc report</body></html>",
+        "report.html": "<html><body>inspectah report</body></html>",
         "inspection-snapshot.json": json.dumps({"schema_version": 5}),
     }
     if extra:
@@ -201,7 +201,7 @@ class TestCountExcluded:
 
 
 # ---------------------------------------------------------------------------
-# Re-render via subprocess (calls `yoinkc inspect --from-snapshot`)
+# Re-render via subprocess (calls `inspectah inspect --from-snapshot`)
 # ---------------------------------------------------------------------------
 
 class TestReRender:
@@ -258,7 +258,7 @@ class TestReRender:
     def test_timeout_returns_error(self, tmp_path):
         output_dir = self._make_output_dir(tmp_path)
 
-        with patch("subprocess.run", side_effect=sp.TimeoutExpired("yoinkc", 300)):
+        with patch("subprocess.run", side_effect=sp.TimeoutExpired("inspectah", 300)):
             ok, msg = _re_render(b"{}", output_dir)
 
         assert ok is False
@@ -267,11 +267,11 @@ class TestReRender:
     def test_command_not_found_returns_error(self, tmp_path):
         output_dir = self._make_output_dir(tmp_path)
 
-        with patch("subprocess.run", side_effect=FileNotFoundError("yoinkc")):
+        with patch("subprocess.run", side_effect=FileNotFoundError("inspectah")):
             ok, msg = _re_render(b"{}", output_dir)
 
         assert ok is False
-        assert "not found" in msg.lower() or "yoinkc" in msg.lower()
+        assert "not found" in msg.lower() or "inspectah" in msg.lower()
 
     def test_passes_original_snapshot(self, tmp_path):
         output_dir = self._make_output_dir(tmp_path)
@@ -428,7 +428,7 @@ class TestServer:
         assert headers.get("Pragma") == "no-cache"
         assert headers.get("Expires") == "0"
         cd = headers.get("Content-Disposition", "")
-        assert "yoinkc-refined-" in cd
+        assert "inspectah-refined-" in cd
         assert ".tar.gz" in cd
         with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as tf:
             names = tf.getnames()
@@ -442,7 +442,7 @@ class TestServer:
             "containerfile": "FROM rhel:9",
         }
 
-        with patch("yoinkc.refine._re_render", return_value=(True, result_dict)):
+        with patch("inspectah.refine._re_render", return_value=(True, result_dict)):
             status, body, headers = _post(url + "/api/re-render", b'{"schema_version": 5}')
 
         assert status == 200
@@ -455,7 +455,7 @@ class TestServer:
     def test_post_rerender_failure_returns_500(self, live_server):
         url, _ = live_server
 
-        with patch("yoinkc.refine._re_render", return_value=(False, "Re-render failed")):
+        with patch("inspectah.refine._re_render", return_value=(False, "Re-render failed")):
             status, body, _ = _post(url + "/api/re-render", b'{"schema_version": 5}')
 
         assert status == 500
@@ -469,7 +469,7 @@ class TestServer:
             "containerfile": "FROM rhel:9",
         }
 
-        with patch("yoinkc.refine._re_render", return_value=(True, result_dict)) as mock_rr:
+        with patch("inspectah.refine._re_render", return_value=(True, result_dict)) as mock_rr:
             wrapper = json.dumps({
                 "snapshot": {"schema_version": 5},
                 "original": {"schema_version": 5, "meta": {"hostname": "orig"}},
@@ -512,10 +512,10 @@ class TestRunRefine:
             registered_handlers.append(handler)
 
         with (
-            patch("yoinkc.refine.signal.signal", side_effect=_capture_handler),
-            patch("yoinkc.refine._find_free_port", return_value=8765),
-            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
-            patch("yoinkc.refine.HTTPServer", return_value=server),
+            patch("inspectah.refine.signal.signal", side_effect=_capture_handler),
+            patch("inspectah.refine._find_free_port", return_value=8765),
+            patch("inspectah.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("inspectah.refine.HTTPServer", return_value=server),
         ):
             result = run_refine(args)
 
@@ -576,14 +576,14 @@ class TestRunRefine:
             events.append(("browser", url))
 
         with (
-            patch("yoinkc.refine.signal.signal"),
-            patch("yoinkc.refine._find_free_port", return_value=8765),
-            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
-            patch("yoinkc.refine.HTTPServer", return_value=server),
-            patch("yoinkc.refine.time.time", return_value=1_700_000_000),
-            patch("yoinkc.refine.threading.Thread", _FakeThread),
-            patch("yoinkc.refine.urllib.request.urlopen", side_effect=_fake_urlopen),
-            patch("yoinkc.refine._open_browser", side_effect=_fake_open_browser),
+            patch("inspectah.refine.signal.signal"),
+            patch("inspectah.refine._find_free_port", return_value=8765),
+            patch("inspectah.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("inspectah.refine.HTTPServer", return_value=server),
+            patch("inspectah.refine.time.time", return_value=1_700_000_000),
+            patch("inspectah.refine.threading.Thread", _FakeThread),
+            patch("inspectah.refine.urllib.request.urlopen", side_effect=_fake_urlopen),
+            patch("inspectah.refine._open_browser", side_effect=_fake_open_browser),
         ):
             result = run_refine(args)
 
@@ -606,7 +606,7 @@ class TestRunRefine:
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        with patch("yoinkc.refine.urllib.request.urlopen", return_value=_FakeResponse()) as mock_urlopen:
+        with patch("inspectah.refine.urllib.request.urlopen", return_value=_FakeResponse()) as mock_urlopen:
             assert _wait_for_server_ready("::1", 8765, attempts=1)
 
         mock_urlopen.assert_called_once_with("http://[::1]:8765/api/health", timeout=0.5)
@@ -621,7 +621,7 @@ class TestRunRefine:
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-        with patch("yoinkc.refine.urllib.request.urlopen", return_value=_FakeResponse()) as mock_urlopen:
+        with patch("inspectah.refine.urllib.request.urlopen", return_value=_FakeResponse()) as mock_urlopen:
             assert _wait_for_server_ready("::", 8765, attempts=1)
 
         mock_urlopen.assert_called_once_with("http://[::1]:8765/api/health", timeout=0.5)
@@ -652,14 +652,14 @@ class TestRunRefine:
         )
 
         with (
-            patch("yoinkc.refine.signal.signal"),
-            patch("yoinkc.refine._find_free_port", return_value=8765),
-            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
-            patch("yoinkc.refine.HTTPServer", return_value=server),
-            patch("yoinkc.refine.time.time", return_value=1_700_000_000),
-            patch("yoinkc.refine._wait_for_server_ready", return_value=True),
-            patch("yoinkc.refine.threading.Thread", _FakeThread),
-            patch("yoinkc.refine._open_browser") as mock_open_browser,
+            patch("inspectah.refine.signal.signal"),
+            patch("inspectah.refine._find_free_port", return_value=8765),
+            patch("inspectah.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("inspectah.refine.HTTPServer", return_value=server),
+            patch("inspectah.refine.time.time", return_value=1_700_000_000),
+            patch("inspectah.refine._wait_for_server_ready", return_value=True),
+            patch("inspectah.refine.threading.Thread", _FakeThread),
+            patch("inspectah.refine._open_browser") as mock_open_browser,
         ):
             result = run_refine(args)
 
@@ -679,12 +679,12 @@ class TestRunRefine:
         )
 
         with (
-            patch("yoinkc.refine.signal.signal"),
-            patch("yoinkc.refine._find_free_port", return_value=8765),
-            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
-            patch("yoinkc.refine.HTTPServer", return_value=server),
-            patch("yoinkc.refine._wait_for_server_ready") as mock_wait_ready,
-            patch("yoinkc.refine._open_browser") as mock_open_browser,
+            patch("inspectah.refine.signal.signal"),
+            patch("inspectah.refine._find_free_port", return_value=8765),
+            patch("inspectah.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("inspectah.refine.HTTPServer", return_value=server),
+            patch("inspectah.refine._wait_for_server_ready") as mock_wait_ready,
+            patch("inspectah.refine._open_browser") as mock_open_browser,
         ):
             result = run_refine(args)
 
@@ -718,14 +718,14 @@ class TestRunRefine:
         )
 
         with (
-            patch("yoinkc.refine.signal.signal"),
-            patch("yoinkc.refine._find_free_port", return_value=8765),
-            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
-            patch("yoinkc.refine.HTTPServer", return_value=server),
-            patch("yoinkc.refine._wait_for_server_ready", return_value=False),
-            patch("yoinkc.refine.threading.Thread", _FakeThread),
-            patch("yoinkc.refine._open_browser") as mock_open_browser,
-            patch("yoinkc.refine._log") as mock_log,
+            patch("inspectah.refine.signal.signal"),
+            patch("inspectah.refine._find_free_port", return_value=8765),
+            patch("inspectah.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("inspectah.refine.HTTPServer", return_value=server),
+            patch("inspectah.refine._wait_for_server_ready", return_value=False),
+            patch("inspectah.refine.threading.Thread", _FakeThread),
+            patch("inspectah.refine._open_browser") as mock_open_browser,
+            patch("inspectah.refine._log") as mock_log,
         ):
             result = run_refine(args)
 
@@ -764,13 +764,13 @@ class TestRunRefine:
         )
 
         with (
-            patch("yoinkc.refine.signal.signal"),
-            patch("yoinkc.refine._find_free_port", return_value=8765),
-            patch("yoinkc.refine._re_render", return_value=(True, "<html>ready</html>")),
-            patch("yoinkc.refine.HTTPServer", return_value=server),
-            patch("yoinkc.refine._wait_for_server_ready", return_value=True),
-            patch("yoinkc.refine.threading.Thread", _FakeThread),
-            patch("yoinkc.refine._open_browser"),
+            patch("inspectah.refine.signal.signal"),
+            patch("inspectah.refine._find_free_port", return_value=8765),
+            patch("inspectah.refine._re_render", return_value=(True, "<html>ready</html>")),
+            patch("inspectah.refine.HTTPServer", return_value=server),
+            patch("inspectah.refine._wait_for_server_ready", return_value=True),
+            patch("inspectah.refine.threading.Thread", _FakeThread),
+            patch("inspectah.refine._open_browser"),
         ):
             result = run_refine(args)
 

@@ -1,6 +1,6 @@
 """Tests for --sensitivity and --no-redaction CLI flags."""
 import pytest
-from yoinkc.cli import parse_args
+from inspectah.cli import parse_args
 
 def test_sensitivity_default_strict():
     args = parse_args(["inspect", "--from-snapshot", "test.json"])

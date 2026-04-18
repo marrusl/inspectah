@@ -4,8 +4,8 @@ import io
 import tarfile
 import pytest
 
-from yoinkc.architect.analyzer import FleetInput, Layer, LayerTopology, analyze_fleets
-from yoinkc.architect.export import export_topology
+from inspectah.architect.analyzer import FleetInput, Layer, LayerTopology, analyze_fleets
+from inspectah.architect.export import export_topology
 
 
 def _make_topology() -> LayerTopology:

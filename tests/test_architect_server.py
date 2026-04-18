@@ -7,8 +7,8 @@ import urllib.error
 import pytest
 from pathlib import Path
 
-from yoinkc.architect.analyzer import FleetInput, analyze_fleets
-from yoinkc.architect.server import create_handler, start_server
+from inspectah.architect.analyzer import FleetInput, analyze_fleets
+from inspectah.architect.server import create_handler, start_server
 
 
 def _make_topology():
@@ -26,7 +26,7 @@ def server_url(tmp_path):
     port, httpd = start_server(
         topo,
         base_image="registry.redhat.io/rhel9/rhel-bootc:9.4",
-        template_dir=Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates",
+        template_dir=Path(__file__).resolve().parent.parent / "src" / "inspectah" / "templates",
         patternfly_css="/* test */",
         bind="127.0.0.1",
         port=0,  # let OS pick a free port
@@ -195,4 +195,4 @@ class TestIndexEndpoint:
         resp = urllib.request.urlopen(f"{server_url}/")
         assert resp.status == 200
         content = resp.read().decode()
-        assert "yoinkc Architect" in content
+        assert "inspectah Architect" in content

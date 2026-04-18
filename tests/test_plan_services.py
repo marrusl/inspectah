@@ -2,13 +2,13 @@
 
 from pathlib import Path
 
-from yoinkc.schema import ScheduledTaskSection
+from inspectah.schema import ScheduledTaskSection
 
 
 class TestServiceBaselinePresets:
 
     def test_parse_preset_lines(self):
-        from yoinkc.inspectors.service import _parse_preset_lines
+        from inspectah.inspectors.service import _parse_preset_lines
         lines = [
             "enable sshd.service",
             "enable chronyd.service",
@@ -22,7 +22,7 @@ class TestServiceBaselinePresets:
         assert ("disable", "*") in glob_rules
 
     def test_base_image_text_preferred_over_host(self):
-        from yoinkc.inspectors.service import _parse_preset_files
+        from inspectah.inspectors.service import _parse_preset_files
         enabled, disabled, _, _glob = _parse_preset_files(
             Path("/nonexistent"),
             base_image_preset_text="enable sshd.service\ndisable *\n",
@@ -31,8 +31,8 @@ class TestServiceBaselinePresets:
 
     def test_run_with_base_image_presets(self):
         """Service enabled on host but not in base presets → action=enable."""
-        from yoinkc.inspectors.service import run as run_service
-        from yoinkc.executor import RunResult
+        from inspectah.inspectors.service import run as run_service
+        from inspectah.executor import RunResult
 
         def exec_(cmd, cwd=None):
             if "systemctl" in cmd:
@@ -54,7 +54,7 @@ class TestServiceBaselinePresets:
 class TestCronToOnCalendar:
 
     def _convert(self, expr):
-        from yoinkc.inspectors.scheduled_tasks import _cron_to_on_calendar
+        from inspectah.inspectors.scheduled_tasks import _cron_to_on_calendar
         return _cron_to_on_calendar(expr)
 
     def test_simple_min_hour(self):
@@ -151,7 +151,7 @@ class TestCronToOnCalendar:
 class TestCronCommandExtraction:
 
     def test_command_in_exec_start(self):
-        from yoinkc.inspectors.scheduled_tasks import _make_timer_service
+        from inspectah.inspectors.scheduled_tasks import _make_timer_service
         _, service = _make_timer_service(
             "cron-backup", "0 2 * * *", "etc/cron.d/backup",
             command="/usr/local/bin/backup.sh --full",
@@ -160,13 +160,13 @@ class TestCronCommandExtraction:
         assert "FIXME" not in service
 
     def test_fallback_when_no_command(self):
-        from yoinkc.inspectors.scheduled_tasks import _make_timer_service
+        from inspectah.inspectors.scheduled_tasks import _make_timer_service
         _, service = _make_timer_service("x", "0 0 * * *", "etc/cron.d/x")
         assert "ExecStart=/bin/true" in service
         assert "FIXME" in service
 
     def test_system_crontab_skips_user_field(self, tmp_path):
-        from yoinkc.inspectors.scheduled_tasks import _scan_cron_file
+        from inspectah.inspectors.scheduled_tasks import _scan_cron_file
         cron_d = tmp_path / "etc/cron.d"
         cron_d.mkdir(parents=True)
         (cron_d / "logrotate").write_text(
@@ -180,7 +180,7 @@ class TestCronCommandExtraction:
         spool = tmp_path / "var/spool/cron"
         spool.mkdir(parents=True)
         (spool / "mark").write_text("30 1 * * * /home/mark/cleanup.sh\n")
-        from yoinkc.inspectors.scheduled_tasks import _scan_cron_file
+        from inspectah.inspectors.scheduled_tasks import _scan_cron_file
         section = ScheduledTaskSection()
         _scan_cron_file(section, tmp_path, spool / "mark", "spool/cron (mark)")
         assert section.generated_timer_units[0].command == "/home/mark/cleanup.sh"
@@ -190,7 +190,7 @@ class TestRpmOwnedCronFiltering:
 
     def test_rpm_owned_cron_d_file_not_converted(self, tmp_path):
         """RPM-owned cron.d files are recorded with rpm_owned=True but no timer is generated."""
-        from yoinkc.inspectors.scheduled_tasks import _scan_cron_file
+        from inspectah.inspectors.scheduled_tasks import _scan_cron_file
         cron_d = tmp_path / "etc/cron.d"
         cron_d.mkdir(parents=True)
         (cron_d / "logrotate").write_text("0 4 * * * root /usr/sbin/logrotate /etc/logrotate.conf\n")
@@ -205,7 +205,7 @@ class TestRpmOwnedCronFiltering:
 
     def test_unowned_cron_d_file_generates_timer(self, tmp_path):
         """Non-RPM-owned cron.d files are recorded with rpm_owned=False and a timer is generated."""
-        from yoinkc.inspectors.scheduled_tasks import _scan_cron_file
+        from inspectah.inspectors.scheduled_tasks import _scan_cron_file
         cron_d = tmp_path / "etc/cron.d"
         cron_d.mkdir(parents=True)
         (cron_d / "my-backup").write_text("0 2 * * * root /usr/local/bin/backup.sh\n")
@@ -220,7 +220,7 @@ class TestRpmOwnedCronFiltering:
 
     def test_user_crontab_always_generates_timer(self, tmp_path):
         """User spool crontabs always generate timers — the rpm_owned_paths check is not applied."""
-        from yoinkc.inspectors.scheduled_tasks import _scan_cron_file
+        from inspectah.inspectors.scheduled_tasks import _scan_cron_file
         spool = tmp_path / "var/spool/cron"
         spool.mkdir(parents=True)
         (spool / "alice").write_text("30 1 * * * /home/alice/backup.sh\n")
@@ -233,7 +233,7 @@ class TestRpmOwnedCronFiltering:
 
     def test_run_mixes_owned_and_unowned_cron_d(self, tmp_path):
         """run() with rpm_owned_paths: owned file in cron_jobs but no timer; unowned gets a timer."""
-        from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+        from inspectah.inspectors.scheduled_tasks import run as run_scheduled_tasks
         cron_d = tmp_path / "etc/cron.d"
         cron_d.mkdir(parents=True)
         (cron_d / "logrotate").write_text("0 4 * * * root /usr/sbin/logrotate /etc/logrotate.conf\n")
@@ -255,7 +255,7 @@ class TestRpmOwnedCronFiltering:
 
     def test_run_cron_period_rpm_owned_skips_timer(self, tmp_path):
         """RPM-owned cron.daily scripts are recorded but no timer unit is generated."""
-        from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+        from inspectah.inspectors.scheduled_tasks import run as run_scheduled_tasks
         cron_daily = tmp_path / "etc/cron.daily"
         cron_daily.mkdir(parents=True)
         (cron_daily / "man-db.cron").write_text("#!/bin/sh\nmandb --quiet\n")
@@ -277,7 +277,7 @@ class TestRpmOwnedCronFiltering:
 
     def test_run_no_rpm_owned_set_converts_all(self, tmp_path):
         """When rpm_owned_paths is None (no executor), all cron files generate timers."""
-        from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+        from inspectah.inspectors.scheduled_tasks import run as run_scheduled_tasks
         cron_d = tmp_path / "etc/cron.d"
         cron_d.mkdir(parents=True)
         (cron_d / "logrotate").write_text("0 4 * * * root /usr/sbin/logrotate /etc/logrotate.conf\n")

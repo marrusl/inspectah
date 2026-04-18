@@ -1,7 +1,7 @@
 """Tests for resolve_install_set — the shared package list that preflight and renderer use."""
 
-from yoinkc.install_set import resolve_install_set
-from yoinkc.schema import InspectionSnapshot, PackageEntry, PackageState, RpmSection
+from inspectah.install_set import resolve_install_set
+from inspectah.schema import InspectionSnapshot, PackageEntry, PackageState, RpmSection
 
 
 def _make_snapshot(
@@ -78,14 +78,14 @@ def test_result_is_sorted():
     assert result == ["apache", "mysql", "zsh"]
 
 def test_tuned_injected_when_active():
-    from yoinkc.schema import KernelBootSection
+    from inspectah.schema import KernelBootSection
     snapshot = _make_snapshot(packages=[("httpd", True)], no_baseline=True)
     snapshot.kernel_boot = KernelBootSection(tuned_active="throughput-performance")
     result = resolve_install_set(snapshot)
     assert "tuned" in result
 
 def test_tuned_not_duplicated():
-    from yoinkc.schema import KernelBootSection
+    from inspectah.schema import KernelBootSection
     snapshot = _make_snapshot(packages=[("httpd", True), ("tuned", True)], no_baseline=True)
     snapshot.kernel_boot = KernelBootSection(tuned_active="throughput-performance")
     result = resolve_install_set(snapshot)

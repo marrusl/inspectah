@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.schema import (
+from inspectah.schema import (
     EnabledModuleStream,
     FleetPrevalence,
     InspectionSnapshot,
@@ -17,8 +17,8 @@ from yoinkc.schema import (
     RpmSection,
     VersionLockEntry,
 )
-from yoinkc.renderers.containerfile import render as render_containerfile
-from yoinkc.renderers.audit_report import render as render_audit
+from inspectah.renderers.containerfile import render as render_containerfile
+from inspectah.renderers.audit_report import render as render_audit
 
 from conftest import _env
 
@@ -117,27 +117,27 @@ class TestRepoFileClassification:
     """is_default_repo classification logic."""
 
     def test_default_repo_redhat(self):
-        from yoinkc.inspectors.rpm import _classify_default_repo
+        from inspectah.inspectors.rpm import _classify_default_repo
         rf = RepoFile(path="etc/yum.repos.d/redhat.repo", content="[rhel-baseos]\nbaseurl=http://x\n")
         assert _classify_default_repo(rf) is True
 
     def test_non_default_repo_epel(self):
-        from yoinkc.inspectors.rpm import _classify_default_repo
+        from inspectah.inspectors.rpm import _classify_default_repo
         rf = RepoFile(path="etc/yum.repos.d/epel.repo", content="[epel]\nbaseurl=http://x\n")
         assert _classify_default_repo(rf) is False
 
     def test_default_repo_appstream_section(self):
-        from yoinkc.inspectors.rpm import _classify_default_repo
+        from inspectah.inspectors.rpm import _classify_default_repo
         rf = RepoFile(path="etc/yum.repos.d/centos.repo", content="[appstream]\nbaseurl=http://x\n")
         assert _classify_default_repo(rf) is True
 
     def test_non_default_repo_copr(self):
-        from yoinkc.inspectors.rpm import _classify_default_repo
+        from inspectah.inspectors.rpm import _classify_default_repo
         rf = RepoFile(path="etc/yum.repos.d/copr-myrepo.repo", content="[copr:user:project]\nbaseurl=http://x\n")
         assert _classify_default_repo(rf) is False
 
     def test_default_repo_fedora_section(self):
-        from yoinkc.inspectors.rpm import _classify_default_repo
+        from inspectah.inspectors.rpm import _classify_default_repo
         rf = RepoFile(path="etc/yum.repos.d/fedora.repo", content="[fedora]\nbaseurl=http://x\n")
         assert _classify_default_repo(rf) is True
 
@@ -175,7 +175,7 @@ class TestRepoCascadeContainerfile:
 class TestDeepVersionPatterns:
 
     def _match(self, data: bytes, expected: bytes):
-        from yoinkc.inspectors.non_rpm_software import DEEP_VERSION_PATTERNS
+        from inspectah.inspectors.non_rpm_software import DEEP_VERSION_PATTERNS
         for pat in DEEP_VERSION_PATTERNS:
             m = pat.search(data)
             if m and m.group(1) == expected:
@@ -192,7 +192,7 @@ class TestDeepVersionPatterns:
         self._match(b"OpenSSL 3.0.12 24 Oct 2023", b"3.0.12")
 
     def test_deep_is_superset_of_base(self):
-        from yoinkc.inspectors.non_rpm_software import VERSION_PATTERNS, DEEP_VERSION_PATTERNS
+        from inspectah.inspectors.non_rpm_software import VERSION_PATTERNS, DEEP_VERSION_PATTERNS
         for pat in VERSION_PATTERNS:
             assert pat in DEEP_VERSION_PATTERNS
 
@@ -201,7 +201,7 @@ class TestVersionChangeSchema:
     """VersionChange model and RpmSection.version_changes field."""
 
     def test_version_change_model(self):
-        from yoinkc.schema import VersionChange, VersionChangeDirection
+        from inspectah.schema import VersionChange, VersionChangeDirection
         vc = VersionChange(
             name="httpd",
             arch="x86_64",
@@ -219,7 +219,7 @@ class TestVersionChangeSchema:
         assert vc2.direction == VersionChangeDirection.DOWNGRADE
 
     def test_version_changes_on_rpm_section(self):
-        from yoinkc.schema import RpmSection, VersionChange, VersionChangeDirection
+        from inspectah.schema import RpmSection, VersionChange, VersionChangeDirection
         section = RpmSection()
         assert section.version_changes == []
         section.version_changes.append(VersionChange(
@@ -230,13 +230,13 @@ class TestVersionChangeSchema:
         assert len(section.version_changes) == 1
 
     def test_version_changes_empty_by_default_roundtrip(self):
-        from yoinkc.schema import RpmSection
+        from inspectah.schema import RpmSection
         data = {"packages_added": [], "base_image_only": []}
         section = RpmSection.model_validate(data)
         assert section.version_changes == []
 
     def test_schema_version_bumped(self):
-        from yoinkc.schema import SCHEMA_VERSION
+        from inspectah.schema import SCHEMA_VERSION
         assert SCHEMA_VERSION >= 7
 
 
@@ -245,18 +245,18 @@ class TestVersionChangesHtmlReport:
 
     def _render_html(self, snapshot):
         """Helper: render HTML report and return the HTML string."""
-        from yoinkc.renderers.html_report import render as render_html
+        from inspectah.renderers.html_report import render as render_html
         from jinja2 import Environment, FileSystemLoader
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             (tmp_path / "Containerfile").write_text("FROM test")
-            templates_dir = Path(__file__).parent.parent / "src" / "yoinkc" / "templates"
+            templates_dir = Path(__file__).parent.parent / "src" / "inspectah" / "templates"
             env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
             render_html(snapshot, env, tmp_path)
             return (tmp_path / "report.html").read_text()
 
     def test_version_changes_table_present(self):
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, RpmSection, PackageEntry,
             VersionChange, VersionChangeDirection,
         )
@@ -330,11 +330,11 @@ class TestVersionChangesAuditReport:
     """Version drift summary in the audit report."""
 
     def test_audit_report_shows_version_drift(self):
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, RpmSection, PackageEntry,
             VersionChange, VersionChangeDirection,
         )
-        from yoinkc.renderers.audit_report import render as render_audit
+        from inspectah.renderers.audit_report import render as render_audit
         snapshot = InspectionSnapshot(
             meta={},
             os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
@@ -362,8 +362,8 @@ class TestVersionChangesAuditReport:
         assert "downgrade" in report.lower()
 
     def test_audit_report_no_version_drift_when_empty(self):
-        from yoinkc.schema import InspectionSnapshot, OsRelease, RpmSection, PackageEntry
-        from yoinkc.renderers.audit_report import render as render_audit
+        from inspectah.schema import InspectionSnapshot, OsRelease, RpmSection, PackageEntry
+        from inspectah.renderers.audit_report import render as render_audit
         snapshot = InspectionSnapshot(
             meta={},
             os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
@@ -385,7 +385,7 @@ class TestVersionChangesAuditReport:
 class TestVersionChangeRoundtrip:
 
     def test_version_changes_survive_json_roundtrip(self):
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, RpmSection,
             VersionChange, VersionChangeDirection,
         )

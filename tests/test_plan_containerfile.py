@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from yoinkc.schema import (
+from inspectah.schema import (
     ComposeFile,
     ConfigFileEntry,
     ConfigFileKind,
@@ -22,9 +22,9 @@ from yoinkc.schema import (
     ServiceSection,
     ServiceStateChange,
 )
-from yoinkc.renderers.containerfile import render as render_containerfile
-from yoinkc.renderers.audit_report import render as render_audit
-from yoinkc.renderers.html_report import render as render_html_report
+from inspectah.renderers.containerfile import render as render_containerfile
+from inspectah.renderers.audit_report import render as render_audit
+from inspectah.renderers.html_report import render as render_html_report
 
 from conftest import _env
 
@@ -239,7 +239,7 @@ class TestAuditReportExcluded:
         assert "[EXCLUDED] foo.service" not in report
 
     def test_excluded_user_shows_excluded(self):
-        from yoinkc.schema import UserGroupSection
+        from inspectah.schema import UserGroupSection
         snapshot = InspectionSnapshot(
             meta={},
             os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
@@ -266,8 +266,8 @@ class TestAuditReportExcluded:
 class TestConfigDiffFallback:
 
     def test_download_rpm_from_repo_success(self):
-        from yoinkc.inspectors.config import _download_rpm_from_repo
-        from yoinkc.executor import RunResult
+        from inspectah.inspectors.config import _download_rpm_from_repo
+        from inspectah.executor import RunResult
 
         def exec_(cmd, cwd=None):
             cmd_str = " ".join(cmd)
@@ -287,8 +287,8 @@ class TestConfigDiffFallback:
         assert result == "ServerRoot /etc/httpd"
 
     def test_extract_uses_dot_slash_prefix(self):
-        from yoinkc.inspectors.config import _extract_file_from_rpm
-        from yoinkc.executor import RunResult
+        from inspectah.inspectors.config import _extract_file_from_rpm
+        from inspectah.executor import RunResult
 
         captured = []
         def exec_(cmd, cwd=None):
@@ -302,7 +302,7 @@ class TestConfigDiffFallback:
 class TestSanitizeShellValue:
 
     def _sanitize(self, value, context="test"):
-        from yoinkc.renderers.containerfile._helpers import _sanitize_shell_value
+        from inspectah.renderers.containerfile._helpers import _sanitize_shell_value
         return _sanitize_shell_value(value, context)
 
     def test_safe_package_name(self):
@@ -343,7 +343,7 @@ class TestSanitizeShellValue:
     def test_unsafe_package_name_produces_fixme(self):
         """Packages with unsafe names should produce a FIXME line, not a dnf install line."""
         import tempfile
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, RpmSection, PackageEntry, PackageState,
         )
         snapshot = InspectionSnapshot(
@@ -358,7 +358,7 @@ class TestSanitizeShellValue:
             ),
         )
         with tempfile.TemporaryDirectory() as tmp:
-            from yoinkc.renderers.containerfile import render
+            from inspectah.renderers.containerfile import render
             from jinja2 import Environment
             render(snapshot, Environment(), Path(tmp))
             cf = (Path(tmp) / "Containerfile").read_text()
@@ -371,7 +371,7 @@ class TestSanitizeShellValue:
     def test_unsafe_unit_name_produces_fixme(self):
         """Units with unsafe names are skipped with a FIXME, not injected."""
         import tempfile
-        from yoinkc.schema import InspectionSnapshot, OsRelease, ServiceSection
+        from inspectah.schema import InspectionSnapshot, OsRelease, ServiceSection
         snapshot = InspectionSnapshot(
             meta={},
             os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
@@ -381,7 +381,7 @@ class TestSanitizeShellValue:
             ),
         )
         with tempfile.TemporaryDirectory() as tmp:
-            from yoinkc.renderers.containerfile import render
+            from inspectah.renderers.containerfile import render
             from jinja2 import Environment
             render(snapshot, Environment(), Path(tmp))
             cf = (Path(tmp) / "Containerfile").read_text()
@@ -444,7 +444,7 @@ def test_html_diff_preview_removed():
 
 
 def test_storage_recommendation_mapping():
-    from yoinkc.renderers.audit_report import _storage_recommendation as rec
+    from inspectah.renderers.audit_report import _storage_recommendation as rec
     assert "image-embedded" in rec("/", "xfs", "/dev/sda1")
     assert "network mount" in rec("/data", "nfs", "server:/share")
     assert "swap" in rec("none", "swap", "/dev/sda3")

@@ -1,5 +1,5 @@
 # tests/test_fleet_cli.py
-"""Tests for yoinkc fleet subcommand CLI and end-to-end behaviour."""
+"""Tests for inspectah fleet subcommand CLI and end-to-end behaviour."""
 
 import io
 import json
@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.schema import InspectionSnapshot, OsRelease, RpmSection, PackageEntry
+from inspectah.schema import InspectionSnapshot, OsRelease, RpmSection, PackageEntry
 
 
 def _make_snapshot(hostname, packages):
@@ -49,53 +49,53 @@ def _make_snapshot_json(tmp_path, hostname, packages):
 
 class TestFleetCliParsing:
     def test_requires_input_dir(self):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         with pytest.raises(SystemExit):
             parse_args(["fleet"])
 
     def test_basic(self, tmp_path):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         args = parse_args(["fleet", str(tmp_path)])
         assert args.input_dir == tmp_path
         assert args.min_prevalence == 100
         assert args.no_hosts is False
 
     def test_with_prevalence(self, tmp_path):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         args = parse_args(["fleet", str(tmp_path), "-p", "80"])
         assert args.min_prevalence == 80
 
     def test_with_output(self, tmp_path):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         args = parse_args(["fleet", str(tmp_path), "-o", "/tmp/merged.json"])
         assert args.output_file == Path("/tmp/merged.json")
 
     def test_no_hosts_flag(self, tmp_path):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         args = parse_args(["fleet", str(tmp_path), "--no-hosts"])
         assert args.no_hosts is True
 
     def test_prevalence_out_of_range(self, tmp_path):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         with pytest.raises(SystemExit):
             parse_args(["fleet", str(tmp_path), "-p", "0"])
         with pytest.raises(SystemExit):
             parse_args(["fleet", str(tmp_path), "-p", "101"])
 
     def test_json_only_flag(self, tmp_path):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         args = parse_args(["fleet", str(tmp_path), "--json-only"])
         assert args.json_only is True
 
     def test_output_dir_flag(self, tmp_path):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         args = parse_args(["fleet", str(tmp_path), "--output-dir", str(tmp_path)])
         assert args.output_dir == tmp_path
 
 
 class TestFleetEndToEnd:
     def test_aggregate_produces_valid_snapshot(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_tarball(tmp_path, "web-01", ["httpd", "php"])
         _make_tarball(tmp_path, "web-02", ["httpd", "mod_ssl"])
 
@@ -116,7 +116,7 @@ class TestFleetEndToEnd:
         assert httpd.include is True
 
     def test_aggregate_default_output_path(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_tarball(tmp_path, "web-01", ["httpd"])
         _make_tarball(tmp_path, "web-02", ["httpd"])
 
@@ -125,18 +125,18 @@ class TestFleetEndToEnd:
         assert (tmp_path / "fleet-snapshot.json").exists()
 
     def test_aggregate_fewer_than_two_exits(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_tarball(tmp_path, "web-01", ["httpd"])
         exit_code = main([str(tmp_path)])
         assert exit_code == 1
 
     def test_aggregate_empty_dir_exits(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         exit_code = main([str(tmp_path)])
         assert exit_code == 1
 
     def test_fleet_tarball_output(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_snapshot_json(tmp_path, "srv-01", ["nginx"])
         _make_snapshot_json(tmp_path, "srv-02", ["nginx", "curl"])
 
@@ -152,7 +152,7 @@ class TestFleetEndToEnd:
         assert any("inspection-snapshot.json" in n for n in names)
 
     def test_fleet_json_only(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_snapshot_json(tmp_path, "db-01", ["postgresql"])
         _make_snapshot_json(tmp_path, "db-02", ["postgresql", "pg_dump"])
 
@@ -162,7 +162,7 @@ class TestFleetEndToEnd:
         assert not list(tmp_path.glob("*.tar.gz"))
 
     def test_fleet_output_dir(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_snapshot_json(tmp_path, "app-01", ["java"])
         _make_snapshot_json(tmp_path, "app-02", ["java", "tomcat"])
 
@@ -174,7 +174,7 @@ class TestFleetEndToEnd:
         assert (out_dir / "report.html").exists()
 
     def test_output_and_output_dir_mutually_exclusive(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_snapshot_json(tmp_path, "mx-01", ["postfix"])
         _make_snapshot_json(tmp_path, "mx-02", ["postfix"])
 
@@ -182,7 +182,7 @@ class TestFleetEndToEnd:
         assert exit_code == 1
 
     def test_json_only_and_output_dir_mutually_exclusive(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         _make_snapshot_json(tmp_path, "mx-03", ["postfix"])
         _make_snapshot_json(tmp_path, "mx-04", ["postfix"])
 
@@ -190,7 +190,7 @@ class TestFleetEndToEnd:
         assert exit_code == 1
 
     def test_fleet_tarball_naming(self, tmp_path, monkeypatch):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         snap_dir = tmp_path / "snapshots"
         snap_dir.mkdir()
         _make_snapshot_json(snap_dir, "cache-01", ["redis"])
@@ -210,7 +210,7 @@ class TestFleetEndToEnd:
         assert not list(other_dir.glob("*.tar.gz")), "nothing should land in CWD"
 
     def test_fleet_main_cwd_override(self, tmp_path):
-        from yoinkc.fleet.__main__ import main
+        from inspectah.fleet.__main__ import main
         snap_dir = tmp_path / "snapshots"
         snap_dir.mkdir()
         _make_snapshot_json(snap_dir, "cache-01", ["redis"])

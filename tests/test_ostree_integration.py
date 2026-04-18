@@ -6,11 +6,11 @@ from unittest.mock import patch
 
 import pytest
 
-from yoinkc.executor import RunResult
-from yoinkc.inspectors import run_all
-from yoinkc.renderers import run_all as run_all_renderers
-from yoinkc.schema import SystemType
-import yoinkc.preflight as preflight_mod
+from inspectah.executor import RunResult
+from inspectah.inspectors import run_all
+from inspectah.renderers import run_all as run_all_renderers
+from inspectah.schema import SystemType
+import inspectah.preflight as preflight_mod
 
 
 def _setup_silverblue_root(tmp_path):

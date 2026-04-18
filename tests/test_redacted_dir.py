@@ -1,11 +1,11 @@
 # tests/test_redacted_dir.py
 import tempfile
 from pathlib import Path
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind,
     RedactionFinding,
 )
-from yoinkc.renderers.containerfile._config_tree import write_config_tree, write_redacted_dir
+from inspectah.renderers.containerfile._config_tree import write_config_tree, write_redacted_dir
 
 
 def _snapshot_with_excluded():
@@ -55,7 +55,7 @@ def test_regenerate_placeholder_content():
         out = Path(tmp)
         write_redacted_dir(snap, out)
         content = (out / "redacted" / "etc" / "cockpit" / "ws-certs.d" / "0-self-signed.key.REDACTED").read_text()
-        assert "REDACTED by yoinkc" in content
+        assert "REDACTED by inspectah" in content
         assert "auto-generated credential" in content
         assert "no action needed" in content
         assert "/etc/cockpit/ws-certs.d/0-self-signed.key" in content
@@ -67,7 +67,7 @@ def test_provision_placeholder_content():
         out = Path(tmp)
         write_redacted_dir(snap, out)
         content = (out / "redacted" / "etc" / "pki" / "tls" / "private" / "server.key.REDACTED").read_text()
-        assert "REDACTED by yoinkc" in content
+        assert "REDACTED by inspectah" in content
         assert "sensitive file detected" in content
         assert "provision" in content
         assert "/etc/pki/tls/private/server.key" in content

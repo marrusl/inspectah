@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.subscription import bundle_subscription_certs
+from inspectah.subscription import bundle_subscription_certs
 
 
 def _make_host_root_with_certs(root: Path) -> None:

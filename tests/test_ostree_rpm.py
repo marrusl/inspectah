@@ -10,9 +10,9 @@ import json
 from pathlib import Path
 from typing import List
 
-from yoinkc.executor import RunResult
-from yoinkc.inspectors.rpm import run as run_rpm
-from yoinkc.schema import SystemType, OstreePackageOverride, PackageEntry
+from inspectah.executor import RunResult
+from inspectah.inspectors.rpm import run as run_rpm
+from inspectah.schema import SystemType, OstreePackageOverride, PackageEntry
 
 
 FIXTURES = Path(__file__).parent / "fixtures"

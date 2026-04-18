@@ -3,8 +3,8 @@
 import tempfile
 from pathlib import Path
 
-from yoinkc.renderers import run_all as run_all_renderers
-from yoinkc.schema import (
+from inspectah.renderers import run_all as run_all_renderers
+from inspectah.schema import (
     AtJob,
     ConfigCategory,
     ConfigFileEntry,
@@ -40,7 +40,7 @@ def _render(refine_mode: bool = False, **snapshot_kwargs) -> str:
 
 
 def _content_template_paths() -> list[Path]:
-    report_dir = Path(__file__).resolve().parents[1] / "src" / "yoinkc" / "templates" / "report"
+    report_dir = Path(__file__).resolve().parents[1] / "src" / "inspectah" / "templates" / "report"
     return sorted(
         path
         for path in report_dir.glob("_*.html.j2")
@@ -172,7 +172,7 @@ class TestInlineStyleCleanup:
         banner_template = (
             Path(__file__).resolve().parents[1]
             / "src"
-            / "yoinkc"
+            / "inspectah"
             / "templates"
             / "report"
             / "_banner.html.j2"
@@ -245,7 +245,7 @@ class TestConfigColumnCleanup:
         assert ".diff-del" not in html
 
     def test_render_diff_html_function_removed(self):
-        from yoinkc.renderers import html_report
+        from inspectah.renderers import html_report
 
         assert not hasattr(html_report, "_render_diff_html")
 
@@ -883,22 +883,22 @@ class TestRepoSectionIds:
     """Disabled repo sections should be filtered out."""
 
     def test_enabled_sections_returned(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         content = "[baseos]\nenabled=1\n[appstream]\nenabled=1\n"
         assert _repo_section_ids(content) == ["baseos", "appstream"]
 
     def test_disabled_sections_excluded(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         content = "[baseos]\nenabled=1\n[supplementary]\nenabled=0\n"
         assert _repo_section_ids(content) == ["baseos"]
 
     def test_enabled_default_when_absent(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         content = "[epel]\ngpgcheck=1\nbaseurl=https://example.com\n"
         assert _repo_section_ids(content) == ["epel"]
 
     def test_mixed_enabled_disabled(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         content = (
             "[baseos]\nenabled=1\n"
             "[debug-rpms]\nenabled=0\n"
@@ -909,27 +909,27 @@ class TestRepoSectionIds:
         assert _repo_section_ids(content) == ["baseos", "appstream"]
 
     def test_enabled_metadata_key_ignored(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         content = "[myrepo]\nenabled_metadata=0\ngpgcheck=1\n"
         assert _repo_section_ids(content) == ["myrepo"]
 
     def test_inline_comment_stripped(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         content = "[disabled-repo]\nenabled=0 # turned off for now\n"
         assert _repo_section_ids(content) == []
 
     def test_inline_comment_on_enabled(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         content = "[active-repo]\nenabled=1 # keep this on\n"
         assert _repo_section_ids(content) == ["active-repo"]
 
     def test_empty_content(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         assert _repo_section_ids("") == []
         assert _repo_section_ids(None) == []
 
     def test_common_false_values_disable_section(self):
-        from yoinkc.renderers.html_report import _repo_section_ids
+        from inspectah.renderers.html_report import _repo_section_ids
         for value in ("0", "no", "false", "off", "NO", "False", " Off "):
             content = f"[disabled-repo]\nenabled={value}\n"
             assert _repo_section_ids(content) == [], value
@@ -937,7 +937,7 @@ class TestRepoSectionIds:
 
 class TestRepoFileCandidateNames:
     def test_disabled_only_repo_file_keeps_section_ids(self):
-        from yoinkc.renderers.html_report import _repo_file_candidate_names
+        from inspectah.renderers.html_report import _repo_file_candidate_names
 
         repo_file = RepoFile(
             path="etc/yum.repos.d/redhat.repo",

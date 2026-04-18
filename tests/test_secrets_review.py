@@ -2,8 +2,8 @@
 import tempfile
 from pathlib import Path
 from jinja2 import Environment
-from yoinkc.schema import InspectionSnapshot, RedactionFinding
-from yoinkc.renderers.secrets_review import render
+from inspectah.schema import InspectionSnapshot, RedactionFinding
+from inspectah.renderers.secrets_review import render
 
 
 def _snapshot_with_findings():

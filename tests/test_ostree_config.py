@@ -10,9 +10,9 @@ Verifies:
 import os
 from pathlib import Path
 
-from yoinkc.executor import RunResult
-from yoinkc.inspectors.config import run as run_config
-from yoinkc.schema import ConfigFileKind, SystemType
+from inspectah.executor import RunResult
+from inspectah.inspectors.config import run as run_config
+from inspectah.schema import ConfigFileKind, SystemType
 
 
 def _config_executor(cmd, *, cwd=None):

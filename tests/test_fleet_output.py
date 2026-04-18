@@ -5,8 +5,8 @@ import re
 
 from jinja2 import Environment
 
-from yoinkc.renderers import html_report
-from yoinkc.schema import (
+from inspectah.renderers import html_report
+from inspectah.schema import (
     ConfigFileEntry,
     ConfigFileKind,
     ConfigSection,
@@ -104,31 +104,31 @@ class TestFleetColor:
     """Tests for the _fleet_color Jinja2 filter."""
 
     def test_full_prevalence_returns_blue(self):
-        from yoinkc.renderers.html_report import _fleet_color
+        from inspectah.renderers.html_report import _fleet_color
         fleet = FleetPrevalence(count=3, total=3)
         assert _fleet_color(fleet) == "pf-m-blue"
 
     def test_majority_prevalence_returns_gold(self):
-        from yoinkc.renderers.html_report import _fleet_color
+        from inspectah.renderers.html_report import _fleet_color
         fleet = FleetPrevalence(count=2, total=3)
         assert _fleet_color(fleet) == "pf-m-gold"
 
     def test_fifty_percent_returns_gold(self):
-        from yoinkc.renderers.html_report import _fleet_color
+        from inspectah.renderers.html_report import _fleet_color
         fleet = FleetPrevalence(count=50, total=100)
         assert _fleet_color(fleet) == "pf-m-gold"
 
     def test_minority_prevalence_returns_red(self):
-        from yoinkc.renderers.html_report import _fleet_color
+        from inspectah.renderers.html_report import _fleet_color
         fleet = FleetPrevalence(count=1, total=3)
         assert _fleet_color(fleet) == "pf-m-red"
 
     def test_none_returns_blue(self):
-        from yoinkc.renderers.html_report import _fleet_color
+        from inspectah.renderers.html_report import _fleet_color
         assert _fleet_color(None) == "pf-m-blue"
 
     def test_zero_total_returns_blue(self):
-        from yoinkc.renderers.html_report import _fleet_color
+        from inspectah.renderers.html_report import _fleet_color
         fleet = FleetPrevalence(count=0, total=0)
         assert _fleet_color(fleet) == "pf-m-blue"
 
@@ -191,7 +191,7 @@ class TestFleetBanner:
         assert "Fleet Analysis" not in html
 
     def test_fleet_banner_prefers_short_display_names(self, tmp_path):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = InspectionSnapshot(
             os_release=OsRelease(name="Red Hat Enterprise Linux", version_id="9.4", id="rhel"),
@@ -304,7 +304,7 @@ class TestFleetPrevalenceBadge:
         assert 'data-hosts=""' in html
 
     def test_prevalence_bar_uses_display_names_and_preserves_full_host_titles(self, tmp_path):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         pkg = PackageEntry(name="httpd", version="2.4.57", release="1.el9", arch="x86_64")
         s1 = InspectionSnapshot(
@@ -334,7 +334,7 @@ class TestFleetConfigPassthrough:
     """Test that _prepare_config_files preserves fleet data."""
 
     def test_fleet_field_preserved(self):
-        from yoinkc.renderers.html_report import _prepare_config_files
+        from inspectah.renderers.html_report import _prepare_config_files
         fleet = FleetPrevalence(count=2, total=3, hosts=["web-01", "web-02"])
         snap = InspectionSnapshot(
             schema_version=1,
@@ -361,7 +361,7 @@ class TestFleetConfigPassthrough:
         assert result[0]["fleet"].total == 3
 
     def test_fleet_field_none_when_absent(self):
-        from yoinkc.renderers.html_report import _prepare_config_files
+        from inspectah.renderers.html_report import _prepare_config_files
         snap = InspectionSnapshot(
             schema_version=1,
             os_release=OsRelease(
@@ -532,7 +532,7 @@ class TestVariantTieResolution:
 
     def test_unresolved_tie_counted(self, tmp_path):
         """An unresolved tie (both include=False, same fleet count) is counted."""
-        from yoinkc.renderers.html_report import _build_context
+        from inspectah.renderers.html_report import _build_context
         snap = self._make_tied_snapshot(resolved=False)
         env = Environment(autoescape=True)
         ctx = _build_context(snap, tmp_path, env)
@@ -540,7 +540,7 @@ class TestVariantTieResolution:
 
     def test_resolved_tie_not_counted(self, tmp_path):
         """A user-resolved tie (one include=True) should NOT be counted."""
-        from yoinkc.renderers.html_report import _build_context
+        from inspectah.renderers.html_report import _build_context
         snap = self._make_tied_snapshot(resolved=True)
         env = Environment(autoescape=True)
         ctx = _build_context(snap, tmp_path, env)
@@ -569,7 +569,7 @@ class TestVariantTieResolution:
     def test_resolved_tie_persists_through_json_roundtrip(self, tmp_path):
         """Variant selection survives JSON serialise→deserialise (re-render path)."""
         import json
-        from yoinkc.renderers.html_report import _build_context
+        from inspectah.renderers.html_report import _build_context
         snap = self._make_tied_snapshot(resolved=True)
         data = json.loads(snap.model_dump_json())
         reloaded = InspectionSnapshot.model_validate(data)
@@ -642,7 +642,7 @@ class TestVariantTieResolution:
                 ],
             ),
         )
-        from yoinkc.renderers.html_report import _build_context
+        from inspectah.renderers.html_report import _build_context
         env = Environment(autoescape=True)
         ctx = _build_context(snap, tmp_path, env)
         # The resolved tie should not be counted as unresolved
@@ -694,7 +694,7 @@ class TestVariantTieResolution:
         assert len(included) == 1
         assert included[0].content == "minority-variant"
         # Verify the render also shows it correctly
-        from yoinkc.renderers.html_report import _build_context
+        from inspectah.renderers.html_report import _build_context
         env = Environment(autoescape=True)
         ctx = _build_context(reloaded, tmp_path, env)
         assert ctx["unresolved_ties"] == 0

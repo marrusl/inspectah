@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.cli import parse_args
+from inspectah.cli import parse_args
 
 
 def test_defaults():
@@ -131,9 +131,9 @@ def test_baseline_packages_reaches_inspectors():
     args = parse_args(["--baseline-packages", "/tmp/pkgs.txt"])
     assert args.baseline_packages == Path("/tmp/pkgs.txt")
 
-    with unittest.mock.patch("yoinkc.inspectors.run_all") as mock_run_all:
+    with unittest.mock.patch("inspectah.inspectors.run_all") as mock_run_all:
         mock_run_all.return_value = unittest.mock.MagicMock()
-        from yoinkc.__main__ import _run_inspectors
+        from inspectah.__main__ import _run_inspectors
         _run_inspectors(Path("/host"), args)
         mock_run_all.assert_called_once()
         call_kwargs = mock_run_all.call_args
@@ -146,9 +146,9 @@ def test_no_baseline_reaches_inspectors():
     args = parse_args(["--no-baseline"])
     assert args.no_baseline is True
 
-    with unittest.mock.patch("yoinkc.inspectors.run_all") as mock_run_all:
+    with unittest.mock.patch("inspectah.inspectors.run_all") as mock_run_all:
         mock_run_all.return_value = unittest.mock.MagicMock()
-        from yoinkc.__main__ import _run_inspectors
+        from inspectah.__main__ import _run_inspectors
         _run_inspectors(Path("/host"), args)
         mock_run_all.assert_called_once()
         call_kwargs = mock_run_all.call_args
@@ -163,22 +163,22 @@ def _make_main_snapshot():
 
 
 def test_main_exception_prints_hint(capsys, monkeypatch):
-    """Unhandled exceptions print a debug hint when YOINKC_DEBUG is unset."""
-    monkeypatch.delenv("YOINKC_DEBUG", raising=False)
-    with unittest.mock.patch("yoinkc.__main__.run_pipeline", side_effect=RuntimeError("boom")):
-        from yoinkc.__main__ import main
+    """Unhandled exceptions print a debug hint when INSPECTAH_DEBUG is unset."""
+    monkeypatch.delenv("INSPECTAH_DEBUG", raising=False)
+    with unittest.mock.patch("inspectah.__main__.run_pipeline", side_effect=RuntimeError("boom")):
+        from inspectah.__main__ import main
         rc = main(["--skip-preflight"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "boom" in err
-    assert "YOINKC_DEBUG" in err
+    assert "INSPECTAH_DEBUG" in err
 
 
 def test_main_exception_prints_traceback_in_debug_mode(capsys, monkeypatch):
-    """Full traceback is printed when YOINKC_DEBUG=1."""
-    monkeypatch.setenv("YOINKC_DEBUG", "1")
-    with unittest.mock.patch("yoinkc.__main__.run_pipeline", side_effect=RuntimeError("kaboom")):
-        from yoinkc.__main__ import main
+    """Full traceback is printed when INSPECTAH_DEBUG=1."""
+    monkeypatch.setenv("INSPECTAH_DEBUG", "1")
+    with unittest.mock.patch("inspectah.__main__.run_pipeline", side_effect=RuntimeError("kaboom")):
+        from inspectah.__main__ import main
         rc = main(["--skip-preflight"])
     assert rc == 1
     err = capsys.readouterr().err
@@ -188,19 +188,19 @@ def test_main_exception_prints_traceback_in_debug_mode(capsys, monkeypatch):
 
 def test_main_git_init_failure_returns_error(capsys, tmp_path, monkeypatch):
     """When github deps are available but init_git_repo fails, main() exits 1 with a helpful message."""
-    monkeypatch.delenv("YOINKC_DEBUG", raising=False)
+    monkeypatch.delenv("INSPECTAH_DEBUG", raising=False)
     snap = _make_main_snapshot()
     # The packaged-install guard checks whether github/git are importable. Mock them
     # as available so the test can reach the init_git_repo failure path it exercises.
     fake_github = unittest.mock.MagicMock()
     fake_git = unittest.mock.MagicMock()
     with (
-        unittest.mock.patch("yoinkc.__main__.run_pipeline", return_value=snap),
-        unittest.mock.patch("yoinkc.git_github.init_git_repo", return_value=False) as mock_init,
-        unittest.mock.patch("yoinkc.git_github.add_and_commit") as mock_commit,
+        unittest.mock.patch("inspectah.__main__.run_pipeline", return_value=snap),
+        unittest.mock.patch("inspectah.git_github.init_git_repo", return_value=False) as mock_init,
+        unittest.mock.patch("inspectah.git_github.add_and_commit") as mock_commit,
         unittest.mock.patch.dict(sys.modules, {"github": fake_github, "git": fake_git}),
     ):
-        from yoinkc.__main__ import main
+        from inspectah.__main__ import main
         rc = main(["--output-dir", str(tmp_path), "--push-to-github", "owner/repo",
                    "--skip-preflight", "--yes"])
     assert rc == 1
@@ -242,7 +242,7 @@ class TestSubcommandRouting:
         assert args.from_snapshot == Path("foo.json")
 
     def test_bare_flags_parsed_as_inspect(self):
-        """Bare `yoinkc --from-snapshot foo.json` should parse as inspect."""
+        """Bare `inspectah --from-snapshot foo.json` should parse as inspect."""
         args = parse_args(["--from-snapshot", "foo.json"])
         assert args.command in (None, "inspect")
         assert args.from_snapshot == Path("foo.json")
@@ -397,27 +397,27 @@ class TestRefineSubcommand:
 
 def test_skip_unavailable_flag():
     """--skip-unavailable is parsed correctly."""
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     args = parse_args(["inspect", "--skip-unavailable"])
     assert args.skip_unavailable is True
 
 
 def test_skip_unavailable_default_false():
     """--skip-unavailable defaults to False."""
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     args = parse_args(["inspect"])
     assert args.skip_unavailable is False
 
 
 class TestMainModule:
-    """Verify `python -m yoinkc` works via __main__.py guard."""
+    """Verify `python -m inspectah` works via __main__.py guard."""
 
     def test_module_help(self):
-        """python3 -m yoinkc --help produces output and exits 0."""
+        """python3 -m inspectah --help produces output and exits 0."""
         import subprocess
 
         result = subprocess.run(
-            [sys.executable, "-m", "yoinkc", "--help"],
+            [sys.executable, "-m", "inspectah", "--help"],
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == 0

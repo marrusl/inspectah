@@ -9,12 +9,12 @@ import tarfile
 import tempfile
 from pathlib import Path
 
-from yoinkc.executor import Executor, RunResult
-from yoinkc.inspectors import run_all as run_all_inspectors
-from yoinkc.packaging import create_tarball
-from yoinkc.pipeline import load_snapshot, save_snapshot
-from yoinkc.redact import redact_snapshot
-from yoinkc.renderers import run_all as run_all_renderers
+from inspectah.executor import Executor, RunResult
+from inspectah.inspectors import run_all as run_all_inspectors
+from inspectah.packaging import create_tarball
+from inspectah.pipeline import load_snapshot, save_snapshot
+from inspectah.redact import redact_snapshot
+from inspectah.renderers import run_all as run_all_renderers
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

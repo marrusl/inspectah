@@ -1,7 +1,7 @@
 """Non-RPM software inspector tests for ostree/bootc source systems."""
 from pathlib import Path
-from yoinkc.executor import RunResult
-from yoinkc.schema import SystemType
+from inspectah.executor import RunResult
+from inspectah.schema import SystemType
 
 
 def _non_rpm_executor(cmd, *, cwd=None):
@@ -9,7 +9,7 @@ def _non_rpm_executor(cmd, *, cwd=None):
 
 
 def test_immutable_usr_local_skipped_on_ostree(tmp_path):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     usr_local = tmp_path / "usr" / "local" / "bin"
     usr_local.mkdir(parents=True)
     (usr_local / "custom-app").write_text("#!/bin/bash\n")
@@ -24,7 +24,7 @@ def test_immutable_usr_local_skipped_on_ostree(tmp_path):
 
 
 def test_immutable_usr_lib_python_skipped_on_ostree(tmp_path):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     pydir = tmp_path / "usr" / "lib" / "python3.12" / "site-packages" / "mylib"
     pydir.mkdir(parents=True)
     (pydir / "__init__.py").write_text("# immutable\n")
@@ -39,7 +39,7 @@ def test_immutable_usr_lib_python_skipped_on_ostree(tmp_path):
 
 
 def test_ostree_var_internal_paths_skipped(tmp_path):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     for internal in ["var/lib/ostree", "var/lib/rpm-ostree", "var/lib/flatpak"]:
         p = tmp_path / internal / "data"
         p.mkdir(parents=True)
@@ -52,7 +52,7 @@ def test_ostree_var_internal_paths_skipped(tmp_path):
 
 
 def test_package_mode_usr_local_still_scanned(tmp_path):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     usr_local = tmp_path / "usr" / "local" / "bin"
     usr_local.mkdir(parents=True)
     (usr_local / "custom-tool").write_text("#!/bin/bash\n")

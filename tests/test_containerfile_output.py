@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from jinja2 import Environment
 
-from yoinkc.renderers import run_all as run_all_renderers
-from yoinkc.renderers.containerfile import render as render_containerfile
-from yoinkc.schema import (
+from inspectah.renderers import run_all as run_all_renderers
+from inspectah.renderers.containerfile import render as render_containerfile
+from inspectah.schema import (
     InspectionSnapshot,
     OsRelease,
     PackageEntry,
@@ -87,8 +87,8 @@ class TestContainerfile:
         assert any(f.is_file() for f in files), "config/etc/ is empty"
 
     def test_tmpfiles_written_to_config_etc(self, outputs_with_baseline):
-        """yoinkc-var.conf must exist inside config/etc/tmpfiles.d/."""
-        tmpfiles = outputs_with_baseline["dir"] / "config/etc/tmpfiles.d/yoinkc-var.conf"
+        """inspectah-var.conf must exist inside config/etc/tmpfiles.d/."""
+        tmpfiles = outputs_with_baseline["dir"] / "config/etc/tmpfiles.d/inspectah-var.conf"
         assert tmpfiles.exists()
 
     def test_fixme_comments_present(self, outputs_with_baseline):
@@ -179,13 +179,13 @@ class TestKernelKargs:
     def test_kargs_toml_generated(self, outputs_with_baseline):
         """TOML drop-in is written for operator-added kargs."""
         toml_path = (outputs_with_baseline["dir"]
-                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+                     / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml")
         assert toml_path.exists(), "kargs TOML not written"
 
     def test_kargs_toml_contains_operator_args(self, outputs_with_baseline):
         """Operator-added kargs from the fixture appear in the TOML array."""
         toml_path = (outputs_with_baseline["dir"]
-                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+                     / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml")
         content = toml_path.read_text()
         assert '"hugepagesz=2M"' in content
         assert '"transparent_hugepage=never"' in content
@@ -193,7 +193,7 @@ class TestKernelKargs:
     def test_kargs_toml_excludes_bootloader_params(self, outputs_with_baseline):
         """Standard bootloader/installer parameters are NOT written to the TOML."""
         toml_path = (outputs_with_baseline["dir"]
-                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+                     / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml")
         content = toml_path.read_text()
         for excluded in ("BOOT_IMAGE", "root=", '"ro"', '"rhgb"', '"quiet"', "crashkernel"):
             assert excluded not in content, (
@@ -203,7 +203,7 @@ class TestKernelKargs:
     def test_kargs_toml_format(self, outputs_with_baseline):
         """TOML content uses the correct kargs array format."""
         toml_path = (outputs_with_baseline["dir"]
-                     / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml")
+                     / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml")
         content = toml_path.read_text()
         assert re.search(r'^kargs = \[".+"\]', content, re.MULTILINE), (
             f"kargs TOML does not have expected array format:\n{content}"
@@ -213,7 +213,7 @@ class TestKernelKargs:
         """Containerfile references the kargs TOML via COPY, not rpm-ostree kargs."""
         cf = (outputs_with_baseline["dir"] / "Containerfile").read_text()
         assert "rpm-ostree kargs" not in cf, "Containerfile still references rpm-ostree kargs"
-        assert "COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/" in cf
+        assert "COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/" in cf
         assert "RUN mkdir -p /usr/lib/bootc/kargs.d" in cf
 
     def test_kargs_section_header_in_containerfile(self, outputs_with_baseline):
@@ -223,7 +223,7 @@ class TestKernelKargs:
 
     def test_no_kargs_toml_when_no_cmdline(self):
         """No TOML file and no kargs section when kernel_boot has no cmdline."""
-        from yoinkc.schema import InspectionSnapshot, OsRelease, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, OsRelease, KernelBootSection
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6"),
@@ -232,7 +232,7 @@ class TestKernelKargs:
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             render_containerfile(snapshot, Environment(), output_dir)
-            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml"
             assert not toml_path.exists(), "TOML written for empty cmdline"
             cf = (output_dir / "Containerfile").read_text()
             assert "kargs.d" not in cf
@@ -240,7 +240,7 @@ class TestKernelKargs:
 
     def test_no_kargs_toml_when_only_bootloader_params(self):
         """No TOML file or kargs section when cmdline contains only standard boot params."""
-        from yoinkc.schema import InspectionSnapshot, OsRelease, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, OsRelease, KernelBootSection
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6"),
@@ -251,14 +251,14 @@ class TestKernelKargs:
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             render_containerfile(snapshot, Environment(), output_dir)
-            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml"
             assert not toml_path.exists(), "TOML written for bootloader-only cmdline"
             cf = (output_dir / "Containerfile").read_text()
             assert "kargs.d" not in cf
 
     def test_no_kargs_toml_when_no_kernel_boot(self):
         """No TOML file and no kargs section when kernel_boot is absent."""
-        from yoinkc.schema import InspectionSnapshot, OsRelease
+        from inspectah.schema import InspectionSnapshot, OsRelease
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6"),
@@ -266,14 +266,14 @@ class TestKernelKargs:
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             render_containerfile(snapshot, Environment(), output_dir)
-            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml"
             assert not toml_path.exists()
             cf = (output_dir / "Containerfile").read_text()
             assert "kargs.d" not in cf
 
     def test_multiple_kargs_combined_in_single_toml(self):
         """Multiple operator kargs from cmdline are collected into a single TOML array."""
-        from yoinkc.schema import InspectionSnapshot, OsRelease, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, OsRelease, KernelBootSection
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6"),
@@ -287,7 +287,7 @@ class TestKernelKargs:
         with tempfile.TemporaryDirectory() as tmp:
             output_dir = Path(tmp)
             render_containerfile(snapshot, Environment(), output_dir)
-            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml"
+            toml_path = output_dir / "config/usr/lib/bootc/kargs.d/inspectah-migrated.toml"
             assert toml_path.exists()
             content = toml_path.read_text()
             assert '"hugepagesz=2M"' in content
@@ -300,7 +300,7 @@ class TestKernelKargs:
             assert len(kargs_lines) == 1, f"Expected single kargs line, got: {kargs_lines}"
             cf = (output_dir / "Containerfile").read_text()
             copies = [ln for ln in cf.splitlines()
-                      if "kargs.d/yoinkc-migrated.toml" in ln and ln.startswith("COPY")]
+                      if "kargs.d/inspectah-migrated.toml" in ln and ln.startswith("COPY")]
             assert len(copies) == 1, f"Expected 1 COPY for kargs TOML, got: {copies}"
 
 
@@ -319,7 +319,7 @@ class TestEdgeCases:
 
     def test_minimal_snapshot_no_crash(self):
         """Renderers must not crash when all sections are None."""
-        from yoinkc.schema import InspectionSnapshot, OsRelease
+        from inspectah.schema import InspectionSnapshot, OsRelease
         minimal = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6"),
@@ -336,7 +336,7 @@ class TestEdgeCases:
 
     def test_none_and_empty_values_no_literal_none(self):
         """No literal 'None' string in any rendered output."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, ServiceSection, ServiceStateChange,
         )
         services = ServiceSection(
@@ -368,7 +368,7 @@ class TestServicePackageFiltering:
 
     @staticmethod
     def _render_cf(snap) -> str:
-        from yoinkc.renderers.containerfile import render as render_containerfile
+        from inspectah.renderers.containerfile import render as render_containerfile
         from jinja2 import Environment
         with tempfile.TemporaryDirectory() as td:
             render_containerfile(snap, Environment(), Path(td))
@@ -376,7 +376,7 @@ class TestServicePackageFiltering:
 
     def _make_snap(self, enabled=None, disabled=None, state_changes=None,
                    leaf=None, auto=None, baseline=None, dep_tree=None):
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, RpmSection, ServiceSection, ServiceStateChange,
             PackageEntry, PackageState,
         )
@@ -397,7 +397,7 @@ class TestServicePackageFiltering:
 
     def test_leaf_package_service_included(self):
         """Service from a leaf package must appear in RUN systemctl enable."""
-        from yoinkc.schema import ServiceStateChange
+        from inspectah.schema import ServiceStateChange
         snap = self._make_snap(
             enabled=["httpd.service"],
             state_changes=[ServiceStateChange(
@@ -412,7 +412,7 @@ class TestServicePackageFiltering:
 
     def test_baseline_package_service_included(self):
         """Service from a base image package must appear in RUN systemctl enable."""
-        from yoinkc.schema import ServiceStateChange
+        from inspectah.schema import ServiceStateChange
         snap = self._make_snap(
             enabled=["sshd.service"],
             state_changes=[ServiceStateChange(
@@ -427,7 +427,7 @@ class TestServicePackageFiltering:
 
     def test_auto_dep_of_leaf_included(self):
         """Service from an auto package that is a dep of a leaf must be included."""
-        from yoinkc.schema import ServiceStateChange
+        from inspectah.schema import ServiceStateChange
         snap = self._make_snap(
             enabled=["mod_ssl.service"],
             state_changes=[ServiceStateChange(
@@ -444,7 +444,7 @@ class TestServicePackageFiltering:
 
     def test_orphan_auto_package_skipped(self):
         """Service from an auto package not depended on by any leaf must be skipped."""
-        from yoinkc.schema import ServiceStateChange
+        from inspectah.schema import ServiceStateChange
         snap = self._make_snap(
             enabled=["insights-client-boot.service", "httpd.service"],
             state_changes=[
@@ -474,7 +474,7 @@ class TestServicePackageFiltering:
 
     def test_unknown_owner_included(self):
         """Service with unknown owning package must be included (safe default)."""
-        from yoinkc.schema import ServiceStateChange
+        from inspectah.schema import ServiceStateChange
         snap = self._make_snap(
             enabled=["custom.service"],
             state_changes=[ServiceStateChange(
@@ -489,7 +489,7 @@ class TestServicePackageFiltering:
 
     def test_orphan_disable_skipped(self):
         """systemctl disable must also skip units whose package won't be installed."""
-        from yoinkc.schema import ServiceStateChange
+        from inspectah.schema import ServiceStateChange
         snap = self._make_snap(
             disabled=["insights-client.service"],
             state_changes=[ServiceStateChange(
@@ -508,7 +508,7 @@ class TestServicePackageFiltering:
 
     def test_no_rpm_data_includes_all(self):
         """When RPM section has no package lists, all units should be included."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, ServiceSection, ServiceStateChange,
         )
         snap = InspectionSnapshot(
@@ -527,7 +527,7 @@ class TestServicePackageFiltering:
 
 def test_gpg_key_copy_precedes_repo_copy():
     """GPG key COPY must appear before repo COPY which must appear before dnf install."""
-    from yoinkc.schema import InspectionSnapshot, RpmSection, PackageEntry, PackageState, RepoFile
+    from inspectah.schema import InspectionSnapshot, RpmSection, PackageEntry, PackageState, RepoFile
 
     snap = InspectionSnapshot()
     snap.rpm = RpmSection()
@@ -563,7 +563,7 @@ def test_gpg_key_copy_precedes_repo_copy():
 
 def test_systemd_timer_copy_precedes_enable():
     """Timer unit COPY must appear before RUN systemctl enable *.timer."""
-    from yoinkc.schema import InspectionSnapshot, ScheduledTaskSection, SystemdTimer
+    from inspectah.schema import InspectionSnapshot, ScheduledTaskSection, SystemdTimer
 
     snap = InspectionSnapshot()
     snap.scheduled_tasks = ScheduledTaskSection()
@@ -590,7 +590,7 @@ def test_systemd_timer_copy_precedes_enable():
 
 def test_repo_copy_precedes_dnf_install():
     """Repo COPY directives must appear before RUN dnf install so repos exist when packages are installed."""
-    from yoinkc.schema import InspectionSnapshot, RpmSection, PackageEntry, PackageState, RepoFile
+    from inspectah.schema import InspectionSnapshot, RpmSection, PackageEntry, PackageState, RepoFile
 
     snap = InspectionSnapshot()
     snap.rpm = RpmSection()
@@ -621,8 +621,8 @@ def test_repo_copy_precedes_dnf_install():
 
 def test_config_tree_timers_excluded_from_services_enable():
     """Config-tree timer units must not appear in the services RUN systemctl enable line."""
-    from yoinkc.renderers.containerfile import render as render_containerfile
-    from yoinkc.schema import (
+    from inspectah.renderers.containerfile import render as render_containerfile
+    from inspectah.schema import (
         InspectionSnapshot, ServiceSection, ScheduledTaskSection, SystemdTimer,
         )
     from jinja2 import Environment
@@ -663,8 +663,8 @@ def test_config_tree_timers_excluded_from_services_enable():
 
 def test_bootc_container_lint_is_last_run():
     """RUN bootc container lint must appear at the end of every generated Containerfile."""
-    from yoinkc.renderers.containerfile import render as render_containerfile
-    from yoinkc.schema import InspectionSnapshot
+    from inspectah.renderers.containerfile import render as render_containerfile
+    from inspectah.schema import InspectionSnapshot
     from jinja2 import Environment
     import tempfile
 
@@ -687,8 +687,8 @@ def test_bootc_container_lint_is_last_run():
 
 def test_nonrpm_emits_nodejs_prereq_when_missing_from_packages():
     """A dnf install for nodejs must appear before npm ci when nodejs is not in packages_added."""
-    from yoinkc.renderers.containerfile import render as render_containerfile
-    from yoinkc.schema import InspectionSnapshot, NonRpmSoftwareSection, NonRpmItem
+    from inspectah.renderers.containerfile import render as render_containerfile
+    from inspectah.schema import InspectionSnapshot, NonRpmSoftwareSection, NonRpmItem
     from jinja2 import Environment
     import tempfile
 
@@ -714,8 +714,8 @@ def test_nonrpm_emits_nodejs_prereq_when_missing_from_packages():
 
 def test_nonrpm_no_nodejs_prereq_when_already_in_packages():
     """No extra nodejs install when nodejs is already in the leaf packages."""
-    from yoinkc.renderers.containerfile import render as render_containerfile
-    from yoinkc.schema import (
+    from inspectah.renderers.containerfile import render as render_containerfile
+    from inspectah.schema import (
         InspectionSnapshot, NonRpmSoftwareSection, NonRpmItem,
         RpmSection, PackageEntry, PackageState,
     )
@@ -747,7 +747,7 @@ class TestTunedProfile:
 
     @staticmethod
     def _render(snapshot) -> str:
-        from yoinkc.renderers.containerfile import render as render_containerfile
+        from inspectah.renderers.containerfile import render as render_containerfile
         from jinja2 import Environment
         with tempfile.TemporaryDirectory() as td:
             render_containerfile(snapshot, Environment(), Path(td))
@@ -755,7 +755,7 @@ class TestTunedProfile:
 
     def test_active_profile_uses_echo_not_tuned_adm(self):
         """Active profile → echo redirect and systemctl enable, never tuned-adm."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, KernelBootSection
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
         )
@@ -766,7 +766,7 @@ class TestTunedProfile:
 
     def test_custom_profiles_emit_copy(self):
         """Custom profiles → dedicated COPY for /etc/tuned/ plus echo/systemctl."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection, ConfigSnippet
+        from inspectah.schema import InspectionSnapshot, KernelBootSection, ConfigSnippet
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(
                 tuned_active="throughput-performance",
@@ -785,7 +785,7 @@ class TestTunedProfile:
 
     def test_empty_active_profile_emits_nothing(self):
         """No tuned_active → no tuned lines in the Containerfile."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, KernelBootSection
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(tuned_active=""),
         )
@@ -795,7 +795,7 @@ class TestTunedProfile:
 
     def test_default_vm_profile_is_still_emitted(self):
         """virtual-guest profile is emitted even though it's a common default."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, KernelBootSection
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(tuned_active="virtual-guest"),
         )
@@ -805,7 +805,7 @@ class TestTunedProfile:
 
     def test_profile_mode_set_to_manual(self):
         """profile_mode must be written as 'manual' alongside active_profile."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, KernelBootSection
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
         )
@@ -818,7 +818,7 @@ class TestTunedProfile:
 
     def test_profile_mode_absent_when_no_active_profile(self):
         """No tuned_active → no profile_mode line either."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, KernelBootSection
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(tuned_active=""),
         )
@@ -827,7 +827,7 @@ class TestTunedProfile:
 
     def test_tuned_package_in_main_install_block(self):
         """tuned appears inside the multi-package dnf install block, not standalone."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, KernelBootSection
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
         )
@@ -846,7 +846,7 @@ class TestTunedProfile:
 
     def test_tuned_not_duplicated_when_in_leaf_packages(self):
         """tuned appears exactly once in the install block when already a leaf package."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, KernelBootSection, RpmSection,
             PackageEntry, PackageState,
         )
@@ -873,7 +873,7 @@ class TestTunedProfile:
 
     def test_kernel_boot_section_has_no_dnf_install(self):
         """Kernel Configuration section must not contain any dnf install line."""
-        from yoinkc.schema import InspectionSnapshot, KernelBootSection
+        from inspectah.schema import InspectionSnapshot, KernelBootSection
         snap = InspectionSnapshot(
             kernel_boot=KernelBootSection(tuned_active="throughput-performance"),
         )
@@ -886,7 +886,7 @@ class TestTunedProfile:
 
     def test_detected_count_excludes_injected_tuned(self):
         """# Detected comment reflects host-observed packages, not synthetic additions."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, KernelBootSection, RpmSection,
             PackageEntry, PackageState,
         )

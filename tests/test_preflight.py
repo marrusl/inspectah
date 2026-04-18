@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch, mock_open
 
 import pytest
 
-from yoinkc.preflight import (
+from inspectah.preflight import (
     in_user_namespace,
     _check_rootful,
     _check_pid_host,
@@ -58,21 +58,21 @@ def _make_inspect_args(**overrides):
 
 def test_in_user_namespace_rootless():
     """Rootless uid_map (inner 0 -> outer 1000) is detected."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = "         0       1000          1\n"
         assert in_user_namespace() is True
 
 
 def test_in_user_namespace_rootful():
     """Rootful uid_map (0 -> 0) is not flagged."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = "         0          0 4294967295\n"
         assert in_user_namespace() is False
 
 
 def test_in_user_namespace_no_procfs():
     """Missing /proc/self/uid_map (e.g. macOS) defaults to False."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.side_effect = OSError("not found")
         assert in_user_namespace() is False
 
@@ -81,14 +81,14 @@ def test_in_user_namespace_no_procfs():
 # _check_rootful
 # ---------------------------------------------------------------------------
 
-@patch("yoinkc.preflight.in_user_namespace", return_value=False)
+@patch("inspectah.preflight.in_user_namespace", return_value=False)
 def test_check_rootful_ok(_mock):
     assert _check_rootful() is None
 
 
-@patch("yoinkc.preflight.in_user_namespace", return_value=True)
+@patch("inspectah.preflight.in_user_namespace", return_value=True)
 def test_check_rootful_fails(_mock):
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = "         0       1000          1\n"
         msg = _check_rootful()
     assert msg is not None
@@ -102,22 +102,22 @@ def test_check_rootful_fails(_mock):
 
 def test_check_pid_host_systemd():
     """PID 1 is systemd → --pid=host is set."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_bytes.return_value = b"/usr/lib/systemd/systemd\x00--switched-root\x00"
         assert _check_pid_host() is None
 
 
 def test_check_pid_host_init():
     """PID 1 is /sbin/init → --pid=host is set."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_bytes.return_value = b"/sbin/init\x00"
         assert _check_pid_host() is None
 
 
 def test_check_pid_host_container_entrypoint():
     """PID 1 is the container entrypoint → --pid=host is NOT set."""
-    with patch("yoinkc.preflight.Path") as MockPath:
-        MockPath.return_value.read_bytes.return_value = b"/usr/local/bin/yoinkc\x00--help\x00"
+    with patch("inspectah.preflight.Path") as MockPath:
+        MockPath.return_value.read_bytes.return_value = b"/usr/local/bin/inspectah\x00--help\x00"
         msg = _check_pid_host()
     assert msg is not None
     assert "--pid=host" in msg
@@ -125,8 +125,8 @@ def test_check_pid_host_container_entrypoint():
 
 def test_check_pid_host_python_entrypoint():
     """PID 1 is python → --pid=host is NOT set."""
-    with patch("yoinkc.preflight.Path") as MockPath:
-        MockPath.return_value.read_bytes.return_value = b"/usr/bin/python3\x00-m\x00yoinkc\x00"
+    with patch("inspectah.preflight.Path") as MockPath:
+        MockPath.return_value.read_bytes.return_value = b"/usr/bin/python3\x00-m\x00inspectah\x00"
         msg = _check_pid_host()
     assert msg is not None
     assert "--pid=host" in msg
@@ -134,7 +134,7 @@ def test_check_pid_host_python_entrypoint():
 
 def test_check_pid_host_unreadable():
     """Cannot read /proc/1/cmdline → skip (don't fail)."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_bytes.side_effect = OSError("not found")
         assert _check_pid_host() is None
 
@@ -161,14 +161,14 @@ Pid:\t1234
 
 def test_check_privileged_ok():
     """All capabilities set → privileged."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = _STATUS_PRIVILEGED
         assert _check_privileged() is None
 
 
 def test_check_privileged_missing_cap_sys_admin():
     """CAP_SYS_ADMIN not set → not privileged."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = _STATUS_UNPRIVILEGED
         msg = _check_privileged()
     assert msg is not None
@@ -178,14 +178,14 @@ def test_check_privileged_missing_cap_sys_admin():
 
 def test_check_privileged_no_capeff():
     """No CapEff line → skip."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = _STATUS_NO_CAPEFF
         assert _check_privileged() is None
 
 
 def test_check_privileged_unreadable():
     """Cannot read /proc/self/status → skip."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.side_effect = OSError("not found")
         assert _check_privileged() is None
 
@@ -196,14 +196,14 @@ def test_check_privileged_unreadable():
 
 def test_check_selinux_unconfined():
     """unconfined_u context → ok."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = "unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023\n"
         assert _check_selinux_label() is None
 
 
 def test_check_selinux_container_t():
     """container_t context → labels are enforced."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = "system_u:system_r:container_t:s0:c123,c456\n"
         msg = _check_selinux_label()
     assert msg is not None
@@ -213,14 +213,14 @@ def test_check_selinux_container_t():
 
 def test_check_selinux_no_selinux():
     """No SELinux (file absent) → skip."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.side_effect = OSError("not found")
         assert _check_selinux_label() is None
 
 
 def test_check_selinux_empty():
     """Empty context → ok."""
-    with patch("yoinkc.preflight.Path") as MockPath:
+    with patch("inspectah.preflight.Path") as MockPath:
         MockPath.return_value.read_text.return_value = ""
         assert _check_selinux_label() is None
 
@@ -229,18 +229,18 @@ def test_check_selinux_empty():
 # check_container_privileges (integration)
 # ---------------------------------------------------------------------------
 
-@patch("yoinkc.preflight._check_rootful", return_value=None)
-@patch("yoinkc.preflight._check_pid_host", return_value=None)
-@patch("yoinkc.preflight._check_privileged", return_value=None)
-@patch("yoinkc.preflight._check_selinux_label", return_value=None)
+@patch("inspectah.preflight._check_rootful", return_value=None)
+@patch("inspectah.preflight._check_pid_host", return_value=None)
+@patch("inspectah.preflight._check_privileged", return_value=None)
+@patch("inspectah.preflight._check_selinux_label", return_value=None)
 def test_all_checks_pass(*_mocks):
     assert check_container_privileges() == []
 
 
-@patch("yoinkc.preflight._check_rootful", return_value="rootless error")
-@patch("yoinkc.preflight._check_pid_host", return_value="pid error")
-@patch("yoinkc.preflight._check_privileged", return_value=None)
-@patch("yoinkc.preflight._check_selinux_label", return_value=None)
+@patch("inspectah.preflight._check_rootful", return_value="rootless error")
+@patch("inspectah.preflight._check_pid_host", return_value="pid error")
+@patch("inspectah.preflight._check_privileged", return_value=None)
+@patch("inspectah.preflight._check_selinux_label", return_value=None)
 def test_multiple_failures(*_mocks):
     errors = check_container_privileges()
     assert len(errors) == 2
@@ -248,10 +248,10 @@ def test_multiple_failures(*_mocks):
     assert "pid" in errors[1]
 
 
-@patch("yoinkc.preflight._check_rootful", return_value=None)
-@patch("yoinkc.preflight._check_pid_host", return_value=None)
-@patch("yoinkc.preflight._check_privileged", return_value="cap error")
-@patch("yoinkc.preflight._check_selinux_label", return_value="selinux error")
+@patch("inspectah.preflight._check_rootful", return_value=None)
+@patch("inspectah.preflight._check_pid_host", return_value=None)
+@patch("inspectah.preflight._check_privileged", return_value="cap error")
+@patch("inspectah.preflight._check_selinux_label", return_value="selinux error")
 def test_cap_and_selinux_failures(*_mocks):
     errors = check_container_privileges()
     assert len(errors) == 2
@@ -265,7 +265,7 @@ def test_cap_and_selinux_failures(*_mocks):
 
 def test_podman_missing_on_inspect():
     """When podman is absent, check_podman raises with install instructions for both platforms."""
-    from yoinkc.preflight import check_podman
+    from inspectah.preflight import check_podman
     with patch("shutil.which", return_value=None):
         with pytest.raises(RuntimeError) as exc_info:
             check_podman()
@@ -276,14 +276,14 @@ def test_podman_missing_on_inspect():
 
 def test_podman_present():
     """When podman is on PATH, check_podman does not raise."""
-    from yoinkc.preflight import check_podman
+    from inspectah.preflight import check_podman
     with patch("shutil.which", return_value="/usr/bin/podman"):
         check_podman()  # no exception
 
 
 def test_podman_missing_ignored_for_fleet(tmp_path):
     """Fleet pipeline never invokes check_podman."""
-    from yoinkc.__main__ import _run_fleet
+    from inspectah.__main__ import _run_fleet
 
     args = argparse.Namespace(
         input_dir=tmp_path,
@@ -293,16 +293,16 @@ def test_podman_missing_ignored_for_fleet(tmp_path):
         json_only=False,
         no_hosts=False,
     )
-    with patch("yoinkc.preflight.check_podman") as mock_check:
+    with patch("inspectah.preflight.check_podman") as mock_check:
         _run_fleet(args)
     mock_check.assert_not_called()
 
 
 def test_podman_missing_ignored_for_refine():
     """Refine pipeline never invokes check_podman."""
-    from yoinkc.__main__ import main
-    with patch("yoinkc.preflight.check_podman") as mock_check, \
-         patch("yoinkc.refine.run_refine", return_value=0):
+    from inspectah.__main__ import main
+    with patch("inspectah.preflight.check_podman") as mock_check, \
+         patch("inspectah.refine.run_refine", return_value=0):
         main(["refine", "nonexistent.tar.gz"])
     mock_check.assert_not_called()
 
@@ -313,39 +313,39 @@ def test_podman_missing_ignored_for_refine():
 
 def test_native_inspect_requires_root(capsys):
     """Non-root native inspect exits with 'requires root' error."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args()
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_registry_login"),
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_registry_login"),
         patch("os.geteuid", return_value=1000),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
     assert result == 1
     captured = capsys.readouterr()
-    assert "yoinkc inspect requires root" in captured.err
-    assert "sudo yoinkc inspect" in captured.err
+    assert "inspectah inspect requires root" in captured.err
+    assert "sudo inspectah inspect" in captured.err
 
 
 def test_native_inspect_root_passes():
     """Root native inspect proceeds without root error."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args()
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_registry_login"),
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_registry_login"),
         patch("os.geteuid", return_value=0),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -354,17 +354,17 @@ def test_native_inspect_root_passes():
 
 def test_root_check_skipped_in_container(monkeypatch):
     """Container entrypoint skips root check regardless of euid."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
-    monkeypatch.setenv("YOINKC_CONTAINER", "1")
+    monkeypatch.setenv("INSPECTAH_CONTAINER", "1")
     args = _make_inspect_args()
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.check_root", create=True) as mock_root,
+        patch("inspectah.preflight.check_root", create=True) as mock_root,
         patch("os.geteuid", return_value=1000),
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -374,7 +374,7 @@ def test_root_check_skipped_in_container(monkeypatch):
 
 def test_root_check_skipped_for_fleet(tmp_path):
     """Fleet pipeline never checks for root."""
-    from yoinkc.__main__ import _run_fleet
+    from inspectah.__main__ import _run_fleet
 
     args = argparse.Namespace(
         input_dir=tmp_path,
@@ -384,17 +384,17 @@ def test_root_check_skipped_for_fleet(tmp_path):
         json_only=False,
         no_hosts=False,
     )
-    with patch("yoinkc.preflight.check_root", create=True) as mock_root:
+    with patch("inspectah.preflight.check_root", create=True) as mock_root:
         _run_fleet(args)
     mock_root.assert_not_called()
 
 
 def test_root_check_skipped_for_refine():
     """Refine pipeline never checks for root."""
-    from yoinkc.__main__ import main
+    from inspectah.__main__ import main
     with (
-        patch("yoinkc.preflight.check_root", create=True) as mock_root,
-        patch("yoinkc.refine.run_refine", return_value=0),
+        patch("inspectah.preflight.check_root", create=True) as mock_root,
+        patch("inspectah.refine.run_refine", return_value=0),
     ):
         main(["refine", "nonexistent.tar.gz"])
     mock_root.assert_not_called()
@@ -402,15 +402,15 @@ def test_root_check_skipped_for_refine():
 
 def test_root_check_skipped_for_from_snapshot():
     """inspect --from-snapshot does not require root."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(from_snapshot=Path("/tmp/snapshot.json"))
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
-        patch("yoinkc.preflight.check_root", create=True) as mock_root,
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.check_root", create=True) as mock_root,
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -420,15 +420,15 @@ def test_root_check_skipped_for_from_snapshot():
 
 def test_root_check_skipped_with_skip_preflight():
     """inspect --skip-preflight does not require root."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(skip_preflight=True)
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
-        patch("yoinkc.preflight.check_root", create=True) as mock_root,
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.check_root", create=True) as mock_root,
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -442,14 +442,14 @@ def test_root_check_skipped_with_skip_preflight():
 
 def test_registry_login_ok():
     """Already logged in → no prompts or side-effects."""
-    from yoinkc.preflight import check_registry_login
+    from inspectah.preflight import check_registry_login
     with patch("subprocess.run", return_value=MagicMock(returncode=0, stdout="user\n")):
         check_registry_login()  # must not raise or exit
 
 
 def test_registry_login_missing_noninteractive(monkeypatch):
     """Not logged in + non-interactive terminal → SystemExit with error."""
-    from yoinkc.preflight import check_registry_login
+    from inspectah.preflight import check_registry_login
     monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: False))
     with patch("subprocess.run", return_value=MagicMock(returncode=1, stdout="")), \
          pytest.raises(SystemExit):
@@ -458,7 +458,7 @@ def test_registry_login_missing_noninteractive(monkeypatch):
 
 def test_registry_login_missing_interactive_succeeds(monkeypatch):
     """Not logged in + interactive TTY → prompts login, re-checks, succeeds."""
-    from yoinkc.preflight import check_registry_login
+    from inspectah.preflight import check_registry_login
     monkeypatch.setattr(sys, "stdin", MagicMock(isatty=lambda: True))
     side_effects = [
         MagicMock(returncode=1, stdout=""),   # initial get-login: not logged in
@@ -475,7 +475,7 @@ def test_registry_login_missing_interactive_succeeds(monkeypatch):
 
 def test_registry_login_check_inspect_only(tmp_path):
     """check_registry_login is never called by the fleet or refine code paths."""
-    from yoinkc.__main__ import _run_fleet
+    from inspectah.__main__ import _run_fleet
 
     args = argparse.Namespace(
         input_dir=tmp_path,
@@ -485,7 +485,7 @@ def test_registry_login_check_inspect_only(tmp_path):
         json_only=False,
         no_hosts=False,
     )
-    with patch("yoinkc.preflight.check_registry_login") as mock_login:
+    with patch("inspectah.preflight.check_registry_login") as mock_login:
         _run_fleet(args)
     mock_login.assert_not_called()
 
@@ -496,17 +496,17 @@ def test_registry_login_check_inspect_only(tmp_path):
 
 def test_registry_login_skipped_with_baseline_packages():
     """Air-gapped baseline file mode should not force registry.redhat.io auth."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(baseline_packages=Path("/tmp/baseline.txt"))
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login") as mock_login,
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login") as mock_login,
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -516,17 +516,17 @@ def test_registry_login_skipped_with_baseline_packages():
 
 def test_registry_login_skipped_with_no_baseline():
     """No-baseline mode should not force registry.redhat.io auth."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(no_baseline=True)
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login") as mock_login,
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login") as mock_login,
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -536,17 +536,17 @@ def test_registry_login_skipped_with_no_baseline():
 
 def test_registry_login_skipped_with_non_redhat_target_image():
     """Mirrored or local target images should not force registry.redhat.io auth."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(target_image="registry.local/rhel-bootc:9.6")
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login") as mock_login,
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login") as mock_login,
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -556,17 +556,17 @@ def test_registry_login_skipped_with_non_redhat_target_image():
 
 def test_registry_login_skipped_with_mirrored_redhat_path():
     """Repository paths containing registry.redhat.io should not count as that registry host."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(target_image="registry.local/registry.redhat.io/rhel9/rhel-bootc:9.6")
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login") as mock_login,
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login") as mock_login,
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -576,17 +576,17 @@ def test_registry_login_skipped_with_mirrored_redhat_path():
 
 def test_registry_login_runs_for_redhat_target_image():
     """Explicit registry.redhat.io target images still require auth preflight."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(target_image="registry.redhat.io/rhel9/rhel-bootc:9.6")
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login") as mock_login,
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login") as mock_login,
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -600,9 +600,9 @@ def test_registry_login_runs_for_redhat_target_image():
 
 def test_is_packaged_install_detects_homebrew_cellar(monkeypatch):
     """A Homebrew Cellar install path counts as a packaged install."""
-    import yoinkc.preflight as preflight_mod
+    import inspectah.preflight as preflight_mod
 
-    monkeypatch.setattr(preflight_mod, "__file__", "/opt/homebrew/Cellar/yoinkc/0.1.0/libexec/lib/python3.13/site-packages/yoinkc/preflight.py")
+    monkeypatch.setattr(preflight_mod, "__file__", "/opt/homebrew/Cellar/inspectah/0.1.0/libexec/lib/python3.13/site-packages/inspectah/preflight.py")
     with patch.object(preflight_mod, "_PACKAGED_MARKER", Path("/nonexistent/.packaged")):
         assert preflight_mod.is_packaged_install() is True
 
@@ -613,18 +613,18 @@ def test_is_packaged_install_detects_homebrew_cellar(monkeypatch):
 
 def test_packaged_install_defaults_to_local_host_root():
     """Native packaged inspect should treat the local host as the default root."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args()
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login"),
-        patch("yoinkc.preflight.check_container_privileges", return_value=[] ) as mock_privs,
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login"),
+        patch("inspectah.preflight.check_container_privileges", return_value=[] ) as mock_privs,
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
     ):
         result = _run_inspect(args)
 
@@ -635,18 +635,18 @@ def test_packaged_install_defaults_to_local_host_root():
 
 def test_packaged_install_preserves_explicit_host_root():
     """An explicit host root should be preserved for packaged installs."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(host_root=Path("/mnt/host"), host_root_explicit=True)
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login"),
-        patch("yoinkc.preflight.check_container_privileges", return_value=[] ) as mock_privs,
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login"),
+        patch("inspectah.preflight.check_container_privileges", return_value=[] ) as mock_privs,
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
     ):
         result = _run_inspect(args)
 
@@ -657,17 +657,17 @@ def test_packaged_install_preserves_explicit_host_root():
 
 def test_preflight_skipped_in_container(monkeypatch):
     """Container entrypoint skips native podman/login checks."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
-    monkeypatch.setenv("YOINKC_CONTAINER", "1")
+    monkeypatch.setenv("INSPECTAH_CONTAINER", "1")
     args = _make_inspect_args()
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.check_podman") as mock_podman,
-        patch("yoinkc.preflight.check_registry_login") as mock_login,
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.preflight.check_podman") as mock_podman,
+        patch("inspectah.preflight.check_registry_login") as mock_login,
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
         result = _run_inspect(args)
 
@@ -678,11 +678,11 @@ def test_preflight_skipped_in_container(monkeypatch):
 
 def test_push_to_github_unsupported_in_packaged_install(capsys):
     """Missing deps in packaged install emits the packaged-install error."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(push_to_github="owner/repo")
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
         patch.dict(sys.modules, {"github": None, "git": None}),
     ):
         result = _run_inspect(args)
@@ -695,11 +695,11 @@ def test_push_to_github_unsupported_in_packaged_install(capsys):
 
 def test_push_to_github_missing_extras_in_dev_install(capsys):
     """Missing deps in non-packaged install tells the user to install extras."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(push_to_github="owner/repo")
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=False),
+        patch("inspectah.preflight.is_packaged_install", return_value=False),
         patch.dict(sys.modules, {"github": None, "git": None}),
     ):
         result = _run_inspect(args)
@@ -707,28 +707,28 @@ def test_push_to_github_missing_extras_in_dev_install(capsys):
     assert result == 1
     captured = capsys.readouterr()
     assert "--push-to-github requires the github extras" in captured.err
-    assert "pip install 'yoinkc[github]'" in captured.err
+    assert "pip install 'inspectah[github]'" in captured.err
 
 
 def test_push_to_github_works_with_deps():
     """Importable deps bypass the early guard regardless of install type."""
-    from yoinkc.__main__ import _run_inspect
+    from inspectah.__main__ import _run_inspect
 
     args = _make_inspect_args(push_to_github="owner/repo", output_dir=Path("/tmp/out"))
     snapshot = MagicMock(redactions=[])
 
     with (
-        patch("yoinkc.preflight.is_packaged_install", return_value=True),
+        patch("inspectah.preflight.is_packaged_install", return_value=True),
         patch.dict(sys.modules, {"github": MagicMock(), "git": MagicMock()}),
-        patch("yoinkc.preflight.check_podman"),
-        patch("yoinkc.preflight.check_root"),
-        patch("yoinkc.preflight.check_registry_login"),
-        patch("yoinkc.preflight.check_container_privileges", return_value=[]),
-        patch("yoinkc.__main__.run_pipeline", return_value=snapshot),
-        patch("yoinkc.git_github.init_git_repo", return_value=True),
-        patch("yoinkc.git_github.add_and_commit", return_value=True),
-        patch("yoinkc.git_github.output_stats", return_value=(1, 1, 0)),
-        patch("yoinkc.git_github.push_to_github", return_value=None),
+        patch("inspectah.preflight.check_podman"),
+        patch("inspectah.preflight.check_root"),
+        patch("inspectah.preflight.check_registry_login"),
+        patch("inspectah.preflight.check_container_privileges", return_value=[]),
+        patch("inspectah.__main__.run_pipeline", return_value=snapshot),
+        patch("inspectah.git_github.init_git_repo", return_value=True),
+        patch("inspectah.git_github.add_and_commit", return_value=True),
+        patch("inspectah.git_github.output_stats", return_value=(1, 1, 0)),
+        patch("inspectah.git_github.push_to_github", return_value=None),
     ):
         result = _run_inspect(args)
 

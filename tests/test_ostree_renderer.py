@@ -1,6 +1,6 @@
 """Containerfile renderer tests for ostree/bootc systems."""
 from pathlib import Path
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, OsRelease, SystemType, RpmSection,
     PackageEntry, OstreePackageOverride, ContainerSection, FlatpakApp,
 )
@@ -35,7 +35,7 @@ def _make_ostree_snapshot() -> InspectionSnapshot:
 
 
 def test_ostree_layered_packages_in_dnf_install(tmp_path):
-    from yoinkc.renderers.containerfile._core import _render_containerfile_content
+    from inspectah.renderers.containerfile._core import _render_containerfile_content
     snapshot = _make_ostree_snapshot()
     content = _render_containerfile_content(snapshot, tmp_path)
     assert "RUN dnf install -y" in content
@@ -44,21 +44,21 @@ def test_ostree_layered_packages_in_dnf_install(tmp_path):
 
 
 def test_ostree_from_line_uses_ostree_base(tmp_path):
-    from yoinkc.renderers.containerfile._core import _render_containerfile_content
+    from inspectah.renderers.containerfile._core import _render_containerfile_content
     snapshot = _make_ostree_snapshot()
     content = _render_containerfile_content(snapshot, tmp_path)
     assert "FROM quay.io/fedora-ostree-desktops/silverblue:41" in content
 
 
 def test_ostree_desktops_bootc_label_emitted(tmp_path):
-    from yoinkc.renderers.containerfile._core import _render_containerfile_content
+    from inspectah.renderers.containerfile._core import _render_containerfile_content
     snapshot = _make_ostree_snapshot()
     content = _render_containerfile_content(snapshot, tmp_path)
     assert 'LABEL containers.bootc 1' in content
 
 
 def test_ostree_removed_packages_in_containerfile(tmp_path):
-    from yoinkc.renderers.containerfile._core import _render_containerfile_content
+    from inspectah.renderers.containerfile._core import _render_containerfile_content
     snapshot = _make_ostree_snapshot()
     content = _render_containerfile_content(snapshot, tmp_path)
     assert "RUN dnf remove" in content
@@ -66,7 +66,7 @@ def test_ostree_removed_packages_in_containerfile(tmp_path):
 
 
 def test_ostree_overridden_packages_in_containerfile(tmp_path):
-    from yoinkc.renderers.containerfile._core import _render_containerfile_content
+    from inspectah.renderers.containerfile._core import _render_containerfile_content
     snapshot = _make_ostree_snapshot()
     content = _render_containerfile_content(snapshot, tmp_path)
     assert "kernel" in content
@@ -74,7 +74,7 @@ def test_ostree_overridden_packages_in_containerfile(tmp_path):
 
 
 def test_flatpaks_list_generated(tmp_path):
-    from yoinkc.renderers.containerfile._core import render
+    from inspectah.renderers.containerfile._core import render
     from jinja2 import Environment
     snapshot = _make_ostree_snapshot()
     render(snapshot, Environment(autoescape=True), tmp_path)
@@ -87,7 +87,7 @@ def test_flatpaks_list_generated(tmp_path):
 
 
 def test_flatpaks_list_not_generated_when_empty(tmp_path):
-    from yoinkc.renderers.containerfile._core import render
+    from inspectah.renderers.containerfile._core import render
     from jinja2 import Environment
     snapshot = _make_ostree_snapshot()
     snapshot.containers.flatpak_apps = []
@@ -96,7 +96,7 @@ def test_flatpaks_list_not_generated_when_empty(tmp_path):
 
 
 def test_renderer_integration_from_ostree_snapshot(tmp_path):
-    from yoinkc.renderers.containerfile._core import render
+    from inspectah.renderers.containerfile._core import render
     from jinja2 import Environment
     snapshot = _make_ostree_snapshot()
     render(snapshot, Environment(autoescape=True), tmp_path)

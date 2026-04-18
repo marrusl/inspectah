@@ -5,7 +5,7 @@ Bug 1 (8ca8ffa): Config directory/file collision in rendering
   - Config inspector must filter rpm_va_by_path to /etc-only paths
   - Kinoite-like scenarios with dir/file collisions must not crash
 
-Bug 2 (8240b18): yoinkc-build Containerfile path
+Bug 2 (8240b18): inspectah-build Containerfile path
   - Build command must use absolute path for -f Containerfile argument
 """
 
@@ -16,9 +16,9 @@ from unittest.mock import patch
 
 import pytest
 
-from yoinkc.renderers.containerfile._config_tree import _safe_write_file, write_config_tree
-from yoinkc.inspectors.config import run as run_config_inspector
-from yoinkc.schema import (
+from inspectah.renderers.containerfile._config_tree import _safe_write_file, write_config_tree
+from inspectah.inspectors.config import run as run_config_inspector
+from inspectah.schema import (
     ConfigFileEntry,
     ConfigFileKind,
     ConfigSection,
@@ -266,32 +266,32 @@ class TestConfigTreeCollisionScenario:
 
 
 # ---------------------------------------------------------------------------
-# Bug 2: yoinkc-build uses absolute Containerfile path
+# Bug 2: inspectah-build uses absolute Containerfile path
 # ---------------------------------------------------------------------------
 
 
-def _import_yoinkc_build():
-    """Import yoinkc-build script (no .py extension) as a module."""
+def _import_inspectah_build():
+    """Import inspectah-build script (no .py extension) as a module."""
     import importlib.util
     import importlib.machinery
 
-    script_path = Path(__file__).parent.parent / "yoinkc-build"
-    loader = importlib.machinery.SourceFileLoader("yoinkc_build", str(script_path))
-    spec = importlib.util.spec_from_loader("yoinkc_build", loader)
+    script_path = Path(__file__).parent.parent / "inspectah-build"
+    loader = importlib.machinery.SourceFileLoader("inspectah_build", str(script_path))
+    spec = importlib.util.spec_from_loader("inspectah_build", loader)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-class TestYoinkcBuildContainerfilePath:
-    """Verify yoinkc-build uses absolute path for -f Containerfile."""
+class TestInspectahBuildContainerfilePath:
+    """Verify inspectah-build uses absolute path for -f Containerfile."""
 
     def test_build_command_uses_absolute_containerfile_path(self, tmp_path):
         """The -f argument to podman/docker must be an absolute path."""
-        yoinkc_build = _import_yoinkc_build()
+        inspectah_build = _import_inspectah_build()
 
         # Create a minimal output directory with a Containerfile
-        output_dir = tmp_path / "yoinkc-output"
+        output_dir = tmp_path / "inspectah-output"
         output_dir.mkdir()
         containerfile = output_dir / "Containerfile"
         containerfile.write_text("FROM registry.access.redhat.com/ubi9:latest\n")
@@ -320,7 +320,7 @@ class TestYoinkcBuildContainerfilePath:
 
         with patch("subprocess.Popen", side_effect=mock_popen), \
              patch("subprocess.run", side_effect=mock_run):
-            yoinkc_build._build(
+            inspectah_build._build(
                 runtime="podman",
                 output_dir=output_dir,
                 tag="test:latest",
@@ -342,10 +342,10 @@ class TestYoinkcBuildContainerfilePath:
 
     def test_build_unaffected_by_cwd_containerfile(self, tmp_path):
         """Build must use the output dir's Containerfile, not CWD's."""
-        yoinkc_build = _import_yoinkc_build()
+        inspectah_build = _import_inspectah_build()
 
         # Create output dir with its Containerfile
-        output_dir = tmp_path / "yoinkc-output"
+        output_dir = tmp_path / "inspectah-output"
         output_dir.mkdir()
         (output_dir / "Containerfile").write_text("FROM ubi9:latest\nRUN echo correct\n")
 
@@ -381,7 +381,7 @@ class TestYoinkcBuildContainerfilePath:
             os.chdir(fake_cwd)
             with patch("subprocess.Popen", side_effect=mock_popen), \
                  patch("subprocess.run", side_effect=mock_run):
-                yoinkc_build._build(
+                inspectah_build._build(
                     runtime="podman",
                     output_dir=output_dir,
                     tag="test:latest",

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.renderers._triage import compute_triage, compute_triage_detail
-from yoinkc.schema import (
+from inspectah.renderers._triage import compute_triage, compute_triage_detail
+from inspectah.schema import (
     ConfigFileEntry,
     ConfigFileKind,
     ConfigSection,

@@ -5,10 +5,10 @@ from pathlib import Path
 
 from jinja2 import Environment
 
-from yoinkc.inspectors.rpm import _detect_duplicates, _detect_multiarch
-from yoinkc.renderers.audit_report import render as render_audit_report
-from yoinkc.renderers.containerfile.packages import section_lines
-from yoinkc.schema import (
+from inspectah.inspectors.rpm import _detect_duplicates, _detect_multiarch
+from inspectah.renderers.audit_report import render as render_audit_report
+from inspectah.renderers.containerfile.packages import section_lines
+from inspectah.schema import (
     InspectionSnapshot,
     OsRelease,
     PackageEntry,

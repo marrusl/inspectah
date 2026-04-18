@@ -1,6 +1,6 @@
 """Tests for heuristic secret detection engine."""
 import pytest
-from yoinkc.heuristic import (
+from inspectah.heuristic import (
     shannon_entropy,
     is_secret_keyword,
     find_heuristic_candidates,
@@ -181,8 +181,8 @@ def test_all_candidates_available_for_enforcement():
 
 
 def test_subscription_cert_paths_excluded_from_heuristic():
-    from yoinkc.schema import InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind
-    from yoinkc.pipeline import _run_heuristic_pass
+    from inspectah.schema import InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind
+    from inspectah.pipeline import _run_heuristic_pass
     snap = InspectionSnapshot(meta={"hostname": "test"})
     snap.config = ConfigSection(files=[
         ConfigFileEntry(path="/etc/pki/entitlement/1234567890.pem",
@@ -193,7 +193,7 @@ def test_subscription_cert_paths_excluded_from_heuristic():
                        content="password = somecomplexvalue12345678\n"),
     ])
     result = _run_heuristic_pass(snap, "strict", False)
-    from yoinkc.schema import RedactionFinding
+    from inspectah.schema import RedactionFinding
     heuristic = [r for r in result.redactions
                  if isinstance(r, RedactionFinding) and r.detection_method == "heuristic"]
     sub_findings = [f for f in heuristic if "entitlement" in f.path or "rhsm" in f.path]

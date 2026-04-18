@@ -20,13 +20,13 @@ import tempfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Ensure the yoinkc package is importable when run from the repo root.
+# Ensure the inspectah package is importable when run from the repo root.
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from yoinkc.renderers import run_all  # noqa: E402
-from yoinkc.schema import (  # noqa: E402
+from inspectah.renderers import run_all  # noqa: E402
+from inspectah.schema import (  # noqa: E402
     SCHEMA_VERSION,
     ConfigCategory,
     ConfigFileEntry,

@@ -3,14 +3,14 @@ import tempfile
 from pathlib import Path
 from jinja2 import Environment
 
-from yoinkc.pipeline import run_pipeline, save_snapshot, _run_heuristic_pass
-from yoinkc.schema import (
+from inspectah.pipeline import run_pipeline, save_snapshot, _run_heuristic_pass
+from inspectah.schema import (
     InspectionSnapshot, ConfigSection, ConfigFileEntry, ConfigFileKind,
     RedactionFinding, ContainerSection, RunningContainer,
     ScheduledTaskSection, GeneratedTimerUnit,
 )
-from yoinkc.renderers.secrets_review import render as render_secrets_review
-from yoinkc.renderers.containerfile._core import _secrets_comment_lines
+from inspectah.renderers.secrets_review import render as render_secrets_review
+from inspectah.renderers.containerfile._core import _secrets_comment_lines
 
 
 def _full_snapshot():

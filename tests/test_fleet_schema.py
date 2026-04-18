@@ -1,7 +1,7 @@
 """Tests for fleet-related schema additions."""
 
 import json
-from yoinkc.schema import FleetPrevalence, FleetMeta
+from inspectah.schema import FleetPrevalence, FleetMeta
 
 
 class TestFleetPrevalence:
@@ -44,7 +44,7 @@ class TestFleetMeta:
         assert fm2.source_hosts == ["a", "b", "c"]
 
 
-from yoinkc.schema import (
+from inspectah.schema import (
     PackageEntry, RepoFile, ConfigFileEntry, ServiceStateChange,
     SystemdDropIn, FirewallZone, GeneratedTimerUnit, QuadletUnit,
     ComposeFile, CronJob,

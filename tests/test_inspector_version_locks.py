@@ -2,8 +2,8 @@
 
 import pytest
 
-from yoinkc.executor import RunResult
-from yoinkc.inspectors.rpm import _collect_version_locks, _parse_nevra_pattern
+from inspectah.executor import RunResult
+from inspectah.inspectors.rpm import _collect_version_locks, _parse_nevra_pattern
 
 
 # ---------------------------------------------------------------------------

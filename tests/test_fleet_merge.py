@@ -4,7 +4,7 @@
 import pytest
 import tempfile
 from pathlib import Path
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, RpmSection, PackageEntry, RepoFile,
     ServiceSection, ServiceStateChange, NetworkSection, FirewallZone,
     FleetPrevalence, OsRelease, ConfigSection, ConfigFileEntry,
@@ -22,7 +22,7 @@ def _snap(hostname="web-01", **kwargs):
 
 class TestMergePackages:
     def test_identical_packages_merged(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(packages_added=[
             PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
         ]))
@@ -37,7 +37,7 @@ class TestMergePackages:
         assert merged.rpm.packages_added[0].include is True
 
     def test_different_packages_both_present(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(packages_added=[
             PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
         ]))
@@ -53,7 +53,7 @@ class TestMergePackages:
             assert p.include is False
 
     def test_prevalence_threshold_50(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(packages_added=[
             PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
         ]))
@@ -66,7 +66,7 @@ class TestMergePackages:
             assert p.include is True
 
     def test_package_identity_by_name_not_version(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(packages_added=[
             PackageEntry(name="httpd", version="2.4.51", release="1", arch="x86_64"),
         ]))
@@ -80,7 +80,7 @@ class TestMergePackages:
 
 class TestMergeServices:
     def test_identical_services_merged(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         sc = ServiceStateChange(
             unit="httpd.service", current_state="enabled",
             default_state="disabled", action="enable",
@@ -92,7 +92,7 @@ class TestMergeServices:
         assert merged.services.state_changes[0].fleet.count == 2
 
     def test_service_identity_includes_action(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         sc_enable = ServiceStateChange(
             unit="httpd.service", current_state="enabled",
             default_state="disabled", action="enable",
@@ -109,7 +109,7 @@ class TestMergeServices:
 
 class TestMergeFirewallZones:
     def test_identical_zones_merged(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         z = FirewallZone(path="/etc/firewalld/zones/public.xml", name="public")
         s1 = _snap("web-01", network=NetworkSection(firewall_zones=[z]))
         s2 = _snap("web-02", network=NetworkSection(firewall_zones=[z]))
@@ -120,7 +120,7 @@ class TestMergeFirewallZones:
 
 class TestMergeFleetMeta:
     def test_fleet_meta_in_merged_snapshot(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01")
         s2 = _snap("web-02")
         merged = merge_snapshots([s1, s2], min_prevalence=90)
@@ -131,14 +131,14 @@ class TestMergeFleetMeta:
         assert set(fleet_meta["source_hosts"]) == {"web-01", "web-02"}
 
     def test_merged_hostname_synthetic(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01")
         s2 = _snap("web-02")
         merged = merge_snapshots([s1, s2], min_prevalence=100, fleet_name="web-servers")
         assert merged.meta["hostname"] == "web-servers"
 
     def test_merge_stores_display_names_on_snapshots_and_fleet_metadata(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = _snap(
             "web-01.east.example.com",
@@ -163,7 +163,7 @@ class TestMergeFleetMeta:
 
 class TestMergeNoneSection:
     def test_one_snapshot_missing_rpm(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(packages_added=[
             PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
         ]))
@@ -174,20 +174,20 @@ class TestMergeNoneSection:
         assert merged.rpm.packages_added[0].fleet.count == 1
 
     def test_all_snapshots_missing_section(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01")
         s2 = _snap("web-02")
         merged = merge_snapshots([s1, s2], min_prevalence=100)
         assert merged.rpm is None
 
 
-from yoinkc.schema import EnabledModuleStream, VersionLockEntry
+from inspectah.schema import EnabledModuleStream, VersionLockEntry
 
 
 class TestMergeModuleStreams:
     def test_same_stream_three_hosts_prevalence(self):
         """Three hosts with the same module:stream → one entry, prevalence 3/3."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         ms = EnabledModuleStream(module_name="postgresql", stream="15")
         snaps = [_snap(f"host-{i}", rpm=RpmSection(module_streams=[ms])) for i in range(3)]
         merged = merge_snapshots(snaps, min_prevalence=100)
@@ -200,7 +200,7 @@ class TestMergeModuleStreams:
 
     def test_different_streams_produce_separate_entries(self):
         """2 hosts on stream 15, 1 host on stream 13 → two entries, each with own prevalence."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         ms15 = EnabledModuleStream(module_name="postgresql", stream="15")
         ms13 = EnabledModuleStream(module_name="postgresql", stream="13")
         snaps = [
@@ -218,7 +218,7 @@ class TestMergeModuleStreams:
 
     def test_profiles_unioned_across_hosts(self):
         """Profiles from different hosts sharing the same stream are unioned."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         ms1 = EnabledModuleStream(module_name="nodejs", stream="18", profiles=["development"])
         ms2 = EnabledModuleStream(module_name="nodejs", stream="18", profiles=["minimal", "development"])
         ms3 = EnabledModuleStream(module_name="nodejs", stream="18", profiles=["default"])
@@ -233,8 +233,8 @@ class TestMergeModuleStreams:
 
     def test_conflicts_recomputed_and_rendered_in_fleet_mode(self):
         """Fleet merge must recompute module stream conflicts for renderer warnings."""
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.containerfile.packages import section_lines
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.containerfile.packages import section_lines
 
         conflict = "postgresql: host=15, base_image=13"
         snaps = [
@@ -289,7 +289,7 @@ class TestMergeModuleStreams:
 class TestMergeVersionLocks:
     def test_same_version_three_hosts_prevalence(self):
         """Three hosts locking the same package+version → one entry, prevalence 3/3."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         vl = VersionLockEntry(
             raw_pattern="curl-7.76.1-26.el9.x86_64",
             name="curl", epoch=0, version="7.76.1", release="26.el9", arch="x86_64",
@@ -304,7 +304,7 @@ class TestMergeVersionLocks:
 
     def test_different_versions_produce_separate_entries(self):
         """2 hosts on version A, 1 host on version B → two entries with own prevalence."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         vl_a = VersionLockEntry(
             raw_pattern="curl-7.76.1-26.el9.x86_64",
             name="curl", epoch=0, version="7.76.1", release="26.el9", arch="x86_64",
@@ -328,7 +328,7 @@ class TestMergeVersionLocks:
 
     def test_different_arch_stays_separate(self):
         """curl.x86_64 and curl.i686 are separate entries even with same version."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         vl_x86 = VersionLockEntry(
             raw_pattern="curl-7.76.1-26.el9.x86_64",
             name="curl", epoch=0, version="7.76.1", release="26.el9", arch="x86_64",
@@ -348,7 +348,7 @@ class TestMergeVersionLocks:
         assert by_arch["i686"].name == "curl"
 
 
-from yoinkc.schema import (
+from inspectah.schema import (
     ConfigSection, ConfigFileEntry, ContainerSection,
     QuadletUnit, ComposeFile, ComposeService,
     SystemdDropIn, UserGroupSection,
@@ -357,7 +357,7 @@ from yoinkc.schema import (
 
 class TestMergeConfigVariants:
     def test_identical_config_merged(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         f = ConfigFileEntry(path="/etc/httpd/conf/httpd.conf", kind="unowned", content="Listen 80")
         s1 = _snap("web-01", config=ConfigSection(files=[f]))
         s2 = _snap("web-02", config=ConfigSection(files=[f]))
@@ -366,7 +366,7 @@ class TestMergeConfigVariants:
         assert merged.config.files[0].fleet.count == 2
 
     def test_different_content_produces_variants(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         f1 = ConfigFileEntry(path="/etc/httpd/conf/httpd.conf", kind="unowned", content="Listen 80")
         f2 = ConfigFileEntry(path="/etc/httpd/conf/httpd.conf", kind="unowned", content="Listen 8080")
         s1 = _snap("web-01", config=ConfigSection(files=[f1]))
@@ -384,7 +384,7 @@ class TestMergeConfigVariants:
         assert len(losers) == 1
 
     def test_majority_variant_included_at_threshold(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         f_majority = ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="version=A")
         f_outlier = ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="version=B")
         snaps = [_snap(f"web-{i:02d}", config=ConfigSection(files=[f_majority])) for i in range(9)]
@@ -400,7 +400,7 @@ class TestMergeConfigVariants:
 
 class TestMergeQuadletVariants:
     def test_quadlet_content_variants(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         q1 = QuadletUnit(path="/etc/containers/systemd/app.container", name="app", content="[Container]\nImage=v1")
         q2 = QuadletUnit(path="/etc/containers/systemd/app.container", name="app", content="[Container]\nImage=v2")
         s1 = _snap("web-01", containers=ContainerSection(quadlet_units=[q1]))
@@ -411,7 +411,7 @@ class TestMergeQuadletVariants:
 
 class TestMergeUsersGroups:
     def test_users_deduplicated_by_name(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         ug1 = UserGroupSection(users=[{"name": "appuser", "uid": 1000}])
         ug2 = UserGroupSection(users=[{"name": "appuser", "uid": 1000}])
         s1 = _snap("web-01", users_groups=ug1)
@@ -423,7 +423,7 @@ class TestMergeUsersGroups:
 
 class TestMergeWarnings:
     def test_warnings_deduplicated(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         w = {"source": "rpm", "message": "package conflict detected"}
         s1 = _snap("web-01")
         s1.warnings = [w]
@@ -435,7 +435,7 @@ class TestMergeWarnings:
 
 class TestMergeLeafAutoPackages:
     def test_leaf_packages_unioned(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(
             packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
             leaf_packages=["httpd"],
@@ -451,7 +451,7 @@ class TestMergeLeafAutoPackages:
         assert set(merged.rpm.auto_packages) == {"apr", "apr-util"}
 
     def test_leaf_fields_none_when_no_snapshots_have_them(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(
             packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
         ))
@@ -464,7 +464,7 @@ class TestMergeLeafAutoPackages:
         assert merged.rpm.leaf_dep_tree is None
 
     def test_leaf_fields_preserved_when_mixed_with_none(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(
             packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
             leaf_packages=["httpd"],
@@ -480,7 +480,7 @@ class TestMergeLeafAutoPackages:
         assert merged.rpm.leaf_dep_tree == {"httpd": ["apr"]}
 
     def test_leaf_dep_tree_merged(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(
             packages_added=[PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64")],
             leaf_dep_tree={"httpd": ["apr", "apr-util"]},
@@ -495,13 +495,13 @@ class TestMergeLeafAutoPackages:
         assert merged.rpm.leaf_dep_tree["nginx"] == ["openssl"]
 
 
-from yoinkc.schema import NonRpmItem, NonRpmSoftwareSection
+from inspectah.schema import NonRpmItem, NonRpmSoftwareSection
 
 
 class TestMergeNonRpmSoftware:
     def test_non_rpm_items_merged_by_path(self):
         """Non-RPM items with same path across hosts are deduplicated."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         item = NonRpmItem(path="/opt/app/bin/myapp", name="myapp", method="elf")
         s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[item]))
         s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[item]))
@@ -514,7 +514,7 @@ class TestMergeNonRpmSoftware:
 
     def test_non_rpm_different_items_both_preserved(self):
         """Different non-RPM items on different hosts are both in merged output."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         i1 = NonRpmItem(path="/opt/app1/bin/app1", name="app1", method="elf")
         i2 = NonRpmItem(path="/opt/app2/bin/app2", name="app2", method="pip")
         s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[i1]))
@@ -526,7 +526,7 @@ class TestMergeNonRpmSoftware:
 
     def test_non_rpm_prevalence_threshold(self):
         """Items below min_prevalence get include=False."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         item_common = NonRpmItem(path="/opt/common/bin/app", name="common", method="elf")
         item_rare = NonRpmItem(path="/opt/rare/bin/app", name="rare", method="elf")
         s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[item_common, item_rare]))
@@ -538,7 +538,7 @@ class TestMergeNonRpmSoftware:
 
     def test_non_rpm_env_files_content_variants(self):
         """env_files with same path but different content produce variants."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         ef1 = ConfigFileEntry(path="/opt/app/.env", kind="unowned", content="DB_HOST=db1.example.com")
         ef2 = ConfigFileEntry(path="/opt/app/.env", kind="unowned", content="DB_HOST=db2.example.com")
         s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[], env_files=[ef1]))
@@ -555,7 +555,7 @@ class TestMergeNonRpmSoftware:
 
     def test_non_rpm_env_files_identical_deduped(self):
         """env_files with same path and content are deduplicated with correct prevalence."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         ef = ConfigFileEntry(path="/opt/app/.env", kind="unowned", content="DB_HOST=db.example.com")
         s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[], env_files=[ef]))
         s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[], env_files=[ef]))
@@ -565,13 +565,13 @@ class TestMergeNonRpmSoftware:
         assert merged.non_rpm_software.env_files[0].include is True
 
 
-from yoinkc.schema import SelinuxPortLabel, SelinuxSection
+from inspectah.schema import SelinuxPortLabel, SelinuxSection
 
 
 class TestMergeSelinux:
     def test_selinux_port_labels_merged(self):
         """Port labels with same protocol/port are deduplicated across hosts."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         pl = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
         s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
         s2 = _snap("host2", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
@@ -584,7 +584,7 @@ class TestMergeSelinux:
 
     def test_selinux_different_ports_preserved(self):
         """Different protocol/port combinations are all preserved."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         pl1 = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
         pl2 = SelinuxPortLabel(protocol="tcp", port="9090", type="http_port_t")
         s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl1], mode="enforcing"))
@@ -596,7 +596,7 @@ class TestMergeSelinux:
 
     def test_selinux_port_labels_prevalence(self):
         """Port labels below threshold get include=False."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         pl = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
         s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
         s2 = _snap("host2", selinux=SelinuxSection(port_labels=[], mode="enforcing"))
@@ -607,7 +607,7 @@ class TestMergeSelinux:
 
     def test_selinux_boolean_overrides_deduped(self):
         """Boolean overrides are deduplicated by name with fleet prevalence."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         b1 = {"name": "httpd_can_network_connect", "current": "on", "default": "off"}
         s1 = _snap("host1", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
         s2 = _snap("host2", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
@@ -617,7 +617,7 @@ class TestMergeSelinux:
 
     def test_selinux_string_lists_unioned(self):
         """String list fields are unioned across hosts."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("host1", selinux=SelinuxSection(
             custom_modules=["mymod1"], fcontext_rules=["/opt/app(/.*)? system_u:object_r:httpd_sys_content_t:s0"],
             mode="enforcing",
@@ -632,7 +632,7 @@ class TestMergeSelinux:
 
     def test_selinux_scalars_first_snapshot(self):
         """Scalar fields (mode, fips_mode) pass through from first snapshot."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("host1", selinux=SelinuxSection(mode="enforcing", fips_mode=True))
         s2 = _snap("host2", selinux=SelinuxSection(mode="permissive", fips_mode=False))
         merged = merge_snapshots([s1, s2], min_prevalence=100)
@@ -641,7 +641,7 @@ class TestMergeSelinux:
 
     def test_selinux_mode_disagreement_merges(self):
         """Hosts with different SELinux modes still produce a valid merged section."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("host1", selinux=SelinuxSection(mode="enforcing"))
         s2 = _snap("host2", selinux=SelinuxSection(mode="disabled"))
         s3 = _snap("host3", selinux=SelinuxSection(mode="enforcing"))
@@ -653,7 +653,7 @@ class TestMergeSelinux:
 class TestDeduplicateDictsHosts:
     def test_deduplicate_dicts_includes_hosts(self):
         """Dict-based fleet prevalence includes host list."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         b1 = {"name": "httpd_can_network_connect", "current": "on", "default": "off"}
         s1 = _snap("host1", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
         s2 = _snap("host2", selinux=SelinuxSection(boolean_overrides=[b1], mode="enforcing"))
@@ -665,7 +665,7 @@ class TestDeduplicateDictsHosts:
 
 class TestNoHostsMode:
     def test_strip_host_lists(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("web-01", rpm=RpmSection(packages_added=[
             PackageEntry(name="httpd", version="2.4", release="1", arch="x86_64"),
         ]))
@@ -678,7 +678,7 @@ class TestNoHostsMode:
 
     def test_strip_host_lists_selinux(self):
         """--no-hosts strips host lists from selinux port_labels."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         pl = SelinuxPortLabel(protocol="tcp", port="8080", type="http_port_t")
         s1 = _snap("host1", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
         s2 = _snap("host2", selinux=SelinuxSection(port_labels=[pl], mode="enforcing"))
@@ -688,7 +688,7 @@ class TestNoHostsMode:
 
     def test_strip_host_lists_non_rpm(self):
         """--no-hosts strips host lists from non_rpm_software items."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         item = NonRpmItem(path="/opt/app/bin/myapp", name="myapp", method="elf")
         s1 = _snap("host1", non_rpm_software=NonRpmSoftwareSection(items=[item]))
         s2 = _snap("host2", non_rpm_software=NonRpmSoftwareSection(items=[item]))
@@ -698,7 +698,7 @@ class TestNoHostsMode:
 
     def test_strip_host_lists_users_groups(self):
         """--no-hosts strips host lists from users_groups (drive-by fix)."""
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
         s1 = _snap("host1", users_groups=UserGroupSection(
             users=[{"name": "appuser", "uid": 1001}],
         ))
@@ -729,7 +729,7 @@ class TestAutoSelectVariants:
         ([3, 3, 1], [True, False, False]),
     ])
     def test_auto_select_config_variants(self, counts, expected_include):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         total = sum(counts)
         snaps = []
@@ -763,8 +763,8 @@ class TestAutoSelectVariants:
 class TestStorageSuppression:
     def test_storage_suppressed_in_fleet_report(self):
         """Storage section is not merged — remains None in fleet snapshot."""
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.schema import StorageSection, FstabEntry
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.schema import StorageSection, FstabEntry
         fstab = FstabEntry(device="/dev/sda1", mount_point="/", fstype="xfs", options="defaults")
         s1 = _snap("host1", storage=StorageSection(fstab_entries=[fstab]))
         s2 = _snap("host2", storage=StorageSection(fstab_entries=[fstab]))
@@ -776,7 +776,7 @@ class TestTieFlags:
     """Verify tie/tie_winner flags are set correctly after fleet merge."""
 
     def test_tied_variants_get_tie_flags(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -797,7 +797,7 @@ class TestTieFlags:
         assert losers[0].include is False
 
     def test_clear_winner_no_tie_flags(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="majority"),
@@ -815,7 +815,7 @@ class TestTieFlags:
             assert v.tie_winner is False
 
     def test_three_way_tie_one_winner(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="aaa"),
@@ -843,7 +843,7 @@ class TestDeterministicTiebreaker:
     """Tiebreaker picks winner by full SHA-256 digest sort."""
 
     def test_same_winner_regardless_of_input_order(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         content_a = "variant-alpha"
         content_b = "variant-beta"
@@ -870,7 +870,7 @@ class TestDeterministicTiebreaker:
 
     def test_tiebreaker_picks_lowest_hash(self):
         import hashlib
-        from yoinkc.fleet.merge import merge_snapshots, _normalize_content
+        from inspectah.fleet.merge import merge_snapshots, _normalize_content
 
         content_a = "aaa-content"
         content_b = "bbb-content"
@@ -895,7 +895,7 @@ class TestNormalization:
     """Level 1 normalization: trailing whitespace + line endings."""
 
     def test_trailing_whitespace_collapses_variants(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         content_a = "key=value\nsetting=on\n"
         content_b = "key=value\nsetting=on   \n"
@@ -912,7 +912,7 @@ class TestNormalization:
         assert merged.config.files[0].fleet.count == 2
 
     def test_line_ending_normalization(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         content_unix = "key=value\nsetting=on\n"
         content_dos = "key=value\r\nsetting=on\r\n"
@@ -929,7 +929,7 @@ class TestNormalization:
         assert merged.config.files[0].fleet.count == 2
 
     def test_genuine_content_difference_not_collapsed(self):
-        from yoinkc.fleet.merge import merge_snapshots
+        from inspectah.fleet.merge import merge_snapshots
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="key=value1\n"),
@@ -946,8 +946,8 @@ class TestCliTieSummary:
     """CLI prints tie summary when ties exist."""
 
     def test_count_tied_winners_returns_correct_count(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.__main__ import _count_tied_winners
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.__main__ import _count_tied_winners
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -959,8 +959,8 @@ class TestCliTieSummary:
         assert _count_tied_winners(merged) == 1
 
     def test_zero_ties_returns_zero(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.__main__ import _count_tied_winners
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.__main__ import _count_tied_winners
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
@@ -976,9 +976,9 @@ class TestReadmeArtifacts:
     """merge-notes.md appears in readme artifacts for fleet merges."""
 
     def test_merge_notes_in_readme_for_fleet(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers import render_readme
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers import render_readme
+        from inspectah.renderers.merge_notes import render_merge_notes
         from jinja2 import Environment, FileSystemLoader
 
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -991,7 +991,7 @@ class TestReadmeArtifacts:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
-            templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
+            templates_dir = Path(__file__).resolve().parent.parent / "src" / "inspectah" / "templates"
             env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
             render_merge_notes(merged, output_dir)
             render_readme(merged, env, output_dir)
@@ -1003,8 +1003,8 @@ class TestContainerfileTieComment:
     """Containerfile inventory comment includes tied items block."""
 
     def test_tied_config_appears_in_inventory_comment(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.containerfile._config_tree import config_inventory_comment
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.containerfile._config_tree import config_inventory_comment
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -1022,8 +1022,8 @@ class TestContainerfileTieComment:
         assert "merge-notes.md" in comment_text, "Should point to merge-notes.md"
 
     def test_no_tie_block_when_no_ties(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.containerfile._config_tree import config_inventory_comment
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.containerfile._config_tree import config_inventory_comment
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
@@ -1043,8 +1043,8 @@ class TestAuditReportDisambiguation:
     """Audit report distinguishes [EXCLUDED], [TIE LOSER], and [REDACTED]."""
 
     def test_tie_loser_labeled_in_audit_report(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.audit_report import render
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.audit_report import render
         from jinja2 import Environment, FileSystemLoader
 
         s1 = _snap("host-1", config=ConfigSection(files=[
@@ -1057,7 +1057,7 @@ class TestAuditReportDisambiguation:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             output_dir = Path(tmpdir)
-            templates_dir = Path(__file__).resolve().parent.parent / "src" / "yoinkc" / "templates"
+            templates_dir = Path(__file__).resolve().parent.parent / "src" / "inspectah" / "templates"
             env = Environment(loader=FileSystemLoader(str(templates_dir)), autoescape=True)
             render(merged, env, output_dir)
             content = (output_dir / "audit-report.md").read_text()
@@ -1068,8 +1068,8 @@ class TestMergeNotes:
     """merge-notes.md is generated with tie and non-unanimous details."""
 
     def test_merge_notes_contains_tied_item(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="variant-a"),
@@ -1090,8 +1090,8 @@ class TestMergeNotes:
             assert "variant" in content.lower()
 
     def test_merge_notes_contains_non_unanimous_item(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="majority"),
@@ -1112,8 +1112,8 @@ class TestMergeNotes:
             assert "2/3" in content
 
     def test_no_merge_notes_when_all_unanimous(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="same"),
@@ -1129,7 +1129,7 @@ class TestMergeNotes:
             assert not (output_dir / "merge-notes.md").exists()
 
     def test_merge_notes_absent_for_single_host(self):
-        from yoinkc.renderers.merge_notes import render_merge_notes
+        from inspectah.renderers.merge_notes import render_merge_notes
 
         snap = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/test.conf", kind="unowned", content="val"),
@@ -1145,8 +1145,8 @@ class TestTieRoundTrip:
     """Full pipeline: merge with ties → render → verify all surfaces."""
 
     def test_full_render_with_ties(self):
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers import run_all
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers import run_all
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=alpha"),
@@ -1180,8 +1180,8 @@ class TestTieRoundTrip:
 
     def test_refine_round_trip_resolves_tie(self):
         """A tie resolved via refine removes the tied-items comment block."""
-        from yoinkc.fleet.merge import merge_snapshots
-        from yoinkc.renderers import run_all
+        from inspectah.fleet.merge import merge_snapshots
+        from inspectah.renderers import run_all
 
         s1 = _snap("host-1", config=ConfigSection(files=[
             ConfigFileEntry(path="/etc/app.conf", kind="unowned", content="setting=alpha"),

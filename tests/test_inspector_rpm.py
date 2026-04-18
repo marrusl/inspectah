@@ -2,9 +2,9 @@
 
 from pathlib import Path
 
-from yoinkc.executor import RunResult
-from yoinkc.inspectors.rpm import _compare_evr, _parse_nevr, _parse_rpm_qa, _parse_rpm_va, _rpmvercmp
-from yoinkc.schema import PackageEntry
+from inspectah.executor import RunResult
+from inspectah.inspectors.rpm import _compare_evr, _parse_nevr, _parse_rpm_qa, _parse_rpm_va, _rpmvercmp
+from inspectah.schema import PackageEntry
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -49,7 +49,7 @@ def test_parse_rpm_va():
 
 def test_rpm_inspector_with_fixtures(host_root, fixture_executor):
     """With executor that can query base image, baseline is applied via podman."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     section = run_rpm(host_root, fixture_executor)
     assert section is not None
     assert section.no_baseline is False
@@ -65,7 +65,7 @@ def test_rpm_inspector_with_fixtures(host_root, fixture_executor):
 
 def test_rpm_inspector_with_baseline_file(host_root, fixture_executor):
     """With --baseline-packages, baseline is loaded from file."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     baseline_file = FIXTURES / "base_image_packages.txt"
     section = run_rpm(host_root, fixture_executor, baseline_packages_file=baseline_file)
     assert section is not None
@@ -81,7 +81,7 @@ def test_rpm_inspector_with_baseline_file(host_root, fixture_executor):
 
 def test_rpm_inspector_captures_gpg_keys(host_root, fixture_executor):
     """GPG keys referenced by gpgkey=file:// in repo files are captured."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     section = run_rpm(host_root, fixture_executor)
     assert section.gpg_keys, "Expected at least one GPG key captured"
     key_paths = [k.path for k in section.gpg_keys]
@@ -92,8 +92,8 @@ def test_rpm_inspector_captures_gpg_keys(host_root, fixture_executor):
 
 def test_collect_gpg_keys_resolves_dnf_vars(tmp_path):
     """gpgkey= paths containing $releasever_major are resolved before file lookup."""
-    from yoinkc.inspectors.rpm import _collect_gpg_keys
-    from yoinkc.schema import RepoFile
+    from inspectah.inspectors.rpm import _collect_gpg_keys
+    from inspectah.schema import RepoFile
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -120,7 +120,7 @@ def test_collect_gpg_keys_resolves_dnf_vars(tmp_path):
 
 def test_source_repo_populated_via_dnf_repoquery(host_root, fixture_executor):
     """source_repo is populated for added packages when dnf repoquery succeeds."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     section = run_rpm(host_root, fixture_executor)
     pkgs_with_repo = [p for p in section.packages_added if p.source_repo]
     assert len(pkgs_with_repo) > 0, "Expected at least one package with source_repo set"
@@ -222,8 +222,8 @@ class TestVersionChangeDetection:
     """Integration tests for version change detection in RPM inspector."""
 
     def test_version_changes_populated(self, host_root, fixture_executor):
-        from yoinkc.inspectors.rpm import run as run_rpm
-        from yoinkc.schema import VersionChangeDirection
+        from inspectah.inspectors.rpm import run as run_rpm
+        from inspectah.schema import VersionChangeDirection
         section = run_rpm(host_root, fixture_executor)
         assert section.version_changes is not None
         bash_changes = [vc for vc in section.version_changes if vc.name == "bash"]
@@ -235,16 +235,16 @@ class TestVersionChangeDetection:
         assert "5.1.8" in vc.base_version
 
     def test_no_version_changes_with_names_only_baseline(self, host_root, fixture_executor):
-        from yoinkc.inspectors.rpm import run as run_rpm
-        from yoinkc.baseline import load_baseline_packages_file
+        from inspectah.inspectors.rpm import run as run_rpm
+        from inspectah.baseline import load_baseline_packages_file
         baseline_pkgs = load_baseline_packages_file(FIXTURES / "base_image_packages.txt")
         preflight = (baseline_pkgs, "test-image:latest", False)
         section = run_rpm(host_root, fixture_executor, preflight_baseline=preflight)
         assert section.version_changes == []
 
     def test_version_changes_sorted_downgrades_first(self, host_root, fixture_executor):
-        from yoinkc.inspectors.rpm import run as run_rpm
-        from yoinkc.schema import VersionChangeDirection
+        from inspectah.inspectors.rpm import run as run_rpm
+        from inspectah.schema import VersionChangeDirection
         section = run_rpm(host_root, fixture_executor)
         if len(section.version_changes) >= 2:
             directions = [vc.direction for vc in section.version_changes]
@@ -256,7 +256,7 @@ class TestVersionChangeDetection:
                 assert max(downgrade_indices) < min(upgrade_indices)
 
     def test_base_image_only_has_nevra(self, host_root, fixture_executor):
-        from yoinkc.inspectors.rpm import run as run_rpm
+        from inspectah.inspectors.rpm import run as run_rpm
         section = run_rpm(host_root, fixture_executor)
         for bio in section.base_image_only:
             if bio.version:
@@ -265,7 +265,7 @@ class TestVersionChangeDetection:
 
 def test_downgrade_warning_generated(host_root, fixture_executor):
     """Downgrades should produce a warning in the warnings list."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
     warnings = []
     section = run_rpm(host_root, fixture_executor, warnings=warnings)
     downgrade_count = sum(1 for vc in section.version_changes
@@ -278,7 +278,7 @@ def test_downgrade_warning_generated(host_root, fixture_executor):
 
 def test_multiarch_warning_deduplicated_per_package(tmp_path):
     """Multi-arch warnings should be emitted once per affected package name."""
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.rpm import run as run_rpm
 
     def executor(cmd, cwd=None):
         cmd_str = " ".join(cmd)

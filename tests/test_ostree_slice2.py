@@ -1,11 +1,11 @@
 """Slice 2 inspector adaptation tests: storage, kernel/boot, scheduled tasks."""
 from pathlib import Path
-from yoinkc.executor import RunResult
-from yoinkc.schema import SystemType, MountPoint
+from inspectah.executor import RunResult
+from inspectah.schema import SystemType, MountPoint
 
 
 def test_ostree_mounts_filtered_from_storage(tmp_path):
-    from yoinkc.inspectors.storage import run as run_storage
+    from inspectah.inspectors.storage import run as run_storage
     etc = tmp_path / "etc"
     etc.mkdir()
     (etc / "fstab").write_text("/dev/sda1  /boot  ext4  defaults  0 2\n")
@@ -42,7 +42,7 @@ def test_ostree_mounts_filtered_from_storage(tmp_path):
 
 
 def test_ostree_grub_defaults_suppressed(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    from inspectah.inspectors.kernel_boot import run as run_kernel_boot
     etc = tmp_path / "etc"
     etc.mkdir()
     (etc / "default").mkdir()
@@ -59,7 +59,7 @@ def test_ostree_grub_defaults_suppressed(tmp_path):
 
 
 def test_ostree_cmdline_still_captured(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    from inspectah.inspectors.kernel_boot import run as run_kernel_boot
     proc = tmp_path / "proc"
     proc.mkdir()
     (proc / "cmdline").write_text(
@@ -76,7 +76,7 @@ def test_ostree_cmdline_still_captured(tmp_path):
 
 
 def test_ostree_vendor_timers_from_usr_lib(tmp_path):
-    from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+    from inspectah.inspectors.scheduled_tasks import run as run_scheduled_tasks
     vendor_dir = tmp_path / "usr" / "lib" / "systemd" / "system"
     vendor_dir.mkdir(parents=True)
     (vendor_dir / "ostree-remount.timer").write_text(

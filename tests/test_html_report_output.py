@@ -5,8 +5,8 @@ import tempfile
 from html.parser import HTMLParser
 from pathlib import Path
 
-from yoinkc.renderers import run_all as run_all_renderers
-from yoinkc.schema import (
+from inspectah.renderers import run_all as run_all_renderers
+from inspectah.schema import (
     ConfigFileEntry,
     ConfigFileKind,
     ConfigSection,
@@ -233,10 +233,10 @@ class TestHtmlStructure:
         the full state_changes array, not in the filtered set of changed units."""
         import re as _re
         import tempfile
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, ServiceSection, ServiceStateChange,
         )
-        from yoinkc.renderers import run_all as run_all_renderers
+        from inspectah.renderers import run_all as run_all_renderers
 
         services = ServiceSection(
             state_changes=[
@@ -280,10 +280,10 @@ class TestHtmlStructure:
         config.files array, not in the filtered set (which excludes quadlet files)."""
         import re as _re
         import tempfile
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
         )
-        from yoinkc.renderers import run_all as run_all_renderers
+        from inspectah.renderers import run_all as run_all_renderers
 
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
@@ -317,10 +317,10 @@ class TestHtmlStructure:
 
     def test_config_file_count_excludes_quadlets(self):
         """_config_file_count must not count quadlet files."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
         )
-        from yoinkc.renderers._triage import _config_file_count
+        from inspectah.renderers._triage import _config_file_count
 
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
@@ -335,10 +335,10 @@ class TestHtmlStructure:
 
     def test_triage_counts_exclude_quadlets(self):
         """compute_triage automatic count must not include quadlet files."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
         )
-        from yoinkc.renderers._triage import compute_triage_detail
+        from inspectah.renderers._triage import compute_triage_detail
 
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
@@ -360,10 +360,10 @@ class TestHtmlStructure:
     def test_snapshot_json_script_tag_injection_escaped(self):
         """</script> inside snapshot values must not terminate the embedded <script> block."""
         import tempfile
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
         )
-        from yoinkc.renderers import run_all as run_all_renderers
+        from inspectah.renderers import run_all as run_all_renderers
 
         payload = '</script><img src=x onerror=alert(1)>'
         snapshot = InspectionSnapshot(
@@ -395,7 +395,7 @@ class TestHtmlStructure:
         the badge on initial render when some entries had been excluded in a refined
         report.
         """
-        from yoinkc.schema import EnabledModuleStream, RpmSection, VersionLockEntry
+        from inspectah.schema import EnabledModuleStream, RpmSection, VersionLockEntry
 
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},
@@ -484,8 +484,8 @@ class TestHtmlReportRedactionFinding:
 
     def test_html_report_with_typed_redaction_findings(self):
         """HTML report renders correctly with RedactionFinding objects in snapshot.redactions."""
-        from yoinkc.schema import InspectionSnapshot, OsRelease, RedactionFinding
-        from yoinkc.renderers import run_all as run_all_renderers
+        from inspectah.schema import InspectionSnapshot, OsRelease, RedactionFinding
+        from inspectah.renderers import run_all as run_all_renderers
 
         snapshot = InspectionSnapshot(
             meta={"host_root": "/host"},

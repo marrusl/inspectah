@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.inspectors.rpm import _apply_module_stream_baseline, _collect_module_streams
-from yoinkc.schema import EnabledModuleStream
+from inspectah.inspectors.rpm import _apply_module_stream_baseline, _collect_module_streams
+from inspectah.schema import EnabledModuleStream
 
 
 def _write_module_file(directory: Path, filename: str, content: str) -> None:

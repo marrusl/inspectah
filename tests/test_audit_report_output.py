@@ -5,11 +5,11 @@ from pathlib import Path
 
 from jinja2 import Environment
 
-from yoinkc.renderers.containerfile import render as render_containerfile
-from yoinkc.renderers.audit_report import render as render_audit_report
-from yoinkc.renderers.kickstart import render as render_kickstart
-from yoinkc.renderers.readme import render as render_readme
-from yoinkc.schema import InspectionSnapshot, OsRelease
+from inspectah.renderers.containerfile import render as render_containerfile
+from inspectah.renderers.audit_report import render as render_audit_report
+from inspectah.renderers.kickstart import render as render_kickstart
+from inspectah.renderers.readme import render as render_readme
+from inspectah.schema import InspectionSnapshot, OsRelease
 
 
 class TestAuditReport:
@@ -43,7 +43,7 @@ class TestAuditReport:
 
     def test_firewall_offline_cmd_in_audit_report_not_containerfile(self):
         """firewall-offline-cmd lines must appear in audit report, not Containerfile."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, NetworkSection, FirewallZone,
         )
         snapshot = InspectionSnapshot(
@@ -77,7 +77,7 @@ class TestAuditReport:
 
     def test_firewall_direct_rule_priority_used(self):
         """Direct rule commands must use the rule's actual priority, not hardcoded 0."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, NetworkSection, FirewallDirectRule,
         )
         snapshot = InspectionSnapshot(
@@ -97,7 +97,7 @@ class TestAuditReport:
 
     def test_excluded_firewall_zone_not_written_to_config_tree(self):
         """Excluded firewall zones must not be written to the config tree or appear in the Containerfile."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, NetworkSection, FirewallZone,
         )
         snapshot = InspectionSnapshot(
@@ -134,7 +134,7 @@ class TestAuditReport:
 
     def test_excluded_firewall_direct_rule_not_written(self):
         """Excluded direct rules must not be written to direct.xml."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, NetworkSection, FirewallDirectRule,
         )
         snapshot = InspectionSnapshot(
@@ -154,7 +154,7 @@ class TestAuditReport:
 
     def test_all_excluded_firewall_direct_rules_no_direct_xml(self):
         """If all direct rules are excluded, direct.xml must not be written at all."""
-        from yoinkc.schema import (
+        from inspectah.schema import (
             InspectionSnapshot, OsRelease, NetworkSection, FirewallDirectRule,
         )
         snapshot = InspectionSnapshot(
@@ -241,7 +241,7 @@ class TestAuditRpmModuleStreamsVersionLocks:
     """Audit report summarises module streams and version locks in the RPM section."""
 
     def _build_snapshot(self):
-        from yoinkc.schema import (
+        from inspectah.schema import (
             RpmSection, EnabledModuleStream, VersionLockEntry,
         )
         return InspectionSnapshot(
@@ -288,7 +288,7 @@ class TestAuditRpmModuleStreamsVersionLocks:
 
     def test_no_module_streams_section_when_empty(self):
         """RPM section without module_streams must not emit the summary line."""
-        from yoinkc.schema import RpmSection
+        from inspectah.schema import RpmSection
         snap = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
@@ -304,7 +304,7 @@ class TestAuditModifications:
 
     def test_modifications_section_with_edits(self):
         """Audit report includes Modifications section when files are edited."""
-        from yoinkc.schema import ConfigFileEntry, ConfigFileKind, ConfigSection
+        from inspectah.schema import ConfigFileEntry, ConfigFileKind, ConfigSection
         original = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
@@ -327,7 +327,7 @@ class TestAuditModifications:
         assert "/etc/myapp/app.conf" in md
 
     def test_modifications_section_with_added_files(self):
-        from yoinkc.schema import ConfigFileEntry, ConfigFileKind, ConfigSection
+        from inspectah.schema import ConfigFileEntry, ConfigFileKind, ConfigSection
         original = InspectionSnapshot(
             meta={"host_root": "/host"},
             os_release=OsRelease(name="RHEL", version_id="9.6", pretty_name="RHEL 9.6"),
@@ -390,8 +390,8 @@ class TestAuditReportRedactionFinding:
 
     def test_audit_report_with_typed_redaction_findings(self):
         """Audit report renders correctly with RedactionFinding objects."""
-        from yoinkc.schema import InspectionSnapshot, OsRelease, RedactionFinding
-        from yoinkc.renderers.audit_report import render
+        from inspectah.schema import InspectionSnapshot, OsRelease, RedactionFinding
+        from inspectah.renderers.audit_report import render
 
         snapshot = InspectionSnapshot(
             meta={},

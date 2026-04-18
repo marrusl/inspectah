@@ -1,4 +1,4 @@
-"""Regression tests for the run-yoinkc.sh wrapper."""
+"""Regression tests for the run-inspectah.sh wrapper."""
 
 import os
 import stat
@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "run-yoinkc.sh"
+SCRIPT = Path(__file__).resolve().parents[1] / "run-inspectah.sh"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -30,8 +30,8 @@ def test_wrapper_does_not_abort_when_hostname_lookup_fails(tmp_path):
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["PODMAN_ARGS_FILE"] = str(args_file)
-    env["YOINKC_IMAGE"] = "ghcr.io/marrusl/yoinkc:test"
-    env.pop("YOINKC_HOSTNAME", None)
+    env["INSPECTAH_IMAGE"] = "ghcr.io/marrusl/inspectah:test"
+    env.pop("INSPECTAH_HOSTNAME", None)
 
     result = subprocess.run(
         [str(SCRIPT)],
@@ -45,6 +45,6 @@ def test_wrapper_does_not_abort_when_hostname_lookup_fails(tmp_path):
     assert result.returncode == 0, result.stderr
     args = args_file.read_text().splitlines()
     assert any(
-        args[i] == "-e" and args[i + 1] == "YOINKC_HOSTNAME="
+        args[i] == "-e" and args[i + 1] == "INSPECTAH_HOSTNAME="
         for i in range(len(args) - 1)
     ), args

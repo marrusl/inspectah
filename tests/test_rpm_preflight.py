@@ -1,8 +1,8 @@
 """Tests for RPM preflight check: schema, install set, and preflight module."""
 
 from pathlib import Path
-from yoinkc.executor import RunResult
-from yoinkc.schema import (
+from inspectah.executor import RunResult
+from inspectah.schema import (
     InspectionSnapshot,
     PreflightResult,
     RepoStatus,
@@ -111,7 +111,7 @@ class TestPreflightSchema:
 class TestRepoProvidingPackages:
     def test_detects_repo_providing_packages(self, host_root, fixture_executor):
         """Packages that own .repo files in /etc/yum.repos.d/ are detected."""
-        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+        from inspectah.inspectors.rpm import _detect_repo_providing_packages
 
         def executor(cmd, cwd=None):
             cmd_str = " ".join(cmd) if isinstance(cmd, list) else cmd
@@ -128,7 +128,7 @@ class TestRepoProvidingPackages:
 
     def test_no_repo_files(self, tmp_path):
         """When no repo files exist, returns empty list."""
-        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+        from inspectah.inspectors.rpm import _detect_repo_providing_packages
 
         def executor(cmd, cwd=None):
             return RunResult(stdout="", stderr="", returncode=1)
@@ -138,7 +138,7 @@ class TestRepoProvidingPackages:
 
     def test_rpm_qf_failure_returns_empty(self, host_root):
         """When rpm -qf fails, returns empty list gracefully."""
-        from yoinkc.inspectors.rpm import _detect_repo_providing_packages
+        from inspectah.inspectors.rpm import _detect_repo_providing_packages
 
         def executor(cmd, cwd=None):
             return RunResult(stdout="", stderr="error", returncode=1)
@@ -152,8 +152,8 @@ class TestRepoProvidingPackages:
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
-from yoinkc.rpm_preflight import run_package_preflight
-from yoinkc.schema import PackageEntry, PackageState, RepoFile
+from inspectah.rpm_preflight import run_package_preflight
+from inspectah.schema import PackageEntry, PackageState, RepoFile
 
 
 def _make_preflight_snapshot(
@@ -202,7 +202,7 @@ def _make_preflight_executor(
             return RunResult(stdout="", stderr="" if pull_rc == 0 else "pull failed", returncode=pull_rc)
         if "podman" in cmd_str and "run" in cmd_str and "-d" in cmd_str:
             # Persistent container creation
-            return RunResult(stdout="yoinkc-preflight-test1234\n", stderr="", returncode=0)
+            return RunResult(stdout="inspectah-preflight-test1234\n", stderr="", returncode=0)
         if "podman" in cmd_str and "exec" in cmd_str and "dnf install" in cmd_str:
             return RunResult(stdout="", stderr="" if bootstrap_rc == 0 else "install failed", returncode=bootstrap_rc)
         if "podman" in cmd_str and "exec" in cmd_str and "repoquery" in cmd_str:
@@ -361,7 +361,7 @@ class TestPackagePreflight:
     def test_synthetic_tuned_not_classified_as_direct_install(self):
         """Synthetic tuned (from resolve_install_set, not in packages_added)
         must go through repoquery, not be classified as direct-install."""
-        from yoinkc.schema import KernelBootSection
+        from inspectah.schema import KernelBootSection
 
         snapshot = _make_preflight_snapshot(packages=["httpd"])
         snapshot.rpm.packages_added[0].source_repo = "baseos"
@@ -378,7 +378,7 @@ class TestPackagePreflight:
 class TestPreflightIntegration:
     def test_skip_unavailable_sets_skipped(self, fixture_executor, host_root):
         """When skip_unavailable=True, snapshot.preflight.status is 'skipped'."""
-        from yoinkc.inspectors import run_all
+        from inspectah.inspectors import run_all
 
         snapshot = run_all(
             host_root,
@@ -403,8 +403,8 @@ class TestPreflightIntegration:
             # Return a minimal result so preflight doesn't actually run podman
             return PreflightResult(status="failed", status_reason="spy")
 
-        with patch('yoinkc.rpm_preflight.run_package_preflight', side_effect=spy_preflight):
-            from yoinkc.inspectors import run_all
+        with patch('inspectah.rpm_preflight.run_package_preflight', side_effect=spy_preflight):
+            from inspectah.inspectors import run_all
 
             snapshot = run_all(
                 host_root,
@@ -418,7 +418,7 @@ class TestPreflightIntegration:
         assert preflight_snapshot_state.get('has_services') is True
 
 
-from yoinkc.renderers.containerfile.packages import section_lines
+from inspectah.renderers.containerfile.packages import section_lines
 
 
 class TestRendererPreflightConsumption:
@@ -500,7 +500,7 @@ class TestRendererPreflightConsumption:
         assert "nginx" in joined
 
 
-from yoinkc.architect.analyzer import FleetInput
+from inspectah.architect.analyzer import FleetInput
 
 
 class TestArchitectPreflightAggregation:
@@ -520,7 +520,7 @@ class TestArchitectPreflightAggregation:
 class TestEndToEnd:
     def test_preflight_roundtrip_via_snapshot(self, tmp_path):
         """Preflight data survives: inspect -> save snapshot -> load -> render."""
-        from yoinkc.pipeline import save_snapshot, load_snapshot
+        from inspectah.pipeline import save_snapshot, load_snapshot
 
         snapshot = InspectionSnapshot(
             rpm=RpmSection(

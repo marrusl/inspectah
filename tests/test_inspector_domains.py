@@ -7,8 +7,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_config_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.config import run as run_config
-    from yoinkc.inspectors.rpm import run as run_rpm
+    from inspectah.inspectors.config import run as run_config
+    from inspectah.inspectors.rpm import run as run_rpm
     rpm_section = run_rpm(host_root, fixture_executor)
     rpm_owned = set((FIXTURES / "rpm_qla_output.txt").read_text().strip().splitlines())
     section = run_config(host_root, fixture_executor, rpm_section=rpm_section, rpm_owned_paths_override=rpm_owned)
@@ -19,7 +19,7 @@ def test_config_inspector_with_fixtures(host_root, fixture_executor):
 
 
 def test_network_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.network import run as run_network
+    from inspectah.inspectors.network import run as run_network
     section = run_network(host_root, fixture_executor)
     assert section is not None
 
@@ -64,7 +64,7 @@ def test_network_inspector_with_fixtures(host_root, fixture_executor):
 
 
 def test_storage_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.storage import run as run_storage
+    from inspectah.inspectors.storage import run as run_storage
     section = run_storage(host_root, fixture_executor)
     assert section is not None
     assert len(section.fstab_entries) >= 3
@@ -79,7 +79,7 @@ def test_storage_inspector_with_fixtures(host_root, fixture_executor):
 
 
 def test_scheduled_tasks_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+    from inspectah.inspectors.scheduled_tasks import run as run_scheduled_tasks
     section = run_scheduled_tasks(host_root, fixture_executor)
     assert section is not None
 
@@ -107,7 +107,7 @@ def test_scheduled_tasks_inspector_with_fixtures(host_root, fixture_executor):
 
 
 def test_container_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.container import run as run_container
+    from inspectah.inspectors.container import run as run_container
 
     section = run_container(host_root, fixture_executor, query_podman=False)
     assert section is not None
@@ -161,7 +161,7 @@ def test_container_inspector_with_fixtures(host_root, fixture_executor):
 
 
 def test_non_rpm_software_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm_software
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm_software
     section = run_non_rpm_software(host_root, fixture_executor, deep_binary_scan=False)
     assert section is not None
 
@@ -220,7 +220,7 @@ def test_non_rpm_software_inspector_with_fixtures(host_root, fixture_executor):
 
 
 def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    from inspectah.inspectors.kernel_boot import run as run_kernel_boot
     section = run_kernel_boot(host_root, fixture_executor)
     assert section is not None
     assert section.cmdline != ""
@@ -265,7 +265,7 @@ def test_kernel_boot_inspector_with_fixtures(host_root, fixture_executor):
 
 def test_kernel_boot_detects_tuned_profile(host_root, fixture_executor):
     """Tuned active profile and custom profiles are detected."""
-    from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+    from inspectah.inspectors.kernel_boot import run as run_kernel_boot
     section = run_kernel_boot(host_root, fixture_executor)
     assert section.tuned_active == "my-web-profile"
     assert len(section.tuned_custom_profiles) >= 1
@@ -278,7 +278,7 @@ def test_kernel_boot_detects_tuned_profile(host_root, fixture_executor):
 
 
 def test_selinux_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.selinux import run as run_selinux
+    from inspectah.inspectors.selinux import run as run_selinux
     section = run_selinux(host_root, fixture_executor)
     assert section is not None
     assert section.mode == "enforcing"
@@ -308,7 +308,7 @@ def test_selinux_inspector_with_fixtures(host_root, fixture_executor):
 
 
 def test_non_rpm_inspector_detects_env_files(host_root, fixture_executor):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
     section = run_non_rpm(host_root, fixture_executor)
     assert section is not None
 
@@ -316,15 +316,15 @@ def test_non_rpm_inspector_detects_env_files(host_root, fixture_executor):
     assert any("myapp/.env" in p for p in env_paths), f"Expected myapp/.env in {env_paths}"
 
     myapp_env = next(ef for ef in section.env_files if "myapp/.env" in ef.path)
-    from yoinkc.schema import ConfigFileKind
+    from inspectah.schema import ConfigFileKind
     assert myapp_env.kind == ConfigFileKind.UNOWNED
     assert "API_KEY" in myapp_env.content
 
 
 def test_env_files_are_redacted(host_root, fixture_executor):
-    from yoinkc.inspectors.non_rpm_software import run as run_non_rpm
-    from yoinkc.redact import redact_snapshot
-    from yoinkc.schema import InspectionSnapshot
+    from inspectah.inspectors.non_rpm_software import run as run_non_rpm
+    from inspectah.redact import redact_snapshot
+    from inspectah.schema import InspectionSnapshot
 
     non_rpm = run_non_rpm(host_root, fixture_executor)
     snapshot = InspectionSnapshot(non_rpm_software=non_rpm)
@@ -342,7 +342,7 @@ def test_env_files_are_redacted(host_root, fixture_executor):
 
 
 def test_detect_locale(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     locale_conf = tmp_path / "etc" / "locale.conf"
     locale_conf.parent.mkdir(parents=True)
@@ -353,7 +353,7 @@ def test_detect_locale(tmp_path):
 
 
 def test_detect_locale_missing(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     (tmp_path / "etc").mkdir(parents=True)
     result = run(host_root=tmp_path, executor=None)
@@ -361,7 +361,7 @@ def test_detect_locale_missing(tmp_path):
 
 
 def test_detect_locale_quoted(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     locale_conf = tmp_path / "etc" / "locale.conf"
     locale_conf.parent.mkdir(parents=True)
@@ -372,7 +372,7 @@ def test_detect_locale_quoted(tmp_path):
 
 
 def test_detect_timezone(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     etc = tmp_path / "etc"
     etc.mkdir(parents=True)
@@ -387,7 +387,7 @@ def test_detect_timezone(tmp_path):
 
 
 def test_detect_timezone_relative_symlink(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     etc = tmp_path / "etc"
     etc.mkdir(parents=True)
@@ -402,7 +402,7 @@ def test_detect_timezone_relative_symlink(tmp_path):
 
 
 def test_detect_timezone_missing(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     (tmp_path / "etc").mkdir(parents=True)
     result = run(host_root=tmp_path, executor=None)
@@ -410,7 +410,7 @@ def test_detect_timezone_missing(tmp_path):
 
 
 def test_detect_alternatives_auto(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     alt_dir = tmp_path / "etc" / "alternatives"
     alt_dir.mkdir(parents=True)
@@ -431,7 +431,7 @@ def test_detect_alternatives_auto(tmp_path):
 
 
 def test_detect_alternatives_manual(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     alt_dir = tmp_path / "etc" / "alternatives"
     alt_dir.mkdir(parents=True)
@@ -451,7 +451,7 @@ def test_detect_alternatives_manual(tmp_path):
 
 
 def test_detect_alternatives_empty(tmp_path):
-    from yoinkc.inspectors.kernel_boot import run
+    from inspectah.inspectors.kernel_boot import run
 
     (tmp_path / "etc").mkdir(parents=True)
     result = run(host_root=tmp_path, executor=None)

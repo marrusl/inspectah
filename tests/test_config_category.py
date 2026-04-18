@@ -1,7 +1,7 @@
 """Tests for config file path classification."""
 import pytest
-from yoinkc.inspectors.config import classify_config_path
-from yoinkc.schema import ConfigCategory
+from inspectah.inspectors.config import classify_config_path
+from inspectah.schema import ConfigCategory
 
 
 @pytest.mark.parametrize("path, expected", [

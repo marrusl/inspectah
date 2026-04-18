@@ -5,10 +5,10 @@ from pathlib import Path
 
 from jinja2 import Environment
 
-from yoinkc.inspectors.config import _detect_crypto_policy, run as run_config
-from yoinkc.renderers.containerfile import render as render_containerfile
-from yoinkc.renderers.containerfile.config import _crypto_policy_lines
-from yoinkc.schema import (
+from inspectah.inspectors.config import _detect_crypto_policy, run as run_config
+from inspectah.renderers.containerfile import render as render_containerfile
+from inspectah.renderers.containerfile.config import _crypto_policy_lines
+from inspectah.schema import (
     ConfigCategory,
     ConfigFileEntry,
     ConfigFileKind,

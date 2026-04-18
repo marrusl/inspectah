@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.executor import RunResult
-from yoinkc.inspectors import run_all
-from yoinkc.schema import InspectionSnapshot
+from inspectah.executor import RunResult
+from inspectah.inspectors import run_all
+from inspectah.schema import InspectionSnapshot
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def test_user_classification():
-    from yoinkc.inspectors.users_groups import _classify_user, _STRATEGY_MAP
+    from inspectah.inspectors.users_groups import _classify_user, _STRATEGY_MAP
 
     assert _classify_user({"shell": "/sbin/nologin", "home": "/var/lib/redis", "uid": 1001}) == "service"
     assert _STRATEGY_MAP["service"] == "sysusers"
@@ -35,7 +35,7 @@ def test_user_classification():
 
 
 def test_user_classification_in_fixture(host_root, fixture_executor):
-    from yoinkc.inspectors.users_groups import run as run_users_groups
+    from inspectah.inspectors.users_groups import run as run_users_groups
     section = run_users_groups(host_root, fixture_executor)
     jdoe = next(u for u in section.users if u["name"] == "jdoe")
     assert jdoe["classification"] == "human"
@@ -47,7 +47,7 @@ def test_user_classification_in_fixture(host_root, fixture_executor):
 
 def test_group_strategy_no_user(tmp_path):
     """Groups with no associated user default to sysusers."""
-    from yoinkc.inspectors.users_groups import run as run_users_groups
+    from inspectah.inspectors.users_groups import run as run_users_groups
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -65,7 +65,7 @@ def test_group_strategy_no_user(tmp_path):
 
 def test_group_strategy_first_user_wins_on_shared_gid(tmp_path):
     """When two users share a primary GID, the group inherits the first user's strategy."""
-    from yoinkc.inspectors.users_groups import run as run_users_groups
+    from inspectah.inspectors.users_groups import run as run_users_groups
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -87,7 +87,7 @@ def test_group_strategy_first_user_wins_on_shared_gid(tmp_path):
 
 
 def test_users_groups_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.users_groups import run as run_users_groups
+    from inspectah.inspectors.users_groups import run as run_users_groups
     section = run_users_groups(host_root, fixture_executor)
     assert section is not None
     assert any(u.get("name") == "jdoe" and u.get("uid") == 1000 for u in section.users)
@@ -252,8 +252,8 @@ def test_no_cross_major_warning_same_version(host_root, fixture_executor):
 
 @pytest.mark.parametrize("etc_hostname_content", ["", "\n"])
 def test_hostname_env_var_takes_priority_over_etc_hostname(tmp_path, fixture_executor, monkeypatch, etc_hostname_content):
-    """YOINKC_HOSTNAME env var takes priority over /etc/hostname."""
-    monkeypatch.setenv("YOINKC_HOSTNAME", "myhost")
+    """INSPECTAH_HOSTNAME env var takes priority over /etc/hostname."""
+    monkeypatch.setenv("INSPECTAH_HOSTNAME", "myhost")
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -265,8 +265,8 @@ def test_hostname_env_var_takes_priority_over_etc_hostname(tmp_path, fixture_exe
 
 
 def test_hostname_env_var_overrides_etc_hostname(tmp_path, fixture_executor, monkeypatch):
-    """YOINKC_HOSTNAME takes precedence even when /etc/hostname is non-empty."""
-    monkeypatch.setenv("YOINKC_HOSTNAME", "from-env")
+    """INSPECTAH_HOSTNAME takes precedence even when /etc/hostname is non-empty."""
+    monkeypatch.setenv("INSPECTAH_HOSTNAME", "from-env")
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -278,8 +278,8 @@ def test_hostname_env_var_overrides_etc_hostname(tmp_path, fixture_executor, mon
 
 
 def test_hostname_falls_back_to_etc_hostname_when_env_unset(tmp_path, fixture_executor, monkeypatch):
-    """When YOINKC_HOSTNAME is absent, /etc/hostname is used."""
-    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+    """When INSPECTAH_HOSTNAME is absent, /etc/hostname is used."""
+    monkeypatch.delenv("INSPECTAH_HOSTNAME", raising=False)
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -292,7 +292,7 @@ def test_hostname_falls_back_to_etc_hostname_when_env_unset(tmp_path, fixture_ex
 
 def test_hostname_from_etc_hostname_strips_whitespace(tmp_path, fixture_executor, monkeypatch):
     """The first /etc/hostname line is stripped before storing it in snapshot metadata."""
-    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+    monkeypatch.delenv("INSPECTAH_HOSTNAME", raising=False)
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -307,7 +307,7 @@ def test_hostname_falls_back_to_hostnamectl_when_env_and_etc_hostname_are_empty(
     tmp_path, fixture_executor, monkeypatch
 ):
     """When env and /etc/hostname are empty, hostnamectl hostname is used."""
-    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+    monkeypatch.delenv("INSPECTAH_HOSTNAME", raising=False)
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -331,7 +331,7 @@ def test_hostname_is_omitted_when_env_file_and_hostnamectl_are_unavailable(
     tmp_path, fixture_executor, monkeypatch
 ):
     """Missing env, empty /etc/hostname, and unavailable hostnamectl must not crash."""
-    monkeypatch.delenv("YOINKC_HOSTNAME", raising=False)
+    monkeypatch.delenv("INSPECTAH_HOSTNAME", raising=False)
 
     etc = tmp_path / "etc"
     etc.mkdir()
@@ -353,8 +353,8 @@ def test_hostname_is_omitted_when_env_file_and_hostnamectl_are_unavailable(
 
 def test_snapshot_roundtrip_with_baseline(host_root, fixture_executor):
     """Resolved baseline is in inspection-snapshot.json; --from-snapshot re-renders without network."""
-    from yoinkc.pipeline import load_snapshot, save_snapshot
-    from yoinkc.renderers import run_all as run_all_renderers
+    from inspectah.pipeline import load_snapshot, save_snapshot
+    from inspectah.renderers import run_all as run_all_renderers
     snapshot = run_all(
         host_root,
         executor=fixture_executor,
@@ -385,8 +385,8 @@ def test_snapshot_roundtrip_with_baseline(host_root, fixture_executor):
 
 def test_classify_leaf_auto_falls_back_when_dnf_repoquery_fails(host_root):
     """When dnf repoquery is unavailable, _classify_leaf_auto falls back to rpm -qR."""
-    from yoinkc.inspectors.rpm import _classify_leaf_auto
-    from yoinkc.schema import PackageEntry, PackageState
+    from inspectah.inspectors.rpm import _classify_leaf_auto
+    from inspectah.schema import PackageEntry, PackageState
 
     packages = [
         PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
@@ -414,8 +414,8 @@ def test_classify_leaf_auto_falls_back_when_dnf_repoquery_fails(host_root):
 
 def test_classify_leaf_auto_uses_userinstalled(host_root):
     """When dnf repoquery --userinstalled succeeds, it determines the leaf set."""
-    from yoinkc.inspectors.rpm import _classify_leaf_auto
-    from yoinkc.schema import PackageEntry, PackageState
+    from inspectah.inspectors.rpm import _classify_leaf_auto
+    from inspectah.schema import PackageEntry, PackageState
 
     packages = [
         PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
@@ -448,8 +448,8 @@ def test_classify_leaf_auto_uses_userinstalled(host_root):
 
 def test_classify_leaf_auto_userinstalled_fallback_on_failure(host_root):
     """When --userinstalled fails but dnf dep queries work, graph-based classification is used."""
-    from yoinkc.inspectors.rpm import _classify_leaf_auto
-    from yoinkc.schema import PackageEntry, PackageState
+    from inspectah.inspectors.rpm import _classify_leaf_auto
+    from inspectah.schema import PackageEntry, PackageState
 
     packages = [
         PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
@@ -474,8 +474,8 @@ def test_classify_leaf_auto_userinstalled_fallback_on_failure(host_root):
 
 def test_classify_leaf_auto_empty_userinstalled_falls_back(host_root):
     """When --userinstalled succeeds but has no overlap with added packages, fall back to graph."""
-    from yoinkc.inspectors.rpm import _classify_leaf_auto
-    from yoinkc.schema import PackageEntry, PackageState
+    from inspectah.inspectors.rpm import _classify_leaf_auto
+    from inspectah.schema import PackageEntry, PackageState
 
     packages = [
         PackageEntry(name="httpd", epoch="0", version="2.4.62", release="1.el9", arch="x86_64", state=PackageState.ADDED),
@@ -506,39 +506,39 @@ class TestInspectorFailures:
     """Each inspector must return a valid (possibly empty) section when commands fail."""
 
     def test_service_falls_back_to_fs_scan(self, host_root):
-        from yoinkc.inspectors.service import run as run_service
+        from inspectah.inspectors.service import run as run_service
         section = run_service(host_root, _failing_executor)
         assert section is not None
         assert isinstance(section.state_changes, list)
 
     def test_kernel_boot_empty_on_lsmod_failure(self, host_root):
-        from yoinkc.inspectors.kernel_boot import run as run_kernel_boot
+        from inspectah.inspectors.kernel_boot import run as run_kernel_boot
         section = run_kernel_boot(host_root, _failing_executor)
         assert section is not None
         assert section.loaded_modules == []
 
     def test_scheduled_tasks_skips_at_jobs(self, host_root):
-        from yoinkc.inspectors.scheduled_tasks import run as run_scheduled_tasks
+        from inspectah.inspectors.scheduled_tasks import run as run_scheduled_tasks
         section = run_scheduled_tasks(host_root, _failing_executor)
         assert section is not None
         assert isinstance(section.at_jobs, list)
         assert isinstance(section.cron_jobs, list)
 
     def test_rpm_empty_on_failure(self, host_root):
-        from yoinkc.inspectors.rpm import run as run_rpm
+        from inspectah.inspectors.rpm import run as run_rpm
         section = run_rpm(host_root, _failing_executor)
         assert section is not None
         assert section.packages_added == []
         assert section.rpm_va == []
 
     def test_selinux_graceful_on_failure(self, host_root):
-        from yoinkc.inspectors.selinux import run as run_selinux
+        from inspectah.inspectors.selinux import run as run_selinux
         section = run_selinux(host_root, _failing_executor)
         assert section is not None
         assert isinstance(section.boolean_overrides, list)
 
     def test_network_empty_on_failure(self, host_root):
-        from yoinkc.inspectors.network import run as run_network
+        from inspectah.inspectors.network import run as run_network
         section = run_network(host_root, _failing_executor)
         assert section is not None
         assert isinstance(section.connections, list)

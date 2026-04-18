@@ -1,11 +1,11 @@
 # tests/test_containerfile_secrets_comments.py
 import tempfile
 from pathlib import Path
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, OsRelease, ConfigSection, ConfigFileEntry, ConfigFileKind,
     RedactionFinding,
 )
-from yoinkc.renderers.containerfile._core import _render_containerfile_content
+from inspectah.renderers.containerfile._core import _render_containerfile_content
 
 
 def _snapshot_with_secrets():

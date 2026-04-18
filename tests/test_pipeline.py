@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from yoinkc.pipeline import load_snapshot, save_snapshot, run_pipeline
-from yoinkc.schema import InspectionSnapshot, SCHEMA_VERSION
+from inspectah.pipeline import load_snapshot, save_snapshot, run_pipeline
+from inspectah.schema import InspectionSnapshot, SCHEMA_VERSION
 
 
 def test_load_snapshot_version_mismatch_raises():
@@ -212,8 +212,8 @@ from io import StringIO
 
 def test_cli_secrets_summary(monkeypatch):
     """CLI summary prints correct counts to stderr."""
-    from yoinkc.pipeline import _print_secrets_summary
-    from yoinkc.schema import RedactionFinding
+    from inspectah.pipeline import _print_secrets_summary
+    from inspectah.schema import RedactionFinding
 
     snap = InspectionSnapshot(meta={})
     snap.redactions = [
@@ -249,7 +249,7 @@ def test_cli_secrets_summary(monkeypatch):
 
 def test_cli_secrets_summary_no_findings(monkeypatch):
     """CLI summary prints nothing when there are no findings."""
-    from yoinkc.pipeline import _print_secrets_summary
+    from inspectah.pipeline import _print_secrets_summary
 
     snap = InspectionSnapshot(meta={})
     snap.redactions = []
@@ -271,7 +271,7 @@ def _make_snapshot_with_config_secret():
     (no PASSWORD/TOKEN/SECRET/API_KEY pattern match), but heuristic will detect
     it via keyword proximity + entropy.
     """
-    from yoinkc.schema import ConfigSection, ConfigFileEntry, ConfigFileKind, ConfigCategory
+    from inspectah.schema import ConfigSection, ConfigFileEntry, ConfigFileKind, ConfigCategory
 
     snap = InspectionSnapshot(meta={"host_root": "/host"})
     snap.config = ConfigSection(files=[
@@ -287,7 +287,7 @@ def _make_snapshot_with_config_secret():
 
 def _make_snapshot_with_subscription_cert():
     """Snapshot with config file under subscription cert path (should be skipped)."""
-    from yoinkc.schema import ConfigSection, ConfigFileEntry, ConfigFileKind, ConfigCategory
+    from inspectah.schema import ConfigSection, ConfigFileEntry, ConfigFileKind, ConfigCategory
 
     snap = InspectionSnapshot(meta={"host_root": "/host"})
     snap.config = ConfigSection(files=[
@@ -303,7 +303,7 @@ def _make_snapshot_with_subscription_cert():
 
 def _make_snapshot_with_container_env_secret():
     """Snapshot with container env var containing heuristic-detectable secret."""
-    from yoinkc.schema import ContainerSection, RunningContainer
+    from inspectah.schema import ContainerSection, RunningContainer
 
     snap = InspectionSnapshot(meta={"host_root": "/host"})
     snap.containers = ContainerSection(running_containers=[
@@ -334,7 +334,7 @@ def test_heuristic_findings_appear_in_redactions(tmp_path):
 
     heuristic_findings = [
         r for r in result.redactions
-        if isinstance(r, __import__("yoinkc.schema", fromlist=["RedactionFinding"]).RedactionFinding)
+        if isinstance(r, __import__("inspectah.schema", fromlist=["RedactionFinding"]).RedactionFinding)
         and r.detection_method == "heuristic"
     ]
     assert len(heuristic_findings) > 0
@@ -360,7 +360,7 @@ def test_heuristic_skips_subscription_cert_paths(tmp_path):
 
     heuristic_findings = [
         r for r in result.redactions
-        if isinstance(r, __import__("yoinkc.schema", fromlist=["RedactionFinding"]).RedactionFinding)
+        if isinstance(r, __import__("inspectah.schema", fromlist=["RedactionFinding"]).RedactionFinding)
         and r.detection_method == "heuristic"
     ]
     # No heuristic findings for subscription cert paths
@@ -392,7 +392,7 @@ def test_no_redaction_mode_detects_but_preserves_content(tmp_path):
             assert "REDACTED_" not in f.content
 
     # All findings should be kind="flagged"
-    from yoinkc.schema import RedactionFinding
+    from inspectah.schema import RedactionFinding
     typed_findings = [r for r in result.redactions if isinstance(r, RedactionFinding)]
     for f in typed_findings:
         assert f.kind == "flagged", f"Expected kind='flagged' in no-redaction mode, got '{f.kind}' for {f.path}"
@@ -400,7 +400,7 @@ def test_no_redaction_mode_detects_but_preserves_content(tmp_path):
 
 def test_pipeline_moderate_flags_all_heuristic(tmp_path):
     """In moderate mode, all heuristic findings are flagged, not redacted."""
-    from yoinkc.schema import RedactionFinding
+    from inspectah.schema import RedactionFinding
 
     snapshot = _make_snapshot_with_config_secret()
     snap_path = tmp_path / "snap.json"
@@ -429,8 +429,8 @@ def test_pipeline_moderate_flags_all_heuristic(tmp_path):
 
 def test_cli_summary_includes_heuristic_supplement(monkeypatch):
     """CLI summary shows heuristic breakdown in inline and flagged counts."""
-    from yoinkc.pipeline import _print_secrets_summary
-    from yoinkc.schema import RedactionFinding
+    from inspectah.pipeline import _print_secrets_summary
+    from inspectah.schema import RedactionFinding
 
     snap = InspectionSnapshot(meta={})
     snap.redactions = [
@@ -462,8 +462,8 @@ def test_cli_summary_includes_heuristic_supplement(monkeypatch):
 
 def test_no_redaction_warning_printed(monkeypatch):
     """--no-redaction completion warning prints WARNING and secrets-review.md to stderr."""
-    from yoinkc.pipeline import _print_no_redaction_warning
-    from yoinkc.schema import RedactionFinding
+    from inspectah.pipeline import _print_no_redaction_warning
+    from inspectah.schema import RedactionFinding
 
     snap = InspectionSnapshot(meta={})
     snap.redactions = [

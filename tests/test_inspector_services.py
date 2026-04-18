@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_service_inspector_with_fixtures(host_root, fixture_executor):
-    from yoinkc.inspectors.service import run as run_service
+    from inspectah.inspectors.service import run as run_service
     section = run_service(host_root, fixture_executor)
     assert section is not None
     assert any(s.unit == "httpd.service" and s.action == "enable" for s in section.state_changes)
@@ -13,7 +13,7 @@ def test_service_inspector_with_fixtures(host_root, fixture_executor):
 
 def test_scan_unit_files_from_fs(host_root):
     """Test the filesystem fallback for unit file state detection."""
-    from yoinkc.inspectors.service import _scan_unit_files_from_fs
+    from inspectah.inspectors.service import _scan_unit_files_from_fs
     units = _scan_unit_files_from_fs(host_root)
 
     assert units.get("test-installable.service") == "enabled", (
@@ -31,7 +31,7 @@ def test_scan_unit_files_from_fs(host_root):
 
 def test_preset_glob_rules_applied(host_root, fixture_executor):
     """Glob preset rules like 'enable cloud-*' must set default_state correctly."""
-    from yoinkc.inspectors.service import run as run_service
+    from inspectah.inspectors.service import run as run_service
 
     preset_text = "enable cloud-*\ndisable *\n"
     section = run_service(
@@ -50,7 +50,7 @@ def test_preset_glob_rules_applied(host_root, fixture_executor):
 
 def test_preset_glob_first_match_wins(host_root, fixture_executor):
     """Glob rules use first-match-wins: earlier rules take precedence."""
-    from yoinkc.inspectors.service import run as run_service
+    from inspectah.inspectors.service import run as run_service
 
     preset_text = "disable cloud-*\nenable cloud-*\ndisable *\n"
     section = run_service(
@@ -70,7 +70,7 @@ def test_preset_glob_first_match_wins(host_root, fixture_executor):
 
 def test_service_inspector_resolves_owning_packages(host_root, fixture_executor):
     """Changed units should have owning_package populated via rpm -qf."""
-    from yoinkc.inspectors.service import run as run_service
+    from inspectah.inspectors.service import run as run_service
     section = run_service(host_root, fixture_executor)
     httpd = next((s for s in section.state_changes if s.unit == "httpd.service"), None)
     assert httpd is not None, "httpd.service must be in state_changes"
@@ -86,7 +86,7 @@ def test_service_inspector_resolves_owning_packages(host_root, fixture_executor)
 
 def test_service_inspector_detects_drop_ins(host_root, fixture_executor):
     """Drop-in overrides under /etc/systemd/system/*.service.d/ are detected."""
-    from yoinkc.inspectors.service import run as run_service
+    from inspectah.inspectors.service import run as run_service
     section = run_service(host_root, fixture_executor)
     assert len(section.drop_ins) >= 1
     httpd_dropin = next(

@@ -3,14 +3,14 @@
 import tempfile
 from pathlib import Path
 
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot,
     OsRelease,
     PackageEntry,
     RpmSection,
     UserGroupSection,
 )
-from yoinkc.renderers.containerfile import render as render_containerfile
+from inspectah.renderers.containerfile import render as render_containerfile
 
 from conftest import _env
 
@@ -29,7 +29,7 @@ class TestUserStrategies:
         )
         with tempfile.TemporaryDirectory() as tmp:
             render_containerfile(snapshot, _env(), Path(tmp))
-            sysusers_path = Path(tmp) / "config/usr/lib/sysusers.d/yoinkc-users.conf"
+            sysusers_path = Path(tmp) / "config/usr/lib/sysusers.d/inspectah-users.conf"
             assert sysusers_path.exists()
             content = sysusers_path.read_text()
             assert "u appuser 1001" in content
@@ -91,7 +91,7 @@ class TestUserStrategies:
             assert "kickstart" in cf.lower()
 
     def test_kickstart_adds_user_directive(self):
-        from yoinkc.renderers.kickstart import render as render_kickstart
+        from inspectah.renderers.kickstart import render as render_kickstart
         snapshot = InspectionSnapshot(
             meta={},
             os_release=OsRelease(name="RHEL", version_id="9.6"),
@@ -119,7 +119,7 @@ class TestUserStrategies:
         )
         with tempfile.TemporaryDirectory() as tmp:
             render_containerfile(snapshot, _env(), Path(tmp))
-            toml_path = Path(tmp) / "yoinkc-users.toml"
+            toml_path = Path(tmp) / "inspectah-users.toml"
             assert toml_path.exists()
             content = toml_path.read_text()
             assert "[[customizations.user]]" in content
@@ -138,7 +138,7 @@ class TestUserStrategies:
         )
         with tempfile.TemporaryDirectory() as tmp:
             render_containerfile(snapshot, _env(), Path(tmp))
-            assert not (Path(tmp) / "yoinkc-users.toml").exists()
+            assert not (Path(tmp) / "inspectah-users.toml").exists()
 
     def test_mixed_strategies(self):
         snapshot = InspectionSnapshot(
@@ -169,7 +169,7 @@ class TestUserStrategies:
             assert "FIXME: human user 'mark' deferred" in cf
 
     def test_user_strategy_override_all_sysusers(self):
-        from yoinkc.inspectors.users_groups import run as run_ug
+        from inspectah.inspectors.users_groups import run as run_ug
         host_root = Path(__file__).parent / "fixtures" / "host_etc"
         section = run_ug(host_root, None, user_strategy_override="sysusers")
         for u in section.users:
@@ -189,13 +189,13 @@ class TestUserStrategies:
         )
         with tempfile.TemporaryDirectory() as tmp:
             render_containerfile(snapshot, _env(), Path(tmp))
-            assert (Path(tmp) / "yoinkc-users.toml").exists()
-            toml = (Path(tmp) / "yoinkc-users.toml").read_text()
+            assert (Path(tmp) / "inspectah-users.toml").exists()
+            toml = (Path(tmp) / "inspectah-users.toml").read_text()
             assert "[[customizations.user]]" in toml
             assert 'name = "mark"' in toml
 
     def test_audit_report_strategy_table(self):
-        from yoinkc.renderers.audit_report import render as render_audit
+        from inspectah.renderers.audit_report import render as render_audit
         snapshot = InspectionSnapshot(
             meta={},
             os_release=OsRelease(name="RHEL", version_id="9.6"),
@@ -222,7 +222,7 @@ class TestUserStrategies:
             assert "has sudo" in report
 
     def test_readme_user_strategies_section(self):
-        from yoinkc.renderers.readme import render as render_readme
+        from inspectah.renderers.readme import render as render_readme
         snapshot = InspectionSnapshot(
             meta={},
             os_release=OsRelease(name="RHEL", version_id="9.6", id="rhel"),
@@ -242,7 +242,7 @@ class TestUserStrategies:
             assert "bootc" in readme.lower()
 
     def test_cli_user_strategy_invalid(self):
-        from yoinkc.cli import parse_args
+        from inspectah.cli import parse_args
         try:
             parse_args(["--user-strategy", "invalid"])
             assert False, "Should have raised SystemExit"

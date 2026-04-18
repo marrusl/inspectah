@@ -4,14 +4,14 @@ import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
-import yoinkc.baseline as baseline_mod
-from yoinkc.baseline import (
+import inspectah.baseline as baseline_mod
+from inspectah.baseline import (
     BaselineResolver,
     select_base_image,
     load_baseline_packages_file,
 )
-from yoinkc.executor import RunResult
-from yoinkc.schema import PackageEntry
+from inspectah.executor import RunResult
+from inspectah.schema import PackageEntry
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -476,7 +476,7 @@ def test_pull_image_triggers_subprocess_when_not_cached(_mock_userns):
         return subprocess.CompletedProcess(cmd, returncode=0)
 
     resolver = BaselineResolver(_not_cached_executor)
-    with patch("yoinkc.baseline.subprocess.run", fake_subprocess_run):
+    with patch("inspectah.baseline.subprocess.run", fake_subprocess_run):
         result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
 
     assert result is True
@@ -495,7 +495,7 @@ def test_pull_image_returns_false_on_subprocess_failure(_mock_userns):
         return subprocess.CompletedProcess(cmd, returncode=125)
 
     resolver = BaselineResolver(_not_cached_executor)
-    with patch("yoinkc.baseline.subprocess.run", failing_subprocess_run):
+    with patch("inspectah.baseline.subprocess.run", failing_subprocess_run):
         result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
 
     assert result is False
@@ -508,7 +508,7 @@ def test_pull_image_returns_false_on_timeout(_mock_userns, capsys):
         raise subprocess.TimeoutExpired(cmd, timeout=baseline_mod._PULL_TIMEOUT_S)
 
     resolver = BaselineResolver(_not_cached_executor)
-    with patch("yoinkc.baseline.subprocess.run", timeout_subprocess_run):
+    with patch("inspectah.baseline.subprocess.run", timeout_subprocess_run):
         result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
 
     assert result is False
@@ -522,7 +522,7 @@ def test_pull_image_returns_false_on_file_not_found(_mock_userns, capsys):
         raise FileNotFoundError("nsenter not found")
 
     resolver = BaselineResolver(_not_cached_executor)
-    with patch("yoinkc.baseline.subprocess.run", fnfe_subprocess_run):
+    with patch("inspectah.baseline.subprocess.run", fnfe_subprocess_run):
         result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
 
     assert result is False
@@ -546,7 +546,7 @@ def test_pull_image_skipped_when_nsenter_unavailable(_mock_userns):
         return subprocess.CompletedProcess(cmd, returncode=0)
 
     resolver = BaselineResolver(eperm_executor)
-    with patch("yoinkc.baseline.subprocess.run", should_not_be_called):
+    with patch("inspectah.baseline.subprocess.run", should_not_be_called):
         result = resolver.pull_image("quay.io/centos-bootc/centos-bootc:stream9")
 
     assert result is False

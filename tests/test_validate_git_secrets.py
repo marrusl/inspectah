@@ -3,9 +3,9 @@
 import tempfile
 from pathlib import Path
 
-from yoinkc.validate import _append_build_failure_to_reports, run_validate
-from yoinkc.redact import scan_directory_for_secrets
-from yoinkc.git_github import output_stats
+from inspectah.validate import _append_build_failure_to_reports, run_validate
+from inspectah.redact import scan_directory_for_secrets
+from inspectah.git_github import output_stats
 
 
 # ---------------------------------------------------------------------------
@@ -204,13 +204,13 @@ def _push_test_context(tmp, mock_git, mock_Github, mock_repo):
     github_mod = _mock.MagicMock()
     github_mod.Github = mock_Github
     return (
-        _mock.patch("yoinkc.redact.scan_directory_for_secrets", return_value=None),
+        _mock.patch("inspectah.redact.scan_directory_for_secrets", return_value=None),
         _mock.patch.dict(sys.modules, {"git": mock_git, "github": github_mod}),
     )
 
 
 def _run_push(tmp_path, repo_spec, mock_git, mock_Github, mock_repo):
-    from yoinkc import git_github
+    from inspectah import git_github
     (tmp_path / ".git").mkdir(exist_ok=True)
     mock_git.Repo.return_value = mock_repo
     patches = _push_test_context(tmp_path, mock_git, mock_Github, mock_repo)

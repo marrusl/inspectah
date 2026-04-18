@@ -4,8 +4,8 @@ import re
 
 import pytest
 
-from yoinkc.redact import redact_snapshot, _redact_text, _is_excluded_path
-from yoinkc.schema import (
+from inspectah.redact import redact_snapshot, _redact_text, _is_excluded_path
+from inspectah.schema import (
     InspectionSnapshot,
     RedactionFinding,
     ConfigSection, ConfigFileEntry, ConfigFileKind,
@@ -515,7 +515,7 @@ def test_redaction_finding_detection_method_in_get():
 
 def test_redaction_finding_roundtrip_with_new_fields(tmp_path):
     """save_snapshot/load_snapshot roundtrip preserves detection_method and confidence."""
-    from yoinkc.pipeline import save_snapshot, load_snapshot
+    from inspectah.pipeline import save_snapshot, load_snapshot
 
     snapshot = InspectionSnapshot(meta={"hostname": "test"})
     snapshot.redactions = [
@@ -581,7 +581,7 @@ def test_redaction_finding_survives_save_load_roundtrip(tmp_path):
     InspectionSnapshot.redactions, RedactionFinding objects would be deserialized
     as plain dicts, and all isinstance() checks downstream would fail silently.
     """
-    from yoinkc.pipeline import save_snapshot, load_snapshot
+    from inspectah.pipeline import save_snapshot, load_snapshot
 
     snapshot = InspectionSnapshot(meta={"hostname": "test"})
     snapshot.redactions = [
@@ -1066,7 +1066,7 @@ def test_key_only_file_excluded():
 def test_malformed_near_typed_dict_warns(tmp_path):
     """A dict that looks typed but fails validation produces a warning."""
     import warnings
-    from yoinkc.pipeline import save_snapshot, load_snapshot
+    from inspectah.pipeline import save_snapshot, load_snapshot
 
     snapshot = InspectionSnapshot(meta={"hostname": "test"})
     snapshot.redactions = [
@@ -1169,7 +1169,7 @@ def test_shadow_findings_have_detection_method_pattern():
 
 def test_scan_directory_ignores_redacted_placeholders(tmp_path):
     """scan_directory_for_secrets skips REDACTED_ placeholder values."""
-    from yoinkc.redact import scan_directory_for_secrets
+    from inspectah.redact import scan_directory_for_secrets
     conf = tmp_path / "app.conf"
     conf.write_text("password=REDACTED_PASSWORD_1\napi_key=REDACTED_API_KEY_1\n")
     result = scan_directory_for_secrets(tmp_path)
@@ -1178,7 +1178,7 @@ def test_scan_directory_ignores_redacted_placeholders(tmp_path):
 
 def test_scan_directory_catches_real_secrets(tmp_path):
     """scan_directory_for_secrets still catches actual secret values."""
-    from yoinkc.redact import scan_directory_for_secrets
+    from inspectah.redact import scan_directory_for_secrets
     conf = tmp_path / "app.conf"
     conf.write_text("password=actual_secret_value\n")
     result = scan_directory_for_secrets(tmp_path)
@@ -1411,7 +1411,7 @@ def test_tier2_vendor_pattern_negative(value, expected_label):
 
 def test_counter_ordering_pattern_before_heuristic():
     """Pattern findings get counters first, then heuristic findings."""
-    from yoinkc.pipeline import _run_heuristic_pass
+    from inspectah.pipeline import _run_heuristic_pass
 
     # Build snapshot with pattern target and heuristic target
     content_pattern = "password=hunter2\n"
@@ -1463,7 +1463,7 @@ def test_flagged_findings_no_counter():
 
 def test_heuristic_redaction_replaces_content():
     """In strict mode, heuristic pass replaces the secret value in file content."""
-    from yoinkc.pipeline import _run_heuristic_pass
+    from inspectah.pipeline import _run_heuristic_pass
 
     # Use signing_key — not caught by pattern pass, but heuristic detects it
     content = "signing_key = aR9xk!mQ2pL7bN4cKzW\nhost = localhost\n"
@@ -1487,7 +1487,7 @@ def test_heuristic_redaction_replaces_content():
 
 
 def test_scan_directory_skips_subscription_dirs(tmp_path):
-    from yoinkc.redact import scan_directory_for_secrets
+    from inspectah.redact import scan_directory_for_secrets
     ent_dir = tmp_path / "entitlement"
     ent_dir.mkdir()
     (ent_dir / "cert.pem").write_text("-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n")
@@ -1498,7 +1498,7 @@ def test_scan_directory_skips_subscription_dirs(tmp_path):
 
 
 def test_scan_directory_catches_secrets_outside_subscription_dirs(tmp_path):
-    from yoinkc.redact import scan_directory_for_secrets
+    from inspectah.redact import scan_directory_for_secrets
     config_dir = tmp_path / "config" / "etc"
     config_dir.mkdir(parents=True)
     (config_dir / "app.conf").write_text("password=realsecret\n")
@@ -1508,10 +1508,10 @@ def test_scan_directory_catches_secrets_outside_subscription_dirs(tmp_path):
 def test_push_gate_uses_heuristic_scan(tmp_path):
     """push_to_github calls scan_directory_for_secrets with heuristic=True."""
     from unittest.mock import patch
-    from yoinkc.redact import scan_directory_for_secrets as _real_scan
+    from inspectah.redact import scan_directory_for_secrets as _real_scan
 
-    with patch("yoinkc.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
-        from yoinkc.git_github import push_to_github
+    with patch("inspectah.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
+        from inspectah.git_github import push_to_github
         push_to_github(
             tmp_path, "owner/repo",
             skip_confirmation=True, github_token="fake",
@@ -1525,10 +1525,10 @@ def test_push_gate_uses_heuristic_scan(tmp_path):
 def test_push_gate_threads_sensitivity(tmp_path):
     """push_to_github passes sensitivity to scan_directory_for_secrets."""
     from unittest.mock import patch
-    from yoinkc.redact import scan_directory_for_secrets as _real_scan
+    from inspectah.redact import scan_directory_for_secrets as _real_scan
 
-    with patch("yoinkc.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
-        from yoinkc.git_github import push_to_github
+    with patch("inspectah.redact.scan_directory_for_secrets", wraps=_real_scan) as mock_scan:
+        from inspectah.git_github import push_to_github
         push_to_github(
             tmp_path, "owner/repo",
             skip_confirmation=True, github_token="fake",
@@ -1542,7 +1542,7 @@ def test_push_gate_threads_sensitivity(tmp_path):
 
 def test_heuristic_redaction_moderate_does_not_replace():
     """In moderate mode, heuristic pass flags but does not redact content."""
-    from yoinkc.pipeline import _run_heuristic_pass
+    from inspectah.pipeline import _run_heuristic_pass
 
     # Use signing_key — not caught by pattern pass, but heuristic detects it
     content = "signing_key = aR9xk!mQ2pL7bN4cKzW\nhost = localhost\n"

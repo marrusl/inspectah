@@ -2,7 +2,7 @@
 
 import pytest
 
-from yoinkc.architect.analyzer import (
+from inspectah.architect.analyzer import (
     FleetInput,
     Layer,
     LayerTopology,

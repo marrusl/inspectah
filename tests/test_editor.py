@@ -4,8 +4,8 @@ import re
 import tempfile
 from pathlib import Path
 
-from yoinkc.renderers import run_all as run_all_renderers
-from yoinkc.schema import (
+from inspectah.renderers import run_all as run_all_renderers
+from inspectah.schema import (
     ConfigFileEntry,
     ConfigFileKind,
     ConfigSection,
@@ -292,14 +292,14 @@ class TestEditorDrawer:
 
     def test_drawer_refine_mode_omits_resize_js_state(self):
         html = _render(refine_mode=True)
-        assert 'yoinkc-editor-drawer-width' not in html
+        assert 'inspectah-editor-drawer-width' not in html
         assert 'DRAWER_LS_KEY' not in html
         assert 'applyDrawerWidth' not in html
 
     def test_drawer_static_mode_unaffected(self):
         """Static report must not reference drawer resize JS."""
         html = _render(refine_mode=False)
-        assert 'yoinkc-editor-drawer-width' not in html
+        assert 'inspectah-editor-drawer-width' not in html
 
 
 class TestEditorIntegration:

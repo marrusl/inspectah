@@ -1,8 +1,8 @@
 """Test that fleet merge handles RedactionFinding objects correctly."""
-from yoinkc.schema import (
+from inspectah.schema import (
     InspectionSnapshot, OsRelease, RedactionFinding,
 )
-from yoinkc.fleet.merge import merge_snapshots
+from inspectah.fleet.merge import merge_snapshots
 
 
 def _snap_with_redactions(hostname, redactions):

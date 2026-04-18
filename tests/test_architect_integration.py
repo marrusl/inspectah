@@ -6,9 +6,9 @@ import tarfile
 import pytest
 from pathlib import Path
 
-from yoinkc.architect.loader import load_refined_fleets
-from yoinkc.architect.analyzer import analyze_fleets
-from yoinkc.architect.export import export_topology
+from inspectah.architect.loader import load_refined_fleets
+from inspectah.architect.analyzer import analyze_fleets
+from inspectah.architect.export import export_topology
 
 
 @pytest.fixture()

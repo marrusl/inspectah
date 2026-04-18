@@ -6,7 +6,7 @@ from _is_excluded_unowned, and genuine operator-placed configs should
 return False.
 """
 
-from yoinkc.inspectors.config import _is_excluded_unowned
+from inspectah.inspectors.config import _is_excluded_unowned
 
 
 # Paths that must be excluded (system-generated noise)

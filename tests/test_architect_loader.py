@@ -7,8 +7,8 @@ import pytest
 from io import BytesIO
 from pathlib import Path
 
-from yoinkc.architect.loader import load_refined_fleets
-from yoinkc.architect.analyzer import FleetInput
+from inspectah.architect.loader import load_refined_fleets
+from inspectah.architect.analyzer import FleetInput
 
 
 def _make_snapshot(hostname: str, packages: list[str], fleet_name: str = "test-fleet") -> dict:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from yoinkc.schema import (
+from inspectah.schema import (
     ComposeFile,
     ConfigFileEntry,
     ConfigFileKind,
@@ -79,13 +79,13 @@ class TestIncludeFieldDefaults:
 
 
 def test_profile_flag_rejected():
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     with pytest.raises(SystemExit):
         parse_args(["--profile", "server"])
 
 
 def test_comps_file_flag_rejected():
-    from yoinkc.cli import parse_args
+    from inspectah.cli import parse_args
     with pytest.raises(SystemExit):
         parse_args(["--comps-file", "/tmp/comps.xml"])
 
@@ -165,7 +165,7 @@ def test_all_features_render_together():
         ),
     )
     with tempfile.TemporaryDirectory() as tmp:
-        from yoinkc.renderers import run_all
+        from inspectah.renderers import run_all
         run_all(snapshot, Path(tmp))
         content = (Path(tmp) / "Containerfile").read_text()
 

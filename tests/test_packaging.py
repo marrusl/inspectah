@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from yoinkc.packaging import (
+from inspectah.packaging import (
     _resolve_hostname,
     create_tarball,
     get_output_stamp,
