@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-yoinkc-build — build a bootc image from yoinkc output with automatic RHEL
+inspectah-build — build a bootc image from inspectah output with automatic RHEL
 entitlement handling.
 
 Usage:
-    ./yoinkc-build ./yoinkc-output/ my-bootc-image:latest
-    ./yoinkc-build output.tar.gz my-bootc-image:v1.0
-    ./yoinkc-build ./yoinkc-output/ my-bootc-image --push registry.example.com/my-bootc-image:v1.0
-    ./yoinkc-build ./yoinkc-output/ my-bootc-image --no-cache
+    ./inspectah-build ./inspectah-output/ my-bootc-image:latest
+    ./inspectah-build output.tar.gz my-bootc-image:v1.0
+    ./inspectah-build ./inspectah-output/ my-bootc-image --push registry.example.com/my-bootc-image:v1.0
+    ./inspectah-build ./inspectah-output/ my-bootc-image --no-cache
 
 No pip dependencies — stdlib only (Python 3.9+).
 """
@@ -28,7 +28,7 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-_SCRIPT_NAME = "yoinkc-build"
+_SCRIPT_NAME = "inspectah-build"
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +48,7 @@ def _warn(msg: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Tarball extraction (same pattern as yoinkc-refine)
+# Tarball extraction (same pattern as inspectah-refine)
 # ---------------------------------------------------------------------------
 
 def _extract_tarball(tarball_path: Path, dest: Path) -> None:
@@ -191,7 +191,7 @@ def _find_entitlement(output_dir: Path) -> tuple[Path | None, Path | None]:
         _log("RHEL host detected — entitlement handled automatically")
         return None, None
 
-    # 2. Bundled in output directory (from run-yoinkc.sh)
+    # 2. Bundled in output directory (from run-inspectah.sh)
     bundled = output_dir / "entitlement"
     if bundled.is_dir():
         result = _validate_entitlement_dir(bundled, "bundled")
@@ -205,16 +205,16 @@ def _find_entitlement(output_dir: Path) -> tuple[Path | None, Path | None]:
         if result[0]:
             return result
 
-    # 4. YOINKC_ENTITLEMENT env var
-    env_path = os.environ.get("YOINKC_ENTITLEMENT")
+    # 4. INSPECTAH_ENTITLEMENT env var
+    env_path = os.environ.get("INSPECTAH_ENTITLEMENT")
     if env_path:
         env_dir = Path(env_path)
         if env_dir.is_dir():
-            result = _validate_entitlement_dir(env_dir, "YOINKC_ENTITLEMENT")
+            result = _validate_entitlement_dir(env_dir, "INSPECTAH_ENTITLEMENT")
             if result[0]:
                 return result
         else:
-            _warn(f"YOINKC_ENTITLEMENT={env_path} is not a directory")
+            _warn(f"INSPECTAH_ENTITLEMENT={env_path} is not a directory")
 
     # 5. Nothing found
     _warn("RHEL entitlement certificates not found.\n"
@@ -223,7 +223,7 @@ def _find_entitlement(output_dir: Path) -> tuple[Path | None, Path | None]:
           "    2. Copy certs from the RHEL host:\n"
           "         scp root@rhel-host:/etc/pki/entitlement/*.pem ./entitlement/\n"
           "         scp -r root@rhel-host:/etc/rhsm ./rhsm/\n"
-          "    3. Re-run run-yoinkc.sh — it bundles certs automatically.")
+          "    3. Re-run run-inspectah.sh — it bundles certs automatically.")
     return None, None
 
 
@@ -352,15 +352,15 @@ def _push(runtime: str, tag: str, dest: str) -> bool:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog=_SCRIPT_NAME,
-        description="Build a bootc image from yoinkc output with automatic "
+        description="Build a bootc image from inspectah output with automatic "
                     "RHEL entitlement handling.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
-  %(prog)s ./yoinkc-output/ my-bootc-image:latest
+  %(prog)s ./inspectah-output/ my-bootc-image:latest
   %(prog)s output.tar.gz my-bootc-image:v1.0
-  %(prog)s ./yoinkc-output/ my-bootc-image --push registry.example.com/my-bootc-image:v1.0
-  %(prog)s ./yoinkc-output/ my-bootc-image --no-cache
+  %(prog)s ./inspectah-output/ my-bootc-image --push registry.example.com/my-bootc-image:v1.0
+  %(prog)s ./inspectah-output/ my-bootc-image --no-cache
 """,
     )
     parser.add_argument("source", help="output directory or .tar.gz tarball")
@@ -392,7 +392,7 @@ examples:
         if not tarfile.is_tarfile(source):
             _err(f"not a valid tar.gz: {source}")
             sys.exit(1)
-        tmpdir = tempfile.mkdtemp(prefix="yoinkc-build-")
+        tmpdir = tempfile.mkdtemp(prefix="inspectah-build-")
         output_dir = Path(tmpdir)
         _log(f"extracting {source.name} …")
         try:

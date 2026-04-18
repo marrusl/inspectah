@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-IMAGE="${YOINKC_IMAGE:-ghcr.io/marrusl/yoinkc:latest}"
-OUTPUT_DIR="${YOINKC_OUTPUT_DIR:-$(pwd)}"
+IMAGE="${INSPECTAH_IMAGE:-ghcr.io/marrusl/inspectah:latest}"
+OUTPUT_DIR="${INSPECTAH_OUTPUT_DIR:-$(pwd)}"
 
 # --- Browser launch helper ---
 _open_browser() {
@@ -46,8 +46,8 @@ esac
 # Only relevant for inspect mode — tool prerequisites shouldn't appear
 # in the RPM output.
 if [ -n "$_need_install" ] && [ "$_mode" = "inspect" ]; then
-  YOINKC_EXCLUDE_PREREQS="${_need_install# }"
-  export YOINKC_EXCLUDE_PREREQS
+  INSPECTAH_EXCLUDE_PREREQS="${_need_install# }"
+  export INSPECTAH_EXCLUDE_PREREQS
 fi
 
 echo "Image: $IMAGE"
@@ -71,7 +71,7 @@ _check_rh_login() {
 
 _prompt_rh_login_fresh() {
   if [ -t 0 ]; then
-    printf '\nyoinkc needs access to registry.redhat.io for the RHEL base image.\nLet'\''s log in now:\n\n' >&2
+    printf '\ninspectah needs access to registry.redhat.io for the RHEL base image.\nLet'\''s log in now:\n\n' >&2
     if podman login registry.redhat.io; then
       return 0
     fi
@@ -115,16 +115,16 @@ case "$_mode" in
         ;;
     esac
 
-    echo "=== Running yoinkc ==="
+    echo "=== Running inspectah ==="
     podman run --rm --pull=always \
       --pid=host \
       --privileged \
       --security-opt label=disable \
       -w /output \
-      ${YOINKC_DEBUG:+-e YOINKC_DEBUG=1} \
-      ${YOINKC_EXCLUDE_PREREQS:+--env YOINKC_EXCLUDE_PREREQS} \
-      -e YOINKC_HOST_CWD="$(pwd)" \
-      -e YOINKC_HOSTNAME="${YOINKC_HOSTNAME:-$(hostnamectl hostname 2>/dev/null || hostname -f)}" \
+      ${INSPECTAH_DEBUG:+-e INSPECTAH_DEBUG=1} \
+      ${INSPECTAH_EXCLUDE_PREREQS:+--env INSPECTAH_EXCLUDE_PREREQS} \
+      -e INSPECTAH_HOST_CWD="$(pwd)" \
+      -e INSPECTAH_HOSTNAME="${INSPECTAH_HOSTNAME:-$(hostnamectl hostname 2>/dev/null || hostname -f)}" \
       -v /:/host:ro \
       -v "$(pwd):/output" \
       "$IMAGE" "$@"
@@ -135,9 +135,9 @@ case "$_mode" in
     if [ $# -eq 0 ]; then
       echo "Usage: $(basename "$0") fleet <input-dir> [flags...]" >&2
       echo "" >&2
-      echo "Runs yoinkc fleet inside the yoinkc container." >&2
+      echo "Runs inspectah fleet inside the inspectah container." >&2
       echo "" >&2
-      echo "  <input-dir>  Directory containing yoinkc tarballs or JSON snapshots" >&2
+      echo "  <input-dir>  Directory containing inspectah tarballs or JSON snapshots" >&2
       exit 1
     fi
 
@@ -148,7 +148,7 @@ case "$_mode" in
     TEMP_OUT="$(mktemp -d)"
     trap 'rm -rf "$TEMP_OUT"' EXIT
 
-    echo "=== Running yoinkc fleet ==="
+    echo "=== Running inspectah fleet ==="
     podman run --rm --pull=always \
       --security-opt label=disable \
       -w /output \
@@ -176,7 +176,7 @@ case "$_mode" in
       case "$_arg" in --no-browser) _launch_browser=false ;; esac
     done
 
-    echo "=== Running yoinkc refine ==="
+    echo "=== Running inspectah refine ==="
     echo "  Report will be at: http://localhost:8642"
 
     # Poll for server readiness and open browser on the host
@@ -231,7 +231,7 @@ case "$_mode" in
       exit 1
     fi
 
-    echo "=== Running yoinkc architect ==="
+    echo "=== Running inspectah architect ==="
     echo "  Dashboard will be at: http://localhost:8643"
 
     # Poll for server readiness and open browser on the host
