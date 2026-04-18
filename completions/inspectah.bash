@@ -1,7 +1,7 @@
-# bash completion for yoinkc
-# Source this file or place it in /usr/share/bash-completion/completions/yoinkc
+# bash completion for inspectah
+# Source this file or place it in /usr/share/bash-completion/completions/inspectah
 
-_yoinkc() {
+_inspectah() {
     local cur prev words cword
     _init_completion || return
 
@@ -81,4 +81,4 @@ _yoinkc() {
     esac
 }
 
-complete -F _yoinkc yoinkc
+complete -F _inspectah inspectah
