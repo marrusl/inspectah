@@ -7,7 +7,7 @@ import logging
 import tarfile
 from pathlib import Path
 
-from yoinkc.architect.analyzer import FleetInput
+from inspectah.architect.analyzer import FleetInput
 
 logger = logging.getLogger(__name__)
 

@@ -1,4 +1,4 @@
-"""HTTP server for yoinkc architect interactive UI."""
+"""HTTP server for inspectah architect interactive UI."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import jinja2
 
-from yoinkc.architect.analyzer import LayerTopology
-from yoinkc.architect.export import export_topology, render_containerfile
+from inspectah.architect.analyzer import LayerTopology
+from inspectah.architect.export import export_topology, render_containerfile
 
 logger = logging.getLogger(__name__)
 

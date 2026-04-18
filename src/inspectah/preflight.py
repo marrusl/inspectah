@@ -1,7 +1,7 @@
 """
 Preflight checks for container environment.
 
-Detects whether yoinkc is running with the required container flags:
+Detects whether inspectah is running with the required container flags:
   - rootful (sudo)        — uid 0 maps to host uid 0
   - --pid=host            — PID 1 is the host init, not container entrypoint
   - --privileged          — full capability set (CAP_SYS_ADMIN for nsenter)
@@ -22,12 +22,12 @@ def _debug(msg: str) -> None:
 
 
 _REGISTRY = "registry.redhat.io"
-_PACKAGED_MARKER = Path("/usr/share/yoinkc/.packaged")
+_PACKAGED_MARKER = Path("/usr/share/inspectah/.packaged")
 
 
 def is_container() -> bool:
-    """Return True when running inside the published yoinkc container image."""
-    return os.environ.get("YOINKC_CONTAINER") == "1"
+    """Return True when running inside the published inspectah container image."""
+    return os.environ.get("INSPECTAH_CONTAINER") == "1"
 
 
 def is_packaged_install() -> bool:
@@ -38,14 +38,14 @@ def is_packaged_install() -> bool:
     # Homebrew installs live under a Cellar prefix rather than /usr. Walk upward
     # from the installed module path and look for the shared marker alongside it.
     for parent in Path(__file__).resolve().parents:
-        if (parent / "share" / "yoinkc" / ".packaged").is_file():
+        if (parent / "share" / "inspectah" / ".packaged").is_file():
             return True
 
     # The Homebrew formula lives outside this repo, so also recognize the
     # conventional Cellar install path even before the formula grows a marker.
     parts = Path(__file__).resolve().parts
     for idx, part in enumerate(parts[:-1]):
-        if part == "Cellar" and idx + 1 < len(parts) and parts[idx + 1] == "yoinkc":
+        if part == "Cellar" and idx + 1 < len(parts) and parts[idx + 1] == "inspectah":
             return True
 
     return False
@@ -110,7 +110,7 @@ def _check_rootful() -> Optional[str]:
     _debug(f"rootful: FAIL (uid 0 maps to host uid {host_uid})")
     return (
         f"Container is running rootless (uid 0 maps to host uid {host_uid}). "
-        "yoinkc requires a rootful container. Run with: sudo podman run …"
+        "inspectah requires a rootful container. Run with: sudo podman run …"
     )
 
 
@@ -226,7 +226,7 @@ def check_root() -> None:
     """
     if os.geteuid() != 0:
         raise RuntimeError(
-            "yoinkc inspect requires root. Run with: sudo yoinkc inspect"
+            "inspectah inspect requires root. Run with: sudo inspectah inspect"
         )
     _debug("root: ok")
 
@@ -240,7 +240,7 @@ def check_podman() -> None:
     import shutil
     if shutil.which("podman") is None:
         raise RuntimeError(
-            "yoinkc inspect requires podman, which was not found on PATH.\n"
+            "inspectah inspect requires podman, which was not found on PATH.\n"
             "Install it with:\n"
             "  dnf install podman   # Fedora / RHEL / CentOS\n"
             "  brew install podman  # macOS"

@@ -95,7 +95,7 @@ def _run_inspect(args) -> int:
             else:
                 print(
                     "--push-to-github requires the github extras. "
-                    "Install them with: pip install 'yoinkc[github]'",
+                    "Install them with: pip install 'inspectah[github]'",
                     file=sys.stderr,
                 )
             return 1
@@ -133,7 +133,7 @@ def _run_inspect(args) -> int:
                 "\nRun with the required flags, e.g.:\n"
                 "  sudo podman run --rm --pid=host --privileged "
                 "--security-opt label=disable \\\n"
-                "    -v /:/host:ro yoinkc\n"
+                "    -v /:/host:ro inspectah\n"
                 "\nOr use --skip-preflight to bypass these checks.",
                 file=sys.stderr,
             )
@@ -169,7 +169,7 @@ def _run_inspect(args) -> int:
             if not init_git_repo(args.output_dir):
                 print(
                     "Error: failed to initialise git repository in output directory. "
-                    "GitPython may not be installed \u2014 try: pip install 'yoinkc[github]'",
+                    "GitPython may not be installed \u2014 try: pip install 'inspectah[github]'",
                     file=sys.stderr,
                 )
                 return 1
@@ -301,10 +301,10 @@ def main(argv: Optional[list] = None, cwd: Optional[Path] = None) -> int:
         return 1
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
-        if os.environ.get("YOINKC_DEBUG"):
+        if os.environ.get("INSPECTAH_DEBUG"):
             traceback.print_exc()
         else:
-            print("Set YOINKC_DEBUG=1 for the full traceback.", file=sys.stderr)
+            print("Set INSPECTAH_DEBUG=1 for the full traceback.", file=sys.stderr)
         return 1
 
 

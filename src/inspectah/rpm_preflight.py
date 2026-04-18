@@ -65,7 +65,7 @@ def _stage_config_tree(snapshot: InspectionSnapshot) -> Optional[Path]:
     if not has_repos and not has_gpg and not has_dnf_conf:
         return None
 
-    staging = Path(tempfile.mkdtemp(prefix="yoinkc-preflight-"))
+    staging = Path(tempfile.mkdtemp(prefix="inspectah-preflight-"))
 
     if has_repos:
         for repo in snapshot.rpm.repo_files:
@@ -283,7 +283,7 @@ def _run_checks(
     (repo-providing packages) persists into phase-2 repoquery.
     """
 
-    container_name = f"yoinkc-preflight-{uuid.uuid4().hex[:8]}"
+    container_name = f"inspectah-preflight-{uuid.uuid4().hex[:8]}"
 
     # Build the podman run -d command with volume mounts
     run_cmd = ["podman", "run", "-d", "--name", container_name]

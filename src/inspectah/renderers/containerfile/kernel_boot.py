@@ -33,7 +33,7 @@ def section_lines(snapshot: InspectionSnapshot) -> list[str]:
             lines.append("# These are applied at install and honored across image upgrades. See bootc documentation:")
             lines.append("# https://containers.github.io/bootc/building/kernel-arguments.html")
             lines.append("RUN mkdir -p /usr/lib/bootc/kargs.d")
-            lines.append("COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/")
+            lines.append("COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/")
     included_mods = [m for m in kb.non_default_modules if m.include] if kb.non_default_modules else []
     if included_mods:
         names = ", ".join(m.name for m in included_mods[:10])

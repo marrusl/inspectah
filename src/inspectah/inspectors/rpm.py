@@ -1133,10 +1133,10 @@ def run(
         installed_names = {p.name for p in installed}
         _debug(f"installed package count: {len(installed_names)}")
         _prereq_exclude: Set[str] = set()
-        _prereq_raw = os.environ.get("YOINKC_EXCLUDE_PREREQS", "").split()
+        _prereq_raw = os.environ.get("INSPECTAH_EXCLUDE_PREREQS", "").split()
         if _prereq_raw:
             _prereq_exclude = set(_prereq_raw)
-            _debug(f"YOINKC_EXCLUDE_PREREQS: will exclude tool prerequisites: {sorted(_prereq_exclude)}")
+            _debug(f"INSPECTAH_EXCLUDE_PREREQS: will exclude tool prerequisites: {sorted(_prereq_exclude)}")
         if baseline_packages is not None and not section.no_baseline:
             baseline_name_set = {p.name for p in baseline_packages.values()}
             added_names = installed_names - baseline_name_set

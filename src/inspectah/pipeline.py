@@ -31,7 +31,7 @@ def load_snapshot(path: Path) -> InspectionSnapshot:
     file_version = data.get("schema_version", 1)
     if file_version != SCHEMA_VERSION:
         raise ValueError(
-            f"Snapshot was created by a different version of yoinkc "
+            f"Snapshot was created by a different version of inspectah "
             f"(schema v{file_version}, expected v{SCHEMA_VERSION}). "
             f"Re-run the inspection to generate a new snapshot."
         )
@@ -371,7 +371,7 @@ def run_pipeline(
     sensitivity: str = "strict",
     no_redaction: bool = False,
 ) -> InspectionSnapshot:
-    """Run the yoinkc pipeline.
+    """Run the inspectah pipeline.
 
     Output modes (mutually exclusive):
     - output_file: write tarball to this path
@@ -433,7 +433,7 @@ def run_pipeline(
         return snapshot
 
     # Render into a temp directory
-    tmp_dir = Path(tempfile.mkdtemp(prefix="yoinkc-"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix="inspectah-"))
     try:
         save_snapshot(snapshot, tmp_dir / "inspection-snapshot.json")
         run_renderers(snapshot, tmp_dir)
@@ -471,11 +471,11 @@ def run_pipeline(
             print("Next steps:")
             if not is_fleet:
                 scp_host = meta_hostname or "TARGET_HOST"
-                host_cwd = os.environ.get("YOINKC_HOST_CWD")
+                host_cwd = os.environ.get("INSPECTAH_HOST_CWD")
                 scp_path = f"{host_cwd}/{name}" if host_cwd else name
                 print(f"  Copy to workstation:    scp {scp_host}:{scp_path} .")
-            print(f"  Interactive refinement: yoinkc refine {name}")
-            print(f"  Build the image:        ./yoinkc-build {name} my-image:latest")
+            print(f"  Interactive refinement: inspectah refine {name}")
+            print(f"  Build the image:        ./inspectah-build {name} my-image:latest")
     except Exception:
         print(
             f"Error during output. Rendered files preserved at: {tmp_dir}",

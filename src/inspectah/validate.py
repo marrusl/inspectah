@@ -1,9 +1,9 @@
 """Build validation: run podman build against generated Containerfile (--validate).
 
-When running inside the yoinkc container, podman is not available directly —
+When running inside the inspectah container, podman is not available directly —
 it must be reached on the host via nsenter, same as the baseline queries.
 The function tries nsenter first, falling back to direct subprocess for the
-case where yoinkc runs directly on the host.
+case where inspectah runs directly on the host.
 """
 
 import subprocess
@@ -28,7 +28,7 @@ def run_validate(output_dir: Path) -> bool:
 
     # Try via nsenter first (when running in the tool container, podman is
     # on the host, not inside the container).  Fall back to direct invocation
-    # for the case where yoinkc runs directly on the host.
+    # for the case where inspectah runs directly on the host.
     try:
         probe = subprocess.run(
             _NSENTER_PREFIX + ["true"],

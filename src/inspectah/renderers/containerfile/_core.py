@@ -42,7 +42,7 @@ def _tmpfiles_lines() -> list[str]:
     return [
         "# === tmpfiles.d for /var structure ===",
         "# Directories created on every boot; /var is not updated by bootc after bootstrap.",
-        "# tmpfiles.d/yoinkc-var.conf included in COPY config/etc/ above",
+        "# tmpfiles.d/inspectah-var.conf included in COPY config/etc/ above",
         "",
     ]
 
@@ -176,7 +176,7 @@ def render(
         included = [a for a in snapshot.containers.flatpak_apps if a.include]
         if included:
             flatpak_lines = [
-                "# Flatpak applications detected by yoinkc",
+                "# Flatpak applications detected by inspectah",
                 "# Install with: xargs flatpak install < flatpaks.list",
                 "# Or wire into your preferred first-boot mechanism (systemd unit, Brewfile, etc.)",
             ]

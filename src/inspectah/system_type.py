@@ -43,7 +43,7 @@ def detect_system_type(host_root: Path, executor: Executor) -> SystemType:
         "Detected ostree system (/ostree exists) but could not determine\n"
         "system type -- both 'bootc status' and 'rpm-ostree status' failed.\n"
         "\n"
-        "This system may use an ostree configuration yoinkc does not yet support."
+        "This system may use an ostree configuration inspectah does not yet support."
     )
 
 

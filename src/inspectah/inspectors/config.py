@@ -324,7 +324,7 @@ def _download_rpm_from_repo(
     """
     if not executor:
         return None
-    tmp_dir = tempfile.mkdtemp(prefix="yoinkc-rpm-")
+    tmp_dir = tempfile.mkdtemp(prefix="inspectah-rpm-")
     try:
         cmd = [
             "dnf", "download", "--destdir", tmp_dir,

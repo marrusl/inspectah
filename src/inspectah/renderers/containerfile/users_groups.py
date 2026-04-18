@@ -25,7 +25,7 @@ def section_lines(snapshot: InspectionSnapshot) -> list[str]:
         names = ", ".join(u.get("name", "") for u in sysusers_users)
         lines.append(f"# Service accounts ({len(sysusers_users)}): {names}")
         lines.append("# Created at boot by systemd-sysusers — declarative, no RUN needed")
-        lines.append("COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/yoinkc-users.conf")
+        lines.append("COPY config/usr/lib/sysusers.d/inspectah-users.conf /usr/lib/sysusers.d/inspectah-users.conf")
         lines.append("# Home directories ensured by tmpfiles.d")
 
     # --- useradd strategy ---
@@ -72,7 +72,7 @@ def section_lines(snapshot: InspectionSnapshot) -> list[str]:
     if blueprint_users:
         names = ", ".join(u.get("name", "") for u in blueprint_users)
         lines.append(f"# Users managed via blueprint ({len(blueprint_users)}): {names}")
-        lines.append("# See yoinkc-users.toml for bootc-image-builder customization")
+        lines.append("# See inspectah-users.toml for bootc-image-builder customization")
 
     # --- kickstart strategy ---
     if kickstart_users:

@@ -24,7 +24,7 @@ def init_git_repo(output_dir: Path) -> bool:
         return False
 
 
-def add_and_commit(output_dir: Path, message: str = "yoinkc output") -> bool:
+def add_and_commit(output_dir: Path, message: str = "inspectah output") -> bool:
     """Add all files and commit. Return True on success."""
     try:
         import git
@@ -101,7 +101,7 @@ def push_to_github(
                 g = Github(token)
                 user = g.get_user()
                 parts = repo_spec.split("/", 1)
-                name = parts[-1] if len(parts) == 2 else "yoinkc"
+                name = parts[-1] if len(parts) == 2 else "inspectah"
                 if len(parts) == 2 and parts[0] != user.login:
                     owner = g.get_organization(parts[0])
                 else:

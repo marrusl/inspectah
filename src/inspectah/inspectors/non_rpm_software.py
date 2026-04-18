@@ -643,14 +643,14 @@ def run(
             if warnings is not None:
                 warnings.append(make_warning(
                     "non_rpm_software",
-                    "readelf not available (rc=127) — ELF binary classification skipped. Install binutils in the yoinkc container image.",
+                    "readelf not available (rc=127) — ELF binary classification skipped. Install binutils in the inspectah container image.",
                 ))
         else:
             probe = executor(["file", "--version"])
             if probe.returncode == 127 and warnings is not None:
                 warnings.append(make_warning(
                     "non_rpm_software",
-                    "file not available (rc=127) — binary type detection skipped. Install file in the yoinkc container image.",
+                    "file not available (rc=127) — binary type detection skipped. Install file in the inspectah container image.",
                 ))
 
     _scan_dirs(section, host_root, executor, deep_binary_scan, is_ostree=is_ostree)

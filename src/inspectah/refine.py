@@ -1,12 +1,12 @@
 """
-Interactive refinement server for yoinkc output.
+Interactive refinement server for inspectah output.
 
-Extracts a yoinkc output tarball, serves the HTML report over HTTP,
-and handles live re-rendering via the ``yoinkc inspect --from-snapshot``
+Extracts a inspectah output tarball, serves the HTML report over HTTP,
+and handles live re-rendering via the ``inspectah inspect --from-snapshot``
 subprocess pipeline.
 
 Usage (via CLI):
-    yoinkc refine output-tarball.tar.gz [--no-browser] [--port PORT]
+    inspectah refine output-tarball.tar.gz [--no-browser] [--port PORT]
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from pathlib import Path
 
 _DEFAULT_PORT = 8642
 _REQUIRED_FILES = ("report.html", "inspection-snapshot.json")
-_LOG_PREFIX = "yoinkc refine"
+_LOG_PREFIX = "inspectah refine"
 _CACHE_CONTROL = "no-cache, no-store, must-revalidate"
 _PRAGMA = "no-cache"
 _EXPIRES = "0"
@@ -137,13 +137,13 @@ def _re_render(
     original_data: bytes | None = None,
 ) -> tuple[bool, dict | str]:
     """
-    Re-render by calling ``yoinkc inspect --from-snapshot``.
+    Re-render by calling ``inspectah inspect --from-snapshot``.
 
     Returns (success, result).  On success the second element is a dict
     with keys ``html``, ``snapshot``, and ``containerfile``; on failure
     it is the error text.
     """
-    with tempfile.TemporaryDirectory(prefix="yoinkc-rerender-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="inspectah-rerender-") as tmp:
         tmp_path = Path(tmp)
         snap_file = tmp_path / "snapshot.json"
         snap_file.write_bytes(snapshot_data)
@@ -151,7 +151,7 @@ def _re_render(
         new_output.mkdir()
 
         cmd = [
-            "yoinkc", "inspect",
+            "inspectah", "inspect",
             "--from-snapshot", str(snap_file),
             "--output-dir", str(new_output),
             "--refine-mode",
@@ -171,7 +171,7 @@ def _re_render(
                 timeout=300,
             )
         except FileNotFoundError as exc:
-            return False, f"yoinkc command not found: {exc}"
+            return False, f"inspectah command not found: {exc}"
         except subprocess.TimeoutExpired:
             return False, "Re-render timed out after 300 seconds."
 
@@ -232,7 +232,7 @@ def _build_tarball(output_dir: Path) -> bytes:
 # ---------------------------------------------------------------------------
 
 class _Handler(BaseHTTPRequestHandler):
-    """HTTP handler for yoinkc refine routes."""
+    """HTTP handler for inspectah refine routes."""
 
     output_dir: Path
     re_render_available: bool = True
@@ -308,7 +308,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         elif path == "/api/tarball":
             timestamp = time.strftime("%Y%m%d-%H%M%S")
-            filename = f"yoinkc-refined-{timestamp}.tar.gz"
+            filename = f"inspectah-refined-{timestamp}.tar.gz"
             data = _build_tarball(output_dir)
             self._send(
                 200,
@@ -425,7 +425,7 @@ def _wait_for_server_ready(
 
 def run_refine(args) -> int:
     """
-    Main entry point for ``yoinkc refine``.
+    Main entry point for ``inspectah refine``.
 
     *args* is the argparse Namespace with ``tarball``, ``no_browser``,
     and ``port`` attributes.
@@ -438,7 +438,7 @@ def run_refine(args) -> int:
         _err(f"not a valid tar.gz file: {tarball}")
         return 1
 
-    tmpdir = tempfile.mkdtemp(prefix="yoinkc-refine-")
+    tmpdir = tempfile.mkdtemp(prefix="inspectah-refine-")
     output_dir = Path(tmpdir)
     server: HTTPServer | None = None
     server_thread: threading.Thread | None = None

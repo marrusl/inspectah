@@ -148,13 +148,13 @@ def _validate_supported_host(os_release: Optional[OsRelease]) -> Optional[str]:
     if os_id == "rhel":
         if major not in _SUPPORTED_RHEL_MAJORS:
             return (
-                f"Host is running RHEL {vid}. This version of yoinkc supports "
+                f"Host is running RHEL {vid}. This version of inspectah supports "
                 f"{supported_list}."
             )
     elif "centos" in os_id:
         if major not in _SUPPORTED_CENTOS_MAJORS:
             return (
-                f"Host is running CentOS {vid}. This version of yoinkc supports "
+                f"Host is running CentOS {vid}. This version of inspectah supports "
                 f"{supported_list}."
             )
     return None
@@ -206,7 +206,7 @@ def _ostree_unknown_base_fail(system_type: "SystemType", os_release: Optional[Os
         f"Detected {type_label} system: {identity}",
         "Could not map to a known bootc base image.",
         "",
-        "Specify one with: yoinkc --target-image <registry/image:tag>",
+        "Specify one with: inspectah --target-image <registry/image:tag>",
         "",
         "Common bases:",
     ]
@@ -235,10 +235,10 @@ def run_all(
         executor = make_executor(str(host_root))
 
     meta = {"host_root": str(host_root), "timestamp": datetime.now(timezone.utc).isoformat()}
-    # Hostname priority: YOINKC_HOSTNAME env var (set by wrapper on host)
+    # Hostname priority: INSPECTAH_HOSTNAME env var (set by wrapper on host)
     #                  → /etc/hostname
     #                  → hostnamectl hostname
-    env_hostname = os.environ.get("YOINKC_HOSTNAME", "").strip()
+    env_hostname = os.environ.get("INSPECTAH_HOSTNAME", "").strip()
     if env_hostname:
         meta["hostname"] = env_hostname
     else:

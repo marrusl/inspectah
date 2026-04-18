@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import tarfile
-from yoinkc.architect.analyzer import LayerTopology
+from inspectah.architect.analyzer import LayerTopology
 
 
 def export_topology(topo: LayerTopology, base_image: str) -> bytes:

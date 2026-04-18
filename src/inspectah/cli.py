@@ -17,8 +17,8 @@ SUBCOMMANDS = ("inspect", "fleet", "refine", "architect")
 def _preprocess_argv(argv: list[str]) -> list[str]:
     """Prepend 'inspect' if the first arg looks like a flag, not a subcommand.
 
-    This preserves backwards compatibility so that `yoinkc --from-snapshot f`
-    behaves the same as `yoinkc inspect --from-snapshot f`.
+    This preserves backwards compatibility so that `inspectah --from-snapshot f`
+    behaves the same as `inspectah inspect --from-snapshot f`.
     """
     if not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help")):
         return ["inspect"] + argv
@@ -154,14 +154,14 @@ def _add_inspect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--refine-mode",
         action="store_true",
-        help="Enable editor UI in rendered report (set by yoinkc refine)",
+        help="Enable editor UI in rendered report (set by inspectah refine)",
     )
     parser.add_argument(
         "--original-snapshot",
         type=Path,
         metavar="PATH",
         help="Path to unmodified original snapshot for editor diff/reset support "
-             "(set by yoinkc refine during re-render)",
+             "(set by inspectah refine during re-render)",
     )
     parser.add_argument(
         "--sensitivity",
@@ -190,7 +190,7 @@ def _add_refine_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "tarball",
         type=Path,
-        help="Path to a yoinkc output tarball (.tar.gz)",
+        help="Path to a inspectah output tarball (.tar.gz)",
     )
     parser.add_argument(
         "--no-browser",
@@ -211,9 +211,9 @@ def _add_refine_args(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build and return the top-level yoinkc argument parser."""
+    """Build and return the top-level inspectah argument parser."""
     parser = argparse.ArgumentParser(
-        prog="yoinkc",
+        prog="inspectah",
         description="Inspect RHEL/CentOS hosts and produce bootc image artifacts.",
     )
     subparsers = parser.add_subparsers(dest="command")

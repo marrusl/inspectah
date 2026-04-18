@@ -10,7 +10,7 @@ def add_fleet_args(parser: argparse.ArgumentParser) -> None:
         "input_dir",
         type=Path,
         metavar="INPUT_DIR",
-        help="Directory containing yoinkc tarballs (.tar.gz) and/or JSON snapshot files",
+        help="Directory containing inspectah tarballs (.tar.gz) and/or JSON snapshot files",
     )
     parser.add_argument(
         "-p", "--min-prevalence",

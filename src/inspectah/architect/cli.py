@@ -1,4 +1,4 @@
-"""CLI registration for yoinkc architect subcommand."""
+"""CLI registration for inspectah architect subcommand."""
 
 from __future__ import annotations
 
@@ -99,9 +99,9 @@ def run_architect(args: argparse.Namespace) -> int:
 
 def _run_architect_inner(args: argparse.Namespace, input_dir: Path) -> int:
     """Core architect logic after input resolution."""
-    from yoinkc.architect.loader import load_refined_fleets
-    from yoinkc.architect.analyzer import analyze_fleets
-    from yoinkc.architect.server import start_server
+    from inspectah.architect.loader import load_refined_fleets
+    from inspectah.architect.analyzer import analyze_fleets
+    from inspectah.architect.server import start_server
 
     fleets = load_refined_fleets(input_dir)
     if not fleets:

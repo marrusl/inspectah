@@ -9,7 +9,7 @@ def bundle_subscription_certs(host_root: Path, output_dir: Path) -> None:
 
     Silently skips if host_root does not exist or certs are not found.
     Red Hat stores subscription certs at /etc/pki/entitlement/ — that path
-    is unchanged; only the yoinkc user-facing terminology is "subscriptions".
+    is unchanged; only the inspectah user-facing terminology is "subscriptions".
     """
     if not host_root.is_dir():
         return

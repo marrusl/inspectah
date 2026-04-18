@@ -37,7 +37,7 @@ class OsRelease(BaseModel):
     variant_id: str = ""
 
 
-# --- Fleet metadata (set by yoinkc fleet) ---
+# --- Fleet metadata (set by inspectah fleet) ---
 
 
 class FleetPrevalence(BaseModel):

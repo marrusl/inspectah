@@ -1,4 +1,4 @@
-"""Shared utilities for yoinkc: debug logging, safe filesystem helpers."""
+"""Shared utilities for inspectah: debug logging, safe filesystem helpers."""
 
 import os
 import sys
@@ -13,13 +13,13 @@ NON_SYSTEM_UID_MAX: int = 60000  # exclusive
 # RPM fallback args shared between rpm and config inspectors
 _RPM_LOCK_DEFINE: List[str] = ["--define", "_rpmlock_path /var/tmp/.rpm.lock"]
 
-_DEBUG = bool(os.environ.get("YOINKC_DEBUG", ""))
+_DEBUG = bool(os.environ.get("INSPECTAH_DEBUG", ""))
 
 
 def debug(label: str, msg: str) -> None:
-    """Print a debug message to stderr when YOINKC_DEBUG is set."""
+    """Print a debug message to stderr when INSPECTAH_DEBUG is set."""
     if _DEBUG:
-        print(f"[yoinkc] {label}: {msg}", file=sys.stderr)
+        print(f"[inspectah] {label}: {msg}", file=sys.stderr)
 
 
 def is_debug() -> bool:

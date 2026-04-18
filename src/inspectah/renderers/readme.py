@@ -19,7 +19,7 @@ def render(
     output_dir: Path,
 ) -> None:
     output_dir = Path(output_dir)
-    lines = ["# yoinkc output", ""]
+    lines = ["# inspectah output", ""]
 
     # --- Summary of findings ---
     os_name = ""
