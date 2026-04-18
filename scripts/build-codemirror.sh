@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a CodeMirror 6 bundle for yoinkc's config editor.
+# Build a CodeMirror 6 bundle for inspectah's config editor.
 #
 # Produces a single IIFE bundle exposing window.CMEditor with:
 #   CMEditor.create(parent, content, onChange) → EditorView
@@ -9,12 +9,12 @@
 #   CMEditor.disableVim(view)
 #
 # Requirements: node ≥18, npm
-# Output: src/yoinkc/static/codemirror/codemirror.min.js
+# Output: src/inspectah/static/codemirror/codemirror.min.js
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-DEST="$REPO_ROOT/src/yoinkc/static/codemirror"
+DEST="$REPO_ROOT/src/inspectah/static/codemirror"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT

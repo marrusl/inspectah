@@ -35,16 +35,16 @@ Architect Demo Bundle
 
 This archive contains fleet tarballs produced by driftify topology.
 Each .tar.gz holds one fleet's inspection-snapshot.json, ready for
-yoinkc architect directly.
+inspectah architect directly.
 
 Usage:
 
   # Pass the bundle directly:
-  yoinkc architect architect-demo-bundle.tar.gz
+  inspectah architect architect-demo-bundle.tar.gz
 
   # Or extract first and pass the directory:
   tar xzf architect-demo-bundle.tar.gz -C ./fleet-tarballs/
-  yoinkc architect ./fleet-tarballs/
+  inspectah architect ./fleet-tarballs/
 READMEEOF
 
 tar czf "$BUNDLE" -C "$FLEET_DIR" . -C "$TMPDIR" README.txt
@@ -53,9 +53,9 @@ echo "Contents:"
 tar tzf "$BUNDLE"
 echo ""
 
-# ── Step 3: Launch architect (if yoinkc is available) ─────────────────────
+# ── Step 3: Launch architect (if inspectah is available) ─────────────────────
 
-if command -v yoinkc &>/dev/null; then
+if command -v inspectah &>/dev/null; then
     echo "=== Step 3: Launch architect (from bundle) ==="
 
     # Keep tmpdir alive while architect runs
@@ -64,7 +64,7 @@ if command -v yoinkc &>/dev/null; then
     echo "Starting architect UI (Ctrl-C to stop)..."
     echo "  URL: http://127.0.0.1:8643"
     echo ""
-    yoinkc architect "$BUNDLE" --no-browser
+    inspectah architect "$BUNDLE" --no-browser
 else
     # Copy bundle to cwd so it survives temp cleanup
     cp "$BUNDLE" ./architect-demo-bundle.tar.gz
@@ -73,5 +73,5 @@ else
     echo ""
     echo "Copy to your workstation and run:"
     echo "  scp $(hostname):$(pwd)/architect-demo-bundle.tar.gz ."
-    echo "  yoinkc architect architect-demo-bundle.tar.gz"
+    echo "  inspectah architect architect-demo-bundle.tar.gz"
 fi
