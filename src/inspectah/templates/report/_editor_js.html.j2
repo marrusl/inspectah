@@ -533,7 +533,7 @@
           updateStateLabels();
         }
       });
-      if (localStorage.getItem('yoinkc-vim-mode') === 'on') {
+      if (localStorage.getItem('inspectah-vim-mode') === 'on') {
         CMEditor.enableVim(editorState.cmView);
       }
     } else if (cmContainer) {
@@ -577,7 +577,7 @@
     var actionsEl = document.getElementById('editor-actions');
     if (!actionsEl) return;
     var created = isOperatorCreated(f.path);
-    var vimLabel = localStorage.getItem('yoinkc-vim-mode') === 'on' ? 'Vim: On' : 'Vim: Off';
+    var vimLabel = localStorage.getItem('inspectah-vim-mode') === 'on' ? 'Vim: On' : 'Vim: Off';
     actionsEl.innerHTML =
       (window.CMEditor && window.CMEditor.enableVim ? '<button class="pf-v6-c-button pf-m-plain pf-m-small" id="btn-vim-toggle" style="margin-right:8px;">' + vimLabel + '</button>' : '') +
       (created ? '<button class="pf-v6-c-button pf-m-danger pf-m-small" id="btn-delete" style="margin-right:8px;">Delete</button>' : '') +
@@ -994,7 +994,7 @@
         }).then(function(blob) {
           var a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
-          a.download = 'yoinkc-output.tar.gz';
+          a.download = 'inspectah-output.tar.gz';
           a.click();
           URL.revokeObjectURL(a.href);
           if (typeof showToast === 'function') showToast('Rebuilt and downloaded successfully');
@@ -1012,13 +1012,13 @@
 
   function toggleVim() {
     if (!editorState.cmView || !window.CMEditor || !window.CMEditor.enableVim) return;
-    var isOn = localStorage.getItem('yoinkc-vim-mode') === 'on';
+    var isOn = localStorage.getItem('inspectah-vim-mode') === 'on';
     if (isOn) {
       CMEditor.disableVim(editorState.cmView);
-      localStorage.setItem('yoinkc-vim-mode', 'off');
+      localStorage.setItem('inspectah-vim-mode', 'off');
     } else {
       CMEditor.enableVim(editorState.cmView);
-      localStorage.setItem('yoinkc-vim-mode', 'on');
+      localStorage.setItem('inspectah-vim-mode', 'on');
     }
     updateEditToolbar();
   }

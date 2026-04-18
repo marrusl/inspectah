@@ -28,9 +28,9 @@
       }
       btn.textContent = theme === 'light' ? '\u263D' : '\u2600';
       btn.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
-      localStorage.setItem('yoinkc-architect-theme', theme);
+      localStorage.setItem('inspectah-architect-theme', theme);
     }
-    applyTheme(localStorage.getItem('yoinkc-architect-theme') || 'dark');
+    applyTheme(localStorage.getItem('inspectah-architect-theme') || 'dark');
     btn.addEventListener('click', function() {
       var isDark = document.documentElement.classList.contains('pf-v6-theme-dark');
       applyTheme(isDark ? 'light' : 'dark');

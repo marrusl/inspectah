@@ -1,6 +1,6 @@
 <script>
 // Apply saved theme immediately so re-rendered pages don't flash
-(function(){ var t = localStorage.getItem('yoinkc-theme'); if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark'); })();
+(function(){ var t = localStorage.getItem('inspectah-theme'); if (t === 'light') document.documentElement.classList.remove('pf-v6-theme-dark'); })();
 var snapshot = {{ snapshot_json|safe }};
 var originalSnapshot = {{ original_snapshot_json|safe }};
 // Deep clone originalSnapshot to prevent reference sharing from server-rendered JSON
@@ -973,7 +973,7 @@ function trapFocus(modalElement, closeHandler) {
         }).then(function(blob) {
           var a = document.createElement('a');
           a.href = URL.createObjectURL(blob);
-          a.download = 'yoinkc-output.tar.gz';
+          a.download = 'inspectah-output.tar.gz';
           a.click();
           URL.revokeObjectURL(a.href);
           showToast('Rebuilt and downloaded successfully');
@@ -1028,7 +1028,7 @@ function trapFocus(modalElement, closeHandler) {
     if (attempt < 3) {
       setTimeout(function() { checkHelperAvailable(attempt + 1); }, 2000);
     } else {
-      console.log('yoinkc-refine not detected');
+      console.log('inspectah-refine not detected');
     }
   }
 
@@ -1207,7 +1207,7 @@ function trapFocus(modalElement, closeHandler) {
         var useraddUsers = includedUsers.filter(function(u) { return u.strategy === 'useradd'; });
 
         if (sysusersUsers.length > 0) {
-          lines.push('COPY config/usr/lib/sysusers.d/yoinkc-users.conf /usr/lib/sysusers.d/yoinkc-users.conf');
+          lines.push('COPY config/usr/lib/sysusers.d/inspectah-users.conf /usr/lib/sysusers.d/inspectah-users.conf');
         }
         if (useraddUsers.length > 0) {
           // Groups first
@@ -1236,7 +1236,7 @@ function trapFocus(modalElement, closeHandler) {
     // 9. Kernel boot — kargs.d
     if (s.kernel_boot && s.kernel_boot.cmdline) {
       lines.push('RUN mkdir -p /usr/lib/bootc/kargs.d');
-      lines.push('COPY config/usr/lib/bootc/kargs.d/yoinkc-migrated.toml /usr/lib/bootc/kargs.d/');
+      lines.push('COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/');
       lines.push('');
     }
 
@@ -1273,9 +1273,9 @@ function trapFocus(modalElement, closeHandler) {
       }
       btn.textContent = theme === 'light' ? '\u263D' : '\u2600';
       btn.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
-      localStorage.setItem('yoinkc-theme', theme);
+      localStorage.setItem('inspectah-theme', theme);
     }
-    applyTheme(localStorage.getItem('yoinkc-theme') || 'dark');
+    applyTheme(localStorage.getItem('inspectah-theme') || 'dark');
     btn.addEventListener('click', function() {
       var isDark = document.documentElement.classList.contains('pf-v6-theme-dark');
       applyTheme(isDark ? 'light' : 'dark');

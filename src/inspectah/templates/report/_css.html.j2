@@ -1,21 +1,21 @@
 <style>
 /* ═══════════════════════════════════════════════════════════════════════
-   yoinkc report – custom overrides on top of PatternFly 6
+   inspectah report – custom overrides on top of PatternFly 6
    ═══════════════════════════════════════════════════════════════════════ */
 
 /* Theme-aware custom properties */
 :root {
-  --yoinkc-diff-add-bg: rgba(77, 171, 247, 0.12);
-  --yoinkc-diff-remove-bg: rgba(201, 25, 11, 0.12);
-  --yoinkc-diff-add-border: #4dabf7;
-  --yoinkc-diff-remove-border: #c9190b;
-  --yoinkc-content-bottom-padding: 5rem;
-  --yoinkc-content-max-height: calc(100vh - 200px);
+  --inspectah-diff-add-bg: rgba(77, 171, 247, 0.12);
+  --inspectah-diff-remove-bg: rgba(201, 25, 11, 0.12);
+  --inspectah-diff-add-border: #4dabf7;
+  --inspectah-diff-remove-border: #c9190b;
+  --inspectah-content-bottom-padding: 5rem;
+  --inspectah-content-max-height: calc(100vh - 200px);
 }
 
 html:not(.pf-v6-theme-dark) {
-  --yoinkc-diff-add-bg: rgba(43, 154, 243, 0.08);
-  --yoinkc-diff-remove-bg: rgba(201, 25, 11, 0.08);
+  --inspectah-diff-add-bg: rgba(43, 154, 243, 0.08);
+  --inspectah-diff-remove-bg: rgba(201, 25, 11, 0.08);
 }
 
 /* Reduced-motion: must come first so it gates ALL animations/transitions below */
@@ -48,7 +48,7 @@ html:not(.pf-v6-theme-dark) .os-icon-rocky  { color: #10B981; }
 html:not(.pf-v6-theme-dark) .os-icon-alma   { color: #ff4649; }
 
 /* Page padding – toolbar lives at the bottom (5rem covers fleet slider + preview) */
-body { padding-bottom: var(--yoinkc-content-bottom-padding); }
+body { padding-bottom: var(--inspectah-content-bottom-padding); }
 /* Prevent PF6 flex-grow from creating a gap between content and fixed toolbar */
 .pf-v6-c-page__main { flex-grow: 0; }
 
@@ -134,7 +134,7 @@ tr.excluded td { opacity: 0.6; }
 tr.excluded td:first-child { opacity: 1; }
 div.excluded { opacity: 0.6; }
 
-/* Include toggle – hidden until yoinkc-refine helper is active */
+/* Include toggle – hidden until inspectah-refine helper is active */
 .pf-v6-c-switch.include-toggle-wrap { display: none; }
 /* Vertically center checkbox cells without overriding all table cells globally */
 .pf-v6-c-table .pf-v6-c-table__check { vertical-align: middle; }
@@ -502,10 +502,10 @@ details.audit-expand { margin-bottom: 0.25rem; }
 .variant-compare-btn { white-space: nowrap; padding-inline: var(--pf-t--global--spacer--sm, 0.5rem); min-width: max-content; }
 /* Fleet variant comparison diff */
 .diff-line-same { padding: 0 16px; white-space: pre; color: var(--pf-t--global--text--color--subtle); }
-.diff-line-add { padding: 0 16px; white-space: pre; background: var(--yoinkc-diff-add-bg); color: var(--pf-t--global--text--color--regular); }
-.diff-line-remove { padding: 0 16px; white-space: pre; background: var(--yoinkc-diff-remove-bg); color: var(--pf-t--global--text--color--regular); }
-.diff-legend-selected { color: var(--yoinkc-diff-remove-border); margin-right: 4px; }
-.diff-legend-comparison { color: var(--yoinkc-diff-add-border); margin-right: 4px; }
+.diff-line-add { padding: 0 16px; white-space: pre; background: var(--inspectah-diff-add-bg); color: var(--pf-t--global--text--color--regular); }
+.diff-line-remove { padding: 0 16px; white-space: pre; background: var(--inspectah-diff-remove-bg); color: var(--pf-t--global--text--color--regular); }
+.diff-legend-selected { color: var(--inspectah-diff-remove-border); margin-right: 4px; }
+.diff-legend-comparison { color: var(--inspectah-diff-add-border); margin-right: 4px; }
 /* Fleet bar active state (popover open) */
 .fleet-bar.active {
   outline: 2px solid var(--pf-t--global--color--brand--default, #0066cc);
