@@ -1,8 +1,8 @@
 """
 CLI argument parsing with subcommand-based structure.
 
-Subcommands: inspect (default), fleet, refine.
-Backwards-compatible: bare flags without a subcommand are treated as inspect.
+Subcommands: scan (default), fleet, refine.
+Backwards-compatible: bare flags without a subcommand are treated as scan.
 """
 
 import argparse
@@ -11,22 +11,22 @@ from typing import Optional
 
 from .fleet.cli import add_fleet_args
 
-SUBCOMMANDS = ("inspect", "fleet", "refine", "architect")
+SUBCOMMANDS = ("scan", "fleet", "refine", "architect")
 
 
 def _preprocess_argv(argv: list[str]) -> list[str]:
-    """Prepend 'inspect' if the first arg looks like a flag, not a subcommand.
+    """Prepend 'scan' if the first arg looks like a flag, not a subcommand.
 
     This preserves backwards compatibility so that `inspectah --from-snapshot f`
-    behaves the same as `inspectah inspect --from-snapshot f`.
+    behaves the same as `inspectah scan --from-snapshot f`.
     """
     if not argv or (argv[0].startswith("-") and argv[0] not in ("-h", "--help")):
-        return ["inspect"] + argv
+        return ["scan"] + argv
     return argv
 
 
-def _add_inspect_args(parser: argparse.ArgumentParser) -> None:
-    """Register all inspect-specific flags on the given parser."""
+def _add_scan_args(parser: argparse.ArgumentParser) -> None:
+    """Register all scan-specific flags on the given parser."""
     parser.add_argument(
         "--host-root",
         type=Path,
@@ -218,11 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command")
 
-    inspect_parser = subparsers.add_parser(
-        "inspect",
-        help="Inspect a host and generate migration artifacts (default)",
+    scan_parser = subparsers.add_parser(
+        "scan",
+        help="Scan a host and generate migration artifacts (default)",
     )
-    _add_inspect_args(inspect_parser)
+    _add_scan_args(scan_parser)
 
     fleet_parser = subparsers.add_parser(
         "fleet",
@@ -268,7 +268,7 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         if not (1 <= args.min_prevalence <= 100):
             parser.error("--min-prevalence must be between 1 and 100")
 
-    if args.command == "inspect":
+    if args.command == "scan":
         if args.from_snapshot and args.inspect_only:
             parser.error("--from-snapshot and --inspect-only cannot be used together")
 

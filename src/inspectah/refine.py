@@ -2,7 +2,7 @@
 Interactive refinement server for inspectah output.
 
 Extracts a inspectah output tarball, serves the HTML report over HTTP,
-and handles live re-rendering via the ``inspectah inspect --from-snapshot``
+and handles live re-rendering via the ``inspectah scan --from-snapshot``
 subprocess pipeline.
 
 Usage (via CLI):
@@ -137,7 +137,7 @@ def _re_render(
     original_data: bytes | None = None,
 ) -> tuple[bool, dict | str]:
     """
-    Re-render by calling ``inspectah inspect --from-snapshot``.
+    Re-render by calling ``inspectah scan --from-snapshot``.
 
     Returns (success, result).  On success the second element is a dict
     with keys ``html``, ``snapshot``, and ``containerfile``; on failure
@@ -151,7 +151,7 @@ def _re_render(
         new_output.mkdir()
 
         cmd = [
-            "inspectah", "inspect",
+            "inspectah", "scan",
             "--from-snapshot", str(snap_file),
             "--output-dir", str(new_output),
             "--refine-mode",

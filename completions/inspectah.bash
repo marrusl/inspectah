@@ -5,9 +5,9 @@ _inspectah() {
     local cur prev words cword
     _init_completion || return
 
-    local subcommands="inspect fleet refine architect"
+    local subcommands="scan fleet refine architect"
 
-    local inspect_flags="--host-root -o --output-dir --no-subscription
+    local scan_flags="--host-root -o --output-dir --no-subscription
         --from-snapshot --inspect-only --target-version --target-image
         --baseline-packages --no-baseline --user-strategy --config-diffs
         --deep-binary-scan --query-podman --skip-preflight --validate
@@ -26,7 +26,7 @@ _inspectah() {
     local i
     for (( i=1; i < cword; i++ )); do
         case "${words[i]}" in
-            inspect|fleet|refine|architect)
+            scan|fleet|refine|architect)
                 subcmd="${words[i]}"
                 break
                 ;;
@@ -35,7 +35,7 @@ _inspectah() {
 
     if [[ -z "$subcmd" ]]; then
         if [[ "$cur" == -* ]]; then
-            COMPREPLY=( $(compgen -W "$inspect_flags" -- "$cur") )
+            COMPREPLY=( $(compgen -W "$scan_flags" -- "$cur") )
         else
             COMPREPLY=( $(compgen -W "$subcommands" -- "$cur") )
         fi
@@ -43,9 +43,9 @@ _inspectah() {
     fi
 
     case "$subcmd" in
-        inspect)
+        scan)
             if [[ "$cur" == -* ]]; then
-                COMPREPLY=( $(compgen -W "$inspect_flags" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$scan_flags" -- "$cur") )
             elif [[ "$prev" == --host-root || "$prev" == --output-dir || \
                     "$prev" == --from-snapshot || "$prev" == --baseline-packages ]]; then
                 _filedir

@@ -2,7 +2,7 @@
 # zsh completion for inspectah
 # Place in /usr/share/zsh/site-functions/_inspectah
 
-_inspectah_inspect() {
+_inspectah_scan() {
     _arguments -s \
         '--host-root[Root path for host inspection]:path:_files -/' \
         '-o[Write tarball to FILE]:file:_files' \
@@ -56,7 +56,7 @@ _inspectah_architect() {
 
 _inspectah() {
     local -a subcmds=(
-        'inspect:Inspect a host and generate migration artifacts'
+        'scan:Scan a host and generate migration artifacts'
         'fleet:Aggregate multiple inspection snapshots'
         'refine:Interactively edit and re-render output'
         'architect:Plan layer decomposition from refined fleets'
@@ -64,7 +64,7 @@ _inspectah() {
 
     if (( CURRENT == 2 )); then
         if [[ "$PREFIX" == -* || "${words[CURRENT]}" == -* ]]; then
-            _inspectah_inspect
+            _inspectah_scan
         else
             _describe 'subcommand' subcmds
         fi
@@ -72,11 +72,11 @@ _inspectah() {
     fi
 
     case "${words[2]}" in
-        inspect) _inspectah_inspect ;;
-        fleet)   _inspectah_fleet ;;
+        scan)      _inspectah_scan ;;
+        fleet)     _inspectah_fleet ;;
         refine)    _inspectah_refine ;;
         architect) _inspectah_architect ;;
-        *)         _inspectah_inspect ;;
+        *)         _inspectah_scan ;;
     esac
 }
 

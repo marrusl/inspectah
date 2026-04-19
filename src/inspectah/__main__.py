@@ -65,8 +65,8 @@ def _run_renderers(
     )
 
 
-def _run_inspect(args) -> int:
-    """Run the inspect pipeline (default subcommand)."""
+def _run_scan(args) -> int:
+    """Run the scan pipeline (default subcommand)."""
     from .preflight import is_container, is_packaged_install, requires_registry_login
 
     packaged_native = is_packaged_install() and not is_container()
@@ -283,8 +283,8 @@ def main(argv: Optional[list] = None, cwd: Optional[Path] = None) -> int:
 
     try:
         match args.command:
-            case None | "inspect":
-                return _run_inspect(args)
+            case None | "scan":
+                return _run_scan(args)
             case "fleet":
                 return _run_fleet(args, cwd=cwd)
             case "refine":

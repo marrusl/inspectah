@@ -16,7 +16,7 @@ _open_browser() {
 }
 
 # --- Detect subcommand ---
-_mode="inspect"
+_mode="scan"
 case "${1:-}" in
   fleet|refine|architect) _mode="$1"; shift ;;
 esac
@@ -45,7 +45,7 @@ esac
 
 # Only relevant for inspect mode — tool prerequisites shouldn't appear
 # in the RPM output.
-if [ -n "$_need_install" ] && [ "$_mode" = "inspect" ]; then
+if [ -n "$_need_install" ] && [ "$_mode" = "scan" ]; then
   INSPECTAH_EXCLUDE_PREREQS="${_need_install# }"
   export INSPECTAH_EXCLUDE_PREREQS
 fi
@@ -95,7 +95,7 @@ _prompt_rh_login_fresh() {
 
 # --- Run the appropriate mode ---
 case "$_mode" in
-  inspect)
+  scan)
     case "$IMAGE" in
       registry.redhat.io/*)
         if $_podman_just_installed && ! podman login --get-login registry.redhat.io >/dev/null 2>&1; then

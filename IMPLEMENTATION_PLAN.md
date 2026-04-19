@@ -72,15 +72,15 @@
 - **Function**: `main(argv: Optional[list] = None, cwd: Optional[Path] = None) -> int`
 - **Structure**: 
   - Calls `parse_args(argv)` from `cli.py`
-  - Matches on `args.command` (inspect, fleet, refine, architect)
-  - Delegates to handler: `_run_inspect()`, `_run_fleet()`, `run_refine()`, `run_architect()`
+  - Matches on `args.command` (scan, fleet, refine, architect)
+  - Delegates to handler: `_run_scan()`, `_run_fleet()`, `run_refine()`, `run_architect()`
   - Returns 0 on success, 1 on error
 
 ### Command Registration: `src/inspectah/cli.py`
 - **Parser**: Standard `argparse.ArgumentParser`
-- **Subcommands**: tuple `("inspect", "fleet", "refine", "architect")`
-- **Backwards Compat**: Bare flags without a subcommand prepend "inspect" automatically
-  - `inspectah --from-snapshot f` → `inspectah inspect --from-snapshot f`
+- **Subcommands**: tuple `("scan", "fleet", "refine", "architect")`
+- **Backwards Compat**: Bare flags without a subcommand prepend "scan" automatically
+  - `inspectah --from-snapshot f` → `inspectah scan --from-snapshot f`
 - **Pattern**: 
   ```python
   parser = argparse.ArgumentParser(prog="inspectah")
@@ -364,7 +364,7 @@ inspectah = ["templates/*.j2", "templates/*.css", "static/**/*"]
 
 ### Flags are parsed in `cli.py`
 - **argparse.Namespace** object passed to handlers
-- **Handlers** in `__main__.py` (_run_inspect, _run_fleet, etc.)
+- **Handlers** in `__main__.py` (_run_scan, _run_fleet, etc.)
 - **Pipeline** (pipeline.py) receives parsed args + extracts needed values
 
 ### Key Option Handling Pattern
@@ -375,11 +375,11 @@ parser.add_argument("--target-version", type=str, metavar="VERSION", help="...")
 # In __main__.py: Pass to handler
 args = parse_args(argv)
 match args.command:
-    case "inspect":
-        return _run_inspect(args)
+    case "scan":
+        return _run_scan(args)
 
-# In _run_inspect: Extract and use
-def _run_inspect(args):
+# In _run_scan: Extract and use
+def _run_scan(args):
     snapshot = run_pipeline(
         host_root=args.host_root,
         target_version=args.target_version,
@@ -610,7 +610,7 @@ main()
   ↓
 parse_args() → args.command
   ↓
-_run_inspect(args)
+_run_scan(args)
   ↓
 run_pipeline(
     host_root, executor, baseline, target_image,

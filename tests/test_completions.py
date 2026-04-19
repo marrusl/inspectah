@@ -95,16 +95,16 @@ def test_build_parser_exposes_real_subcommands_and_flags():
     assert "--port" in refine_flags
 
 
-def test_zsh_completion_supports_top_level_inspect_flags():
-    """zsh should complete inspect flags for `inspectah --flag` as well as `inspectah inspect --flag`."""
+def test_zsh_completion_supports_top_level_scan_flags():
+    """zsh should complete scan flags for `inspectah --flag` as well as `inspectah scan --flag`."""
     content = COMPLETION_FILES["zsh"].read_text()
     assert 'CURRENT == 2' in content
     assert '$PREFIX' in content or '${words[CURRENT]}' in content
-    assert '_inspectah_inspect' in content
+    assert '_inspectah_scan' in content
 
 
-def test_fish_completion_supports_top_level_inspect_flags():
-    """fish should complete inspect flags before an explicit subcommand."""
+def test_fish_completion_supports_top_level_scan_flags():
+    """fish should complete scan flags before an explicit subcommand."""
     content = COMPLETION_FILES["fish"].read_text()
     assert 'not __fish_seen_subcommand_from $subcmds' in content
     assert '-l from-snapshot' in content

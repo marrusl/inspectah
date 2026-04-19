@@ -67,7 +67,7 @@ def test_output_dir_long_flag():
 
 def test_host_root_equal_syntax_counts_as_explicit():
     """`--host-root=/path` must count as an explicit override."""
-    args = parse_args(["inspect", "--host-root=/host"])
+    args = parse_args(["scan", "--host-root=/host"])
     assert args.host_root == Path("/host")
     assert args.host_root_explicit is True
 
@@ -228,23 +228,23 @@ def test_no_baseline_and_baseline_packages_are_mutually_exclusive():
 class TestSubcommandRouting:
     """Verify the subcommand-based CLI structure."""
 
-    def test_no_args_defaults_to_inspect(self):
+    def test_no_args_defaults_to_scan(self):
         args = parse_args([])
-        assert args.command in (None, "inspect")
+        assert args.command in (None, "scan")
 
-    def test_explicit_inspect_subcommand(self):
-        args = parse_args(["inspect"])
-        assert args.command == "inspect"
+    def test_explicit_scan_subcommand(self):
+        args = parse_args(["scan"])
+        assert args.command == "scan"
 
-    def test_inspect_with_from_snapshot(self):
-        args = parse_args(["inspect", "--from-snapshot", "foo.json"])
-        assert args.command == "inspect"
+    def test_scan_with_from_snapshot(self):
+        args = parse_args(["scan", "--from-snapshot", "foo.json"])
+        assert args.command == "scan"
         assert args.from_snapshot == Path("foo.json")
 
-    def test_bare_flags_parsed_as_inspect(self):
-        """Bare `inspectah --from-snapshot foo.json` should parse as inspect."""
+    def test_bare_flags_parsed_as_scan(self):
+        """Bare `inspectah --from-snapshot foo.json` should parse as scan."""
         args = parse_args(["--from-snapshot", "foo.json"])
-        assert args.command in (None, "inspect")
+        assert args.command in (None, "scan")
         assert args.from_snapshot == Path("foo.json")
 
     def test_fleet_subcommand_recognized(self):
@@ -263,32 +263,32 @@ class TestSubcommandRouting:
         assert "fleet" in out
         assert "refine" in out
 
-    def test_inspect_help_shows_inspect_flags(self, capsys):
+    def test_scan_help_shows_scan_flags(self, capsys):
         with pytest.raises(SystemExit) as exc_info:
-            parse_args(["inspect", "--help"])
+            parse_args(["scan", "--help"])
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "--from-snapshot" in out
 
     @pytest.mark.parametrize("flags,attr,expected", [
-        (["inspect", "--host-root", "/mnt"], "host_root", Path("/mnt")),
-        (["inspect", "-o", "/tmp/out.tar.gz"], "output_file", Path("/tmp/out.tar.gz")),
-        (["inspect", "--output-dir", "/tmp/d"], "output_dir", Path("/tmp/d")),
-        (["inspect", "--no-subscription"], "no_subscription", True),
-        (["inspect", "--inspect-only"], "inspect_only", True),
-        (["inspect", "--config-diffs"], "config_diffs", True),
-        (["inspect", "--deep-binary-scan"], "deep_binary_scan", True),
-        (["inspect", "--query-podman"], "query_podman", True),
-        (["inspect", "--skip-preflight"], "skip_preflight", True),
-        (["inspect", "--output-dir", "/d", "--validate"], "validate", True),
-        (["inspect", "--target-version", "9.6"], "target_version", "9.6"),
-        (["inspect", "--target-image", "reg/img:1"], "target_image", "reg/img:1"),
-        (["inspect", "--no-baseline"], "no_baseline", True),
-        (["inspect", "--baseline-packages", "/f"], "baseline_packages", Path("/f")),
-        (["inspect", "--user-strategy", "sysusers"], "user_strategy", "sysusers"),
+        (["scan", "--host-root", "/mnt"], "host_root", Path("/mnt")),
+        (["scan", "-o", "/tmp/out.tar.gz"], "output_file", Path("/tmp/out.tar.gz")),
+        (["scan", "--output-dir", "/tmp/d"], "output_dir", Path("/tmp/d")),
+        (["scan", "--no-subscription"], "no_subscription", True),
+        (["scan", "--inspect-only"], "inspect_only", True),
+        (["scan", "--config-diffs"], "config_diffs", True),
+        (["scan", "--deep-binary-scan"], "deep_binary_scan", True),
+        (["scan", "--query-podman"], "query_podman", True),
+        (["scan", "--skip-preflight"], "skip_preflight", True),
+        (["scan", "--output-dir", "/d", "--validate"], "validate", True),
+        (["scan", "--target-version", "9.6"], "target_version", "9.6"),
+        (["scan", "--target-image", "reg/img:1"], "target_image", "reg/img:1"),
+        (["scan", "--no-baseline"], "no_baseline", True),
+        (["scan", "--baseline-packages", "/f"], "baseline_packages", Path("/f")),
+        (["scan", "--user-strategy", "sysusers"], "user_strategy", "sysusers"),
     ], ids=lambda v: str(v) if not isinstance(v, list) else " ".join(v))
-    def test_inspect_flags_under_subcommand(self, flags, attr, expected):
-        """All inspect flags work under the explicit 'inspect' subcommand."""
+    def test_scan_flags_under_subcommand(self, flags, attr, expected):
+        """All scan flags work under the explicit 'scan' subcommand."""
         args = parse_args(flags)
         assert getattr(args, attr) == expected
 
@@ -309,8 +309,8 @@ class TestSubcommandRouting:
         (["--baseline-packages", "/f"], "baseline_packages", Path("/f")),
         (["--user-strategy", "sysusers"], "user_strategy", "sysusers"),
     ], ids=lambda v: str(v) if not isinstance(v, list) else " ".join(v))
-    def test_inspect_flags_bare(self, flags, attr, expected):
-        """All inspect flags work without explicit 'inspect' subcommand (backwards compat)."""
+    def test_scan_flags_bare(self, flags, attr, expected):
+        """All scan flags work without explicit 'scan' subcommand (backwards compat)."""
         args = parse_args(flags)
         assert getattr(args, attr) == expected
 
@@ -398,14 +398,14 @@ class TestRefineSubcommand:
 def test_skip_unavailable_flag():
     """--skip-unavailable is parsed correctly."""
     from inspectah.cli import parse_args
-    args = parse_args(["inspect", "--skip-unavailable"])
+    args = parse_args(["scan", "--skip-unavailable"])
     assert args.skip_unavailable is True
 
 
 def test_skip_unavailable_default_false():
     """--skip-unavailable defaults to False."""
     from inspectah.cli import parse_args
-    args = parse_args(["inspect"])
+    args = parse_args(["scan"])
     assert args.skip_unavailable is False
 
 
@@ -421,4 +421,4 @@ class TestMainModule:
             capture_output=True, text=True, timeout=10,
         )
         assert result.returncode == 0
-        assert "inspect" in result.stdout
+        assert "scan" in result.stdout

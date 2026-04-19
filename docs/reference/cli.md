@@ -9,26 +9,26 @@ Complete flag reference for all inspectah subcommands. For usage examples, see t
 Top-level command. All functionality is accessed through subcommands.
 
 ```
-inspectah [-h] {inspect,fleet,refine,architect} ...
+inspectah [-h] {scan,fleet,refine,architect} ...
 ```
 
-If no subcommand is given, or if the first argument looks like a flag (e.g. `--from-snapshot`), `inspect` is assumed for backwards compatibility.
+If no subcommand is given, or if the first argument looks like a flag (e.g. `--from-snapshot`), `scan` is assumed for backwards compatibility.
 
 | Subcommand | Description |
 |------------|-------------|
-| `inspect` | Inspect a host and generate migration artifacts (default) |
+| `scan` | Scan a host and generate migration artifacts (default) |
 | `fleet` | Aggregate multiple inspection snapshots into a fleet report |
 | `refine` | Interactively edit and re-render inspection output |
 | `architect` | Plan layer decomposition from refined fleets |
 
 ---
 
-## `inspectah inspect`
+## `inspectah scan`
 
-Default subcommand. Inspects a host and generates migration artifacts.
+Default subcommand. Scans a host and generates migration artifacts.
 
 ```
-inspectah inspect [-h] [--host-root PATH] [-o FILE | --output-dir DIR]
+inspectah scan [-h] [--host-root PATH] [-o FILE | --output-dir DIR]
                [--no-subscription] [--from-snapshot PATH] [--inspect-only]
                [--target-version VERSION] [--target-image IMAGE]
                [--baseline-packages FILE] [--no-baseline]
@@ -93,23 +93,23 @@ These flags are set automatically by `inspectah refine` during re-rendering. The
 # Basic host inspection (inside container via run-inspectah.sh)
 sudo ./run-inspectah.sh
 
-# Inspect with a specific target version
-inspectah inspect --target-version 9.6
+# Scan with a specific target version
+inspectah scan --target-version 9.6
 
-# Re-render from a saved snapshot without re-inspecting
-inspectah inspect --from-snapshot inspection-snapshot.json -o refreshed.tar.gz
+# Re-render from a saved snapshot without re-scanning
+inspectah scan --from-snapshot inspection-snapshot.json -o refreshed.tar.gz
 
 # Air-gapped: provide baseline package list manually
-inspectah inspect --baseline-packages rhel9-base-packages.txt
+inspectah scan --baseline-packages rhel9-base-packages.txt
 
-# Full inspection with config diffs and container enumeration
-inspectah inspect --config-diffs --query-podman
+# Full scan with config diffs and container enumeration
+inspectah scan --config-diffs --query-podman
 
-# Inspect and validate the generated Containerfile builds
-inspectah inspect --output-dir ./output --validate
+# Scan and validate the generated Containerfile builds
+inspectah scan --output-dir ./output --validate
 
 # Override the base image entirely
-inspectah inspect --target-image registry.redhat.io/rhel10/rhel-bootc:10.2
+inspectah scan --target-image registry.redhat.io/rhel10/rhel-bootc:10.2
 ```
 
 ---
@@ -137,7 +137,7 @@ inspectah refine [-h] [--no-browser] [--port PORT] TARBALL
 5. Handles re-render requests when you toggle items and click **Re-render**
 6. Serves the updated tarball for download
 
-The re-render pipeline calls `inspectah inspect --from-snapshot` under the hood, so changes to toggles are reflected in the Containerfile, audit report, and all other output artifacts.
+The re-render pipeline calls `inspectah scan --from-snapshot` under the hood, so changes to toggles are reflected in the Containerfile, audit report, and all other output artifacts.
 
 ### Examples
 

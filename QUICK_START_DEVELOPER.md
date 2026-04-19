@@ -14,7 +14,7 @@
 
 1. **Entry Point**: `src/inspectah/__main__.py`
    - Calls `parse_args()` → matches command → calls handler
-   - Handlers: `_run_inspect()`, `_run_fleet()`, `run_refine()`, `run_architect()`
+   - Handlers: `_run_scan()`, `_run_fleet()`, `run_refine()`, `run_architect()`
 
 2. **Commands**: `src/inspectah/cli.py`
    - argparse subcommand setup

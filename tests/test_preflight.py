@@ -17,8 +17,8 @@ from inspectah.preflight import (
 )
 
 
-def _make_inspect_args(**overrides):
-    """Return a minimal argparse namespace suitable for _run_inspect tests."""
+def _make_scan_args(**overrides):
+    """Return a minimal argparse namespace suitable for _run_scan tests.."""
     args = argparse.Namespace(
         push_to_github=None,
         from_snapshot=None,
@@ -313,9 +313,9 @@ def test_podman_missing_ignored_for_refine():
 
 def test_native_inspect_requires_root(capsys):
     """Non-root native inspect exits with 'requires root' error."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args()
+    args = _make_scan_args()
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -325,7 +325,7 @@ def test_native_inspect_requires_root(capsys):
         patch("os.geteuid", return_value=1000),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 1
     captured = capsys.readouterr()
@@ -335,9 +335,9 @@ def test_native_inspect_requires_root(capsys):
 
 def test_native_inspect_root_passes():
     """Root native inspect proceeds without root error."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args()
+    args = _make_scan_args()
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -347,17 +347,17 @@ def test_native_inspect_root_passes():
         patch("os.geteuid", return_value=0),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
 
 
 def test_root_check_skipped_in_container(monkeypatch):
     """Container entrypoint skips root check regardless of euid."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
     monkeypatch.setenv("INSPECTAH_CONTAINER", "1")
-    args = _make_inspect_args()
+    args = _make_scan_args()
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -366,7 +366,7 @@ def test_root_check_skipped_in_container(monkeypatch):
         patch("inspectah.preflight.check_container_privileges", return_value=[]),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_root.assert_not_called()
@@ -402,9 +402,9 @@ def test_root_check_skipped_for_refine():
 
 def test_root_check_skipped_for_from_snapshot():
     """inspect --from-snapshot does not require root."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(from_snapshot=Path("/tmp/snapshot.json"))
+    args = _make_scan_args(from_snapshot=Path("/tmp/snapshot.json"))
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -412,7 +412,7 @@ def test_root_check_skipped_for_from_snapshot():
         patch("inspectah.preflight.check_root", create=True) as mock_root,
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_root.assert_not_called()
@@ -420,9 +420,9 @@ def test_root_check_skipped_for_from_snapshot():
 
 def test_root_check_skipped_with_skip_preflight():
     """inspect --skip-preflight does not require root."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(skip_preflight=True)
+    args = _make_scan_args(skip_preflight=True)
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -430,7 +430,7 @@ def test_root_check_skipped_with_skip_preflight():
         patch("inspectah.preflight.check_root", create=True) as mock_root,
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_root.assert_not_called()
@@ -496,9 +496,9 @@ def test_registry_login_check_inspect_only(tmp_path):
 
 def test_registry_login_skipped_with_baseline_packages():
     """Air-gapped baseline file mode should not force registry.redhat.io auth."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(baseline_packages=Path("/tmp/baseline.txt"))
+    args = _make_scan_args(baseline_packages=Path("/tmp/baseline.txt"))
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -508,7 +508,7 @@ def test_registry_login_skipped_with_baseline_packages():
         patch("inspectah.preflight.check_container_privileges", return_value=[]),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_login.assert_not_called()
@@ -516,9 +516,9 @@ def test_registry_login_skipped_with_baseline_packages():
 
 def test_registry_login_skipped_with_no_baseline():
     """No-baseline mode should not force registry.redhat.io auth."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(no_baseline=True)
+    args = _make_scan_args(no_baseline=True)
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -528,7 +528,7 @@ def test_registry_login_skipped_with_no_baseline():
         patch("inspectah.preflight.check_container_privileges", return_value=[]),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_login.assert_not_called()
@@ -536,9 +536,9 @@ def test_registry_login_skipped_with_no_baseline():
 
 def test_registry_login_skipped_with_non_redhat_target_image():
     """Mirrored or local target images should not force registry.redhat.io auth."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(target_image="registry.local/rhel-bootc:9.6")
+    args = _make_scan_args(target_image="registry.local/rhel-bootc:9.6")
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -548,7 +548,7 @@ def test_registry_login_skipped_with_non_redhat_target_image():
         patch("inspectah.preflight.check_container_privileges", return_value=[]),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_login.assert_not_called()
@@ -556,9 +556,9 @@ def test_registry_login_skipped_with_non_redhat_target_image():
 
 def test_registry_login_skipped_with_mirrored_redhat_path():
     """Repository paths containing registry.redhat.io should not count as that registry host."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(target_image="registry.local/registry.redhat.io/rhel9/rhel-bootc:9.6")
+    args = _make_scan_args(target_image="registry.local/registry.redhat.io/rhel9/rhel-bootc:9.6")
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -568,7 +568,7 @@ def test_registry_login_skipped_with_mirrored_redhat_path():
         patch("inspectah.preflight.check_container_privileges", return_value=[]),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_login.assert_not_called()
@@ -576,9 +576,9 @@ def test_registry_login_skipped_with_mirrored_redhat_path():
 
 def test_registry_login_runs_for_redhat_target_image():
     """Explicit registry.redhat.io target images still require auth preflight."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(target_image="registry.redhat.io/rhel9/rhel-bootc:9.6")
+    args = _make_scan_args(target_image="registry.redhat.io/rhel9/rhel-bootc:9.6")
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -588,7 +588,7 @@ def test_registry_login_runs_for_redhat_target_image():
         patch("inspectah.preflight.check_container_privileges", return_value=[]),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_login.assert_called_once_with()
@@ -608,14 +608,14 @@ def test_is_packaged_install_detects_homebrew_cellar(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# _run_inspect preflight and packaged-install guards
+# _run_scan preflight and packaged-install guards
 # ---------------------------------------------------------------------------
 
 def test_packaged_install_defaults_to_local_host_root():
     """Native packaged inspect should treat the local host as the default root."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args()
+    args = _make_scan_args()
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -626,7 +626,7 @@ def test_packaged_install_defaults_to_local_host_root():
         patch("inspectah.preflight.check_container_privileges", return_value=[] ) as mock_privs,
         patch("inspectah.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_privs.assert_not_called()
@@ -635,9 +635,9 @@ def test_packaged_install_defaults_to_local_host_root():
 
 def test_packaged_install_preserves_explicit_host_root():
     """An explicit host root should be preserved for packaged installs."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(host_root=Path("/mnt/host"), host_root_explicit=True)
+    args = _make_scan_args(host_root=Path("/mnt/host"), host_root_explicit=True)
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -648,7 +648,7 @@ def test_packaged_install_preserves_explicit_host_root():
         patch("inspectah.preflight.check_container_privileges", return_value=[] ) as mock_privs,
         patch("inspectah.__main__.run_pipeline", return_value=snapshot) as mock_pipeline,
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_privs.assert_not_called()
@@ -657,10 +657,10 @@ def test_packaged_install_preserves_explicit_host_root():
 
 def test_preflight_skipped_in_container(monkeypatch):
     """Container entrypoint skips native podman/login checks."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
     monkeypatch.setenv("INSPECTAH_CONTAINER", "1")
-    args = _make_inspect_args()
+    args = _make_scan_args()
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -669,7 +669,7 @@ def test_preflight_skipped_in_container(monkeypatch):
         patch("inspectah.preflight.check_container_privileges", return_value=[]),
         patch("inspectah.__main__.run_pipeline", return_value=snapshot),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0
     mock_podman.assert_not_called()
@@ -678,14 +678,14 @@ def test_preflight_skipped_in_container(monkeypatch):
 
 def test_push_to_github_unsupported_in_packaged_install(capsys):
     """Missing deps in packaged install emits the packaged-install error."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(push_to_github="owner/repo")
+    args = _make_scan_args(push_to_github="owner/repo")
     with (
         patch("inspectah.preflight.is_packaged_install", return_value=True),
         patch.dict(sys.modules, {"github": None, "git": None}),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 1
     captured = capsys.readouterr()
@@ -695,14 +695,14 @@ def test_push_to_github_unsupported_in_packaged_install(capsys):
 
 def test_push_to_github_missing_extras_in_dev_install(capsys):
     """Missing deps in non-packaged install tells the user to install extras."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(push_to_github="owner/repo")
+    args = _make_scan_args(push_to_github="owner/repo")
     with (
         patch("inspectah.preflight.is_packaged_install", return_value=False),
         patch.dict(sys.modules, {"github": None, "git": None}),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 1
     captured = capsys.readouterr()
@@ -712,9 +712,9 @@ def test_push_to_github_missing_extras_in_dev_install(capsys):
 
 def test_push_to_github_works_with_deps():
     """Importable deps bypass the early guard regardless of install type."""
-    from inspectah.__main__ import _run_inspect
+    from inspectah.__main__ import _run_scan
 
-    args = _make_inspect_args(push_to_github="owner/repo", output_dir=Path("/tmp/out"))
+    args = _make_scan_args(push_to_github="owner/repo", output_dir=Path("/tmp/out"))
     snapshot = MagicMock(redactions=[])
 
     with (
@@ -730,6 +730,6 @@ def test_push_to_github_works_with_deps():
         patch("inspectah.git_github.output_stats", return_value=(1, 1, 0)),
         patch("inspectah.git_github.push_to_github", return_value=None),
     ):
-        result = _run_inspect(args)
+        result = _run_scan(args)
 
     assert result == 0

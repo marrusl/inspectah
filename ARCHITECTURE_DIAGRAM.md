@@ -16,17 +16,17 @@
                     └────────┬────────┘
         ┌───────────┬────────┼────────┬──────────┐
         │           │        │        │          │
-   inspect      fleet      refine  architect   (help)
+    scan       fleet      refine  architect   (help)
         │           │        │        │
         └─────────────────────────────┘
               _run_XXXXX() handlers
 
 ┌─────────────────────────────────────────────────────────────────┐
-│                    INSPECT SUBCOMMAND FLOW                       │
+│                     SCAN SUBCOMMAND FLOW                         │
 │         (Default command; runs actual system analysis)           │
 └─────────────────────────────────────────────────────────────────┘
 
-_run_inspect(args)
+_run_scan(args)
         │
         ▼
     run_pipeline()
