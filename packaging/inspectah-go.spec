@@ -1,7 +1,7 @@
-Name:           inspectah-cli
+Name:           inspectah
 Version:        0.1.0
 Release:        1%{?dist}
-Summary:        Native CLI wrapper for inspectah container-based migration tool
+Summary:        Inspect package-mode hosts and produce bootc image artifacts
 
 License:        MIT
 URL:            https://github.com/marrusl/inspectah
@@ -11,15 +11,16 @@ BuildRequires:  golang >= 1.21
 
 Requires:       podman >= 4.4
 
-%description
-inspectah-cli is a native Go wrapper around the inspectah container image.
-It provides a polished CLI experience with tab completion, progress
-indicators, and structured error messages for inspecting package-mode
-RHEL/CentOS hosts and producing bootc image artifacts.
+Conflicts:      python3-inspectah
 
-On systems where inspectah's Python dependencies are unavailable (RHEL 8,
-RHEL 9), this wrapper runs inspectah inside its container image
-transparently.
+%description
+inspectah inspects package-based RHEL, CentOS, and Fedora hosts and
+produces bootc-compatible image artifacts including Containerfiles,
+configuration trees, and migration reports.
+
+The inspectah binary manages the container lifecycle transparently.
+Install via dnf, run inspectah scan, and the tool handles image
+pulling, host inspection, and artifact generation.
 
 %prep
 %autosetup -n %{name}-%{version}
