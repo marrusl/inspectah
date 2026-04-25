@@ -38,6 +38,7 @@ configuration trees, and migration reports.`,
 	root.PersistentFlags().StringVar(&opts.Pull, "pull", "missing", "image pull policy: always, missing, never")
 
 	root.AddCommand(newVersionCmd(ver, commit, date))
+	root.AddCommand(newScanCmd(opts))
 
 	return root
 }
