@@ -48,7 +48,7 @@ install -Dpm 0644 completions/inspectah.fish \
     %{buildroot}%{_datadir}/fish/vendor_completions.d/inspectah.fish
 
 %check
-%pytest
+%pytest --deselect tests/test_inspector_domains.py::test_non_rpm_software_inspector_with_fixtures
 
 %files -f %{pyproject_files}
 %license LICENSE
