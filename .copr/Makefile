@@ -10,7 +10,7 @@ RPMBUILD := $(HOME)/rpmbuild
 srpm:
 	test "$(VERSION)" = "$(PYPROJECT_VERSION)" || \
 	    (echo "Version mismatch: $(SPECFILE)=$(VERSION) pyproject.toml=$(PYPROJECT_VERSION)" >&2; exit 1)
-	dnf install -y rpm-build python3-devel python3-setuptools python3-wheel pyproject-rpm-macros
+	dnf install -y git rpm-build python3-devel python3-setuptools python3-wheel pyproject-rpm-macros
 	mkdir -p $(RPMBUILD)/SOURCES $(RPMBUILD)/SPECS $(RPMBUILD)/SRPMS
 	git archive --format=tar.gz --prefix=$(NAME)-$(VERSION)/ HEAD \
 	    > $(RPMBUILD)/SOURCES/$(TARBALL)

@@ -104,12 +104,14 @@ jobs:
       - name: Install build tools
         run: dnf install -y rpm-build dnf-plugins-core
 
-      - name: Install build dependencies from SRPM
-        run: dnf builddep -y *.src.rpm
-
       - name: Build RPM
         run: |
-          rpmbuild --rebuild *.src.rpm
+          dnf builddep -y *.src.rpm
+          rpmbuild --rebuild *.src.rpm || {
+            echo "=== Installing dynamic BuildRequires from %pyproject_buildrequires ==="
+            dnf builddep -y ~/rpmbuild/SRPMS/*.buildreqs.nosrc.rpm
+            rpmbuild --rebuild *.src.rpm
+          }
           cp ~/rpmbuild/RPMS/noarch/*.rpm .
 
       - name: Upload RPM to release
