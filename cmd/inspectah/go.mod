@@ -1,6 +1,6 @@
 module github.com/marrusl/inspectah/cmd/inspectah
 
-go 1.26.2
+go 1.21
 
 require (
 	github.com/spf13/cobra v1.10.2

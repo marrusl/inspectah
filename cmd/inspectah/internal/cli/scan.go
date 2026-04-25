@@ -33,13 +33,12 @@ passed through to the inspectah container.`,
 		Args:               cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := platform.CheckScanPlatform(); err != nil {
-				ierrors.Render(os.Stderr, ierrors.New(
+				return ierrors.New(
 					ierrors.ErrPlatformUnsupported,
 					"scan requires a Linux host",
 					"Use inspectah scan on a RHEL, CentOS, or Fedora system. For refine/fleet/build, any platform works.",
-					nil,
-				))
-				return err
+					err,
+				)
 			}
 
 			runner := container.NewRealRunner()

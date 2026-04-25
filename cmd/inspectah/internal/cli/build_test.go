@@ -21,14 +21,11 @@ func TestBuildCmd_Flags(t *testing.T) {
 	assert.NotNil(t, f.Lookup("verbose"))
 }
 
-func TestBuildCmd_RequiresExactlyOneArg(t *testing.T) {
+func TestBuildCmd_AcceptsExtraArgs(t *testing.T) {
 	cmd := newBuildCmd()
-	err := cmd.Args(cmd, []string{})
-	assert.Error(t, err)
+	err := cmd.Args(cmd, []string{"dir1"})
+	assert.NoError(t, err)
 
-	err = cmd.Args(cmd, []string{"dir1", "dir2"})
-	assert.Error(t, err)
-
-	err = cmd.Args(cmd, []string{"dir1"})
+	err = cmd.Args(cmd, []string{"dir1", "--build-arg", "FOO=bar"})
 	assert.NoError(t, err)
 }

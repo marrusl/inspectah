@@ -19,19 +19,26 @@ func RunChild(ctx context.Context, podmanPath string, args []string) error {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start podman: %w", err)
 	}
 
+	done := make(chan error, 1)
 	go func() {
-		sig := <-sigCh
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case sig := <-sigCh:
 		if cmd.Process != nil {
 			cmd.Process.Signal(sig)
 		}
-	}()
-
-	return cmd.Wait()
+		return <-done
+	case err := <-done:
+		return err
+	}
 }
 
 func WaitForServer(url string, timeout time.Duration) bool {

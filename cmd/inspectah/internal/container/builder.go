@@ -1,5 +1,7 @@
 package container
 
+import "sort"
+
 type RunOpts struct {
 	Image      string
 	Privileged bool
@@ -41,8 +43,13 @@ func BuildArgs(opts RunOpts) []string {
 		args = append(args, "-p", p)
 	}
 
-	for k, v := range opts.Env {
-		args = append(args, "-e", k+"="+v)
+	envKeys := make([]string, 0, len(opts.Env))
+	for k := range opts.Env {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		args = append(args, "-e", k+"="+opts.Env[k])
 	}
 
 	if opts.Workdir != "" {

@@ -1,12 +1,22 @@
 package cli
 
 import (
+	"errors"
 	"os"
 
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/container"
+	ierrors "github.com/marrusl/inspectah/cmd/inspectah/internal/errors"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/version"
 	"github.com/spf13/cobra"
 )
+
+func AsWrapperError(err error) (*ierrors.WrapperError, bool) {
+	var werr *ierrors.WrapperError
+	if errors.As(err, &werr) {
+		return werr, true
+	}
+	return nil, false
+}
 
 type GlobalOpts struct {
 	Image string

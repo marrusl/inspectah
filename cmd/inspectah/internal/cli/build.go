@@ -19,16 +19,23 @@ func newBuildCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "build <output-dir> [flags]",
+		Use:   "build <output-dir> [flags] [-- extra-podman-args...]",
 		Short: "Build a bootc image from inspectah output",
 		Long: `Build a bootc container image from an inspectah output directory
 containing a Containerfile and config tree.
 
 This runs podman build on the host — it does not use the inspectah
 container image. The --pull flag here controls base image pulls
-during the build, not the inspectah scanner image.`,
-		Args: cobra.ExactArgs(1),
+during the build, not the inspectah scanner image.
+
+Extra arguments after -- are passed directly to podman build
+(e.g., --build-arg, --secret, --squash).`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return fmt.Errorf("requires an output directory argument")
+			}
+
 			outputDir, err := filepath.Abs(args[0])
 			if err != nil {
 				return fmt.Errorf("cannot resolve output directory: %w", err)
@@ -48,6 +55,7 @@ during the build, not the inspectah scanner image.`,
 			if pull != "" {
 				podmanArgs = append(podmanArgs, "--pull="+pull)
 			}
+			podmanArgs = append(podmanArgs, args[1:]...)
 			podmanArgs = append(podmanArgs, "-f", containerfile, outputDir)
 
 			if dryRun || verbose {
