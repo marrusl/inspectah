@@ -24,3 +24,6 @@ tests/e2e/.env.test
 tests/e2e/.server-pids
 # Root-level fleet test artifacts
 fleet-aggregate.*.tar.gz
+
+# Go CLI wrapper
+cmd/inspectah/inspectah
