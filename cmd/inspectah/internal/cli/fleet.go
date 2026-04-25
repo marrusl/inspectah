@@ -78,5 +78,7 @@ The input directory should contain inspectah tarballs or JSON snapshots.`,
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the podman command without executing")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print the podman command before executing")
 
+	registerFleetPassthrough(cmd)
+
 	return cmd
 }

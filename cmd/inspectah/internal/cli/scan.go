@@ -97,5 +97,7 @@ passed through to the inspectah container.`,
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print the podman command before executing")
 	cmd.Flags().StringVar(&hostname, "hostname", "", "override hostname for the inspection")
 
+	registerScanPassthrough(cmd)
+
 	return cmd
 }
