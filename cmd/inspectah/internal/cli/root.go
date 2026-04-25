@@ -39,6 +39,11 @@ configuration trees, and migration reports.`,
 
 	root.AddCommand(newVersionCmd(ver, commit, date))
 	root.AddCommand(newScanCmd(opts))
+	root.AddCommand(newFleetCmd(opts))
+	root.AddCommand(newRefineCmd(opts))
+	root.AddCommand(newArchitectCmd(opts))
+	root.AddCommand(newBuildCmd())
+	root.AddCommand(newImageCmd(opts))
 
 	return root
 }
