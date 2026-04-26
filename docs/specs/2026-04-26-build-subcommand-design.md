@@ -115,24 +115,41 @@ repo path pattern: `registry.redhat.io/ubi{7,8,9}`, and anything under
 `registry.redhat.io/ubi{7,8,9}/*` (covers `ubi9/ubi`, `ubi9/ubi-minimal`,
 `ubi8/ubi-micro`, etc.).
 
-**Ambiguous:** a stage uses `ARG` substitution in the image reference that
-cannot be resolved statically (no default value), AND no stage is
-definitively entitled or non-entitled.
+**Ambiguous:** at least one stage has an image reference that cannot be
+classified as entitled or non-entitled. This includes unresolved `ARG`
+substitution (no default value) and mixed cases (e.g., one known public
+stage plus one unresolved stage). Any unresolved stage makes the overall
+build ambiguous, even if other stages are definitively non-entitled.
 
-**Non-entitled:** all stages reference non-RHEL registries, or all RHEL
-references are UBI images.
+**Non-entitled:** all stages are definitively non-RHEL or UBI. No
+unresolved references remain.
 
 The parser must handle:
-- `ARG`-substituted references (resolve if default value defined)
+- `ARG`-substituted references (resolve if default value defined in the
+  Containerfile; do NOT attempt to resolve `--build-arg` passthrough values
+  — those are runtime inputs invisible to static analysis)
 - `FROM --platform=... <image>` syntax
 - Multi-stage builds (check every `FROM`)
 - Comments and blank lines (skip them)
 
+Note: `--build-arg` values passed via `--` can change the image reference
+at invocation time, turning an ambiguous build into entitled or non-entitled.
+Static analysis cannot account for this — the ambiguous classification and
+its warn-and-proceed behavior cover this case.
+
 ### Cert discovery cascade
-Checked in order, first match wins. `--no-entitlements` skips the entire
-cascade. If a flag or env var points to a path that does not exist or
-contains no `.pem` files, fail immediately — an explicit override that
-doesn't resolve is a user error, not a fallthrough signal.
+Checked in order, first match wins. If a flag or env var points to a path
+that does not exist or contains no `.pem` files, fail immediately — an
+explicit override that doesn't resolve is a user error, not a fallthrough
+signal.
+
+**`--no-entitlements`** skips the entire cascade AND overrides the
+entitlement detection result to `non-entitled`, regardless of what the
+Containerfile says. This is a deliberate escape hatch: the user is
+asserting that the build does not need subscription repos. On any
+platform, `--no-entitlements` produces a clean `non-entitled + no-certs`
+path — no warnings, no errors, no cert mounting. Mutually exclusive with
+`--entitlements-dir` (error if both specified).
 
 1. CLI flag — `--entitlements-dir <path>` (fail if path invalid)
 2. Environment variable — `INSPECTAH_ENTITLEMENT_DIR` (fail if path invalid)
@@ -167,7 +184,7 @@ with the platform to produce one action:
 
 | Detection | Certs found | Host-native | No certs |
 |-----------|-------------|-------------|----------|
-| Entitled | Error: entitled builds not supported on macOS | N/A (macOS has no host entitlement) | Error: build on Linux or use `--no-entitlements` |
+| Entitled | Error: entitled builds not supported on macOS yet | N/A (macOS has no host entitlement) | Error: build on Linux, or use `--no-entitlements` if the Containerfile doesn't need subscribed repos (`--no-entitlements` overrides detection to non-entitled, avoiding this cell entirely) |
 | Ambiguous | Warn: cannot inject on macOS, proceed without | N/A | Warn, proceed |
 | Non-entitled | Ignore certs | N/A | Proceed silently |
 
