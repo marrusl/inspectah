@@ -68,8 +68,9 @@ Everything else (e.g., `--squash`, `--layers`, `--secret`) passes through `--`.
 ## Input Handling
 
 ### Tarball (primary path)
-Accept `.tar.gz` or `.tgz`. Extract to a temp directory. Clean up on exit,
-including SIGINT/SIGTERM signal handling.
+Accept `.tar.gz` or `.tgz`. Extract to a temp directory under `$HOME`
+(ensures paths are accessible to `podman machine` on macOS). Clean up on
+exit, including SIGINT/SIGTERM signal handling.
 
 **Archive safety:** Only extract regular files and directories. For every
 entry, resolve the full destination path and verify it falls within the
@@ -187,9 +188,15 @@ with the platform to produce one action:
 | Non-entitled | Ignore certs | N/A | Proceed silently |
 
 macOS entitled builds work because `podman machine` shares the user's
-home directory into the VM by default. Cert paths under `$HOME` (bundled
-in tarball, `~/.config/inspectah/entitlement/`, or user-specified via
-`--entitlements-dir`) are accessible to the VM and `-v` mounts work.
+home directory into the VM by default. On macOS, all paths used for `-v`
+mounts must be under `$HOME` (or another explicitly shared podman machine
+mount). This is enforced at two points:
+
+- **Tarball extraction:** uses a temp directory under `$HOME`.
+- **Cert discovery and `--entitlements-dir`:** on macOS, preflight the
+  resolved entitlement path. If it falls outside `$HOME`, warn that the
+  path may not be accessible to `podman machine` and suggest copying certs
+  to a location under `$HOME`.
 
 **Mount flags** (both platforms):
 - `-v <entitlement-dir>:/etc/pki/entitlement:ro`
