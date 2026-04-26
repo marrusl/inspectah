@@ -111,7 +111,9 @@ Parse all `FROM` directives in the Containerfile. If any stage references
 - Comments and blank lines (skip them)
 
 If `ARG` substitution cannot be resolved statically (no default value),
-treat the stage as potentially requiring entitlements and warn.
+assume entitlements are required. If certs are found, mount them silently.
+If certs are not found, warn but proceed — the build will fail naturally
+if the registry actually requires them.
 
 ### Cert validation
 Validate expiry using Go's `crypto/x509` stdlib — no openssl dependency.
@@ -179,7 +181,8 @@ Note: Building linux/arm64 on linux/amd64 via QEMU — build will be slower.
 ### Missing podman
 ```
 Error: podman not found
-  Install: sudo dnf install podman
+  Linux:  sudo dnf install podman
+  macOS:  brew install podman && podman machine init && podman machine start
 ```
 
 ### Missing Containerfile
