@@ -1,9 +1,13 @@
 package cli
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBuildCmd_Exists(t *testing.T) {
@@ -55,4 +59,33 @@ func TestBuildCmd_MutualExclusion(t *testing.T) {
 		"--no-entitlements", "--entitlements-dir", "/some/path"})
 	err := cmd.Execute()
 	assert.ErrorContains(t, err, "mutually exclusive")
+}
+
+func TestBuildCmd_AbsoluteContainerfilePath(t *testing.T) {
+	// Regression: build must use the Containerfile from the output dir,
+	// not an absolute path that leaks the extraction location.
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Containerfile"), []byte("FROM fedora:43\n"), 0644))
+
+	// Capture os.Stderr since dry-run writes there directly
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+
+	cmd := newBuildCmd()
+	cmd.SetArgs([]string{dir, "-t", "test:latest", "--dry-run"})
+	execErr := cmd.Execute()
+
+	w.Close()
+	os.Stderr = origStderr
+
+	var buf bytes.Buffer
+	buf.ReadFrom(r)
+	r.Close()
+
+	require.NoError(t, execErr)
+
+	output := buf.String()
+	assert.Contains(t, output, "-f "+filepath.Join(dir, "Containerfile"))
 }

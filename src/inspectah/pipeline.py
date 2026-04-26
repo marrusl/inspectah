@@ -475,7 +475,7 @@ def run_pipeline(
                 scp_path = f"{host_cwd}/{name}" if host_cwd else name
                 print(f"  Copy to workstation:    scp {scp_host}:{scp_path} .")
             print(f"  Interactive refinement: inspectah refine {name}")
-            print(f"  Build the image:        ./inspectah-build {name} my-image:latest")
+            print(f"  Build the image:        inspectah build {name} -t my-image:latest")
     except Exception:
         print(
             f"Error during output. Rendered files preserved at: {tmp_dir}",

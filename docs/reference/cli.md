@@ -225,37 +225,45 @@ inspectah architect ./refined-fleets/ --no-browser
 
 ---
 
-## `inspectah-build`
+## `inspectah build`
 
-Standalone companion script (not a subcommand). Wraps `podman build` with automatic RHEL subscription cert handling. Solves the problem of building RHEL-based bootc images on non-RHEL hosts (Mac, Windows, Fedora) by auto-detecting and bind-mounting entitlement certs so `dnf install` works inside the build.
+Wraps `podman build` with automatic RHEL subscription cert handling. Solves the problem of building RHEL-based bootc images on non-RHEL hosts (Mac, Windows, Fedora) by auto-detecting and bind-mounting entitlement certs so `dnf install` works inside the build.
 
 ```bash
-./inspectah-build TARBALL_OR_DIR TAG [--push REGISTRY/IMAGE:TAG] [--no-cache]
+inspectah build TARBALL_OR_DIR -t IMAGE:TAG [flags] [-- EXTRA_PODMAN_ARGS...]
 ```
 
-| Argument / Flag | Description |
-|-----------------|-------------|
-| `TARBALL_OR_DIR` | inspectah output tarball or unpacked directory -- positional |
-| `TAG` | Image name and optional tag for the built image (default tag: `latest`) -- positional |
-| `--push DEST` | Push the built image to a registry after building |
+| Flag | Description |
+|------|-------------|
+| `-t, --tag` | Image name:tag (required) |
+| `--platform` | Target os/arch (e.g., `linux/arm64`) |
+| `--entitlements-dir` | Explicit entitlement cert directory |
+| `--no-entitlements` | Skip entitlement detection entirely |
+| `--ignore-expired-certs` | Proceed despite expired entitlement certs |
 | `--no-cache` | Clean rebuild without layer caching |
+| `--pull` | Base image pull policy (`always`, `missing`, `never`, `newer`) |
+| `--dry-run` | Print the podman command without executing |
+| `--verbose` | Print the podman command before executing |
 
-Requirements: Python 3.9+ (stdlib only). Podman or Docker.
+Requirements: Podman installed.
 
 ### Examples
 
 ```bash
 # Build from a tarball
-./inspectah-build webserver01-20260312-143000.tar.gz my-bootc-image:latest
+inspectah build webserver01-20260312-143000.tar.gz -t my-bootc-image:latest
 
 # Build from an unpacked directory
-./inspectah-build ./inspectah-output/ my-bootc-image:v1.0
+inspectah build ./inspectah-output/ -t my-bootc-image:v1.0
 
-# Build and push to a registry
-./inspectah-build ./inspectah-output/ my-bootc-image --push registry.example.com/my-bootc-image:v1.0
+# Build for a different architecture
+inspectah build output.tar.gz -t my-image:latest --platform linux/arm64
+
+# Dry run (print command without executing)
+inspectah build output.tar.gz -t my-image:latest --dry-run
 
 # Rebuild without cache
-./inspectah-build ./inspectah-output/ my-bootc-image --no-cache
+inspectah build ./inspectah-output/ -t my-bootc-image --no-cache
 ```
 
 ---

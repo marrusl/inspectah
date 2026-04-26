@@ -6,7 +6,9 @@ Bug 1 (8ca8ffa): Config directory/file collision in rendering
   - Kinoite-like scenarios with dir/file collisions must not crash
 
 Bug 2 (8240b18): inspectah-build Containerfile path
-  - Build command must use absolute path for -f Containerfile argument
+  - RETIRED: standalone inspectah-build script removed. Regression coverage
+    moved to Go tests in cmd/inspectah/internal/cli/build_test.go
+    (TestBuildCmd_AbsoluteContainerfilePath).
 """
 
 import sys
@@ -266,137 +268,8 @@ class TestConfigTreeCollisionScenario:
 
 
 # ---------------------------------------------------------------------------
-# Bug 2: inspectah-build uses absolute Containerfile path
+# Bug 2: inspectah-build Containerfile path — RETIRED
+# Standalone inspectah-build script removed. Regression coverage moved to
+# Go tests: cmd/inspectah/internal/cli/build_test.go
+#   - TestBuildCmd_AbsoluteContainerfilePath
 # ---------------------------------------------------------------------------
-
-
-def _import_inspectah_build():
-    """Import inspectah-build script (no .py extension) as a module."""
-    import importlib.util
-    import importlib.machinery
-
-    script_path = Path(__file__).parent.parent / "inspectah-build"
-    loader = importlib.machinery.SourceFileLoader("inspectah_build", str(script_path))
-    spec = importlib.util.spec_from_loader("inspectah_build", loader)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-class TestInspectahBuildContainerfilePath:
-    """Verify inspectah-build uses absolute path for -f Containerfile."""
-
-    def test_build_command_uses_absolute_containerfile_path(self, tmp_path):
-        """The -f argument to podman/docker must be an absolute path."""
-        inspectah_build = _import_inspectah_build()
-
-        # Create a minimal output directory with a Containerfile
-        output_dir = tmp_path / "inspectah-output"
-        output_dir.mkdir()
-        containerfile = output_dir / "Containerfile"
-        containerfile.write_text("FROM registry.access.redhat.com/ubi9:latest\n")
-
-        # Capture the command that _build would run
-        captured_cmd = []
-
-        def mock_popen(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-
-            class FakeProc:
-                stdout = iter([])
-                returncode = 0
-
-                def wait(self):
-                    pass
-
-            return FakeProc()
-
-        def mock_run(cmd, **kwargs):
-            class FakeResult:
-                returncode = 0
-                stdout = "abc123 500MB"
-
-            return FakeResult()
-
-        with patch("subprocess.Popen", side_effect=mock_popen), \
-             patch("subprocess.run", side_effect=mock_run):
-            inspectah_build._build(
-                runtime="podman",
-                output_dir=output_dir,
-                tag="test:latest",
-                entitlement_dir=None,
-                rhsm_dir=None,
-                no_cache=False,
-            )
-
-        # Find the -f argument
-        f_idx = captured_cmd.index("-f")
-        containerfile_arg = captured_cmd[f_idx + 1]
-
-        # Must be an absolute path
-        assert Path(containerfile_arg).is_absolute(), (
-            f"Containerfile path must be absolute, got: {containerfile_arg}"
-        )
-        # Must point to the correct file
-        assert containerfile_arg == str(output_dir / "Containerfile")
-
-    def test_build_unaffected_by_cwd_containerfile(self, tmp_path):
-        """Build must use the output dir's Containerfile, not CWD's."""
-        inspectah_build = _import_inspectah_build()
-
-        # Create output dir with its Containerfile
-        output_dir = tmp_path / "inspectah-output"
-        output_dir.mkdir()
-        (output_dir / "Containerfile").write_text("FROM ubi9:latest\nRUN echo correct\n")
-
-        # Create a DIFFERENT Containerfile in a fake CWD
-        fake_cwd = tmp_path / "repo-with-own-containerfile"
-        fake_cwd.mkdir()
-        (fake_cwd / "Containerfile").write_text("FROM wrong:image\nCOPY pyproject.toml ./\n")
-
-        captured_cmd = []
-
-        def mock_popen(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-
-            class FakeProc:
-                stdout = iter([])
-                returncode = 0
-
-                def wait(self):
-                    pass
-
-            return FakeProc()
-
-        def mock_run(cmd, **kwargs):
-            class FakeResult:
-                returncode = 0
-                stdout = "abc123 500MB"
-
-            return FakeResult()
-
-        import os
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(fake_cwd)
-            with patch("subprocess.Popen", side_effect=mock_popen), \
-                 patch("subprocess.run", side_effect=mock_run):
-                inspectah_build._build(
-                    runtime="podman",
-                    output_dir=output_dir,
-                    tag="test:latest",
-                    entitlement_dir=None,
-                    rhsm_dir=None,
-                    no_cache=False,
-                )
-        finally:
-            os.chdir(original_cwd)
-
-        # The -f path must point to the OUTPUT dir's Containerfile
-        f_idx = captured_cmd.index("-f")
-        containerfile_arg = captured_cmd[f_idx + 1]
-        assert str(output_dir / "Containerfile") == containerfile_arg, (
-            f"Expected output dir Containerfile, got: {containerfile_arg}"
-        )
-        # It must NOT be the CWD's Containerfile
-        assert str(fake_cwd / "Containerfile") != containerfile_arg

@@ -1,64 +1,49 @@
 # How to Build a bootc Image from inspectah Output
 
-After running `inspectah inspect` and `inspectah refine` on a RHEL host, you have a tarball containing everything needed to rebuild that system as a bootc container image. This guide walks through building that image using the `inspectah-build` tool.
+After running `inspectah inspect` and `inspectah refine` on a RHEL host, you have a tarball containing everything needed to rebuild that system as a bootc container image. This guide walks through building that image using `inspectah build`.
 
 ## Prerequisites
 
 Before you start, you'll need:
 
-1. **A container runtime**: Either Podman or Docker installed on your build machine
+1. **Podman**: Installed on your build machine
    - Install Podman: https://podman.io/docs/installation
-   - Install Docker: https://docs.docker.com/engine/install/
 
 2. **inspectah output tarball**: A file named like `hostname-20260312-143000.tar.gz` from the inspect/refine workflow, containing:
    - `Containerfile` — the bootc image definition
    - `config/` — configuration files to layer into the image
    - `entitlement/` and `rhsm/` — RHEL subscription certs (if building a RHEL image)
 
-3. **Python 3.9 or later**: The `inspectah-build` script is pure Python with no external dependencies
+3. **The `inspectah` CLI**: The Go binary with the `build` subcommand
 
 4. **RHEL subscription certificates** (for RHEL images only):
    - If building on a RHEL host, certificates are auto-detected
    - If building on Mac, Windows, or Fedora, you'll need certs from the source RHEL system (see "RHEL Subscription Cert Handling" below)
 
-## Getting inspectah-build
-
-Download the build script:
-
-```bash
-curl -fsSL -o inspectah-build https://raw.githubusercontent.com/marrusl/inspectah/main/inspectah-build
-chmod +x inspectah-build
-```
-
-The script stays on disk for future builds.
-
 ## Basic Usage
 
-The simplest build command takes a tarball and an image name:
+The simplest build command takes a tarball and an image tag:
 
 ```bash
-./inspectah-build hostname-20260312-143000.tar.gz my-bootc-image:latest
+inspectah build hostname-20260312-143000.tar.gz -t my-bootc-image:latest
 ```
 
 You can also build from an extracted directory:
 
 ```bash
 tar xzf hostname-20260312-143000.tar.gz
-./inspectah-build hostname-20260312-143000/ my-bootc-image:latest
+inspectah build hostname-20260312-143000/ -t my-bootc-image:latest
 ```
-
-If you don't provide an image name, `inspectah-build` will prompt for one interactively (when running in a terminal).
 
 ## What Happens During the Build
 
-When you run `inspectah-build`, it:
+When you run `inspectah build`, it:
 
 1. **Extracts the tarball** (if needed) and validates that a `Containerfile` exists
-2. **Detects the container runtime** — looks for `podman` first, falls back to `docker`
-3. **Checks if the image needs RHEL entitlement** — scans the `Containerfile` for `FROM registry.redhat.io`
-4. **Locates subscription certificates** (for RHEL images) — see next section
-5. **Runs the container build** — executes `podman build` or `docker build` with entitlement volumes mounted
-6. **Reports build results** — shows image ID and size
+2. **Checks if the image needs RHEL entitlement** — scans the `Containerfile` for RHEL/UBI base images
+3. **Locates subscription certificates** (for RHEL images) — see next section
+4. **Runs `podman build`** with entitlement volumes mounted
+5. **Reports build results** — shows the image tag on success
 
 The actual build command looks like:
 
@@ -66,125 +51,106 @@ The actual build command looks like:
 podman build \
   -f Containerfile \
   -t my-bootc-image:latest \
-  -v /path/to/entitlement:/etc/pki/entitlement:ro,Z \
-  -v /path/to/rhsm:/etc/rhsm:ro,Z \
+  -v /path/to/entitlement:/etc/pki/entitlement:ro \
   /path/to/extracted/output
 ```
 
-Build output streams to your terminal in real time, just like a manual `podman build`.
+Build output streams to your terminal in real time.
 
 ## RHEL Subscription Cert Handling
 
-Building a RHEL-based bootc image requires valid subscription certificates so that `dnf install` can access Red Hat's package repositories during the build. `inspectah-build` auto-detects and bind-mounts these certificates for you.
+Building a RHEL-based bootc image requires valid subscription certificates so that `dnf install` can access Red Hat's package repositories during the build. `inspectah build` auto-detects and bind-mounts these certificates for you.
 
 ### How Certificate Detection Works
 
-The script searches for certificates in this priority order:
+The tool searches for certificates in this priority order:
 
-1. **RHEL host auto-detection** — If you're building on a RHEL system with `/etc/pki/entitlement/*.pem` present, podman handles entitlement automatically. No explicit mount needed.
+1. **Explicit directory** — Use `--entitlements-dir /path/to/certs` to point directly at your certificate directory.
 
 2. **Bundled in the tarball** — If you ran `inspectah inspect` on the RHEL host using `run-inspectah.sh`, certificates are automatically bundled into the tarball at `entitlement/` and `rhsm/`.
 
-3. **Current working directory** — If you've copied certificates to `./entitlement/*.pem` and optionally `./rhsm/` next to where you're running `inspectah-build`, they'll be detected.
+3. **RHEL host auto-detection** — If you're building on a RHEL system with `/etc/pki/entitlement/*.pem` present, certs are detected automatically.
 
-4. **INSPECTAH_ENTITLEMENT environment variable** — Set this to a directory containing `*.pem` files:
-   ```bash
-   export INSPECTAH_ENTITLEMENT=/path/to/entitlement
-   ./inspectah-build hostname-20260312-143000.tar.gz my-bootc-image:latest
-   ```
+4. **Current working directory** — If you've copied certificates to `./entitlement/*.pem` next to where you're running `inspectah build`, they'll be detected.
+
+Use `--no-entitlements` to skip certificate detection entirely (e.g., when building Fedora or CentOS Stream images that don't need RHEL repos).
 
 ### What Gets Mounted
 
-When certificates are found, `inspectah-build` bind-mounts them read-only into the build container:
+When certificates are found, `inspectah build` bind-mounts them read-only into the build container:
 
 - `/etc/pki/entitlement` — subscription certificates (`.pem` files)
 - `/etc/rhsm` — subscription manager config (if present alongside entitlement certs)
 
-The `:ro,Z` flags mean:
-- `:ro` — read-only mount (build can't modify your host certs)
-- `:Z` — SELinux relabeling for rootless podman compatibility
-
-This makes the certificates available inside the container during `RUN dnf install` commands, exactly as if the build were running on the original RHEL host.
-
 ### Certificate Expiry Checks
 
-If `openssl` is available, `inspectah-build` validates certificates before building:
+`inspectah build` validates certificates before building:
 
-- **Expired certs** trigger a warning with instructions to copy fresh certs from the RHEL host
+- **Expired certs** trigger a warning and the build is skipped (use `--ignore-expired-certs` to override)
 - **Certs expiring within 24 hours** trigger a heads-up warning but don't block the build
-- Expiry date is logged for transparency
 
 ### Building RHEL Images on Non-RHEL Hosts
 
-This is the primary reason `inspectah-build` exists. You can build RHEL bootc images on:
+You can build RHEL bootc images on:
 
-- **macOS** — using Podman Desktop or Docker Desktop
-- **Windows** — using Podman Desktop, Docker Desktop, or WSL2
+- **macOS** — using Podman Desktop
 - **Fedora** — using native podman
-- **Any Linux with podman/docker** — as long as you have valid RHEL subscription certs
+- **Any Linux with podman** — as long as you have valid RHEL subscription certs
 
 The workflow:
 
 1. Run `inspectah inspect` on the RHEL host (certs are bundled automatically)
-2. Copy the tarball to your Mac/Windows/Fedora workstation
-3. Run `inspectah-build` — certs are auto-detected from the tarball
+2. Copy the tarball to your Mac/Fedora workstation
+3. Run `inspectah build` — certs are auto-detected from the tarball
 
-If you extracted the tarball and lost the bundled certs, or if you're working from an older inspectah output that didn't bundle them, copy them manually:
+If you extracted the tarball and lost the bundled certs, copy them manually:
 
 ```bash
 scp root@rhel-host:/etc/pki/entitlement/*.pem ./entitlement/
 scp -r root@rhel-host:/etc/rhsm ./rhsm/
 ```
 
-Then `inspectah-build` will find them in your current directory.
+Then use `--entitlements-dir ./entitlement` or place them next to the tarball.
 
 ### What If Certificates Aren't Found?
 
-If you're building a RHEL image and no certificates are detected, you'll see:
+If you're building a RHEL image and no certificates are detected, `inspectah build` will warn you and proceed. If the image actually needs RHEL repos, `dnf install` will fail during the build. Options:
 
-```
-⚠ RHEL entitlement certificates not found.
-  If the build fails, options:
-    1. Build on the RHEL host directly (entitlement is automatic)
-    2. Copy certs from the RHEL host:
-         scp root@rhel-host:/etc/pki/entitlement/*.pem ./entitlement/
-         scp -r root@rhel-host:/etc/rhsm ./rhsm/
-    3. Re-run run-inspectah.sh — it bundles certs automatically.
-```
-
-The build will proceed anyway (in case you're building a Fedora-based image), but if it's a RHEL image, `dnf install` will fail when it can't access Red Hat's repos.
+1. Build on the RHEL host directly (entitlement is automatic)
+2. Copy certs from the RHEL host (see above)
+3. Re-run `run-inspectah.sh` — it bundles certs automatically
 
 ## Build Options
 
 ### Force rebuild without cache
 
-By default, container builds reuse cached layers. To force a clean rebuild:
-
 ```bash
-./inspectah-build hostname-20260312-143000.tar.gz my-bootc-image:latest --no-cache
+inspectah build hostname-20260312-143000.tar.gz -t my-bootc-image:latest --no-cache
 ```
 
-This passes `--no-cache` to the underlying `podman build` or `docker build` command.
-
-### Build and push in one command
-
-To push the built image to a registry immediately after building:
+### Cross-architecture builds
 
 ```bash
-./inspectah-build hostname-20260312-143000.tar.gz my-bootc-image \
-  --push registry.example.com/my-bootc-image:v1.0
+inspectah build hostname-20260312-143000.tar.gz -t my-bootc-image:latest --platform linux/arm64
 ```
 
-The script:
-1. Builds the image with the tag `my-bootc-image:latest` (or whatever you specified)
-2. Checks if you're logged in to `registry.example.com`
-3. Prompts for login if needed (in an interactive terminal)
-4. Tags the image as `registry.example.com/my-bootc-image:v1.0`
-5. Pushes to the registry
+### Dry run (preview the podman command)
+
+```bash
+inspectah build hostname-20260312-143000.tar.gz -t my-bootc-image:latest --dry-run
+```
+
+### Pass extra arguments to podman
+
+Any arguments after `--` are forwarded to `podman build`:
+
+```bash
+inspectah build hostname-20260312-143000.tar.gz -t my-bootc-image:latest -- --build-arg FOO=bar
+```
 
 ## Pushing the Built Image to a Registry
 
-If you didn't use `--push` during the build, you can push manually afterward using your container runtime directly:
+After building, push manually using podman:
 
 ```bash
 # Log in to your registry
@@ -197,15 +163,6 @@ podman tag my-bootc-image:latest registry.example.com/my-bootc-image:v1.0
 podman push registry.example.com/my-bootc-image:v1.0
 ```
 
-Or use `inspectah-build` to do it for you after the fact:
-
-```bash
-./inspectah-build hostname-20260312-143000.tar.gz my-bootc-image \
-  --push registry.example.com/my-bootc-image:v1.0
-```
-
-This will detect that the image already exists locally and skip the build, going straight to tag-and-push.
-
 ## Troubleshooting
 
 ### Build fails with "repository not found" or dnf errors
@@ -213,8 +170,8 @@ This will detect that the image already exists locally and skip the build, going
 This usually means RHEL subscription certificates weren't found or are expired. Check:
 
 1. Are you building a RHEL image? Look for `FROM registry.redhat.io` in the `Containerfile`.
-2. Did `inspectah-build` log "using bundled/cwd/INSPECTAH_ENTITLEMENT entitlement certs"? If not, certs weren't detected.
-3. Run `openssl x509 -enddate -noout -in entitlement/*.pem` to verify cert expiry.
+2. Did `inspectah build` log certificate discovery? If not, use `--entitlements-dir` to point at your certs.
+3. Check cert expiry: `openssl x509 -enddate -noout -in entitlement/*.pem`
 
 Solution: Copy fresh certs from the RHEL host as shown in "RHEL Subscription Cert Handling" above.
 
@@ -228,19 +185,12 @@ podman login registry.redhat.io
 
 Use your Red Hat account credentials (same as access.redhat.com).
 
-### "neither podman nor docker found"
-
-Install a container runtime:
-- Podman: https://podman.io/docs/installation
-- Docker: https://docs.docker.com/engine/install/
-
 ### Push fails with "not logged in to registry.example.com"
 
-If running non-interactively (e.g., in CI), log in before running `inspectah-build`:
+Log in to the registry before pushing:
 
 ```bash
 podman login registry.example.com
-./inspectah-build ... --push registry.example.com/...
 ```
 
 ## Next Steps

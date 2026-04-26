@@ -14,7 +14,7 @@ Three subcommands and one companion tool complete the workflow:
 - **`inspectah refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
 - **`inspectah fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
 - **`inspectah architect`** takes multiple refined fleets and proposes a layered image topology (base + derived layers), with an interactive web UI for adjusting the decomposition.
-- **`inspectah-build`** builds a bootc container image from inspectah output, with automatic RHEL subscription cert handling.
+- **`inspectah build`** builds a bootc container image from inspectah output, with automatic RHEL subscription cert handling.
 
 ## Refine UI Internals
 
@@ -22,7 +22,7 @@ Every inspected item (packages, config files, services, repos, etc.) has an incl
 
 ## Build Cert Handling
 
-For RHEL base images (`registry.redhat.io`), `inspectah-build` searches for subscription certificates in this order: bundled in the inspectah output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `INSPECTAH_ENTITLEMENT` env var. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, cert access is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured.
+For RHEL base images (`registry.redhat.io`), `inspectah build` searches for subscription certificates in this order: bundled in the inspectah output, host-local (`/etc/pki/entitlement`), current directory (`./entitlement/`), or `--entitlements-dir`. Certs are bind-mounted into the build via `-v`. On a RHEL host with a valid subscription, cert access is handled by podman natively. Found certificates are validated via `openssl x509 -checkend` — the operator gets an expiry warning before a build fails due to stale credentials. On non-RHEL hosts, if no certs are found the build proceeds with a warning — the operator may have a Satellite or local mirror configured. Use `--no-entitlements` to skip detection entirely.
 
 ## Fleet Report Features
 

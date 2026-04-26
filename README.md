@@ -24,7 +24,7 @@ inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates ever
   Refine     run-inspectah.sh refine *.tar.gz       Edit findings in the browser
   Fleet      run-inspectah.sh fleet dir/ -p 80      Merge N hosts into one spec
   Architect  run-inspectah.sh architect ./fleets/   Plan layer decomposition
-  Build      inspectah-build *.tar.gz tag           Build the bootc image
+  Build      inspectah build *.tar.gz -t tag         Build the bootc image
 ```
 
 ## Quick Start
@@ -66,15 +66,13 @@ The refine server runs on port 8642 by default. Use `--port` to change it, or `-
 
 ### Build the image
 
-`inspectah-build` handles building bootc images from inspectah output, primarily solving the problem of building RHEL images on non-RHEL hosts (Mac, Windows, Fedora). It auto-detects and bind-mounts RHEL subscription certs so `dnf install` works inside the build.
+`inspectah build` handles building bootc images from inspectah output, primarily solving the problem of building RHEL images on non-RHEL hosts (Mac, Windows, Fedora). It auto-detects and bind-mounts RHEL subscription certs so `dnf install` works inside the build.
 
 ```bash
-curl -fsSL -o inspectah-build https://raw.githubusercontent.com/marrusl/inspectah/main/inspectah-build
-chmod +x inspectah-build
-./inspectah-build hostname-20260312-143000.tar.gz my-bootc-image:latest
+inspectah build hostname-20260312-143000.tar.gz -t my-bootc-image:latest
 ```
 
-Push with `--push registry.example.com/my-bootc-image:v1.0`.
+See `inspectah build --help` for all flags (entitlements, platform, dry-run, etc.).
 
 ## Output Artifacts
 

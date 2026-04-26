@@ -106,7 +106,7 @@
     <ol>
       <li><strong>Review</strong> — Check the Audit report tab for warnings and review any FIXME comments in the generated Containerfile.</li>
       <li><strong>Refine</strong> (optional) — Use e.g. <code>./run-inspectah.sh refine {% if fleet_meta %}fleet-*.tar.gz{% else %}hostname-*.tar.gz{% endif %}</code> to interactively toggle package and config inclusions, then re-render the Containerfile.</li>
-      <li><strong>Build</strong> — Build your bootc image: e.g. <code>./inspectah-build {% if fleet_meta %}fleet-*.tar.gz{% else %}hostname-*.tar.gz{% endif %} my-image:latest</code></li>
+      <li><strong>Build</strong> — Build your bootc image: e.g. <code>inspectah build {% if fleet_meta %}fleet-*.tar.gz{% else %}hostname-*.tar.gz{% endif %} -t my-image:latest</code></li>
     </ol>
   </div>
 </div>
