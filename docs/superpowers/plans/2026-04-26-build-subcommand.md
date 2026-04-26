@@ -235,7 +235,11 @@ func extractTarball(path string) (*InputResult, func(), error) {
 	if err != nil {
 		homeDir = os.TempDir()
 	}
-	extractDir, err := os.MkdirTemp(filepath.Join(homeDir, ".cache", "inspectah"), "build-")
+	cacheDir := filepath.Join(homeDir, ".cache", "inspectah")
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		return nil, noop, fmt.Errorf("cannot create cache directory: %w", err)
+	}
+	extractDir, err := os.MkdirTemp(cacheDir, "build-")
 	if err != nil {
 		return nil, noop, fmt.Errorf("cannot create temp directory: %w", err)
 	}
@@ -302,7 +306,7 @@ func extractTarball(path string) (*InputResult, func(), error) {
 			out.Close()
 		}
 
-		seen[target] = true
+		seen[filepath.Clean(target)] = true
 	}
 
 	if err := validateContainerfile(extractDir); err != nil {
@@ -1067,9 +1071,8 @@ import (
 func TestFormatSuccess(t *testing.T) {
 	msg := FormatSuccess("localhost/my-migration:latest")
 	assert.Contains(t, msg, "Built: localhost/my-migration:latest")
-	assert.Contains(t, msg, "podman run -it")
-	assert.Contains(t, msg, "bootc switch")
 	assert.Contains(t, msg, "bcvk ephemeral run-ssh")
+	assert.Contains(t, msg, "bootc switch")
 	assert.Contains(t, msg, "podman push")
 }
 
@@ -1098,11 +1101,10 @@ func FormatSuccess(tag string) string {
 	return fmt.Sprintf(`Built: %s
 
 Next steps:
-  Run:    podman run -it %s
-  Switch: bootc switch <registry>/%s
   Test:   bcvk ephemeral run-ssh %s
+  Switch: bootc switch %s
   Push:   podman push %s <registry>/%s`,
-		tag, tag, stripLocalhost(tag), tag, tag, stripLocalhost(tag))
+		tag, tag, tag, tag, stripLocalhost(tag))
 }
 
 func FormatMissingPodman() string {
@@ -1279,15 +1281,19 @@ Extra arguments after -- are passed directly to podman build
 			}
 			defer cleanup()
 
-			// Handle cleanup on signals — cancel context to kill podman child first
+			// Handle cleanup on signals — cancel context, wait for child, then clean up
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
+			var podProcess *os.Process
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 			go func() {
 				<-sigCh
-				cancel()  // kills podman build child via context
-				cleanup() // then remove temp dir
+				cancel()
+				if podProcess != nil {
+					podProcess.Wait() // reap the child before cleanup
+				}
+				cleanup()
 				os.Exit(1)
 			}()
 
@@ -1296,6 +1302,11 @@ Extra arguments after -- are passed directly to podman build
 			cfData, err := os.ReadFile(cfPath)
 			if err != nil {
 				return fmt.Errorf("cannot read Containerfile: %w", err)
+			}
+
+			// Mutual exclusion check happens before any detection gating
+			if noEntitlements && entitlementsDir != "" {
+				return fmt.Errorf("--no-entitlements and --entitlements-dir are mutually exclusive")
 			}
 
 			detection := build.ClassifyBuild(string(cfData))
@@ -1388,7 +1399,12 @@ Extra arguments after -- are passed directly to podman build
 			podCmd.Stdout = os.Stdout
 			podCmd.Stderr = os.Stderr
 
-			if err := podCmd.Run(); err != nil {
+			if err := podCmd.Start(); err != nil {
+				return fmt.Errorf("podman build failed to start: %w", err)
+			}
+			podProcess = podCmd.Process
+
+			if err := podCmd.Wait(); err != nil {
 				if exitErr, ok := err.(*exec.ExitError); ok {
 					return fmt.Errorf("podman build exited with code %d", exitErr.ExitCode())
 				}
@@ -1417,7 +1433,7 @@ Extra arguments after -- are passed directly to podman build
 
 - [ ] **Step 4: Run all tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/cli/ -v -run TestBuildCmd && go test ./cmd/inspectah/internal/build/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/cli/ -v -run TestBuildCmd && go test ./internal/build/ -v`
 Expected: all tests PASS across both packages.
 
 - [ ] **Step 5: Run full test suite**
@@ -1466,7 +1482,7 @@ Expected: "No Containerfile found" error.
 
 - [ ] **Step 4: Run full test suite one final time**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... && python -m pytest tests/ -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... && cd ../.. && python -m pytest tests/ -q`
 Expected: all Go and Python tests pass.
 
 - [ ] **Step 5: Commit**
@@ -1481,42 +1497,78 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ### Task 8: Retire `inspectah-build` References
 
-**Files:**
-- Modify: `docs/how-to/build-bootc-image.md` — update to reference `inspectah build`
-- Modify: any templates/renderers that print `inspectah-build` in output messages
-- Modify: `README.md` or other top-level docs referencing `inspectah-build`
+**Lifecycle decision:** The standalone `inspectah-build` Python script is
+removed in this change. No shim, no deprecation wrapper. The Go CLI `build`
+subcommand is the sole build entry point going forward.
+
+**Files to modify (known surfaces):**
+- Remove: `inspectah-build` (standalone Python script at repo root)
+- Modify: `README.md` — update build workflow examples
+- Modify: `docs/how-to/build-bootc-image.md` — rewrite to reference `inspectah build`
+- Modify: `docs/reference/cli.md` (if exists) — update command reference
+- Modify: `src/inspectah/packaging.py` — update "Next steps" output text
+- Modify: `src/inspectah/templates/report/_summary.html.j2` — update build instructions
+- Modify: any other templates/renderers printing `inspectah-build` in output
 
 - [ ] **Step 1: Find all references to `inspectah-build`**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && grep -rn 'inspectah-build' --include='*.md' --include='*.py' --include='*.go' --include='*.sh' | grep -v '.git/'`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && grep -rn 'inspectah-build\|inspectah_build\|inspectah\.build' --include='*.md' --include='*.py' --include='*.go' --include='*.sh' --include='*.j2' --include='*.html' | grep -v '.git/' | grep -v __pycache__`
 
-- [ ] **Step 2: Update docs to reference `inspectah build`**
+Review the output and categorize each hit as: remove, update text, or update test assertion.
 
-For each file found in step 1, update references from `inspectah-build` or
-`./inspectah-build` to `inspectah build`. Update command examples, flag names,
-and any behavioral descriptions that no longer apply (e.g., docker support,
-interactive prompts, `--push`).
+- [ ] **Step 2: Remove the standalone script**
 
-- [ ] **Step 3: Update Python output templates**
+```bash
+git rm inspectah-build
+```
 
-The Python scan output prints "Next steps" including `./inspectah-build`.
-Find and update these in `src/inspectah/` to reference `inspectah build` instead.
-Search for `inspectah-build` in `renderers/`, `packaging.py`, and `__main__.py`.
+- [ ] **Step 3: Update `src/inspectah/packaging.py` next-steps output**
 
-- [ ] **Step 4: Run full test suite**
+Find the "Next steps" block that prints `./inspectah-build`. Update to:
+```
+Next steps:
+  Copy to workstation:    scp {hostname}:{tarball_path} .
+  Interactive refinement: inspectah refine {tarball_name}
+  Build the image:        inspectah build {tarball_name} -t my-image:latest
+```
+
+- [ ] **Step 4: Update `docs/how-to/build-bootc-image.md`**
+
+Replace `./inspectah-build` examples with `inspectah build` equivalents.
+Remove docker-specific sections. Remove `--push`/`--registry` examples.
+Update flag names to match the new CLI (`--entitlements-dir`, `--no-entitlements`,
+`--ignore-expired-certs`, `--platform`).
+
+- [ ] **Step 5: Update report templates**
+
+Search `src/inspectah/templates/` for `inspectah-build` references.
+Update any build instructions in HTML report output to reference
+`inspectah build`.
+
+- [ ] **Step 6: Update remaining docs**
+
+Update `README.md` and any other docs found in step 1.
+
+- [ ] **Step 7: Fix broken test assertions**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -q`
+
+If any tests fail due to changed output strings (e.g., "inspectah-build"
+in expected output), update the test assertions to match the new text.
+
+- [ ] **Step 8: Run full test suite**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... && cd ../.. && python -m pytest tests/ -q`
-Expected: all tests pass. Some Python tests may need string updates if they
-assert on the old `inspectah-build` output text.
+Expected: all tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add -A
-git commit -m "chore: update references from inspectah-build to inspectah build
+git commit -m "chore: retire inspectah-build standalone script
 
-The standalone Python build script is retired. All docs, templates,
-and output messages now reference the integrated Go CLI subcommand.
+Remove the Python build script. All docs, templates, report output,
+and test assertions now reference 'inspectah build' (Go CLI subcommand).
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```

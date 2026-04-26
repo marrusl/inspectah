@@ -165,6 +165,9 @@ When certs are discovered (levels 1-2, 4-5), validate expiry using Go's
 which certs, `subscription-manager refresh` hint). `--ignore-expired-certs`
 overrides.
 
+Host-native entitlement (level 3) does not perform expiry validation —
+podman and subscription-manager handle cert lifecycle on subscribed hosts.
+
 ### Platform-specific decision matrix
 
 The entitlement detection result (`entitled` / `ambiguous` / `non-entitled`)
@@ -220,24 +223,23 @@ Platform-dependent verification:
   QEMU emulation is typically pre-configured in the VM. Skip the binfmt check
   (not accessible from the macOS host) and let podman report any errors directly.
 
-### Arch mismatch warning
-If `--platform` doesn't match the scanned host's architecture (detectable
-from tarball metadata), print a warning but proceed — this is a valid use
-case.
+### Cross-arch note
+When `--platform` specifies a different architecture than the CLI host,
+print: `Note: Building <target> on <host> via QEMU — build will be slower.`
 
-### Performance note
-Print: `Note: Building <target> on <host> via QEMU — build will be slower.`
+The current tarball format does not persist the scanned host's architecture,
+so no scan-vs-target mismatch warning is possible. This could be added in
+a future schema revision.
 
 ## Output Behavior
 
 ### Success
 ```
-Built: localhost/my-migration:latest (847 MB)
+Built: localhost/my-migration:latest
 
 Next steps:
-  Run:    podman run -it localhost/my-migration:latest
-  Switch: bootc switch <registry>/my-migration:latest
   Test:   bcvk ephemeral run-ssh localhost/my-migration:latest
+  Switch: bootc switch localhost/my-migration:latest
   Push:   podman push localhost/my-migration:latest <registry>/my-migration:latest
 ```
 
