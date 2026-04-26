@@ -16,7 +16,7 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from ._util import debug as _debug_fn
 from .executor import Executor
@@ -77,7 +77,7 @@ def _stage_config_tree(snapshot: InspectionSnapshot) -> Optional[Path]:
 
     staging = Path(tempfile.mkdtemp(prefix="inspectah-preflight-"))
 
-    if has_repos:
+    if has_repos and snapshot.rpm and snapshot.rpm.repo_files:
         for repo in snapshot.rpm.repo_files:
             if not repo.include or not repo.path:
                 continue
@@ -85,7 +85,7 @@ def _stage_config_tree(snapshot: InspectionSnapshot) -> Optional[Path]:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(repo.content or "")
 
-    if has_gpg:
+    if has_gpg and snapshot.rpm and snapshot.rpm.gpg_keys:
         for key in snapshot.rpm.gpg_keys:
             if not key.include or not key.path:
                 continue
@@ -93,7 +93,7 @@ def _stage_config_tree(snapshot: InspectionSnapshot) -> Optional[Path]:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(key.content or "")
 
-    if has_dnf_conf:
+    if has_dnf_conf and snapshot.config and snapshot.config.files:
         for f in snapshot.config.files:
             if not f.include or not f.path.startswith("etc/dnf/"):
                 continue
