@@ -28,6 +28,11 @@ from .schema import (
     UnverifiablePackage,
 )
 
+# When running inside the inspectah container (the only execution mode),
+# podman is not installed.  All podman commands must be executed in the
+# host's namespaces via nsenter, matching the pattern in baseline.py.
+_NSENTER_PREFIX = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "--"]
+
 _DIRECT_INSTALL_REPOS = frozenset({"", "(none)", "commandline", "(commandline)", "installed"})
 
 # DNF stderr patterns that indicate a repo failed to sync/download metadata.
@@ -41,6 +46,11 @@ _REPO_FAILURE_PATTERNS = (
 
 def _debug(msg: str) -> None:
     _debug_fn("rpm_preflight", msg)
+
+
+def _host_cmd(cmd: list[str]) -> list[str]:
+    """Prepend nsenter prefix to run *cmd* in the host's namespaces."""
+    return _NSENTER_PREFIX + cmd
 
 
 def _stage_config_tree(snapshot: InspectionSnapshot) -> Optional[Path]:
@@ -238,8 +248,8 @@ def run_package_preflight(
             timestamp=timestamp,
         )
 
-    # Pull the base image
-    pull_result = executor(["podman", "pull", "-q", base_image])
+    # Pull the base image (via nsenter into host namespaces)
+    pull_result = executor(_host_cmd(["podman", "pull", "-q", base_image]))
     if pull_result.returncode != 0:
         return PreflightResult(
             status="failed",
@@ -285,7 +295,7 @@ def _run_checks(
 
     container_name = f"inspectah-preflight-{uuid.uuid4().hex[:8]}"
 
-    # Build the podman run -d command with volume mounts
+    # Build the podman run -d command with volume mounts (via nsenter)
     run_cmd = ["podman", "run", "-d", "--name", container_name]
 
     if staging_dir:
@@ -301,8 +311,8 @@ def _run_checks(
 
     run_cmd += [base_image, "sleep", "infinity"]
 
-    # Start persistent container
-    start_result = executor(run_cmd)
+    # Start persistent container (via nsenter into host namespaces)
+    start_result = executor(_host_cmd(run_cmd))
     if start_result.returncode != 0:
         return PreflightResult(
             status="failed",
@@ -312,7 +322,7 @@ def _run_checks(
             timestamp=timestamp,
         )
 
-    exec_base = ["podman", "exec", container_name]
+    exec_base = _host_cmd(["podman", "exec", container_name])
 
     try:
         return _run_checks_in_container(
@@ -325,8 +335,8 @@ def _run_checks(
             timestamp=timestamp,
         )
     finally:
-        # Always clean up the container
-        executor(["podman", "rm", "-f", container_name])
+        # Always clean up the container (via nsenter)
+        executor(_host_cmd(["podman", "rm", "-f", container_name]))
 
 
 def _run_checks_in_container(
