@@ -2,6 +2,7 @@ package platform
 
 import (
 	"errors"
+	"os"
 	"runtime"
 	"testing"
 
@@ -16,6 +17,16 @@ func TestCheckScanPlatform(t *testing.T) {
 		assert.Error(t, err)
 		assert.True(t, errors.Is(err, ErrPlatformUnsupported))
 		assert.Contains(t, err.Error(), "scan requires a Linux host")
+	}
+}
+
+func TestCheckRoot(t *testing.T) {
+	err := CheckRoot()
+	if os.Geteuid() == 0 {
+		assert.NoError(t, err)
+	} else {
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, ErrNotRoot))
 	}
 }
 

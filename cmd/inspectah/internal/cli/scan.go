@@ -41,6 +41,15 @@ passed through to the inspectah container.`,
 				)
 			}
 
+			if err := platform.CheckRoot(); err != nil {
+				return ierrors.New(
+					ierrors.ErrPermissionDenied,
+					"scan requires root privileges",
+					"Run with sudo: sudo inspectah scan",
+					err,
+				)
+			}
+
 			fmt.Fprintf(os.Stderr, "inspectah %s\n\n", opts.Version)
 
 			runner := container.NewRealRunner()
