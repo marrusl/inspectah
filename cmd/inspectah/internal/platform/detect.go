@@ -17,3 +17,7 @@ func CheckScanPlatform() error {
 func IsLinux() bool {
 	return runtime.GOOS == "linux"
 }
+
+func IsMacOS() bool {
+	return runtime.GOOS == "darwin"
+}
