@@ -109,23 +109,30 @@ Entitlement configuration consists of two directories:
 Checked in order, first match wins. CLI flag and env var take precedence
 over filesystem locations (standard CLI convention):
 
-0. RHEL host auto-detection — if `/etc/pki/entitlement/*.pem` exists and
+1. CLI flag — `--entitlements-dir <path>`
+2. Environment variable — `INSPECTAH_ENTITLEMENT_DIR`
+
+If neither flag nor env var is set, check for RHEL host auto-detection
+before falling through to filesystem locations:
+
+3. RHEL host auto-detection — if `/etc/pki/entitlement/*.pem` exists and
    contains valid certs, the host is subscribed and podman handles entitlement
    natively. Skip all mounting — return early with no explicit cert paths.
    This matches current `inspectah-build` behavior.
-1. CLI flag — `--entitlements-dir <path>`
-2. Environment variable — `INSPECTAH_ENTITLEMENT_DIR`
-3. Bundled in tarball — `<output>/entitlement/`
-4. User config — `~/.config/inspectah/entitlement/`
+4. Bundled in tarball — `<output>/entitlement/`
+5. User config — `~/.config/inspectah/entitlement/`
 
-At each cascade level (1-4), also check for a sibling `rhsm/` directory.
-If found, include it in the build mounts.
+At each cascade level (1-2, 4-5), also check for a sibling `rhsm/`
+directory. If found, include it in the build mounts.
 
 `--no-entitlements` skips the cascade entirely.
 
 ### RHEL detection
-Parse all `FROM` directives in the Containerfile. If any stage references
-`registry.redhat.io`, entitlements are required. The parser must handle:
+Parse all `FROM` directives in the Containerfile. A stage requires
+entitlements if it references `registry.redhat.io` AND the image is not
+a UBI (Universal Base Image) variant. UBI images (`ubi8`, `ubi9`,
+`ubi-minimal`, `ubi-micro`, `ubi-init`) are freely available from
+`registry.redhat.io` without subscription. The parser must handle:
 
 - `ARG`-substituted registry references (resolve `${REGISTRY}` if default
   value is defined in the Containerfile)
@@ -180,8 +187,19 @@ The macOS entitlement injection mechanism is defined in a follow-on spec:
 - Test matrix for tarball vs directory input on macOS
 
 Until the follow-on spec is complete, `inspectah build` on macOS supports
-non-entitled builds only (Fedora, CentOS Stream, UBI). RHEL-entitled builds
-on macOS will print an error directing the user to build on a Linux host.
+non-entitled builds only (Fedora, CentOS Stream, UBI). Boundary rules:
+
+- **Definite RHEL base image:** error directing the user to build on a
+  Linux host or use `--no-entitlements` if the Containerfile doesn't need
+  subscribed repos.
+- **Ambiguous base image (unresolved ARG):** warn that entitlement injection
+  is not supported on macOS and proceed without certs. If the build fails
+  due to missing entitlements, the error will be clear.
+- **Passthrough `-v` with host paths:** on macOS, scan passthrough args for
+  `-v`/`--volume` flags with host paths and warn that they may not work with
+  the podman remote client. Do not block — some `-v` patterns work (e.g.,
+  paths within the podman machine's shared mounts), and podman will report
+  the error if they don't.
 
 ## Cross-Architecture Builds
 
@@ -254,9 +272,9 @@ Assemble the `podman build` command with:
 - `--platform <platform>` (if specified)
 - `--no-cache` (if specified)
 - `--pull <policy>` (if specified)
-- `-v <entitlement-dir>:/etc/pki/entitlement:ro` (Linux, if certs from cascade levels 1-4)
+- `-v <entitlement-dir>:/etc/pki/entitlement:ro` (Linux, if certs discovered)
 - `-v <rhsm-dir>:/etc/rhsm:ro` (Linux, if `rhsm/` found)
-- No mount flags when host handles entitlement natively (cascade level 0)
+- No mount flags when host handles entitlement natively (cascade level 3)
 - On macOS, entitlement injection deferred to follow-on spec
 - Any `--` passthrough args
 - Build context: the output directory
