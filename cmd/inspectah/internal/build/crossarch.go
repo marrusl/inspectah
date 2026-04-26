@@ -24,9 +24,16 @@ func CrossArchCheck(platform string) ([]string, error) {
 		return nil, nil
 	}
 
+	// On non-Linux hosts (macOS, Windows), podman runs builds inside a Linux VM,
+	// so the effective build OS is always linux regardless of runtime.GOOS.
+	buildOS := runtime.GOOS
+	if buildOS != "linux" {
+		buildOS = "linux"
+	}
+
 	var warnings []string
 	warnings = append(warnings, fmt.Sprintf("Note: Building %s on %s/%s via QEMU — build will be slower.",
-		platform, runtime.GOOS, hostArch))
+		platform, buildOS, hostArch))
 
 	if runtime.GOOS == "linux" {
 		binfmtArch := mapArchToBinfmt(targetArch)
