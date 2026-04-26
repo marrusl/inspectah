@@ -809,16 +809,23 @@ func DiscoverCerts(opts DiscoverOpts) (*DiscoverResult, error) {
 	return &DiscoverResult{Status: DiscoveryNoCerts}, nil
 }
 
-func resolveExplicitDir(dir string) (*DiscoverResult, error) {
+func ValidateExplicitDir(dir string) error {
 	info, err := os.Stat(dir)
 	if err != nil {
-		return nil, fmt.Errorf("entitlement directory %q does not exist", dir)
+		return fmt.Errorf("entitlement directory %q does not exist", dir)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("entitlement path %q is not a directory", dir)
+		return fmt.Errorf("entitlement path %q is not a directory", dir)
 	}
 	if !hasPEMs(dir) {
-		return nil, fmt.Errorf("entitlement directory %q contains no .pem files", dir)
+		return fmt.Errorf("entitlement directory %q contains no .pem files", dir)
+	}
+	return nil
+}
+
+func resolveExplicitDir(dir string) (*DiscoverResult, error) {
+	if err := ValidateExplicitDir(dir); err != nil {
+		return nil, err
 	}
 	return resolveDir(dir)
 }
@@ -1309,6 +1316,20 @@ Extra arguments after -- are passed directly to podman build
 				return fmt.Errorf("--no-entitlements and --entitlements-dir are mutually exclusive")
 			}
 
+			// Validate explicit overrides immediately, regardless of detection.
+			// An invalid --entitlements-dir or env var is always a user error.
+			envDir := os.Getenv("INSPECTAH_ENTITLEMENT_DIR")
+			if entitlementsDir != "" {
+				if err := build.ValidateExplicitDir(entitlementsDir); err != nil {
+					return err
+				}
+			}
+			if envDir != "" && entitlementsDir == "" {
+				if err := build.ValidateExplicitDir(envDir); err != nil {
+					return err
+				}
+			}
+
 			detection := build.ClassifyBuild(string(cfData))
 
 			// --no-entitlements overrides detection to non-entitled
@@ -1324,7 +1345,7 @@ Extra arguments after -- are passed directly to podman build
 				var err error
 				certs, err = build.DiscoverCerts(build.DiscoverOpts{
 					EntitlementsDir:  entitlementsDir,
-					EnvDir:           os.Getenv("INSPECTAH_ENTITLEMENT_DIR"),
+					EnvDir:           envDir,
 					OutputDir:        input.Dir,
 					SkipEntitlements: false,
 				})
@@ -1506,7 +1527,7 @@ subcommand is the sole build entry point going forward.
 - Modify: `README.md` — update build workflow examples
 - Modify: `docs/how-to/build-bootc-image.md` — rewrite to reference `inspectah build`
 - Modify: `docs/reference/cli.md` (if exists) — update command reference
-- Modify: `src/inspectah/packaging.py` — update "Next steps" output text
+- Modify: `src/inspectah/pipeline.py` — update "Next steps" output text
 - Modify: `src/inspectah/templates/report/_summary.html.j2` — update build instructions
 - Modify: any other templates/renderers printing `inspectah-build` in output
 
@@ -1522,7 +1543,7 @@ Review the output and categorize each hit as: remove, update text, or update tes
 git rm inspectah-build
 ```
 
-- [ ] **Step 3: Update `src/inspectah/packaging.py` next-steps output**
+- [ ] **Step 3: Update `src/inspectah/pipeline.py` next-steps output**
 
 Find the "Next steps" block that prints `./inspectah-build`. Update to:
 ```
@@ -1549,19 +1570,45 @@ Update any build instructions in HTML report output to reference
 
 Update `README.md` and any other docs found in step 1.
 
-- [ ] **Step 7: Fix broken test assertions**
+- [ ] **Step 7: Migrate regression coverage to Go tests**
+
+`tests/test_regression_20260408.py` contains an absolute-Containerfile-path
+regression test anchored to `inspectah-build`. Before deleting the script,
+port this regression to Go-side coverage in
+`cmd/inspectah/internal/cli/build_test.go`:
+
+```go
+func TestBuildCmd_AbsoluteContainerfilePath(t *testing.T) {
+	// Regression: build must use the Containerfile from the output dir,
+	// not an absolute path that leaks the extraction location.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Containerfile"), []byte("FROM fedora:43\n"), 0644)
+
+	cmd := newBuildCmd()
+	cmd.SetArgs([]string{dir, "-t", "test:latest", "--dry-run"})
+
+	var stderr bytes.Buffer
+	cmd.SetErr(&stderr)
+	err := cmd.Execute()
+	require.NoError(t, err)
+
+	output := stderr.String()
+	assert.Contains(t, output, "-f "+filepath.Join(dir, "Containerfile"))
+}
+```
+
+- [ ] **Step 8: Fix remaining broken test assertions**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && python -m pytest tests/ -q`
 
-If any tests fail due to changed output strings (e.g., "inspectah-build"
-in expected output), update the test assertions to match the new text.
+Update any Python tests that fail due to changed output strings.
 
-- [ ] **Step 8: Run full test suite**
+- [ ] **Step 9: Run full test suite**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... && cd ../.. && python -m pytest tests/ -q`
 Expected: all tests pass.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add -A
