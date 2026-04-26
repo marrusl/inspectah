@@ -27,6 +27,9 @@ pulling, host inspection, and artifact generation.
 
 %build
 cd cmd/inspectah
+export GOFLAGS=-mod=vendor
+export GONOSUMCHECK=1
+export GONOSUMDB=*
 go build -trimpath -ldflags "-s -w \
     -X main.version=%{version} \
     -X main.commit=%{?_commit}%{!?_commit:unknown} \
