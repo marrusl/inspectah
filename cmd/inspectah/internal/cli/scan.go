@@ -41,6 +41,8 @@ passed through to the inspectah container.`,
 				)
 			}
 
+			fmt.Fprintf(os.Stderr, "inspectah %s\n\n", opts.Version)
+
 			runner := container.NewRealRunner()
 
 			if err := container.EnsureImage(context.Background(), runner, opts.Image, opts.Pull, os.Stderr); err != nil {
@@ -58,8 +60,8 @@ passed through to the inspectah container.`,
 			}
 
 			env := map[string]string{
-				"INSPECTAH_HOST_CWD":  outDir,
-				"INSPECTAH_HOSTNAME":  hn,
+				"INSPECTAH_HOST_CWD": outDir,
+				"INSPECTAH_HOSTNAME": hn,
 			}
 			if os.Getenv("INSPECTAH_DEBUG") != "" {
 				env["INSPECTAH_DEBUG"] = "1"
@@ -80,12 +82,18 @@ passed through to the inspectah container.`,
 
 			podmanArgs := container.BuildArgs(runOpts)
 
-			if dryRun || verbose {
-				fmt.Fprintf(os.Stderr, "podman %s\n", strings.Join(podmanArgs, " "))
-				if dryRun {
-					return nil
-				}
+			if dryRun {
+				fmt.Fprintf(os.Stderr, "── [dry-run] Would execute:\n\n")
+				fmt.Fprintf(os.Stderr, "podman %s\n", formatPodmanCmd(podmanArgs))
+				fmt.Fprintf(os.Stderr, "\nNo changes made.\n")
+				return nil
 			}
+
+			if verbose {
+				fmt.Fprintf(os.Stderr, "podman %s\n", strings.Join(podmanArgs, " "))
+			}
+
+			fmt.Fprintf(os.Stderr, "── [scan]   Scanning host...\n\n")
 
 			return runner.Exec(podmanArgs)
 		},
@@ -99,4 +107,21 @@ passed through to the inspectah container.`,
 	registerScanPassthrough(cmd)
 
 	return cmd
+}
+
+func formatPodmanCmd(args []string) string {
+	if len(args) <= 1 {
+		return strings.Join(args, " ")
+	}
+	var b strings.Builder
+	b.WriteString(args[0])
+	for _, arg := range args[1:] {
+		if strings.HasPrefix(arg, "-") {
+			b.WriteString(" \\\n  ")
+		} else {
+			b.WriteString(" ")
+		}
+		b.WriteString(arg)
+	}
+	return b.String()
 }

@@ -27,3 +27,4 @@ fleet-aggregate.*.tar.gz
 
 # Go CLI wrapper
 cmd/inspectah/inspectah
+cmd/inspectah/inspectah-linux-*

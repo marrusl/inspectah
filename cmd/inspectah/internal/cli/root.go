@@ -19,12 +19,13 @@ func AsWrapperError(err error) (*ierrors.WrapperError, bool) {
 }
 
 type GlobalOpts struct {
-	Image string
-	Pull  string
+	Image   string
+	Pull    string
+	Version string
 }
 
 func NewRootCmd(ver, commit, date string) *cobra.Command {
-	opts := &GlobalOpts{}
+	opts := &GlobalOpts{Version: ver}
 
 	root := &cobra.Command{
 		Use:   "inspectah",

@@ -24,10 +24,11 @@ func TestEnsureImage_Missing_ImageExists(t *testing.T) {
 	var buf bytes.Buffer
 	err := EnsureImage(context.Background(), fake, "test:latest", "missing", &buf)
 	require.NoError(t, err)
-	assert.Empty(t, buf.String())
+	assert.Contains(t, buf.String(), "Migration tool ready")
+	assert.Contains(t, buf.String(), "cached")
 }
 
-func TestEnsureImage_Missing_NeedssPull(t *testing.T) {
+func TestEnsureImage_Missing_NeedsPull(t *testing.T) {
 	callCount := 0
 	fake := &FakeRunner{
 		RunFunc: func(ctx context.Context, args []string, stdout, stderr io.Writer) (int, error) {
@@ -44,8 +45,8 @@ func TestEnsureImage_Missing_NeedssPull(t *testing.T) {
 	var buf bytes.Buffer
 	err := EnsureImage(context.Background(), fake, "test:latest", "missing", &buf)
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Pulling test:latest")
-	assert.Contains(t, buf.String(), "Ready.")
+	assert.Contains(t, buf.String(), "Pulling migration tool")
+	assert.Contains(t, buf.String(), "Migration tool ready")
 }
 
 func TestEnsureImage_Always_Pulls(t *testing.T) {
@@ -60,7 +61,7 @@ func TestEnsureImage_Always_Pulls(t *testing.T) {
 	var buf bytes.Buffer
 	err := EnsureImage(context.Background(), fake, "test:latest", "always", &buf)
 	require.NoError(t, err)
-	assert.Contains(t, buf.String(), "Pulling")
+	assert.Contains(t, buf.String(), "Pulling migration tool")
 }
 
 func TestEnsureImage_Never_Missing(t *testing.T) {
@@ -72,7 +73,19 @@ func TestEnsureImage_Never_Missing(t *testing.T) {
 	var buf bytes.Buffer
 	err := EnsureImage(context.Background(), fake, "test:latest", "never", &buf)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not found locally")
+	assert.Contains(t, buf.String(), "not found locally")
+}
+
+func TestEnsureImage_Never_Exists(t *testing.T) {
+	fake := &FakeRunner{
+		RunFunc: func(ctx context.Context, args []string, stdout, stderr io.Writer) (int, error) {
+			return 0, nil
+		},
+	}
+	var buf bytes.Buffer
+	err := EnsureImage(context.Background(), fake, "test:latest", "never", &buf)
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Migration tool ready")
 }
 
 func TestEnsureImage_PullFailed_ManifestUnknown(t *testing.T) {
