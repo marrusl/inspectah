@@ -173,7 +173,7 @@ func TestResolveInput_RejectsDeviceNode(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run TestResolveInput`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run TestResolveInput`
 Expected: compilation error — package `build` does not exist yet.
 
 - [ ] **Step 3: Implement `input.go`**
@@ -261,12 +261,22 @@ func extractTarball(path string) (*InputResult, func(), error) {
 			return nil, noop, fmt.Errorf("corrupt tarball: %w", err)
 		}
 
-		if err := validateTarEntry(hdr, extractDir, seen); err != nil {
+		// Validate entry type first (rejects symlinks, hardlinks, devices)
+		if err := validateEntryType(hdr); err != nil {
 			cleanup()
 			return nil, noop, err
 		}
 
-		target := filepath.Join(extractDir, stripTopLevel(hdr.Name))
+		// Compute final extraction target and validate it
+		stripped := stripTopLevel(hdr.Name)
+		if stripped == "" || stripped == "." {
+			continue
+		}
+		target := filepath.Join(extractDir, stripped)
+		if err := validateTarget(target, extractDir, seen); err != nil {
+			cleanup()
+			return nil, noop, err
+		}
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -292,7 +302,7 @@ func extractTarball(path string) (*InputResult, func(), error) {
 			out.Close()
 		}
 
-		seen[hdr.Name] = true
+		seen[target] = true
 	}
 
 	if err := validateContainerfile(extractDir); err != nil {
@@ -303,38 +313,32 @@ func extractTarball(path string) (*InputResult, func(), error) {
 	return &InputResult{Dir: extractDir, IsTarball: true}, cleanup, nil
 }
 
-func validateTarEntry(hdr *tar.Header, root string, seen map[string]bool) error {
-	name := hdr.Name
-
-	if filepath.IsAbs(name) {
-		return fmt.Errorf("archive safety: absolute path %q rejected", name)
-	}
-	if strings.Contains(name, "..") {
-		for _, part := range strings.Split(name, "/") {
-			if part == ".." {
-				return fmt.Errorf("archive safety: path traversal in %q rejected", name)
-			}
-		}
-	}
-
-	resolved := filepath.Join(root, filepath.Clean(name))
-	if !strings.HasPrefix(resolved, root+string(filepath.Separator)) && resolved != root {
-		return fmt.Errorf("archive safety: path %q escapes extraction root", name)
-	}
-
+func validateEntryType(hdr *tar.Header) error {
 	switch hdr.Typeflag {
 	case tar.TypeReg, tar.TypeDir:
-		// allowed
+		return nil
 	case tar.TypeSymlink:
-		return fmt.Errorf("archive safety: symlink %q rejected", name)
+		return fmt.Errorf("archive safety: symlink %q rejected", hdr.Name)
 	case tar.TypeLink:
-		return fmt.Errorf("archive safety: hard link %q rejected", name)
+		return fmt.Errorf("archive safety: hard link %q rejected", hdr.Name)
 	default:
-		return fmt.Errorf("archive safety: unsupported entry type %d for %q", hdr.Typeflag, name)
+		return fmt.Errorf("archive safety: unsupported entry type %d for %q", hdr.Typeflag, hdr.Name)
+	}
+}
+
+func validateTarget(target, root string, seen map[string]bool) error {
+	cleaned := filepath.Clean(target)
+
+	if filepath.IsAbs(cleaned) && !strings.HasPrefix(cleaned, root+string(filepath.Separator)) {
+		return fmt.Errorf("archive safety: absolute path rejected")
 	}
 
-	if seen[name] {
-		return fmt.Errorf("archive safety: duplicate path %q rejected", name)
+	if !strings.HasPrefix(cleaned, root+string(filepath.Separator)) && cleaned != root {
+		return fmt.Errorf("archive safety: path traversal rejected — resolved to %q", cleaned)
+	}
+
+	if seen[cleaned] {
+		return fmt.Errorf("archive safety: duplicate path %q rejected", cleaned)
 	}
 
 	return nil
@@ -359,7 +363,7 @@ func validateContainerfile(dir string) error {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run TestResolveInput`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run TestResolveInput`
 Expected: all 8 tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -431,13 +435,15 @@ func TestClassifyBuild_PlatformFlag(t *testing.T) {
 }
 
 func TestClassifyBuild_ARGWithDefault(t *testing.T) {
+	// ARG with default is still ambiguous because --build-arg can override
 	cf := "ARG BASE=registry.redhat.io/rhel9/rhel-bootc:9.4\nFROM ${BASE}\n"
-	assert.Equal(t, DetectionEntitled, ClassifyBuild(cf))
+	assert.Equal(t, DetectionAmbiguous, ClassifyBuild(cf))
 }
 
 func TestClassifyBuild_ARGWithUBIDefault(t *testing.T) {
+	// Even UBI defaults are ambiguous — --build-arg could point elsewhere
 	cf := "ARG BASE=registry.redhat.io/ubi9/ubi:latest\nFROM ${BASE}\n"
-	assert.Equal(t, DetectionNonEntitled, ClassifyBuild(cf))
+	assert.Equal(t, DetectionAmbiguous, ClassifyBuild(cf))
 }
 
 func TestClassifyBuild_ARGNoDefault(t *testing.T) {
@@ -458,7 +464,7 @@ func TestClassifyBuild_CommentsAndBlanks(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run TestClassifyBuild`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run TestClassifyBuild`
 Expected: compilation error — `ClassifyBuild` not defined.
 
 - [ ] **Step 3: Implement `rhel.go`**
@@ -483,14 +489,14 @@ const (
 var ubiPattern = regexp.MustCompile(`^registry\.redhat\.io/ubi[789]($|/.*)`)
 
 func ClassifyBuild(containerfile string) Detection {
-	args := parseARGs(containerfile)
-	stages := parseFROMs(containerfile, args)
+	argNames := parseARGNames(containerfile)
+	stages := parseFROMs(containerfile, argNames)
 
 	hasEntitled := false
 	hasAmbiguous := false
 
 	for _, img := range stages {
-		switch classifyImage(img) {
+		switch classifyImage(img, argNames) {
 		case DetectionEntitled:
 			hasEntitled = true
 		case DetectionAmbiguous:
@@ -507,22 +513,24 @@ func ClassifyBuild(containerfile string) Detection {
 	return DetectionNonEntitled
 }
 
-func parseARGs(content string) map[string]string {
-	args := make(map[string]string)
+func parseARGNames(content string) map[string]bool {
+	names := make(map[string]bool)
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(strings.ToUpper(line), "ARG ") {
 			continue
 		}
 		rest := strings.TrimSpace(line[4:])
+		name := rest
 		if idx := strings.Index(rest, "="); idx >= 0 {
-			args[rest[:idx]] = rest[idx+1:]
+			name = rest[:idx]
 		}
+		names[name] = true
 	}
-	return args
+	return names
 }
 
-func parseFROMs(content string, args map[string]string) []string {
+func parseFROMs(content string, argNames map[string]bool) []string {
 	var images []string
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
@@ -544,21 +552,13 @@ func parseFROMs(content string, args map[string]string) []string {
 		}
 
 		img := strings.Fields(rest)[0]
-		img = resolveARGs(img, args)
 		images = append(images, img)
 	}
 	return images
 }
 
-func resolveARGs(img string, args map[string]string) string {
-	for name, val := range args {
-		img = strings.ReplaceAll(img, "${"+name+"}", val)
-		img = strings.ReplaceAll(img, "$"+name, val)
-	}
-	return img
-}
-
-func classifyImage(img string) Detection {
+func classifyImage(img string, argNames map[string]bool) Detection {
+	// Any ARG reference makes this ambiguous — --build-arg can override defaults
 	if strings.Contains(img, "${") || strings.Contains(img, "$") {
 		return DetectionAmbiguous
 	}
@@ -581,7 +581,7 @@ func classifyImage(img string) Detection {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run TestClassifyBuild`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run TestClassifyBuild`
 Expected: all 12 tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -717,7 +717,7 @@ func TestValidateCertExpiry_IgnoreExpired(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run "TestDiscoverCerts|TestValidateCertExpiry"`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run "TestDiscoverCerts|TestValidateCertExpiry"`
 Expected: compilation error — `DiscoverCerts`, `ValidateCertExpiry` not defined.
 
 - [ ] **Step 3: Implement `entitlement.go`**
@@ -894,7 +894,7 @@ func CheckMacOSPath(dir string) string {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run "TestDiscoverCerts|TestValidateCertExpiry"`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run "TestDiscoverCerts|TestValidateCertExpiry"`
 Expected: all 8 tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -1029,7 +1029,7 @@ func mapArchToBinfmt(goarch string) string {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run TestCrossArch`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run TestCrossArch`
 Expected: all 3 tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -1083,7 +1083,7 @@ func TestFormatMissingPodman(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run "TestFormatSuccess|TestFormatMissingPodman"`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run "TestFormatSuccess|TestFormatMissingPodman"`
 Expected: compilation error.
 
 - [ ] **Step 3: Implement `output.go`**
@@ -1121,7 +1121,7 @@ func stripLocalhost(tag string) string {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/build/ -v -run "TestFormatSuccess|TestFormatMissingPodman"`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/build/ -v -run "TestFormatSuccess|TestFormatMissingPodman"`
 Expected: all 2 tests PASS.
 
 - [ ] **Step 5: Commit**
@@ -1210,7 +1210,7 @@ func TestBuildCmd_MutualExclusion(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/cli/ -v -run TestBuildCmd`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/cli/ -v -run TestBuildCmd`
 Expected: some tests fail (new flags don't exist yet).
 
 - [ ] **Step 3: Replace `build.go` with full implementation**
@@ -1220,6 +1220,7 @@ Expected: some tests fail (new flags don't exist yet).
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1278,12 +1279,15 @@ Extra arguments after -- are passed directly to podman build
 			}
 			defer cleanup()
 
-			// Handle cleanup on signals
+			// Handle cleanup on signals — cancel context to kill podman child first
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 			go func() {
 				<-sigCh
-				cleanup()
+				cancel()  // kills podman build child via context
+				cleanup() // then remove temp dir
 				os.Exit(1)
 			}()
 
@@ -1296,22 +1300,29 @@ Extra arguments after -- are passed directly to podman build
 
 			detection := build.ClassifyBuild(string(cfData))
 
-			// Discover entitlement certs
+			// --no-entitlements overrides detection to non-entitled
 			if noEntitlements {
 				detection = build.DetectionNonEntitled
 			}
 
-			certs, err := build.DiscoverCerts(build.DiscoverOpts{
-				EntitlementsDir:  entitlementsDir,
-				EnvDir:           os.Getenv("INSPECTAH_ENTITLEMENT_DIR"),
-				OutputDir:        input.Dir,
-				SkipEntitlements: noEntitlements,
-			})
-			if err != nil {
-				return err
+			// Only run cert discovery for entitled/ambiguous builds
+			var certs *build.DiscoverResult
+			if detection == build.DetectionNonEntitled {
+				certs = &build.DiscoverResult{Status: build.DiscoveryNoCerts}
+			} else {
+				var err error
+				certs, err = build.DiscoverCerts(build.DiscoverOpts{
+					EntitlementsDir:  entitlementsDir,
+					EnvDir:           os.Getenv("INSPECTAH_ENTITLEMENT_DIR"),
+					OutputDir:        input.Dir,
+					SkipEntitlements: false,
+				})
+				if err != nil {
+					return err
+				}
 			}
 
-			// Validate cert expiry
+			// Validate cert expiry (only when certs were actually discovered)
 			if certs.Status == build.DiscoveryCertsFound {
 				if err := build.ValidateCertExpiry(certs.EntitlementDir, ignoreExpired); err != nil {
 					return err
@@ -1351,7 +1362,7 @@ Extra arguments after -- are passed directly to podman build
 				podmanArgs = append(podmanArgs, "--pull="+pull)
 			}
 
-			// Entitlement volume mounts
+			// Entitlement volume mounts (only for entitled/ambiguous with discovered certs)
 			if certs.Status == build.DiscoveryCertsFound {
 				podmanArgs = append(podmanArgs, "-v", certs.EntitlementDir+":/etc/pki/entitlement:ro")
 				if certs.RHSMDir != "" {
@@ -1373,7 +1384,7 @@ Extra arguments after -- are passed directly to podman build
 			fmt.Fprintf(os.Stderr, "Building image from %s\n", input.Dir)
 
 			// Execute podman build
-			podCmd := exec.CommandContext(cmd.Context(), podmanPath, podmanArgs...)
+			podCmd := exec.CommandContext(ctx, podmanPath, podmanArgs...)
 			podCmd.Stdout = os.Stdout
 			podCmd.Stderr = os.Stderr
 
@@ -1406,12 +1417,12 @@ Extra arguments after -- are passed directly to podman build
 
 - [ ] **Step 4: Run all tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/cli/ -v -run TestBuildCmd && go test ./cmd/inspectah/internal/build/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/cli/ -v -run TestBuildCmd && go test ./cmd/inspectah/internal/build/ -v`
 Expected: all tests PASS across both packages.
 
 - [ ] **Step 5: Run full test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/... -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... -v`
 Expected: all Go tests PASS.
 
 - [ ] **Step 6: Commit**
@@ -1437,32 +1448,75 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 - [ ] **Step 1: Verify `--help` output**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go run ./cmd/inspectah build --help`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go run . build --help`
 Expected: shows all flags including `--tag`, `--platform`, `--entitlements-dir`, `--no-entitlements`, `--ignore-expired-certs`, `--no-cache`, `--pull`, `--dry-run`, `--verbose`.
 
 - [ ] **Step 2: Verify `--dry-run` with a test tarball**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go run ./cmd/inspectah build <path-to-test-tarball> -t test:latest --dry-run`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go run . build <path-to-test-tarball> -t test:latest --dry-run`
 Expected: prints the full `podman build` command without executing it.
 
 - [ ] **Step 3: Verify error messages**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go run ./cmd/inspectah build /nonexistent -t test:latest`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go run . build /nonexistent -t test:latest`
 Expected: clear error about path not existing.
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go run ./cmd/inspectah build /tmp -t test:latest`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go run . build /tmp -t test:latest`
 Expected: "No Containerfile found" error.
 
 - [ ] **Step 4: Run full test suite one final time**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/... && python -m pytest tests/ -q`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... && python -m pytest tests/ -q`
 Expected: all Go and Python tests pass.
 
-- [ ] **Step 5: Commit plan completion marker**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add docs/superpowers/plans/2026-04-26-build-subcommand.md
-git commit -m "docs(plan): mark build subcommand implementation plan complete
+git commit -m "test(build): integration smoke test pass
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
+---
+
+### Task 8: Retire `inspectah-build` References
+
+**Files:**
+- Modify: `docs/how-to/build-bootc-image.md` — update to reference `inspectah build`
+- Modify: any templates/renderers that print `inspectah-build` in output messages
+- Modify: `README.md` or other top-level docs referencing `inspectah-build`
+
+- [ ] **Step 1: Find all references to `inspectah-build`**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && grep -rn 'inspectah-build' --include='*.md' --include='*.py' --include='*.go' --include='*.sh' | grep -v '.git/'`
+
+- [ ] **Step 2: Update docs to reference `inspectah build`**
+
+For each file found in step 1, update references from `inspectah-build` or
+`./inspectah-build` to `inspectah build`. Update command examples, flag names,
+and any behavioral descriptions that no longer apply (e.g., docker support,
+interactive prompts, `--push`).
+
+- [ ] **Step 3: Update Python output templates**
+
+The Python scan output prints "Next steps" including `./inspectah-build`.
+Find and update these in `src/inspectah/` to reference `inspectah build` instead.
+Search for `inspectah-build` in `renderers/`, `packaging.py`, and `__main__.py`.
+
+- [ ] **Step 4: Run full test suite**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... && cd ../.. && python -m pytest tests/ -q`
+Expected: all tests pass. Some Python tests may need string updates if they
+assert on the old `inspectah-build` output text.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A
+git commit -m "chore: update references from inspectah-build to inspectah build
+
+The standalone Python build script is retired. All docs, templates,
+and output messages now reference the integrated Go CLI subcommand.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
