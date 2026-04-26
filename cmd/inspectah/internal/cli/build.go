@@ -1,62 +1,167 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 
-	"github.com/marrusl/inspectah/cmd/inspectah/internal/container"
+	build "github.com/marrusl/inspectah/cmd/inspectah/internal/build"
 	"github.com/spf13/cobra"
 )
 
 func newBuildCmd() *cobra.Command {
 	var (
-		tag     string
-		pull    string
-		dryRun  bool
-		verbose bool
+		tag             string
+		platform        string
+		entitlementsDir string
+		noEntitlements  bool
+		ignoreExpired   bool
+		noCache         bool
+		pull            string
+		dryRun          bool
+		verbose         bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "build <output-dir> [flags] [-- extra-podman-args...]",
+		Use:   "build <tarball|directory> -t <image:tag> [flags] [-- extra-podman-args...]",
 		Short: "Build a bootc image from inspectah output",
-		Long: `Build a bootc container image from an inspectah output directory
-containing a Containerfile and config tree.
+		Long: `Build a bootc container image from an inspectah scan/refine tarball
+or extracted directory.
 
-This runs podman build on the host — it does not use the inspectah
-container image. The --pull flag here controls base image pulls
-during the build, not the inspectah scanner image.
+Runs podman build natively on the workstation. Handles RHEL entitlement
+cert detection, validation, and injection automatically.
 
 Extra arguments after -- are passed directly to podman build
 (e.g., --build-arg, --secret, --squash).`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
-				return fmt.Errorf("requires an output directory argument")
+				return fmt.Errorf("requires a tarball or directory argument\n\nUsage: inspectah build <tarball|directory> -t <image:tag>")
 			}
 
-			outputDir, err := filepath.Abs(args[0])
+			if tag == "" {
+				return fmt.Errorf("--tag (-t) is required")
+			}
+
+			if noEntitlements && entitlementsDir != "" {
+				return fmt.Errorf("--no-entitlements and --entitlements-dir are mutually exclusive")
+			}
+
+			podmanPath, err := exec.LookPath("podman")
 			if err != nil {
-				return fmt.Errorf("cannot resolve output directory: %w", err)
+				return fmt.Errorf(build.FormatMissingPodman())
 			}
 
-			containerfile := filepath.Join(outputDir, "Containerfile")
-			if _, err := os.Stat(containerfile); err != nil {
-				return fmt.Errorf("no Containerfile found in %s — run inspectah scan first", outputDir)
+			input, cleanup, err := build.ResolveInput(args[0])
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			ctx, cancel := context.WithCancel(cmd.Context())
+			defer cancel()
+			var podProcess *os.Process
+			sigCh := make(chan os.Signal, 1)
+			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+			go func() {
+				<-sigCh
+				cancel()
+				if podProcess != nil {
+					podProcess.Wait()
+				}
+				cleanup()
+				os.Exit(1)
+			}()
+
+			cfPath := input.Dir + "/Containerfile"
+			cfData, err := os.ReadFile(cfPath)
+			if err != nil {
+				return fmt.Errorf("cannot read Containerfile: %w", err)
 			}
 
-			runner := container.NewRealRunner()
+			envDir := os.Getenv("INSPECTAH_ENTITLEMENT_DIR")
+			if entitlementsDir != "" {
+				if err := build.ValidateExplicitDir(entitlementsDir); err != nil {
+					return err
+				}
+			}
+			if envDir != "" && entitlementsDir == "" {
+				if err := build.ValidateExplicitDir(envDir); err != nil {
+					return err
+				}
+			}
 
-			podmanArgs := []string{"build"}
-			if tag != "" {
-				podmanArgs = append(podmanArgs, "-t", tag)
+			detection := build.ClassifyBuild(string(cfData))
+
+			if noEntitlements {
+				detection = build.DetectionNonEntitled
+			}
+
+			var certs *build.DiscoverResult
+			if detection == build.DetectionNonEntitled {
+				certs = &build.DiscoverResult{Status: build.DiscoveryNoCerts}
+			} else {
+				var err error
+				certs, err = build.DiscoverCerts(build.DiscoverOpts{
+					EntitlementsDir:  entitlementsDir,
+					EnvDir:           envDir,
+					OutputDir:        input.Dir,
+					SkipEntitlements: false,
+				})
+				if err != nil {
+					return err
+				}
+			}
+
+			if certs.Status == build.DiscoveryCertsFound {
+				if err := build.ValidateCertExpiry(certs.EntitlementDir, ignoreExpired); err != nil {
+					return err
+				}
+				if warning := build.CheckMacOSPath(certs.EntitlementDir); warning != "" {
+					fmt.Fprintln(os.Stderr, warning)
+				}
+			}
+
+			if certs.Status == build.DiscoveryNoCerts && detection != build.DetectionNonEntitled {
+				fmt.Fprintln(os.Stderr, "Warning: RHEL entitlement certs not found. Build may fail if subscribed repos are needed.")
+				fmt.Fprintln(os.Stderr, "  Copy from RHEL host:  scp root@rhel-host:/etc/pki/entitlement/*.pem ./entitlement/")
+				fmt.Fprintln(os.Stderr, "  Silence this warning: inspectah build --no-entitlements ...")
+			}
+
+			if platform != "" {
+				warnings, err := build.CrossArchCheck(platform)
+				if err != nil {
+					return err
+				}
+				for _, w := range warnings {
+					fmt.Fprintln(os.Stderr, w)
+				}
+			}
+
+			podmanArgs := []string{"build", "-f", cfPath, "-t", tag}
+			if platform != "" {
+				podmanArgs = append(podmanArgs, "--platform="+platform)
+			}
+			if noCache {
+				podmanArgs = append(podmanArgs, "--no-cache")
 			}
 			if pull != "" {
 				podmanArgs = append(podmanArgs, "--pull="+pull)
 			}
+
+			if certs.Status == build.DiscoveryCertsFound {
+				podmanArgs = append(podmanArgs, "-v", certs.EntitlementDir+":/etc/pki/entitlement:ro")
+				if certs.RHSMDir != "" {
+					podmanArgs = append(podmanArgs, "-v", certs.RHSMDir+":/etc/rhsm:ro")
+				}
+			}
+
 			podmanArgs = append(podmanArgs, args[1:]...)
-			podmanArgs = append(podmanArgs, "-f", containerfile, outputDir)
+			podmanArgs = append(podmanArgs, input.Dir)
 
 			if dryRun || verbose {
 				fmt.Fprintf(os.Stderr, "podman %s\n", strings.Join(podmanArgs, " "))
@@ -65,23 +170,37 @@ Extra arguments after -- are passed directly to podman build
 				}
 			}
 
-			fmt.Fprintf(os.Stderr, "Building image from %s\n", outputDir)
+			fmt.Fprintf(os.Stderr, "Building image from %s\n", input.Dir)
 
-			code, err := runner.Run(cmd.Context(), podmanArgs, os.Stdout, os.Stderr)
-			if err != nil {
+			podCmd := exec.CommandContext(ctx, podmanPath, podmanArgs...)
+			podCmd.Stdout = os.Stdout
+			podCmd.Stderr = os.Stderr
+
+			if err := podCmd.Start(); err != nil {
+				return fmt.Errorf("podman build failed to start: %w", err)
+			}
+			podProcess = podCmd.Process
+
+			if err := podCmd.Wait(); err != nil {
+				if exitErr, ok := err.(*exec.ExitError); ok {
+					return fmt.Errorf("podman build exited with code %d", exitErr.ExitCode())
+				}
 				return fmt.Errorf("podman build failed: %w", err)
 			}
-			if code != 0 {
-				return fmt.Errorf("podman build exited with code %d", code)
-			}
 
-			fmt.Fprintf(os.Stderr, "Build complete.\n")
+			fmt.Fprintln(os.Stderr)
+			fmt.Fprintln(os.Stderr, build.FormatSuccess(tag))
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVarP(&tag, "tag", "t", "", "tag for the built image (e.g., my-migration:latest)")
-	cmd.Flags().StringVar(&pull, "pull", "", "base image pull policy for podman build (always, missing, never)")
+	cmd.Flags().StringVarP(&tag, "tag", "t", "", "image name:tag (required)")
+	cmd.Flags().StringVar(&platform, "platform", "", "target os/arch (e.g., linux/arm64)")
+	cmd.Flags().StringVar(&entitlementsDir, "entitlements-dir", "", "explicit entitlement cert directory")
+	cmd.Flags().BoolVar(&noEntitlements, "no-entitlements", false, "skip entitlement detection entirely")
+	cmd.Flags().BoolVar(&ignoreExpired, "ignore-expired-certs", false, "proceed despite expired entitlement certs")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false, "do not use cache when building")
+	cmd.Flags().StringVar(&pull, "pull", "", "base image pull policy (always, missing, never, newer)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the podman command without executing")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print the podman command before executing")
 
