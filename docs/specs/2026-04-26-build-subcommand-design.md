@@ -1,6 +1,6 @@
 # `inspectah build` Subcommand Design
 
-**Status:** Draft
+**Status:** Approved
 **Date:** 2026-04-26
 **Replaces:** `inspectah-build` standalone Python script
 
@@ -190,7 +190,7 @@ with the platform to produce one action:
 macOS entitled builds work because `podman machine` shares the user's
 home directory into the VM by default. On macOS, all paths used for `-v`
 mounts must be under `$HOME` (or another explicitly shared podman machine
-mount). This is enforced at two points:
+mount). This is handled at two points:
 
 - **Tarball extraction:** uses a temp directory under `$HOME`.
 - **Cert discovery and `--entitlements-dir`:** on macOS, preflight the
