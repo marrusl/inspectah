@@ -52,12 +52,12 @@ should fail fast with a clear error, not block waiting for input.
 | Flag | Type | Default | Purpose |
 |------|------|---------|---------|
 | `--tag, -t` | string | required | Image name:tag |
-| `--platform` | string | host arch | Target os/arch (e.g., `linux/arm64`) |
+| `--platform` | string | omitted (defers to podman) | Target os/arch (e.g., `linux/arm64`) |
 | `--entitlements-dir` | string | auto-detect | Explicit cert directory |
 | `--no-entitlements` | bool | false | Skip entitlement detection |
 | `--ignore-expired-certs` | bool | false | Proceed despite expired certs |
 | `--no-cache` | bool | false | Skip build cache |
-| `--pull` | string | "" | Base image pull policy (`always`, `missing`, `never`, `newer`) |
+| `--pull` | string | omitted (defers to podman, default `missing`) | Base image pull policy (`always`, `missing`, `never`, `newer`) |
 | `--dry-run` | bool | false | Print podman command only |
 | `--verbose` | bool | false | Print command before running |
 | `--` | passthrough | — | Extra podman build args |
@@ -70,10 +70,16 @@ Everything else (e.g., `--squash`, `--layers`, `--secret`) passes through `--`.
 Accept `.tar.gz` or `.tgz`. Extract to a temp directory. Clean up on exit,
 including SIGINT/SIGTERM signal handling.
 
-**Archive safety:** Extraction must reject path traversal attacks. Reject
-entries containing `..` path components, absolute paths, or symlinks pointing
-outside the extraction root. Use Go's `archive/tar` with explicit validation
-on each entry header before writing.
+**Archive safety:** Only extract regular files and directories. For every
+entry, resolve the full destination path and verify it falls within the
+extraction root before writing. Reject:
+
+- `..` path components and absolute paths
+- Symlinks and hard links (inspectah tarballs contain neither)
+- Device nodes, FIFOs, sockets, and other special file types
+- Duplicate paths that would overwrite a previously extracted entry
+
+Use Go's `archive/tar` with explicit validation on each entry header.
 
 Validate extracted contents: must contain a `Containerfile`. Fail fast with
 a clear error if missing, pointing to `inspectah scan` output format.
@@ -88,6 +94,14 @@ as directory. If neither exists, fail with a usage hint.
 
 ## Entitlement Cert Handling
 
+### Discovery and structure
+Entitlement configuration consists of two directories:
+
+- `entitlement/` — subscription certificates (`.pem` files), mounted at
+  `/etc/pki/entitlement` during build
+- `rhsm/` — subscription-manager config, mounted at `/etc/rhsm` during build.
+  Optional companion directory; looked for alongside `entitlement/`.
+
 ### Auto-discovery cascade
 Checked in order, first match wins. CLI flag and env var take precedence
 over filesystem locations (standard CLI convention):
@@ -97,6 +111,9 @@ over filesystem locations (standard CLI convention):
 3. Bundled in tarball — `<output>/entitlement/`
 4. Host local — `/etc/pki/entitlement/`
 5. User config — `~/.config/inspectah/entitlement/`
+
+At each cascade level, also check for a sibling `rhsm/` directory. If found,
+include it in the build mounts.
 
 `--no-entitlements` skips the cascade entirely.
 
@@ -111,9 +128,11 @@ Parse all `FROM` directives in the Containerfile. If any stage references
 - Comments and blank lines (skip them)
 
 If `ARG` substitution cannot be resolved statically (no default value),
-assume entitlements are required. If certs are found, mount them silently.
-If certs are not found, warn but proceed — the build will fail naturally
-if the registry actually requires them.
+treat the stage as ambiguous. Behavior: if certs are found via the
+discovery cascade, mount them silently. If certs are not found, warn
+but proceed (do not fail) — the build will fail naturally if the registry
+actually requires them. This is distinct from the definite-RHEL case, which
+fails when certs are missing.
 
 ### Cert validation
 Validate expiry using Go's `crypto/x509` stdlib — no openssl dependency.
@@ -121,12 +140,28 @@ Validate expiry using Go's `crypto/x509` stdlib — no openssl dependency.
 - **Expired certs:** fail with a clear message. Show expiry date, which certs
   are stale, and the `subscription-manager refresh` fix. `--ignore-expired-certs`
   overrides.
-- **No certs found + RHEL base image:** fail with instructions on where to
-  place certs.
+- **No certs found + definite RHEL base image:** fail with instructions on
+  where to place certs.
+- **No certs found + ambiguous base image (unresolved ARG):** warn but proceed.
 - **No certs found + non-RHEL base image:** proceed silently.
 
 ### Build-time mounting
-Certs are mounted into the build via podman's `--volume` flag.
+On Linux, certs are mounted into the build via `podman build -v`:
+
+- `-v <entitlement-dir>:/etc/pki/entitlement:ro,Z`
+- `-v <rhsm-dir>:/etc/rhsm:ro,Z` (if `rhsm/` found)
+
+On macOS, `podman build -v` with host paths is not supported by the
+remote client (the client and podman machine VM are on different
+machines). Instead, copy certs into the build context as a temporary
+directory and use a `--secret` or `COPY`-based injection strategy:
+
+1. Copy certs into the build context under a temp subdirectory
+2. Use `--build-arg` or `--secret` to make them available during build
+3. Clean up the temp copy after build completes
+
+The implementation should detect the platform and select the appropriate
+strategy automatically. The user interface is identical on both platforms.
 
 ## Cross-Architecture Builds
 
@@ -199,7 +234,9 @@ Assemble the `podman build` command with:
 - `--platform <platform>` (if specified)
 - `--no-cache` (if specified)
 - `--pull <policy>` (if specified)
-- `-v <entitlement-dir>:/run/secrets/etc-pki-entitlement:ro` (if RHEL + certs found)
+- `-v <entitlement-dir>:/etc/pki/entitlement:ro,Z` (Linux, if RHEL + certs found)
+- `-v <rhsm-dir>:/etc/rhsm:ro,Z` (Linux, if `rhsm/` found)
+- On macOS, use the build-context injection strategy instead of `-v`
 - Any `--` passthrough args
 - Build context: the output directory
 
