@@ -150,11 +150,6 @@ jobs:
   update-homebrew:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.release.tag_name }}
-          path: inspectah-src
-
       - name: Compute source tarball metadata
         id: source_tarball
         env:
@@ -163,8 +158,10 @@ jobs:
         run: |
           URL="https://github.com/${REPO}/archive/refs/tags/${RELEASE_TAG}.tar.gz"
           SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          VERSION="${RELEASE_TAG#v}"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tap repo
         uses: actions/checkout@v4
@@ -173,84 +170,17 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      - name: Resolve dependencies and update formula
+      - name: Update formula
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          SOURCE_TARBALL_SHA: ${{ steps.source_tarball.outputs.sha256 }}
-          SOURCE_TARBALL_URL: ${{ steps.source_tarball.outputs.url }}
-        working-directory: inspectah-src
+          VERSION: ${{ steps.source_tarball.outputs.version }}
+          SHA256: ${{ steps.source_tarball.outputs.sha256 }}
+        working-directory: homebrew-tap
         run: |
-          python3 -m venv /tmp/resolve
-          /tmp/resolve/bin/pip install --quiet .
-          /tmp/resolve/bin/python3 - "$SOURCE_TARBALL_URL" "$SOURCE_TARBALL_SHA" \
-            ../homebrew-tap/Formula/inspectah.rb << 'PYEOF'
-          import importlib.metadata
-          import json
-          import re
-          import sys
-          import urllib.request
-          from pathlib import Path
-
-          def normalize_package_name(name: str) -> str:
-              return re.sub(r"[-_.]+", "-", name).lower()
-
-          _, tarball_url, tarball_sha, formula_path = sys.argv
-          formula_path = Path(formula_path)
-
-          SKIP = {"inspectah", "pip", "setuptools", "wheel"}
-
-          packages = sorted(
-              (
-                  normalize_package_name(d.metadata["Name"]),
-                  d.metadata["Version"],
-              )
-              for d in importlib.metadata.distributions()
-              if d.metadata["Name"].lower() not in SKIP
-          )
-
-          resource_blocks = []
-          for name, version in packages:
-              with urllib.request.urlopen(
-                  f"https://pypi.org/pypi/{name}/{version}/json"
-              ) as resp:
-                  data = json.loads(resp.read())
-              for fi in data["urls"]:
-                  if fi["packagetype"] == "sdist":
-                      resource_blocks.append(
-                          f'  resource "{name}" do\n'
-                          f'    url "{fi["url"]}"\n'
-                          f'    sha256 "{fi["digests"]["sha256"]}"\n'
-                          f"  end"
-                      )
-                      break
-              else:
-                  raise SystemExit(f"No sdist found on PyPI for {name} {version}")
-
-          formula = formula_path.read_text()
-          formula = re.sub(r'(  url ").*(")', rf"\g<1>{tarball_url}\2", formula)
-          formula = re.sub(
-              r'(  sha256 ").*(")', rf"\g<1>{tarball_sha}\2", formula, count=1
-          )
-
-          resource_text = "\n\n".join(resource_blocks)
-          resource_section_start = formula.find('  resource "')
-          resource_section_end = formula.find("\n  def install")
-          if resource_section_start == -1 or resource_section_end == -1:
-              raise SystemExit("Could not locate Homebrew resource section")
-          formula = (
-              formula[:resource_section_start]
-              + resource_text
-              + "\n\n"
-              + formula[resource_section_end + 1 :]
-          )
-
-          formula_path.write_text(formula)
-          print(f"Updated formula with {len(resource_blocks)} resource blocks")
-          PYEOF
+          sed -i \
+            -e "s|url \".*\"|url \"https://github.com/${{ github.repository }}/archive/refs/tags/v${VERSION}.tar.gz\"|" \
+            -e "s|sha256 \".*\"|sha256 \"${SHA256}\"|" \
+            Formula/inspectah.rb
+          echo "Updated formula to v${VERSION} (sha256: ${SHA256})"
 
       - name: Open PR against tap repo
         env:
