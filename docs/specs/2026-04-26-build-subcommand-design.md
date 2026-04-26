@@ -13,6 +13,9 @@ The existing `inspectah-build` Python script is retired. All build logic moves
 into Go with no container or external script dependencies beyond podman.
 
 Supports Linux and macOS hosts. On macOS, builds run through `podman machine`.
+Non-entitled builds work on both platforms. RHEL-entitled builds on macOS
+require a follow-on spec for the entitlement injection mechanism — see
+`Build-time mounting (macOS)` section.
 
 ## Usage
 
@@ -106,14 +109,17 @@ Entitlement configuration consists of two directories:
 Checked in order, first match wins. CLI flag and env var take precedence
 over filesystem locations (standard CLI convention):
 
+0. RHEL host auto-detection — if `/etc/pki/entitlement/*.pem` exists and
+   contains valid certs, the host is subscribed and podman handles entitlement
+   natively. Skip all mounting — return early with no explicit cert paths.
+   This matches current `inspectah-build` behavior.
 1. CLI flag — `--entitlements-dir <path>`
 2. Environment variable — `INSPECTAH_ENTITLEMENT_DIR`
 3. Bundled in tarball — `<output>/entitlement/`
-4. Host local — `/etc/pki/entitlement/`
-5. User config — `~/.config/inspectah/entitlement/`
+4. User config — `~/.config/inspectah/entitlement/`
 
-At each cascade level, also check for a sibling `rhsm/` directory. If found,
-include it in the build mounts.
+At each cascade level (1-4), also check for a sibling `rhsm/` directory.
+If found, include it in the build mounts.
 
 `--no-entitlements` skips the cascade entirely.
 
@@ -130,9 +136,7 @@ Parse all `FROM` directives in the Containerfile. If any stage references
 If `ARG` substitution cannot be resolved statically (no default value),
 treat the stage as ambiguous. Behavior: if certs are found via the
 discovery cascade, mount them silently. If certs are not found, warn
-but proceed (do not fail) — the build will fail naturally if the registry
-actually requires them. This is distinct from the definite-RHEL case, which
-fails when certs are missing.
+but proceed — same as the definite-RHEL case.
 
 ### Cert validation
 Validate expiry using Go's `crypto/x509` stdlib — no openssl dependency.
@@ -140,28 +144,44 @@ Validate expiry using Go's `crypto/x509` stdlib — no openssl dependency.
 - **Expired certs:** fail with a clear message. Show expiry date, which certs
   are stale, and the `subscription-manager refresh` fix. `--ignore-expired-certs`
   overrides.
-- **No certs found + definite RHEL base image:** fail with instructions on
-  where to place certs.
+- **No certs found + definite RHEL base image:** warn with instructions on
+  where to place certs, but proceed. The build may still succeed if the
+  Containerfile doesn't install packages, or if the host handles entitlement
+  natively (Satellite, SCA, etc.). This matches current `inspectah-build`
+  behavior.
 - **No certs found + ambiguous base image (unresolved ARG):** warn but proceed.
 - **No certs found + non-RHEL base image:** proceed silently.
 
-### Build-time mounting
-On Linux, certs are mounted into the build via `podman build -v`:
+### Build-time mounting (Linux)
+When certs are discovered via the cascade (levels 1-4) and need explicit
+mounting, use `podman build -v` with `:ro` only (no `:Z` — do not relabel
+system directories):
 
-- `-v <entitlement-dir>:/etc/pki/entitlement:ro,Z`
-- `-v <rhsm-dir>:/etc/rhsm:ro,Z` (if `rhsm/` found)
+- `-v <entitlement-dir>:/etc/pki/entitlement:ro`
+- `-v <rhsm-dir>:/etc/rhsm:ro` (if `rhsm/` found)
 
-On macOS, `podman build -v` with host paths is not supported by the
-remote client (the client and podman machine VM are on different
-machines). Instead, copy certs into the build context as a temporary
-directory and use a `--secret` or `COPY`-based injection strategy:
+When the host handles entitlement natively (level 0), no mount flags are
+added — podman's built-in subscription handling takes over.
 
-1. Copy certs into the build context under a temp subdirectory
-2. Use `--build-arg` or `--secret` to make them available during build
-3. Clean up the temp copy after build completes
+### Build-time mounting (macOS)
+macOS builds run through the podman remote client to a `podman machine` VM.
+The remote client does not support `-v` with host paths during `podman build`.
 
-The implementation should detect the platform and select the appropriate
-strategy automatically. The user interface is identical on both platforms.
+The macOS entitlement injection mechanism is defined in a follow-on spec:
+**`macOS build execution` (TBD)**. That spec must lock down:
+
+- The exact injection mechanism (secret mount, build-context staging, or
+  Containerfile wrapping)
+- Whether inspectah stages a temporary build context outside the user's
+  directory
+- How `entitlement/` and `rhsm/` are consumed during `RUN dnf ...`
+- Cleanup guarantees so secrets never persist in image layers or user workspace
+- How unsupported passthrough args are handled (especially `-v` host binds)
+- Test matrix for tarball vs directory input on macOS
+
+Until the follow-on spec is complete, `inspectah build` on macOS supports
+non-entitled builds only (Fedora, CentOS Stream, UBI). RHEL-entitled builds
+on macOS will print an error directing the user to build on a Linux host.
 
 ## Cross-Architecture Builds
 
@@ -234,9 +254,10 @@ Assemble the `podman build` command with:
 - `--platform <platform>` (if specified)
 - `--no-cache` (if specified)
 - `--pull <policy>` (if specified)
-- `-v <entitlement-dir>:/etc/pki/entitlement:ro,Z` (Linux, if RHEL + certs found)
-- `-v <rhsm-dir>:/etc/rhsm:ro,Z` (Linux, if `rhsm/` found)
-- On macOS, use the build-context injection strategy instead of `-v`
+- `-v <entitlement-dir>:/etc/pki/entitlement:ro` (Linux, if certs from cascade levels 1-4)
+- `-v <rhsm-dir>:/etc/rhsm:ro` (Linux, if `rhsm/` found)
+- No mount flags when host handles entitlement natively (cascade level 0)
+- On macOS, entitlement injection deferred to follow-on spec
 - Any `--` passthrough args
 - Build context: the output directory
 
