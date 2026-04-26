@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           inspectah
-Version:        0.1.0
+Version:        0.2.0
 Release:        1%{?dist}
 Summary:        Inspect package-mode hosts and produce bootc image artifacts
 
