@@ -97,7 +97,7 @@ as directory. If neither exists, fail with a usage hint.
 
 ## Entitlement Cert Handling
 
-### Discovery and structure
+### Structure
 Entitlement configuration consists of two directories:
 
 - `entitlement/` — subscription certificates (`.pem` files), mounted at
@@ -105,101 +105,92 @@ Entitlement configuration consists of two directories:
 - `rhsm/` — subscription-manager config, mounted at `/etc/rhsm` during build.
   Optional companion directory; looked for alongside `entitlement/`.
 
-### Auto-discovery cascade
-Checked in order, first match wins. CLI flag and env var take precedence
-over filesystem locations (standard CLI convention):
+### RHEL detection
+Parse all `FROM` directives in the Containerfile to classify the build as
+`entitled`, `ambiguous`, or `non-entitled`.
 
-1. CLI flag — `--entitlements-dir <path>`
-2. Environment variable — `INSPECTAH_ENTITLEMENT_DIR`
+**Entitled:** any stage references `registry.redhat.io` with a non-UBI
+image. UBI images are freely available without subscription — match by
+repo path pattern: `registry.redhat.io/ubi{7,8,9}`, and anything under
+`registry.redhat.io/ubi{7,8,9}/*` (covers `ubi9/ubi`, `ubi9/ubi-minimal`,
+`ubi8/ubi-micro`, etc.).
 
-If neither flag nor env var is set, check for RHEL host auto-detection
-before falling through to filesystem locations:
+**Ambiguous:** a stage uses `ARG` substitution in the image reference that
+cannot be resolved statically (no default value), AND no stage is
+definitively entitled or non-entitled.
 
-3. RHEL host auto-detection — if `/etc/pki/entitlement/*.pem` exists and
-   contains valid certs, the host is subscribed and podman handles entitlement
-   natively. Skip all mounting — return early with no explicit cert paths.
-   This matches current `inspectah-build` behavior.
+**Non-entitled:** all stages reference non-RHEL registries, or all RHEL
+references are UBI images.
+
+The parser must handle:
+- `ARG`-substituted references (resolve if default value defined)
+- `FROM --platform=... <image>` syntax
+- Multi-stage builds (check every `FROM`)
+- Comments and blank lines (skip them)
+
+### Cert discovery cascade
+Checked in order, first match wins. `--no-entitlements` skips the entire
+cascade. If a flag or env var points to a path that does not exist or
+contains no `.pem` files, fail immediately — an explicit override that
+doesn't resolve is a user error, not a fallthrough signal.
+
+1. CLI flag — `--entitlements-dir <path>` (fail if path invalid)
+2. Environment variable — `INSPECTAH_ENTITLEMENT_DIR` (fail if path invalid)
+3. RHEL host native — if `/etc/pki/entitlement/*.pem` exists with valid
+   certs, the host is subscribed. Mark discovery result as `host-native`.
 4. Bundled in tarball — `<output>/entitlement/`
 5. User config — `~/.config/inspectah/entitlement/`
 
-At each cascade level (1-2, 4-5), also check for a sibling `rhsm/`
-directory. If found, include it in the build mounts.
-
-`--no-entitlements` skips the cascade entirely.
-
-### RHEL detection
-Parse all `FROM` directives in the Containerfile. A stage requires
-entitlements if it references `registry.redhat.io` AND the image is not
-a UBI (Universal Base Image) variant. UBI images (`ubi8`, `ubi9`,
-`ubi-minimal`, `ubi-micro`, `ubi-init`) are freely available from
-`registry.redhat.io` without subscription. The parser must handle:
-
-- `ARG`-substituted registry references (resolve `${REGISTRY}` if default
-  value is defined in the Containerfile)
-- `FROM --platform=... <image>` syntax
-- Multi-stage builds (check every `FROM`, not just the last)
-- Comments and blank lines (skip them)
-
-If `ARG` substitution cannot be resolved statically (no default value),
-treat the stage as ambiguous. Behavior: if certs are found via the
-discovery cascade, mount them silently. If certs are not found, warn
-but proceed — same as the definite-RHEL case.
+At levels 1-2 and 4-5, also check for a sibling `rhsm/` directory.
 
 ### Cert validation
-Validate expiry using Go's `crypto/x509` stdlib — no openssl dependency.
+When certs are discovered (levels 1-2, 4-5), validate expiry using Go's
+`crypto/x509` stdlib. Expired certs fail with a clear message (expiry date,
+which certs, `subscription-manager refresh` hint). `--ignore-expired-certs`
+overrides.
 
-- **Expired certs:** fail with a clear message. Show expiry date, which certs
-  are stale, and the `subscription-manager refresh` fix. `--ignore-expired-certs`
-  overrides.
-- **No certs found + definite RHEL base image:** warn with instructions on
-  where to place certs, but proceed. The build may still succeed if the
-  Containerfile doesn't install packages, or if the host handles entitlement
-  natively (Satellite, SCA, etc.). This matches current `inspectah-build`
-  behavior.
-- **No certs found + ambiguous base image (unresolved ARG):** warn but proceed.
-- **No certs found + non-RHEL base image:** proceed silently.
+### Platform-specific decision matrix
 
-### Build-time mounting (Linux)
-When certs are discovered via the cascade (levels 1-4) and need explicit
-mounting, use `podman build -v` with `:ro` only (no `:Z` — do not relabel
-system directories):
+The entitlement detection result (`entitled` / `ambiguous` / `non-entitled`)
+and the discovery result (`certs-found` / `host-native` / `no-certs`) combine
+with the platform to produce one action:
 
+**Linux:**
+
+| Detection | Certs found | Host-native | No certs |
+|-----------|-------------|-------------|----------|
+| Entitled | Mount via `-v :ro` | No mount flags (podman handles) | Warn, proceed |
+| Ambiguous | Mount via `-v :ro` | No mount flags | Warn, proceed |
+| Non-entitled | Ignore certs | Ignore | Proceed silently |
+
+**macOS (until follow-on spec):**
+
+| Detection | Certs found | Host-native | No certs |
+|-----------|-------------|-------------|----------|
+| Entitled | Error: entitled builds not supported on macOS | N/A (macOS has no host entitlement) | Error: build on Linux or use `--no-entitlements` |
+| Ambiguous | Warn: cannot inject on macOS, proceed without | N/A | Warn, proceed |
+| Non-entitled | Ignore certs | N/A | Proceed silently |
+
+On Linux, "mount via `-v :ro`" means:
 - `-v <entitlement-dir>:/etc/pki/entitlement:ro`
 - `-v <rhsm-dir>:/etc/rhsm:ro` (if `rhsm/` found)
 
-When the host handles entitlement natively (level 0), no mount flags are
-added — podman's built-in subscription handling takes over.
+No `:Z` relabeling — do not relabel system directories.
 
-### Build-time mounting (macOS)
-macOS builds run through the podman remote client to a `podman machine` VM.
-The remote client does not support `-v` with host paths during `podman build`.
-
+### macOS: follow-on spec dependency
 The macOS entitlement injection mechanism is defined in a follow-on spec:
 **`macOS build execution` (TBD)**. That spec must lock down:
 
-- The exact injection mechanism (secret mount, build-context staging, or
-  Containerfile wrapping)
-- Whether inspectah stages a temporary build context outside the user's
-  directory
+- The exact injection mechanism
+- Build-context staging and cleanup guarantees
 - How `entitlement/` and `rhsm/` are consumed during `RUN dnf ...`
-- Cleanup guarantees so secrets never persist in image layers or user workspace
-- How unsupported passthrough args are handled (especially `-v` host binds)
 - Test matrix for tarball vs directory input on macOS
 
-Until the follow-on spec is complete, `inspectah build` on macOS supports
-non-entitled builds only (Fedora, CentOS Stream, UBI). Boundary rules:
-
-- **Definite RHEL base image:** error directing the user to build on a
-  Linux host or use `--no-entitlements` if the Containerfile doesn't need
-  subscribed repos.
-- **Ambiguous base image (unresolved ARG):** warn that entitlement injection
-  is not supported on macOS and proceed without certs. If the build fails
-  due to missing entitlements, the error will be clear.
-- **Passthrough `-v` with host paths:** on macOS, scan passthrough args for
-  `-v`/`--volume` flags with host paths and warn that they may not work with
-  the podman remote client. Do not block — some `-v` patterns work (e.g.,
-  paths within the podman machine's shared mounts), and podman will report
-  the error if they don't.
+### macOS: passthrough arg warnings
+On macOS, scan `--` passthrough args for `-v`/`--volume` flags with host
+paths and warn that they may not work with the podman remote client. Do
+not block — some patterns work (e.g., paths within podman machine's shared
+mounts), and podman will report the error if they don't.
 
 ## Cross-Architecture Builds
 
@@ -272,10 +263,7 @@ Assemble the `podman build` command with:
 - `--platform <platform>` (if specified)
 - `--no-cache` (if specified)
 - `--pull <policy>` (if specified)
-- `-v <entitlement-dir>:/etc/pki/entitlement:ro` (Linux, if certs discovered)
-- `-v <rhsm-dir>:/etc/rhsm:ro` (Linux, if `rhsm/` found)
-- No mount flags when host handles entitlement natively (cascade level 3)
-- On macOS, entitlement injection deferred to follow-on spec
+- Entitlement volume mounts per the platform-specific decision matrix
 - Any `--` passthrough args
 - Build context: the output directory
 
