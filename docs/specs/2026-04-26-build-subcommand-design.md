@@ -13,9 +13,7 @@ The existing `inspectah-build` Python script is retired. All build logic moves
 into Go with no container or external script dependencies beyond podman.
 
 Supports Linux and macOS hosts. On macOS, builds run through `podman machine`.
-Non-entitled builds work on both platforms. RHEL-entitled builds on macOS
-require a follow-on spec for the entitlement injection mechanism — see
-`Build-time mounting (macOS)` section.
+Entitled and non-entitled builds work on both platforms.
 
 ## Usage
 
@@ -180,34 +178,24 @@ with the platform to produce one action:
 | Ambiguous | Mount via `-v :ro` | No mount flags | Warn, proceed |
 | Non-entitled | Ignore certs | Ignore | Proceed silently |
 
-**macOS (until follow-on spec):**
+**macOS:**
 
 | Detection | Certs found | Host-native | No certs |
 |-----------|-------------|-------------|----------|
-| Entitled | Error: entitled builds not supported on macOS yet | N/A (macOS has no host entitlement) | Error: build on Linux, or use `--no-entitlements` if the Containerfile doesn't need subscribed repos (`--no-entitlements` overrides detection to non-entitled, avoiding this cell entirely) |
-| Ambiguous | Warn: cannot inject on macOS, proceed without | N/A | Warn, proceed |
+| Entitled | Mount via `-v :ro` | N/A (macOS has no host entitlement) | Warn, proceed (or `--no-entitlements` to silence) |
+| Ambiguous | Mount via `-v :ro` | N/A | Warn, proceed |
 | Non-entitled | Ignore certs | N/A | Proceed silently |
 
-On Linux, "mount via `-v :ro`" means:
+macOS entitled builds work because `podman machine` shares the user's
+home directory into the VM by default. Cert paths under `$HOME` (bundled
+in tarball, `~/.config/inspectah/entitlement/`, or user-specified via
+`--entitlements-dir`) are accessible to the VM and `-v` mounts work.
+
+**Mount flags** (both platforms):
 - `-v <entitlement-dir>:/etc/pki/entitlement:ro`
 - `-v <rhsm-dir>:/etc/rhsm:ro` (if `rhsm/` found)
 
 No `:Z` relabeling — do not relabel system directories.
-
-### macOS: follow-on spec dependency
-The macOS entitlement injection mechanism is defined in a follow-on spec:
-**`macOS build execution` (TBD)**. That spec must lock down:
-
-- The exact injection mechanism
-- Build-context staging and cleanup guarantees
-- How `entitlement/` and `rhsm/` are consumed during `RUN dnf ...`
-- Test matrix for tarball vs directory input on macOS
-
-### macOS: passthrough arg warnings
-On macOS, scan `--` passthrough args for `-v`/`--volume` flags with host
-paths and warn that they may not work with the podman remote client. Do
-not block — some patterns work (e.g., paths within podman machine's shared
-mounts), and podman will report the error if they don't.
 
 ## Cross-Architecture Builds
 
