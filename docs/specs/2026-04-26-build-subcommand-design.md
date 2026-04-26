@@ -12,6 +12,8 @@ for the full workflow: `inspectah scan` → `inspectah refine` → `inspectah bu
 The existing `inspectah-build` Python script is retired. All build logic moves
 into Go with no container or external script dependencies beyond podman.
 
+Supports Linux and macOS hosts. On macOS, builds run through `podman machine`.
+
 ## Usage
 
 ```
@@ -55,7 +57,7 @@ should fail fast with a clear error, not block waiting for input.
 | `--no-entitlements` | bool | false | Skip entitlement detection |
 | `--ignore-expired-certs` | bool | false | Proceed despite expired certs |
 | `--no-cache` | bool | false | Skip build cache |
-| `--pull` | string | "" | Base image pull policy |
+| `--pull` | string | "" | Base image pull policy (`always`, `missing`, `never`, `newer`) |
 | `--dry-run` | bool | false | Print podman command only |
 | `--verbose` | bool | false | Print command before running |
 | `--` | passthrough | — | Extra podman build args |
@@ -67,6 +69,11 @@ Everything else (e.g., `--squash`, `--layers`, `--secret`) passes through `--`.
 ### Tarball (primary path)
 Accept `.tar.gz` or `.tgz`. Extract to a temp directory. Clean up on exit,
 including SIGINT/SIGTERM signal handling.
+
+**Archive safety:** Extraction must reject path traversal attacks. Reject
+entries containing `..` path components, absolute paths, or symlinks pointing
+outside the extraction root. Use Go's `archive/tar` with explicit validation
+on each entry header before writing.
 
 Validate extracted contents: must contain a `Containerfile`. Fail fast with
 a clear error if missing, pointing to `inspectah scan` output format.
@@ -82,19 +89,29 @@ as directory. If neither exists, fail with a usage hint.
 ## Entitlement Cert Handling
 
 ### Auto-discovery cascade
-Checked in order, first match wins:
+Checked in order, first match wins. CLI flag and env var take precedence
+over filesystem locations (standard CLI convention):
 
-1. Bundled in tarball — `<output>/entitlement/`
-2. Host local — `/etc/pki/entitlement/`
-3. User config — `~/.config/inspectah/entitlement/`
-4. Environment variable — `INSPECTAH_ENTITLEMENT_DIR`
+1. CLI flag — `--entitlements-dir <path>`
+2. Environment variable — `INSPECTAH_ENTITLEMENT_DIR`
+3. Bundled in tarball — `<output>/entitlement/`
+4. Host local — `/etc/pki/entitlement/`
+5. User config — `~/.config/inspectah/entitlement/`
 
-`--entitlements-dir` overrides the cascade. `--no-entitlements` skips it
-entirely.
+`--no-entitlements` skips the cascade entirely.
 
 ### RHEL detection
-Parse the `FROM` line in the Containerfile. If it references
-`registry.redhat.io`, entitlements are required.
+Parse all `FROM` directives in the Containerfile. If any stage references
+`registry.redhat.io`, entitlements are required. The parser must handle:
+
+- `ARG`-substituted registry references (resolve `${REGISTRY}` if default
+  value is defined in the Containerfile)
+- `FROM --platform=... <image>` syntax
+- Multi-stage builds (check every `FROM`, not just the last)
+- Comments and blank lines (skip them)
+
+If `ARG` substitution cannot be resolved statically (no default value),
+treat the stage as potentially requiring entitlements and warn.
 
 ### Cert validation
 Validate expiry using Go's `crypto/x509` stdlib — no openssl dependency.
@@ -116,9 +133,14 @@ Cross-arch builds use QEMU user-mode emulation via `qemu-user-static` +
 `binfmt_misc`.
 
 ### Preflight
-Verify `qemu-user-static` is installed and the target arch's binfmt handler
-is registered (check `/proc/sys/fs/binfmt_misc/qemu-*`). Fail fast with
-install instructions if not.
+Platform-dependent verification:
+
+- **Linux:** Check that `qemu-user-static` is installed and the target arch's
+  binfmt handler is registered (`/proc/sys/fs/binfmt_misc/qemu-*`). Fail fast
+  with install instructions if not.
+- **macOS:** Cross-arch support depends on the `podman machine` VM configuration.
+  QEMU emulation is typically pre-configured in the VM. Skip the binfmt check
+  (not accessible from the macOS host) and let podman report any errors directly.
 
 ### Arch mismatch warning
 If `--platform` doesn't match the scanned host's architecture (detectable
