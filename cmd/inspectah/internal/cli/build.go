@@ -24,6 +24,7 @@ func newBuildCmd() *cobra.Command {
 		pull            string
 		dryRun          bool
 		verbose         bool
+		strictArch      bool
 	)
 
 	cmd := &cobra.Command{
@@ -132,6 +133,9 @@ Extra arguments after -- are passed directly to podman build
 				fmt.Fprintln(os.Stderr, "  Silence this warning: inspectah build --no-entitlements ...")
 			}
 
+			// Cross-arch handling: check QEMU readiness and substitute
+			// arch-specific packages when building for a different platform.
+			var crossArchCleanup func()
 			if platform != "" {
 				warnings, err := build.CrossArchCheck(platform)
 				if err != nil {
@@ -140,6 +144,49 @@ Extra arguments after -- are passed directly to podman build
 				for _, w := range warnings {
 					fmt.Fprintln(os.Stderr, w)
 				}
+
+				// Extract the target Go arch from --platform.
+				parts := strings.SplitN(platform, "/", 2)
+				targetGoArch := parts[1]
+
+				// Infer source arch from the Containerfile content.
+				sourceRPM := build.InferSourceArch(string(cfData))
+				if sourceRPM != "" {
+					sourceGoArch := ""
+					switch sourceRPM {
+					case "aarch64":
+						sourceGoArch = "arm64"
+					case "x86_64":
+						sourceGoArch = "amd64"
+					case "s390x":
+						sourceGoArch = "s390x"
+					case "ppc64le":
+						sourceGoArch = "ppc64le"
+					}
+
+					if sourceGoArch != "" && sourceGoArch != targetGoArch {
+						result, err := build.CrossArchSubstitute(string(cfData), sourceGoArch, targetGoArch, strictArch)
+						if err != nil {
+							return err
+						}
+						if len(result.Substitutions) > 0 {
+							for _, s := range result.Substitutions {
+								fmt.Fprintf(os.Stderr, "Note: substituted %s → %s (cross-arch)\n", s.From, s.To)
+							}
+							// Write the modified Containerfile to a temp file
+							// in the same directory so build context is preserved.
+							tmpPath, tmpCleanup, err := build.WriteTempContainerfile(input.Dir, result.ModifiedContent)
+							if err != nil {
+								return err
+							}
+							crossArchCleanup = tmpCleanup
+							cfPath = tmpPath
+						}
+					}
+				}
+			}
+			if crossArchCleanup != nil {
+				defer crossArchCleanup()
 			}
 
 			podmanArgs := []string{"build", "-f", cfPath, "-t", tag}
@@ -203,6 +250,7 @@ Extra arguments after -- are passed directly to podman build
 	cmd.Flags().StringVar(&pull, "pull", "", "base image pull policy (always, missing, never, newer)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the podman command without executing")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "print the podman command before executing")
+	cmd.Flags().BoolVar(&strictArch, "strict-arch", false, "error on arch-specific packages instead of auto-substituting")
 
 	return cmd
 }
