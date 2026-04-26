@@ -162,6 +162,17 @@ func TestResolveInput_RejectsHardlink(t *testing.T) {
 	assert.ErrorContains(t, err, "hard link")
 }
 
+func TestResolveInput_RejectsPostStripDuplicate(t *testing.T) {
+	// Two entries with different top-level prefixes that collapse to the same
+	// post-strip path — must be rejected as a duplicate.
+	tb := createTestTarball(t, []tarEntry{
+		{Name: "host/Containerfile", Type: tar.TypeReg, Body: "FROM fedora:43\n"},
+		{Name: "other/Containerfile", Type: tar.TypeReg, Body: "FROM evil:latest\n"},
+	})
+	_, _, err := ResolveInput(tb)
+	assert.ErrorContains(t, err, "duplicate path")
+}
+
 func TestResolveInput_RejectsDeviceNode(t *testing.T) {
 	tb := createTestTarball(t, []tarEntry{
 		{Name: "dev", Type: tar.TypeBlock},
