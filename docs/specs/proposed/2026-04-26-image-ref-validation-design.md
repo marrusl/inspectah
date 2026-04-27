@@ -1,7 +1,7 @@
 # Image Reference Validation
 
 **Date:** 2026-04-26
-**Status:** Proposed (revised round 3, 2026-04-26)
+**Status:** Proposed (revised round 4, 2026-04-27)
 
 ## Problem
 
@@ -134,17 +134,36 @@ The `image use` command accepts two input forms:
    image ref before persistence
 2. **Full image ref:** `quay.io/custom/image:latest` -- saved as-is
 
-### Detection
+### Detection and preprocessing
 
-A version-like input is detected when the string:
-- Has no slashes (no registry/repo path)
-- Has no `@` (no digest)
-- Matches a semver-ish pattern: optional `v` prefix followed by digits
-  and dots (e.g., `0.5.1`, `v2.0.0-rc.1`)
+The `image use` command preprocesses input through a fixed pipeline:
 
-This is a simple heuristic, not a strict semver parse. The key
-invariant is: anything with a `/` is treated as a full ref. Anything
-without a `/` that looks like a version number gets expanded.
+1. **`trim`** -- strip leading/trailing whitespace (paste artifacts)
+2. **`looksLikeVersion(input)`** -- detect version-like inputs
+3. **`expand`** -- if version-like, expand via `version.NormalizeTag` +
+   `version.ToImageRef`
+4. **`Validate`** -- validate the expanded (or pass-through) ref
+
+#### `looksLikeVersion` accepted pattern
+
+```
+[v]MAJOR.MINOR.PATCH[-prerelease]
+```
+
+Where:
+- `v` prefix is optional
+- `MAJOR`, `MINOR`, `PATCH` are digits
+- `prerelease` is any alphanumeric dot-separated suffix (e.g., `rc.1`,
+  `beta.2`, `alpha.1.pre`)
+
+Accepted examples: `0.5.1`, `v0.5.1`, `v2.0.0-rc.1`, `0.6.0-beta.2`
+
+The function returns `false` (treating input as a full ref) when the
+string contains `/` (registry/repo path) or `:` (explicit tag
+separator) or `@` (digest). This is a simple heuristic, not a strict
+semver parse. The key invariant: anything with a `/`, `:`, or `@` is
+treated as a full ref. Anything without those that matches the pattern
+above gets expanded.
 
 ### Canonicalization
 
@@ -179,9 +198,10 @@ Pinned image: quay.io/custom/image:latest
 
 ### Ordering
 
-The `image use` flow is: detect shorthand -> expand if needed ->
+The `image use` flow is: trim -> detect shorthand -> expand if needed ->
 validate the final ref -> save to config. Validation always runs on
-the canonical form, never on the raw shorthand.
+the canonical form, never on the raw shorthand. See "Detection and
+preprocessing" above for the full pipeline.
 
 ## Design Decision: Bare digests and image IDs
 
@@ -384,51 +404,115 @@ if err := container.SavePinnedImage(ref); err != nil {
 fmt.Printf("Pinned image: %s\n", ref)
 ```
 
-The `looksLikeVersion` helper detects strings with no slashes, no `@`,
-and a leading digit or `v` followed by digits and dots.
+The `looksLikeVersion` helper is described in "Detection and
+preprocessing" above. It accepts the pattern
+`[v]MAJOR.MINOR.PATCH[-prerelease]` and rejects anything containing
+`/`, `:`, or `@`.
 
-### `--image` global flag (eager validation)
+### Image resolution scoped to container commands
 
-The `--image` flag is validated eagerly at parse time -- before
-`ResolveImage`. If the user passes `--image "garbage"` but a valid pin
-exists, the garbage must still be rejected. It should not be silently
-swallowed by the fallback chain.
+**Key constraint:** Only three commands need the migration-tool
+container image: `scan`, `refine`, and `architect`. All other commands
+(`build`, `image use`, `image info`, `image update`, `version`) never
+need image resolution and must not be blocked by a bad image ref.
+
+This matters because a corrupted pin (e.g., a typo saved by a
+pre-validation version of `image use`) would block the repair path:
+`inspectah image use --unpin` would fail at validation before it could
+clear the bad pin. Similarly, `inspectah version` should never fail
+because of image config.
+
+**Design:** Image resolution and validation are NOT in `PersistentPreRunE`.
+The root command's `PersistentPreRun` is removed entirely (it currently
+calls `ResolveImage` for all commands). Instead, a shared helper is
+called explicitly by the commands that need it.
+
+#### `resolveAndValidateImage` helper
 
 ```go
-// In PersistentPreRunE, BEFORE ResolveImage:
-if opts.Image != "" {
-    validated, err := imageref.Validate(opts.Image)
-    if err != nil {
-        return fmt.Errorf("--image: %w", err)
+// resolveAndValidateImage resolves the container image ref from the
+// flag/env/pin/default chain and validates it. Called at the start of
+// RunE by scan, refine, and architect -- the only commands that run
+// a container.
+func resolveAndValidateImage(opts *GlobalOpts) error {
+    // Validate --image flag eagerly if provided
+    if opts.Image != "" {
+        validated, err := imageref.Validate(opts.Image)
+        if err != nil {
+            return fmt.Errorf("--image: %w", err)
+        }
+        opts.Image = validated
     }
-    opts.Image = validated  // use canonical form
+
+    // Resolve (flag -> env -> pin -> default) with lazy validation
+    resolved, err := container.ResolveImage(
+        opts.Image,
+        os.Getenv("INSPECTAH_IMAGE"),
+        container.LoadPinnedImage(),
+        version.DefaultImageRef(),
+    )
+    if err != nil {
+        return err
+    }
+    opts.Image = resolved
+    return nil
 }
-// Then resolve (flag -> env -> pin -> default).
-// ResolveImage now returns (string, error) -- env and pin are
-// validated lazily inside it.
-resolved, err := container.ResolveImage(opts.Image, envValue, pinnedValue, defaultValue)
-if err != nil {
-    return err
-}
-opts.Image = resolved
 ```
 
-Note: `PersistentPreRun` currently doesn't return an error (it's
-`PersistentPreRun`, not `PersistentPreRunE`). This will need to change
-to `PersistentPreRunE` to propagate validation errors. The root command
-already has `SilenceUsage: true`, so cobra won't dump usage text on
-validation errors.
+#### Which commands call it
 
-### `INSPECTAH_IMAGE` env var (lazy validation)
+| Command | Calls `resolveAndValidateImage`? | Reason |
+|---------|----------------------------------|--------|
+| `scan` | Yes | Runs inspectah container |
+| `refine` | Yes | Runs inspectah container |
+| `architect` | Yes | Runs inspectah container |
+| `build` | No | Runs `podman build`, uses `--tag` not `--image` |
+| `image use` | No | Sets/clears the pin; has its own validation |
+| `image info` | No | Reads config, no container |
+| `image update` | No | Checks for updates, no container run |
+| `version` | No | Prints version string |
 
-The env var is validated lazily inside `ResolveImage`, not at parse
-time. This avoids errors when the env var is set but the `--image`
-flag takes precedence.
+Each container-using command calls the helper at the top of its `RunE`,
+before `container.EnsureImage`:
+
+```go
+// In scan/refine/architect RunE:
+if err := resolveAndValidateImage(opts); err != nil {
+    return err
+}
+```
+
+The `--image` flag still lives on the root command (it's a global flag
+available to all commands), but validation only fires when a command
+actually uses the resolved image.
+
+#### Root command change
+
+The root command's `PersistentPreRun` is removed:
+
+```go
+// BEFORE (runs for ALL commands):
+PersistentPreRun: func(cmd *cobra.Command, args []string) {
+    opts.Image = container.ResolveImage(...)
+}
+
+// AFTER (no PersistentPreRun -- resolution moves to per-command):
+// (PersistentPreRun removed entirely)
+```
+
+This eliminates the need for `PersistentPreRunE` -- there is no
+root-level pre-run hook at all.
+
+### `INSPECTAH_IMAGE` env var and pinned config (lazy validation)
+
+The env var and pinned config are validated lazily inside `ResolveImage`,
+not at parse time. This avoids errors when the env var is set but the
+`--image` flag takes precedence.
 
 ```go
 func ResolveImage(flagValue, envValue, pinnedValue, defaultValue string) (string, error) {
     if flagValue != "" {
-        // Already validated eagerly by PersistentPreRunE
+        // Already validated eagerly by resolveAndValidateImage
         return flagValue, nil
     }
     if envValue != "" {
@@ -470,13 +554,13 @@ if warning != "" {
 
 ## Validation Timing Summary
 
-| Source | Timing | Error prefix |
-|--------|--------|--------------|
-| `--image` flag | Eager (PersistentPreRunE) | `--image: invalid image reference "..."` |
-| `INSPECTAH_IMAGE` env | Lazy (ResolveImage) | `invalid image reference from INSPECTAH_IMAGE: ...` |
-| Pinned config | Lazy (ResolveImage) | `invalid pinned image in config — run \`inspectah image use\` to update: ...` |
-| `image use <ref>` | Eager (before save) | `invalid image reference "..."` |
-| `build --tag` | Eager (before build) | `invalid build target "..."` |
+| Source | Timing | Scope | Error prefix |
+|--------|--------|-------|--------------|
+| `--image` flag | Eager (`resolveAndValidateImage`) | scan, refine, architect only | `--image: invalid image reference "..."` |
+| `INSPECTAH_IMAGE` env | Lazy (ResolveImage) | scan, refine, architect only | `invalid image reference from INSPECTAH_IMAGE: ...` |
+| Pinned config | Lazy (ResolveImage) | scan, refine, architect only | `invalid pinned image in config — run \`inspectah image use\` to update: ...` |
+| `image use <ref>` | Eager (before save) | `image use` only | `invalid image reference "..."` |
+| `build --tag` | Eager (before build) | `build` only | `invalid build target "..."` |
 
 ## Test Cases
 
@@ -542,6 +626,8 @@ validated by the library's own test suite):
 - `image use "invalid ref"` returns non-zero exit with validation error
 - `image use 0.5.1` succeeds, prints `Pinned image: ghcr.io/marrusl/inspectah:0.5.1`
 - `image use v0.5.1` succeeds, prints same expanded ref (v stripped)
+- `image use v2.0.0-rc.1` succeeds, prints expanded ref with prerelease
+- `image use 0.6.0-beta.2` succeeds, prints expanded ref with prerelease
 - `image use quay.io/custom/image:latest` succeeds, prints ref as-is
 - `image use " 0.5.1 "` succeeds (whitespace stripped before expansion)
 - `build -t "bad ref" input.tar.gz` returns non-zero with validation error
@@ -550,6 +636,8 @@ validated by the library's own test suite):
 - `--image "bad ref" scan` returns non-zero with `--image:` prefix in error
 - `INSPECTAH_IMAGE="bad ref" inspectah scan` returns non-zero with
   `INSPECTAH_IMAGE` attribution in error
+- `version` succeeds even when a bad image is pinned in config
+- `image use --unpin` succeeds even when a bad image is pinned in config
 
 ## Dependencies
 
@@ -570,18 +658,22 @@ lighter addition than either of those.
 
 ## Implementation Notes
 
-- The `PersistentPreRun` -> `PersistentPreRunE` change is safe; cobra
-  supports both and the existing function body doesn't return errors
-  that need suppressing.
+- The root command's `PersistentPreRun` is removed entirely. Image
+  resolution moves to `resolveAndValidateImage`, called explicitly by
+  scan, refine, and architect at the top of their `RunE`. No
+  `PersistentPreRunE` is needed.
 - `ResolveImage` signature changes from `(string)` to `(string, error)`.
-  All callers must handle the new error return. This is the mechanism
-  for lazy validation of env var and pinned config sources.
+  The only callers are now the three container-using commands (via the
+  helper). This is the mechanism for lazy validation of env var and
+  pinned config sources.
 - Existing pinned images in `~/.config/inspectah/config.json` are now
   validated lazily inside `ResolveImage`. A bad pinned ref produces a
   clear error: `invalid pinned image in config — run 'inspectah image
   use' to update`. This is a hard error (not a warning) because the
   ref would fail at `podman pull` time anyway -- failing early with
-  actionable guidance is better.
+  actionable guidance is better. Crucially, this error only surfaces
+  when running a container command -- `image use --unpin` remains
+  unblocked as the repair path.
 - The old `ValidateTag` function name is retired. The new
   `ValidateBuildTarget` name makes the contract explicit: this
   validates a build output name, not a tag component.
@@ -621,3 +713,16 @@ lighter addition than either of those.
     `ResolveImage` signature changes to `(string, error)`.
   - Noted that `build.go` help text should be updated (tag not strictly
     required) -- deferred to implementation.
+- **Round 4 (2026-04-27):** Two targeted fixes:
+  - **Scoping fix (blocker):** Moved image resolution and validation out
+    of `PersistentPreRunE` on the root command. Only `scan`, `refine`,
+    and `architect` call `resolveAndValidateImage` in their `RunE`. All
+    other commands (`build`, `image use`, `image info`, `image update`,
+    `version`) are unaffected by image config. This unblocks the repair
+    path: `image use --unpin` no longer fails when a bad image is pinned.
+  - **Prerelease shorthand:** Spelled out the `image use` preprocessing
+    pipeline (trim, detect, expand, validate) and the accepted shorthand
+    pattern: `[v]MAJOR.MINOR.PATCH[-prerelease]`. Prerelease suffixes
+    like `v2.0.0-rc.1` and `0.6.0-beta.2` are first-class.
+  - Added CLI integration test cases for prerelease shorthands, repair
+    path (`image use --unpin`), and `version` with a bad pin.
