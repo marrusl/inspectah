@@ -27,7 +27,44 @@ inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates ever
   Build      inspectah build *.tar.gz -t tag         Build the bootc image
 ```
 
-## Quick Start
+## Installation
+
+### RPM (Fedora / RHEL / CentOS Stream)
+
+```bash
+sudo dnf copr enable marrusl/inspectah
+sudo dnf install inspectah
+```
+
+Requires podman >= 4.4 (installed as a dependency if not present).
+
+### Homebrew (macOS)
+
+```bash
+brew install marrusl/tap/inspectah
+```
+
+Requires podman to be installed separately (e.g. via [Podman Desktop](https://podman-desktop.io/) or `brew install podman`).
+
+### From source
+
+```bash
+cd cmd/inspectah
+go build -o inspectah .
+sudo install inspectah /usr/local/bin/
+```
+
+### Configuration
+
+| Variable | Effect |
+|----------|--------|
+| `INSPECTAH_IMAGE` | Override the container image (e.g. a local build or pinned tag) |
+| `INSPECTAH_HOSTNAME` | Override the reported hostname |
+| `INSPECTAH_DEBUG` | Set to `1` to enable debug logging |
+
+The container image is published to `ghcr.io/marrusl/inspectah:latest` (multi-arch: amd64 + arm64). The Go CLI pulls it automatically on first run.
+
+## Getting Started
 
 ### Inspect a host
 
@@ -37,7 +74,7 @@ sudo inspectah scan
 
 A hostname-stamped tarball appears in your current directory (e.g. `webserver01-20260312-143000.tar.gz`). It contains the Containerfile, config tree, reports, and snapshot.
 
-The Go CLI handles container image pulling and podman orchestration automatically. See [Installation](#installation) for setup.
+The Go CLI handles container image pulling and podman orchestration automatically.
 
 > **`sudo` is required.** The container requires rootful podman for `nsenter` into host namespaces.
 
@@ -141,53 +178,6 @@ The interactive web UI (default port 8643) lets you explore the proposed layer t
 
 See [CLI Reference](docs/reference/cli.md#inspectah-architect) for flags.
 
-## Installation
-
-### RPM (Fedora / RHEL / CentOS Stream)
-
-```bash
-sudo dnf copr enable marrusl/inspectah
-sudo dnf install inspectah
-```
-
-Requires podman >= 4.4 (installed as a dependency if not present).
-
-### Homebrew (macOS)
-
-```bash
-brew install marrusl/tap/inspectah
-```
-
-Requires podman to be installed separately (e.g. via [Podman Desktop](https://podman-desktop.io/) or `brew install podman`).
-
-### From source
-
-```bash
-cd cmd/inspectah
-go build -o inspectah .
-sudo install inspectah /usr/local/bin/
-```
-
-### Shell script (legacy)
-
-The `run-inspectah.sh` wrapper still works for one-off use on hosts where you cannot install the RPM, but the Go CLI provides error translation, tab completion, and a build subcommand that the shell script does not support.
-
-```bash
-curl -fsSL -o run-inspectah.sh https://raw.githubusercontent.com/marrusl/inspectah/main/run-inspectah.sh
-chmod +x run-inspectah.sh
-sudo ./run-inspectah.sh
-```
-
-### Configuration
-
-| Variable | Effect |
-|----------|--------|
-| `INSPECTAH_IMAGE` | Override the container image (e.g. a local build or pinned tag) |
-| `INSPECTAH_HOSTNAME` | Override the reported hostname |
-| `INSPECTAH_DEBUG` | Set to `1` to enable debug logging |
-
-The container image is published to `ghcr.io/marrusl/inspectah:latest` (multi-arch: amd64 + arm64). The Go CLI pulls it automatically on first run.
-
 ## See Also
 
 - [CLI Reference](docs/reference/cli.md) — complete flag tables for all subcommands
@@ -195,6 +185,16 @@ The container image is published to `ghcr.io/marrusl/inspectah:latest` (multi-ar
 - [Design Document](docs/reference/design.md) — full technical design and schema reference
 - [driftify](https://github.com/marrusl/driftify) — companion tool for applying synthetic drift to test inspectah end-to-end
 - [bootc upstream](https://containers.github.io/bootc/) — bootc project documentation
+
+## Shell Script (Legacy)
+
+The `run-inspectah.sh` wrapper still works for one-off use on hosts where you cannot install the Go CLI, but it lacks error translation, tab completion, and the build subcommand.
+
+```bash
+curl -fsSL -o run-inspectah.sh https://raw.githubusercontent.com/marrusl/inspectah/main/run-inspectah.sh
+chmod +x run-inspectah.sh
+sudo ./run-inspectah.sh
+```
 
 ## License
 
