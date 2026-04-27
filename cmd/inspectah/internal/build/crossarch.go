@@ -1,6 +1,7 @@
 package build
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -84,6 +85,21 @@ func init() {
 	})
 }
 
+// stripCommentLines removes lines that start with # (after optional whitespace).
+func stripCommentLines(text string) string {
+	var lines []string
+	scanner := bufio.NewScanner(strings.NewReader(text))
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 func CrossArchCheck(platform string) ([]string, error) {
 	if platform == "" {
 		return nil, nil
@@ -160,14 +176,30 @@ func MapGoArchToRPMArch(goarch string) string {
 
 // InferSourceArch examines a Containerfile for arch-specific package names
 // and returns the RPM arch of the source system (e.g., "aarch64", "x86_64").
-// Returns "" if no arch-specific packages are found.
+// Returns "" if no arch-specific packages are found or if the result is ambiguous
+// (packages from multiple arch families appear in non-comment lines).
 func InferSourceArch(containerfile string) string {
+	// Strip comment lines so a comment like "# on amd64 use grub2-efi-x64"
+	// does not influence arch detection.
+	stripped := stripCommentLines(containerfile)
+
+	archesFound := make(map[string]bool)
 	for _, pkg := range allArchSpecificPackages {
-		// Match as a standalone word (not a substring of another package name).
 		pattern := `(?:^|[\s\\])` + regexp.QuoteMeta(pkg) + `(?:$|[\s\\])`
-		if matched, _ := regexp.MatchString(pattern, containerfile); matched {
-			return pkgToSourceArch[pkg]
+		if matched, _ := regexp.MatchString(pattern, stripped); matched {
+			archesFound[pkgToSourceArch[pkg]] = true
 		}
+	}
+
+	if len(archesFound) == 0 {
+		return ""
+	}
+	// Ambiguous: packages from more than one arch family present.
+	if len(archesFound) > 1 {
+		return ""
+	}
+	for arch := range archesFound {
+		return arch
 	}
 	return ""
 }
@@ -176,20 +208,26 @@ func InferSourceArch(containerfile string) string {
 //   - subs: packages that have a known equivalent on the target arch
 //   - unmapped: packages that belong to the source arch but have no target equivalent
 //
+// Comment lines are excluded from the scan so that a comment mentioning an
+// arch-specific package does not produce a false positive.
+//
 // When sourceArch == targetArch, both return values are empty.
 func FindArchSpecificPackages(containerfile, sourceArch, targetArch string) ([]PkgSubstitution, []string, error) {
 	if sourceArch == targetArch {
 		return nil, nil, nil
 	}
 
+	// Strip comment lines before scanning for packages.
+	stripped := stripCommentLines(containerfile)
+
 	var subs []PkgSubstitution
 	var unmapped []string
 	seen := make(map[string]bool)
 
 	for _, pkg := range allArchSpecificPackages {
-		// Check if package appears in the Containerfile as a standalone token.
+		// Check if package appears in non-comment text as a standalone token.
 		pattern := `(?:^|[\s\\])` + regexp.QuoteMeta(pkg) + `(?:$|[\s\\])`
-		if matched, _ := regexp.MatchString(pattern, containerfile); !matched {
+		if matched, _ := regexp.MatchString(pattern, stripped); !matched {
 			continue
 		}
 		if seen[pkg] {
@@ -217,6 +255,8 @@ func FindArchSpecificPackages(containerfile, sourceArch, targetArch string) ([]P
 
 // ApplySubstitutions replaces arch-specific package names in a Containerfile string.
 // Substitutions are applied longest-first to prevent partial-match corruption.
+// Matches inside comment lines (lines starting with #) are skipped so that
+// comments mentioning arch packages are preserved as-is.
 func ApplySubstitutions(containerfile string, subs []PkgSubstitution) string {
 	// Sort substitutions longest-first by the From field.
 	sorted := make([]PkgSubstitution, len(subs))
@@ -225,27 +265,32 @@ func ApplySubstitutions(containerfile string, subs []PkgSubstitution) string {
 		return len(sorted[i].From) > len(sorted[j].From)
 	})
 
-	result := containerfile
-	for _, s := range sorted {
-		// Use word-boundary-aware replacement: the package name must be
-		// surrounded by whitespace, backslash, or start/end of string.
-		pattern := regexp.MustCompile(`(^|[\s\\])` + regexp.QuoteMeta(s.From) + `($|[\s\\])`)
-		result = pattern.ReplaceAllStringFunc(result, func(match string) string {
-			// Preserve the leading and trailing delimiters.
-			prefix := ""
-			suffix := ""
-			trimmed := strings.TrimLeft(match, " \t\n\\")
-			if len(trimmed) < len(match) {
-				prefix = match[:len(match)-len(trimmed)]
-			}
-			trimmed2 := strings.TrimRight(trimmed, " \t\n\\")
-			if len(trimmed2) < len(trimmed) {
-				suffix = trimmed[len(trimmed2):]
-			}
-			return prefix + s.To + suffix
-		})
+	// Process line by line so we can skip comment lines entirely.
+	lines := strings.Split(containerfile, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue // leave comment lines untouched
+		}
+		for _, s := range sorted {
+			pattern := regexp.MustCompile(`(^|[\s\\])` + regexp.QuoteMeta(s.From) + `($|[\s\\])`)
+			line = pattern.ReplaceAllStringFunc(line, func(match string) string {
+				prefix := ""
+				suffix := ""
+				t := strings.TrimLeft(match, " \t\n\\")
+				if len(t) < len(match) {
+					prefix = match[:len(match)-len(t)]
+				}
+				t2 := strings.TrimRight(t, " \t\n\\")
+				if len(t2) < len(t) {
+					suffix = t[len(t2):]
+				}
+				return prefix + s.To + suffix
+			})
+		}
+		lines[i] = line
 	}
-	return result
+	return strings.Join(lines, "\n")
 }
 
 // WriteTempContainerfile writes content to a temporary Containerfile in dir.

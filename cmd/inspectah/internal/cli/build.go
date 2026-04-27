@@ -66,6 +66,7 @@ Extra arguments after -- are passed directly to podman build
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
 			var podProcess *os.Process
+			var crossArchCleanup func()
 			sigCh := make(chan os.Signal, 1)
 			signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 			go func() {
@@ -73,6 +74,12 @@ Extra arguments after -- are passed directly to podman build
 				cancel()
 				if podProcess != nil {
 					podProcess.Wait()
+				}
+				// Clean up cross-arch temp Containerfile if one was created.
+				// crossArchCleanup is set by the main goroutine after this
+				// goroutine starts, so it may still be nil at signal time.
+				if crossArchCleanup != nil {
+					crossArchCleanup()
 				}
 				cleanup()
 				os.Exit(1)
@@ -135,7 +142,6 @@ Extra arguments after -- are passed directly to podman build
 
 			// Cross-arch handling: check QEMU readiness and substitute
 			// arch-specific packages when building for a different platform.
-			var crossArchCleanup func()
 			if platform != "" {
 				warnings, err := build.CrossArchCheck(platform)
 				if err != nil {

@@ -27,9 +27,21 @@ func TestCrossArchCheck_EmptyPlatform(t *testing.T) {
 func TestCrossArchCheck_CrossArchWarning(t *testing.T) {
 	// Pick an arch that differs from the host
 	targetArch := "amd64"
+	binfmtArch := "x86_64"
 	if runtime.GOARCH == "amd64" {
 		targetArch = "arm64"
+		binfmtArch = "aarch64"
 	}
+
+	// On Linux, CrossArchCheck probes /proc/sys/fs/binfmt_misc for QEMU
+	// handlers. Skip if the required handler is not installed.
+	if runtime.GOOS == "linux" {
+		handler := filepath.Join("/proc/sys/fs/binfmt_misc", "qemu-"+binfmtArch)
+		if _, err := os.Stat(handler); err != nil {
+			t.Skipf("skipping: binfmt handler %s not available", handler)
+		}
+	}
+
 	platform := "linux/" + targetArch
 
 	warnings, err := CrossArchCheck(platform)
@@ -144,6 +156,17 @@ RUN dnf install -y kernel-core vim-enhanced bash-completion
 	assert.Empty(t, unmapped)
 }
 
+func TestFindArchSpecificPackages_IgnoresComments(t *testing.T) {
+	cf := `FROM quay.io/centos-bootc/centos-bootc:stream9
+# grub2-efi-aa64 is the aarch64 bootloader
+RUN dnf install -y kernel-core vim
+`
+	subs, unmapped, err := FindArchSpecificPackages(cf, "aarch64", "x86_64")
+	require.NoError(t, err)
+	assert.Empty(t, subs, "packages in comments should not produce substitutions")
+	assert.Empty(t, unmapped)
+}
+
 func TestFindArchSpecificPackages_SameArch(t *testing.T) {
 	cf := `FROM quay.io/centos-bootc/centos-bootc:stream9
 RUN dnf install -y grub2-efi-x64 shim-x64
@@ -207,6 +230,21 @@ func TestInferSourceArch(t *testing.T) {
 			cf:       "RUN dnf install -y grub2-efi-ia32",
 			expected: "x86_64",
 		},
+		{
+			name:     "arch package only in comment",
+			cf:       "# on amd64 use grub2-efi-x64\nRUN dnf install -y kernel-core",
+			expected: "",
+		},
+		{
+			name:     "comment does not override real package",
+			cf:       "# note: grub2-efi-x64 is for x86\nRUN dnf install -y grub2-efi-aa64 shim-aa64",
+			expected: "aarch64",
+		},
+		{
+			name:     "ambiguous: both arch families in code lines",
+			cf:       "RUN dnf install -y grub2-efi-aa64 grub2-efi-x64",
+			expected: "",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,6 +290,20 @@ func TestApplySubstitutions_PreservesFormatting(t *testing.T) {
 	}
 	result := ApplySubstitutions(original, subs)
 	assert.Equal(t, "RUN dnf install -y grub2-efi-x64 shim-x64", result)
+}
+
+func TestApplySubstitutions_SkipsComments(t *testing.T) {
+	original := "# Use grub2-efi-aa64 on aarch64\nRUN dnf install -y grub2-efi-aa64 shim-aa64\n"
+	subs := []PkgSubstitution{
+		{From: "grub2-efi-aa64", To: "grub2-efi-x64"},
+		{From: "shim-aa64", To: "shim-x64"},
+	}
+	result := ApplySubstitutions(original, subs)
+	// The comment line should be untouched.
+	assert.Contains(t, result, "# Use grub2-efi-aa64 on aarch64")
+	// The RUN line should be substituted.
+	assert.Contains(t, result, "grub2-efi-x64")
+	assert.Contains(t, result, "shim-x64")
 }
 
 func TestApplySubstitutions_NoPartialMatch(t *testing.T) {
