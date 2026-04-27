@@ -1,7 +1,7 @@
 # Image Reference Validation
 
 **Date:** 2026-04-26
-**Status:** Proposed (revised round 2, 2026-04-26)
+**Status:** Proposed (revised round 3, 2026-04-26)
 
 ## Problem
 
@@ -29,10 +29,10 @@ The `--target-image` flag is a passthrough to the inner inspectah
 container, which does its own validation. It is out of scope here --
 the Go wrapper doesn't interpret it.
 
-**In scope:** `--image`, `image use`, `build --tag`.
+**In scope:** `--image`, `image use`, `build --tag`, `INSPECTAH_IMAGE`
+env var, pinned config.
 
-**Out of scope:** `--target-image` (passthrough), `INSPECTAH_IMAGE` env
-var (validated when it hits `ResolveImage` -> same path as `--image`).
+**Out of scope:** `--target-image` (passthrough to the inner container).
 
 ### Non-goals
 
@@ -126,18 +126,62 @@ in `EnsureImage` (see `container/ensure.go`). Using
 -- eliminates drift between what inspectah accepts and what podman
 accepts.
 
-## Design Decision: `image use` and version-style inputs
+## Design Decision: `image use` shorthand with canonicalization
 
-The `image use` help text advertises:
+The `image use` command accepts two input forms:
 
-> Accepts both v-prefixed (v0.5.1) and bare (0.5.1) versions
+1. **Version shorthand:** `0.5.1`, `v0.5.1` -- expanded to a full
+   image ref before persistence
+2. **Full image ref:** `quay.io/custom/image:latest` -- saved as-is
 
-`0.5.1` is a valid input per `reference.Parse` -- the distribution
-library treats it as a bare repository name containing dots and digits.
-This is important: the validator must NOT reject it. The `image use`
-command's version-to-tag expansion logic (stripping the `v` prefix and
-constructing a full registry reference) runs **after** validation, so
-the validator sees the raw user input.
+### Detection
+
+A version-like input is detected when the string:
+- Has no slashes (no registry/repo path)
+- Has no `@` (no digest)
+- Matches a semver-ish pattern: optional `v` prefix followed by digits
+  and dots (e.g., `0.5.1`, `v2.0.0-rc.1`)
+
+This is a simple heuristic, not a strict semver parse. The key
+invariant is: anything with a `/` is treated as a full ref. Anything
+without a `/` that looks like a version number gets expanded.
+
+### Canonicalization
+
+Version inputs are expanded using the existing logic in
+`version/check.go`:
+
+```go
+// version.NormalizeTag("v0.5.1") -> "0.5.1"  (strips v prefix)
+// version.NormalizeTag("0.5.1")  -> "0.5.1"  (no-op)
+// version.ToImageRef("ghcr.io", "marrusl/inspectah", "v0.5.1")
+//   -> "ghcr.io/marrusl/inspectah:0.5.1"
+```
+
+The expanded ref is then validated and persisted. The raw shorthand
+is never saved to config.
+
+### Feedback
+
+The command echoes the resolved ref so the user sees exactly what
+was pinned:
+
+```
+$ inspectah image use 0.5.1
+Pinned image: ghcr.io/marrusl/inspectah:0.5.1
+
+$ inspectah image use v0.5.1
+Pinned image: ghcr.io/marrusl/inspectah:0.5.1
+
+$ inspectah image use quay.io/custom/image:latest
+Pinned image: quay.io/custom/image:latest
+```
+
+### Ordering
+
+The `image use` flow is: detect shorthand -> expand if needed ->
+validate the final ref -> save to config. Validation always runs on
+the canonical form, never on the raw shorthand.
 
 ## Design Decision: Bare digests and image IDs
 
@@ -181,8 +225,10 @@ import "github.com/distribution/reference"
 // It does not accept bare digests or image IDs -- those are not named
 // references and cannot be pulled.
 //
-// Returns nil if valid, or an error describing the structural problem.
-func Validate(ref string) error
+// Returns the canonicalized ref (whitespace stripped, normalized) and
+// nil error if valid, or ("", error) describing the structural problem.
+// Callers MUST use the returned string, not the original input.
+func Validate(ref string) (string, error)
 
 // ValidateBuildTarget checks whether ref is a valid image name for use
 // as a build output tag (podman build -t / buildah tag). It accepts
@@ -192,7 +238,10 @@ func Validate(ref string) error
 // that doesn't exist yet, so you can't know its digest. If no tag is
 // provided, a warning is returned (not an error) suggesting the user
 // add one for reproducibility.
-func ValidateBuildTarget(ref string) (warning string, err error)
+//
+// Returns the canonicalized ref and nil error if valid, plus an
+// optional warning string. Callers MUST use the returned string.
+func ValidateBuildTarget(ref string) (canonical string, warning string, err error)
 ```
 
 Two entry points because the contracts differ:
@@ -237,8 +286,9 @@ correctness.
 The validator wraps `reference.Parse` with:
 
 1. Strip leading/trailing whitespace (paste artifacts from config
-   files and scripts -- strip silently, don't warn)
-2. Reject empty strings (after stripping)
+   files and scripts -- strip silently, don't warn). The stripped
+   string becomes the canonical ref returned to callers.
+2. Reject empty strings (after stripping) -- return `("", error)`
 3. Reject strings exceeding 4096 characters (garbage-input guard,
    checked before `reference.Parse` to avoid feeding it pathological
    input)
@@ -247,9 +297,10 @@ The validator wraps `reference.Parse` with:
 5. Call `reference.Parse(ref)` -- if it returns an error, wrap it
    in inspectah's error format with actionable guidance
 6. For `Validate`: verify the result is a `reference.Named` (rejects
-   bare digests/IDs)
+   bare digests/IDs). Return `(canonicalRef, nil)`.
 7. For `ValidateBuildTarget`: additionally check that the result does
-   NOT contain a digest component, and warn if no tag is present
+   NOT contain a digest component, and warn if no tag is present.
+   Return `(canonicalRef, warning, nil)` or `(canonicalRef, "", nil)`.
 
 ## Error Messages
 
@@ -309,29 +360,57 @@ grammar -- users don't need to know the regex.
 
 ### `image use`
 
+The `image use` command detects version shorthand, expands it, then
+validates and persists the canonical ref.
+
 ```go
 // In newImageUseCmd(), before SavePinnedImage:
-if err := imageref.Validate(ref); err != nil {
+
+// 1. Detect version shorthand and expand
+if looksLikeVersion(ref) {
+    ref = version.ToImageRef(version.DefaultRegistry, version.DefaultRepo, ref)
+}
+
+// 2. Validate and canonicalize
+ref, err := imageref.Validate(ref)
+if err != nil {
     return err
 }
+
+// 3. Persist the canonical ref (never raw input)
+if err := container.SavePinnedImage(ref); err != nil {
+    return fmt.Errorf("failed to save pin: %w", err)
+}
+fmt.Printf("Pinned image: %s\n", ref)
 ```
 
-### `--image` global flag
+The `looksLikeVersion` helper detects strings with no slashes, no `@`,
+and a leading digit or `v` followed by digits and dots.
 
-Validation runs on the **raw flag value before resolution**. If the
-user passes `--image "garbage"` but a valid pin exists, the garbage
-must still be rejected -- it should not be silently swallowed by the
-fallback chain in `ResolveImage`.
+### `--image` global flag (eager validation)
+
+The `--image` flag is validated eagerly at parse time -- before
+`ResolveImage`. If the user passes `--image "garbage"` but a valid pin
+exists, the garbage must still be rejected. It should not be silently
+swallowed by the fallback chain.
 
 ```go
 // In PersistentPreRunE, BEFORE ResolveImage:
 if opts.Image != "" {
-    if err := imageref.Validate(opts.Image); err != nil {
-        return err
+    validated, err := imageref.Validate(opts.Image)
+    if err != nil {
+        return fmt.Errorf("--image: %w", err)
     }
+    opts.Image = validated  // use canonical form
 }
-// Then resolve (flag -> env -> pin -> default):
-opts.Image = container.ResolveImage(opts.Image, ...)
+// Then resolve (flag -> env -> pin -> default).
+// ResolveImage now returns (string, error) -- env and pin are
+// validated lazily inside it.
+resolved, err := container.ResolveImage(opts.Image, envValue, pinnedValue, defaultValue)
+if err != nil {
+    return err
+}
+opts.Image = resolved
 ```
 
 Note: `PersistentPreRun` currently doesn't return an error (it's
@@ -340,24 +419,70 @@ to `PersistentPreRunE` to propagate validation errors. The root command
 already has `SilenceUsage: true`, so cobra won't dump usage text on
 validation errors.
 
+### `INSPECTAH_IMAGE` env var (lazy validation)
+
+The env var is validated lazily inside `ResolveImage`, not at parse
+time. This avoids errors when the env var is set but the `--image`
+flag takes precedence.
+
+```go
+func ResolveImage(flagValue, envValue, pinnedValue, defaultValue string) (string, error) {
+    if flagValue != "" {
+        // Already validated eagerly by PersistentPreRunE
+        return flagValue, nil
+    }
+    if envValue != "" {
+        validated, err := imageref.Validate(envValue)
+        if err != nil {
+            return "", fmt.Errorf("invalid image reference from INSPECTAH_IMAGE: %w", err)
+        }
+        return validated, nil
+    }
+    if pinnedValue != "" {
+        validated, err := imageref.Validate(pinnedValue)
+        if err != nil {
+            return "", fmt.Errorf("invalid pinned image in config — run `inspectah image use` to update: %w", err)
+        }
+        return validated, nil
+    }
+    return defaultValue, nil
+}
+```
+
+This is a **breaking signature change** to `ResolveImage`: it now
+returns `(string, error)`. All callers must handle the error. The
+`source` label is baked into each error message so the user knows
+which config surface produced the bad ref.
+
 ### `build --tag`
 
 ```go
 // In newBuildCmd(), after the empty check:
-warning, err := imageref.ValidateBuildTarget(tag)
+tag, warning, err := imageref.ValidateBuildTarget(tag)
 if err != nil {
     return err
 }
 if warning != "" {
     fmt.Fprintln(os.Stderr, warning)
 }
+// Use 'tag' (canonical) from here on
 ```
+
+## Validation Timing Summary
+
+| Source | Timing | Error prefix |
+|--------|--------|--------------|
+| `--image` flag | Eager (PersistentPreRunE) | `--image: invalid image reference "..."` |
+| `INSPECTAH_IMAGE` env | Lazy (ResolveImage) | `invalid image reference from INSPECTAH_IMAGE: ...` |
+| Pinned config | Lazy (ResolveImage) | `invalid pinned image in config — run \`inspectah image use\` to update: ...` |
+| `image use <ref>` | Eager (before save) | `invalid image reference "..."` |
+| `build --tag` | Eager (before build) | `invalid build target "..."` |
 
 ## Test Cases
 
 ### `imageref.Validate`
 
-**Should accept:**
+**Should accept (return canonical ref, nil):**
 - `registry.redhat.io/rhel9/rhel-bootc:9.6` -- standard registry/repo:tag
 - `quay.io/centos-bootc/centos-bootc:stream9` -- standard
 - `localhost:5000/myimage:latest` -- localhost with port
@@ -371,9 +496,10 @@ if warning != "" {
 - `my-registry.example.com:8080/org/sub/repo:tag` -- deep path with port
 - `image:v1.0-beta.1` -- hyphens and dots in tag
 - `name:tag@sha256:` + 64 hex chars -- tag + digest coexistence
-- `" myimage:tag "` -- leading/trailing whitespace (stripped silently)
+- `" myimage:tag "` -- leading/trailing whitespace (stripped; returned
+  string is `myimage:tag`)
 
-**Should reject:**
+**Should reject (return "", error):**
 - `""` -- empty string
 - `"my image:tag"` -- embedded spaces
 - `":tag"` -- no name
@@ -414,12 +540,16 @@ validated by the library's own test suite):
 ### CLI integration tests
 
 - `image use "invalid ref"` returns non-zero exit with validation error
-- `image use 0.5.1` succeeds (version-style input must not be rejected)
-- `image use v0.5.1` succeeds (v-prefixed version)
+- `image use 0.5.1` succeeds, prints `Pinned image: ghcr.io/marrusl/inspectah:0.5.1`
+- `image use v0.5.1` succeeds, prints same expanded ref (v stripped)
+- `image use quay.io/custom/image:latest` succeeds, prints ref as-is
+- `image use " 0.5.1 "` succeeds (whitespace stripped before expansion)
 - `build -t "bad ref" input.tar.gz` returns non-zero with validation error
 - `build -t myimage input.tar.gz` succeeds with warning about missing tag
 - `build -t "img@sha256:abc..." input.tar.gz` returns non-zero (digest rejected)
-- `--image "bad ref" scan` returns non-zero with validation error
+- `--image "bad ref" scan` returns non-zero with `--image:` prefix in error
+- `INSPECTAH_IMAGE="bad ref" inspectah scan` returns non-zero with
+  `INSPECTAH_IMAGE` attribution in error
 
 ## Dependencies
 
@@ -438,24 +568,27 @@ lighter addition than either of those.
 
 **Version:** Use the latest stable release (v0.6.x as of this writing).
 
-## Migration Notes
+## Implementation Notes
 
 - The `PersistentPreRun` -> `PersistentPreRunE` change is safe; cobra
   supports both and the existing function body doesn't return errors
   that need suppressing.
-- Existing pinned images in `~/.config/inspectah/config.json` are
-  validated on load with a **warning** (not a hard error). If a stored
-  ref fails `Validate`, emit:
-  ```
-  Warning: pinned image "registery.redhat.io/..." may be invalid
-    Use 'inspectah image use <ref>' to update your pinned image.
-  ```
-  This doesn't block the user but surfaces the problem at the right
-  moment, preventing confusion when the same ref would be rejected
-  by `image use`.
+- `ResolveImage` signature changes from `(string)` to `(string, error)`.
+  All callers must handle the new error return. This is the mechanism
+  for lazy validation of env var and pinned config sources.
+- Existing pinned images in `~/.config/inspectah/config.json` are now
+  validated lazily inside `ResolveImage`. A bad pinned ref produces a
+  clear error: `invalid pinned image in config — run 'inspectah image
+  use' to update`. This is a hard error (not a warning) because the
+  ref would fail at `podman pull` time anyway -- failing early with
+  actionable guidance is better.
 - The old `ValidateTag` function name is retired. The new
   `ValidateBuildTarget` name makes the contract explicit: this
   validates a build output name, not a tag component.
+- `build.go` help text currently says the tag is required. Since
+  `inspectah build -t myimage` (no tag component) is now valid (warning,
+  not error), the help text should be updated to reflect this. Not part
+  of this commit -- note for implementation.
 
 ## Revision History
 
@@ -475,3 +608,16 @@ lighter addition than either of those.
     scope (not pullable references).
   - Removed self-contained regex implementation details that would
     have drifted from the library.
+- **Round 3 (2026-04-26):** Three blocker fixes plus implementation note:
+  - `Validate` and `ValidateBuildTarget` now return `(string, error)` --
+    the canonicalized ref (whitespace stripped, normalized) must be used
+    by all callers, not the raw input.
+  - `image use` shorthand: version-like inputs (`0.5.1`, `v0.5.1`) are
+    expanded to full image refs (`ghcr.io/marrusl/inspectah:0.5.1`)
+    before validation and persistence. Full refs pass through unchanged.
+  - Hybrid validation timing: `--image` flag validated eagerly at parse
+    time; `INSPECTAH_IMAGE` env var and pinned config validated lazily
+    inside `ResolveImage` with source-attributed error messages.
+    `ResolveImage` signature changes to `(string, error)`.
+  - Noted that `build.go` help text should be updated (tag not strictly
+    required) -- deferred to implementation.
