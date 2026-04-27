@@ -70,7 +70,10 @@ Containerfile.`,
 			if !noBrowser {
 				go func() {
 					if container.WaitForServer(url+"/api/health", 30*time.Second) {
-						container.OpenBrowser(url)
+						// Cache-bust: browsers may cache a failed/empty response
+						// from the port before the container server was ready.
+						browserURL := fmt.Sprintf("%s?t=%d", url, time.Now().Unix())
+						container.OpenBrowser(browserURL)
 					}
 				}()
 			}
