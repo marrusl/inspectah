@@ -1,7 +1,7 @@
 # Image Reference Validation
 
 **Date:** 2026-04-26
-**Status:** Proposed
+**Status:** Proposed (revised per team review 2026-04-26)
 
 ## Problem
 
@@ -46,17 +46,46 @@ Container image references follow the OCI distribution spec grammar.
 The canonical form is:
 
 ```
-[registry[:port]/]repository[:tag|@digest]
+[registry[:port]/]repository[:tag][@digest]
 ```
+
+Tag and digest may both be present (`name:tag@digest`). This matches
+podman and buildah behavior.
 
 Decomposed:
 
-| Component | Rules |
-|-----------|-------|
-| **Registry** | Optional. Hostname or IP, optionally with `:port`. Default depends on container engine config (`docker.io`, `registry.redhat.io`, etc.) |
-| **Repository** | One or more `/`-separated path components. Each component: `[a-z0-9]+(?:[._-][a-z0-9]+)*` |
-| **Tag** | Optional after `:`. `[a-zA-Z0-9_.-]+`, max 128 chars. Cannot start with `.` or `-` |
-| **Digest** | Optional after `@`. Format: `algorithm:hex` (e.g., `sha256:abc123...`). Mutually exclusive with tag in strict parsing, but some tools allow both |
+| Component | Rules | Case sensitivity |
+|-----------|-------|------------------|
+| **Registry** | Optional. Hostname or IP, optionally with `:port`. Default depends on container engine config (`docker.io`, `registry.redhat.io`, etc.) | Case-insensitive (DNS per RFC 4343). `REGISTRY.COM/repo:tag` is valid. |
+| **Repository** | One or more `/`-separated path components. Each component: `[a-z0-9]+(?:[._-][a-z0-9]+)*` | Lowercase only. `REPO:tag` is invalid. |
+| **Tag** | Optional after `:`. `[a-zA-Z0-9_.-]+`, max 128 chars. Cannot start with `.` or `-` | Mixed case allowed. |
+| **Digest** | Optional after `@`. Format: `algorithm:hex` (e.g., `sha256:abc123...`). May coexist with tag. | Lowercase hex only (`[a-f0-9]+`). |
+
+### Registry vs. repository disambiguation
+
+The first component (before the first `/`, or the entire string if no
+`/`) could be a hostname or a bare repository name. The rule:
+
+- Contains a `.` or `:` → hostname (uppercase OK)
+- Otherwise → bare repository name (lowercase only)
+
+This matches how `docker.io/library/ubuntu` is parsed by the
+distribution/reference library.
+
+### Colon disambiguation
+
+`host:5000/repo:tag` contains two colons. The parsing rule:
+
+- A colon in the portion **before the first `/`**, followed by digits
+  only, is a **port separator**.
+- The last colon **after the final `/`-separated component** (and before
+  any `@`) is the **tag separator**.
+
+### Overall reference length
+
+Maximum 4096 characters. Anything longer is rejected as likely garbage
+input. This also protects against regex backtracking on pathological
+strings.
 
 ### Valid examples
 
@@ -68,15 +97,18 @@ Decomposed:
 - `myimage` (bare name, no tag)
 - `registry.example.com/org/repo@sha256:abcdef1234567890...`
 - `docker.io/library/ubuntu:22.04`
+- `registry.redhat.io/rhel9/rhel-bootc:9.6@sha256:abcdef...` (tag + digest)
+- `REGISTRY.COM/repo:tag` (uppercase hostname is valid per DNS)
 
 ### Invalid examples
 
 - `my image:tag` (spaces)
-- `REGISTRY.COM/Repo:Tag` (uppercase in repository path)
+- `REGISTRY.COM/Repo:Tag` (uppercase in repository path component after `/`)
 - `:just-a-tag` (no name)
 - `repo:` (empty tag)
 - `repo@` (empty digest)
 - `repo@md5:abc` (non-OCI digest algorithm for strict mode)
+- `https://registry.redhat.io/rhel9/rhel-bootc:9.6` (URL, not image ref)
 
 ## Design Decision: Validation Level
 
@@ -146,19 +178,31 @@ testify only), a self-contained implementation is preferable.
 
 The validator should:
 
-1. Reject empty strings
-2. Reject strings containing whitespace or control characters
-3. Split on `@` to separate optional digest
-4. Split remainder on `:` to separate optional tag (being careful
-   about registry ports -- `host:5000/repo:tag` has two colons)
-5. Validate each component against its character class
-6. Validate tag length (max 128 chars)
-7. Validate digest format (`algorithm:hex`, algorithm is `[a-z0-9]+`,
-   hex is `[a-f0-9]+` with minimum length)
+1. Strip leading/trailing whitespace (paste artifacts from config
+   files and scripts -- strip silently, don't warn)
+2. Reject empty strings (after stripping)
+3. Reject strings exceeding 4096 characters
+4. Detect URL-shaped input (`http://` or `https://` prefix) and
+   return a targeted error suggesting the user remove the protocol
+5. Reject strings containing embedded whitespace or control characters
+6. Split on `@` to separate optional digest (tag and digest may
+   coexist -- `name:tag@digest` is valid)
+7. Split remainder on `:` to separate optional tag, using the colon
+   disambiguation rule (see grammar section above)
+8. Validate the hostname/repository split: if the first component
+   contains `.` or `:`, treat it as a hostname (uppercase OK);
+   otherwise treat as a bare repo name (lowercase only). Path
+   components after the first `/` are always lowercase only.
+9. Validate tag format and length (max 128 chars)
+10. Validate digest format (`algorithm:hex`, algorithm is `[a-z0-9]+`,
+    hex is `[a-f0-9]+` lowercase only, minimum 32 chars for sha256)
 
 ## Error Messages
 
-Errors should name the problem and show the expected format:
+All surfaces use the same prefix: `invalid image reference`. The reason
+line differentiates what's wrong. This keeps the user's mental model
+simple -- there's one concept (image reference) and the CLI tells you
+exactly what's wrong with yours.
 
 ```
 Error: invalid image reference "my image:tag"
@@ -174,10 +218,26 @@ Error: invalid image reference "my image:tag"
 For `build --tag` when no tag is provided:
 
 ```
-Error: invalid build tag "myimage"
-  --tag requires a name:tag format
+Error: invalid image reference "myimage"
+  --tag requires a name:tag format (tag is missing)
 
   Example: inspectah build output.tar.gz -t myimage:v1.0
+```
+
+For URL-shaped input:
+
+```
+Error: invalid image reference "https://registry.redhat.io/rhel9/rhel-bootc:9.6"
+  image references are not URLs -- remove the https:// prefix
+
+  Did you mean: registry.redhat.io/rhel9/rhel-bootc:9.6
+```
+
+For empty input (e.g., from unset shell variable `$MY_IMAGE`):
+
+```
+Error: no image reference provided
+  Set the image with: inspectah image use <registry/name:tag>
 ```
 
 Keep the example list short (3 examples max). Don't dump the full
@@ -196,18 +256,27 @@ if err := imageref.Validate(ref); err != nil {
 
 ### `--image` global flag
 
+Validation runs on the **raw flag value before resolution**. If the
+user passes `--image "garbage"` but a valid pin exists, the garbage
+must still be rejected -- it should not be silently swallowed by the
+fallback chain in `ResolveImage`.
+
 ```go
-// In PersistentPreRun, after ResolveImage:
+// In PersistentPreRunE, BEFORE ResolveImage:
 if opts.Image != "" {
     if err := imageref.Validate(opts.Image); err != nil {
         return err
     }
 }
+// Then resolve (flag -> env -> pin -> default):
+opts.Image = container.ResolveImage(opts.Image, ...)
 ```
 
 Note: `PersistentPreRun` currently doesn't return an error (it's
 `PersistentPreRun`, not `PersistentPreRunE`). This will need to change
-to `PersistentPreRunE` to propagate validation errors.
+to `PersistentPreRunE` to propagate validation errors. The root command
+already has `SilenceUsage: true`, so cobra won't dump usage text on
+validation errors.
 
 ### `build --tag`
 
@@ -233,17 +302,27 @@ if err := imageref.ValidateTag(tag); err != nil {
 - `docker.io/library/ubuntu:22.04` -- dots in tag
 - `my-registry.example.com:8080/org/sub/repo:tag` -- deep path with port
 - `image:v1.0-beta.1` -- hyphens and dots in tag
+- `name:tag@sha256:` + 64 hex chars -- tag + digest coexistence
+- `REGISTRY.COM/repo:tag` -- uppercase hostname (DNS is case-insensitive)
+- `" myimage:tag "` -- leading/trailing whitespace (stripped silently)
 
 **Should reject:**
 - `""` -- empty string
-- `"my image:tag"` -- spaces
-- `"repo:"` -- empty tag
+- `"my image:tag"` -- embedded spaces
+- `"repo:"` -- empty tag after colon
 - `"repo@"` -- empty digest
+- `"repo@sha256:"` -- empty hex after algorithm
 - `":tag"` -- no name
 - `"repo@notadigest"` -- malformed digest (no algorithm separator)
-- `"REPO:tag"` -- uppercase in repository component
+- `"REPO:tag"` -- uppercase in bare repository name (no `.` or `:`, so not a hostname)
+- `"REGISTRY.COM/Repo:tag"` -- uppercase in path component after `/`
+- `"repo@sha256:ABCDEF..."` -- uppercase hex in digest (reject; lowercase only)
 - String with control characters
 - String with `\n` or `\t`
+- `"https://registry.redhat.io/rhel9/rhel-bootc:9.6"` -- URL-shaped input
+- `"http://localhost/image:tag"` -- URL-shaped input
+- String >4096 characters -- length ceiling
+- Unicode homoglyphs (`"rеgistry.io/repo:tag"` with Cyrillic 'е') -- the `[a-z0-9]` class rejects this, but an explicit test proves it
 
 ### `imageref.ValidateTag`
 
@@ -264,9 +343,14 @@ if err := imageref.ValidateTag(tag); err != nil {
 - The `PersistentPreRun` -> `PersistentPreRunE` change is safe; cobra
   supports both and the existing function body doesn't return errors
   that need suppressing.
-- Existing pinned images in `~/.config/inspectah/config.json` are not
-  re-validated. If a user has an invalid ref pinned from before this
-  change, it will fail at pull time as before. This is acceptable --
-  re-validating stored config on every run adds complexity for a case
-  that essentially doesn't exist.
+- Existing pinned images in `~/.config/inspectah/config.json` are
+  validated on load with a **warning** (not a hard error). If a stored
+  ref fails `Validate`, emit:
+  ```
+  Warning: pinned image "registery.redhat.io/..." may be invalid
+    Use 'inspectah image use <ref>' to update your pinned image.
+  ```
+  This doesn't block the user but surfaces the problem at the right
+  moment, preventing confusion when the same ref would be rejected
+  by `image use`.
 - No new dependencies required. The validator is self-contained.
