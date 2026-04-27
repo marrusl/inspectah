@@ -17,27 +17,26 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Install build dependencies
-        run: >-
-          dnf install -y
-          rpm-build
-          python3-devel
-          python3-setuptools
-          python3-wheel
-          pyproject-rpm-macros
+        run: dnf install -y rpm-build golang git
 
       - name: Build SRPM
         run: |
-          SPEC_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' inspectah.spec)
-          PYPROJECT_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
-          if [ "$SPEC_VERSION" != "$PYPROJECT_VERSION" ]; then
-            echo "Version mismatch: inspectah.spec=$SPEC_VERSION pyproject.toml=$PYPROJECT_VERSION" >&2
+          SPEC_VERSION=$(sed -n 's/^Version:[[:space:]]*//p' packaging/inspectah.spec)
+          GO_VERSION=$(sed -n 's/^[[:space:]]*version = "\(.*\)"/\1/p' cmd/inspectah/main.go)
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$SPEC_VERSION" != "$GO_VERSION" ]; then
+            echo "Version mismatch: packaging/inspectah.spec=$SPEC_VERSION cmd/inspectah/main.go=$GO_VERSION" >&2
+            exit 1
+          fi
+          if [ "$SPEC_VERSION" != "$TAG_VERSION" ]; then
+            echo "Version mismatch: packaging/inspectah.spec=$SPEC_VERSION tag=$TAG_VERSION" >&2
             exit 1
           fi
           VERSION=$SPEC_VERSION
           mkdir -p ~/rpmbuild/SOURCES
           tar czf ~/rpmbuild/SOURCES/inspectah-${VERSION}.tar.gz \
             --transform "s,^\.,inspectah-${VERSION}," --exclude-vcs .
-          rpmbuild -bs inspectah.spec
+          rpmbuild -bs packaging/inspectah.spec
           cp ~/rpmbuild/SRPMS/*.src.rpm .
 
       - name: Upload SRPM to release
@@ -107,12 +106,8 @@ jobs:
       - name: Build RPM
         run: |
           dnf builddep -y *.src.rpm
-          rpmbuild --rebuild *.src.rpm || {
-            echo "=== Installing dynamic BuildRequires from %pyproject_buildrequires ==="
-            dnf builddep -y ~/rpmbuild/SRPMS/*.buildreqs.nosrc.rpm
-            rpmbuild --rebuild *.src.rpm
-          }
-          cp ~/rpmbuild/RPMS/noarch/*.rpm .
+          rpmbuild --rebuild *.src.rpm
+          find ~/rpmbuild/RPMS -name '*.rpm' ! -name '*.src.rpm' -exec cp {} . \;
 
       - name: Upload RPM to release
         uses: actions/github-script@v7
