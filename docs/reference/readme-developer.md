@@ -30,16 +30,17 @@ This directory contains comprehensive documentation for developers working on th
 
 ## Key Takeaways (60 seconds)
 
-1. **Language**: Python 3.11+ (not Go)
-2. **CLI**: argparse (not Cobra)
-3. **Data**: Pydantic v2 schema (strongly typed)
-4. **Pattern**: 11 Inspectors → 1 Schema → 8 Renderers
-5. **Entry**: `src/inspectah/__main__.py::main()`
-6. **Schema**: `src/inspectah/schema.py::InspectionSnapshot` (single source of truth)
-7. **Inspectors**: `src/inspectah/inspectors/*.py` (each returns Pydantic model)
-8. **Renderers**: `src/inspectah/renderers/*.py` (each consumes snapshot)
-9. **Tests**: pytest with mock `/etc` trees in `tests/fixtures/`
-10. **Build**: setuptools (pyproject.toml)
+1. **Two layers**: Go CLI wrapper (Cobra, `cmd/inspectah/`) + Python engine (argparse, `src/inspectah/`)
+2. **Go CLI**: orchestrates podman, distributed via COPR RPM and Homebrew
+3. **Python engine**: runs inside the container, does all inspection and rendering
+4. **Data**: Pydantic v2 schema (strongly typed)
+5. **Pattern**: 11 Inspectors → 1 Schema → 8 Renderers
+6. **Entry**: Go → `cmd/inspectah/main.go`, Python → `src/inspectah/__main__.py::main()`
+7. **Schema**: `src/inspectah/schema.py::InspectionSnapshot` (single source of truth)
+8. **Inspectors**: `src/inspectah/inspectors/*.py` (each returns Pydantic model)
+9. **Renderers**: `src/inspectah/renderers/*.py` (each consumes snapshot)
+10. **Tests**: pytest for Python (`tests/`), Go tests (`cmd/inspectah/internal/*/`)
+11. **Build**: Go binary via `go build`, Python container via `Containerfile`
 
 ## File Organization
 
@@ -49,8 +50,19 @@ inspectah/
 ├── IMPLEMENTATION_PLAN.md             ← Full reference (900 lines)
 ├── ARCHITECTURE_DIAGRAM.md            ← Visual flows
 ├── README_DEVELOPER.md                ← You are here
-├── src/inspectah/
-│   ├── __main__.py                   ← CLI entry point
+├── cmd/inspectah/                    ← Go CLI wrapper (Cobra)
+│   ├── main.go                       ← Entry point
+│   ├── go.mod / go.sum / vendor/     ← Go module deps
+│   └── internal/
+│       ├── cli/                      ← Subcommands (scan, fleet, etc.)
+│       ├── container/                ← Podman invocation builder
+│       ├── errors/                   ← Error translation
+│       ├── paths/                    ← Path resolution
+│       └── platform/                 ← Platform detection
+├── packaging/
+│   └── inspectah.spec                ← RPM spec for COPR builds
+├── src/inspectah/                    ← Python analysis engine
+│   ├── __main__.py                   ← Python CLI entry point
 │   ├── cli.py                        ← Command registration
 │   ├── schema.py                     ← Data model contract
 │   ├── pipeline.py                   ← Orchestration
@@ -65,7 +77,7 @@ inspectah/
 │   ├── test_*.py                     ← ~20 test modules
 │   ├── fixtures/                     ← Mock /etc trees
 │   └── e2e/                          ← Browser tests
-└── pyproject.toml                     ← Build configuration
+└── pyproject.toml                     ← Python build configuration
 ```
 
 ## Common Workflows
@@ -201,7 +213,7 @@ pip install -e ".[dev]"
 pytest tests/
 
 # Run locally (requires root or container)
-sudo python -m inspectah inspect --output-file test.tar.gz
+sudo python -m inspectah scan --output-file test.tar.gz
 ```
 
 ## When to Use Which Document
@@ -243,5 +255,6 @@ Questions? Start here:
 ---
 
 **Last Updated**: April 2026  
-**inspectah Version**: 0.5.1  
-**Python**: 3.11+
+**inspectah Version**: 0.6.0  
+**Go CLI**: 1.21+, Cobra  
+**Python Engine**: 3.11+, Pydantic v2

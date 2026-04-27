@@ -20,10 +20,10 @@ inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates ever
 
   Each step consumes and produces tarballs. Refine, Fleet, and Architect are optional.
 
-  Inspect    run-inspectah.sh                       Scan host, produce tarball
-  Refine     run-inspectah.sh refine *.tar.gz       Edit findings in the browser
-  Fleet      run-inspectah.sh fleet dir/ -p 80      Merge N hosts into one spec
-  Architect  run-inspectah.sh architect ./fleets/   Plan layer decomposition
+  Inspect    inspectah scan                          Scan host, produce tarball
+  Refine     inspectah refine *.tar.gz               Edit findings in the browser
+  Fleet      inspectah fleet dir/ -p 80              Merge N hosts into one spec
+  Architect  inspectah architect ./fleets/           Plan layer decomposition
   Build      inspectah build *.tar.gz -t tag         Build the bootc image
 ```
 
@@ -32,14 +32,14 @@ inspectah scans a running RHEL, CentOS Stream, or Fedora host and generates ever
 ### Inspect a host
 
 ```bash
-curl -fsSL -o run-inspectah.sh https://raw.githubusercontent.com/marrusl/inspectah/main/run-inspectah.sh
-chmod +x run-inspectah.sh
-sudo ./run-inspectah.sh
+sudo inspectah scan
 ```
 
-A hostname-stamped tarball appears in your current directory (e.g. `webserver01-20260312-143000.tar.gz`). It contains the Containerfile, config tree, reports, and snapshot. The script stays on disk for subsequent commands.
+A hostname-stamped tarball appears in your current directory (e.g. `webserver01-20260312-143000.tar.gz`). It contains the Containerfile, config tree, reports, and snapshot.
 
-> **`sudo` must wrap the script, not `curl`.** The container requires rootful podman — if `sudo` only applies to the download, nsenter into host namespaces will fail.
+The Go CLI handles container image pulling and podman orchestration automatically. See [Installation](#installation) for setup.
+
+> **`sudo` is required.** The container requires rootful podman for `nsenter` into host namespaces.
 
 > **RHEL hosts:** Run `sudo podman login registry.redhat.io` first. The base image requires authentication. CentOS Stream and Fedora need no auth.
 
@@ -49,7 +49,7 @@ After inspection, copy the tarball to your workstation and launch the interactiv
 
 ```bash
 scp target-host:~/hostname-*.tar.gz .
-./run-inspectah.sh refine hostname-*.tar.gz
+inspectah refine hostname-*.tar.gz
 ```
 
 The browser opens automatically with the Refine dashboard. From here you can:
@@ -66,7 +66,7 @@ The refine server runs on port 8642 by default. Use `--port` to change it, or `-
 
 ### Build the image
 
-`inspectah build` handles building bootc images from inspectah output, primarily solving the problem of building RHEL images on non-RHEL hosts (Mac, Windows, Fedora). It auto-detects and bind-mounts RHEL subscription certs so `dnf install` works inside the build.
+`inspectah build` builds bootc images from inspectah output, solving the problem of building RHEL images on non-RHEL hosts (Mac, Windows, Fedora). It auto-detects and bind-mounts RHEL subscription certs so `dnf install` works inside the build.
 
 ```bash
 inspectah build hostname-20260312-143000.tar.gz -t my-bootc-image:latest
@@ -106,18 +106,18 @@ Use `--output-dir` to get unpacked directory output instead.
 
 ```bash
 # Inspect each host
-INSPECTAH_HOSTNAME=web-01 ./run-inspectah.sh
-INSPECTAH_HOSTNAME=web-02 ./run-inspectah.sh
-INSPECTAH_HOSTNAME=web-03 ./run-inspectah.sh
+sudo INSPECTAH_HOSTNAME=web-01 inspectah scan
+sudo INSPECTAH_HOSTNAME=web-02 inspectah scan
+sudo INSPECTAH_HOSTNAME=web-03 inspectah scan
 
 # Collect and aggregate
 mkdir web-servers && cp web-0*.tar.gz web-servers/
-./run-inspectah.sh fleet ./web-servers/ -p 80
+inspectah fleet ./web-servers/ -p 80
 ```
 
 The `-p` (prevalence threshold) controls inclusion. `-p 100` (default) means strict intersection — only items on every host. `-p 80` includes items on 80%+ of hosts. Items below threshold remain visible in the report but are excluded from the Containerfile.
 
-The container wrapper (`run-inspectah.sh fleet`) runs everything inside the inspectah container — no Python or pip required on your workstation.
+The Go CLI runs everything inside the inspectah container automatically — no Python or pip required on your workstation.
 
 See [CLI Reference](docs/reference/cli.md#inspectah-fleet) for the full flag list.
 
@@ -134,7 +134,7 @@ See [CLI Reference](docs/reference/cli.md#inspectah-fleet) for the full flag lis
 ```bash
 mkdir refined-fleets
 cp web-servers-refined.tar.gz db-servers-refined.tar.gz refined-fleets/
-./run-inspectah.sh architect ./refined-fleets/
+inspectah architect ./refined-fleets/
 ```
 
 The interactive web UI (default port 8643) lets you explore the proposed layer topology, move packages between layers, preview generated Containerfiles, and export the final set with an ordered build script.
@@ -143,16 +143,42 @@ See [CLI Reference](docs/reference/cli.md#inspectah-architect) for flags.
 
 ## Installation
 
-### Container
+### RPM (Fedora / RHEL / CentOS Stream)
 
-The wrapper script handles everything — it installs podman if needed and pulls the pre-built image:
+```bash
+sudo dnf copr enable marrusl/inspectah
+sudo dnf install inspectah
+```
+
+Requires podman >= 4.4 (installed as a dependency if not present).
+
+### Homebrew (macOS)
+
+```bash
+brew install marrusl/tap/inspectah
+```
+
+Requires podman to be installed separately (e.g. via [Podman Desktop](https://podman-desktop.io/) or `brew install podman`).
+
+### From source
+
+```bash
+cd cmd/inspectah
+go build -o inspectah .
+sudo install inspectah /usr/local/bin/
+```
+
+### Shell script (legacy)
+
+The `run-inspectah.sh` wrapper still works for one-off use on hosts where you cannot install the RPM, but the Go CLI provides error translation, tab completion, and a build subcommand that the shell script does not support.
 
 ```bash
 curl -fsSL -o run-inspectah.sh https://raw.githubusercontent.com/marrusl/inspectah/main/run-inspectah.sh
 chmod +x run-inspectah.sh
+sudo ./run-inspectah.sh
 ```
 
-The image is published to `ghcr.io/marrusl/inspectah:latest` (multi-arch: amd64 + arm64).
+### Configuration
 
 | Variable | Effect |
 |----------|--------|
@@ -160,11 +186,13 @@ The image is published to `ghcr.io/marrusl/inspectah:latest` (multi-arch: amd64 
 | `INSPECTAH_HOSTNAME` | Override the reported hostname |
 | `INSPECTAH_DEBUG` | Set to `1` to enable debug logging |
 
+The container image is published to `ghcr.io/marrusl/inspectah:latest` (multi-arch: amd64 + arm64). The Go CLI pulls it automatically on first run.
+
 ## See Also
 
 - [CLI Reference](docs/reference/cli.md) — complete flag tables for all subcommands
 - [Architecture](docs/explanation/architecture.md) — how inspectors, renderers, and baseline subtraction work
-- [Design Document](design.md) — full technical design and schema reference
+- [Design Document](docs/reference/design.md) — full technical design and schema reference
 - [driftify](https://github.com/marrusl/driftify) — companion tool for applying synthetic drift to test inspectah end-to-end
 - [bootc upstream](https://containers.github.io/bootc/) — bootc project documentation
 

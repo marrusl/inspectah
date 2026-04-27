@@ -2,13 +2,13 @@
 
 ## TL;DR - Key Facts
 
-- **Language**: Python 3.11+ (NOT Go)
-- **CLI Framework**: argparse (NOT Cobra)
-- **Data Layer**: Pydantic v2 (schemas: `src/inspectah/schema.py`)
+- **Two layers**: Go CLI wrapper (`cmd/inspectah/`) orchestrates the container; Python analysis engine (`src/inspectah/`) does the actual work inside the container
+- **Go CLI**: Cobra framework, manages podman lifecycle, distributed via COPR RPM and Homebrew
+- **Python engine**: Python 3.11+, argparse, Pydantic v2 schemas (`src/inspectah/schema.py`)
 - **Plugin Pattern**: Inspectors collect → Renderers output (both in registry)
 - **Orchestration**: Pipeline in `pipeline.py` runs inspectors sequentially, then renderers
-- **Testing**: pytest with fixtures in `tests/fixtures/` mock `/etc` trees
-- **Build**: setuptools (pyproject.toml), container at `ghcr.io/marrusl/inspectah:latest`
+- **Testing**: pytest for Python (`tests/`), Go tests for CLI (`cmd/inspectah/internal/`)
+- **Build**: Go binary via `go build`, Python container via `Containerfile`, published to `ghcr.io/marrusl/inspectah:latest`
 
 ## Critical Files (Read in Order)
 
@@ -41,10 +41,20 @@
 ## Commands Structure
 
 ```bash
-inspectah [inspect]              # Scan host, produce tarball/dir
-inspectah refine *.tar.gz        # Interactive browser editor
-inspectah fleet dir/             # Merge N host snapshots
-inspectah architect ./fleets/    # Plan layer decomposition
+# Go CLI (user-facing, manages container lifecycle)
+inspectah scan                     # Scan host, produce tarball/dir
+inspectah refine *.tar.gz          # Interactive browser editor
+inspectah fleet dir/               # Merge N host snapshots
+inspectah architect ./fleets/      # Plan layer decomposition
+inspectah build *.tar.gz -t tag    # Build bootc image (runs on host, not in container)
+inspectah version                  # Print wrapper version
+inspectah completion bash          # Generate shell completions
+
+# Python CLI (inside the container — developers work here)
+inspectah scan                     # argparse entry point for inspection logic
+inspectah refine *.tar.gz          # Refine server
+inspectah fleet dir/               # Fleet merge
+inspectah architect ./fleets/      # Architect server
 ```
 
 ## Adding a New Analyzer (Step-by-Step)
@@ -155,10 +165,10 @@ pytest tests/
 pytest -xvs tests/test_your_analyzer.py
 
 # Run (requires root, container, chroot)
-sudo python -m inspectah inspect --output-file output.tar.gz
+sudo python -m inspectah scan --output-file output.tar.gz
 
 # From snapshot (no root needed)
-python -m inspectah inspect --from-snapshot output.tar.gz --output-dir refine/
+python -m inspectah scan --from-snapshot output.tar.gz --output-dir refine/
 ```
 
 ## Key Patterns
@@ -212,50 +222,64 @@ result.returncode  # int
 ## Project Layout
 
 ```
-src/inspectah/
-├── __main__.py           # CLI entry point
-├── cli.py                # argparse setup
-├── pipeline.py           # Orchestrator (run_pipeline function)
-├── schema.py             # Pydantic models
+cmd/inspectah/                    # Go CLI wrapper
+├── main.go                       # Entry point (version injection via ldflags)
+├── go.mod / go.sum / vendor/     # Go module with vendored deps
+└── internal/
+    ├── cli/                      # Cobra subcommands (scan, fleet, refine, etc.)
+    ├── container/                # Podman invocation builder
+    ├── errors/                   # Error classification and user-facing messages
+    ├── paths/                    # Path resolution and mount construction
+    └── platform/                 # Platform detection (podman discovery)
+
+src/inspectah/                    # Python analysis engine (runs inside container)
+├── __main__.py                   # CLI entry point
+├── cli.py                        # argparse setup
+├── pipeline.py                   # Orchestrator (run_pipeline function)
+├── schema.py                     # Pydantic models
 ├── inspectors/
-│   ├── __init__.py       # run_XXXXX functions
+│   ├── __init__.py               # run_XXXXX functions
 │   ├── rpm.py
 │   ├── config.py
 │   ├── service.py
 │   └── ... (9 more)
 ├── renderers/
-│   ├── __init__.py       # run_all() main entry
+│   ├── __init__.py               # run_all() main entry
 │   ├── audit_report.py
 │   ├── html_report.py
 │   └── ... (6 more)
-├── templates/            # Jinja2 templates
-├── preflight.py          # Startup checks
-├── baseline.py           # Resolve base image
-├── heuristic.py          # Smart classification
-├── redact.py             # Secrets masking
-└── packaging.py          # Tarball handling
+├── templates/                    # Jinja2 templates
+├── preflight.py                  # Startup checks
+├── baseline.py                   # Resolve base image
+├── heuristic.py                  # Smart classification
+├── redact.py                     # Secrets masking
+└── packaging.py                  # Tarball handling
+
+packaging/
+├── inspectah.spec                # RPM spec for COPR builds
 
 tests/
-├── conftest.py           # pytest fixtures
-├── fixtures/             # Mock /etc trees
-├── test_*.py             # ~20 test modules
-└── e2e/                  # Browser tests
+├── conftest.py                   # pytest fixtures
+├── fixtures/                     # Mock /etc trees
+├── test_*.py                     # ~20 test modules
+└── e2e/                          # Browser tests
 
 docs/
-├── reference/            # CLI flag documentation
-└── explanation/          # Architecture docs
+├── reference/                    # CLI flag documentation
+└── explanation/                  # Architecture docs
 ```
 
 ## Important Notes
 
-1. **No Cobra** — inspectah uses argparse, not a Go CLI framework
-2. **No Go Code** — 100% Python
-3. **Pydantic v2** — use Field(), BaseModel, not v1 syntax
-4. **Container-First** — All commands run inside podman with chroot to /host
-5. **Read-Only** — Never modifies the inspected host
-6. **Type Safety** — Everything flows through schema types
-7. **Baseline Required** — Without baseline, all packages included (risky)
-8. **Warnings Tracked** — Appear in snapshot.warnings and HTML report
+1. **Two-layer architecture** — Go CLI wrapper (Cobra) orchestrates podman; Python engine (argparse) does inspection/rendering inside the container
+2. **Go CLI** — `cmd/inspectah/` contains the Cobra CLI, distributed as RPM/Homebrew binary
+3. **Python engine** — `src/inspectah/` is the analysis core, runs inside the container image
+4. **Pydantic v2** — use Field(), BaseModel, not v1 syntax
+5. **Container-First** — Inspection runs inside podman with host root mounted at /host
+6. **Read-Only** — Never modifies the inspected host
+7. **Type Safety** — Everything flows through schema types
+8. **Baseline Required** — Without baseline, all packages included (risky)
+9. **Warnings Tracked** — Appear in snapshot.warnings and HTML report
 
 ## Common Tasks
 

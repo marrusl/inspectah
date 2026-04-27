@@ -47,7 +47,7 @@ During inspection, the tool emits styled progress output to stderr using ANSI co
 
 The default output is a tarball (`HOSTNAME-YYYYMMDD-HHMMSS.tar.gz`) containing the Containerfile, config tree, reports, snapshot, and RHEL subscription certs (if present on the inspected host). Use `--output-dir` for unpacked directory output, which is required for `--validate` and `--push-to-github`.
 
-The tool itself ships as a container: `ghcr.io/marrusl/inspectah:latest`.
+The tool ships as a container image (`ghcr.io/marrusl/inspectah:latest`) orchestrated by the Go CLI wrapper. The Go CLI constructs the `podman run` command with all required flags and volume mounts, so users run `inspectah scan` rather than composing the podman invocation manually.
 
 ### Executor
 
@@ -115,15 +115,30 @@ This is called out prominently in the audit report's "Data Migration Plan" secti
 
 ## 3. CLI Reference
 
-One entry point is registered in `pyproject.toml`:
+### Go CLI Wrapper
+
+Users interact with inspectah through a Go CLI binary (`cmd/inspectah/`) that manages the container lifecycle. The Go CLI:
+
+- Detects the container runtime (podman, with path discovery and version checking)
+- Pulls the `ghcr.io/marrusl/inspectah` container image automatically
+- Constructs the appropriate `podman run` or `podman build` command with all required volume mounts, privileges, port mappings, and environment variables
+- Translates podman error codes into actionable user-facing messages
+- Provides tab completion for bash, zsh, and fish
+- Supports two execution strategies: **exec replacement** (scan, fleet) for direct terminal control, and **child process** (refine, architect, build) for server management, signal forwarding, and browser launch
+
+The Go CLI is distributed via COPR RPM (`dnf install inspectah`) and Homebrew (`brew install marrusl/tap/inspectah`). It requires podman >= 4.4 at runtime.
+
+### Python CLI (Container-Internal)
+
+Inside the container, the Python CLI is the entry point registered in `pyproject.toml`:
 
 ```
 inspectah = "inspectah.__main__:main"
 ```
 
-Subcommands: `inspectah inspect` (default), `inspectah fleet`, `inspectah refine`. The `fleet` and `refine` subcommands were previously separate entry points (`inspectah-fleet`, `inspectah-refine`) and are now integrated.
+Subcommands: `inspectah scan` (default), `inspectah fleet`, `inspectah refine`, `inspectah architect`. All inspection, rendering, and analysis logic lives in the Python codebase. The Go CLI is purely an orchestration layer that constructs and executes `podman run` commands.
 
-`inspectah build` is a Go CLI subcommand that builds a bootc container image from inspectah output with automatic RHEL subscription cert handling (see [Building on Non-RHEL Hosts](#building-on-non-rhel-hosts)).
+`inspectah build` is implemented directly in the Go CLI (not in Python) since it wraps `podman build` on the user's host rather than running inside the container.
 
 ### `inspectah` — Host Inspection
 
@@ -247,25 +262,37 @@ Merges multiple inspectah inspection snapshots into a single fleet-level snapsho
 
 ### Wrapper Scripts
 
-#### `run-inspectah.sh`
+#### Go CLI (`cmd/inspectah/`)
 
-A self-contained shell script (POSIX `sh`) for running inspectah on a host without any prior installation. It:
+The primary CLI wrapper. A Cobra-based Go binary that constructs and executes `podman run` / `podman build` commands. Two execution strategies: exec replacement (scan, fleet) for direct terminal control, and child process mode (refine, architect, build) for server management, signal forwarding, and browser launch.
+
+Distributed via:
+- **COPR RPM**: `sudo dnf copr enable marrusl/inspectah && sudo dnf install inspectah`
+- **Homebrew**: `brew install marrusl/tap/inspectah`
+- **From source**: `cd cmd/inspectah && go build -o inspectah .`
+
+Usage:
+
+```
+sudo inspectah scan
+sudo inspectah scan --target-version 9.6
+inspectah refine hostname-*.tar.gz
+inspectah fleet ./snapshots/ -p 80
+inspectah build output.tar.gz -t my-image:latest
+```
+
+#### `run-inspectah.sh` (legacy)
+
+A self-contained shell script (POSIX `sh`) for running inspectah on a host without any prior installation. It still works but is deprecated in favor of the Go CLI, which provides error translation, tab completion, version management, and the `build` subcommand.
+
+The shell script:
 
 1. Installs `podman` via `dnf` or `yum` if not already present
 2. Tracks just-installed packages in `INSPECTAH_EXCLUDE_PREREQS` so they are excluded from inspection results
 3. Checks/prompts for `registry.redhat.io` login when using RHEL base images
 4. Launches the inspectah container with the required privileges (`--pid=host`, `--privileged`, `--security-opt label=disable`)
 5. Forwards all extra arguments to the `inspectah` entry point
-6. Detects subcommands (`fleet`, `refine`) and routes accordingly — `run-inspectah.sh fleet` maps to `inspectah fleet`, `run-inspectah.sh refine` maps to `inspectah refine`
-
-Usage:
-
-```
-curl -fsSL https://raw.githubusercontent.com/marrusl/inspectah/main/run-inspectah.sh | sudo sh
-curl -fsSL ... | sudo INSPECTAH_HOSTNAME=webserver01 sh -s -- --inspect-only
-./run-inspectah.sh fleet ./snapshots/ -p 80
-./run-inspectah.sh refine hostname-*.tar.gz
-```
+6. Detects subcommands (`fleet`, `refine`) and routes accordingly
 
 ## 4. Schema
 
@@ -775,16 +802,11 @@ inspectah fleet <input_dir> [-p PCT] [-o FILE] [--output-dir DIR] [--json-only] 
 
 Default output is a tarball containing Containerfile, HTML report, and merged snapshot — matching the single-host output format.
 
-### Container Wrapper (`run-inspectah.sh fleet`)
+### Container Orchestration (`inspectah fleet`)
 
-For zero-install workstation use, `run-inspectah.sh fleet` runs the fleet aggregation inside the inspectah container image. It:
+The Go CLI handles all container orchestration for fleet aggregation: bind-mounting the input directory read-only, creating a temp directory for output, running `inspectah fleet` inside the container, and copying the result tarball to the current working directory.
 
-1. Requires `podman` (does not auto-install).
-2. Bind-mounts the input directory read-only and a temp directory for output.
-3. Runs `inspectah fleet` inside the container, passing through `-p`, `--json-only`, and `--no-hosts` flags.
-4. Copies the result tarball to `INSPECTAH_OUTPUT_DIR` (default: current working directory).
-
-Usage: `./run-inspectah.sh fleet ./snapshots/ -p 80 --no-hosts`
+Usage: `inspectah fleet ./snapshots/ -p 80 --no-hosts`
 
 ## 8. Pipeline & Packaging
 
@@ -853,7 +875,9 @@ When building the Containerfile, `inspectah build` searches for certificates in 
 
 ### Wrapper Scripts
 
-`run-inspectah.sh` is the single zero-install entry point. It detects subcommands (`fleet`, `refine`) via a case statement and routes accordingly:
+The Go CLI (`cmd/inspectah/`) is the primary entry point, distributed as an RPM (via COPR) and a Homebrew formula. It replaces the shell script for all standard workflows. The `run-inspectah.sh` shell script remains available as a legacy zero-install option for one-off use.
+
+The legacy shell script detects subcommands (`fleet`, `refine`) via a case statement and routes accordingly:
 
 **Default (inspect):**
 
@@ -881,7 +905,7 @@ The `Containerfile` at the repository root defines the inspectah tool image:
 - **Base image**: `fedora:latest` — chosen because it's in the Red Hat family (compatible tooling and package ecosystem) but doesn't require a subscription, and works on both `amd64` and `aarch64`.
 - **Dependencies**: `python3`, `python3-pip`, `systemd` (for systemd-related inspection), `binutils` and `file` (for binary analysis).
 - **Install**: the inspectah package is installed in editable mode (`pip install -e .`).
-- **Entry point**: `inspectah`. Subcommands `fleet` and `refine` are routed by `run-inspectah.sh` via a case statement.
+- **Entry point**: `inspectah`. The Go CLI constructs the appropriate `podman run` command and passes the subcommand through.
 
 ### Interactive Refinement
 
@@ -889,9 +913,9 @@ The HTML report embeds the full inspection snapshot and exposes include/exclude 
 
 **Workflow:**
 
-1. **Inspect on host:** run inspectah, collect the output tarball.
+1. **Inspect on host:** `sudo inspectah scan`, collect the output tarball.
 2. **Copy to workstation:** `scp target-host:~/hostname-*.tar.gz .`
-3. **Start refine:** `./run-inspectah.sh refine hostname-*.tar.gz` — runs `inspectah refine` inside the container, serves the report at `http://localhost:8642`, and auto-opens the browser.
+3. **Start refine:** `inspectah refine hostname-*.tar.gz` — runs `inspectah refine` inside the container, serves the report at `http://localhost:8642`, and auto-opens the browser.
 4. **Iterate in browser:** toggle items with checkboxes, click Re-render to apply changes, download a refined tarball when done.
 
 **`inspectah refine`** (`src/inspectah/refine.py`) is an HTTP server module that:

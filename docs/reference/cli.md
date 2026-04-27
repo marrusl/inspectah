@@ -2,6 +2,19 @@
 
 Complete flag reference for all inspectah subcommands. For usage examples, see the [README](../../README.md).
 
+## Architecture
+
+The `inspectah` binary is a Go CLI wrapper that manages the container lifecycle. All inspection, rendering, and analysis logic runs inside the `ghcr.io/marrusl/inspectah` container image. The Go CLI handles image pulling, volume mounting, port forwarding, and error translation so you don't need to construct `podman run` commands by hand.
+
+Install via [COPR RPM](../../README.md#installation) (`dnf install inspectah`) or [Homebrew](../../README.md#installation) (`brew install marrusl/tap/inspectah`). Requires podman >= 4.4 at runtime.
+
+### Global flags
+
+| Flag | Description |
+|------|-------------|
+| `--image IMAGE` | Override the container image (default: `ghcr.io/marrusl/inspectah:latest`; also via `INSPECTAH_IMAGE` env var) |
+| `--pull POLICY` | Image pull policy: `always`, `missing` (default), `never`, `newer` |
+
 ---
 
 ## `inspectah`
@@ -9,23 +22,24 @@ Complete flag reference for all inspectah subcommands. For usage examples, see t
 Top-level command. All functionality is accessed through subcommands.
 
 ```
-inspectah [-h] {scan,fleet,refine,architect} ...
+inspectah [global-flags] {scan,fleet,refine,architect,build,version,completion} ...
 ```
-
-If no subcommand is given, or if the first argument looks like a flag (e.g. `--from-snapshot`), `scan` is assumed for backwards compatibility.
 
 | Subcommand | Description |
 |------------|-------------|
-| `scan` | Scan a host and generate migration artifacts (default) |
+| `scan` | Scan a host and generate migration artifacts |
 | `fleet` | Aggregate multiple inspection snapshots into a fleet report |
 | `refine` | Interactively edit and re-render inspection output |
 | `architect` | Plan layer decomposition from refined fleets |
+| `build` | Build a bootc image from inspectah output |
+| `version` | Print wrapper version information |
+| `completion` | Generate shell completion scripts |
 
 ---
 
 ## `inspectah scan`
 
-Default subcommand. Scans a host and generates migration artifacts.
+Scans a host and generates migration artifacts.
 
 ```
 inspectah scan [-h] [--host-root PATH] [-o FILE | --output-dir DIR]
@@ -90,33 +104,33 @@ These flags are set automatically by `inspectah refine` during re-rendering. The
 ### Examples
 
 ```bash
-# Basic host inspection (inside container via run-inspectah.sh)
-sudo ./run-inspectah.sh
+# Basic host inspection
+sudo inspectah scan
 
 # Scan with a specific target version
-inspectah scan --target-version 9.6
+sudo inspectah scan --target-version 9.6
 
 # Re-render from a saved snapshot without re-scanning
 inspectah scan --from-snapshot inspection-snapshot.json -o refreshed.tar.gz
 
 # Air-gapped: provide baseline package list manually
-inspectah scan --baseline-packages rhel9-base-packages.txt
+sudo inspectah scan --baseline-packages rhel9-base-packages.txt
 
 # Full scan with config diffs and container enumeration
-inspectah scan --config-diffs --query-podman
+sudo inspectah scan --config-diffs --query-podman
 
 # Scan and validate the generated Containerfile builds
-inspectah scan --output-dir ./output --validate
+sudo inspectah scan --output-dir ./output --validate
 
 # Override the base image entirely
-inspectah scan --target-image registry.redhat.io/rhel10/rhel-bootc:10.2
+sudo inspectah scan --target-image registry.redhat.io/rhel10/rhel-bootc:10.2
 ```
 
 ---
 
 ## `inspectah refine`
 
-Serves a inspectah output tarball over HTTP for interactive editing in the browser. Toggle individual packages, config files, and services on or off, then re-render to update the Containerfile and reports. Download the updated tarball when done.
+Serves an inspectah output tarball over HTTP for interactive editing in the browser. Toggle individual packages, config files, and services on or off, then re-render to update the Containerfile and reports. Download the updated tarball when done.
 
 ```
 inspectah refine [-h] [--no-browser] [--port PORT] TARBALL
@@ -143,10 +157,10 @@ The re-render pipeline calls `inspectah scan --from-snapshot` under the hood, so
 
 ```bash
 # Refine a single-host inspection
-./run-inspectah.sh refine webserver01-20260312-143000.tar.gz
+inspectah refine webserver01-20260312-143000.tar.gz
 
 # Refine a fleet output
-./run-inspectah.sh refine web-servers-fleet.tar.gz
+inspectah refine web-servers-fleet.tar.gz
 
 # Use a specific port and skip auto-opening the browser
 inspectah refine output.tar.gz --port 9000 --no-browser
@@ -177,10 +191,10 @@ inspectah fleet [-h] [-p PCT] [-o FILE] [--output-dir DIR] [--json-only]
 ```bash
 # Aggregate 3 web servers with strict intersection (only items on ALL hosts)
 mkdir web-servers && cp web-0{1,2,3}.tar.gz web-servers/
-./run-inspectah.sh fleet ./web-servers/
+inspectah fleet ./web-servers/
 
 # Include items on 80%+ of hosts
-./run-inspectah.sh fleet ./web-servers/ -p 80
+inspectah fleet ./web-servers/ -p 80
 
 # Output merged JSON only (no Containerfile rendering)
 inspectah fleet ./web-servers/ --json-only -o web-fleet.json
@@ -214,7 +228,7 @@ inspectah architect [-h] [--port PORT] [--no-browser] [--bind ADDRESS] INPUT
 # Plan layers from two refined fleets
 mkdir refined-fleets
 cp web-servers-refined.tar.gz db-servers-refined.tar.gz refined-fleets/
-./run-inspectah.sh architect ./refined-fleets/
+inspectah architect ./refined-fleets/
 
 # Use a custom port
 inspectah architect ./refined-fleets/ --port 9090
@@ -268,11 +282,51 @@ inspectah build ./inspectah-output/ -t my-bootc-image --no-cache
 
 ---
 
+## `inspectah version`
+
+Prints the wrapper binary version, git commit, and build date.
+
+```bash
+inspectah version
+```
+
+```
+inspectah wrapper 0.6.0
+  commit: abc1234
+  built:  2026-04-25T12:00:00Z
+```
+
+---
+
+## `inspectah completion`
+
+Generates shell completion scripts for tab completion of subcommands, flags, and arguments.
+
+```
+inspectah completion {bash,zsh,fish,powershell}
+```
+
+### Setup
+
+```bash
+# Bash
+inspectah completion bash > /etc/bash_completion.d/inspectah
+
+# Zsh
+inspectah completion zsh > "${fpath[1]}/_inspectah"
+
+# Fish
+inspectah completion fish > ~/.config/fish/completions/inspectah.fish
+```
+
+The RPM package installs completions automatically for bash, zsh, and fish.
+
+---
+
 ## Environment Variables
 
 | Variable | Effect |
 |----------|--------|
-| `INSPECTAH_IMAGE` | Override the container image used by `run-inspectah.sh` (e.g. a local build or pinned tag) |
+| `INSPECTAH_IMAGE` | Override the container image (e.g. a local build or pinned tag). Also settable via `--image` flag. |
 | `INSPECTAH_HOSTNAME` | Override the reported hostname in inspection output |
 | `INSPECTAH_DEBUG` | Set to `1` to enable debug logging |
-| `INSPECTAH_OUTPUT_DIR` | Override the output directory for `run-inspectah.sh` (default: current directory) |

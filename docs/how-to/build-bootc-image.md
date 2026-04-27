@@ -1,20 +1,19 @@
 # How to Build a bootc Image from inspectah Output
 
-After running `inspectah inspect` and `inspectah refine` on a RHEL host, you have a tarball containing everything needed to rebuild that system as a bootc container image. This guide walks through building that image using `inspectah build`.
+After running `inspectah scan` and `inspectah refine` on a RHEL host, you have a tarball containing everything needed to rebuild that system as a bootc container image. This guide walks through building that image using `inspectah build`.
 
 ## Prerequisites
 
 Before you start, you'll need:
 
-1. **Podman**: Installed on your build machine
-   - Install Podman: https://podman.io/docs/installation
+1. **inspectah CLI**: Install via COPR (`sudo dnf install inspectah`) or Homebrew (`brew install marrusl/tap/inspectah`). See the [README](../../README.md#installation) for details.
 
-2. **inspectah output tarball**: A file named like `hostname-20260312-143000.tar.gz` from the inspect/refine workflow, containing:
+2. **Podman**: Required on your build machine. The RPM package installs it as a dependency. On macOS, install via [Podman Desktop](https://podman-desktop.io/) or `brew install podman`.
+
+3. **inspectah output tarball**: A file named like `hostname-20260312-143000.tar.gz` from the inspect/refine workflow, containing:
    - `Containerfile` — the bootc image definition
    - `config/` — configuration files to layer into the image
    - `entitlement/` and `rhsm/` — RHEL subscription certs (if building a RHEL image)
-
-3. **The `inspectah` CLI**: The Go binary with the `build` subcommand
 
 4. **RHEL subscription certificates** (for RHEL images only):
    - If building on a RHEL host, certificates are auto-detected
@@ -67,7 +66,7 @@ The tool searches for certificates in this priority order:
 
 1. **Explicit directory** — Use `--entitlements-dir /path/to/certs` to point directly at your certificate directory.
 
-2. **Bundled in the tarball** — If you ran `inspectah inspect` on the RHEL host using `run-inspectah.sh`, certificates are automatically bundled into the tarball at `entitlement/` and `rhsm/`.
+2. **Bundled in the tarball** — If you ran `inspectah scan` on the RHEL host, certificates are automatically bundled into the tarball at `entitlement/` and `rhsm/`.
 
 3. **RHEL host auto-detection** — If you're building on a RHEL system with `/etc/pki/entitlement/*.pem` present, certs are detected automatically.
 
@@ -99,7 +98,7 @@ You can build RHEL bootc images on:
 
 The workflow:
 
-1. Run `inspectah inspect` on the RHEL host (certs are bundled automatically)
+1. Run `inspectah scan` on the RHEL host (certs are bundled automatically)
 2. Copy the tarball to your Mac/Fedora workstation
 3. Run `inspectah build` — certs are auto-detected from the tarball
 
@@ -118,7 +117,7 @@ If you're building a RHEL image and no certificates are detected, `inspectah bui
 
 1. Build on the RHEL host directly (entitlement is automatic)
 2. Copy certs from the RHEL host (see above)
-3. Re-run `run-inspectah.sh` — it bundles certs automatically
+3. Re-run `inspectah scan` on the RHEL host — it bundles certs automatically
 
 ## Build Options
 

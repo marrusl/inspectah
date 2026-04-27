@@ -1,20 +1,28 @@
 # Architecture
 
-This document covers inspectah internals: inspectors, renderers, baseline subtraction, Containerfile layer ordering, and build cert handling. For usage, see the [README](../../README.md). For the full technical design, see [design.md](../../design.md).
+This document covers inspectah internals: the Go CLI wrapper, inspectors, renderers, baseline subtraction, Containerfile layer ordering, and build cert handling. For usage, see the [README](../../README.md). For the full technical design, see [design.md](../reference/design.md).
 
 ## Overview
+
+inspectah has a two-layer architecture:
+
+- **Go CLI wrapper** (`cmd/inspectah/`) — a Cobra-based binary that manages the container lifecycle. Users interact with this layer. It handles podman discovery, image pulling, volume mounting, port forwarding, error translation, and tab completion. Distributed via COPR RPM and Homebrew.
+- **Python analysis engine** (the container image) — all inspection, rendering, and analysis logic. Runs inside the `ghcr.io/marrusl/inspectah` container image. The Go CLI constructs the `podman run` command; the Python code does the actual work.
+
+Within the Python layer:
 
 - **Inspectors** run against a host root (default `/host`) and produce structured JSON (the inspection snapshot).
 - **Renderers** consume the snapshot and produce output artifacts (Containerfile, markdown report, HTML report, etc.).
 
 A core design principle is **baseline subtraction**: wherever possible, the tool subtracts base-image defaults from the host's current state so that only operator-added or operator-modified items appear in the output. Packages are diffed against the base image package list, services against base image presets, timers and cron jobs against RPM ownership, and kernel/SELinux configs against shipped defaults. Items that exist identically in the base image are omitted — they'll already be there.
 
-Three subcommands and one companion tool complete the workflow:
+Five subcommands complete the workflow:
 
+- **`inspectah scan`** inspects a host and produces migration artifacts (Containerfile, reports, snapshot).
 - **`inspectah refine`** serves an interactive UI for editing findings — toggling packages in or out, changing user migration strategies, excluding config files — and re-rendering the Containerfile live.
 - **`inspectah fleet`** aggregates inspections from multiple hosts into a single fleet snapshot, producing a merged Containerfile and report with prevalence annotations.
 - **`inspectah architect`** takes multiple refined fleets and proposes a layered image topology (base + derived layers), with an interactive web UI for adjusting the decomposition.
-- **`inspectah build`** builds a bootc container image from inspectah output, with automatic RHEL subscription cert handling.
+- **`inspectah build`** builds a bootc container image from inspectah output, with automatic RHEL subscription cert handling. This subcommand runs directly on the host (not inside the container) since it wraps `podman build`.
 
 ## Refine UI Internals
 
@@ -178,13 +186,15 @@ The resolved baseline (including the base image package list) is cached in the i
 
 ## Running the Container Directly
 
+The Go CLI handles all container orchestration automatically. The examples below are for advanced users who want to run the container image directly without the Go CLI.
+
 The pre-built image is published to GHCR on every push to `main`:
 
 ```
 ghcr.io/marrusl/inspectah:latest
 ```
 
-Multi-arch (amd64 + arm64). To run it directly without the wrapper script:
+Multi-arch (amd64 + arm64). To run it directly without the CLI:
 
 ```bash
 sudo podman run --rm \
