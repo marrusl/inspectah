@@ -17,7 +17,10 @@ func TestScanCmd_Flags(t *testing.T) {
 
 	f := cmd.Flags()
 	assert.NotNil(t, f.Lookup("output"))
-	assert.NotNil(t, f.Lookup("dry-run"))
-	assert.NotNil(t, f.Lookup("verbose"))
-	assert.NotNil(t, f.Lookup("hostname"))
+	// Native pipeline flags (previously passthrough to container)
+	assert.NotNil(t, f.Lookup("host-root"))
+	assert.NotNil(t, f.Lookup("from-snapshot"))
+	assert.NotNil(t, f.Lookup("output-dir"))
+	assert.NotNil(t, f.Lookup("no-redaction"))
+	assert.NotNil(t, f.Lookup("sensitivity"))
 }
