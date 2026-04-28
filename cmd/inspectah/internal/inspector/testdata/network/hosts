@@ -1,0 +1,5 @@
+127.0.0.1   localhost localhost.localdomain
+::1         localhost localhost.localdomain
+10.0.0.50   db-primary.internal db-primary
+10.0.0.51   db-replica.internal db-replica
+192.168.1.100 app-server.local

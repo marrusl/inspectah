@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Public</short>
+  <description>Public zone for untrusted networks.</description>
+  <service name="ssh"/>
+  <service name="dhcpv6-client"/>
+  <port port="8080" protocol="tcp"/>
+  <port port="443" protocol="tcp"/>
+  <rule family="ipv4">
+    <source address="192.168.1.0/24"/>
+    <port port="3306" protocol="tcp"/>
+    <accept/>
+  </rule>
+</zone>

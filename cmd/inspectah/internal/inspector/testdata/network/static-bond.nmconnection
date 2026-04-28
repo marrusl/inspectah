@@ -1,0 +1,10 @@
+[connection]
+id=static-bond
+type=bond
+
+[ipv4]
+method=manual
+address1=10.0.0.5/24,10.0.0.1
+
+[ipv6]
+method=ignore
