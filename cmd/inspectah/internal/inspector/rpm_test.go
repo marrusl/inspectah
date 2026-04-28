@@ -14,7 +14,7 @@ import (
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
-func loadFixture(t *testing.T, name string) string {
+func loadRpmFixture(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "rpm", name))
 	require.NoError(t, err, "loading fixture %s", name)
@@ -88,7 +88,7 @@ func TestParseNEVRA(t *testing.T) {
 }
 
 func TestParseRpmQA(t *testing.T) {
-	input := loadFixture(t, "rpm-qa.txt")
+	input := loadRpmFixture(t, "rpm-qa.txt")
 	var warnings []Warning
 	packages := parseRpmQA(input, &warnings)
 
@@ -126,7 +126,7 @@ not-parseable
 // ---------------------------------------------------------------------------
 
 func TestParseRpmVa(t *testing.T) {
-	input := loadFixture(t, "rpm-va.txt")
+	input := loadRpmFixture(t, "rpm-va.txt")
 	entries := parseRpmVa(input)
 
 	assert.GreaterOrEqual(t, len(entries), 2, "should parse multiple entries")
@@ -375,7 +375,7 @@ func TestDetectDuplicates(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestParseModuleINI(t *testing.T) {
-	input := loadFixture(t, "modules.module")
+	input := loadRpmFixture(t, "modules.module")
 	result := parseModuleINI(input)
 
 	assert.Contains(t, result, "nodejs")
@@ -505,8 +505,8 @@ func rpmQACmdKey() string {
 }
 
 func TestRunRpmNoBaseline(t *testing.T) {
-	rpmQAOutput := loadFixture(t, "rpm-qa.txt")
-	rpmVaOutput := loadFixture(t, "rpm-va.txt")
+	rpmQAOutput := loadRpmFixture(t, "rpm-qa.txt")
+	rpmVaOutput := loadRpmFixture(t, "rpm-va.txt")
 
 	exec := NewFakeExecutor(map[string]ExecResult{
 		// rpm -qa
@@ -578,7 +578,7 @@ From repo   : appstream`,
 }
 
 func TestRunRpmWithBaseline(t *testing.T) {
-	rpmQAOutput := loadFixture(t, "rpm-qa.txt")
+	rpmQAOutput := loadRpmFixture(t, "rpm-qa.txt")
 
 	// Create a baseline that includes bash and glibc but NOT vim-enhanced.
 	baseline := map[string]schema.PackageEntry{
@@ -830,7 +830,7 @@ Altered:
 }
 
 func TestRunRpmModuleStreams(t *testing.T) {
-	moduleContent := loadFixture(t, "modules.module")
+	moduleContent := loadRpmFixture(t, "modules.module")
 
 	exec := NewFakeExecutor(map[string]ExecResult{
 		rpmQACmdKey(): {
@@ -859,7 +859,7 @@ func TestRunRpmModuleStreams(t *testing.T) {
 }
 
 func TestRunRpmVersionLocks(t *testing.T) {
-	vlContent := loadFixture(t, "versionlock.list")
+	vlContent := loadRpmFixture(t, "versionlock.list")
 
 	exec := NewFakeExecutor(map[string]ExecResult{
 		rpmQACmdKey(): {

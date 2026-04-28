@@ -1,0 +1,11 @@
+Module                  Size  Used by
+vfat                   20480  1
+fat                    86016  1 vfat
+ext4                  991232  1
+mbcache                16384  1 ext4
+jbd2                  180224  1 ext4
+bridge                409600  0
+stp                    16384  1 bridge
+llc                    16384  2 bridge,stp
+nf_tables             323584  0
+ip_tables              32768  0
