@@ -1,0 +1,3 @@
+# DNF versionlock plugin configuration
+1:curl-7.76.1-26.el9.x86_64
+python3-urllib3-1.26.5-3.el9.noarch

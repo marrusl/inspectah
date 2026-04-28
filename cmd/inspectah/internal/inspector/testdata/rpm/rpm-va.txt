@@ -1,0 +1,4 @@
+S.5....T.  c /etc/foo.conf
+..5....T.  c /etc/bar.conf
+.......T.    /boot/vmlinuz
+S.5....T.    /etc/sysconfig/network

@@ -1,0 +1,17 @@
+[nodejs]
+name=nodejs
+stream=18
+profiles=common
+state=enabled
+
+[postgresql]
+name=postgresql
+stream=15
+profiles=server
+state=installed
+
+[disabled_module]
+name=disabled_module
+stream=1
+profiles=
+state=disabled
