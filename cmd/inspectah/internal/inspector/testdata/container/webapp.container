@@ -1,0 +1,10 @@
+[Container]
+Image=registry.example.com/myapp:latest
+PublishPort=8080:8080
+Volume=webapp-data.volume:/data
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

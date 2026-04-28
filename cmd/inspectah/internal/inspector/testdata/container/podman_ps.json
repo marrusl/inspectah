@@ -1,0 +1,54 @@
+[
+  {
+    "ID": "abc123def456",
+    "Names": ["webapp"],
+    "Image": "registry.example.com/myapp:latest",
+    "ImageID": "sha256:aabbccdd",
+    "State": {
+      "Status": "running"
+    },
+    "Mounts": [
+      {
+        "Type": "volume",
+        "Source": "/var/lib/containers/storage/volumes/webapp-data/_data",
+        "Destination": "/data",
+        "Mode": "",
+        "RW": true
+      }
+    ],
+    "NetworkSettings": {
+      "Networks": {
+        "podman": {
+          "IPAddress": "10.88.0.2"
+        }
+      },
+      "Ports": {
+        "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}]
+      }
+    },
+    "Config": {
+      "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin", "APP_ENV=production"]
+    }
+  },
+  {
+    "ID": "789012345678",
+    "Names": ["redis-cache"],
+    "Image": "redis:7-alpine",
+    "ImageID": "sha256:eeff0011",
+    "State": {
+      "Status": "running"
+    },
+    "Mounts": [],
+    "NetworkSettings": {
+      "Networks": {
+        "podman": {
+          "IPAddress": "10.88.0.3"
+        }
+      },
+      "Ports": {}
+    },
+    "Config": {
+      "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin"]
+    }
+  }
+]
