@@ -7,13 +7,13 @@ import (
 )
 
 func TestScanCmd_Exists(t *testing.T) {
-	cmd := newScanCmd(&GlobalOpts{Pull: "missing", Image: "test:latest"})
+	cmd := newScanCmd(&GlobalOpts{Version: "0.7.0"})
 	assert.Equal(t, "scan", cmd.Use[:4])
 	assert.Contains(t, cmd.Short, "Inspect")
 }
 
 func TestScanCmd_Flags(t *testing.T) {
-	cmd := newScanCmd(&GlobalOpts{Pull: "missing", Image: "test:latest"})
+	cmd := newScanCmd(&GlobalOpts{Version: "0.7.0"})
 
 	f := cmd.Flags()
 	assert.NotNil(t, f.Lookup("output"))
