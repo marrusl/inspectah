@@ -697,33 +697,3 @@ type RedactionFinding struct {
 	DetectionMethod string  `json:"detection_method"`
 	Confidence      *string `json:"confidence"`
 }
-
-// ---------------------------------------------------------------------------
-// Root snapshot
-// ---------------------------------------------------------------------------
-
-// InspectionSnapshot is the full inspection snapshot, serialised as
-// inspection-snapshot.json. All sections are optional so we can run a
-// subset of inspectors.
-type InspectionSnapshot struct {
-	SchemaVersion int                    `json:"schema_version"`
-	Meta          map[string]interface{} `json:"meta"`
-	OsRelease     *OsRelease             `json:"os_release"`
-	SystemType    SystemType             `json:"system_type"`
-
-	Rpm            *RpmSection            `json:"rpm"`
-	Config         *ConfigSection         `json:"config"`
-	Services       *ServiceSection        `json:"services"`
-	Network        *NetworkSection        `json:"network"`
-	Storage        *StorageSection        `json:"storage"`
-	ScheduledTasks *ScheduledTaskSection  `json:"scheduled_tasks"`
-	Containers     *ContainerSection      `json:"containers"`
-	NonRpmSoftware *NonRpmSoftwareSection `json:"non_rpm_software"`
-	KernelBoot     *KernelBootSection     `json:"kernel_boot"`
-	Selinux        *SelinuxSection        `json:"selinux"`
-	UsersGroups    *UserGroupSection      `json:"users_groups"`
-	Preflight      PreflightResult        `json:"preflight"`
-
-	Warnings   []map[string]interface{} `json:"warnings"`
-	Redactions []RedactionFinding       `json:"redactions"`
-}

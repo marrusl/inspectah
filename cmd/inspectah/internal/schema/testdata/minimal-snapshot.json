@@ -1,0 +1,31 @@
+{
+  "schema_version": 11,
+  "meta": {},
+  "os_release": null,
+  "system_type": "package-mode",
+  "rpm": null,
+  "config": null,
+  "services": null,
+  "network": null,
+  "storage": null,
+  "scheduled_tasks": null,
+  "containers": null,
+  "non_rpm_software": null,
+  "kernel_boot": null,
+  "selinux": null,
+  "users_groups": null,
+  "preflight": {
+    "status": "ok",
+    "status_reason": null,
+    "available": [],
+    "unavailable": [],
+    "unverifiable": [],
+    "direct_install": [],
+    "repo_unreachable": [],
+    "base_image": "",
+    "repos_queried": [],
+    "timestamp": ""
+  },
+  "warnings": [],
+  "redactions": []
+}

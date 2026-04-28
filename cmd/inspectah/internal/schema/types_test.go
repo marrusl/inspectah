@@ -233,7 +233,7 @@ func TestInspectionSnapshotJSON(t *testing.T) {
 			Status: "skipped",
 		},
 		Warnings:   []map[string]interface{}{},
-		Redactions: []RedactionFinding{},
+		Redactions: []json.RawMessage{},
 	}
 
 	data, err := json.Marshal(snap)
