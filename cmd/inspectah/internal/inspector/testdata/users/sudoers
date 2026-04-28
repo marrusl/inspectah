@@ -1,0 +1,22 @@
+## Sudoers allows particular users to run various commands as
+## the root user, without needing the root password.
+
+Defaults   !visiblepw
+Defaults    always_set_home
+Defaults    match_group_by_gid
+Defaults    env_reset
+
+## Allow root to run any commands anywhere
+root	ALL=(ALL) 	ALL
+
+## Allows members of the 'sys' group to run networking commands
+%sys ALL = NETWORKING
+
+## Allows people in group wheel to run all commands
+%wheel	ALL=(ALL)	ALL
+
+## Same thing without a password
+# %wheel	ALL=(ALL)	NOPASSWD: ALL
+
+alice ALL=(ALL) NOPASSWD: ALL
+bob ALL=(ALL) ALL
