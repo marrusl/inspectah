@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           inspectah
-Version:        0.2.2
+Version:        0.7.0
 Release:        1%{?dist}
 Summary:        Inspect package-mode hosts and produce bootc image artifacts
 
@@ -20,9 +20,8 @@ inspectah inspects package-based RHEL, CentOS, and Fedora hosts and
 produces bootc-compatible image artifacts including Containerfiles,
 configuration trees, and migration reports.
 
-The inspectah binary manages the container lifecycle transparently.
-Install via dnf, run inspectah scan, and the tool handles image
-pulling, host inspection, and artifact generation.
+Install via dnf and run inspectah scan. The tool handles host
+inspection and artifact generation directly.
 
 %prep
 %autosetup -n %{name}-%{version}
