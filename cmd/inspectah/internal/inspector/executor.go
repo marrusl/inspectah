@@ -205,7 +205,9 @@ func (f *FakeExecutor) FileExists(path string) bool {
 	return false
 }
 
-// ReadDir returns virtual directory entries.
+// ReadDir returns virtual directory entries. An entry whose full path
+// (parent + "/" + name) exists as a key in the dirs map is reported as a
+// directory; everything else is reported as a file.
 func (f *FakeExecutor) ReadDir(path string) ([]os.DirEntry, error) {
 	names, ok := f.dirs[path]
 	if !ok {
@@ -213,17 +215,25 @@ func (f *FakeExecutor) ReadDir(path string) ([]os.DirEntry, error) {
 	}
 	entries := make([]os.DirEntry, len(names))
 	for i, name := range names {
-		entries[i] = fakeDirEntry{name: name}
+		childPath := filepath.Join(path, name)
+		_, isDir := f.dirs[childPath]
+		entries[i] = fakeDirEntry{name: name, isDir: isDir}
 	}
 	return entries, nil
 }
 
 // fakeDirEntry implements os.DirEntry for test doubles.
 type fakeDirEntry struct {
-	name string
+	name  string
+	isDir bool
 }
 
 func (d fakeDirEntry) Name() string               { return d.name }
-func (d fakeDirEntry) IsDir() bool                 { return false }
-func (d fakeDirEntry) Type() fs.FileMode           { return 0 }
-func (d fakeDirEntry) Info() (fs.FileInfo, error)   { return nil, nil }
+func (d fakeDirEntry) IsDir() bool                 { return d.isDir }
+func (d fakeDirEntry) Type() fs.FileMode {
+	if d.isDir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (d fakeDirEntry) Info() (fs.FileInfo, error) { return nil, nil }

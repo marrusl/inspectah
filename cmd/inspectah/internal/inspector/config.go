@@ -205,11 +205,58 @@ func isExcludedUnowned(path string) bool {
 		return true
 	}
 	for _, pattern := range unownedExcludeGlobs {
-		if matched, _ := filepath.Match(pattern, path); matched {
+		if matchUnownedGlob(pattern, path) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchUnownedGlob matches a path against a glob pattern. Unlike
+// filepath.Match, patterns ending in "/*" match any depth below the
+// directory (matching Python fnmatch.fnmatch behavior where * crosses
+// path separators). For patterns without trailing /*, falls back to
+// filepath.Match on the basename for patterns like "ssh_host_*".
+func matchUnownedGlob(pattern, path string) bool {
+	// Fast path: try filepath.Match first (handles single-level globs)
+	if matched, _ := filepath.Match(pattern, path); matched {
+		return true
+	}
+
+	// For patterns like "/etc/dir/*", match any path under /etc/dir/
+	if strings.HasSuffix(pattern, "/*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+
+	// For patterns with wildcards in intermediate segments (e.g.
+	// "/etc/selinux/*/contexts/*"), match segment-by-segment. The
+	// trailing /* means any depth, intermediate * matches one segment.
+	patParts := strings.Split(pattern, "/")
+	pathParts := strings.Split(path, "/")
+
+	return matchParts(patParts, pathParts)
+}
+
+// matchParts matches path segments against pattern segments. A "*" in a
+// non-terminal position matches exactly one segment. In the terminal
+// position, it matches one or more remaining segments.
+func matchParts(pat, path []string) bool {
+	pi, qi := 0, 0
+	for pi < len(pat) && qi < len(path) {
+		if pi == len(pat)-1 && pat[pi] == "*" {
+			return true // terminal * matches rest
+		}
+		matched, _ := filepath.Match(pat[pi], path[qi])
+		if !matched {
+			return false
+		}
+		pi++
+		qi++
+	}
+	return pi == len(pat) && qi == len(path)
 }
 
 // ---------------------------------------------------------------------------
@@ -633,9 +680,15 @@ func RunConfig(exec Executor, opts ConfigOptions) (*schema.ConfigSection, []Warn
 
 		var diffAgainstRpm *string
 		if opts.ConfigDiffs {
-			pkg := getOwningPackage(exec, path)
-			if pkg == "" && entry.Package != nil {
+			// Prefer the package name from rpm -Va (short name) over rpm -qf
+			// (returns full NEVRA). The short name works better for cache
+			// lookups and dnf download.
+			pkg := ""
+			if entry.Package != nil {
 				pkg = *entry.Package
+			}
+			if pkg == "" {
+				pkg = getOwningPackage(exec, path)
 			}
 			pathInRpm := strings.TrimPrefix(path, "/")
 			original := ""
