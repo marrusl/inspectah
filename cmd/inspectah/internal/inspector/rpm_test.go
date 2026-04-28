@@ -72,7 +72,7 @@ func TestParseNEVRA(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := parseNEVRA(tc.input)
+			got := ParseNEVRA(tc.input)
 			if tc.expect == nil {
 				assert.Nil(t, got)
 			} else {
@@ -501,7 +501,7 @@ enabled=1`,
 
 // rpmQACmdKey returns the FakeExecutor command key for rpm -qa.
 func rpmQACmdKey() string {
-	return "rpm -qa --queryformat " + rpmQAQueryformat + "\n"
+	return "rpm -qa --queryformat " + RpmQAQueryformat + "\n"
 }
 
 func TestRunRpmNoBaseline(t *testing.T) {

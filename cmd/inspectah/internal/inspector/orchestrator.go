@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/baseline"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 )
 
@@ -100,8 +101,48 @@ func RunAll(exec Executor, opts InspectOptions) (*schema.InspectionSnapshot, err
 		}
 	}
 
-	// Resolve base image for the RPM inspector
-	baseImage := opts.TargetImage
+	// --- Baseline resolution ---
+	// Resolve baseline packages, presets, and module streams before running
+	// inspectors. If --no-baseline is set or opts already carries pre-loaded
+	// baseline data, skip the resolver.
+	var baselinePackages map[string]schema.PackageEntry
+	var baseImageRef string
+	var baseImagePresetText string
+	noBaseline := opts.NoBaseline
+
+	if opts.BaselinePackages != nil {
+		// Caller pre-loaded baseline (e.g. from tests or outer pipeline).
+		baselinePackages = opts.BaselinePackages
+		baseImageRef = opts.TargetImage
+	} else if !noBaseline {
+		resolver := baseline.NewResolver(executorAdapter{exec})
+		osID := ""
+		versionID := ""
+		if osRelease != nil {
+			osID = osRelease.ID
+			versionID = osRelease.VersionID
+		}
+		baselinePackages, baseImageRef, noBaseline = resolver.Resolve(baseline.ResolveOptions{
+			OsID:          osID,
+			VersionID:     versionID,
+			TargetVersion: opts.TargetVersion,
+			TargetImage:   opts.TargetImage,
+		})
+
+		// Query presets and module streams from the resolved base image.
+		if baseImageRef != "" && !noBaseline {
+			if presetText, err := resolver.QueryPresets(baseImageRef); err == nil {
+				baseImagePresetText = presetText
+			}
+			// Module streams are used by RPM inspector for conflict detection.
+			// Cached by the resolver, so this is essentially free.
+			_, _ = resolver.QueryModuleStreams(baseImageRef)
+		}
+	}
+
+	if baseImageRef == "" {
+		baseImageRef = opts.TargetImage
+	}
 
 	// --- Inspector execution (safe pattern) ---
 
@@ -109,11 +150,11 @@ func RunAll(exec Executor, opts InspectOptions) (*schema.InspectionSnapshot, err
 	sectionBanner("Packages", 1, totalInspectors)
 	rpmSection, rpmWarn := safeRun("rpm", func() (*schema.RpmSection, []Warning, error) {
 		return RunRpm(exec, RpmOptions{
-			BaselinePackages: opts.BaselinePackages,
+			BaselinePackages: baselinePackages,
 			SystemType:       systemType,
 			TargetVersion:    opts.TargetVersion,
 			TargetImage:      opts.TargetImage,
-			BaseImage:        baseImage,
+			BaseImage:        baseImageRef,
 		})
 	})
 	snapshot.Rpm = rpmSection
@@ -149,8 +190,8 @@ func RunAll(exec Executor, opts InspectOptions) (*schema.InspectionSnapshot, err
 	sectionBanner("Services", 3, totalInspectors)
 	serviceSection, serviceWarn := safeRun("service", func() (*schema.ServiceSection, []Warning, error) {
 		return RunServices(exec, ServiceOptions{
-			SystemType: systemType,
-			// BaseImagePresetText is Phase 3 (requires BaselineResolver)
+			SystemType:          systemType,
+			BaseImagePresetText: baseImagePresetText,
 		})
 	})
 	snapshot.Services = serviceSection
@@ -433,4 +474,24 @@ func populateHostname(exec Executor, snapshot *schema.InspectionSnapshot) {
 // sectionBanner prints a progress banner to stderr.
 func sectionBanner(name string, step, total int) {
 	fmt.Fprintf(os.Stderr, "[%d/%d] %s\n", step, total, name)
+}
+
+// ---------------------------------------------------------------------------
+// Executor → baseline.CommandRunner adapter
+// ---------------------------------------------------------------------------
+
+// executorAdapter adapts the inspector.Executor interface to the
+// baseline.CommandRunner interface, bridging the ExecResult/CommandResult
+// type difference without creating an import cycle.
+type executorAdapter struct {
+	exec Executor
+}
+
+func (a executorAdapter) Run(name string, args ...string) baseline.CommandResult {
+	r := a.exec.Run(name, args...)
+	return baseline.CommandResult{
+		Stdout:   r.Stdout,
+		Stderr:   r.Stderr,
+		ExitCode: r.ExitCode,
+	}
 }

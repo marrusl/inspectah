@@ -298,8 +298,8 @@ func RunRpm(exec Executor, opts RpmOptions) (*schema.RpmSection, []Warning, erro
 // NEVRA parsing
 // ---------------------------------------------------------------------------
 
-// rpmQAQueryformat is the queryformat used with rpm -qa.
-const rpmQAQueryformat = `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`
+// RpmQAQueryformat is the queryformat used with rpm -qa.
+const RpmQAQueryformat = `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`
 
 // virtualPackages are package names to skip (not real packages).
 var virtualPackages = map[string]bool{
@@ -307,10 +307,10 @@ var virtualPackages = map[string]bool{
 	"gpg-pubkey-release": true,
 }
 
-// parseNEVRA parses a single line from rpm -qa --queryformat output.
+// ParseNEVRA parses a single line from rpm -qa --queryformat output.
 // Format: epoch:name-version-release.arch
 // Returns nil if the line cannot be parsed.
-func parseNEVRA(line string) *schema.PackageEntry {
+func ParseNEVRA(line string) *schema.PackageEntry {
 	s := strings.TrimSpace(line)
 	if s == "" {
 		return nil
@@ -369,7 +369,7 @@ func parseRpmQA(stdout string, warnings *[]Warning) []schema.PackageEntry {
 		if line == "" {
 			continue
 		}
-		pkg := parseNEVRA(line)
+		pkg := ParseNEVRA(line)
 		if pkg != nil {
 			packages = append(packages, *pkg)
 		} else {
@@ -396,11 +396,11 @@ func parseRpmQA(stdout string, warnings *[]Warning) []schema.PackageEntry {
 // rpmQA runs rpm -qa and returns the parsed package list, filtering out
 // virtual packages.
 func rpmQA(exec Executor, warnings *[]Warning) []schema.PackageEntry {
-	result := exec.Run("rpm", "-qa", "--queryformat", rpmQAQueryformat+"\n")
+	result := exec.Run("rpm", "-qa", "--queryformat", RpmQAQueryformat+"\n")
 	if result.ExitCode != 0 {
 		// Fallback: try with --root.
 		result = exec.Run("rpm", "--root", exec.HostRoot(), "-qa",
-			"--queryformat", rpmQAQueryformat+"\n")
+			"--queryformat", RpmQAQueryformat+"\n")
 		if result.ExitCode == 0 && warnings != nil {
 			*warnings = append(*warnings, makeWarning("rpm",
 				"rpm -qa used --root fallback (--dbpath query failed); results are correct but may be slower.",
@@ -1221,6 +1221,18 @@ func collectModuleStreams(exec Executor) []schema.EnabledModuleStream {
 type moduleInfo struct {
 	stream   string
 	profiles []string
+}
+
+// ParseModuleStreams parses concatenated module INI text and returns
+// {module_name: stream} for sections whose state is enabled or installed.
+// This is the exported version for use by the baseline package.
+func ParseModuleStreams(text string) map[string]string {
+	parsed := parseModuleINI(text)
+	result := make(map[string]string, len(parsed))
+	for name, info := range parsed {
+		result[name] = info.stream
+	}
+	return result
 }
 
 // parseModuleINI parses INI-format module files. We implement a minimal INI

@@ -169,6 +169,14 @@ func (f *FakeExecutor) WithDirs(dirs map[string][]string) *FakeExecutor {
 	return f
 }
 
+// Commands returns the underlying command map for test inspection.
+func (f *FakeExecutor) Commands() map[string]ExecResult { return f.commands }
+
+// AddCommand adds or replaces a canned command result.
+func (f *FakeExecutor) AddCommand(key string, result ExecResult) {
+	f.commands[key] = result
+}
+
 func (f *FakeExecutor) HostRoot() string { return "/" }
 
 // Run looks up the command key (space-joined name + args) and returns the
