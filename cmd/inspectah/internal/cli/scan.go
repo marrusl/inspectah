@@ -5,8 +5,10 @@ import (
 	"os"
 
 	ierrors "github.com/marrusl/inspectah/cmd/inspectah/internal/errors"
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/inspector"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/pipeline"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/platform"
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 	"github.com/spf13/cobra"
 )
 
@@ -98,6 +100,19 @@ Requires root privileges on a Linux host.`,
 				SkipPreflight:    skipPreflight,
 				BaselinePackages: baselinePackages,
 				UserStrategy:     userStrategy,
+				RunInspectors: func(hostRoot string) (*schema.InspectionSnapshot, error) {
+					exec := inspector.NewRealExecutor(hostRoot)
+					return inspector.RunAll(exec, inspector.InspectOptions{
+						ConfigDiffs:          configDiffs,
+						DeepBinaryScan:       deepBinaryScan,
+						QueryPodman:          queryPodman,
+						TargetVersion:        targetVersion,
+						TargetImage:          targetImage,
+						NoBaseline:           noBaseline,
+						UserStrategyOverride: userStrategy,
+						Version:              opts.Version,
+					})
+				},
 			})
 			return err
 		},
