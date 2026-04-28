@@ -1,0 +1,24 @@
+# /etc/fstab
+# Created by anaconda on Thu Mar  1 12:00:00 2024
+
+UUID=abcd-1234 / xfs defaults 0 0
+UUID=efgh-5678 /boot ext4 defaults 1 2
+/dev/mapper/data-home /home xfs defaults,noatime 0 0
+
+# NFS share
+nfs-server:/export/data /mnt/data nfs rw,hard,intr 0 0
+
+# CIFS share with credentials
+//fileserver/share /mnt/share cifs credentials=/etc/samba/creds.txt,uid=1000 0 0
+
+# Bind mount
+/opt/app /srv/app none bind 0 0
+
+# Swap
+/dev/mapper/swap swap swap defaults 0 0
+
+# iSCSI target
+/dev/disk/by-path/ip-10.0.0.1:3260-iscsi-iqn.2024-01.com.example:target1-lun-0 /mnt/iscsi ext4 _netdev 0 0
+
+# NFS with secretfile
+nfs-server:/secure /mnt/secure nfs secretfile=/etc/nfs/secret.key 0 0

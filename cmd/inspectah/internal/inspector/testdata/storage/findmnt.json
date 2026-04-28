@@ -1,0 +1,28 @@
+{
+  "filesystems": [
+    {
+      "target": "/",
+      "source": "/dev/mapper/root",
+      "fstype": "xfs",
+      "options": "rw,relatime,seclabel,attr2,inode64,logbufs=8,logbsize=32k,noquota"
+    },
+    {
+      "target": "/boot",
+      "source": "/dev/sda1",
+      "fstype": "ext4",
+      "options": "rw,relatime,seclabel"
+    },
+    {
+      "target": "/home",
+      "source": "/dev/mapper/data-home",
+      "fstype": "xfs",
+      "options": "rw,noatime,seclabel,attr2,inode64,logbufs=8"
+    },
+    {
+      "target": "/mnt/data",
+      "source": "nfs-server:/export/data",
+      "fstype": "nfs4",
+      "options": "rw,relatime,vers=4.2,rsize=1048576,wsize=1048576,hard,proto=tcp"
+    }
+  ]
+}

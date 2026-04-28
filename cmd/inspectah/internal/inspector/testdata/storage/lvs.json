@@ -1,0 +1,23 @@
+{
+  "report": [
+    {
+      "lv": [
+        {
+          "lv_name": "root",
+          "vg_name": "rhel",
+          "lv_size": "50.00g"
+        },
+        {
+          "lv_name": "home",
+          "vg_name": "data",
+          "lv_size": "100.00g"
+        },
+        {
+          "lv_name": "swap",
+          "vg_name": "rhel",
+          "lv_size": "8.00g"
+        }
+      ]
+    }
+  ]
+}
