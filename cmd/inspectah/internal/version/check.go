@@ -17,7 +17,7 @@ func ToImageRef(registry, repo, version string) string {
 const (
 	DefaultRegistry = "ghcr.io"
 	DefaultRepo     = "marrusl/inspectah"
-	DefaultTag      = "latest"
+	DefaultTag      = "0.6.0"
 )
 
 func DefaultImageRef() string {

@@ -30,5 +30,5 @@ func TestToImageRef_NoVPrefix(t *testing.T) {
 
 func TestDefaultImageRef(t *testing.T) {
 	ref := DefaultImageRef()
-	assert.Equal(t, "ghcr.io/marrusl/inspectah:latest", ref)
+	assert.Equal(t, "ghcr.io/marrusl/inspectah:0.6.0", ref)
 }
