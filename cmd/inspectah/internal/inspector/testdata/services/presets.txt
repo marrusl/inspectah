@@ -1,0 +1,17 @@
+enable sshd.service
+enable crond.service
+enable chronyd.service
+enable NetworkManager.service
+enable auditd.service
+enable rsyslog.service
+enable tuned.service
+enable bluetooth.service
+enable kdump.service
+enable firewalld.service
+enable postfix.service
+enable cleanup.timer
+disable httpd.service
+disable cups.service
+disable sssd.service
+disable foobar.timer
+disable *
