@@ -15,9 +15,11 @@ func TestFleetCmd_Exists(t *testing.T) {
 func TestFleetCmd_Flags(t *testing.T) {
 	cmd := newFleetCmd(&GlobalOpts{Pull: "missing", Image: "test:latest"})
 	f := cmd.Flags()
-	assert.NotNil(t, f.Lookup("output"))
-	assert.NotNil(t, f.Lookup("dry-run"))
-	assert.NotNil(t, f.Lookup("verbose"))
+	assert.NotNil(t, f.Lookup("min-prevalence"))
+	assert.NotNil(t, f.Lookup("output-file"))
+	assert.NotNil(t, f.Lookup("output-dir"))
+	assert.NotNil(t, f.Lookup("json-only"))
+	assert.NotNil(t, f.Lookup("no-hosts"))
 }
 
 func TestFleetCmd_RequiresArg(t *testing.T) {
