@@ -1,0 +1,4 @@
+SELinux fcontext                                   type               Context
+
+/opt/myapp(/.*)?                                   all files          system_u:object_r:httpd_sys_content_t:s0
+/srv/data(/.*)?                                    all files          system_u:object_r:nfs_t:s0

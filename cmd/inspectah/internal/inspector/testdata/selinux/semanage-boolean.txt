@@ -1,0 +1,6 @@
+SELinux boolean                State  Default Description
+
+httpd_can_network_connect      (on   ,   off)  Allow httpd to make outbound network connections
+virt_use_nfs                   (on   ,   off)  Allow virt to use nfs
+samba_enable_home_dirs          (on   ,   on)  Allow samba to enable home dirs
+container_manage_cgroup        (off  ,   on)  Allow container to manage cgroup
