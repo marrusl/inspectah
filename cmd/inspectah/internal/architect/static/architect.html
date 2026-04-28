@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en" class="pf-v6-theme-dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>inspectah Architect</title>
+  <style>
+/* Reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+html, body { margin: 0; padding: 0; height: 100%; }
+body { display: flex; flex-direction: column; }
+.pf-v6-c-page { display: flex; flex-direction: column; min-height: 100vh; }
+.pf-v6-c-masthead { display: flex; align-items: center; justify-content: space-between; padding: 0 1.5rem; height: 3.5rem; flex-shrink: 0; }
+.pf-v6-c-masthead__brand { font-size: 1.125rem; font-weight: 700; letter-spacing: 0.03em; }
+.architect-layout { display: grid; grid-template-columns: 200px minmax(0, 3fr) minmax(0, 2fr); flex: 1; overflow: hidden; min-height: 0; }
+@media (max-width: 960px) { .architect-layout { grid-template-columns: 180px minmax(0, 1fr) minmax(0, 1fr); } }
+.architect-sidebar { overflow-y: auto; border-right: 1px solid #444; padding-top: 0.5rem; }
+.sidebar-title { text-transform: uppercase; font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.08em; padding: 0.5rem 1rem; color: #aaa; }
+.fleet-card { display: block; padding: 0.5rem 1rem; border-left: 3px solid transparent; cursor: pointer; transition: background 0.15s; text-decoration: none; color: inherit; }
+.fleet-card:hover { background: rgba(255,255,255,0.06); }
+.fleet-card.fleet-active { background: rgba(255,255,255,0.04); }
+.fleet-card-name { font-weight: 600; font-size: 0.875rem; margin-bottom: 0.125rem; }
+.fleet-card-meta { font-size: 0.75rem; color: #aaa; }
+.fleet-color-0 { border-left-color: #c9190b; }
+.fleet-color-1 { border-left-color: #f0ab00; }
+.fleet-color-2 { border-left-color: #2b9af3; }
+.fleet-color-3 { border-left-color: #3e8635; }
+.fleet-color-4 { border-left-color: #a18fff; }
+.fleet-color-5 { border-left-color: #ec7a08; }
+.architect-center { overflow-y: auto; overflow-x: hidden; padding: 1.5rem; min-width: 0; border-right: 1px solid #444; }
+.layer-tree-title { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #aaa; margin-bottom: 1rem; }
+.layer-card { border: 1px solid #444; border-left: 3px solid #888; border-radius: 3px; padding: 1rem; margin-bottom: 0.5rem; cursor: pointer; transition: background 0.15s, border-color 0.15s; position: relative; }
+.layer-card:hover { background: rgba(255,255,255,0.06); }
+.layer-card.layer-selected { background: rgba(0,102,204,0.12); border-top-color: #0066cc; border-right-color: #0066cc; border-bottom-color: #0066cc; border-left-width: 3px; }
+.layer-card.layer-derived { margin-left: 2.5rem; }
+.layer-card.layer-derived.layer-selected { border-top-color: #0066cc; border-right-color: #0066cc; border-bottom-color: #0066cc; }
+.layer-color-0 { border-left-color: #c9190b; }
+.layer-color-1 { border-left-color: #f0ab00; }
+.layer-color-2 { border-left-color: #2b9af3; }
+.layer-color-3 { border-left-color: #3e8635; }
+.layer-color-4 { border-left-color: #a18fff; }
+.layer-color-5 { border-left-color: #ec7a08; }
+.layer-color-base { border-left-color: #888; }
+.derived-group { position: relative; margin-left: 1rem; padding-left: 1.5rem; }
+.derived-group::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0.5rem; border-left: 1px solid #444; }
+.derived-connector { position: relative; }
+.derived-connector::before { content: ''; position: absolute; left: -1.5rem; top: 50%; width: 1.25rem; border-top: 1px solid #444; }
+.derived-connector:last-child::after { content: ''; position: absolute; left: -1.5rem; top: 50%; bottom: -0.5rem; width: 2px; background: #1b1d21; }
+.layer-card-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.375rem; }
+.layer-card-name { font-weight: 700; font-size: 0.9375rem; flex-shrink: 0; letter-spacing: 0.01em; }
+.layer-card-badges { display: flex; gap: 0.5rem; flex-wrap: wrap; flex-shrink: 0; }
+.layer-badge { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.6875rem; font-weight: 600; padding: 0.125rem 0.5rem; border-radius: 99px; white-space: nowrap; overflow: visible; min-width: max-content; }
+.layer-badge-pkg { background: rgba(255,255,255,0.08); color: #eee; }
+.layer-badge-hosts { background: rgba(62,134,53,0.15); color: #3e8635; }
+.layer-badge-fanout { background: rgba(240,171,0,0.15); color: #f0ab00; }
+.layer-badge-turbulence { background: rgba(43,154,243,0.15); color: #2b9af3; }
+.layer-card-detail { font-size: 0.75rem; color: #aaa; }
+.architect-drawer { border-left: 1px solid #444; display: flex; flex-direction: column; overflow: hidden; }
+.drawer-header { padding: 1rem; border-bottom: 1px solid #444; flex-shrink: 0; }
+.drawer-header-title { font-weight: 700; font-size: 0.9375rem; margin-bottom: 0.125rem; }
+.drawer-header-meta { font-size: 0.75rem; color: #aaa; }
+.drawer-body { overflow-y: auto; flex: 1; padding: 0; }
+.drawer-section-label { font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: #aaa; padding: 0.5rem 1rem; background: rgba(255,255,255,0.04); border-bottom: 1px solid #444; }
+.pkg-row { display: flex; align-items: center; justify-content: space-between; padding: 0.375rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.8125rem; transition: background 0.1s; }
+.pkg-row:hover { background: rgba(255,255,255,0.06); }
+.pkg-name { display: flex; align-items: center; gap: 0.375rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pkg-icon { font-size: 0.875rem; flex-shrink: 0; }
+.config-row { display: flex; align-items: center; padding: 0.375rem 1rem; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 0.8125rem; color: #aaa; }
+.config-row .pkg-icon { opacity: 0.7; }
+.move-dropdown { position: relative; flex-shrink: 0; }
+.move-btn { font-size: 0.6875rem; padding: 0.125rem 0.5rem; border: 1px solid #555; border-radius: 3px; background: transparent; color: #2b9af3; cursor: pointer; white-space: nowrap; transition: background 0.1s; }
+.move-btn:hover { background: rgba(255,255,255,0.08); }
+.move-menu { position: absolute; right: 0; top: 100%; z-index: 100; min-width: 220px; background: #1b1d21; border: 1px solid #444; border-radius: 3px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: none; padding: 0.25rem 0; }
+.move-menu.open { display: block; }
+.move-menu-item:hover { background: rgba(255,255,255,0.08); }
+.action-with-impact { display: inline-flex; align-items: center; gap: 0.375rem; }
+.impact-badge { display: inline-flex; align-items: center; font-size: 0.5625rem; font-weight: 600; padding: 0.0625rem 0.375rem; border-radius: 99px; white-space: nowrap; cursor: default; letter-spacing: 0.01em; }
+.impact-low { background: rgba(62,134,53,0.2); color: #3e8635; }
+.impact-med { background: rgba(240,171,0,0.2); color: #f0ab00; }
+.impact-high { background: rgba(201,25,11,0.2); color: #c9190b; }
+.move-menu-item { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 0.375rem 0.75rem; text-align: left; font-size: 0.75rem; border: none; background: none; color: #eee; cursor: pointer; transition: background 0.1s; gap: 0.5rem; }
+.move-menu-item .impact-badge { flex-shrink: 0; }
+.menu-item-label { flex: 1; min-width: 0; }
+.architect-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1.5rem; border-top: 1px solid #444; flex-shrink: 0; background: rgba(255,255,255,0.02); }
+.toolbar-summary { font-size: 0.8125rem; color: #aaa; }
+.architect-toast { position: fixed; bottom: 4rem; right: 1.5rem; padding: 0.75rem 1.25rem; border-radius: 3px; font-size: 0.8125rem; opacity: 0; transform: translateY(0.5rem); transition: opacity 0.3s, transform 0.3s; pointer-events: none; z-index: 200; }
+.architect-toast.visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.architect-sidebar::-webkit-scrollbar, .drawer-body::-webkit-scrollbar, .architect-center::-webkit-scrollbar { width: 6px; }
+.architect-sidebar::-webkit-scrollbar-thumb, .drawer-body::-webkit-scrollbar-thumb, .architect-center::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+.architect-sidebar::-webkit-scrollbar-track, .drawer-body::-webkit-scrollbar-track, .architect-center::-webkit-scrollbar-track { background: transparent; }
+.drawer-empty { padding: 2rem 1rem; text-align: center; color: #aaa; font-size: 0.8125rem; }
+.cf-modal-overlay { position: fixed; inset: 0; z-index: 300; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; }
+.cf-modal { background: #1b1d21; border: 1px solid #444; border-radius: 3px; width: min(720px, 90vw); max-height: 80vh; display: flex; flex-direction: column; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+.cf-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 0.75rem 1rem; border-bottom: 1px solid #444; flex-shrink: 0; }
+.cf-modal-title { font-weight: 700; font-size: 0.9375rem; }
+.cf-modal-close { background: none; border: none; font-size: 1.25rem; color: #aaa; cursor: pointer; padding: 0.25rem 0.5rem; line-height: 1; }
+.cf-modal-close:hover { color: #eee; }
+.cf-modal-body { overflow: auto; padding: 1rem; margin: 0; font-family: 'Red Hat Mono', 'SF Mono', 'Menlo', monospace; font-size: 0.8125rem; line-height: 1.6; background: rgba(0,0,0,0.3); color: #eee; white-space: pre-wrap; word-break: break-word; }
+.cf-kw { color: #2b9af3; font-weight: 700; }
+.layer-preview-btn { font-size: 0.6875rem; padding: 0.125rem 0.5rem; border: 1px solid #555; border-radius: 3px; background: transparent; color: #2b9af3; cursor: pointer; white-space: nowrap; transition: background 0.1s; }
+.layer-preview-btn:hover { background: rgba(255,255,255,0.08); }
+.moveup-btn { font-size: 0.6875rem; padding: 0.125rem 0.5rem; border: 1px solid #555; border-radius: 3px; background: transparent; color: #2b9af3; cursor: pointer; white-space: nowrap; transition: background 0.1s; }
+.moveup-btn:hover { background: rgba(255,255,255,0.08); }
+.pkg-actions { display: flex; gap: 0.25rem; align-items: center; flex-shrink: 0; }
+/* Light theme */
+html:not(.pf-v6-theme-dark) body { background: #f0f0f0; color: #151515; }
+html:not(.pf-v6-theme-dark) .pf-v6-c-masthead { background: #fff; border-bottom: 1px solid #d2d2d2; color: #151515; }
+html:not(.pf-v6-theme-dark) .architect-sidebar { background: #fff; border-right-color: #d2d2d2; }
+html:not(.pf-v6-theme-dark) .sidebar-title { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .fleet-card { color: #151515; }
+html:not(.pf-v6-theme-dark) .fleet-card:hover { background: rgba(0,0,0,0.04); }
+html:not(.pf-v6-theme-dark) .fleet-card.fleet-active { background: rgba(0,0,0,0.06); }
+html:not(.pf-v6-theme-dark) .fleet-card-meta { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .architect-center { background: #f0f0f0; border-right-color: #d2d2d2; }
+html:not(.pf-v6-theme-dark) .layer-tree-title { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .layer-card { background: #fff; border-top-color: #d2d2d2; border-right-color: #d2d2d2; border-bottom-color: #d2d2d2; color: #151515; }
+html:not(.pf-v6-theme-dark) .layer-card:hover { background: #f5f5f5; }
+html:not(.pf-v6-theme-dark) .layer-card.layer-selected { background: rgba(0,102,204,0.06); border-top-color: #0066cc; border-right-color: #0066cc; border-bottom-color: #0066cc; }
+html:not(.pf-v6-theme-dark) .layer-card-detail { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .layer-color-base { border-left-color: #8a8d90; }
+html:not(.pf-v6-theme-dark) .derived-group::before { border-left-color: #d2d2d2; }
+html:not(.pf-v6-theme-dark) .derived-connector::before { border-top-color: #d2d2d2; }
+html:not(.pf-v6-theme-dark) .derived-connector:last-child::after { background: #f0f0f0; }
+html:not(.pf-v6-theme-dark) .layer-badge-pkg { background: rgba(0,0,0,0.06); color: #151515; }
+html:not(.pf-v6-theme-dark) .layer-badge-hosts { background: rgba(62,134,53,0.1); color: #1e4f18; }
+html:not(.pf-v6-theme-dark) .layer-badge-fanout { background: rgba(240,171,0,0.1); color: #795600; }
+html:not(.pf-v6-theme-dark) .layer-badge-turbulence { background: rgba(43,154,243,0.1); color: #004080; }
+html:not(.pf-v6-theme-dark) .architect-drawer { background: #fff; border-left-color: #d2d2d2; }
+html:not(.pf-v6-theme-dark) .drawer-header { border-bottom-color: #d2d2d2; color: #151515; }
+html:not(.pf-v6-theme-dark) .drawer-header-meta { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .drawer-section-label { background: #f5f5f5; border-bottom-color: #d2d2d2; color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .pkg-row { border-bottom-color: #e0e0e0; color: #151515; }
+html:not(.pf-v6-theme-dark) .pkg-row:hover { background: rgba(0,0,0,0.03); }
+html:not(.pf-v6-theme-dark) .config-row { border-bottom-color: #e0e0e0; color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .drawer-empty { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .move-menu { background: #fff; border-color: #d2d2d2; box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
+html:not(.pf-v6-theme-dark) .move-btn, html:not(.pf-v6-theme-dark) .moveup-btn, html:not(.pf-v6-theme-dark) .layer-preview-btn { border-color: #b8bbbe; color: #0066cc; }
+html:not(.pf-v6-theme-dark) .move-btn:hover, html:not(.pf-v6-theme-dark) .moveup-btn:hover, html:not(.pf-v6-theme-dark) .layer-preview-btn:hover { background: rgba(0,0,0,0.04); }
+html:not(.pf-v6-theme-dark) .move-menu-item { color: #151515; }
+html:not(.pf-v6-theme-dark) .move-menu-item:hover { background: rgba(0,0,0,0.04); }
+html:not(.pf-v6-theme-dark) .impact-low { background: rgba(62,134,53,0.12); color: #1e4f18; }
+html:not(.pf-v6-theme-dark) .impact-med { background: rgba(240,171,0,0.12); color: #795600; }
+html:not(.pf-v6-theme-dark) .impact-high { background: rgba(201,25,11,0.12); color: #a30000; }
+html:not(.pf-v6-theme-dark) .architect-toolbar { background: #fff; border-top-color: #d2d2d2; }
+html:not(.pf-v6-theme-dark) .toolbar-summary { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .architect-toast { background: #fff; color: #151515; border: 1px solid #d2d2d2; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+html:not(.pf-v6-theme-dark) .cf-modal-overlay { background: rgba(0,0,0,0.4); }
+html:not(.pf-v6-theme-dark) .cf-modal { background: #fff; border-color: #d2d2d2; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+html:not(.pf-v6-theme-dark) .cf-modal-header { border-bottom-color: #d2d2d2; color: #151515; }
+html:not(.pf-v6-theme-dark) .cf-modal-close { color: #6a6e73; }
+html:not(.pf-v6-theme-dark) .cf-modal-close:hover { color: #151515; }
+html:not(.pf-v6-theme-dark) .cf-modal-body { background: #f5f5f5; color: #151515; }
+html:not(.pf-v6-theme-dark) .cf-kw { color: #004080; }
+html:not(.pf-v6-theme-dark) .architect-sidebar::-webkit-scrollbar-thumb, html:not(.pf-v6-theme-dark) .drawer-body::-webkit-scrollbar-thumb, html:not(.pf-v6-theme-dark) .architect-center::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.18); }
+html:not(.pf-v6-theme-dark) #theme-toggle { color: #151515; }
+.pf-v6-c-button { display: inline-flex; align-items: center; font-size: 0.875rem; font-weight: 600; border: none; border-radius: 3px; padding: 0.5rem 1rem; cursor: pointer; }
+.pf-v6-c-button.pf-m-primary { background: #0066cc; color: #fff; }
+.pf-v6-c-button.pf-m-primary:hover { background: #004d99; }
+.pf-v6-c-button.pf-m-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.pf-v6-c-button.pf-m-plain { background: transparent; border: none; cursor: pointer; font-size: 1.25rem; padding: 0.25rem 0.5rem; color: #eee; }
+.pf-v6-c-skip-to-content { position: absolute; left: -9999px; }
+.pf-v6-c-skip-to-content:focus { left: 0; }
+  </style>
+</head>
+<body>
+  <a class="pf-v6-c-skip-to-content" href="#main-content">Skip to main content</a>
+  <div class="pf-v6-c-page">
+    <header class="pf-v6-c-masthead">
+      <div class="pf-v6-c-masthead__main">
+        <span class="pf-v6-c-masthead__brand">inspectah Architect</span>
+      </div>
+      <div class="pf-v6-c-masthead__content">
+        <button id="theme-toggle" class="pf-v6-c-button pf-m-plain" title="Switch to light theme" aria-label="Toggle theme">&#9728;</button>
+      </div>
+    </header>
+    <div class="architect-layout">
+      <div class="architect-sidebar" id="fleet-sidebar">
+        <div class="sidebar-title">Fleets</div>
+        <div id="fleet-list"></div>
+      </div>
+      <div class="architect-center" id="main-content">
+        <div class="layer-tree-title">Layer Topology</div>
+        <div id="layer-tree"></div>
+      </div>
+      <div class="architect-drawer" id="package-drawer">
+        <div class="drawer-header" id="drawer-header"></div>
+        <div class="drawer-body" id="drawer-body"></div>
+      </div>
+    </div>
+    <div class="architect-toolbar" id="architect-toolbar" role="toolbar" aria-label="Actions">
+      <span class="toolbar-summary" id="toolbar-summary"></span>
+      <button id="btn-export" class="pf-v6-c-button pf-m-primary" type="button" title="Export Containerfiles as tar.gz">Export Containerfiles</button>
+    </div>
+    <div id="toast" class="pf-v6-c-alert pf-m-info architect-toast"></div>
+    <div id="containerfile-modal" class="cf-modal-overlay" style="display:none">
+      <div class="cf-modal">
+        <div class="cf-modal-header">
+          <span class="cf-modal-title" id="cf-modal-title"></span>
+          <button class="cf-modal-close" onclick="closeCfModal()">&times;</button>
+        </div>
+        <pre class="cf-modal-body" id="cf-modal-body"></pre>
+      </div>
+    </div>
+  </div>
+  <script>
+    window.__TOPOLOGY__ = TOPOLOGY_JSON_PLACEHOLDER;
+  </script>
+  <script>
+(function() {
+  'use strict';
+  var topology = window.__TOPOLOGY__;
+  var selectedLayer = 'base';
+  var activeFleet = null;
+  var openMenuPkg = null;
+  var fleetList = document.getElementById('fleet-list');
+  var layerTree = document.getElementById('layer-tree');
+  var drawerHeader = document.getElementById('drawer-header');
+  var drawerBody = document.getElementById('drawer-body');
+  var toolbarSummary = document.getElementById('toolbar-summary');
+  var toast = document.getElementById('toast');
+  (function() {
+    var btn = document.getElementById('theme-toggle');
+    if (!btn) return;
+    function applyTheme(theme) {
+      if (theme === 'dark') { document.documentElement.classList.add('pf-v6-theme-dark'); }
+      else { document.documentElement.classList.remove('pf-v6-theme-dark'); }
+      btn.textContent = theme === 'light' ? '☽' : '☀';
+      btn.title = theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
+      localStorage.setItem('inspectah-architect-theme', theme);
+    }
+    applyTheme(localStorage.getItem('inspectah-architect-theme') || 'dark');
+    btn.addEventListener('click', function() {
+      var isDark = document.documentElement.classList.contains('pf-v6-theme-dark');
+      applyTheme(isDark ? 'light' : 'dark');
+    });
+  })();
+  function esc(str) { var d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+  function showToast(msg, ms) { if (!toast) return; toast.textContent = msg; toast.classList.add('visible'); setTimeout(function() { toast.classList.remove('visible'); }, ms || 3500); }
+  function getLayer(name) { for (var i = 0; i < topology.layers.length; i++) { if (topology.layers[i].name === name) return topology.layers[i]; } return null; }
+  function getFleetColor(idx) { return 'fleet-color-' + (idx % 6); }
+  function getLayerColor(idx) { return 'layer-color-' + (idx % 6); }
+  function getLayerFleetIndex(layerName) { for (var i = 0; i < topology.fleets.length; i++) { if (topology.fleets[i].name === layerName) return i; } return -1; }
+  function layerHostCount(layer) { var count = 0; for (var i = 0; i < layer.fleets.length; i++) { for (var j = 0; j < topology.fleets.length; j++) { if (topology.fleets[j].name === layer.fleets[i]) { count += topology.fleets[j].host_count; } } } if (layer.parent === null) return totalHosts(); return count; }
+  function totalHosts() { var n = 0; for (var i = 0; i < topology.fleets.length; i++) n += topology.fleets[i].host_count; return n; }
+  function renderSidebar() {
+    var html = '';
+    for (var i = 0; i < topology.fleets.length; i++) {
+      var f = topology.fleets[i];
+      var layer = getLayer(f.name);
+      var baseLayer = getLayer('base');
+      var pkgCount = layer ? layer.packages.length : f.total_packages;
+      if (layer && layer.parent === 'base' && baseLayer) { pkgCount += baseLayer.packages.length; }
+      var active = (activeFleet === f.name) ? ' fleet-active' : '';
+      html += '<li class="pf-v6-c-nav__item"><a class="fleet-card ' + getFleetColor(i) + active + '" data-fleet="' + esc(f.name) + '" href="#">' +
+        '<div class="fleet-card-name">' + esc(f.name) + '</div>' +
+        '<div class="fleet-card-meta">' + (f.host_count > 0 ? f.host_count + ' hosts &middot; ' : '') + pkgCount + ' pkgs</div></a></li>';
+    }
+    fleetList.innerHTML = html;
+  }
+  function renderTree() {
+    var html = '<div class="layer-tree-title">Layer Topology</div>';
+    var base = null; var derived = [];
+    for (var i = 0; i < topology.layers.length; i++) { var l = topology.layers[i]; if (l.parent === null) base = l; else derived.push(l); }
+    if (base) { var baseFleetIdx = (topology.fleets.length === 1) ? 0 : -1; html += renderLayerCard(base, false, baseFleetIdx); }
+    if (derived.length > 0) { html += '<div class="derived-group">'; for (var j = 0; j < derived.length; j++) { var fleetIdx = getLayerFleetIndex(derived[j].name); html += '<div class="derived-connector">' + renderLayerCard(derived[j], true, fleetIdx) + '</div>'; } html += '</div>'; }
+    layerTree.innerHTML = html;
+  }
+  function renderLayerCard(layer, isDerived, fleetIdx) {
+    var sel = (layer.name === selectedLayer) ? ' layer-selected' : '';
+    var cls = isDerived ? ' layer-derived' : '';
+    var colorCls = (fleetIdx >= 0) ? ' ' + getLayerColor(fleetIdx) : ' layer-color-base';
+    var fleetLabel = layer.fleets.length > 0 ? layer.fleets.join(', ') : '';
+    var hosts = layerHostCount(layer);
+    return '<div class="layer-card' + cls + sel + colorCls + '" data-layer="' + esc(layer.name) + '">' +
+      '<div class="layer-card-header"><span class="layer-card-name">' + esc(layer.name) + '</span>' +
+      '<div class="layer-card-badges">' +
+        '<button class="layer-preview-btn" data-preview-layer="' + esc(layer.name) + '" title="View Containerfile">📄 View</button>' +
+        (hosts > 0 ? '<span class="layer-badge layer-badge-hosts" title="Number of hosts served by this layer">' + hosts + ' host' + (hosts !== 1 ? 's' : '') + '</span>' : '') +
+        '<span class="layer-badge layer-badge-pkg">' + layer.packages.length + ' pkg' + (layer.packages.length !== 1 ? 's' : '') + '</span>' +
+        (layer.fan_out > 0 ? '<span class="layer-badge layer-badge-fanout" title="Number of derived layers that rebuild when this layer changes">fan-out: ' + layer.fan_out + '</span>' : '') +
+        '<span class="layer-badge layer-badge-turbulence" title="Estimated update impact">turbulence: ' + layer.turbulence.toFixed(1) + '</span>' +
+      '</div></div>' +
+      (fleetLabel ? '<div class="layer-card-detail">Serves: ' + esc(fleetLabel) + '</div>' : '') + '</div>';
+  }
+  function renderDrawer() {
+    var layer = getLayer(selectedLayer);
+    if (!layer) { drawerHeader.innerHTML = '<div class="drawer-header-title">No layer selected</div>'; drawerBody.innerHTML = '<div class="drawer-empty">Select a layer to view packages.</div>'; return; }
+    drawerHeader.innerHTML = '<div class="drawer-header-title">' + esc(layer.name) + '</div><div class="drawer-header-meta">' + layer.packages.length + ' packages' + (layer.configs.length > 0 ? ' &middot; ' + layer.configs.length + ' configs' : '') + '</div>';
+    var html = '';
+    if (layer.packages.length > 0) { html += '<div class="drawer-section-label">Packages</div>'; var sorted = layer.packages.slice().sort(); for (var i = 0; i < sorted.length; i++) { html += renderPackageRow(sorted[i], layer); } }
+    else { html += '<div class="drawer-empty">No packages in this layer.</div>'; }
+    if (layer.configs.length > 0) { html += '<div class="drawer-section-label">Configs (read-only)</div>'; for (var c = 0; c < layer.configs.length; c++) { html += '<div class="config-row"><span class="pkg-icon">📄</span> ' + esc(layer.configs[c]) + '</div>'; } }
+    drawerBody.innerHTML = html;
+  }
+  function renderPackageRow(pkg, fromLayer) {
+    var isDerived = fromLayer.parent !== null;
+    var actionsHtml = '';
+    if (isDerived) {
+      var moveImpact = calcImpact(pkg, fromLayer.parent, 'move');
+      actionsHtml += '<span class="action-with-impact"><button class="moveup-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(fromLayer.parent) + '" title="' + esc(moveImpact.text) + '">↑ Move up</button>' + impactBadgeHtml(moveImpact) + '</span>';
+      var siblings = [];
+      for (var i = 0; i < topology.layers.length; i++) { var l = topology.layers[i]; if (l.parent !== null && l.name !== fromLayer.name) { siblings.push(l); } }
+      if (siblings.length > 0) {
+        var menuOpen = (openMenuPkg === fromLayer.name + '/' + pkg) ? ' open' : '';
+        actionsHtml += '<div class="move-dropdown"><button class="move-btn" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '">Copy to ▾</button><div class="move-menu' + menuOpen + '" data-menu-for="' + esc(fromLayer.name + '/' + pkg) + '">';
+        for (var s = 0; s < siblings.length; s++) { var copyImpact = calcImpact(pkg, siblings[s].name, 'copy'); actionsHtml += '<button class="move-menu-item copy-action" data-pkg="' + esc(pkg) + '" data-from="' + esc(fromLayer.name) + '" data-to="' + esc(siblings[s].name) + '" title="' + esc(copyImpact.text) + '"><span class="menu-item-label">→ ' + esc(siblings[s].name) + '</span>' + impactBadgeHtml(copyImpact) + '</button>'; }
+        actionsHtml += '</div></div>';
+      }
+    }
+    return '<div class="pkg-row"><span class="pkg-name"><span class="pkg-icon">📦</span> ' + esc(pkg) + '</span>' + (actionsHtml ? '<span class="pkg-actions">' + actionsHtml + '</span>' : '') + '</div>';
+  }
+  function renderToolbar() { var hosts = totalHosts(); toolbarSummary.textContent = topology.fleets.length + ' fleet' + (topology.fleets.length !== 1 ? 's' : '') + ' · ' + hosts + ' host' + (hosts !== 1 ? 's' : '') + ' · ' + topology.layers.length + ' layer' + (topology.layers.length !== 1 ? 's' : ''); }
+  function render() { renderSidebar(); renderTree(); renderDrawer(); renderToolbar(); }
+  function selectLayer(name) { selectedLayer = name; openMenuPkg = null; render(); }
+  function turbulenceLevel(value) { if (value < 3) return 'low'; if (value < 8) return 'med'; return 'high'; }
+  function calcImpact(pkg, targetLayerName, action) {
+    var target = getLayer(targetLayerName);
+    if (!target) return { text: '', level: 'low', fanOut: 0, oldTurb: 0, newTurb: 0 };
+    var verb = (action === 'move') ? 'Moving' : 'Copying';
+    var newPkgCount = target.packages.length + 1;
+    var affectedImages = target.fan_out + 1;
+    var newTurbulence = target.parent !== null ? Math.max(1.0, target.fan_out * (newPkgCount / 50.0)) : target.fan_out * (newPkgCount / 50.0);
+    return { text: verb + ' ' + pkg + ' to ' + targetLayerName + ' affects ' + affectedImages + ' image' + (affectedImages !== 1 ? 's' : '') + '. Turbulence: ' + target.turbulence.toFixed(1) + ' → ' + newTurbulence.toFixed(1), level: turbulenceLevel(newTurbulence), fanOut: affectedImages, oldTurb: target.turbulence, newTurb: newTurbulence };
+  }
+  function impactBadgeHtml(impact) { return '<span class="impact-badge impact-' + impact.level + '" title="' + esc(impact.text) + '">' + impact.fanOut + ' img' + (impact.fanOut !== 1 ? 's' : '') + ' · ' + impact.oldTurb.toFixed(1) + '→' + impact.newTurb.toFixed(1) + '</span>'; }
+  function movePackage(pkg, from, to) {
+    fetch('/api/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ package: pkg, from: from, to: to }) })
+    .then(function(resp) { if (!resp.ok) { return resp.json().then(function(d) { throw new Error(d.error || 'HTTP ' + resp.status); }); } return resp.json(); })
+    .then(function(data) { topology = data; openMenuPkg = null; showToast('Moved ' + pkg + ' from ' + from + ' to ' + to, 3000); render(); })
+    .catch(function(err) { showToast('Move failed: ' + err.message, 5000); });
+  }
+  function copyPkg(pkg, from, to) {
+    fetch('/api/copy', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ package: pkg, from: from, to: to }) })
+    .then(function(resp) { if (!resp.ok) { return resp.json().then(function(d) { throw new Error(d.error || 'HTTP ' + resp.status); }); } return resp.json(); })
+    .then(function(data) { topology = data; openMenuPkg = null; showToast('Copied ' + pkg + ' to ' + to, 3000); render(); })
+    .catch(function(err) { showToast('Copy failed: ' + err.message, 5000); });
+  }
+  function showCfModal(layerName) {
+    fetch('/api/preview/' + encodeURIComponent(layerName)).then(function(resp) { if (!resp.ok) throw new Error('HTTP ' + resp.status); return resp.text(); })
+    .then(function(content) {
+      document.getElementById('cf-modal-title').textContent = layerName + '/Containerfile';
+      var highlighted = esc(content).replace(/^(FROM|RUN|COPY|ADD|ENV|EXPOSE|CMD|ENTRYPOINT|WORKDIR|LABEL|ARG|VOLUME|USER|STOPSIGNAL|HEALTHCHECK|SHELL|ONBUILD)\b/gm, '<span class="cf-kw">$1</span>');
+      document.getElementById('cf-modal-body').innerHTML = highlighted;
+      document.getElementById('containerfile-modal').style.display = '';
+    }).catch(function(err) { showToast('Preview failed: ' + err.message, 5000); });
+  }
+  window.closeCfModal = function() { document.getElementById('containerfile-modal').style.display = 'none'; };
+  document.getElementById('containerfile-modal').addEventListener('click', function(e) { if (e.target === this) closeCfModal(); });
+  document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeCfModal(); });
+  function exportTopology() {
+    var btn = document.getElementById('btn-export');
+    if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
+    fetch('/api/export').then(function(resp) { if (!resp.ok) throw new Error('HTTP ' + resp.status); return resp.blob(); })
+    .then(function(blob) { var url = URL.createObjectURL(blob); var a = document.createElement('a'); a.href = url; a.download = 'architect-export.tar.gz'; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url); showToast('Containerfiles exported.', 3000); })
+    .catch(function(err) { showToast('Export failed: ' + err.message, 5000); })
+    .finally(function() { if (btn) { btn.disabled = false; btn.textContent = 'Export Containerfiles'; } });
+  }
+  document.addEventListener('click', function(e) { if (!e.target.closest('.move-dropdown')) { if (openMenuPkg !== null) { openMenuPkg = null; renderDrawer(); } } });
+  layerTree.addEventListener('click', function(e) {
+    var previewBtn = e.target.closest('.layer-preview-btn');
+    if (previewBtn) { e.stopPropagation(); showCfModal(previewBtn.dataset.previewLayer); return; }
+    var card = e.target.closest('.layer-card');
+    if (card && card.dataset.layer) { selectLayer(card.dataset.layer); }
+  });
+  fleetList.addEventListener('click', function(e) { e.preventDefault(); var card = e.target.closest('.fleet-card'); if (card && card.dataset.fleet) { activeFleet = card.dataset.fleet; selectLayer(card.dataset.fleet); } });
+  drawerBody.addEventListener('click', function(e) {
+    var moveupBtn = e.target.closest('.moveup-btn');
+    if (moveupBtn) { e.stopPropagation(); movePackage(moveupBtn.dataset.pkg, moveupBtn.dataset.from, moveupBtn.dataset.to); return; }
+    var moveBtnEl = e.target.closest('.move-btn');
+    if (moveBtnEl) { e.stopPropagation(); var key = moveBtnEl.dataset.from + '/' + moveBtnEl.dataset.pkg; openMenuPkg = (openMenuPkg === key) ? null : key; renderDrawer(); return; }
+    var menuItem = e.target.closest('.move-menu-item');
+    if (menuItem) { e.stopPropagation(); if (menuItem.classList.contains('copy-action')) { copyPkg(menuItem.dataset.pkg, menuItem.dataset.from, menuItem.dataset.to); } else { movePackage(menuItem.dataset.pkg, menuItem.dataset.from, menuItem.dataset.to); } return; }
+  });
+  var exportBtn = document.getElementById('btn-export');
+  if (exportBtn) { exportBtn.addEventListener('click', function() { exportTopology(); }); }
+  render();
+})();
+  </script>
+</body>
+</html>
