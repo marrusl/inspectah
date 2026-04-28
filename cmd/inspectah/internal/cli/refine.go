@@ -1,91 +1,94 @@
 package cli
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
-	"github.com/marrusl/inspectah/cmd/inspectah/internal/container"
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/refine"
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/renderer"
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 	"github.com/spf13/cobra"
 )
 
-func newRefineCmd(opts *GlobalOpts) *cobra.Command {
+func newRefineCmd(_ *GlobalOpts) *cobra.Command {
 	var (
 		port      int
 		noBrowser bool
-		dryRun    bool
-		verbose   bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "refine <tarball> [flags] [-- extra-flags...]",
+		Use:   "refine <tarball>",
 		Short: "Serve the interactive report for operator refinement",
 		Long: `Serve an inspectah tarball as an interactive web UI where operators
 can toggle packages, configs, and services, then re-render the
 Containerfile.`,
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			runner := container.NewRealRunner()
-
-			if err := container.EnsureImage(context.Background(), runner, opts.Image, opts.Pull, os.Stderr); err != nil {
-				return err
-			}
-
 			tarball, err := filepath.Abs(args[0])
 			if err != nil {
 				return fmt.Errorf("cannot resolve tarball path: %w", err)
 			}
-			if _, err := os.Stat(tarball); err != nil {
-				return fmt.Errorf("tarball not found: %s", tarball)
-			}
-			tarballName := filepath.Base(tarball)
 
-			portStr := fmt.Sprintf("%d:%d", port, port)
-			containerInput := fmt.Sprintf("/input/%s", tarballName)
-
-			runOpts := container.RunOpts{
-				Image: opts.Image,
-				Ports: []string{portStr},
-				Mounts: []container.Mount{
-					{Source: tarball, Target: containerInput, Options: "ro"},
-				},
-				Command: append([]string{"refine", "--port", fmt.Sprintf("%d", port), "--bind", "0.0.0.0", "--no-browser", containerInput}, args[1:]...),
-			}
-
-			podmanArgs := container.BuildArgs(runOpts)
-
-			if dryRun || verbose {
-				fmt.Fprintf(os.Stderr, "podman %s\n", strings.Join(podmanArgs, " "))
-				if dryRun {
-					return nil
-				}
-			}
-
-			url := fmt.Sprintf("http://localhost:%d", port)
-			fmt.Fprintf(os.Stderr, "Starting refine server at %s\n", url)
-
-			if !noBrowser {
-				go func() {
-					if container.WaitForServer(url+"/api/health", 30*time.Second) {
-						// Cache-bust: browsers may cache a failed/empty response
-						// from the port before the container server was ready.
-						browserURL := fmt.Sprintf("%s?t=%d", url, time.Now().Unix())
-						container.OpenBrowser(browserURL)
-					}
-				}()
-			}
-
-			return container.RunChild(context.Background(), runner.PodmanPath, podmanArgs)
+			return refine.RunRefine(refine.RunRefineOptions{
+				TarballPath: tarball,
+				Port:        port,
+				NoBrowser:   noBrowser,
+				ReRenderFn:  nativeReRender,
+			})
 		},
 	}
 
 	cmd.Flags().IntVar(&port, "port", 8642, "port for the refine server")
 	cmd.Flags().BoolVar(&noBrowser, "no-browser", false, "do not open browser automatically")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the podman command without executing")
-	cmd.Flags().BoolVar(&verbose, "verbose", false, "print the podman command before executing")
 
 	return cmd
+}
+
+// nativeReRender re-renders the output by loading the snapshot and running
+// the renderer pipeline directly — no subprocess or container needed.
+func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.ReRenderResult, error) {
+	var snap schema.InspectionSnapshot
+	if err := json.Unmarshal(snapData, &snap); err != nil {
+		return refine.ReRenderResult{}, fmt.Errorf("parse snapshot: %w", err)
+	}
+
+	// Write the snapshot to the output dir for renderers to reference
+	snapPath := filepath.Join(outputDir, "inspection-snapshot.json")
+	if err := os.WriteFile(snapPath, snapData, 0644); err != nil {
+		return refine.ReRenderResult{}, fmt.Errorf("write snapshot: %w", err)
+	}
+
+	// Handle original snapshot for diff display
+	origSnapPath := ""
+	if origData != nil {
+		origFile := filepath.Join(outputDir, ".original-snapshot.json")
+		if err := os.WriteFile(origFile, origData, 0644); err != nil {
+			return refine.ReRenderResult{}, fmt.Errorf("write original snapshot: %w", err)
+		}
+		origSnapPath = origFile
+	}
+
+	// Run all renderers
+	if err := renderer.RunAll(&snap, outputDir, renderer.RunAllOptions{
+		RefineMode:           true,
+		OriginalSnapshotPath: origSnapPath,
+	}); err != nil {
+		return refine.ReRenderResult{}, fmt.Errorf("render: %w", err)
+	}
+
+	// Read back the results
+	htmlData, err := os.ReadFile(filepath.Join(outputDir, "report.html"))
+	if err != nil {
+		return refine.ReRenderResult{}, fmt.Errorf("read report.html: %w", err)
+	}
+
+	containerfileData, _ := os.ReadFile(filepath.Join(outputDir, "Containerfile"))
+
+	return refine.ReRenderResult{
+		HTML:          string(htmlData),
+		Snapshot:      json.RawMessage(snapData),
+		Containerfile: string(containerfileData),
+	}, nil
 }
