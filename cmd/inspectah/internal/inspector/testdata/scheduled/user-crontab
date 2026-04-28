@@ -1,0 +1,3 @@
+# User crontab (no user field)
+0 * * * * /home/appuser/bin/healthcheck.sh
+30 6 * * 1-5 /home/appuser/bin/weekday-report.sh

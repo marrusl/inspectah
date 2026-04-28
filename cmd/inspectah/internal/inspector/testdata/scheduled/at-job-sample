@@ -1,0 +1,11 @@
+#!/bin/sh
+# atrun uid=1000 gid=1000
+# mail appuser 0
+umask 22
+SHELL=/bin/sh; export SHELL
+cd /home/appuser || {
+	echo 'Execution directory inaccessible' >&2
+	exit 1
+}
+/usr/local/bin/run-migration.sh --stage=final
+echo "migration done"
