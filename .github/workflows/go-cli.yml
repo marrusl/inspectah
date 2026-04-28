@@ -2,12 +2,12 @@ name: Go CLI
 
 on:
   push:
-    branches: [main]
+    branches: [main, go-port]
     paths:
       - 'cmd/inspectah/**'
       - '.github/workflows/go-cli.yml'
   pull_request:
-    branches: [main]
+    branches: [main, go-port]
     paths:
       - 'cmd/inspectah/**'
       - '.github/workflows/go-cli.yml'

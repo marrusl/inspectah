@@ -9,6 +9,7 @@ permissions:
 
 jobs:
   build-srpm:
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
@@ -79,6 +80,7 @@ jobs:
           path: "*.src.rpm"
 
   build-rpm:
+    if: ${{ !github.event.release.prerelease }}
     needs: build-srpm
     runs-on: ubuntu-latest
     strategy:
@@ -143,6 +145,7 @@ jobs:
             }
 
   update-homebrew:
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
       - name: Compute source tarball metadata
