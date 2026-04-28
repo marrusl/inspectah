@@ -1,0 +1,13 @@
+There are 25 section headers, starting at offset 0x1234:
+
+Section Headers:
+  [Nr] Name              Type             Address           Offset
+       Size              EntSize          Flags  Link  Info  Align
+  [ 0]                   NULL             0000000000000000  00000000
+       0000000000000000  0000000000000000           0     0     0
+  [ 1] .text             PROGBITS         0000000000401000  00001000
+       0000000000050000  0000000000000000  AX       0     0     16
+  [ 2] .note.go.buildid  NOTE             0000000000400000  00000000
+       0000000000000038  0000000000000000   A       0     0     4
+  [ 3] .gopclntab        PROGBITS         0000000000500000  00100000
+       0000000000020000  0000000000000000   A       0     0     32
