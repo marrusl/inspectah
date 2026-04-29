@@ -10,19 +10,47 @@ import (
 
 // TriageItem represents a classified snapshot item for the SPA.
 type TriageItem struct {
-	Section    string `json:"section"`
-	Key        string `json:"key"`
-	Tier       int    `json:"tier"`
-	Reason     string `json:"reason"`
-	Name       string `json:"name"`
-	Meta       string `json:"meta"`
-	IsSecret   bool   `json:"is_secret,omitempty"`
-	SourcePath string `json:"source_path,omitempty"`
+	Section        string `json:"section"`
+	Key            string `json:"key"`
+	Tier           int    `json:"tier"`
+	Reason         string `json:"reason"`
+	Name           string `json:"name"`
+	Meta           string `json:"meta"`
+	IsSecret       bool   `json:"is_secret,omitempty"`
+	SourcePath     string `json:"source_path,omitempty"`
+	DefaultInclude bool   `json:"default_include"`
 }
 
 // ClassifySnapshot classifies all triageable items in the snapshot.
 // Returns a manifest sorted by section, then tier (3->2->1).
-func ClassifySnapshot(snap *schema.InspectionSnapshot) []TriageItem {
+//
+// If original is non-nil, DefaultInclude is set from the original
+// snapshot's include values. This lets the SPA distinguish "user
+// excluded this" from "this started as excluded (e.g. fleet merge
+// below-threshold)."
+func ClassifySnapshot(snap *schema.InspectionSnapshot, original *schema.InspectionSnapshot) []TriageItem {
+	items := classifyAll(snap)
+
+	if original != nil {
+		origItems := classifyAll(original)
+		origMap := make(map[string]bool)
+		for _, oi := range origItems {
+			origMap[oi.Key] = oi.DefaultInclude
+		}
+		for i := range items {
+			if val, ok := origMap[items[i].Key]; ok {
+				items[i].DefaultInclude = val
+			}
+			// Items not in original keep their current DefaultInclude (new items)
+		}
+	}
+
+	return items
+}
+
+// classifyAll runs all classifiers against the snapshot and returns
+// items with DefaultInclude set to each item's current include value.
+func classifyAll(snap *schema.InspectionSnapshot) []TriageItem {
 	secretPaths := buildSecretPathSet(snap)
 
 	var items []TriageItem
@@ -42,6 +70,20 @@ func isIncluded(b *bool) bool {
 
 func boolPtr(v bool) *bool {
 	return &v
+}
+
+// mapInclude reads the "include" key from an untyped map, defaulting
+// to true when the key is absent or not a bool.
+func mapInclude(m map[string]interface{}) bool {
+	v, ok := m["include"]
+	if !ok {
+		return true
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return true
+	}
+	return b
 }
 
 func buildSecretPathSet(snap *schema.InspectionSnapshot) map[string]bool {
@@ -81,12 +123,13 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 		}
 		tier, reason := classifyPackage(pkg, baselineNames)
 		items = append(items, TriageItem{
-			Section: "packages",
-			Key:     fmt.Sprintf("pkg-%s-%s", pkg.Name, pkg.Arch),
-			Tier:    tier,
-			Reason:  reason,
-			Name:    pkg.Name,
-			Meta:    joinNonEmpty(" | ", pkg.Version+"-"+pkg.Release, pkg.Arch, pkg.SourceRepo),
+			Section:        "packages",
+			Key:            fmt.Sprintf("pkg-%s-%s", pkg.Name, pkg.Arch),
+			Tier:           tier,
+			Reason:         reason,
+			Name:           pkg.Name,
+			Meta:           joinNonEmpty(" | ", pkg.Version+"-"+pkg.Release, pkg.Arch, pkg.SourceRepo),
+			DefaultInclude: pkg.Include,
 		})
 	}
 
@@ -95,12 +138,13 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 			continue
 		}
 		items = append(items, TriageItem{
-			Section: "packages",
-			Key:     fmt.Sprintf("ms-%s-%s", ms.ModuleName, ms.Stream),
-			Tier:    2,
-			Reason:  "Module stream package. Verify compatibility.",
-			Name:    ms.ModuleName + ":" + ms.Stream,
-			Meta:    strings.Join(ms.Profiles, ", "),
+			Section:        "packages",
+			Key:            fmt.Sprintf("ms-%s-%s", ms.ModuleName, ms.Stream),
+			Tier:           2,
+			Reason:         "Module stream package. Verify compatibility.",
+			Name:           ms.ModuleName + ":" + ms.Stream,
+			Meta:           strings.Join(ms.Profiles, ", "),
+			DefaultInclude: true,
 		})
 	}
 	return items
@@ -150,12 +194,13 @@ func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]boo
 		}
 		tier, reason := classifyConfigFile(f)
 		items = append(items, TriageItem{
-			Section: "config",
-			Key:     "cfg-" + f.Path,
-			Tier:    tier,
-			Reason:  reason,
-			Name:    f.Path,
-			Meta:    joinNonEmpty(" | ", string(f.Kind), string(f.Category)),
+			Section:        "config",
+			Key:            "cfg-" + f.Path,
+			Tier:           tier,
+			Reason:         reason,
+			Name:           f.Path,
+			Meta:           joinNonEmpty(" | ", string(f.Kind), string(f.Category)),
+			DefaultInclude: f.Include,
 		})
 	}
 	return items
@@ -205,6 +250,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool) [
 			items = append(items, TriageItem{
 				Section: "runtime", Key: "svc-" + svc.Unit,
 				Tier: tier, Reason: reason, Name: svc.Unit, Meta: meta,
+				DefaultInclude: svc.Include,
 			})
 		}
 	}
@@ -214,6 +260,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool) [
 				Section: "runtime", Key: "cron-" + job.Path,
 				Tier: 2, Reason: "Scheduled cron job.",
 				Name: job.Path, Meta: job.Source,
+				DefaultInclude: job.Include,
 			})
 		}
 		for _, timer := range snap.ScheduledTasks.SystemdTimers {
@@ -221,6 +268,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool) [
 				Section: "runtime", Key: "timer-" + timer.Name,
 				Tier: 2, Reason: "Systemd timer unit.",
 				Name: timer.Name, Meta: timer.OnCalendar,
+				DefaultInclude: isIncluded(timer.Include),
 			})
 		}
 	}
@@ -237,6 +285,7 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 				Section: "containers", Key: "quadlet-" + q.Name,
 				Tier: 2, Reason: "Quadlet file with container unit.",
 				Name: q.Name, Meta: q.Image,
+				DefaultInclude: q.Include,
 			})
 		}
 		for _, c := range snap.Containers.RunningContainers {
@@ -247,6 +296,7 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 			items = append(items, TriageItem{
 				Section: "containers", Key: "container-" + c.Name,
 				Tier: tier, Reason: reason, Name: c.Name, Meta: c.Image,
+				DefaultInclude: isIncluded(c.Include),
 			})
 		}
 	}
@@ -263,6 +313,7 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 				Section: "containers", Key: "nonrpm-" + name,
 				Tier: 3, Reason: "Non-RPM binary with unclear provenance.",
 				Name: name, Meta: item.Method,
+				DefaultInclude: item.Include,
 			})
 		}
 	}
@@ -283,7 +334,8 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 			items = append(items, TriageItem{
 				Section: "identity", Key: "user-" + name,
 				Tier: tier, Reason: reason, Name: name,
-				Meta: fmt.Sprintf("UID %.0f", uid),
+				Meta:           fmt.Sprintf("UID %.0f", uid),
+				DefaultInclude: mapInclude(u),
 			})
 		}
 		for _, g := range snap.UsersGroups.Groups {
@@ -297,7 +349,8 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 			items = append(items, TriageItem{
 				Section: "identity", Key: "group-" + name,
 				Tier: tier, Reason: reason, Name: name,
-				Meta: fmt.Sprintf("GID %.0f", gid),
+				Meta:           fmt.Sprintf("GID %.0f", gid),
+				DefaultInclude: mapInclude(g),
 			})
 		}
 	}
@@ -309,6 +362,7 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 				Section: "identity", Key: "sebool-" + name,
 				Tier: 2, Reason: "SELinux boolean changed from default.",
 				Name: name, Meta: val,
+				DefaultInclude: mapInclude(b),
 			})
 		}
 		for _, m := range snap.Selinux.CustomModules {
@@ -316,13 +370,15 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 				Section: "identity", Key: "semod-" + m,
 				Tier: 3, Reason: "Custom SELinux policy module.",
 				Name: m,
+				DefaultInclude: true,
 			})
 		}
 		for _, p := range snap.Selinux.PortLabels {
 			items = append(items, TriageItem{
 				Section: "identity", Key: fmt.Sprintf("seport-%s-%s", p.Protocol, p.Port),
 				Tier: 2, Reason: "Custom SELinux port label.",
-				Name: fmt.Sprintf("%s/%s -> %s", p.Protocol, p.Port, p.Type),
+				Name:           fmt.Sprintf("%s/%s -> %s", p.Protocol, p.Port, p.Type),
+				DefaultInclude: true,
 			})
 		}
 	}
@@ -337,6 +393,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Section: "system", Key: "sysctl-" + s.Key,
 				Tier: 2, Reason: "Custom sysctl parameter.",
 				Name: s.Key, Meta: s.Runtime,
+				DefaultInclude: s.Include,
 			})
 		}
 		for _, m := range snap.KernelBoot.NonDefaultModules {
@@ -344,6 +401,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Section: "system", Key: "kmod-" + m.Name,
 				Tier: 2, Reason: "Kernel module loaded.",
 				Name: m.Name, Meta: m.UsedBy,
+				DefaultInclude: m.Include,
 			})
 		}
 	}
@@ -353,13 +411,15 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Section: "system", Key: "conn-" + conn.Name,
 				Tier: 2, Reason: "Network connection configuration.",
 				Name: conn.Name, Meta: conn.Type,
+				DefaultInclude: isIncluded(conn.Include),
 			})
 		}
 		for _, zone := range snap.Network.FirewallZones {
 			items = append(items, TriageItem{
 				Section: "system", Key: "fw-" + zone.Name,
 				Tier: 2, Reason: "Custom firewall zone.",
-				Name: zone.Name,
+				Name:           zone.Name,
+				DefaultInclude: zone.Include,
 			})
 		}
 	}
@@ -369,6 +429,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Section: "system", Key: "fstab-" + entry.MountPoint,
 				Tier: 2, Reason: "Non-default mount point.",
 				Name: entry.MountPoint, Meta: entry.Fstype,
+				DefaultInclude: isIncluded(entry.Include),
 			})
 		}
 	}
@@ -414,14 +475,15 @@ func classifySecretItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 		}
 
 		items = append(items, TriageItem{
-			Section:    "secrets",
-			Key:        fmt.Sprintf("secret-%d", i),
-			Tier:       3,
-			Reason:     "Secret or credential detected: " + ftype,
-			Name:       name,
-			Meta:       ftype,
-			IsSecret:   true,
-			SourcePath: sourcePath,
+			Section:        "secrets",
+			Key:            fmt.Sprintf("secret-%d", i),
+			Tier:           3,
+			Reason:         "Secret or credential detected: " + ftype,
+			Name:           name,
+			Meta:           ftype,
+			IsSecret:       true,
+			SourcePath:     sourcePath,
+			DefaultInclude: true,
 		})
 	}
 	return items

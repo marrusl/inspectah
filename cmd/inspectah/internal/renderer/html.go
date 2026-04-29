@@ -39,7 +39,7 @@ func RenderHTMLReport(snap *schema.InspectionSnapshot, outputDir string, opts HT
 		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 
-	manifest := ClassifySnapshot(snap)
+	manifest := ClassifySnapshot(snap, opts.OriginalSnapshot)
 	manifestJSON, err := json.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("marshal triage manifest: %w", err)

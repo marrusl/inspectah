@@ -5,7 +5,8 @@
     "tier": 1,
     "reason": "Standard package matching base image.",
     "name": "bash",
-    "meta": "5.2.26-2.el9 | x86_64 | baseos"
+    "meta": "5.2.26-2.el9 | x86_64 | baseos",
+    "default_include": true
   },
   {
     "section": "packages",
@@ -13,7 +14,8 @@
     "tier": 2,
     "reason": "Third-party repository (epel). Not in base image.",
     "name": "htop",
-    "meta": "3.3.0-1.el9 | x86_64 | epel"
+    "meta": "3.3.0-1.el9 | x86_64 | epel",
+    "default_include": true
   },
   {
     "section": "packages",
@@ -21,6 +23,7 @@
     "tier": 3,
     "reason": "Package installed locally (no repository). Verify provenance.",
     "name": "custom-tool",
-    "meta": "1.0-1 | x86_64"
+    "meta": "1.0-1 | x86_64",
+    "default_include": true
   }
 ]

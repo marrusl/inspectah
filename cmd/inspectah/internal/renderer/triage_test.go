@@ -14,7 +14,7 @@ func TestClassifyPackage_BaseImage(t *testing.T) {
 		PackagesAdded:        []schema.PackageEntry{{Name: "coreutils", Arch: "x86_64", State: "installed", SourceRepo: "baseos", Include: true}},
 		BaselinePackageNames: &[]string{"coreutils"},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 1, items[0].Tier)
 	assert.Equal(t, "packages", items[0].Section)
@@ -25,7 +25,7 @@ func TestClassifyPackage_ThirdParty(t *testing.T) {
 	snap.Rpm = &schema.RpmSection{
 		PackagesAdded: []schema.PackageEntry{{Name: "epel-pkg", Arch: "x86_64", SourceRepo: "epel", Include: true}},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 2, items[0].Tier)
 	assert.Contains(t, items[0].Reason, "Third-party")
@@ -36,7 +36,7 @@ func TestClassifyPackage_LocalInstall(t *testing.T) {
 	snap.Rpm = &schema.RpmSection{
 		PackagesAdded: []schema.PackageEntry{{Name: "mystery", Arch: "x86_64", State: "local_install", Include: true}},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 3, items[0].Tier)
 }
@@ -49,7 +49,7 @@ func TestClassifyPrecedence_HighestTierWins(t *testing.T) {
 		},
 		BaselinePackageNames: &[]string{"local-and-base"},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 3, items[0].Tier, "local_install (tier 3) must win over baseline (tier 1)")
 }
@@ -64,7 +64,7 @@ func TestClassifySecretPrecedence(t *testing.T) {
 	snap.Redactions = []json.RawMessage{
 		json.RawMessage(`{"path":"/etc/secret.conf","finding_type":"api_key"}`),
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 
 	// Secret-flagged item should appear in secrets section only
 	for _, item := range items {
@@ -88,7 +88,7 @@ func TestClassifyConfig_RpmDefault(t *testing.T) {
 			{Path: "/etc/default.conf", Kind: schema.ConfigFileKindRpmOwnedDefault, Include: true},
 		},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 1, items[0].Tier)
 }
@@ -100,7 +100,7 @@ func TestClassifyConfig_Modified(t *testing.T) {
 			{Path: "/etc/modified.conf", Kind: schema.ConfigFileKindRpmOwnedModified, Include: true},
 		},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 2, items[0].Tier)
 }
@@ -112,7 +112,7 @@ func TestClassifyConfig_QuadletExcluded(t *testing.T) {
 			{Path: "/etc/containers/systemd/app.container", Kind: "non_rpm", Include: true},
 		},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	for _, item := range items {
 		if item.Section == "config" {
 			t.Error("quadlet files must not appear in config section")
@@ -127,7 +127,7 @@ func TestClassifyIdentity_SystemUser(t *testing.T) {
 			{"name": "root", "uid": float64(0)},
 		},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 1, items[0].Tier)
 }
@@ -139,7 +139,7 @@ func TestClassifyIdentity_UserCreated(t *testing.T) {
 			{"name": "appuser", "uid": float64(1001)},
 		},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 2, items[0].Tier)
 }
@@ -151,7 +151,7 @@ func TestClassifyContainer_WithoutQuadlet(t *testing.T) {
 			{Name: "orphan", Image: "nginx"},
 		},
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Len(t, items, 1)
 	assert.Equal(t, 3, items[0].Tier)
 	assert.Contains(t, items[0].Reason, "without quadlet")
@@ -159,7 +159,7 @@ func TestClassifyContainer_WithoutQuadlet(t *testing.T) {
 
 func TestClassifySnapshot_EmptySnapshot(t *testing.T) {
 	snap := schema.NewSnapshot()
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 	assert.Empty(t, items)
 }
 
@@ -175,7 +175,7 @@ func TestClassifySecret_SourcePathPopulated(t *testing.T) {
 		json.RawMessage(`{"path":"/etc/secret.conf","finding_type":"api_key"}`),
 		json.RawMessage(`{"path":"/some/other/path","finding_type":"password"}`),
 	}
-	items := ClassifySnapshot(snap)
+	items := ClassifySnapshot(snap, nil)
 
 	// Find the secret items
 	var secretWithConfig, secretWithoutConfig *TriageItem
@@ -205,4 +205,99 @@ func TestIsIncluded(t *testing.T) {
 	assert.True(t, isIncluded(nil), "nil should be included (default)")
 	assert.True(t, isIncluded(&tr), "true should be included")
 	assert.False(t, isIncluded(&fa), "false should be excluded")
+}
+
+func TestClassifySnapshot_DefaultInclude_NoOriginal(t *testing.T) {
+	// Without an original snapshot, DefaultInclude should match current include value.
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: false, SourceRepo: "appstream"},
+		},
+	}
+	items := ClassifySnapshot(snap, nil)
+	assert.Len(t, items, 1)
+	assert.False(t, items[0].DefaultInclude, "without original, default should match current (false)")
+}
+
+func TestClassifySnapshot_DefaultInclude_OriginalAlsoFalse(t *testing.T) {
+	// Both current and original have include=false (fleet below-threshold).
+	// DefaultInclude should be false → SPA treats as undecided.
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: false, SourceRepo: "appstream"},
+		},
+	}
+	orig := schema.NewSnapshot()
+	orig.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: false, SourceRepo: "appstream"},
+		},
+	}
+	items := ClassifySnapshot(snap, orig)
+	assert.Len(t, items, 1)
+	assert.False(t, items[0].DefaultInclude, "original had false, default should be false")
+}
+
+func TestClassifySnapshot_DefaultInclude_UserReIncluded(t *testing.T) {
+	// Current is include=true (user re-included), original was include=false.
+	// DefaultInclude should still be false (from original) → SPA sees decided.
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+	orig := schema.NewSnapshot()
+	orig.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: false, SourceRepo: "appstream"},
+		},
+	}
+	items := ClassifySnapshot(snap, orig)
+	assert.Len(t, items, 1)
+	assert.False(t, items[0].DefaultInclude, "original had false, default should still be false even though current is true")
+}
+
+func TestClassifySnapshot_DefaultInclude_UserExcluded(t *testing.T) {
+	// Current is include=false (user excluded), original was include=true.
+	// DefaultInclude should be true (from original) → SPA sees decided.
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: false, SourceRepo: "appstream"},
+		},
+	}
+	orig := schema.NewSnapshot()
+	orig.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+	items := ClassifySnapshot(snap, orig)
+	assert.Len(t, items, 1)
+	assert.True(t, items[0].DefaultInclude, "original had true, default should be true")
+}
+
+func TestClassifySnapshot_DefaultInclude_NewItem(t *testing.T) {
+	// Item exists in current but not in original (new item).
+	// DefaultInclude should keep the current value (true).
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "newpkg", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+	orig := schema.NewSnapshot() // empty original — no packages
+	items := ClassifySnapshot(snap, orig)
+	assert.Len(t, items, 1)
+	assert.True(t, items[0].DefaultInclude, "new item not in original should keep current default (true)")
+}
+
+func TestMapInclude(t *testing.T) {
+	assert.True(t, mapInclude(map[string]interface{}{"name": "test"}), "missing include key should default true")
+	assert.True(t, mapInclude(map[string]interface{}{"include": true}), "include=true should return true")
+	assert.False(t, mapInclude(map[string]interface{}{"include": false}), "include=false should return false")
+	assert.True(t, mapInclude(map[string]interface{}{"include": "yes"}), "non-bool include should default true")
 }

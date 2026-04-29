@@ -116,7 +116,15 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 	htmlData, _ := os.ReadFile(filepath.Join(outputDir, "report.html"))
 	containerfileData, _ := os.ReadFile(filepath.Join(outputDir, "Containerfile"))
 
-	manifest := renderer.ClassifySnapshot(&snap)
+	// Load the original (sidecar) snapshot for DefaultInclude computation.
+	// Use the working dir's sidecar (not renderDir, which is cleaned up).
+	var origSnap *schema.InspectionSnapshot
+	sidecarPath := filepath.Join(outputDir, "original-inspection-snapshot.json")
+	if s, err := schema.LoadSnapshot(sidecarPath); err == nil {
+		origSnap = s
+	}
+
+	manifest := renderer.ClassifySnapshot(&snap, origSnap)
 	manifestJSON, _ := json.Marshal(manifest)
 
 	return refine.ReRenderResult{

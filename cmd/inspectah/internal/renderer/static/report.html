@@ -811,12 +811,18 @@ var App = {
 
 // ── Decided-state helper ──
 // Returns true if an item has been decided — either because the user acted
-// on it in this session (App.decisions) OR because the snapshot's include
-// value differs from the default (handles reload/session resume).
+// on it in this session (App.decisions) OR because the snapshot's current
+// include value differs from its original default (handles reload/session
+// resume). Three cases:
+//   1. Started true, user excluded → current=false, default=true → decided
+//   2. Started false (fleet), never touched → current=false, default=false → undecided
+//   3. Started false, user re-included → current=true, default=false → decided
 function isItemDecided(item) {
   if (App.decisions[item.key]) return true;
-  // Items with include=false were explicitly excluded (possibly in a prior session)
-  return getSnapshotInclude(item.key) === false;
+  var current = getSnapshotInclude(item.key);
+  var original = item.default_include;
+  if (original === undefined || original === null) original = true;
+  return current !== original;
 }
 
 // ── Change counter ──
