@@ -1,4 +1,4 @@
-# HTML Report Redesign Implementation Plan (Revision 6)
+# HTML Report Redesign Implementation Plan (Revision 7)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -13,18 +13,27 @@
 **Spec:** `docs/specs/proposed/2026-04-28-html-report-redesign.md`
 
 **Prerequisites:**
-- [ ] Update the approved spec's "continuous Containerfile updates" language to match the badge-preview contract (see Spec Update Required section at end of plan). This must happen before implementation begins.
+- [x] ~~Update the approved spec's "continuous Containerfile updates" language to match the badge-preview contract.~~ Applied: preview contract + display-only surfaces + resting-state labels all updated in the spec.
 
-**Review history:** Revisions 1-2 reviewed by Kit, Thorn, Slate, Fern. Revisions 3-4 reviewed by Kit, Thorn (narrowed). Revision 5 addresses all round-4 findings. Revision 6 addresses stale artifact cleanup in rerender staging and adds disappearance proof.
+**Review history:** Revisions 1-2 reviewed by Kit, Thorn, Slate, Fern. Revisions 3-4 reviewed by Kit, Thorn (narrowed). Revision 5 round-4. Revision 6 stale-artifact cleanup. Revision 7 addresses Kit rounds 5-6: config/ is renderer-owned, clean-before-render removes ALL outputs including config/, disappearance proof covers config/ + redacted/ in working dir and tarball.
 
 ---
+
+## Revision 7 Changes from Rounds 5-6
+
+| Finding | Source | Resolution |
+|---------|--------|------------|
+| `config/` treated as input data but is renderer-owned output from `writeConfigTree()` | Kit R6 | `cleanRendererOutputs` no longer preserves `config/`. Only snapshot + sidecar are preserved. `renderer.RunAll()` regenerates `config/` from snapshot data via `writeConfigTree()`. |
+| Repeated-rerender proof incomplete on `config/` outputs | Kit R6 | Render N fixture adds a config file (`/etc/httpd/conf/httpd.conf`). Named assertions prove `config/etc/httpd/` exists after render N and is absent (file + dir) from both working directory and tarball after render N+1. |
+| Ground-truth render not refine-mode-equivalent (missing OriginalSnapshotPath) | Kit R5 | Both ground-truth `renderer.RunAll()` calls pass `OriginalSnapshotPath` with copied sidecar. |
+| Disappearance proof doesn't cover tarball export | Kit R5 | Tarball extracted and checked for stale `redacted/`, stale `config/`, and sidecar. |
 
 ## Revision 6 Changes
 
 | Finding | Source | Resolution |
 |---------|--------|------------|
-| `syncRenderedOutput()` only adds/overwrites — never removes files the new render didn't produce | Kit | `syncRenderedOutput()` now deletes renderer-owned files from the working directory that are absent from the new render output. The sidecar and any non-renderer files are preserved. Prevents stale artifacts (e.g., `merge-notes.md`, `redacted/`) from surviving across snapshot changes. |
-| No test proves artifacts disappear across rerenders with different snapshots | Kit | New `TestNativeReRender_StaleArtifactRemoval` exercises two sequential real `nativeReRender` calls with different snapshots. Proves artifact X from render N is absent after render N+1 when the new snapshot doesn't produce it, and that the sidecar survives both renders. |
+| `syncRenderedOutput()` only adds/overwrites — never removes files the new render didn't produce | Kit | Addressed in Rev 6, further tightened in Rev 7 with pre-render cleanup + directory removal. |
+| No test proves artifacts disappear across rerenders with different snapshots | Kit | Addressed in Rev 6, further tightened in Rev 7 with guaranteed-disappearing fixture. |
 | Stale "continuous Containerfile preview" language in spec | Fern | Three references updated: section layout table, rebuild flow step 1, and out-of-scope diff rationale. |
 | Display-only card language and aria-labels inconsistent | Fern | Spec display-only section already uses "Acknowledge / Skip". Added explicit aria-label guidance for display-only cards. |
 | Future guided queue mode compatibility not documented | — | Brief note added to Descoped section. No scope change — just a "don't close the door" constraint on card component, decision state, and manifest design. |
@@ -478,10 +487,17 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 	}
 	defer os.RemoveAll(renderDir)
 
-	// Copy working dir contents to temp render dir
+	// Copy working dir contents to temp render dir (preserves config/
+	// tree and sidecar which renderers read from as input data).
 	if err := copyDir(outputDir, renderDir); err != nil {
 		return refine.ReRenderResult{}, fmt.Errorf("copy working dir: %w", err)
 	}
+
+	// Clean all renderer-owned outputs from the temp dir BEFORE rendering.
+	// This ensures the render starts from a clean state — no stale files
+	// from a prior render survive into the new output. Only input data
+	// (sidecar, snapshot) is preserved.
+	cleanRendererOutputs(renderDir)
 
 	// Write new snapshot to render dir
 	snapPath := filepath.Join(renderDir, "inspection-snapshot.json")
@@ -495,7 +511,7 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 		origSnapPath = ""
 	}
 
-	// Run all renderers in the temp dir
+	// Run all renderers in the temp dir — fresh output, no stale artifacts
 	if err := renderer.RunAll(&snap, renderDir, renderer.RunAllOptions{
 		RefineMode:           true,
 		OriginalSnapshotPath: origSnapPath,
@@ -531,83 +547,93 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 	}, nil
 }
 
-// syncRenderedOutput replaces all renderer-owned files in dst with
-// the rendered versions from src. Also REMOVES any renderer-owned
-// files in dst that are absent from src (stale artifacts from a
-// previous render). Skips the immutable sidecar.
-// Uses temp+rename per file for crash safety.
-func syncRenderedOutput(src, dst string) error {
-	// Phase 1: Build the set of files the new render produced.
-	newFiles := make(map[string]bool)
-	if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, _ := filepath.Rel(src, path)
-		if rel == "." || info.IsDir() {
-			return nil
-		}
-		if filepath.Base(rel) == "original-inspection-snapshot.json" {
-			return nil
-		}
-		newFiles[rel] = true
-		return nil
-	}); err != nil {
-		return fmt.Errorf("inventory new render: %w", err)
+// cleanRendererOutputs removes all renderer-owned files and
+// directories from dir, preserving only the snapshot and sidecar.
+// config/ IS renderer-owned — writeConfigTree() regenerates it
+// from snapshot data during renderer.RunAll().
+func cleanRendererOutputs(dir string) {
+	preserved := map[string]bool{
+		"inspection-snapshot.json":          true,
+		"original-inspection-snapshot.json": true,
 	}
 
-	// Phase 2: Copy all new render output into dst (add/overwrite).
-	if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		name := e.Name()
+		if preserved[name] {
+			continue
 		}
+		os.RemoveAll(filepath.Join(dir, name))
+	}
+}
+
+// syncRenderedOutput replaces ALL content in dst with the rendered
+// output from src. Skips the immutable sidecar. Removes stale files
+// AND empty directories from dst that are absent in src.
+func syncRenderedOutput(src, dst string) error {
+	// Phase 1: Build inventory of files AND directories the new render produced.
+	newPaths := make(map[string]bool)
+	filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return nil }
 		rel, _ := filepath.Rel(src, path)
-		if rel == "." {
-			return nil
-		}
-		if filepath.Base(rel) == "original-inspection-snapshot.json" {
-			return nil
-		}
+		if rel == "." { return nil }
+		if filepath.Base(rel) == "original-inspection-snapshot.json" { return nil }
+		newPaths[rel] = true
+		return nil
+	})
+
+	// Phase 2: Copy all new render output into dst.
+	if err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return err }
+		rel, _ := filepath.Rel(src, path)
+		if rel == "." { return nil }
+		if filepath.Base(rel) == "original-inspection-snapshot.json" { return nil }
 		target := filepath.Join(dst, rel)
 		if info.IsDir() {
 			return os.MkdirAll(target, 0755)
 		}
 		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
+		if err != nil { return err }
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil { return err }
 		tmp := target + ".tmp"
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(tmp, data, info.Mode()); err != nil {
-			return err
-		}
+		if err := os.WriteFile(tmp, data, info.Mode()); err != nil { return err }
 		return os.Rename(tmp, target)
 	}); err != nil {
 		return fmt.Errorf("copy rendered output: %w", err)
 	}
 
-	// Phase 3: Remove stale renderer-owned files from dst that the
-	// new render did not produce. Walk dst, skip the sidecar, and
-	// remove anything not in newFiles.
-	return filepath.Walk(dst, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+	// Phase 3: Remove stale FILES from dst not in the new render.
+	filepath.Walk(dst, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return nil }
 		rel, _ := filepath.Rel(dst, path)
-		if rel == "." || info.IsDir() {
-			return nil
-		}
-		// Never touch the immutable sidecar
-		if filepath.Base(rel) == "original-inspection-snapshot.json" {
-			return nil
-		}
-		if !newFiles[rel] {
-			return os.Remove(path)
+		if rel == "." || info.IsDir() { return nil }
+		if filepath.Base(rel) == "original-inspection-snapshot.json" { return nil }
+		if !newPaths[rel] {
+			os.Remove(path)
 		}
 		return nil
 	})
+
+	// Phase 4: Remove stale empty DIRECTORIES from dst (bottom-up).
+	// Walk in reverse depth order so parent dirs are removed after children.
+	var dirs []string
+	filepath.Walk(dst, func(path string, info os.FileInfo, err error) error {
+		if err != nil { return nil }
+		rel, _ := filepath.Rel(dst, path)
+		if rel == "." || !info.IsDir() { return nil }
+		if filepath.Base(rel) == "original-inspection-snapshot.json" { return nil }
+		dirs = append(dirs, path)
+		return nil
+	})
+	// Reverse so deepest directories are processed first
+	for i := len(dirs) - 1; i >= 0; i-- {
+		entries, _ := os.ReadDir(dirs[i])
+		if len(entries) == 0 {
+			os.Remove(dirs[i])
+		}
+	}
+
+	return nil
 }
 ```
 
@@ -745,9 +771,18 @@ func TestNativeReRender_ProducesCanonicalOutput(t *testing.T) {
 	// replaced ALL renderer-owned outputs, not just a subset.
 	groundTruthDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(groundTruthDir, "inspection-snapshot.json"), snapData, 0644))
+	// Copy sidecar to ground-truth dir so the render is refine-mode-equivalent
+	sidecarSrc := filepath.Join(workDir, "original-inspection-snapshot.json")
+	sidecarGT := filepath.Join(groundTruthDir, "original-inspection-snapshot.json")
+	if data, err := os.ReadFile(sidecarSrc); err == nil {
+		os.WriteFile(sidecarGT, data, 0444)
+	}
 	var groundSnap schema.InspectionSnapshot
 	require.NoError(t, json.Unmarshal(snapData, &groundSnap))
-	require.NoError(t, renderer.RunAll(&groundSnap, groundTruthDir, renderer.RunAllOptions{RefineMode: true}))
+	require.NoError(t, renderer.RunAll(&groundSnap, groundTruthDir, renderer.RunAllOptions{
+		RefineMode:           true,
+		OriginalSnapshotPath: sidecarGT,
+	}))
 
 	// Ground truth now contains every file renderer.RunAll() produces.
 	groundFiles := snapshotDirContents(t, groundTruthDir)
@@ -828,9 +863,10 @@ Located in `cmd/inspectah/internal/cli/refine_test.go`:
 func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 	workDir := t.TempDir()
 
-	// ── Render N: snapshot with packages + scheduled tasks ──
-	// This snapshot should cause the renderer to produce merge-notes.md
-	// and/or other conditional output files.
+	// ── Render N: snapshot with config files + redactions ──
+	// This produces TWO guaranteed-disappearing renderer-owned paths:
+	// 1. redacted/etc/secret.conf.REDACTED (from WriteRedactedDir)
+	// 2. config/etc/httpd/conf/httpd.conf (from writeConfigTree)
 	snapN := schema.NewSnapshot()
 	snapN.Rpm = &schema.RpmSection{
 		PackagesAdded: []schema.PackageEntry{
@@ -838,10 +874,14 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 			 State: "installed", SourceRepo: "appstream", Include: true},
 		},
 	}
-	snapN.ScheduledTasks = &schema.ScheduledTaskSection{
-		CronJobs: []schema.CronJob{
-			{Path: "/etc/cron.d/backup", Source: "cron.d"},
+	snapN.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/httpd/conf/httpd.conf", Kind: schema.ConfigFileKindRpmOwnedModified,
+			 Category: schema.ConfigCategoryOther, Content: "ServerRoot /etc/httpd", Include: true},
 		},
+	}
+	snapN.Redactions = []json.RawMessage{
+		json.RawMessage(`{"path":"/etc/secret.conf","source":"file","kind":"excluded","finding_type":"api_key","original":"REDACTED"}`),
 	}
 	snapDataN, err := json.Marshal(snapN)
 	require.NoError(t, err)
@@ -854,13 +894,30 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 	_, err = nativeReRender(snapDataN, nil, workDir)
 	require.NoError(t, err)
 
-	// Record the full file set after render N
+	// ── NAMED ASSERTION: renderer-owned outputs exist after render N ──
+	redactedFile := filepath.Join(workDir, "redacted", "etc", "secret.conf.REDACTED")
+	assert.FileExists(t, redactedFile,
+		"render N must produce redacted/etc/secret.conf.REDACTED")
+	redactedDir := filepath.Join(workDir, "redacted")
+	assert.DirExists(t, redactedDir,
+		"render N must produce redacted/ directory")
+	configFile := filepath.Join(workDir, "config", "etc", "httpd", "conf", "httpd.conf")
+	assert.FileExists(t, configFile,
+		"render N must produce config/etc/httpd/conf/httpd.conf")
+
 	afterRenderN := snapshotDirContents(t, workDir)
 	t.Logf("Files after render N: %v", mapKeys(afterRenderN))
 
-	// ── Render N+1: minimal snapshot (no packages, no tasks) ──
-	// This snapshot should produce FEWER output files than render N.
+	// ── Render N+1: snapshot WITHOUT redactions ──
+	// WriteRedactedDir produces nothing → redacted/ must disappear entirely.
 	snapN1 := schema.NewSnapshot()
+	snapN1.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "nginx", Version: "1.24", Release: "1", Arch: "x86_64",
+			 State: "installed", SourceRepo: "appstream", Include: true},
+		},
+	}
+	// No redactions
 	snapDataN1, err := json.Marshal(snapN1)
 	require.NoError(t, err)
 
@@ -868,35 +925,51 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 	_, err = nativeReRender(snapDataN1, nil, workDir)
 	require.NoError(t, err)
 
-	// Record the full file set after render N+1
 	afterRenderN1 := snapshotDirContents(t, workDir)
 	t.Logf("Files after render N+1: %v", mapKeys(afterRenderN1))
 
-	// ── PROOF: stale artifacts from render N are gone ──
-	// Render N+1 into a ground-truth dir to know exactly what it produces.
+	// ── NAMED ASSERTION: stale outputs are gone after render N+1 ──
+	// Redacted artifacts (render N had redactions, render N+1 does not)
+	assert.NoFileExists(t, redactedFile,
+		"redacted/etc/secret.conf.REDACTED must disappear after render N+1")
+	_, err = os.Stat(redactedDir)
+	assert.True(t, os.IsNotExist(err),
+		"redacted/ directory must be removed after render N+1 (empty dir cleanup)")
+
+	// Config tree artifacts (render N had httpd config, render N+1 does not)
+	assert.NoFileExists(t, configFile,
+		"config/etc/httpd/conf/httpd.conf must disappear after render N+1")
+	_, err = os.Stat(filepath.Join(workDir, "config", "etc", "httpd"))
+	assert.True(t, os.IsNotExist(err),
+		"config/etc/httpd/ directory must be removed after render N+1")
+
+	// ── FULL SET PROOF: working dir == ground truth for render N+1 ──
 	groundDir := t.TempDir()
 	require.NoError(t, os.WriteFile(
 		filepath.Join(groundDir, "inspection-snapshot.json"), snapDataN1, 0644))
+	// Copy sidecar to ground-truth dir for refine-mode-equivalent render
+	sidecarGT := filepath.Join(groundDir, "original-inspection-snapshot.json")
+	sidecarData, _ := os.ReadFile(filepath.Join(workDir, "original-inspection-snapshot.json"))
+	os.WriteFile(sidecarGT, sidecarData, 0444)
+
 	var groundSnap schema.InspectionSnapshot
 	require.NoError(t, json.Unmarshal(snapDataN1, &groundSnap))
 	require.NoError(t, renderer.RunAll(&groundSnap, groundDir, renderer.RunAllOptions{
-		RefineMode: true,
+		RefineMode:           true,
+		OriginalSnapshotPath: sidecarGT,
 	}))
 	groundFiles := snapshotDirContents(t, groundDir)
 
-	// The working directory should contain ONLY:
-	// 1. Files the ground-truth render produced
-	// 2. The immutable sidecar
+	// Working dir must contain ONLY ground-truth files + sidecar
 	for path := range afterRenderN1 {
 		if path == "original-inspection-snapshot.json" {
-			continue // sidecar is expected
+			continue
 		}
 		_, inGround := groundFiles[path]
 		assert.True(t, inGround,
 			"stale artifact %q survived render N+1 — must be removed", path)
 	}
 
-	// Every ground-truth file must be present in the working dir
 	for path, content := range groundFiles {
 		workContent, exists := afterRenderN1[path]
 		assert.True(t, exists, "missing expected file: %s", path)
@@ -912,6 +985,33 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, string(snapDataN), string(sidecar),
 		"sidecar must be immutable across multiple renders")
+
+	// ── TARBALL PROOF: stale artifacts absent from exported tarball ──
+	// Package the post-render-N+1 working directory as a tarball and
+	// verify stale artifacts don't leak into the export.
+	tarPath := filepath.Join(t.TempDir(), "test-refined.tar.gz")
+	require.NoError(t, refine.RepackTarball(workDir, tarPath))
+
+	tarExtractDir := t.TempDir()
+	require.NoError(t, refine.ExtractTarball(tarPath, tarExtractDir))
+
+	// Named assertions: stale artifacts must not be in the tarball
+	_, tarRedactedErr := os.Stat(filepath.Join(tarExtractDir, "redacted"))
+	assert.True(t, os.IsNotExist(tarRedactedErr),
+		"stale redacted/ directory must not appear in exported tarball")
+	assert.NoFileExists(t,
+		filepath.Join(tarExtractDir, "redacted", "etc", "secret.conf.REDACTED"),
+		"stale redacted file must not appear in exported tarball")
+
+	// Stale config/ artifacts must not be in the tarball
+	assert.NoFileExists(t,
+		filepath.Join(tarExtractDir, "config", "etc", "httpd", "conf", "httpd.conf"),
+		"stale config file must not appear in exported tarball")
+
+	// Sidecar must also be excluded from tarball (per tarball allowlist)
+	assert.NoFileExists(t,
+		filepath.Join(tarExtractDir, "original-inspection-snapshot.json"),
+		"sidecar must be excluded from exported tarball")
 }
 
 func mapKeys(m map[string]string) []string {

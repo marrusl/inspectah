@@ -155,6 +155,8 @@ The following item types carry triage decisions that persist in the snapshot (su
 
 These surfaces are scoped for full renderer integration in a follow-up. The triage cards still display tier classification and risk information — "Acknowledge" records that the admin reviewed the item, and "Skip" records that they deprioritized it. Both decisions persist for cross-session continuity.
 
+**Resting-state labels for display-only surfaces:** When a display-only card is decided and collapses, it uses "Acknowledged" / "Skipped" labels — NOT "included" / "excluded" or "auto-included." The `aria-label` on decided display-only cards must also use the display-only language (e.g., `aria-label="Network connection eth0: Acknowledged"`).
+
 ### Three tiers, descending urgency
 
 Tiers are displayed in the order: Red → Yellow → Green. The admin handles the most critical items first while they are freshest.
