@@ -359,11 +359,9 @@ func TestClassifySelinuxPortLabel_DefaultInclude_True(t *testing.T) {
 }
 
 func TestModuleStream_UserExclusionSurvivesNormalization(t *testing.T) {
-	// Regression: NormalizeSnapshot must NOT re-include a user-excluded
-	// module stream. The inspector sets Include=true at creation; if a
-	// user later sets it to false, that decision must survive session
-	// restart (which calls NormalizeSnapshot).
+	// v12 snapshot: user-excluded module stream must NOT be re-included.
 	snap := schema.NewSnapshot()
+	snap.SchemaVersion = schema.SchemaVersion // current version
 	snap.Rpm = &schema.RpmSection{
 		ModuleStreams: []schema.EnabledModuleStream{
 			{ModuleName: "nodejs", Stream: "18", Profiles: []string{"common"}, Include: false},
@@ -373,5 +371,24 @@ func TestModuleStream_UserExclusionSurvivesNormalization(t *testing.T) {
 	schema.NormalizeSnapshot(snap)
 
 	assert.False(t, snap.Rpm.ModuleStreams[0].Include,
-		"user-excluded module stream must NOT be re-included by NormalizeSnapshot")
+		"user-excluded module stream in v12 must NOT be re-included by NormalizeSnapshot")
+}
+
+func TestModuleStream_V11MigrationNormalizesInclude(t *testing.T) {
+	// v11 snapshot: inspector didn't set Include, so false is a zero value,
+	// not a user decision. NormalizeSnapshot must fix it to true.
+	snap := schema.NewSnapshot()
+	snap.SchemaVersion = schema.SchemaVersion - 1 // v11
+	snap.Rpm = &schema.RpmSection{
+		ModuleStreams: []schema.EnabledModuleStream{
+			{ModuleName: "nodejs", Stream: "18", Profiles: []string{"common"}, Include: false},
+		},
+	}
+
+	schema.NormalizeSnapshot(snap)
+
+	assert.True(t, snap.Rpm.ModuleStreams[0].Include,
+		"v11 module stream with zero-value Include must be normalized to true")
+	assert.Equal(t, schema.SchemaVersion, snap.SchemaVersion,
+		"NormalizeSnapshot must bump schema version to current")
 }
