@@ -1208,6 +1208,7 @@ func collectModuleStreams(exec Executor) []schema.EnabledModuleStream {
 				ModuleName: modName,
 				Stream:     info.stream,
 				Profiles:   info.profiles,
+				Include:    true,
 			})
 		}
 	}

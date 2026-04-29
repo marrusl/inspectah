@@ -357,3 +357,32 @@ func TestClassifySelinuxPortLabel_DefaultInclude_True(t *testing.T) {
 	assert.Equal(t, "seport-tcp-8080", items[0].Key)
 	assert.True(t, items[0].DefaultInclude, "selinux port label with Include=true should have DefaultInclude=true")
 }
+
+func TestModuleStreamIncludeNormalization(t *testing.T) {
+	// Regression test: inspector-produced EnabledModuleStream entries
+	// should get Include=true after normalization, even if created with
+	// the zero value (false).
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		ModuleStreams: []schema.EnabledModuleStream{
+			// Simulate inspector output: Include=false (zero value), no Fleet
+			{ModuleName: "nodejs", Stream: "18", Profiles: []string{"common"}, Include: false},
+		},
+	}
+
+	schema.NormalizeSnapshot(snap)
+
+	assert.True(t, snap.Rpm.ModuleStreams[0].Include, "inspector-produced module stream should be normalized to Include=true")
+
+	// Verify it appears in triage output with DefaultInclude=true
+	items := ClassifySnapshot(snap, nil)
+	found := false
+	for _, item := range items {
+		if item.Key == "ms-nodejs-18" {
+			found = true
+			assert.True(t, item.DefaultInclude, "normalized module stream should have DefaultInclude=true")
+			break
+		}
+	}
+	assert.True(t, found, "module stream should appear in triage output")
+}

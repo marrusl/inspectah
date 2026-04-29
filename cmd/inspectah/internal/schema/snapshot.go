@@ -137,6 +137,13 @@ func NormalizeSnapshot(snap *InspectionSnapshot) {
 			}
 		}
 	}
+	if snap.Rpm != nil {
+		for i := range snap.Rpm.ModuleStreams {
+			if !snap.Rpm.ModuleStreams[i].Include && snap.Rpm.ModuleStreams[i].Fleet == nil {
+				snap.Rpm.ModuleStreams[i].Include = true
+			}
+		}
+	}
 
 	snap.SchemaVersion = SchemaVersion
 }
