@@ -298,3 +298,58 @@ func containsAt(s, substr string, start int) bool {
 	}
 	return false
 }
+
+func TestLoadSnapshot_V11MigratesModuleStreamInclude(t *testing.T) {
+	// v11 snapshots have module streams with Include=false (zero value)
+	// because the inspector didn't set it. LoadSnapshot must fix this.
+	snap := NewSnapshot()
+	snap.SchemaVersion = SchemaVersion - 1
+	snap.Rpm = &RpmSection{
+		ModuleStreams: []EnabledModuleStream{
+			{ModuleName: "nodejs", Stream: "18", Include: false},
+		},
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	data, _ := json.Marshal(snap)
+	os.WriteFile(path, data, 0644)
+
+	loaded, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+
+	if !loaded.Rpm.ModuleStreams[0].Include {
+		t.Error("v11 module stream Include should be migrated to true")
+	}
+	if loaded.SchemaVersion != SchemaVersion {
+		t.Errorf("schema version should be bumped to %d, got %d", SchemaVersion, loaded.SchemaVersion)
+	}
+}
+
+func TestLoadSnapshot_V12PreservesModuleStreamExclusion(t *testing.T) {
+	// v12 snapshots: Include=false means user or fleet excluded.
+	// LoadSnapshot must NOT change it.
+	snap := NewSnapshot()
+	snap.SchemaVersion = SchemaVersion
+	snap.Rpm = &RpmSection{
+		ModuleStreams: []EnabledModuleStream{
+			{ModuleName: "nodejs", Stream: "18", Include: false},
+		},
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	data, _ := json.Marshal(snap)
+	os.WriteFile(path, data, 0644)
+
+	loaded, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+
+	if loaded.Rpm.ModuleStreams[0].Include {
+		t.Error("v12 module stream Include=false must be preserved")
+	}
+}

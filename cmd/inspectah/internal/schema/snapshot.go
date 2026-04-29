@@ -60,6 +60,18 @@ func LoadSnapshot(path string) (*InspectionSnapshot, error) {
 			snap.SchemaVersion, SchemaVersion-1, SchemaVersion)
 	}
 
+	// v11→v12 migration: inspector didn't set Include on module streams,
+	// leaving the zero value (false). In v12+ the inspector sets Include=true
+	// at creation, so false means "user or fleet excluded."
+	if snap.SchemaVersion < SchemaVersion && snap.Rpm != nil {
+		for i := range snap.Rpm.ModuleStreams {
+			if !snap.Rpm.ModuleStreams[i].Include {
+				snap.Rpm.ModuleStreams[i].Include = true
+			}
+		}
+		snap.SchemaVersion = SchemaVersion
+	}
+
 	return &snap, nil
 }
 
@@ -83,18 +95,6 @@ func SaveSnapshot(snap *InspectionSnapshot, path string) error {
 // fully normalized snapshot regardless of the original version.
 func NormalizeSnapshot(snap *InspectionSnapshot) {
 	t := true
-
-	// v11 migration: the inspector didn't set Include on module streams
-	// before schema v12, leaving the zero value (false). In v12+ the
-	// inspector sets Include=true at creation, so false means "user or
-	// fleet excluded." Only normalize for pre-v12 snapshots.
-	if snap.SchemaVersion < SchemaVersion && snap.Rpm != nil {
-		for i := range snap.Rpm.ModuleStreams {
-			if !snap.Rpm.ModuleStreams[i].Include {
-				snap.Rpm.ModuleStreams[i].Include = true
-			}
-		}
-	}
 
 	if snap.ScheduledTasks != nil {
 		for i := range snap.ScheduledTasks.SystemdTimers {

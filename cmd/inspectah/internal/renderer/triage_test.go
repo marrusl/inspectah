@@ -374,21 +374,5 @@ func TestModuleStream_UserExclusionSurvivesNormalization(t *testing.T) {
 		"user-excluded module stream in v12 must NOT be re-included by NormalizeSnapshot")
 }
 
-func TestModuleStream_V11MigrationNormalizesInclude(t *testing.T) {
-	// v11 snapshot: inspector didn't set Include, so false is a zero value,
-	// not a user decision. NormalizeSnapshot must fix it to true.
-	snap := schema.NewSnapshot()
-	snap.SchemaVersion = schema.SchemaVersion - 1 // v11
-	snap.Rpm = &schema.RpmSection{
-		ModuleStreams: []schema.EnabledModuleStream{
-			{ModuleName: "nodejs", Stream: "18", Profiles: []string{"common"}, Include: false},
-		},
-	}
-
-	schema.NormalizeSnapshot(snap)
-
-	assert.True(t, snap.Rpm.ModuleStreams[0].Include,
-		"v11 module stream with zero-value Include must be normalized to true")
-	assert.Equal(t, schema.SchemaVersion, snap.SchemaVersion,
-		"NormalizeSnapshot must bump schema version to current")
-}
+// v11 migration test lives in schema/snapshot_test.go (TestLoadSnapshot_V11MigratesModuleStreamInclude)
+// since the migration now runs at the LoadSnapshot boundary, not in NormalizeSnapshot.
