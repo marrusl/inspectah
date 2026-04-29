@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // --- Section line tests ---
@@ -340,4 +342,42 @@ func TestWriteRedactedDir(t *testing.T) {
 	if !strings.Contains(string(data), "REDACTED") {
 		t.Error("redacted file should contain REDACTED marker")
 	}
+}
+
+func TestContainerfile_DisplayOnlyIncludeDoesNotAffectOutput(t *testing.T) {
+	makeSnap := func() *schema.InspectionSnapshot {
+		snap := schema.NewSnapshot()
+		tr, fa := true, false
+		snap.Network = &schema.NetworkSection{
+			Connections: []schema.NMConnection{
+				{Name: "eth0", Include: &tr},
+				{Name: "eth1", Include: &fa},
+			},
+		}
+		snap.Storage = &schema.StorageSection{
+			FstabEntries: []schema.FstabEntry{
+				{MountPoint: "/data", Fstype: "xfs", Include: &tr},
+				{MountPoint: "/backup", Fstype: "ext4", Include: &fa},
+			},
+		}
+		return snap
+	}
+
+	// Render with all included
+	dir1 := t.TempDir()
+	snap1 := makeSnap()
+	require.NoError(t, RenderContainerfile(snap1, dir1))
+	cf1, _ := os.ReadFile(filepath.Join(dir1, "Containerfile"))
+
+	// Render with some excluded
+	dir2 := t.TempDir()
+	snap2 := makeSnap()
+	fa := false
+	snap2.Network.Connections[0].Include = &fa
+	snap2.Storage.FstabEntries[0].Include = &fa
+	require.NoError(t, RenderContainerfile(snap2, dir2))
+	cf2, _ := os.ReadFile(filepath.Join(dir2, "Containerfile"))
+
+	assert.Equal(t, string(cf1), string(cf2),
+		"display-only Include changes must not affect Containerfile output")
 }

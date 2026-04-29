@@ -55,9 +55,9 @@ func LoadSnapshot(path string) (*InspectionSnapshot, error) {
 		return nil, fmt.Errorf("failed to parse snapshot JSON: %w", err)
 	}
 
-	if snap.SchemaVersion != SchemaVersion {
-		return nil, fmt.Errorf("schema version mismatch: file has %d, expected %d",
-			snap.SchemaVersion, SchemaVersion)
+	if snap.SchemaVersion != SchemaVersion && snap.SchemaVersion != SchemaVersion-1 {
+		return nil, fmt.Errorf("schema version mismatch: file has %d, expected %d or %d",
+			snap.SchemaVersion, SchemaVersion-1, SchemaVersion)
 	}
 
 	return &snap, nil
@@ -75,6 +75,70 @@ func SaveSnapshot(snap *InspectionSnapshot, path string) error {
 	}
 
 	return nil
+}
+
+// NormalizeSnapshot converts all nil *bool Include fields to explicit
+// true and sets SchemaVersion to the current version. Called by the
+// refine server after loading a snapshot, so the SPA always sees a
+// fully normalized snapshot regardless of the original version.
+func NormalizeSnapshot(snap *InspectionSnapshot) {
+	t := true
+
+	if snap.ScheduledTasks != nil {
+		for i := range snap.ScheduledTasks.SystemdTimers {
+			if snap.ScheduledTasks.SystemdTimers[i].Include == nil {
+				snap.ScheduledTasks.SystemdTimers[i].Include = &t
+			}
+		}
+		for i := range snap.ScheduledTasks.AtJobs {
+			if snap.ScheduledTasks.AtJobs[i].Include == nil {
+				snap.ScheduledTasks.AtJobs[i].Include = &t
+			}
+		}
+	}
+	if snap.Containers != nil {
+		for i := range snap.Containers.RunningContainers {
+			if snap.Containers.RunningContainers[i].Include == nil {
+				snap.Containers.RunningContainers[i].Include = &t
+			}
+		}
+	}
+	if snap.Network != nil {
+		for i := range snap.Network.Connections {
+			if snap.Network.Connections[i].Include == nil {
+				snap.Network.Connections[i].Include = &t
+			}
+		}
+	}
+	if snap.Storage != nil {
+		for i := range snap.Storage.FstabEntries {
+			if snap.Storage.FstabEntries[i].Include == nil {
+				snap.Storage.FstabEntries[i].Include = &t
+			}
+		}
+	}
+	// Normalize untyped map-based Include keys (users, groups, SELinux booleans)
+	if snap.UsersGroups != nil {
+		for _, u := range snap.UsersGroups.Users {
+			if _, ok := u["include"]; !ok {
+				u["include"] = true
+			}
+		}
+		for _, g := range snap.UsersGroups.Groups {
+			if _, ok := g["include"]; !ok {
+				g["include"] = true
+			}
+		}
+	}
+	if snap.Selinux != nil {
+		for _, b := range snap.Selinux.BooleanOverrides {
+			if _, ok := b["include"]; !ok {
+				b["include"] = true
+			}
+		}
+	}
+
+	snap.SchemaVersion = SchemaVersion
 }
 
 // ParseRedaction attempts to unmarshal a raw redaction entry into a

@@ -2,6 +2,7 @@ package renderer
 
 import (
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"os"
 	"path/filepath"
@@ -30,35 +31,35 @@ type reportData struct {
 func RenderHTMLReport(snap *schema.InspectionSnapshot, outputDir string, opts HTMLReportOptions) error {
 	tmpl, err := template.New("report").Parse(reportTemplate)
 	if err != nil {
-		return err
+		return fmt.Errorf("parse report template: %w", err)
 	}
 
-	// Marshal snapshot to JSON for embedding
 	snapJSON, err := json.Marshal(snap)
 	if err != nil {
-		return err
+		return fmt.Errorf("marshal snapshot: %w", err)
 	}
 
-	// Read Containerfile from outputDir
-	containerfile := ""
-	cfPath := filepath.Join(outputDir, "Containerfile")
-	if data, err := os.ReadFile(cfPath); err == nil {
-		containerfile = string(data)
+	manifest := ClassifySnapshot(snap)
+	manifestJSON, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshal triage manifest: %w", err)
 	}
 
-	// Build template data
+	cfData, _ := os.ReadFile(filepath.Join(outputDir, "Containerfile"))
+	cfJSON, _ := json.Marshal(string(cfData))
+
 	data := reportData{
 		PatternFlyCSS:  template.CSS(patternFlyCSS),
 		CodeMirrorJS:   template.JS(codeMirrorJS),
 		SnapshotJSON:   template.JS(escapeScriptClose(string(snapJSON))),
-		Containerfile:  template.JS(escapeScriptClose(marshalJSString(containerfile))),
-		TriageManifest: template.JS("[]"),
+		Containerfile:  template.JS(escapeScriptClose(string(cfJSON))),
+		TriageManifest: template.JS(escapeScriptClose(string(manifestJSON))),
 	}
 
 	outPath := filepath.Join(outputDir, "report.html")
 	f, err := os.Create(outPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("create report.html: %w", err)
 	}
 	defer f.Close()
 

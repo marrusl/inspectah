@@ -19,6 +19,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 )
 
 const (
@@ -111,6 +113,13 @@ func RunRefine(opts RunRefineOptions) error {
 		if snapData, err := os.ReadFile(snapPath); err == nil {
 			os.WriteFile(sidecarPath, snapData, 0444)
 		}
+	}
+
+	// Normalize snapshot: convert nil *bool Include fields to explicit true.
+	// Done after sidecar creation so the original snapshot is preserved.
+	if snap, err := schema.LoadSnapshot(snapPath); err == nil {
+		schema.NormalizeSnapshot(snap)
+		schema.SaveSnapshot(snap, snapPath)
 	}
 
 	// Initial re-render if re-render function is available

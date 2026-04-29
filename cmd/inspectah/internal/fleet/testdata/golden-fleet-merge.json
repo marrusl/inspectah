@@ -1,5 +1,5 @@
 {
-  "schema_version": 11,
+  "schema_version": 12,
   "meta": {
     "fleet": {
       "host_title_map": {
@@ -16,7 +16,7 @@
       "total_hosts": 3
     },
     "hostname": "fleet-merged",
-    "timestamp": "2026-04-28T14:56:07Z"
+    "timestamp": "2026-04-29T03:06:05Z"
   },
   "os_release": {
     "name": "Red Hat Enterprise Linux",

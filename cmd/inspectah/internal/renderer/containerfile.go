@@ -468,7 +468,7 @@ func scheduledTasksSectionLines(snap *schema.InspectionSnapshot) []string {
 
 	var localTimers []schema.SystemdTimer
 	for _, t := range st.SystemdTimers {
-		if t.Source == "local" {
+		if t.Source == "local" && isIncluded(t.Include) {
 			localTimers = append(localTimers, t)
 		}
 	}
@@ -907,6 +907,12 @@ func selinuxSectionLines(snap *schema.InspectionSnapshot) []string {
 	// Non-default booleans
 	var nonDefault []map[string]interface{}
 	for _, b := range snap.Selinux.BooleanOverrides {
+		// Check dynamic include key (same pattern as users)
+		if inc, ok := b["include"]; ok {
+			if incBool, ok := inc.(bool); ok && !incBool {
+				continue
+			}
+		}
 		if nd, ok := b["non_default"]; ok {
 			if ndBool, ok := nd.(bool); ok && ndBool {
 				nonDefault = append(nonDefault, b)

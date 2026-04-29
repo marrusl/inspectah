@@ -116,13 +116,14 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 	htmlData, _ := os.ReadFile(filepath.Join(outputDir, "report.html"))
 	containerfileData, _ := os.ReadFile(filepath.Join(outputDir, "Containerfile"))
 
-	// Phase 2: triage_manifest is empty. Phase 3 populates it via
-	// renderer.ClassifySnapshot().
+	manifest := renderer.ClassifySnapshot(&snap)
+	manifestJSON, _ := json.Marshal(manifest)
+
 	return refine.ReRenderResult{
 		HTML:           string(htmlData),
 		Snapshot:       json.RawMessage(snapData),
 		Containerfile:  string(containerfileData),
-		TriageManifest: json.RawMessage("[]"),
+		TriageManifest: json.RawMessage(manifestJSON),
 	}, nil
 }
 

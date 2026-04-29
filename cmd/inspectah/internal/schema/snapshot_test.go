@@ -212,6 +212,75 @@ func TestNewSnapshot(t *testing.T) {
 	}
 }
 
+func TestNormalizeSnapshot_SetsNilIncludeToTrue(t *testing.T) {
+	snap := NewSnapshot()
+	snap.ScheduledTasks = &ScheduledTaskSection{
+		SystemdTimers: []SystemdTimer{{Name: "test.timer", Source: "local"}},
+		AtJobs:        []AtJob{{File: "a1", Command: "echo hi"}},
+	}
+	snap.Containers = &ContainerSection{
+		RunningContainers: []RunningContainer{{Name: "web", Image: "nginx"}},
+	}
+	snap.Network = &NetworkSection{
+		Connections: []NMConnection{{Name: "eth0", Type: "802-3-ethernet"}},
+	}
+	snap.Storage = &StorageSection{
+		FstabEntries: []FstabEntry{{MountPoint: "/data", Fstype: "xfs"}},
+	}
+	snap.UsersGroups = &UserGroupSection{
+		Users:  []map[string]interface{}{{"name": "app", "uid": float64(1001)}},
+		Groups: []map[string]interface{}{{"name": "app", "gid": float64(1001)}},
+	}
+	snap.Selinux = &SelinuxSection{
+		BooleanOverrides: []map[string]interface{}{{"name": "httpd_can_network_connect", "current_value": "on"}},
+	}
+
+	// Before normalization: nil/absent
+	if snap.ScheduledTasks.SystemdTimers[0].Include != nil {
+		t.Error("timer Include should be nil before normalization")
+	}
+	if snap.Network.Connections[0].Include != nil {
+		t.Error("connection Include should be nil before normalization")
+	}
+	if snap.Storage.FstabEntries[0].Include != nil {
+		t.Error("fstab Include should be nil before normalization")
+	}
+	if _, hasInclude := snap.UsersGroups.Users[0]["include"]; hasInclude {
+		t.Error("user should not have include key before normalization")
+	}
+
+	NormalizeSnapshot(snap)
+
+	// After: explicit true
+	if snap.ScheduledTasks.SystemdTimers[0].Include == nil || !*snap.ScheduledTasks.SystemdTimers[0].Include {
+		t.Error("timer Include should be true after normalization")
+	}
+	if snap.ScheduledTasks.AtJobs[0].Include == nil || !*snap.ScheduledTasks.AtJobs[0].Include {
+		t.Error("at job Include should be true after normalization")
+	}
+	if snap.Containers.RunningContainers[0].Include == nil || !*snap.Containers.RunningContainers[0].Include {
+		t.Error("running container Include should be true after normalization")
+	}
+	if snap.Network.Connections[0].Include == nil || !*snap.Network.Connections[0].Include {
+		t.Error("connection Include should be true after normalization")
+	}
+	if snap.Storage.FstabEntries[0].Include == nil || !*snap.Storage.FstabEntries[0].Include {
+		t.Error("fstab Include should be true after normalization")
+	}
+	if inc, ok := snap.UsersGroups.Users[0]["include"]; !ok || inc != true {
+		t.Error("user include should be true after normalization")
+	}
+	if inc, ok := snap.UsersGroups.Groups[0]["include"]; !ok || inc != true {
+		t.Error("group include should be true after normalization")
+	}
+	if inc, ok := snap.Selinux.BooleanOverrides[0]["include"]; !ok || inc != true {
+		t.Error("boolean override include should be true after normalization")
+	}
+	if snap.SchemaVersion != SchemaVersion {
+		t.Errorf("schema version should be %d after normalization, got %d", SchemaVersion, snap.SchemaVersion)
+	}
+}
+
 // Helper to check if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||

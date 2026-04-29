@@ -10,7 +10,7 @@ import (
 )
 
 // SchemaVersion is the current inspection snapshot schema version.
-const SchemaVersion = 11
+const SchemaVersion = 12
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -68,6 +68,7 @@ const (
 type ConfigFileKind string
 
 const (
+	ConfigFileKindRpmOwnedDefault  ConfigFileKind = "rpm_owned_default"
 	ConfigFileKindRpmOwnedModified ConfigFileKind = "rpm_owned_modified"
 	ConfigFileKindUnowned          ConfigFileKind = "unowned"
 	ConfigFileKindOrphaned         ConfigFileKind = "orphaned"
@@ -320,10 +321,12 @@ type ServiceSection struct {
 
 // NMConnection is a NetworkManager connection profile.
 type NMConnection struct {
-	Path   string `json:"path"`
-	Name   string `json:"name"`
-	Method string `json:"method"`
-	Type   string `json:"type"`
+	Path    string           `json:"path"`
+	Name    string           `json:"name"`
+	Method  string           `json:"method"`
+	Type    string           `json:"type"`
+	Include *bool            `json:"include,omitempty"`
+	Fleet   *FleetPrevalence `json:"fleet,omitempty"`
 }
 
 // FirewallZone is a firewalld zone definition.
@@ -379,10 +382,12 @@ type NetworkSection struct {
 
 // FstabEntry is a single entry from /etc/fstab.
 type FstabEntry struct {
-	Device     string `json:"device"`
-	MountPoint string `json:"mount_point"`
-	Fstype     string `json:"fstype"`
-	Options    string `json:"options"`
+	Device     string           `json:"device"`
+	MountPoint string           `json:"mount_point"`
+	Fstype     string           `json:"fstype"`
+	Options    string           `json:"options"`
+	Include    *bool            `json:"include,omitempty"`
+	Fleet      *FleetPrevalence `json:"fleet,omitempty"`
 }
 
 // CredentialRef is a reference to a credential file discovered in mount
@@ -440,22 +445,26 @@ type CronJob struct {
 
 // SystemdTimer is a systemd timer unit.
 type SystemdTimer struct {
-	Name           string `json:"name"`
-	OnCalendar     string `json:"on_calendar"`
-	ExecStart      string `json:"exec_start"`
-	Description    string `json:"description"`
-	Source         string `json:"source"`
-	Path           string `json:"path"`
-	TimerContent   string `json:"timer_content"`
-	ServiceContent string `json:"service_content"`
+	Name           string           `json:"name"`
+	OnCalendar     string           `json:"on_calendar"`
+	ExecStart      string           `json:"exec_start"`
+	Description    string           `json:"description"`
+	Source         string           `json:"source"`
+	Path           string           `json:"path"`
+	TimerContent   string           `json:"timer_content"`
+	ServiceContent string           `json:"service_content"`
+	Include        *bool            `json:"include,omitempty"`
+	Fleet          *FleetPrevalence `json:"fleet,omitempty"`
 }
 
 // AtJob is an at(1) job.
 type AtJob struct {
-	File       string `json:"file"`
-	Command    string `json:"command"`
-	User       string `json:"user"`
-	WorkingDir string `json:"working_dir"`
+	File       string           `json:"file"`
+	Command    string           `json:"command"`
+	User       string           `json:"user"`
+	WorkingDir string           `json:"working_dir"`
+	Include    *bool            `json:"include,omitempty"`
+	Fleet      *FleetPrevalence `json:"fleet,omitempty"`
 }
 
 // GeneratedTimerUnit is a systemd timer generated from a cron expression.
@@ -530,6 +539,8 @@ type RunningContainer struct {
 	Networks map[string]interface{} `json:"networks"`
 	Ports    map[string]interface{} `json:"ports"`
 	Env      []string               `json:"env"`
+	Include  *bool                  `json:"include,omitempty"`
+	Fleet    *FleetPrevalence       `json:"fleet,omitempty"`
 }
 
 // FlatpakApp is a Flatpak application detected on an ostree system.
