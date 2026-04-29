@@ -261,6 +261,89 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 		"sidecar must be excluded from exported tarball")
 }
 
+func TestNativeReRender_SecretExclusionRemovesConfigFile(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create a snapshot with a config file that is also flagged as a secret
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "httpd", Version: "2.4", Release: "1", Arch: "x86_64",
+				State: "installed", SourceRepo: "appstream", Include: true},
+		},
+	}
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/httpd/conf/httpd.conf", Kind: schema.ConfigFileKindRpmOwnedModified,
+				Category: schema.ConfigCategoryOther, Content: "ServerRoot /etc/httpd", Include: true},
+			{Path: "/etc/secret.conf", Kind: "non_rpm",
+				Category: schema.ConfigCategoryOther, Content: "API_KEY=hunter2", Include: true},
+		},
+	}
+	snap.Redactions = []json.RawMessage{
+		json.RawMessage(`{"path":"/etc/secret.conf","source":"file","kind":"excluded","finding_type":"api_key","original":"REDACTED"}`),
+	}
+
+	snapData, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "inspection-snapshot.json"), snapData, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "original-inspection-snapshot.json"), snapData, 0444))
+
+	// ── Render 1: both config files included ──
+	result1, err := nativeReRender(snapData, nil, workDir)
+	require.NoError(t, err)
+	_ = result1
+
+	// Verify the secret-backed config file exists in config/
+	secretConfigFile := filepath.Join(workDir, "config", "etc", "secret.conf")
+	assert.FileExists(t, secretConfigFile,
+		"secret-backed config file must exist before exclusion")
+
+	// Verify redacted/ artifacts also exist
+	redactedFile := filepath.Join(workDir, "redacted", "etc", "secret.conf.REDACTED")
+	assert.FileExists(t, redactedFile,
+		"redacted file must exist before exclusion")
+
+	// ── Simulate secret exclusion: set the backing config entry Include=false ──
+	// This is what the SPA does when the user clicks "Exclude from image" on a
+	// secret card — updateSnapshotInclude uses source_path to toggle the config entry.
+	snap.Config.Files[1].Include = false
+	snapDataExcluded, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	// ── Render 2: secret-backed config file excluded ──
+	_, err = nativeReRender(snapDataExcluded, nil, workDir)
+	require.NoError(t, err)
+
+	// The secret-backed config file must be ABSENT from config/
+	assert.NoFileExists(t, secretConfigFile,
+		"excluded secret-backed config file must disappear from config/")
+
+	// The non-secret config file must still be present
+	normalConfigFile := filepath.Join(workDir, "config", "etc", "httpd", "conf", "httpd.conf")
+	assert.FileExists(t, normalConfigFile,
+		"non-secret config file must survive after secret exclusion")
+
+	// Redacted artifacts should still be present (redaction is about the secret
+	// detection, not the config include state)
+	assert.FileExists(t, redactedFile,
+		"redacted file must survive after secret config exclusion")
+
+	// ── Tarball proof: excluded file absent from export ──
+	tarPath := filepath.Join(t.TempDir(), "secret-exclusion.tar.gz")
+	require.NoError(t, refine.RepackTarballFiltered(workDir, tarPath))
+
+	tarExtractDir := t.TempDir()
+	require.NoError(t, refine.ExtractTarball(tarPath, tarExtractDir))
+
+	assert.NoFileExists(t,
+		filepath.Join(tarExtractDir, "config", "etc", "secret.conf"),
+		"excluded secret-backed config file must not appear in exported tarball")
+	assert.FileExists(t,
+		filepath.Join(tarExtractDir, "config", "etc", "httpd", "conf", "httpd.conf"),
+		"non-secret config file must appear in exported tarball")
+}
+
 func snapshotDirContents(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	contents := make(map[string]string)

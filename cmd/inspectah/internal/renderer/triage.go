@@ -10,13 +10,14 @@ import (
 
 // TriageItem represents a classified snapshot item for the SPA.
 type TriageItem struct {
-	Section  string `json:"section"`
-	Key      string `json:"key"`
-	Tier     int    `json:"tier"`
-	Reason   string `json:"reason"`
-	Name     string `json:"name"`
-	Meta     string `json:"meta"`
-	IsSecret bool   `json:"is_secret,omitempty"`
+	Section    string `json:"section"`
+	Key        string `json:"key"`
+	Tier       int    `json:"tier"`
+	Reason     string `json:"reason"`
+	Name       string `json:"name"`
+	Meta       string `json:"meta"`
+	IsSecret   bool   `json:"is_secret,omitempty"`
+	SourcePath string `json:"source_path,omitempty"`
 }
 
 // ClassifySnapshot classifies all triageable items in the snapshot.
@@ -31,7 +32,7 @@ func ClassifySnapshot(snap *schema.InspectionSnapshot) []TriageItem {
 	items = append(items, classifyContainerItems(snap, secretPaths)...)
 	items = append(items, classifyIdentity(snap, secretPaths)...)
 	items = append(items, classifySystemItems(snap, secretPaths)...)
-	items = append(items, classifySecretItems(snap)...)
+	items = append(items, classifySecretItems(snap, secretPaths)...)
 	return items
 }
 
@@ -374,7 +375,15 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 	return items
 }
 
-func classifySecretItems(snap *schema.InspectionSnapshot) []TriageItem {
+func classifySecretItems(snap *schema.InspectionSnapshot, secrets map[string]bool) []TriageItem {
+	// Build a set of config file paths for source_path linking
+	configPaths := make(map[string]bool)
+	if snap.Config != nil {
+		for _, f := range snap.Config.Files {
+			configPaths[f.Path] = true
+		}
+	}
+
 	var items []TriageItem
 	for i, r := range snap.Redactions {
 		var finding struct {
@@ -395,14 +404,24 @@ func classifySecretItems(snap *schema.InspectionSnapshot) []TriageItem {
 		if ftype == "" {
 			ftype = finding.Type
 		}
+
+		// Determine if this secret is backed by a config file.
+		// If the redaction's path matches a config file path, set SourcePath
+		// so the SPA can toggle the config entry's Include field.
+		var sourcePath string
+		if finding.Path != "" && configPaths[finding.Path] {
+			sourcePath = finding.Path
+		}
+
 		items = append(items, TriageItem{
-			Section:  "secrets",
-			Key:      fmt.Sprintf("secret-%d", i),
-			Tier:     3,
-			Reason:   "Secret or credential detected: " + ftype,
-			Name:     name,
-			Meta:     ftype,
-			IsSecret: true,
+			Section:    "secrets",
+			Key:        fmt.Sprintf("secret-%d", i),
+			Tier:       3,
+			Reason:     "Secret or credential detected: " + ftype,
+			Name:       name,
+			Meta:       ftype,
+			IsSecret:   true,
+			SourcePath: sourcePath,
 		})
 	}
 	return items

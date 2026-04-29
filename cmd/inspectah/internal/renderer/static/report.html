@@ -803,7 +803,8 @@ var App = {
   revision: 0,
   reviewStates: {},    // sectionId -> 'unreviewed' | 'in-progress' | 'reviewed'
   prevInventories: {}, // sectionId -> sorted key string for rebuild comparison
-  decisions: {},       // key -> true (include) | false (exclude)
+  decisions: {},       // key -> true (decided). Presence means user acted; snapshot holds actual value.
+  priorValues: {},     // key -> prior include value before makeDecision (for undo)
   activeSection: 'overview',
   tierExpanded: {}     // sectionId-tier -> boolean
 };
@@ -1113,7 +1114,7 @@ function updateBadge(sectionId) {
   var undecided3 = 0;
   var undecided2 = 0;
   for (var i = 0; i < items.length; i++) {
-    if (App.decisions[items[i].key] !== undefined) continue;
+    if (App.decisions[items[i].key]) continue;  // user has acted on this item
     if (items[i].tier === 3) undecided3++;
     else if (items[i].tier === 2) undecided2++;
   }
@@ -1451,7 +1452,9 @@ function buildDecidedCard(item, included) {
 // ── Decision Logic ──
 function makeDecision(key, sectionId, include) {
   if (App.mode === 'static') return;
-  App.decisions[key] = include;
+  // Store prior snapshot value so undo can restore it
+  App.priorValues[key] = getSnapshotInclude(key);
+  App.decisions[key] = true;  // presence means "user acted on this"
   updateSnapshotInclude(key, include);
   incrementChangeCounter();
 
@@ -1470,12 +1473,20 @@ function makeDecision(key, sectionId, include) {
   // Focus the next undecided card in this section
   focusNextUndecided(sectionId);
 
+  // Persist decision to server
+  scheduleAutosave();
+
   // Disable buttons if static mode (shouldn't happen, but guard)
   if (App.mode === 'static') disableAllDecisionButtons();
 }
 
 function undoDecision(key, sectionId) {
   if (App.mode === 'static') return;
+  // Restore the prior snapshot include value
+  if (App.priorValues[key] !== undefined) {
+    updateSnapshotInclude(key, App.priorValues[key]);
+    delete App.priorValues[key];
+  }
   delete App.decisions[key];
   decrementChangeCounter();
 
@@ -1489,6 +1500,198 @@ function undoDecision(key, sectionId) {
   // Re-render the section
   renderTriageSection(sectionId);
   updateBadge(sectionId);
+
+  // Persist undo to server
+  scheduleAutosave();
+}
+
+// ── Read snapshot include state ──
+// Returns the current include value for a triage key from the snapshot.
+// This is the authoritative source for whether an item is included.
+function getSnapshotInclude(key) {
+  var snap = App.snapshot;
+
+  if (key.indexOf('pkg-') === 0) {
+    var suffix = key.substring(4);
+    if (snap.rpm && snap.rpm.packages_added) {
+      for (var i = 0; i < snap.rpm.packages_added.length; i++) {
+        var pkg = snap.rpm.packages_added[i];
+        if (pkg.name + '-' + pkg.arch === suffix) {
+          return pkg.include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('ms-') === 0) {
+    var msSuffix = key.substring(3);
+    if (snap.rpm && snap.rpm.module_streams) {
+      for (var mi = 0; mi < snap.rpm.module_streams.length; mi++) {
+        var ms = snap.rpm.module_streams[mi];
+        if (ms.module_name + '-' + ms.stream === msSuffix) {
+          return ms.include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('cfg-') === 0) {
+    var cfgPath = key.substring(4);
+    if (snap.config && snap.config.files) {
+      for (var ci = 0; ci < snap.config.files.length; ci++) {
+        if (snap.config.files[ci].path === cfgPath) {
+          return snap.config.files[ci].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('svc-') === 0) {
+    var svcUnit = key.substring(4);
+    if (snap.services && snap.services.state_changes) {
+      for (var si = 0; si < snap.services.state_changes.length; si++) {
+        if (snap.services.state_changes[si].unit === svcUnit) {
+          return snap.services.state_changes[si].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('cron-') === 0) {
+    var cronPath = key.substring(5);
+    if (snap.scheduled_tasks && snap.scheduled_tasks.cron_jobs) {
+      for (var cri = 0; cri < snap.scheduled_tasks.cron_jobs.length; cri++) {
+        if (snap.scheduled_tasks.cron_jobs[cri].path === cronPath) {
+          return snap.scheduled_tasks.cron_jobs[cri].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('timer-') === 0) {
+    var timerName = key.substring(6);
+    if (snap.scheduled_tasks && snap.scheduled_tasks.systemd_timers) {
+      for (var ti = 0; ti < snap.scheduled_tasks.systemd_timers.length; ti++) {
+        if (snap.scheduled_tasks.systemd_timers[ti].name === timerName) {
+          return snap.scheduled_tasks.systemd_timers[ti].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('quadlet-') === 0) {
+    var qName = key.substring(8);
+    if (snap.containers && snap.containers.quadlet_units) {
+      for (var qi = 0; qi < snap.containers.quadlet_units.length; qi++) {
+        if (snap.containers.quadlet_units[qi].name === qName) {
+          return snap.containers.quadlet_units[qi].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('container-') === 0) {
+    var cName = key.substring(10);
+    if (snap.containers && snap.containers.running_containers) {
+      for (var rci = 0; rci < snap.containers.running_containers.length; rci++) {
+        if (snap.containers.running_containers[rci].name === cName) {
+          return snap.containers.running_containers[rci].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('nonrpm-') === 0) {
+    var nrName = key.substring(7);
+    if (snap.non_rpm_software && snap.non_rpm_software.items) {
+      for (var ni = 0; ni < snap.non_rpm_software.items.length; ni++) {
+        var nrItem = snap.non_rpm_software.items[ni];
+        var itemName = nrItem.name || nrItem.path;
+        if (itemName === nrName) {
+          return nrItem.include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('user-') === 0) {
+    var uName = key.substring(5);
+    if (snap.users_groups && snap.users_groups.users) {
+      for (var ui = 0; ui < snap.users_groups.users.length; ui++) {
+        var u = snap.users_groups.users[ui];
+        if ((u.name || u.username) === uName) {
+          return u.include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('group-') === 0) {
+    var gName = key.substring(6);
+    if (snap.users_groups && snap.users_groups.groups) {
+      for (var gi = 0; gi < snap.users_groups.groups.length; gi++) {
+        var g = snap.users_groups.groups[gi];
+        if ((g.name || g.groupname) === gName) {
+          return g.include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('sebool-') === 0) {
+    var boolName = key.substring(7);
+    if (snap.selinux && snap.selinux.boolean_overrides) {
+      for (var bi = 0; bi < snap.selinux.boolean_overrides.length; bi++) {
+        var b = snap.selinux.boolean_overrides[bi];
+        if ((b.name || b.boolean) === boolName) {
+          return b.include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('sysctl-') === 0) {
+    var sysKey = key.substring(7);
+    if (snap.kernel_boot && snap.kernel_boot.sysctl_overrides) {
+      for (var ski = 0; ski < snap.kernel_boot.sysctl_overrides.length; ski++) {
+        if (snap.kernel_boot.sysctl_overrides[ski].key === sysKey) {
+          return snap.kernel_boot.sysctl_overrides[ski].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('kmod-') === 0) {
+    var modName = key.substring(5);
+    if (snap.kernel_boot && snap.kernel_boot.non_default_modules) {
+      for (var ki = 0; ki < snap.kernel_boot.non_default_modules.length; ki++) {
+        if (snap.kernel_boot.non_default_modules[ki].name === modName) {
+          return snap.kernel_boot.non_default_modules[ki].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('conn-') === 0) {
+    var connName = key.substring(5);
+    if (snap.network && snap.network.connections) {
+      for (var coi = 0; coi < snap.network.connections.length; coi++) {
+        if (snap.network.connections[coi].name === connName) {
+          return snap.network.connections[coi].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('fw-') === 0) {
+    var fwName = key.substring(3);
+    if (snap.network && snap.network.firewall_zones) {
+      for (var fi = 0; fi < snap.network.firewall_zones.length; fi++) {
+        if (snap.network.firewall_zones[fi].name === fwName) {
+          return snap.network.firewall_zones[fi].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('fstab-') === 0) {
+    var mountPoint = key.substring(6);
+    if (snap.storage && snap.storage.fstab_entries) {
+      for (var fsi = 0; fsi < snap.storage.fstab_entries.length; fsi++) {
+        if (snap.storage.fstab_entries[fsi].mount_point === mountPoint) {
+          return snap.storage.fstab_entries[fsi].include !== false;
+        }
+      }
+    }
+  } else if (key.indexOf('secret-') === 0) {
+    // For secret items with a source_path, check the backing config entry
+    var manifest = App.triageManifest || [];
+    for (var si = 0; si < manifest.length; si++) {
+      if (manifest[si].key === key && manifest[si].source_path) {
+        var srcPath = manifest[si].source_path;
+        if (snap.config && snap.config.files) {
+          for (var sci = 0; sci < snap.config.files.length; sci++) {
+            if (snap.config.files[sci].path === srcPath) {
+              return snap.config.files[sci].include !== false;
+            }
+          }
+        }
+      }
+    }
+    // No backing config entry — default to included
+    return true;
+  }
+
+  // Default: included
+  return true;
 }
 
 // ── Update snapshot include flags ──
@@ -1692,8 +1895,21 @@ function updateSnapshotInclude(key, include) {
     }
   } else if (key.indexOf('secret-') === 0) {
     // Secrets are redaction entries — no include field on the redaction itself.
-    // The underlying config file may have an include field.
-    // For now we track the decision in App.decisions only.
+    // Look up the backing config file via source_path from the triage manifest.
+    var manifest = App.triageManifest || [];
+    for (var si = 0; si < manifest.length; si++) {
+      if (manifest[si].key === key && manifest[si].source_path) {
+        var srcPath = manifest[si].source_path;
+        if (snap.config && snap.config.files) {
+          for (var sci = 0; sci < snap.config.files.length; sci++) {
+            if (snap.config.files[sci].path === srcPath) {
+              snap.config.files[sci].include = include;
+              return;
+            }
+          }
+        }
+      }
+    }
   }
 }
 
@@ -1813,8 +2029,8 @@ function renderTriageSection(sectionId) {
 
     for (var ii = 0; ii < tierItems.length; ii++) {
       var item = tierItems[ii];
-      if (App.decisions[item.key] !== undefined) {
-        if (tier === 1 && App.decisions[item.key] === false) {
+      if (App.decisions[item.key]) {  // user has acted on this item
+        if (tier === 1 && getSnapshotInclude(item.key) === false) {
           overrides.push(item);
         } else {
           decided.push(item);
@@ -1911,7 +2127,7 @@ function renderTriageSection(sectionId) {
 
     // Show decided items first (collapsed cards)
     for (var di = 0; di < decided.length; di++) {
-      itemsDiv.appendChild(buildDecidedCard(decided[di], App.decisions[decided[di].key]));
+      itemsDiv.appendChild(buildDecidedCard(decided[di], getSnapshotInclude(decided[di].key)));
     }
 
     // Show undecided items (full cards)
@@ -1929,7 +2145,7 @@ function renderTriageSection(sectionId) {
 
   var decidedCount = 0;
   for (var fc = 0; fc < items.length; fc++) {
-    if (App.decisions[items[fc].key] !== undefined) decidedCount++;
+    if (App.decisions[items[fc].key]) decidedCount++;
   }
 
   var statsSpan = document.createElement('span');
@@ -2010,6 +2226,7 @@ function applyRebuildResponse(data) {
 
   // Clear decisions — rebuild applied canonical state
   App.decisions = {};
+  App.priorValues = {};
 
   renderAllSections();
   renderContainerfilePreview();
@@ -2347,8 +2564,7 @@ function triggerRebuild() {
     };
     xhr.send(JSON.stringify({
       snapshot: App.snapshot,
-      revision: App.revision,
-      decisions: App.decisions
+      revision: App.revision
     }));
   } catch (e) {
     btn.disabled = false;

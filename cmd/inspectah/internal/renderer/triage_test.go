@@ -163,6 +163,42 @@ func TestClassifySnapshot_EmptySnapshot(t *testing.T) {
 	assert.Empty(t, items)
 }
 
+func TestClassifySecret_SourcePathPopulated(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/secret.conf", Kind: "non_rpm", Include: true},
+			{Path: "/etc/normal.conf", Kind: "non_rpm", Include: true},
+		},
+	}
+	snap.Redactions = []json.RawMessage{
+		json.RawMessage(`{"path":"/etc/secret.conf","finding_type":"api_key"}`),
+		json.RawMessage(`{"path":"/some/other/path","finding_type":"password"}`),
+	}
+	items := ClassifySnapshot(snap)
+
+	// Find the secret items
+	var secretWithConfig, secretWithoutConfig *TriageItem
+	for i := range items {
+		if items[i].Section == "secrets" {
+			if items[i].Name == "/etc/secret.conf" {
+				secretWithConfig = &items[i]
+			}
+			if items[i].Name == "/some/other/path" {
+				secretWithoutConfig = &items[i]
+			}
+		}
+	}
+
+	assert.NotNil(t, secretWithConfig, "secret backed by config file must exist")
+	assert.Equal(t, "/etc/secret.conf", secretWithConfig.SourcePath,
+		"SourcePath must point to the backing config file")
+
+	assert.NotNil(t, secretWithoutConfig, "secret without config file must exist")
+	assert.Empty(t, secretWithoutConfig.SourcePath,
+		"SourcePath must be empty when no backing config file")
+}
+
 func TestIsIncluded(t *testing.T) {
 	tr := true
 	fa := false

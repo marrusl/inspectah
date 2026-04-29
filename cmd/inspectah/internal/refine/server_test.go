@@ -430,6 +430,38 @@ func TestAPISnapshot_PutAutosave(t *testing.T) {
 	assert.Contains(t, string(diskSnap), "updated")
 }
 
+func TestAPISnapshot_PutMalformedSnapshot(t *testing.T) {
+	dir := setupTestOutputDir(t)
+	handler := newRefineHandler(dir, nil)
+
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"missing snapshot field", `{"revision":1}`},
+		{"null snapshot", `{"snapshot":null,"revision":1}`},
+		{"snapshot is string not object", `{"snapshot":"not an object","revision":1}`},
+		{"snapshot is array not object", `{"snapshot":[1,2,3],"revision":1}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("PUT", "/api/snapshot", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			assert.Equal(t, 400, w.Code, "malformed snapshot must return 400")
+		})
+	}
+
+	// Verify snapshot on disk is unchanged after all malformed requests
+	diskSnap, err := os.ReadFile(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(diskSnap), "test-host",
+		"snapshot on disk must not change after malformed PUT")
+}
+
 func TestAPISnapshot_PutStaleRevision(t *testing.T) {
 	dir := setupTestOutputDir(t)
 	handler := newRefineHandler(dir, nil)

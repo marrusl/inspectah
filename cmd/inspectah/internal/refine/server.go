@@ -368,6 +368,17 @@ func (h *refineHandler) handleAPISnapshot(w http.ResponseWriter, r *http.Request
 			return
 		}
 
+		// Validate snapshot is present and well-formed
+		if len(req.Snapshot) == 0 || string(req.Snapshot) == "null" {
+			h.sendError(w, 400, "missing or empty snapshot field")
+			return
+		}
+		var validSnap schema.InspectionSnapshot
+		if err := json.Unmarshal(req.Snapshot, &validSnap); err != nil {
+			h.sendError(w, 400, "invalid snapshot: "+err.Error())
+			return
+		}
+
 		h.mu.Lock()
 		if req.Revision != h.revision {
 			current := h.revision
