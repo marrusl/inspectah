@@ -1,0 +1,26 @@
+[
+  {
+    "section": "packages",
+    "key": "pkg-bash-x86_64",
+    "tier": 1,
+    "reason": "Standard package matching base image.",
+    "name": "bash",
+    "meta": "5.2.26-2.el9 | x86_64 | baseos"
+  },
+  {
+    "section": "packages",
+    "key": "pkg-htop-x86_64",
+    "tier": 2,
+    "reason": "Third-party repository (epel). Not in base image.",
+    "name": "htop",
+    "meta": "3.3.0-1.el9 | x86_64 | epel"
+  },
+  {
+    "section": "packages",
+    "key": "pkg-custom-tool-x86_64",
+    "tier": 3,
+    "reason": "Package installed locally (no repository). Verify provenance.",
+    "name": "custom-tool",
+    "meta": "1.0-1 | x86_64"
+  }
+]

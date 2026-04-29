@@ -1,13 +1,121 @@
 package renderer
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 )
+
+// normalizeWhitespace trims trailing spaces from each line, normalizes
+// line endings to \n, and trims leading/trailing blank lines.
+func normalizeWhitespace(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimRight(lines[i], " \t")
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n")) + "\n"
+}
+
+// extractFragment finds the first HTML element that matches the given
+// regex pattern and returns its outer HTML. The pattern should match
+// the opening tag.
+func extractFragment(html string, openTag string) string {
+	idx := strings.Index(html, openTag)
+	if idx == -1 {
+		return ""
+	}
+
+	// Determine the tag name from the opening tag
+	re := regexp.MustCompile(`<(\w+)`)
+	m := re.FindStringSubmatch(openTag)
+	if m == nil {
+		return ""
+	}
+	tagName := m[1]
+
+	// Simple nested-tag-aware extraction: count open/close tags
+	depth := 0
+	i := idx
+	openPattern := "<" + tagName
+	closePattern := "</" + tagName
+	for i < len(html) {
+		if strings.HasPrefix(html[i:], closePattern) {
+			depth--
+			if depth == 0 {
+				// Find the end of this closing tag
+				end := strings.Index(html[i:], ">")
+				if end == -1 {
+					return html[idx:]
+				}
+				return html[idx : i+end+1]
+			}
+			i += len(closePattern)
+		} else if strings.HasPrefix(html[i:], openPattern) {
+			// Check it's actually an open tag (not e.g. <navigator)
+			nextChar := html[i+len(openPattern)]
+			if nextChar == ' ' || nextChar == '>' || nextChar == '/' || nextChar == '\n' {
+				depth++
+			}
+			i += len(openPattern)
+		} else {
+			i++
+		}
+	}
+	return html[idx:]
+}
+
+// extractJSConst extracts the value of a JavaScript const from the
+// rendered HTML. It looks for `const NAME = ...;` and returns the
+// unquoted string value (for string constants).
+func extractJSConst(html, name string) string {
+	marker := "const " + name + " = "
+	idx := strings.Index(html, marker)
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(marker)
+	// The value is a JSON string literal — find the matching quotes
+	if start >= len(html) || html[start] != '"' {
+		return ""
+	}
+	// Parse JSON string manually: find unescaped closing quote
+	i := start + 1
+	var sb strings.Builder
+	for i < len(html) {
+		if html[i] == '\\' && i+1 < len(html) {
+			switch html[i+1] {
+			case '"':
+				sb.WriteByte('"')
+			case '\\':
+				sb.WriteByte('\\')
+			case 'n':
+				sb.WriteByte('\n')
+			case 'r':
+				sb.WriteByte('\r')
+			case 't':
+				sb.WriteByte('\t')
+			case '/':
+				sb.WriteByte('/')
+			default:
+				sb.WriteByte('\\')
+				sb.WriteByte(html[i+1])
+			}
+			i += 2
+		} else if html[i] == '"' {
+			return sb.String()
+		} else {
+			sb.WriteByte(html[i])
+			i++
+		}
+	}
+	return sb.String()
+}
 
 func TestRenderHTMLReportMinimal(t *testing.T) {
 	outDir := t.TempDir()
@@ -318,4 +426,175 @@ func TestMarshalJSString(t *testing.T) {
 			t.Errorf("marshalJSString(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
+}
+
+// ── Golden-file tests ──
+
+// goldenTestHelper renders a report and returns the full HTML content.
+func goldenTestHelper(t *testing.T, snap *schema.InspectionSnapshot, containerfile string) string {
+	t.Helper()
+	outDir := t.TempDir()
+	os.WriteFile(filepath.Join(outDir, "Containerfile"), []byte(containerfile), 0644)
+
+	err := RenderHTMLReport(snap, outDir, HTMLReportOptions{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outDir, "report.html"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	return string(data)
+}
+
+// goldenCompare compares a fragment against a golden file. If
+// UPDATE_GOLDEN is set, it writes the golden file instead.
+func goldenCompare(t *testing.T, goldenPath, got string) {
+	t.Helper()
+	got = normalizeWhitespace(got)
+
+	if os.Getenv("UPDATE_GOLDEN") != "" {
+		err := os.WriteFile(goldenPath, []byte(got), 0644)
+		if err != nil {
+			t.Fatalf("write golden %s: %v", goldenPath, err)
+		}
+		t.Logf("updated golden file: %s", goldenPath)
+		return
+	}
+
+	wantData, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read golden %s: %v\n(run with UPDATE_GOLDEN=1 to generate)", goldenPath, err)
+	}
+	want := normalizeWhitespace(string(wantData))
+
+	if got != want {
+		// Show a helpful diff — find first difference
+		gotLines := strings.Split(got, "\n")
+		wantLines := strings.Split(want, "\n")
+		diffLine := 0
+		for diffLine < len(gotLines) && diffLine < len(wantLines) {
+			if gotLines[diffLine] != wantLines[diffLine] {
+				break
+			}
+			diffLine++
+		}
+		t.Errorf("golden mismatch in %s at line %d\n--- want (around line %d) ---\n%s\n--- got (around line %d) ---\n%s\n\n(run with UPDATE_GOLDEN=1 to regenerate)",
+			goldenPath, diffLine+1,
+			diffLine+1, contextLines(wantLines, diffLine, 3),
+			diffLine+1, contextLines(gotLines, diffLine, 3))
+	}
+}
+
+// contextLines returns a few lines around the given index for diff output.
+func contextLines(lines []string, center, radius int) string {
+	start := center - radius
+	if start < 0 {
+		start = 0
+	}
+	end := center + radius + 1
+	if end > len(lines) {
+		end = len(lines)
+	}
+	return strings.Join(lines[start:end], "\n")
+}
+
+func TestGoldenSidebar(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "httpd", Version: "2.4.57", Release: "1.el9", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+	html := goldenTestHelper(t, snap, "FROM test:latest\n")
+
+	// Extract the <aside sidebar element (includes progress bar and nav container)
+	fragment := extractFragment(html, `<aside class="pf-v6-c-page__sidebar"`)
+	if fragment == "" {
+		t.Fatal("could not extract sidebar <aside> element from rendered HTML")
+	}
+
+	goldenPath := filepath.Join("testdata", "golden-sidebar.html")
+	goldenCompare(t, goldenPath, fragment)
+}
+
+func TestGoldenTierSection(t *testing.T) {
+	// Build a snapshot with items in all 3 tiers:
+	// - Tier 1: base-image package (matches baseline)
+	// - Tier 2: third-party package (epel repo)
+	// - Tier 3: local-install package (no repo)
+	baseline := []string{"bash"}
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		BaselinePackageNames: &baseline,
+		PackagesAdded: []schema.PackageEntry{
+			// Tier 1: in baseline
+			{Name: "bash", Version: "5.2.26", Release: "2.el9", Arch: "x86_64", State: schema.PackageStateAdded, Include: true, SourceRepo: "baseos"},
+			// Tier 2: third-party repo (epel)
+			{Name: "htop", Version: "3.3.0", Release: "1.el9", Arch: "x86_64", State: schema.PackageStateAdded, Include: true, SourceRepo: "epel"},
+			// Tier 3: local install
+			{Name: "custom-tool", Version: "1.0", Release: "1", Arch: "x86_64", State: "local_install", Include: true, SourceRepo: ""},
+		},
+	}
+	html := goldenTestHelper(t, snap, "FROM rhel-bootc:9.4\n")
+
+	// The section HTML is JS-rendered at runtime, so we extract the
+	// TRIAGE_MANIFEST JSON from the rendered template — this contains the
+	// classified items with tier, section, key, reason, etc.
+	marker := "const TRIAGE_MANIFEST = "
+	idx := strings.Index(html, marker)
+	if idx == -1 {
+		t.Fatal("could not find TRIAGE_MANIFEST in rendered HTML")
+	}
+	start := idx + len(marker)
+	// Find the end: the manifest is a JSON array followed by a semicolon
+	// First, unescape the script-close escaping
+	rest := html[start:]
+	end := strings.Index(rest, ";\n")
+	if end == -1 {
+		end = strings.Index(rest, ";")
+	}
+	if end == -1 {
+		t.Fatal("could not find end of TRIAGE_MANIFEST")
+	}
+	manifestRaw := strings.ReplaceAll(rest[:end], `<\/`, "</")
+
+	// Parse and verify all 3 tiers are present
+	var items []TriageItem
+	if err := json.Unmarshal([]byte(manifestRaw), &items); err != nil {
+		t.Fatalf("parse TRIAGE_MANIFEST: %v", err)
+	}
+
+	tiers := map[int]bool{}
+	for _, item := range items {
+		tiers[item.Tier] = true
+	}
+	if !tiers[1] || !tiers[2] || !tiers[3] {
+		t.Errorf("expected items in all 3 tiers, got tiers: %v", tiers)
+	}
+
+	// Re-marshal with indentation for a stable golden file
+	formatted, err := json.MarshalIndent(items, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	goldenPath := filepath.Join("testdata", "golden-tier-section.html")
+	goldenCompare(t, goldenPath, string(formatted))
+}
+
+func TestGoldenContainerfile(t *testing.T) {
+	snap := schema.NewSnapshot()
+	containerfile := "FROM rhel-bootc:9.4\nRUN dnf install -y httpd\nCOPY ./config/ /etc/\n"
+	html := goldenTestHelper(t, snap, containerfile)
+
+	// Extract the INITIAL_CONTAINERFILE value from the rendered template
+	value := extractJSConst(html, "INITIAL_CONTAINERFILE")
+	if value == "" {
+		t.Fatal("could not extract INITIAL_CONTAINERFILE from rendered HTML")
+	}
+
+	goldenPath := filepath.Join("testdata", "golden-containerfile.txt")
+	goldenCompare(t, goldenPath, value)
 }

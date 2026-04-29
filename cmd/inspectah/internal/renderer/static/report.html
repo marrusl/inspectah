@@ -1,3 +1,16 @@
+<!--
+  Browser smoke test matrix (manual verification):
+  - Static mode (file://): renders, banner shows, controls disabled
+  - Refine mode (http://): renders, controls enabled, no banner
+  - Sidebar navigation: all destinations, grouped keyboard, focus moves
+  - Tier rendering: Red → Yellow → Green ordering
+  - Include/exclude + undo: decision → badge increments → undo → badge decrements
+  - Editor: edit config file → content saved to snapshot
+  - Autosave: changes persist across page sections
+  - Rebuild: rebuild → tarball downloads → manifest refreshes → counter resets
+  - Theme toggle: dark ↔ light, persists across reload
+  - Narrow viewport: hamburger → overlay → Escape closes → focus returns
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -623,6 +636,74 @@
       outline: 2px solid #4493f8;
       outline-offset: 2px;
     }
+
+    /* ── Hamburger button (narrow viewports only) ── */
+    .hamburger-btn {
+      display: none;
+      background: transparent;
+      border: 1px solid var(--pf-t--global--border--color--default, #666);
+      color: inherit;
+      font-size: 1.25rem;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      line-height: 1;
+    }
+
+    .hamburger-btn:hover {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
+    }
+
+    /* ── Sidebar overlay backdrop ── */
+    .sidebar-overlay-backdrop {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 999;
+    }
+
+    .sidebar-overlay-backdrop.active {
+      display: block;
+    }
+
+    /* ── Reduced motion ── */
+    @media (prefers-reduced-motion: reduce) {
+      .review-progress-fill {
+        transition: none;
+      }
+    }
+
+    /* ── Narrow viewport (< 1200px) ── */
+    @media (max-width: 1199px) {
+      .hamburger-btn {
+        display: inline-block;
+      }
+
+      .pf-v6-c-page__sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 280px;
+        z-index: 1000;
+        background: var(--pf-t--global--background--color--primary-default, #1b1d21);
+        transform: translateX(-100%);
+        overflow-y: auto;
+      }
+
+      .pf-v6-c-page__sidebar.overlay-open {
+        transform: translateX(0);
+      }
+
+      .preview-panel {
+        display: none;
+      }
+
+      .pf-v6-c-page__main {
+        padding: 1rem;
+      }
+    }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -636,6 +717,7 @@
     <h1>inspectah Report</h1>
   </div>
   <div class="pf-v6-c-masthead__content">
+    <button class="hamburger-btn" id="hamburger-btn" type="button" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar" onclick="toggleSidebarOverlay()">&#x2630;</button>
     <button class="pf-v6-c-button pf-m-plain" type="button" aria-label="Toggle theme" onclick="toggleTheme()">&#x263E;</button>
     <span class="autosave-status" id="autosave-status"></span>
     <span id="autosave-live" class="sr-only" aria-live="polite"></span>
@@ -650,7 +732,10 @@
 
 <div class="pf-v6-c-page">
   <!-- Sidebar navigation -->
-  <aside class="pf-v6-c-page__sidebar" role="navigation" aria-label="Section navigation">
+  <!-- Sidebar overlay backdrop (narrow viewports) -->
+  <div class="sidebar-overlay-backdrop" id="sidebar-backdrop" onclick="closeSidebarOverlay()"></div>
+
+  <aside class="pf-v6-c-page__sidebar" id="sidebar" role="navigation" aria-label="Section navigation">
     <div class="review-progress" id="review-progress">
       <span id="review-progress-text">Review progress: 0 / 7</span>
       <div class="review-progress-bar">
@@ -870,15 +955,26 @@ function enableRefineMode() {
 }
 
 function disableAllDecisionButtons() {
+  // Ensure the describedby target exists
+  if (!document.getElementById('static-mode-desc')) {
+    var desc = document.createElement('span');
+    desc.id = 'static-mode-desc';
+    desc.className = 'sr-only';
+    desc.textContent = 'Disabled in static mode. Run inspectah refine to enable.';
+    document.body.appendChild(desc);
+  }
+
   var buttons = document.querySelectorAll('.card-actions button, .undo-link');
   for (var i = 0; i < buttons.length; i++) {
     buttons[i].setAttribute('aria-disabled', 'true');
+    buttons[i].setAttribute('aria-describedby', 'static-mode-desc');
     buttons[i].disabled = true;
   }
   // Also disable mark-reviewed buttons
   var reviewBtns = document.querySelectorAll('.mark-reviewed-btn');
   for (var j = 0; j < reviewBtns.length; j++) {
     reviewBtns[j].setAttribute('aria-disabled', 'true');
+    reviewBtns[j].setAttribute('aria-describedby', 'static-mode-desc');
     reviewBtns[j].disabled = true;
   }
 }
@@ -1370,6 +1466,9 @@ function makeDecision(key, sectionId, include) {
   // Re-render the section
   renderTriageSection(sectionId);
   updateBadge(sectionId);
+
+  // Focus the next undecided card in this section
+  focusNextUndecided(sectionId);
 
   // Disable buttons if static mode (shouldn't happen, but guard)
   if (App.mode === 'static') disableAllDecisionButtons();
@@ -2285,6 +2384,87 @@ function toggleTheme() {
     document.body.classList.add('pf-v6-theme-light');
   }
 })();
+
+// ── Focus next undecided card after a decision ──
+function focusNextUndecided(sectionId) {
+  var container = document.getElementById('section-' + sectionId);
+  if (!container) return;
+  var nextCard = container.querySelector('.triage-card .card-actions button');
+  if (nextCard) {
+    nextCard.focus();
+  }
+}
+
+// ── Sidebar overlay (narrow viewport) ──
+function toggleSidebarOverlay() {
+  var sidebar = document.getElementById('sidebar');
+  var backdrop = document.getElementById('sidebar-backdrop');
+  var btn = document.getElementById('hamburger-btn');
+  if (!sidebar || !backdrop || !btn) return;
+
+  var isOpen = sidebar.classList.contains('overlay-open');
+  if (isOpen) {
+    closeSidebarOverlay();
+  } else {
+    sidebar.classList.add('overlay-open');
+    backdrop.classList.add('active');
+    btn.setAttribute('aria-expanded', 'true');
+    btn.setAttribute('aria-label', 'Close navigation');
+
+    // Focus the first link in the sidebar
+    var firstLink = sidebar.querySelector('.pf-v6-c-nav__link');
+    if (firstLink) firstLink.focus();
+
+    // Add focus trap and Escape listener
+    sidebar._trapHandler = function(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeSidebarOverlay();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+
+      var focusable = sidebar.querySelectorAll(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+
+      var first = focusable[0];
+      var last = focusable[focusable.length - 1];
+
+      if (e.shiftKey) {
+        if (document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener('keydown', sidebar._trapHandler);
+  }
+}
+
+function closeSidebarOverlay() {
+  var sidebar = document.getElementById('sidebar');
+  var backdrop = document.getElementById('sidebar-backdrop');
+  var btn = document.getElementById('hamburger-btn');
+  if (!sidebar || !backdrop || !btn) return;
+
+  sidebar.classList.remove('overlay-open');
+  backdrop.classList.remove('active');
+  btn.setAttribute('aria-expanded', 'false');
+  btn.setAttribute('aria-label', 'Open navigation');
+  btn.focus();
+
+  if (sidebar._trapHandler) {
+    document.removeEventListener('keydown', sidebar._trapHandler);
+    sidebar._trapHandler = null;
+  }
+}
 
 document.addEventListener('DOMContentLoaded', boot);
 </script>
