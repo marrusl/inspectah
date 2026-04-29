@@ -487,8 +487,8 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 	}
 	defer os.RemoveAll(renderDir)
 
-	// Copy working dir contents to temp render dir (preserves config/
-	// tree and sidecar which renderers read from as input data).
+	// Copy working dir contents to temp render dir so
+	// cleanRendererOutputs can selectively preserve only snapshot + sidecar.
 	if err := copyDir(outputDir, renderDir); err != nil {
 		return refine.ReRenderResult{}, fmt.Errorf("copy working dir: %w", err)
 	}
