@@ -4,7 +4,8 @@
 package refine
 
 import (
-	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -31,9 +33,10 @@ var requiredFiles = []string{"report.html", "inspection-snapshot.json"}
 
 // ReRenderResult holds the output of a re-render operation.
 type ReRenderResult struct {
-	HTML          string          `json:"html"`
-	Snapshot      json.RawMessage `json:"snapshot"`
-	Containerfile string          `json:"containerfile"`
+	HTML           string          `json:"html"`
+	Snapshot       json.RawMessage `json:"snapshot"`
+	Containerfile  string          `json:"containerfile"`
+	TriageManifest json.RawMessage `json:"triage_manifest"`
 }
 
 // ReRenderFunc is a function that re-renders the output from snapshot data.
@@ -99,6 +102,14 @@ func RunRefine(opts RunRefineOptions) error {
 					hostLabel = h
 				}
 			}
+		}
+	}
+
+	// Create immutable sidecar — original snapshot before any edits
+	sidecarPath := filepath.Join(tmpDir, "original-inspection-snapshot.json")
+	if _, err := os.Stat(sidecarPath); os.IsNotExist(err) {
+		if snapData, err := os.ReadFile(snapPath); err == nil {
+			os.WriteFile(sidecarPath, snapData, 0444)
 		}
 	}
 
@@ -199,6 +210,10 @@ type refineHandler struct {
 	outputDir  string
 	reRenderFn ReRenderFunc
 	mux        *http.ServeMux
+
+	mu       sync.Mutex
+	revision int
+	renderID string
 }
 
 func newRefineHandler(outputDir string, reRenderFn ReRenderFunc) http.Handler {
@@ -206,12 +221,23 @@ func newRefineHandler(outputDir string, reRenderFn ReRenderFunc) http.Handler {
 		outputDir:  outputDir,
 		reRenderFn: reRenderFn,
 		mux:        http.NewServeMux(),
+		revision:   1,
+		renderID:   generateRenderID(),
+	}
+
+	// Create sidecar if it doesn't exist — immutable copy of the original snapshot
+	sidecar := filepath.Join(outputDir, "original-inspection-snapshot.json")
+	if _, err := os.Stat(sidecar); os.IsNotExist(err) {
+		if snapData, err := os.ReadFile(filepath.Join(outputDir, "inspection-snapshot.json")); err == nil {
+			os.WriteFile(sidecar, snapData, 0444)
+		}
 	}
 
 	h.mux.HandleFunc("/", h.handleRoot)
 	h.mux.HandleFunc("/index.html", h.handleRoot)
 	h.mux.HandleFunc("/snapshot", h.handleSnapshot)
 	h.mux.HandleFunc("/api/health", h.handleHealth)
+	h.mux.HandleFunc("/api/snapshot", h.handleAPISnapshot)
 	h.mux.HandleFunc("/api/tarball", h.handleTarball)
 	h.mux.HandleFunc("/api/render", h.handleRender)
 
@@ -233,6 +259,8 @@ func (h *refineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleSnapshot(w, r)
 	case path == "/api/health":
 		h.handleHealth(w, r)
+	case path == "/api/snapshot":
+		h.handleAPISnapshot(w, r)
 	case path == "/api/tarball":
 		h.handleTarball(w, r)
 	case path == "/api/render":
@@ -297,9 +325,87 @@ func (h *refineHandler) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-func (h *refineHandler) handleTarball(w http.ResponseWriter, _ *http.Request) {
-	// Build tarball in memory
-	var buf bytes.Buffer
+func (h *refineHandler) handleAPISnapshot(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case "GET":
+		h.mu.Lock()
+		rev := h.revision
+		h.mu.Unlock()
+
+		snapData, err := os.ReadFile(filepath.Join(h.outputDir, "inspection-snapshot.json"))
+		if err != nil {
+			h.sendError(w, 500, "failed to read snapshot")
+			return
+		}
+		h.sendJSON(w, 200, map[string]interface{}{
+			"snapshot": json.RawMessage(snapData),
+			"revision": rev,
+		})
+
+	case "PUT":
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			h.sendError(w, 400, "failed to read request body")
+			return
+		}
+		defer r.Body.Close()
+
+		var req struct {
+			Snapshot json.RawMessage `json:"snapshot"`
+			Revision int             `json:"revision"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			h.sendError(w, 400, "invalid JSON")
+			return
+		}
+
+		h.mu.Lock()
+		if req.Revision != h.revision {
+			current := h.revision
+			h.mu.Unlock()
+			h.sendJSON(w, 409, map[string]interface{}{
+				"error":            "stale revision",
+				"current_revision": current,
+			})
+			return
+		}
+
+		snapPath := filepath.Join(h.outputDir, "inspection-snapshot.json")
+		if err := os.WriteFile(snapPath, req.Snapshot, 0644); err != nil {
+			h.mu.Unlock()
+			h.sendError(w, 500, "failed to write snapshot")
+			return
+		}
+		h.revision++
+		newRev := h.revision
+		h.mu.Unlock()
+
+		h.sendJSON(w, 200, map[string]interface{}{
+			"revision": newRev,
+		})
+
+	default:
+		h.sendError(w, 405, "method not allowed")
+	}
+}
+
+func (h *refineHandler) handleTarball(w http.ResponseWriter, r *http.Request) {
+	// Enforce render_id guard — can't download stale tarball
+	queryRenderID := r.URL.Query().Get("render_id")
+	if queryRenderID != "" {
+		h.mu.Lock()
+		currentID := h.renderID
+		h.mu.Unlock()
+		if queryRenderID != currentID {
+			h.sendJSON(w, 409, map[string]interface{}{
+				"error":             "stale render_id",
+				"current_render_id": currentID,
+			})
+			return
+		}
+	}
+
+	// Build tarball to temp file, then serve
 	tmpFile, err := os.CreateTemp("", "refine-tarball-*.tar.gz")
 	if err != nil {
 		h.sendError(w, 500, "failed to create temp file")
@@ -309,7 +415,7 @@ func (h *refineHandler) handleTarball(w http.ResponseWriter, _ *http.Request) {
 	tmpFile.Close()
 	defer os.Remove(tmpPath)
 
-	if err := RepackTarball(h.outputDir, tmpPath); err != nil {
+	if err := RepackTarballFiltered(h.outputDir, tmpPath); err != nil {
 		h.sendError(w, 500, "failed to create tarball: "+err.Error())
 		return
 	}
@@ -319,8 +425,6 @@ func (h *refineHandler) handleTarball(w http.ResponseWriter, _ *http.Request) {
 		h.sendError(w, 500, "failed to read tarball")
 		return
 	}
-
-	_ = buf // not used, we use tmpFile approach
 
 	filename := fmt.Sprintf("inspectah-refined-%d.tar.gz", time.Now().Unix())
 	h.addCacheHeaders(w)
@@ -371,14 +475,36 @@ func (h *refineHandler) handleRender(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.sendJSON(w, 200, result)
+	// Update revision and render_id on successful render
+	h.mu.Lock()
+	h.revision++
+	h.renderID = generateRenderID()
+	rev := h.revision
+	rid := h.renderID
+	h.mu.Unlock()
+
+	h.sendJSON(w, 200, map[string]interface{}{
+		"html":            result.HTML,
+		"snapshot":        result.Snapshot,
+		"containerfile":   result.Containerfile,
+		"triage_manifest": result.TriageManifest,
+		"render_id":       rid,
+		"revision":        rev,
+	})
 }
 
 func (h *refineHandler) handleOptions(w http.ResponseWriter, _ *http.Request) {
 	h.addCacheHeaders(w)
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.WriteHeader(200)
+}
+
+// generateRenderID produces a short random hex string for render_id binding.
+func generateRenderID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
 }
 
 func (h *refineHandler) handleStatic(w http.ResponseWriter, r *http.Request) {
