@@ -809,6 +809,16 @@ var App = {
   tierExpanded: {}     // sectionId-tier -> boolean
 };
 
+// ── Decided-state helper ──
+// Returns true if an item has been decided — either because the user acted
+// on it in this session (App.decisions) OR because the snapshot's include
+// value differs from the default (handles reload/session resume).
+function isItemDecided(item) {
+  if (App.decisions[item.key]) return true;
+  // Items with include=false were explicitly excluded (possibly in a prior session)
+  return getSnapshotInclude(item.key) === false;
+}
+
 // ── Change counter ──
 var changeCount = 0;
 
@@ -1114,7 +1124,7 @@ function updateBadge(sectionId) {
   var undecided3 = 0;
   var undecided2 = 0;
   for (var i = 0; i < items.length; i++) {
-    if (App.decisions[items[i].key]) continue;  // user has acted on this item
+    if (isItemDecided(items[i])) continue;  // user has acted on this item
     if (items[i].tier === 3) undecided3++;
     else if (items[i].tier === 2) undecided2++;
   }
@@ -2029,7 +2039,7 @@ function renderTriageSection(sectionId) {
 
     for (var ii = 0; ii < tierItems.length; ii++) {
       var item = tierItems[ii];
-      if (App.decisions[item.key]) {  // user has acted on this item
+      if (isItemDecided(item)) {  // user has acted on this item
         if (tier === 1 && getSnapshotInclude(item.key) === false) {
           overrides.push(item);
         } else {
@@ -2145,7 +2155,7 @@ function renderTriageSection(sectionId) {
 
   var decidedCount = 0;
   for (var fc = 0; fc < items.length; fc++) {
-    if (App.decisions[items[fc].key]) decidedCount++;
+    if (isItemDecided(items[fc])) decidedCount++;
   }
 
   var statsSpan = document.createElement('span');
@@ -2223,10 +2233,6 @@ function applyRebuildResponse(data) {
       App.reviewStates[section.id] = 'reviewed';
     }
   });
-
-  // Clear decisions — rebuild applied canonical state
-  App.decisions = {};
-  App.priorValues = {};
 
   renderAllSections();
   renderContainerfilePreview();
