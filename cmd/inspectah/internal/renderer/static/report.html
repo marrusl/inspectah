@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>inspectah Report</title>
+  <style>{{.PatternFlyCSS}}</style>
+  <style>
+    /* SPA-specific overrides for PatternFly */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .pf-v6-c-page {
+      display: flex;
+      min-height: calc(100vh - 64px);
+    }
+
+    .pf-v6-c-page__sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      border-right: 1px solid var(--pf-t--global--border--color--default, #444);
+      overflow-y: auto;
+    }
+
+    .pf-v6-c-page__main {
+      flex: 1;
+      min-width: 0;
+      padding: 1.5rem 2rem;
+      overflow-y: auto;
+    }
+
+    .preview-panel {
+      width: 360px;
+      flex-shrink: 0;
+      border-left: 1px solid var(--pf-t--global--border--color--default, #444);
+      overflow-y: auto;
+      padding: 1rem;
+    }
+
+    .preview-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 0.75rem;
+    }
+
+    .preview-header h2 {
+      font-size: 1rem;
+      margin: 0;
+    }
+
+    #containerfile-preview code {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    #containerfile-preview {
+      margin: 0;
+      padding: 0.75rem;
+      border-radius: 4px;
+    }
+
+    .pf-v6-c-masthead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1.5rem;
+    }
+
+    .pf-v6-c-masthead__main h1 {
+      font-size: 1.25rem;
+      margin: 0;
+    }
+
+    .pf-v6-c-masthead__content {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .pf-v6-c-nav__link {
+      display: flex;
+      align-items: center;
+      padding: 0.5rem 1rem;
+      text-decoration: none;
+      color: inherit;
+      border-radius: 4px;
+      gap: 0.5rem;
+    }
+
+    .pf-v6-c-nav__link:hover {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
+    }
+
+    .pf-v6-c-nav__item {
+      list-style: none;
+    }
+
+    .pf-v6-c-nav__list {
+      padding: 0.5rem 0;
+      margin: 0;
+    }
+
+    .review-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+      background: var(--pf-t--global--border--color--default, #666);
+    }
+
+    .autosave-status {
+      font-size: 0.8rem;
+      opacity: 0.7;
+    }
+
+    #changes-badge {
+      font-size: 0.75rem;
+      padding: 0.125rem 0.5rem;
+      border-radius: 12px;
+      background: var(--pf-t--global--color--status--info--default, #2b9af3);
+      color: #fff;
+    }
+  </style>
+</head>
+<body class="pf-v6-theme-dark">
+
+<!-- Skip link for accessibility -->
+<a class="pf-v6-c-skip-to-content__link" href="#main-content">Skip to content</a>
+
+<!-- Top toolbar -->
+<header class="pf-v6-c-masthead" role="banner">
+  <div class="pf-v6-c-masthead__main">
+    <h1>inspectah Report</h1>
+  </div>
+  <div class="pf-v6-c-masthead__content">
+    <button class="pf-v6-c-button pf-m-plain" type="button" aria-label="Toggle theme" onclick="toggleTheme()">&#x263E;</button>
+    <span class="autosave-status" id="autosave-status"></span>
+    <span id="autosave-live" class="sr-only" aria-live="polite"></span>
+  </div>
+</header>
+
+<div class="pf-v6-c-page">
+  <!-- Sidebar navigation -->
+  <aside class="pf-v6-c-page__sidebar" role="navigation" aria-label="Section navigation">
+    <nav class="pf-v6-c-nav" id="section-nav">
+      <!-- Section links built by renderSidebar() -->
+    </nav>
+  </aside>
+
+  <!-- Main content -->
+  <main class="pf-v6-c-page__main" id="main-content" role="main">
+    <!-- Sections rendered here by JS (Phase 4) -->
+  </main>
+
+  <!-- Containerfile preview panel (right sidebar in wide view) -->
+  <aside class="preview-panel" aria-label="Containerfile preview">
+    <div class="preview-header">
+      <h2>Containerfile Preview</h2>
+      <span id="changes-badge" style="display:none">0 changes pending</span>
+    </div>
+    <pre id="containerfile-preview"><code></code></pre>
+  </aside>
+</div>
+
+<script>{{.CodeMirrorJS}}</script>
+<script>
+const SNAPSHOT = {{.SnapshotJSON}};
+const INITIAL_CONTAINERFILE = {{.Containerfile}};
+const TRIAGE_MANIFEST = {{.TriageManifest}};
+
+// App state
+var App = {
+  snapshot: SNAPSHOT,
+  containerfile: typeof INITIAL_CONTAINERFILE === 'string' ? INITIAL_CONTAINERFILE : '',
+  triageManifest: TRIAGE_MANIFEST || [],
+  mode: 'static',
+  reviewStates: {},
+  prevInventories: {}
+};
+
+// Migration sections for the sidebar
+var MIGRATION_SECTIONS = [
+  {id: 'overview',   label: 'Overview'},
+  {id: 'packages',   label: 'Packages'},
+  {id: 'config',     label: 'Configuration'},
+  {id: 'runtime',    label: 'Runtime'},
+  {id: 'containers', label: 'Containers'},
+  {id: 'identity',   label: 'Identity'},
+  {id: 'system',     label: 'System'},
+  {id: 'secrets',    label: 'Secrets'}
+];
+
+// ── Boot sequence ──
+function boot() {
+  renderSidebar();
+  renderContainerfilePreview();
+  // Phase 4 adds: renderAllSections()
+  // Phase 5 adds: mode detection, autosave init
+}
+
+function renderSidebar() {
+  var nav = document.getElementById('section-nav');
+  if (!nav) return;
+
+  var list = document.createElement('ul');
+  list.className = 'pf-v6-c-nav__list';
+  list.setAttribute('role', 'list');
+
+  MIGRATION_SECTIONS.forEach(function(section) {
+    var li = document.createElement('li');
+    li.className = 'pf-v6-c-nav__item';
+
+    var a = document.createElement('a');
+    a.className = 'pf-v6-c-nav__link';
+    a.href = '#section-' + section.id;
+    a.setAttribute('data-section', section.id);
+
+    var dot = document.createElement('span');
+    dot.className = 'review-dot';
+    dot.setAttribute('aria-hidden', 'true');
+
+    var text = document.createTextNode(section.label);
+
+    a.appendChild(dot);
+    a.appendChild(text);
+    li.appendChild(a);
+    list.appendChild(li);
+  });
+
+  nav.appendChild(list);
+
+  // Keyboard navigation: ArrowDown/ArrowUp within the nav list
+  list.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    var links = list.querySelectorAll('.pf-v6-c-nav__link');
+    var current = Array.prototype.indexOf.call(links, document.activeElement);
+    if (current === -1) return;
+    e.preventDefault();
+    if (e.key === 'ArrowDown' && current < links.length - 1) {
+      links[current + 1].focus();
+    } else if (e.key === 'ArrowUp' && current > 0) {
+      links[current - 1].focus();
+    }
+  });
+}
+
+function renderContainerfilePreview() {
+  var el = document.getElementById('containerfile-preview');
+  if (el) {
+    el.querySelector('code').textContent = App.containerfile;
+  }
+}
+
+// ── Theme toggle ──
+function toggleTheme() {
+  document.body.classList.toggle('pf-v6-theme-dark');
+  document.body.classList.toggle('pf-v6-theme-light');
+  localStorage.setItem('inspectah-theme',
+    document.body.classList.contains('pf-v6-theme-dark') ? 'dark' : 'light');
+}
+
+// Restore saved theme
+(function() {
+  var saved = localStorage.getItem('inspectah-theme');
+  if (saved === 'light') {
+    document.body.classList.remove('pf-v6-theme-dark');
+    document.body.classList.add('pf-v6-theme-light');
+  }
+})();
+
+document.addEventListener('DOMContentLoaded', boot);
+</script>
+</body>
+</html>
