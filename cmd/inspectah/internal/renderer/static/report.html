@@ -492,6 +492,137 @@
     .copy-btn:hover {
       background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
     }
+
+    /* Editor panel */
+    .editor-panel {
+      display: none;
+      border-top: 1px solid var(--pf-t--global--border--color--default, #444);
+      margin-top: 1.5rem;
+      padding-top: 1rem;
+    }
+
+    .editor-panel.active {
+      display: block;
+    }
+
+    .editor-panel h3 {
+      font-size: 1rem;
+      margin: 0 0 0.75rem 0;
+    }
+
+    .editor-layout {
+      display: flex;
+      gap: 1rem;
+      min-height: 300px;
+    }
+
+    .file-browser {
+      width: 220px;
+      flex-shrink: 0;
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      border-radius: 4px;
+      overflow-y: auto;
+      max-height: 400px;
+    }
+
+    .file-browser-group {
+      padding: 0.375rem 0;
+    }
+
+    .file-browser-group-label {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.25rem 0.75rem;
+      opacity: 0.5;
+      font-weight: 600;
+    }
+
+    .file-browser-item {
+      padding: 0.375rem 0.75rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      outline-offset: -2px;
+    }
+
+    .file-browser-item:hover,
+    .file-browser-item:focus {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
+    }
+
+    .file-browser-item.selected {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.1));
+      font-weight: 600;
+    }
+
+    .editor-area {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .editor-area .CodeMirror {
+      height: 400px;
+      font-size: 0.85rem;
+    }
+
+    .editor-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 300px;
+      opacity: 0.5;
+      font-style: italic;
+    }
+
+    /* Rebuild bar */
+    .rebuild-bar {
+      display: none;
+      padding: 0.75rem 1rem;
+      border-top: 1px solid var(--pf-t--global--border--color--default, #444);
+      background: var(--pf-t--global--background--color--secondary-default, rgba(0,0,0,0.15));
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .rebuild-bar.active {
+      display: flex;
+    }
+
+    .rebuild-btn {
+      font-size: 0.85rem;
+      padding: 0.375rem 1rem;
+      border-radius: 4px;
+      cursor: pointer;
+      background: #4493f8;
+      color: #fff;
+      border: 1px solid #4493f8;
+      font-weight: 600;
+    }
+
+    .rebuild-btn:hover {
+      background: #3a7fd4;
+    }
+
+    .rebuild-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .rebuild-status {
+      font-size: 0.8rem;
+      opacity: 0.8;
+    }
+
+    .rebuild-status:focus {
+      outline: 2px solid #4493f8;
+      outline-offset: 2px;
+    }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -511,6 +642,12 @@
   </div>
 </header>
 
+<!-- Rebuild bar (shown in refine mode) -->
+<div class="rebuild-bar" id="rebuild-bar" role="region" aria-label="Rebuild controls">
+  <button class="rebuild-btn" id="rebuild-btn" type="button" onclick="triggerRebuild()" aria-label="Rebuild Containerfile from current decisions">Rebuild</button>
+  <span class="rebuild-status" id="rebuild-status" tabindex="-1" role="status"></span>
+</div>
+
 <div class="pf-v6-c-page">
   <!-- Sidebar navigation -->
   <aside class="pf-v6-c-page__sidebar" role="navigation" aria-label="Section navigation">
@@ -528,6 +665,19 @@
   <!-- Main content -->
   <main class="pf-v6-c-page__main" id="main-content" role="main">
     <!-- Sections rendered here by JS -->
+
+    <!-- Editor panel (shown in refine mode) -->
+    <div class="editor-panel" id="editor-panel" role="region" aria-label="File editor">
+      <h3>Edit Files</h3>
+      <div class="editor-layout">
+        <div class="file-browser" id="file-browser" role="listbox" aria-label="File list">
+          <!-- File browser items populated by renderEditorFileBrowser() -->
+        </div>
+        <div class="editor-area" id="editor-area">
+          <div class="editor-empty" id="editor-empty">Select a file to edit</div>
+        </div>
+      </div>
+    </div>
   </main>
 
   <!-- Containerfile preview panel (right sidebar in wide view) -->
@@ -682,6 +832,11 @@ function enableStaticMode() {
 
 function enableRefineMode() {
   App.mode = 'refine';
+
+  // Show rebuild bar
+  var rebuildBar = document.getElementById('rebuild-bar');
+  if (rebuildBar) rebuildBar.classList.add('active');
+
   // Fetch the live snapshot from the server
   try {
     var xhr = new XMLHttpRequest();
@@ -697,15 +852,20 @@ function enableRefineMode() {
             App.triageManifest = data.triage_manifest;
           }
           renderAllSections();
+          initEditor();
         } catch (e) {
           // keep embedded data
+          initEditor();
         }
+      } else {
+        initEditor();
       }
     };
-    xhr.onerror = function() {};
+    xhr.onerror = function() { initEditor(); };
     xhr.send();
   } catch (e) {
     // keep embedded data
+    initEditor();
   }
 }
 
@@ -1755,6 +1915,358 @@ function applyRebuildResponse(data) {
   renderAllSections();
   renderContainerfilePreview();
   resetChangeCounter();
+}
+
+// ── Editor (Task 5.1) ──
+var editorInstance = null;
+var currentEditorFile = null;
+var autosaveTimer = null;
+var autosaveHadFailure = false;
+
+function collectEditorFiles() {
+  var files = [];
+  var snap = App.snapshot;
+
+  // Config files
+  if (snap.config && snap.config.files) {
+    for (var i = 0; i < snap.config.files.length; i++) {
+      files.push({
+        path: snap.config.files[i].path,
+        family: 'config',
+        ref: snap.config.files[i]
+      });
+    }
+  }
+
+  // Systemd drop-in files
+  if (snap.services && snap.services.drop_ins) {
+    for (var j = 0; j < snap.services.drop_ins.length; j++) {
+      files.push({
+        path: snap.services.drop_ins[j].path,
+        family: 'drop-in',
+        ref: snap.services.drop_ins[j]
+      });
+    }
+  }
+
+  // Quadlet files
+  if (snap.containers && snap.containers.quadlet_units) {
+    for (var k = 0; k < snap.containers.quadlet_units.length; k++) {
+      var q = snap.containers.quadlet_units[k];
+      files.push({
+        path: q.path || q.name,
+        family: 'quadlet',
+        ref: q
+      });
+    }
+  }
+
+  return files;
+}
+
+function renderEditorFileBrowser(files, container) {
+  container.innerHTML = '';
+
+  // Group by family
+  var groups = {config: [], 'drop-in': [], quadlet: []};
+  for (var i = 0; i < files.length; i++) {
+    if (groups[files[i].family]) {
+      groups[files[i].family].push(files[i]);
+    }
+  }
+
+  var groupLabels = {config: 'Config Files', 'drop-in': 'Drop-in Files', quadlet: 'Quadlet Files'};
+  var families = ['config', 'drop-in', 'quadlet'];
+  var allItems = [];
+
+  for (var gi = 0; gi < families.length; gi++) {
+    var fam = families[gi];
+    if (groups[fam].length === 0) continue;
+
+    var groupDiv = document.createElement('div');
+    groupDiv.className = 'file-browser-group';
+
+    var groupLabel = document.createElement('div');
+    groupLabel.className = 'file-browser-group-label';
+    groupLabel.textContent = groupLabels[fam];
+    groupDiv.appendChild(groupLabel);
+
+    for (var fi = 0; fi < groups[fam].length; fi++) {
+      var f = groups[fam][fi];
+      var item = document.createElement('div');
+      item.className = 'file-browser-item';
+      item.setAttribute('role', 'option');
+      item.setAttribute('tabindex', allItems.length === 0 ? '0' : '-1');
+      item.textContent = f.path;
+      item.setAttribute('data-file-path', f.path);
+      item.onclick = (function(file) {
+        return function() { openFileInEditor(file); };
+      })(f);
+      allItems.push(item);
+      groupDiv.appendChild(item);
+    }
+
+    container.appendChild(groupDiv);
+  }
+
+  // Roving tabindex keyboard navigation
+  container.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
+    var items = Array.prototype.slice.call(container.querySelectorAll('.file-browser-item'));
+    var idx = items.indexOf(document.activeElement);
+    if (idx === -1) return;
+
+    if (e.key === 'ArrowDown' && idx < items.length - 1) {
+      e.preventDefault();
+      items[idx].setAttribute('tabindex', '-1');
+      items[idx + 1].setAttribute('tabindex', '0');
+      items[idx + 1].focus();
+    } else if (e.key === 'ArrowUp' && idx > 0) {
+      e.preventDefault();
+      items[idx].setAttribute('tabindex', '-1');
+      items[idx - 1].setAttribute('tabindex', '0');
+      items[idx - 1].focus();
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      items[idx].click();
+    }
+  });
+}
+
+function openFileInEditor(file) {
+  // Save current editor content back before switching
+  if (editorInstance && currentEditorFile) {
+    currentEditorFile.ref.content = editorInstance.getValue();
+  }
+
+  currentEditorFile = file;
+
+  // Update selected state in file browser
+  var items = document.querySelectorAll('#file-browser .file-browser-item');
+  for (var i = 0; i < items.length; i++) {
+    items[i].classList.remove('selected');
+    items[i].setAttribute('aria-selected', 'false');
+    if (items[i].getAttribute('data-file-path') === file.path) {
+      items[i].classList.add('selected');
+      items[i].setAttribute('aria-selected', 'true');
+    }
+  }
+
+  // Hide empty placeholder
+  var emptyEl = document.getElementById('editor-empty');
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // Create or update CodeMirror instance
+  var editorArea = document.getElementById('editor-area');
+  if (editorInstance) {
+    editorInstance.setValue(file.ref.content || '');
+    editorInstance.clearHistory();
+    editorInstance.refresh();
+  } else {
+    // Remove any existing content except the empty placeholder
+    var existing = editorArea.querySelector('.CodeMirror');
+    if (existing) existing.remove();
+
+    editorInstance = CodeMirror(editorArea, {
+      value: file.ref.content || '',
+      lineNumbers: true,
+      theme: 'default',
+      readOnly: App.mode === 'static'
+    });
+
+    editorInstance.on('change', function() {
+      if (currentEditorFile) {
+        currentEditorFile.ref.content = editorInstance.getValue();
+        incrementChangeCounter();
+        scheduleAutosave();
+      }
+    });
+  }
+}
+
+function initEditor() {
+  var panel = document.getElementById('editor-panel');
+  var browser = document.getElementById('file-browser');
+  if (!panel || !browser) return;
+
+  var files = collectEditorFiles();
+  if (files.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.classList.add('active');
+  renderEditorFileBrowser(files, browser);
+}
+
+// ── Autosave (Task 5.2) ──
+function setAutosaveStatus(status, isRecovery) {
+  var el = document.getElementById('autosave-status');
+  var liveRegion = document.getElementById('autosave-live');
+  if (!el) return;
+
+  switch (status) {
+    case 'saving':
+      el.textContent = 'Saving...';
+      // Visual only — NOT announced via aria-live
+      break;
+    case 'saved':
+      el.textContent = 'Saved ' + new Date().toLocaleTimeString();
+      // Only announce recovery from failure
+      if (isRecovery && liveRegion) {
+        liveRegion.textContent = 'Saved';
+      }
+      break;
+    case 'failed':
+      el.textContent = 'Save failed — retrying';
+      if (liveRegion) {
+        liveRegion.textContent = 'Save failed';
+      }
+      break;
+  }
+}
+
+function scheduleAutosave() {
+  if (App.mode !== 'refine') return;
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(function() {
+    autosaveTimer = null;
+    performAutosave();
+  }, 500);
+}
+
+function performAutosave() {
+  if (App.mode !== 'refine') return;
+
+  // Save current editor content back to snapshot
+  if (editorInstance && currentEditorFile) {
+    currentEditorFile.ref.content = editorInstance.getValue();
+  }
+
+  setAutosaveStatus('saving');
+
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open('PUT', '/api/snapshot', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          App.revision = data.revision || App.revision;
+        } catch (e) {}
+        var wasFailure = autosaveHadFailure;
+        autosaveHadFailure = false;
+        setAutosaveStatus('saved', wasFailure);
+      } else if (xhr.status === 409) {
+        // Stale revision — silent discard per spec
+        // No UI change, no announcement
+      } else {
+        autosaveHadFailure = true;
+        setAutosaveStatus('failed');
+        // Retry after 2 seconds
+        setTimeout(performAutosave, 2000);
+      }
+    };
+    xhr.onerror = function() {
+      autosaveHadFailure = true;
+      setAutosaveStatus('failed');
+      setTimeout(performAutosave, 2000);
+    };
+    xhr.send(JSON.stringify({
+      snapshot: App.snapshot,
+      revision: App.revision
+    }));
+  } catch (e) {
+    autosaveHadFailure = true;
+    setAutosaveStatus('failed');
+    setTimeout(performAutosave, 2000);
+  }
+}
+
+function cancelPendingAutosave() {
+  if (autosaveTimer) {
+    clearTimeout(autosaveTimer);
+    autosaveTimer = null;
+  }
+}
+
+// ── Rebuild + Download (Task 5.3) ──
+function triggerRebuild() {
+  if (App.mode !== 'refine') return;
+
+  var btn = document.getElementById('rebuild-btn');
+  var statusEl = document.getElementById('rebuild-status');
+  if (!btn || !statusEl) return;
+
+  // Cancel pending autosave before rebuild
+  cancelPendingAutosave();
+
+  // Save current editor content back to snapshot
+  if (editorInstance && currentEditorFile) {
+    currentEditorFile.ref.content = editorInstance.getValue();
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Rebuilding...';
+  statusEl.textContent = '';
+
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/render', true);
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    xhr.onload = function() {
+      btn.disabled = false;
+      btn.textContent = 'Rebuild';
+
+      if (xhr.status === 200) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          applyRebuildResponse(data);
+          statusEl.textContent = 'Rebuild complete — downloading...';
+          statusEl.setAttribute('tabindex', '-1');
+          statusEl.focus();
+
+          // Trigger tarball download
+          if (data.render_id) {
+            downloadTarball(data.render_id);
+          }
+        } catch (e) {
+          statusEl.textContent = 'Rebuild failed: invalid response';
+          btn.focus();
+        }
+      } else {
+        statusEl.textContent = 'Rebuild failed: ' + (xhr.statusText || 'server error');
+        btn.focus();
+      }
+    };
+    xhr.onerror = function() {
+      btn.disabled = false;
+      btn.textContent = 'Rebuild';
+      statusEl.textContent = 'Rebuild failed: network error';
+      btn.focus();
+    };
+    xhr.send(JSON.stringify({
+      snapshot: App.snapshot,
+      revision: App.revision,
+      decisions: App.decisions
+    }));
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = 'Rebuild';
+    statusEl.textContent = 'Rebuild failed: ' + e.message;
+    btn.focus();
+  }
+}
+
+function downloadTarball(renderId) {
+  var a = document.createElement('a');
+  a.href = '/api/tarball?render_id=' + encodeURIComponent(renderId);
+  a.download = '';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 // ── Theme toggle ──
