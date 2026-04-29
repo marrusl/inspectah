@@ -2081,3 +2081,251 @@ Add a new subsection under "Guided Triage Interaction Model":
 > - Groups — renderer generates user accounts only, not group-specific output
 >
 > These surfaces are scoped for full renderer integration in a follow-up.
+
+---
+
+## Appendix: Recovered Revision 2 Task Details (Phases 4-6)
+
+> **History:** The plan was iteratively revised across 7 review rounds. Revisions 1-5 existed only in the planning session's conversation context and were never committed to git. The detailed task breakdowns below were recovered from session transcript `edcde213`. Tasks superseded by later revisions are annotated.
+
+### Phase 4: SPA Rendering + Decision Flow
+
+> **Revision 7 changes:** Task 4.2 (JS classification) was eliminated — classification moved to Go (`triage.go`) in Phase 3. The SPA consumes `TRIAGE_MANIFEST` from the Go-produced manifest. Task 4.5 (live Containerfile preview) was replaced by the badge preview pattern — no client-side `generatePreviewContainerfile()`. The current Phase 4 section (above) describes the manifest-driven approach and badge preview. These recovered tasks should be read alongside the revision 7 Phase 4 notes.
+
+#### Task 4.1: Mode detection, boot sequence, and SPA router
+
+Replace the placeholder functions in report.html with full implementations:
+
+- `detectMode()` — file:// short-circuit, /api/health check with re_render gate
+- `enableStaticMode()` — show banner, disable controls with `aria-disabled`, add callouts with `aria-describedby`
+- `enableRefineMode()` — fetch GET /api/snapshot, set revision, render all sections, start autosave
+- `navigateTo(section)` — SPA routing with `aria-current="page"`, focus moves to section heading
+- `updateProgressBar()`, `updateSidebarDot()`, `updateBadge()`, `updateAllBadges()`
+
+#### ~~Task 4.2: Tier classification engine~~ (SUPERSEDED — now in Phase 3 Go triage engine)
+
+~~Implement `classifySection()` and per-section classifiers using correct field names from the schema contract table.~~
+
+> **Revision 3+ change:** Classification is now single-sourced in Go (`triage.go`). The SPA reads `TRIAGE_MANIFEST` — it never computes tiers itself. This task is fully handled by Phase 3, Task 3.3.
+
+#### Task 4.3: Triage card component + decision handling
+
+- `buildTriageCard()` — tier-specific card with correct button language (Secrets inverted: "Exclude from image" primary, "Keep in image (acknowledged)" secondary). Display-only types use "Acknowledge / Skip" (revision 5+).
+- `buildDecidedCard()` — collapsed single-line with tier-specific labels. Display-only resting labels: "Acknowledged / Skipped" (revision 6+).
+- `makeDecision()` — updates `App.snapshot` include flags, calls `updateSnapshotInclude()` for ALL item types, increments change counter, re-renders section, triggers autosave
+- `undoDecision()` — removes decision, reverts review state if reviewed, decrements change counter
+- `updateSnapshotInclude()` — handles ALL types using the `key` prefix to dispatch: `pkg-`, `ms-`, `cfg-`, `svc-`, `dropin-`, `cron-`, `timer-`, `atjob-`, `quadlet-`, `container-`, `nonrpm-`, `user-`, `group-`, `sebool-`, `seport-`, `sysctl-`, `kmod-`, `conn-`, `fw-`, `fstab-`. For `*bool` types, sets `item.include = true/false`. For `map[string]interface{}` types (users, groups, boolean_overrides), sets `item["include"] = true/false`.
+
+#### Task 4.4: Section renderers
+
+Shared `renderTriageSection(sectionName)` function used by all 7 migration-area renderers. Includes:
+- Tier group rendering (3→2→1 order)
+- Tier-1 collapsed by default with override visibility
+- Section footer with stats and "Mark section reviewed" button
+- Auto-complete for zero-item sections (stores empty inventory string for rebuild comparison — Fern fix)
+
+#### ~~Task 4.5: Client-side Containerfile preview generation~~ (SUPERSEDED — badge preview)
+
+> **Revision 3+ change:** Live Containerfile preview was replaced by the badge preview pattern. The Containerfile preview panel shows the last server-rendered version. A change counter badge ("N changes pending — rebuild to update preview") updates on every decision. The Containerfile text only refreshes after a server rebuild in Phase 5. No `generatePreviewContainerfile()` function.
+
+<details>
+<summary>Original revision 2 code (for reference only — do not implement)</summary>
+
+```javascript
+function generatePreviewContainerfile() {
+  const snap = App.snapshot;
+  const lines = [];
+  const baseImage = (snap.rpm && snap.rpm.base_image) || 'ubi9';
+  lines.push('FROM ' + baseImage);
+  lines.push('');
+
+  // Packages section
+  const includedPkgs = (snap.rpm ? snap.rpm.packages_added || [] : [])
+    .filter(p => p.include !== false)
+    .map(p => p.name);
+  if (includedPkgs.length > 0) {
+    lines.push('# Packages');
+    for (let i = 0; i < includedPkgs.length; i += 5) {
+      const chunk = includedPkgs.slice(i, i + 5);
+      const cont = i + 5 < includedPkgs.length ? ' \\' : '';
+      if (i === 0) {
+        lines.push('RUN dnf install -y ' + chunk.join(' ') + cont);
+      } else {
+        lines.push('    ' + chunk.join(' ') + cont);
+      }
+    }
+    lines.push('');
+  }
+
+  // Config files
+  const includedCfg = (snap.config ? snap.config.files || [] : [])
+    .filter(f => f.include !== false);
+  if (includedCfg.length > 0) {
+    lines.push('# Configuration');
+    includedCfg.forEach(f => {
+      lines.push('COPY ' + f.path + ' ' + f.path);
+    });
+    lines.push('');
+  }
+
+  // Services
+  const enabledSvcs = (snap.services ? snap.services.state_changes || [] : [])
+    .filter(s => s.include !== false && s.action === 'enable');
+  if (enabledSvcs.length > 0) {
+    lines.push('# Services');
+    lines.push('RUN systemctl enable ' + enabledSvcs.map(s => s.unit).join(' '));
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+```
+
+</details>
+
+#### Task 4.6: Review state machine + theme toggle
+
+- Review state transitions: all 6 events from the spec table
+- Zero-item sections auto-complete AND store empty inventory (Fern fix)
+- `toggleTheme()` — toggles `pf-v6-theme-dark` class, persists to localStorage
+- Theme restoration on page load
+
+#### Task 4.7: Overview section renderer
+
+Stats table from snapshot data, warnings list.
+
+- [ ] **Browser checkpoint: verify static mode renders, refine mode enables, decisions update badge counter**
+
+### Phase 5: Editor + Autosave + Rebuild
+
+#### Task 5.1: Editor section
+
+CodeMirror integration covering ALL approved file families (Kit finding):
+- `App.snapshot.config.files` — config files
+- `App.snapshot.services.drop_ins` — systemd drop-in files
+- `App.snapshot.containers.quadlet_units` — quadlet files
+
+File browser uses roving tabindex with ArrowUp/Down for keyboard navigation (Fern finding):
+
+```javascript
+function renderEditorFileBrowser(files, container) {
+  container.innerHTML = '';
+  files.forEach((f, i) => {
+    const item = document.createElement('div');
+    item.className = 'file-browser-item';
+    item.setAttribute('role', 'option');
+    item.setAttribute('tabindex', i === 0 ? '0' : '-1');
+    item.textContent = f.path;
+    item.onclick = () => openFileInEditor(f);
+    item.onkeydown = (e) => {
+      const items = Array.from(container.querySelectorAll('.file-browser-item'));
+      const idx = items.indexOf(item);
+      if (e.key === 'ArrowDown' && idx < items.length - 1) {
+        e.preventDefault(); items[idx + 1].focus(); items[idx + 1].setAttribute('tabindex', '0'); item.setAttribute('tabindex', '-1');
+      } else if (e.key === 'ArrowUp' && idx > 0) {
+        e.preventDefault(); items[idx - 1].focus(); items[idx - 1].setAttribute('tabindex', '0'); item.setAttribute('tabindex', '-1');
+      } else if (e.key === 'Enter') {
+        e.preventDefault(); item.click();
+      }
+    };
+    container.appendChild(item);
+  });
+}
+```
+
+#### Task 5.2: Autosave manager
+
+- Debounced PUT /api/snapshot (500ms)
+- Revision counter management
+- Autosave status indicator — **only announce failures and recovery** (Fern finding):
+  - "Saving..." shown visually but NOT announced via aria-live
+  - "Saved 3s ago" shown visually but NOT announced
+  - "Save failed — retrying" announced via aria-live (it IS a failure)
+  - After recovery from failure: "Saved" announced once
+- Silent 409 discard — no UI change, no announcement
+
+```javascript
+function setAutosaveStatus(status, isRecovery) {
+  const el = document.getElementById('autosave-status');
+  const liveRegion = document.getElementById('autosave-live');
+
+  switch (status) {
+    case 'saving':
+      el.textContent = 'Saving...';
+      break;
+    case 'saved':
+      el.textContent = 'Saved ' + new Date().toLocaleTimeString();
+      if (isRecovery) {
+        liveRegion.textContent = 'Saved';
+      }
+      break;
+    case 'failed':
+      el.textContent = 'Save failed — retrying';
+      liveRegion.textContent = 'Save failed';
+      break;
+  }
+}
+```
+
+#### Task 5.3: Rebuild + download flow
+
+- Cancel pending autosave before POST /api/render
+- Apply canonical response: replace `App.snapshot` and `App.containerfile`
+- **Revision 7 addition:** Replace `App.triageManifest` with `data.triage_manifest` from rebuild response, re-render all sections from fresh manifest, reset change counter
+- Inventory-aware review state check (sections with changed items reopen to in-progress)
+- Success focus → rebuild status region (Fern finding), not download button
+- Failure focus → error message on button (Fern finding)
+- Trigger `GET /api/tarball?render_id=X` download
+
+```javascript
+// Success: focus status region, not button
+document.getElementById('rebuild-status').focus();
+// Failure: focus stays on button which now shows error
+btn.focus();
+```
+
+- [ ] **Browser checkpoint: editor edits, autosave persists, rebuild produces correct tarball, manifest refreshes**
+
+### Phase 6: Polish + Golden-File Tests
+
+#### Task 6.1: Accessibility audit
+
+Verify all ARIA attributes are correct. Add any missing:
+- `aria-disabled="true"` + `aria-describedby` on all static-mode controls
+- `role="option"` on editor file browser items
+- Reduced-motion: all animations disabled
+- Focus-next-undecided after card decision
+
+#### Task 6.2: Narrow viewport responsive layout
+
+- Sidebar overlay fully works (< 1200px)
+- Preview panel hidden; Containerfile destination becomes the only access
+- Hamburger menu with correct focus management
+
+#### Task 6.3: Golden-file tests (3 fragments)
+
+Add to `html_test.go`:
+
+1. **Sidebar fragment** — extract `<nav class="sidebar">` through `</nav>`, normalize whitespace, compare to `testdata/golden-sidebar.html`
+2. **Tier section fragment** — render with a snapshot containing items in all 3 tiers, extract the Packages section, compare to `testdata/golden-tier-section.html`
+3. **Containerfile fragment** — render with a known snapshot, extract embedded `INITIAL_CONTAINERFILE`, compare to `testdata/golden-containerfile.txt`
+
+Generate goldens with `UPDATE_GOLDEN=1 go test ./internal/renderer/ -run TestGolden`.
+
+#### Task 6.4: Final browser smoke test
+
+| Scenario | Verify |
+|----------|--------|
+| Static mode (file://) | Renders, banner shows, controls disabled, no console errors |
+| Refine mode (http://) | Renders, controls enabled, no banner |
+| Sidebar navigation | All destinations, grouped keyboard, focus moves |
+| Tier rendering | Red → Yellow → Green ordering |
+| Include/exclude + undo | Decision → badge increments → undo → badge decrements |
+| Editor change + rebuild | Edit config → rebuild → tarball has edit → manifest refreshes |
+| Mark reviewed then mutate | Review → undo decision → status reverts |
+| Rebuild inventory change | Review → edit → rebuild → section reopens if inventory changed |
+| Successful rebuild | Spinner → Done → tarball downloads. Focus on status region. |
+| Failed rebuild | Error on button → prior state preserved. Focus on error. |
+| Session resume | Download → stop → refine downloaded tarball → decisions intact |
+| Theme toggle | Dark → Light → Dark. All readable. Persists across reload. |
+| Narrow viewport | Hamburger → overlay → Escape closes → focus returns |
