@@ -103,6 +103,11 @@
       background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
     }
 
+    .pf-v6-c-nav__link[aria-current="page"] {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.08));
+      font-weight: 600;
+    }
+
     .pf-v6-c-nav__item {
       list-style: none;
     }
@@ -120,6 +125,14 @@
       background: var(--pf-t--global--border--color--default, #666);
     }
 
+    .review-dot.in-progress {
+      background: #d29922;
+    }
+
+    .review-dot.reviewed {
+      background: #3fb950;
+    }
+
     .autosave-status {
       font-size: 0.8rem;
       opacity: 0.7;
@@ -131,6 +144,353 @@
       border-radius: 12px;
       background: var(--pf-t--global--color--status--info--default, #2b9af3);
       color: #fff;
+    }
+
+    /* Progress bar */
+    .review-progress {
+      padding: 0.75rem 1rem;
+      font-size: 0.8rem;
+      opacity: 0.8;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, #444);
+    }
+
+    .review-progress-bar {
+      height: 4px;
+      background: var(--pf-t--global--border--color--default, #444);
+      border-radius: 2px;
+      margin-top: 0.375rem;
+      overflow: hidden;
+    }
+
+    .review-progress-fill {
+      height: 100%;
+      background: #3fb950;
+      border-radius: 2px;
+      transition: width 0.2s ease;
+    }
+
+    /* Triage badge counts in sidebar */
+    .triage-badge {
+      font-size: 0.65rem;
+      padding: 0.0625rem 0.375rem;
+      border-radius: 8px;
+      margin-left: auto;
+      font-weight: 600;
+    }
+
+    .triage-badge.tier-3 {
+      background: rgba(248, 81, 73, 0.2);
+      color: #f85149;
+    }
+
+    .triage-badge.tier-2 {
+      background: rgba(210, 153, 34, 0.2);
+      color: #d29922;
+    }
+
+    /* Section heading */
+    .section-heading {
+      font-size: 1.25rem;
+      margin: 0 0 1rem 0;
+      padding-bottom: 0.5rem;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, #444);
+    }
+
+    /* Tier group */
+    .tier-group {
+      margin-bottom: 1.5rem;
+    }
+
+    .tier-group-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .tier-group-header .tier-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .tier-indicator.tier-3 { background: #f85149; }
+    .tier-indicator.tier-2 { background: #d29922; }
+    .tier-indicator.tier-1 { background: #3fb950; }
+
+    .tier-group-items {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .tier-group-items.collapsed {
+      display: none;
+    }
+
+    /* Tier 1 collapsed summary */
+    .tier1-summary {
+      font-size: 0.85rem;
+      padding: 0.5rem 0.75rem;
+      border-radius: 4px;
+      background: rgba(63, 185, 80, 0.08);
+      border-left: 3px solid #3fb950;
+      color: #3fb950;
+      cursor: pointer;
+    }
+
+    /* Triage card */
+    .triage-card {
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      position: relative;
+    }
+
+    .triage-card.tier-3 {
+      border-left: 3px solid #f85149;
+    }
+
+    .triage-card.tier-2 {
+      border-left: 3px solid #d29922;
+    }
+
+    .triage-card.tier-1 {
+      border-left: 3px solid #3fb950;
+    }
+
+    .triage-card .card-name {
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 0.25rem;
+    }
+
+    .triage-card .card-meta {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-bottom: 0.25rem;
+    }
+
+    .triage-card .card-reason {
+      font-size: 0.8rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .triage-card .card-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .triage-card .card-actions button {
+      font-size: 0.8rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      border: 1px solid transparent;
+      cursor: pointer;
+    }
+
+    .btn-primary {
+      background: #4493f8;
+      color: #fff;
+      border-color: #4493f8 !important;
+    }
+
+    .btn-primary:hover {
+      background: #3a7fd4;
+    }
+
+    .btn-outline {
+      background: transparent;
+      color: inherit;
+      border-color: var(--pf-t--global--border--color--default, #666) !important;
+    }
+
+    .btn-outline:hover {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
+    }
+
+    /* Decided card (collapsed) */
+    .decided-card {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.375rem 0.75rem;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      border: 1px solid var(--pf-t--global--border--color--default, #333);
+    }
+
+    .decided-card .decided-label {
+      font-size: 0.75rem;
+      padding: 0.0625rem 0.375rem;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+
+    .decided-label.included {
+      background: rgba(63, 185, 80, 0.15);
+      color: #3fb950;
+    }
+
+    .decided-label.excluded {
+      background: rgba(139, 148, 158, 0.15);
+      color: #8b949e;
+    }
+
+    .decided-label.acknowledged {
+      background: rgba(63, 185, 80, 0.15);
+      color: #3fb950;
+    }
+
+    .decided-label.skipped {
+      background: rgba(139, 148, 158, 0.15);
+      color: #8b949e;
+    }
+
+    /* Secrets decided labels: inverted colors */
+    .decided-label.secret-kept {
+      background: rgba(248, 81, 73, 0.15);
+      color: #f85149;
+    }
+
+    .decided-label.secret-excluded {
+      background: rgba(63, 185, 80, 0.15);
+      color: #3fb950;
+    }
+
+    .decided-card .undo-link {
+      margin-left: auto;
+      font-size: 0.75rem;
+      cursor: pointer;
+      color: #4493f8;
+      background: none;
+      border: none;
+      text-decoration: underline;
+    }
+
+    /* Section footer */
+    .section-footer {
+      margin-top: 1rem;
+      padding-top: 0.75rem;
+      border-top: 1px solid var(--pf-t--global--border--color--default, #444);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.85rem;
+    }
+
+    .section-footer .section-stats {
+      opacity: 0.7;
+    }
+
+    .mark-reviewed-btn {
+      font-size: 0.8rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 4px;
+      cursor: pointer;
+      background: transparent;
+      color: inherit;
+      border: 1px solid var(--pf-t--global--border--color--default, #666);
+    }
+
+    .mark-reviewed-btn:hover {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
+    }
+
+    .mark-reviewed-btn.reviewed {
+      background: rgba(63, 185, 80, 0.12);
+      color: #3fb950;
+      border-color: #3fb950;
+    }
+
+    /* Tier 3 warning banner on card */
+    .card-warning {
+      font-size: 0.8rem;
+      padding: 0.375rem 0.5rem;
+      border-radius: 4px;
+      margin-bottom: 0.5rem;
+      background: rgba(248, 81, 73, 0.1);
+      border: 1px solid rgba(248, 81, 73, 0.3);
+      color: #f85149;
+    }
+
+    /* Overview section */
+    .overview-stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 0.75rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .stat-card {
+      padding: 0.75rem 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+    }
+
+    .stat-card .stat-value {
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+
+    .stat-card .stat-label {
+      font-size: 0.8rem;
+      opacity: 0.7;
+    }
+
+    .overview-warnings {
+      margin-top: 1rem;
+    }
+
+    .warning-item {
+      font-size: 0.85rem;
+      padding: 0.375rem 0.5rem;
+      margin-bottom: 0.375rem;
+      border-radius: 4px;
+      background: rgba(210, 153, 34, 0.1);
+      border: 1px solid rgba(210, 153, 34, 0.3);
+      color: #d29922;
+    }
+
+    /* Section container */
+    .report-section {
+      display: none;
+    }
+
+    .report-section.active {
+      display: block;
+    }
+
+    /* Static mode banner */
+    .static-banner {
+      padding: 0.5rem 1rem;
+      background: rgba(210, 153, 34, 0.1);
+      border: 1px solid rgba(210, 153, 34, 0.3);
+      border-radius: 4px;
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      color: #d29922;
+    }
+
+    /* Copy button */
+    .copy-btn {
+      font-size: 0.75rem;
+      padding: 0.125rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      background: transparent;
+      color: inherit;
+      border: 1px solid var(--pf-t--global--border--color--default, #666);
+    }
+
+    .copy-btn:hover {
+      background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
     }
   </style>
 </head>
@@ -154,6 +514,12 @@
 <div class="pf-v6-c-page">
   <!-- Sidebar navigation -->
   <aside class="pf-v6-c-page__sidebar" role="navigation" aria-label="Section navigation">
+    <div class="review-progress" id="review-progress">
+      <span id="review-progress-text">Review progress: 0 / 7</span>
+      <div class="review-progress-bar">
+        <div class="review-progress-fill" id="review-progress-fill" style="width:0%"></div>
+      </div>
+    </div>
     <nav class="pf-v6-c-nav" id="section-nav">
       <!-- Section links built by renderSidebar() -->
     </nav>
@@ -161,15 +527,16 @@
 
   <!-- Main content -->
   <main class="pf-v6-c-page__main" id="main-content" role="main">
-    <!-- Sections rendered here by JS (Phase 4) -->
+    <!-- Sections rendered here by JS -->
   </main>
 
   <!-- Containerfile preview panel (right sidebar in wide view) -->
   <aside class="preview-panel" aria-label="Containerfile preview">
     <div class="preview-header">
       <h2>Containerfile Preview</h2>
-      <span id="changes-badge" style="display:none">0 changes pending</span>
+      <button class="copy-btn" type="button" onclick="copyContainerfile()" aria-label="Copy Containerfile to clipboard">Copy</button>
     </div>
+    <div id="changes-badge" style="display:none" role="status">0 changes pending</div>
     <pre id="containerfile-preview"><code></code></pre>
   </aside>
 </div>
@@ -180,36 +547,183 @@ const SNAPSHOT = {{.SnapshotJSON}};
 const INITIAL_CONTAINERFILE = {{.Containerfile}};
 const TRIAGE_MANIFEST = {{.TriageManifest}};
 
-// App state
+// ── Display-only key prefixes ──
+// These item types use "Acknowledge / Skip" instead of "Include / Leave out"
+var DISPLAY_ONLY_PREFIXES = ['conn-', 'fstab-', 'container-', 'group-'];
+
+function isDisplayOnly(key) {
+  for (var i = 0; i < DISPLAY_ONLY_PREFIXES.length; i++) {
+    if (key.indexOf(DISPLAY_ONLY_PREFIXES[i]) === 0) return true;
+  }
+  return false;
+}
+
+// ── App state ──
 var App = {
   snapshot: SNAPSHOT,
   containerfile: typeof INITIAL_CONTAINERFILE === 'string' ? INITIAL_CONTAINERFILE : '',
   triageManifest: TRIAGE_MANIFEST || [],
   mode: 'static',
-  reviewStates: {},
-  prevInventories: {}
+  renderId: '',
+  revision: 0,
+  reviewStates: {},    // sectionId -> 'unreviewed' | 'in-progress' | 'reviewed'
+  prevInventories: {}, // sectionId -> sorted key string for rebuild comparison
+  decisions: {},       // key -> true (include) | false (exclude)
+  activeSection: 'overview',
+  tierExpanded: {}     // sectionId-tier -> boolean
 };
+
+// ── Change counter ──
+var changeCount = 0;
+
+function incrementChangeCounter() {
+  changeCount++;
+  var badge = document.getElementById('changes-badge');
+  if (badge) {
+    badge.style.display = '';
+    badge.textContent = changeCount + ' change' + (changeCount !== 1 ? 's' : '') +
+      ' pending — rebuild to update preview';
+  }
+}
+
+function decrementChangeCounter() {
+  changeCount = Math.max(0, changeCount - 1);
+  var badge = document.getElementById('changes-badge');
+  if (badge) {
+    if (changeCount === 0) {
+      badge.style.display = 'none';
+    } else {
+      badge.textContent = changeCount + ' change' + (changeCount !== 1 ? 's' : '') +
+        ' pending — rebuild to update preview';
+    }
+  }
+}
+
+function resetChangeCounter() {
+  changeCount = 0;
+  var badge = document.getElementById('changes-badge');
+  if (badge) badge.style.display = 'none';
+}
 
 // Migration sections for the sidebar
 var MIGRATION_SECTIONS = [
-  {id: 'overview',   label: 'Overview'},
-  {id: 'packages',   label: 'Packages'},
-  {id: 'config',     label: 'Configuration'},
-  {id: 'runtime',    label: 'Runtime'},
-  {id: 'containers', label: 'Containers'},
-  {id: 'identity',   label: 'Identity'},
-  {id: 'system',     label: 'System'},
-  {id: 'secrets',    label: 'Secrets'}
+  {id: 'overview',   label: 'Overview',       tracked: false},
+  {id: 'packages',   label: 'Packages',       tracked: true},
+  {id: 'config',     label: 'Configuration',  tracked: true},
+  {id: 'runtime',    label: 'Runtime',         tracked: true},
+  {id: 'containers', label: 'Containers',      tracked: true},
+  {id: 'identity',   label: 'Identity',        tracked: true},
+  {id: 'system',     label: 'System',          tracked: true},
+  {id: 'secrets',    label: 'Secrets',         tracked: true}
 ];
 
 // ── Boot sequence ──
 function boot() {
+  detectMode();
   renderSidebar();
   renderContainerfilePreview();
-  // Phase 4 adds: renderAllSections()
-  // Phase 5 adds: mode detection, autosave init
+  renderAllSections();
+  navigateTo('overview');
 }
 
+function detectMode() {
+  // file:// protocol -> static mode immediately
+  if (window.location.protocol === 'file:') {
+    enableStaticMode();
+    return;
+  }
+  // Otherwise try /api/health to see if refine server is running
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/health', true);
+    xhr.timeout = 2000;
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          if (data.re_render) {
+            enableRefineMode();
+          } else {
+            enableStaticMode();
+          }
+        } catch (e) {
+          enableStaticMode();
+        }
+      } else {
+        enableStaticMode();
+      }
+    };
+    xhr.onerror = function() { enableStaticMode(); };
+    xhr.ontimeout = function() { enableStaticMode(); };
+    xhr.send();
+  } catch (e) {
+    enableStaticMode();
+  }
+}
+
+function enableStaticMode() {
+  App.mode = 'static';
+  // Add static banner to main content
+  var main = document.getElementById('main-content');
+  if (main) {
+    var existing = document.getElementById('static-banner');
+    if (!existing) {
+      var banner = document.createElement('div');
+      banner.id = 'static-banner';
+      banner.className = 'static-banner';
+      banner.setAttribute('role', 'status');
+      banner.textContent = 'Static report — decisions are read-only. Run inspectah refine to enable interactive triage.';
+      main.insertBefore(banner, main.firstChild);
+    }
+  }
+  // Disable decision buttons
+  disableAllDecisionButtons();
+}
+
+function enableRefineMode() {
+  App.mode = 'refine';
+  // Fetch the live snapshot from the server
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/snapshot', true);
+    xhr.onload = function() {
+      if (xhr.status === 200) {
+        try {
+          var data = JSON.parse(xhr.responseText);
+          App.snapshot = data.snapshot || data;
+          App.revision = data.revision || 0;
+          App.renderId = data.render_id || '';
+          if (data.triage_manifest) {
+            App.triageManifest = data.triage_manifest;
+          }
+          renderAllSections();
+        } catch (e) {
+          // keep embedded data
+        }
+      }
+    };
+    xhr.onerror = function() {};
+    xhr.send();
+  } catch (e) {
+    // keep embedded data
+  }
+}
+
+function disableAllDecisionButtons() {
+  var buttons = document.querySelectorAll('.card-actions button, .undo-link');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].setAttribute('aria-disabled', 'true');
+    buttons[i].disabled = true;
+  }
+  // Also disable mark-reviewed buttons
+  var reviewBtns = document.querySelectorAll('.mark-reviewed-btn');
+  for (var j = 0; j < reviewBtns.length; j++) {
+    reviewBtns[j].setAttribute('aria-disabled', 'true');
+    reviewBtns[j].disabled = true;
+  }
+}
+
+// ── Sidebar ──
 function renderSidebar() {
   var nav = document.getElementById('section-nav');
   if (!nav) return;
@@ -226,15 +740,33 @@ function renderSidebar() {
     a.className = 'pf-v6-c-nav__link';
     a.href = '#section-' + section.id;
     a.setAttribute('data-section', section.id);
+    a.onclick = function(e) {
+      e.preventDefault();
+      navigateTo(section.id);
+    };
 
-    var dot = document.createElement('span');
-    dot.className = 'review-dot';
-    dot.setAttribute('aria-hidden', 'true');
+    // Only tracked sections get a review dot
+    if (section.tracked) {
+      var dot = document.createElement('span');
+      dot.className = 'review-dot';
+      dot.id = 'dot-' + section.id;
+      dot.setAttribute('aria-hidden', 'true');
+      a.appendChild(dot);
+    }
 
-    var text = document.createTextNode(section.label);
-
-    a.appendChild(dot);
+    var text = document.createElement('span');
+    text.textContent = section.label;
     a.appendChild(text);
+
+    // Badge container for tier counts
+    if (section.tracked) {
+      var badge = document.createElement('span');
+      badge.id = 'badge-' + section.id;
+      badge.className = 'triage-badge';
+      badge.style.display = 'none';
+      a.appendChild(badge);
+    }
+
     li.appendChild(a);
     list.appendChild(li);
   });
@@ -254,13 +786,975 @@ function renderSidebar() {
       links[current - 1].focus();
     }
   });
+
+  updateAllBadges();
 }
 
+// ── SPA Navigation ──
+function navigateTo(sectionId) {
+  App.activeSection = sectionId;
+
+  // Update aria-current on sidebar links
+  var links = document.querySelectorAll('.pf-v6-c-nav__link');
+  for (var i = 0; i < links.length; i++) {
+    if (links[i].getAttribute('data-section') === sectionId) {
+      links[i].setAttribute('aria-current', 'page');
+    } else {
+      links[i].removeAttribute('aria-current');
+    }
+  }
+
+  // Show/hide sections
+  var sections = document.querySelectorAll('.report-section');
+  for (var j = 0; j < sections.length; j++) {
+    if (sections[j].id === 'section-' + sectionId) {
+      sections[j].classList.add('active');
+    } else {
+      sections[j].classList.remove('active');
+    }
+  }
+
+  // Focus to section heading
+  var heading = document.getElementById('heading-' + sectionId);
+  if (heading) {
+    heading.focus();
+  }
+}
+
+// ── Progress & Badges ──
+function updateProgressBar() {
+  var reviewed = 0;
+  var total = 0;
+  MIGRATION_SECTIONS.forEach(function(s) {
+    if (!s.tracked) return;
+    total++;
+    if (App.reviewStates[s.id] === 'reviewed') reviewed++;
+  });
+
+  var text = document.getElementById('review-progress-text');
+  var fill = document.getElementById('review-progress-fill');
+  if (text) text.textContent = 'Review progress: ' + reviewed + ' / ' + total;
+  if (fill) fill.style.width = (total > 0 ? (reviewed / total * 100) : 0) + '%';
+}
+
+function updateSidebarDot(sectionId) {
+  var dot = document.getElementById('dot-' + sectionId);
+  if (!dot) return;
+  var state = App.reviewStates[sectionId] || 'unreviewed';
+  dot.className = 'review-dot';
+  if (state === 'in-progress') {
+    dot.classList.add('in-progress');
+  } else if (state === 'reviewed') {
+    dot.classList.add('reviewed');
+  }
+}
+
+function updateBadge(sectionId) {
+  var badge = document.getElementById('badge-' + sectionId);
+  if (!badge) return;
+
+  var items = getManifestItemsForSection(sectionId);
+  var undecided3 = 0;
+  var undecided2 = 0;
+  for (var i = 0; i < items.length; i++) {
+    if (App.decisions[items[i].key] !== undefined) continue;
+    if (items[i].tier === 3) undecided3++;
+    else if (items[i].tier === 2) undecided2++;
+  }
+
+  if (undecided3 > 0) {
+    badge.style.display = '';
+    badge.className = 'triage-badge tier-3';
+    badge.textContent = undecided3;
+  } else if (undecided2 > 0) {
+    badge.style.display = '';
+    badge.className = 'triage-badge tier-2';
+    badge.textContent = undecided2;
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+function updateAllBadges() {
+  MIGRATION_SECTIONS.forEach(function(s) {
+    if (s.tracked) updateBadge(s.id);
+  });
+}
+
+// ── Manifest helpers ──
+function getManifestItemsForSection(sectionId) {
+  var items = [];
+  for (var i = 0; i < App.triageManifest.length; i++) {
+    if (App.triageManifest[i].section === sectionId) {
+      items.push(App.triageManifest[i]);
+    }
+  }
+  return items;
+}
+
+function groupByTier(items) {
+  var groups = {3: [], 2: [], 1: []};
+  for (var i = 0; i < items.length; i++) {
+    var t = items[i].tier;
+    if (!groups[t]) groups[t] = [];
+    groups[t].push(items[i]);
+  }
+  return groups;
+}
+
+// ── Overview Section ──
+function renderOverview() {
+  var container = document.getElementById('section-overview');
+  if (!container) return;
+  container.innerHTML = '';
+
+  var heading = document.createElement('h2');
+  heading.className = 'section-heading';
+  heading.id = 'heading-overview';
+  heading.setAttribute('tabindex', '-1');
+  heading.textContent = 'Overview';
+  container.appendChild(heading);
+
+  // Stats grid
+  var stats = document.createElement('div');
+  stats.className = 'overview-stats';
+
+  var snap = App.snapshot;
+
+  // Count items by type
+  var pkgCount = 0;
+  if (snap.rpm && snap.rpm.packages_added) pkgCount = snap.rpm.packages_added.length;
+
+  var cfgCount = 0;
+  if (snap.config && snap.config.files) cfgCount = snap.config.files.length;
+
+  var svcCount = 0;
+  if (snap.services && snap.services.state_changes) svcCount = snap.services.state_changes.length;
+
+  var secretCount = 0;
+  if (snap.redactions) secretCount = snap.redactions.length;
+
+  var manifestTotal = App.triageManifest.length;
+  var tier3Count = 0;
+  var tier2Count = 0;
+  var tier1Count = 0;
+  for (var i = 0; i < App.triageManifest.length; i++) {
+    if (App.triageManifest[i].tier === 3) tier3Count++;
+    else if (App.triageManifest[i].tier === 2) tier2Count++;
+    else tier1Count++;
+  }
+
+  var statItems = [
+    {label: 'Total Items', value: manifestTotal},
+    {label: 'Flagged (Tier 3)', value: tier3Count},
+    {label: 'Needs Decision (Tier 2)', value: tier2Count},
+    {label: 'Auto-included (Tier 1)', value: tier1Count},
+    {label: 'Packages Added', value: pkgCount},
+    {label: 'Config Files', value: cfgCount},
+    {label: 'Service Changes', value: svcCount},
+    {label: 'Secrets Found', value: secretCount}
+  ];
+
+  for (var j = 0; j < statItems.length; j++) {
+    var card = document.createElement('div');
+    card.className = 'stat-card';
+    var val = document.createElement('div');
+    val.className = 'stat-value';
+    val.textContent = statItems[j].value;
+    var lbl = document.createElement('div');
+    lbl.className = 'stat-label';
+    lbl.textContent = statItems[j].label;
+    card.appendChild(val);
+    card.appendChild(lbl);
+    stats.appendChild(card);
+  }
+  container.appendChild(stats);
+
+  // System info
+  if (snap.os_release) {
+    var sysInfo = document.createElement('div');
+    sysInfo.style.marginBottom = '1rem';
+    sysInfo.style.fontSize = '0.85rem';
+    sysInfo.style.opacity = '0.8';
+    var osr = snap.os_release;
+    sysInfo.textContent = 'System: ' + (osr.pretty_name || osr.name || 'Unknown') +
+      ' | Type: ' + (snap.system_type || 'unknown');
+    container.appendChild(sysInfo);
+  }
+
+  // Warnings
+  if (snap.warnings && snap.warnings.length > 0) {
+    var warningsDiv = document.createElement('div');
+    warningsDiv.className = 'overview-warnings';
+    var wHead = document.createElement('h3');
+    wHead.textContent = 'Warnings (' + snap.warnings.length + ')';
+    wHead.style.fontSize = '1rem';
+    wHead.style.marginBottom = '0.5rem';
+    warningsDiv.appendChild(wHead);
+
+    for (var w = 0; w < snap.warnings.length; w++) {
+      var warn = snap.warnings[w];
+      var wItem = document.createElement('div');
+      wItem.className = 'warning-item';
+      wItem.textContent = warn.message || warn.text || JSON.stringify(warn);
+      warningsDiv.appendChild(wItem);
+    }
+    container.appendChild(warningsDiv);
+  }
+}
+
+// ── Triage Card Builder ──
+function buildTriageCard(item) {
+  var card = document.createElement('div');
+  card.className = 'triage-card tier-' + item.tier;
+  card.setAttribute('data-key', item.key);
+
+  // Tier 3 warning banner
+  if (item.tier === 3) {
+    var warning = document.createElement('div');
+    warning.className = 'card-warning';
+    warning.textContent = item.reason;
+    card.appendChild(warning);
+  }
+
+  // Name
+  var nameEl = document.createElement('div');
+  nameEl.className = 'card-name';
+  nameEl.textContent = item.name || item.key;
+  card.appendChild(nameEl);
+
+  // Meta
+  if (item.meta) {
+    var metaEl = document.createElement('div');
+    metaEl.className = 'card-meta';
+    metaEl.textContent = item.meta;
+    card.appendChild(metaEl);
+  }
+
+  // Reason (tier 2 and tier 1 show reason inline, tier 3 shows it in warning banner)
+  if (item.tier !== 3) {
+    var reasonEl = document.createElement('div');
+    reasonEl.className = 'card-reason';
+    reasonEl.textContent = item.reason;
+    card.appendChild(reasonEl);
+  }
+
+  // Action buttons
+  var actions = document.createElement('div');
+  actions.className = 'card-actions';
+
+  var displayOnly = isDisplayOnly(item.key);
+  var isSecret = item.is_secret || item.section === 'secrets';
+
+  if (isSecret) {
+    // Secrets: "Exclude from image" is primary, "Keep in image (acknowledged)" is secondary
+    var excludeBtn = document.createElement('button');
+    excludeBtn.type = 'button';
+    excludeBtn.className = 'btn-primary';
+    excludeBtn.textContent = 'Exclude from image';
+    excludeBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
+    excludeBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+    actions.appendChild(excludeBtn);
+
+    var keepBtn = document.createElement('button');
+    keepBtn.type = 'button';
+    keepBtn.className = 'btn-outline';
+    keepBtn.textContent = 'Keep in image (acknowledged)';
+    keepBtn.setAttribute('aria-label', 'Keep ' + (item.name || item.key) + ' in image');
+    keepBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+    actions.appendChild(keepBtn);
+  } else if (displayOnly) {
+    // Display-only: "Acknowledge" / "Skip"
+    var ackBtn = document.createElement('button');
+    ackBtn.type = 'button';
+    ackBtn.className = 'btn-primary';
+    ackBtn.textContent = 'Acknowledge';
+    ackBtn.setAttribute('aria-label', 'Acknowledge ' + (item.name || item.key));
+    ackBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+    actions.appendChild(ackBtn);
+
+    var skipBtn = document.createElement('button');
+    skipBtn.type = 'button';
+    skipBtn.className = 'btn-outline';
+    skipBtn.textContent = 'Skip';
+    skipBtn.setAttribute('aria-label', 'Skip ' + (item.name || item.key));
+    skipBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+    actions.appendChild(skipBtn);
+  } else if (item.tier === 3) {
+    // Non-secret tier 3: "Acknowledge & include" / "Exclude"
+    var ackIncBtn = document.createElement('button');
+    ackIncBtn.type = 'button';
+    ackIncBtn.className = 'btn-primary';
+    ackIncBtn.textContent = 'Acknowledge & include';
+    ackIncBtn.setAttribute('aria-label', 'Acknowledge and include ' + (item.name || item.key) + ' in image');
+    ackIncBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+    actions.appendChild(ackIncBtn);
+
+    var exclBtn = document.createElement('button');
+    exclBtn.type = 'button';
+    exclBtn.className = 'btn-outline';
+    exclBtn.textContent = 'Exclude';
+    exclBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
+    exclBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+    actions.appendChild(exclBtn);
+  } else {
+    // Standard tier 2 / tier 1: "Include in image" / "Leave out"
+    var inclBtn = document.createElement('button');
+    inclBtn.type = 'button';
+    inclBtn.className = 'btn-primary';
+    inclBtn.textContent = 'Include in image';
+    inclBtn.setAttribute('aria-label', 'Include ' + (item.name || item.key) + ' in image');
+    inclBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+    actions.appendChild(inclBtn);
+
+    var leaveBtn = document.createElement('button');
+    leaveBtn.type = 'button';
+    leaveBtn.className = 'btn-outline';
+    leaveBtn.textContent = 'Leave out';
+    leaveBtn.setAttribute('aria-label', 'Leave ' + (item.name || item.key) + ' out of image');
+    leaveBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+    actions.appendChild(leaveBtn);
+  }
+
+  card.appendChild(actions);
+  return card;
+}
+
+// ── Decided Card Builder ──
+function buildDecidedCard(item, included) {
+  var card = document.createElement('div');
+  card.className = 'decided-card';
+  card.setAttribute('data-key', item.key);
+
+  var nameSpan = document.createElement('span');
+  nameSpan.textContent = item.name || item.key;
+  card.appendChild(nameSpan);
+
+  var label = document.createElement('span');
+  label.className = 'decided-label';
+
+  var displayOnly = isDisplayOnly(item.key);
+  var isSecret = item.is_secret || item.section === 'secrets';
+
+  if (isSecret) {
+    if (included) {
+      label.classList.add('secret-kept');
+      label.textContent = 'kept in image (acknowledged)';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Kept in image (acknowledged)');
+    } else {
+      label.classList.add('secret-excluded');
+      label.textContent = 'excluded from image';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Excluded from image');
+    }
+  } else if (displayOnly) {
+    if (included) {
+      label.classList.add('acknowledged');
+      label.textContent = 'Acknowledged';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Acknowledged');
+    } else {
+      label.classList.add('skipped');
+      label.textContent = 'Skipped';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Skipped');
+    }
+  } else if (item.tier === 3) {
+    if (included) {
+      label.classList.add('included');
+      label.textContent = 'included (acknowledged)';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Included (acknowledged)');
+    } else {
+      label.classList.add('excluded');
+      label.textContent = 'excluded';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Excluded');
+    }
+  } else {
+    if (included) {
+      label.classList.add('included');
+      label.textContent = 'included';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Included');
+    } else {
+      label.classList.add('excluded');
+      label.textContent = 'excluded';
+      card.setAttribute('aria-label', (item.name || item.key) + ': Excluded');
+    }
+  }
+
+  card.appendChild(label);
+
+  // Undo button
+  var undo = document.createElement('button');
+  undo.type = 'button';
+  undo.className = 'undo-link';
+  undo.textContent = 'undo';
+  undo.setAttribute('aria-label', 'Undo decision for ' + (item.name || item.key));
+  undo.onclick = function() { undoDecision(item.key, item.section); };
+  card.appendChild(undo);
+
+  return card;
+}
+
+// ── Decision Logic ──
+function makeDecision(key, sectionId, include) {
+  if (App.mode === 'static') return;
+  App.decisions[key] = include;
+  updateSnapshotInclude(key, include);
+  incrementChangeCounter();
+
+  // Transition review state
+  var current = App.reviewStates[sectionId];
+  if (current === 'unreviewed' || !current) {
+    App.reviewStates[sectionId] = 'in-progress';
+    updateSidebarDot(sectionId);
+    updateProgressBar();
+  }
+
+  // Re-render the section
+  renderTriageSection(sectionId);
+  updateBadge(sectionId);
+
+  // Disable buttons if static mode (shouldn't happen, but guard)
+  if (App.mode === 'static') disableAllDecisionButtons();
+}
+
+function undoDecision(key, sectionId) {
+  if (App.mode === 'static') return;
+  delete App.decisions[key];
+  decrementChangeCounter();
+
+  // If section was reviewed, revert to in-progress
+  if (App.reviewStates[sectionId] === 'reviewed') {
+    App.reviewStates[sectionId] = 'in-progress';
+    updateSidebarDot(sectionId);
+    updateProgressBar();
+  }
+
+  // Re-render the section
+  renderTriageSection(sectionId);
+  updateBadge(sectionId);
+}
+
+// ── Update snapshot include flags ──
+function updateSnapshotInclude(key, include) {
+  var snap = App.snapshot;
+  var prefix = key.split('-')[0] + '-';
+  var suffix = key.substring(prefix.length);
+
+  if (key.indexOf('pkg-') === 0) {
+    // pkg-NAME-ARCH — find in packages_added
+    if (snap.rpm && snap.rpm.packages_added) {
+      for (var i = 0; i < snap.rpm.packages_added.length; i++) {
+        var pkg = snap.rpm.packages_added[i];
+        if (pkg.name + '-' + pkg.arch === suffix) {
+          pkg.include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('ms-') === 0) {
+    // ms-MODULE-STREAM
+    if (snap.rpm && snap.rpm.module_streams) {
+      for (var mi = 0; mi < snap.rpm.module_streams.length; mi++) {
+        var ms = snap.rpm.module_streams[mi];
+        if (ms.module_name + '-' + ms.stream === suffix) {
+          ms.include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('cfg-') === 0) {
+    // cfg-PATH
+    var path = key.substring(4);
+    if (snap.config && snap.config.files) {
+      for (var ci = 0; ci < snap.config.files.length; ci++) {
+        if (snap.config.files[ci].path === path) {
+          snap.config.files[ci].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('svc-') === 0) {
+    var unit = key.substring(4);
+    if (snap.services && snap.services.state_changes) {
+      for (var si = 0; si < snap.services.state_changes.length; si++) {
+        if (snap.services.state_changes[si].unit === unit) {
+          snap.services.state_changes[si].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('cron-') === 0) {
+    var cronPath = key.substring(5);
+    if (snap.scheduled_tasks && snap.scheduled_tasks.cron_jobs) {
+      for (var cri = 0; cri < snap.scheduled_tasks.cron_jobs.length; cri++) {
+        if (snap.scheduled_tasks.cron_jobs[cri].path === cronPath) {
+          snap.scheduled_tasks.cron_jobs[cri].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('timer-') === 0) {
+    var timerName = key.substring(6);
+    if (snap.scheduled_tasks && snap.scheduled_tasks.systemd_timers) {
+      for (var ti = 0; ti < snap.scheduled_tasks.systemd_timers.length; ti++) {
+        if (snap.scheduled_tasks.systemd_timers[ti].name === timerName) {
+          snap.scheduled_tasks.systemd_timers[ti].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('quadlet-') === 0) {
+    var qName = key.substring(8);
+    if (snap.containers && snap.containers.quadlet_units) {
+      for (var qi = 0; qi < snap.containers.quadlet_units.length; qi++) {
+        if (snap.containers.quadlet_units[qi].name === qName) {
+          snap.containers.quadlet_units[qi].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('container-') === 0) {
+    var cName = key.substring(10);
+    if (snap.containers && snap.containers.running_containers) {
+      for (var rci = 0; rci < snap.containers.running_containers.length; rci++) {
+        if (snap.containers.running_containers[rci].name === cName) {
+          snap.containers.running_containers[rci].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('nonrpm-') === 0) {
+    var nrName = key.substring(7);
+    if (snap.non_rpm_software && snap.non_rpm_software.items) {
+      for (var ni = 0; ni < snap.non_rpm_software.items.length; ni++) {
+        var nrItem = snap.non_rpm_software.items[ni];
+        var itemName = nrItem.name || nrItem.path;
+        if (itemName === nrName) {
+          nrItem.include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('user-') === 0) {
+    var uName = key.substring(5);
+    if (snap.users_groups && snap.users_groups.users) {
+      for (var ui = 0; ui < snap.users_groups.users.length; ui++) {
+        var u = snap.users_groups.users[ui];
+        if ((u.name || u.username) === uName) {
+          u.include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('group-') === 0) {
+    var gName = key.substring(6);
+    if (snap.users_groups && snap.users_groups.groups) {
+      for (var gi = 0; gi < snap.users_groups.groups.length; gi++) {
+        var g = snap.users_groups.groups[gi];
+        if ((g.name || g.groupname) === gName) {
+          g.include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('sebool-') === 0) {
+    var boolName = key.substring(7);
+    if (snap.selinux && snap.selinux.boolean_overrides) {
+      for (var bi = 0; bi < snap.selinux.boolean_overrides.length; bi++) {
+        var b = snap.selinux.boolean_overrides[bi];
+        if ((b.name || b.boolean) === boolName) {
+          b.include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('seport-') === 0) {
+    // seport-PROTO-PORT
+    var seportSuffix = key.substring(7);
+    if (snap.selinux && snap.selinux.port_labels) {
+      for (var spi = 0; spi < snap.selinux.port_labels.length; spi++) {
+        var sp = snap.selinux.port_labels[spi];
+        if (sp.protocol + '-' + sp.port === seportSuffix) {
+          sp.include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('semod-') === 0) {
+    // semod is custom_modules which is []string - no include field to set
+    // No-op for now
+  } else if (key.indexOf('sysctl-') === 0) {
+    var sysKey = key.substring(7);
+    if (snap.kernel_boot && snap.kernel_boot.sysctl_overrides) {
+      for (var ski = 0; ski < snap.kernel_boot.sysctl_overrides.length; ski++) {
+        if (snap.kernel_boot.sysctl_overrides[ski].key === sysKey) {
+          snap.kernel_boot.sysctl_overrides[ski].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('kmod-') === 0) {
+    var modName = key.substring(5);
+    if (snap.kernel_boot && snap.kernel_boot.non_default_modules) {
+      for (var ki = 0; ki < snap.kernel_boot.non_default_modules.length; ki++) {
+        if (snap.kernel_boot.non_default_modules[ki].name === modName) {
+          snap.kernel_boot.non_default_modules[ki].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('conn-') === 0) {
+    var connName = key.substring(5);
+    if (snap.network && snap.network.connections) {
+      for (var coi = 0; coi < snap.network.connections.length; coi++) {
+        if (snap.network.connections[coi].name === connName) {
+          snap.network.connections[coi].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('fw-') === 0) {
+    var fwName = key.substring(3);
+    if (snap.network && snap.network.firewall_zones) {
+      for (var fi = 0; fi < snap.network.firewall_zones.length; fi++) {
+        if (snap.network.firewall_zones[fi].name === fwName) {
+          snap.network.firewall_zones[fi].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('fstab-') === 0) {
+    var mountPoint = key.substring(6);
+    if (snap.storage && snap.storage.fstab_entries) {
+      for (var fsi = 0; fsi < snap.storage.fstab_entries.length; fsi++) {
+        if (snap.storage.fstab_entries[fsi].mount_point === mountPoint) {
+          snap.storage.fstab_entries[fsi].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('secret-') === 0) {
+    // Secrets are redaction entries — no include field on the redaction itself.
+    // The underlying config file may have an include field.
+    // For now we track the decision in App.decisions only.
+  }
+}
+
+// ── Section Renderers ──
+function renderAllSections() {
+  var main = document.getElementById('main-content');
+  if (!main) return;
+
+  // Remove existing sections but keep the static banner if present
+  var banner = document.getElementById('static-banner');
+  var children = main.querySelectorAll('.report-section');
+  for (var i = 0; i < children.length; i++) {
+    main.removeChild(children[i]);
+  }
+
+  // Create section containers
+  MIGRATION_SECTIONS.forEach(function(section) {
+    var div = document.createElement('div');
+    div.className = 'report-section';
+    div.id = 'section-' + section.id;
+    main.appendChild(div);
+  });
+
+  // Render overview
+  renderOverview();
+
+  // Render each triage section and set initial review states
+  MIGRATION_SECTIONS.forEach(function(section) {
+    if (!section.tracked) return;
+    renderTriageSection(section.id);
+  });
+
+  // Initialize review states for zero-item sections
+  MIGRATION_SECTIONS.forEach(function(section) {
+    if (!section.tracked) return;
+    var items = getManifestItemsForSection(section.id);
+    // Store inventory for rebuild comparison
+    var keys = [];
+    for (var k = 0; k < items.length; k++) {
+      keys.push(items[k].key + ':' + items[k].tier);
+    }
+    keys.sort();
+    App.prevInventories[section.id] = keys.join(',');
+
+    // Auto-complete zero-item sections
+    if (items.length === 0 && !App.reviewStates[section.id]) {
+      App.reviewStates[section.id] = 'reviewed';
+      updateSidebarDot(section.id);
+    } else if (!App.reviewStates[section.id]) {
+      App.reviewStates[section.id] = 'unreviewed';
+    }
+  });
+
+  updateProgressBar();
+  updateAllBadges();
+
+  // Show the active section
+  navigateTo(App.activeSection);
+
+  // If static mode, disable buttons after rendering
+  if (App.mode === 'static') {
+    disableAllDecisionButtons();
+  }
+}
+
+function renderTriageSection(sectionId) {
+  var container = document.getElementById('section-' + sectionId);
+  if (!container) return;
+  container.innerHTML = '';
+
+  // Section heading
+  var heading = document.createElement('h2');
+  heading.className = 'section-heading';
+  heading.id = 'heading-' + sectionId;
+  heading.setAttribute('tabindex', '-1');
+  // Find label
+  var label = sectionId;
+  for (var s = 0; s < MIGRATION_SECTIONS.length; s++) {
+    if (MIGRATION_SECTIONS[s].id === sectionId) {
+      label = MIGRATION_SECTIONS[s].label;
+      break;
+    }
+  }
+  heading.textContent = label;
+  container.appendChild(heading);
+
+  var items = getManifestItemsForSection(sectionId);
+
+  // Zero-item section
+  if (items.length === 0) {
+    var emptyMsg = document.createElement('p');
+    emptyMsg.style.opacity = '0.6';
+    emptyMsg.style.fontStyle = 'italic';
+    emptyMsg.textContent = 'No items found in this section.';
+    container.appendChild(emptyMsg);
+    return;
+  }
+
+  // Group by tier, render 3 -> 2 -> 1
+  var groups = groupByTier(items);
+  var tiers = [3, 2, 1];
+
+  for (var ti = 0; ti < tiers.length; ti++) {
+    var tier = tiers[ti];
+    var tierItems = groups[tier];
+    if (!tierItems || tierItems.length === 0) continue;
+
+    var tierDiv = document.createElement('div');
+    tierDiv.className = 'tier-group';
+    tierDiv.setAttribute('data-tier', tier);
+
+    // Separate decided and undecided items
+    var decided = [];
+    var undecided = [];
+    // For tier 1, also track overrides (excluded auto-includes)
+    var overrides = [];
+
+    for (var ii = 0; ii < tierItems.length; ii++) {
+      var item = tierItems[ii];
+      if (App.decisions[item.key] !== undefined) {
+        if (tier === 1 && App.decisions[item.key] === false) {
+          overrides.push(item);
+        } else {
+          decided.push(item);
+        }
+      } else {
+        undecided.push(item);
+      }
+    }
+
+    // Tier header
+    var tierLabel = tier === 3 ? 'Flagged' : tier === 2 ? 'Needs decision' : 'Auto-included';
+    var tierHeader = document.createElement('div');
+    tierHeader.className = 'tier-group-header';
+    tierHeader.setAttribute('role', 'button');
+    tierHeader.setAttribute('aria-expanded', 'true');
+
+    var expandKey = sectionId + '-' + tier;
+    // Tier 1 collapsed by default unless previously expanded
+    var isExpanded = App.tierExpanded[expandKey];
+    if (isExpanded === undefined) {
+      isExpanded = (tier !== 1);
+    }
+    tierHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+
+    var indicator = document.createElement('span');
+    indicator.className = 'tier-indicator tier-' + tier;
+    tierHeader.appendChild(indicator);
+
+    var headerText = document.createElement('span');
+    headerText.textContent = tierLabel + ' (' + tierItems.length + ')';
+    tierHeader.appendChild(headerText);
+
+    // Toggle expand/collapse
+    tierHeader.onclick = (function(key, headerEl) {
+      return function() {
+        var expanded = headerEl.getAttribute('aria-expanded') === 'true';
+        App.tierExpanded[key] = !expanded;
+        headerEl.setAttribute('aria-expanded', !expanded ? 'true' : 'false');
+        var itemsContainer = headerEl.nextElementSibling;
+        // Skip the tier1-summary if it exists
+        while (itemsContainer && !itemsContainer.classList.contains('tier-group-items')) {
+          itemsContainer = itemsContainer.nextElementSibling;
+        }
+        if (itemsContainer) {
+          if (!expanded) {
+            itemsContainer.classList.remove('collapsed');
+          } else {
+            itemsContainer.classList.add('collapsed');
+          }
+        }
+        // Expanding tier 1 transitions to in-progress
+        if (!expanded && tier === 1) {
+          var currentState = App.reviewStates[sectionId];
+          if (currentState === 'unreviewed' || !currentState) {
+            App.reviewStates[sectionId] = 'in-progress';
+            updateSidebarDot(sectionId);
+            updateProgressBar();
+          }
+        }
+      };
+    })(expandKey, tierHeader);
+
+    tierHeader.setAttribute('tabindex', '0');
+    tierHeader.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        this.click();
+      }
+    });
+
+    tierDiv.appendChild(tierHeader);
+
+    // Tier 1 summary line (shown when collapsed)
+    if (tier === 1 && !isExpanded && undecided.length > 0) {
+      var summary = document.createElement('div');
+      summary.className = 'tier1-summary';
+      summary.textContent = undecided.length + ' standard item' +
+        (undecided.length !== 1 ? 's' : '') + ' auto-included';
+      summary.onclick = function() { tierHeader.click(); };
+      tierDiv.appendChild(summary);
+    }
+
+    // Overrides surface above collapsed tier-1 items
+    if (tier === 1 && overrides.length > 0) {
+      for (var oi = 0; oi < overrides.length; oi++) {
+        tierDiv.appendChild(buildDecidedCard(overrides[oi], false));
+      }
+    }
+
+    // Items container
+    var itemsDiv = document.createElement('div');
+    itemsDiv.className = 'tier-group-items';
+    if (!isExpanded) itemsDiv.classList.add('collapsed');
+
+    // Show decided items first (collapsed cards)
+    for (var di = 0; di < decided.length; di++) {
+      itemsDiv.appendChild(buildDecidedCard(decided[di], App.decisions[decided[di].key]));
+    }
+
+    // Show undecided items (full cards)
+    for (var ui = 0; ui < undecided.length; ui++) {
+      itemsDiv.appendChild(buildTriageCard(undecided[ui]));
+    }
+
+    tierDiv.appendChild(itemsDiv);
+    container.appendChild(tierDiv);
+  }
+
+  // Section footer
+  var footer = document.createElement('div');
+  footer.className = 'section-footer';
+
+  var decidedCount = 0;
+  for (var fc = 0; fc < items.length; fc++) {
+    if (App.decisions[items[fc].key] !== undefined) decidedCount++;
+  }
+
+  var statsSpan = document.createElement('span');
+  statsSpan.className = 'section-stats';
+  statsSpan.textContent = decidedCount + ' / ' + items.length + ' decided';
+  footer.appendChild(statsSpan);
+
+  var reviewBtn = document.createElement('button');
+  reviewBtn.type = 'button';
+  reviewBtn.className = 'mark-reviewed-btn';
+  var isReviewed = App.reviewStates[sectionId] === 'reviewed';
+  if (isReviewed) {
+    reviewBtn.classList.add('reviewed');
+    reviewBtn.textContent = '✓ Reviewed';
+  } else {
+    reviewBtn.textContent = 'Mark section reviewed';
+  }
+  reviewBtn.setAttribute('aria-label', isReviewed ?
+    label + ' section reviewed' : 'Mark ' + label + ' section reviewed');
+  reviewBtn.onclick = function() {
+    if (App.mode === 'static') return;
+    App.reviewStates[sectionId] = 'reviewed';
+    updateSidebarDot(sectionId);
+    updateProgressBar();
+    renderTriageSection(sectionId);
+    // Re-show the section
+    var sec = document.getElementById('section-' + sectionId);
+    if (sec) sec.classList.add('active');
+  };
+  footer.appendChild(reviewBtn);
+  container.appendChild(footer);
+}
+
+// ── Containerfile Preview ──
 function renderContainerfilePreview() {
   var el = document.getElementById('containerfile-preview');
   if (el) {
     el.querySelector('code').textContent = App.containerfile;
   }
+}
+
+function copyContainerfile() {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(App.containerfile);
+  }
+}
+
+// ── Apply Rebuild Response (Phase 5 calls this) ──
+function applyRebuildResponse(data) {
+  App.snapshot = data.snapshot;
+  App.containerfile = data.containerfile;
+  App.renderId = data.render_id;
+  App.revision = data.revision;
+  App.triageManifest = data.triage_manifest;
+
+  // Check inventory changes for review state
+  MIGRATION_SECTIONS.forEach(function(section) {
+    if (!section.tracked) return;
+    var items = getManifestItemsForSection(section.id);
+    var keys = [];
+    for (var k = 0; k < items.length; k++) {
+      keys.push(items[k].key + ':' + items[k].tier);
+    }
+    keys.sort();
+    var newInventory = keys.join(',');
+    var oldInventory = App.prevInventories[section.id] || '';
+
+    if (newInventory !== oldInventory && App.reviewStates[section.id] === 'reviewed') {
+      App.reviewStates[section.id] = 'in-progress';
+    }
+    App.prevInventories[section.id] = newInventory;
+
+    // Zero-item auto-complete
+    if (items.length === 0) {
+      App.reviewStates[section.id] = 'reviewed';
+    }
+  });
+
+  // Clear decisions — rebuild applied canonical state
+  App.decisions = {};
+
+  renderAllSections();
+  renderContainerfilePreview();
+  resetChangeCounter();
 }
 
 // ── Theme toggle ──

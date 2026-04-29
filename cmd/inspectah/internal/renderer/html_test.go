@@ -218,7 +218,7 @@ func TestHTMLDataEmbedding(t *testing.T) {
 	}
 	content := string(data)
 
-	// The SPA template must embed data as JavaScript constants
+	// The SPA template must embed data as JavaScript variables
 	constants := []string{
 		"const SNAPSHOT =",
 		"const INITIAL_CONTAINERFILE =",
@@ -226,7 +226,7 @@ func TestHTMLDataEmbedding(t *testing.T) {
 	}
 	for _, c := range constants {
 		if !strings.Contains(content, c) {
-			t.Errorf("missing embedded data constant: %q", c)
+			t.Errorf("missing embedded data variable: %q", c)
 		}
 	}
 }
