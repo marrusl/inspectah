@@ -1,0 +1,216 @@
+{
+  "schema_version": 12,
+  "meta": {
+    "fleet": {
+      "host_title_map": {
+        "host1": "host1.example.com",
+        "host2": "host2.example.com",
+        "host3": "host3.example.com"
+      },
+      "min_prevalence": 100,
+      "source_hosts": [
+        "host1",
+        "host2",
+        "host3"
+      ],
+      "total_hosts": 3
+    },
+    "hostname": "fleet-merged",
+    "timestamp": "2026-04-29T02:31:45Z"
+  },
+  "os_release": {
+    "name": "Red Hat Enterprise Linux",
+    "version_id": "9.4",
+    "version": "9.4 (Plow)",
+    "id": "rhel",
+    "id_like": "fedora",
+    "pretty_name": "Red Hat Enterprise Linux 9.4 (Plow)",
+    "variant_id": ""
+  },
+  "system_type": "package-mode",
+  "rpm": {
+    "packages_added": [
+      {
+        "name": "httpd",
+        "epoch": "0",
+        "version": "2.4.57",
+        "release": "5.el9",
+        "arch": "x86_64",
+        "state": "added",
+        "include": true,
+        "source_repo": "",
+        "fleet": {
+          "count": 3,
+          "total": 3,
+          "hosts": [
+            "host1",
+            "host2",
+            "host3"
+          ]
+        }
+      },
+      {
+        "name": "vim",
+        "epoch": "2",
+        "version": "9.0",
+        "release": "1.el9",
+        "arch": "x86_64",
+        "state": "added",
+        "include": false,
+        "source_repo": "",
+        "fleet": {
+          "count": 1,
+          "total": 3,
+          "hosts": [
+            "host1"
+          ]
+        }
+      },
+      {
+        "name": "nginx",
+        "epoch": "0",
+        "version": "1.24",
+        "release": "1.el9",
+        "arch": "x86_64",
+        "state": "added",
+        "include": false,
+        "source_repo": "",
+        "fleet": {
+          "count": 1,
+          "total": 3,
+          "hosts": [
+            "host2"
+          ]
+        }
+      }
+    ],
+    "base_image_only": [],
+    "rpm_va": null,
+    "repo_files": [],
+    "gpg_keys": [],
+    "dnf_history_removed": null,
+    "version_changes": null,
+    "leaf_packages": null,
+    "auto_packages": null,
+    "leaf_dep_tree": null,
+    "module_streams": null,
+    "version_locks": [],
+    "module_stream_conflicts": null,
+    "baseline_module_streams": null,
+    "versionlock_command_output": null,
+    "multiarch_packages": null,
+    "duplicate_packages": null,
+    "repo_providing_packages": null,
+    "ostree_overrides": null,
+    "ostree_removals": null,
+    "base_image": "quay.io/centos-bootc/centos-bootc:stream9",
+    "baseline_package_names": null,
+    "no_baseline": false
+  },
+  "config": {
+    "files": [
+      {
+        "path": "/etc/httpd/httpd.conf",
+        "kind": "rpm_owned_modified",
+        "category": "other",
+        "content": "ServerName host1",
+        "rpm_va_flags": null,
+        "package": null,
+        "diff_against_rpm": null,
+        "include": true,
+        "tie": true,
+        "tie_winner": true,
+        "fleet": {
+          "count": 1,
+          "total": 3,
+          "hosts": [
+            "host1"
+          ]
+        }
+      },
+      {
+        "path": "/etc/httpd/httpd.conf",
+        "kind": "rpm_owned_modified",
+        "category": "other",
+        "content": "ServerName host2",
+        "rpm_va_flags": null,
+        "package": null,
+        "diff_against_rpm": null,
+        "include": false,
+        "tie": true,
+        "tie_winner": false,
+        "fleet": {
+          "count": 1,
+          "total": 3,
+          "hosts": [
+            "host2"
+          ]
+        }
+      }
+    ]
+  },
+  "services": {
+    "state_changes": [
+      {
+        "unit": "httpd.service",
+        "current_state": "enabled",
+        "default_state": "disabled",
+        "action": "enable",
+        "include": true,
+        "owning_package": null,
+        "fleet": {
+          "count": 3,
+          "total": 3,
+          "hosts": [
+            "host1",
+            "host2",
+            "host3"
+          ]
+        }
+      },
+      {
+        "unit": "nginx.service",
+        "current_state": "enabled",
+        "default_state": "disabled",
+        "action": "enable",
+        "include": false,
+        "owning_package": null,
+        "fleet": {
+          "count": 1,
+          "total": 3,
+          "hosts": [
+            "host2"
+          ]
+        }
+      }
+    ],
+    "enabled_units": [
+      "httpd.service",
+      "nginx.service"
+    ],
+    "disabled_units": null,
+    "drop_ins": []
+  },
+  "network": null,
+  "storage": null,
+  "scheduled_tasks": null,
+  "containers": null,
+  "non_rpm_software": null,
+  "kernel_boot": null,
+  "selinux": null,
+  "users_groups": null,
+  "preflight": {
+    "status": "",
+    "status_reason": null,
+    "available": null,
+    "unavailable": null,
+    "unverifiable": null,
+    "direct_install": null,
+    "repo_unreachable": null,
+    "base_image": "",
+    "repos_queried": null,
+    "timestamp": ""
+  },
+  "warnings": null,
+  "redactions": null
+}

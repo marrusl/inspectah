@@ -144,7 +144,7 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 			Reason:         "Module stream package. Verify compatibility.",
 			Name:           ms.ModuleName + ":" + ms.Stream,
 			Meta:           strings.Join(ms.Profiles, ", "),
-			DefaultInclude: true,
+			DefaultInclude: ms.Include,
 		})
 	}
 	return items
@@ -378,7 +378,7 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 				Section: "identity", Key: fmt.Sprintf("seport-%s-%s", p.Protocol, p.Port),
 				Tier: 2, Reason: "Custom SELinux port label.",
 				Name:           fmt.Sprintf("%s/%s -> %s", p.Protocol, p.Port, p.Type),
-				DefaultInclude: true,
+				DefaultInclude: p.Include,
 			})
 		}
 	}

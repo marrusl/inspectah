@@ -301,3 +301,59 @@ func TestMapInclude(t *testing.T) {
 	assert.False(t, mapInclude(map[string]interface{}{"include": false}), "include=false should return false")
 	assert.True(t, mapInclude(map[string]interface{}{"include": "yes"}), "non-bool include should default true")
 }
+
+func TestClassifyModuleStream_DefaultInclude_False(t *testing.T) {
+	// Test that module stream with Include: false gets DefaultInclude: false
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		ModuleStreams: []schema.EnabledModuleStream{
+			{ModuleName: "nodejs", Stream: "18", Include: false},
+		},
+	}
+	items := ClassifySnapshot(snap, nil)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "ms-nodejs-18", items[0].Key)
+	assert.False(t, items[0].DefaultInclude, "module stream with Include=false should have DefaultInclude=false")
+}
+
+func TestClassifyModuleStream_DefaultInclude_True(t *testing.T) {
+	// Test that module stream with Include: true gets DefaultInclude: true
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		ModuleStreams: []schema.EnabledModuleStream{
+			{ModuleName: "nodejs", Stream: "18", Include: true},
+		},
+	}
+	items := ClassifySnapshot(snap, nil)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "ms-nodejs-18", items[0].Key)
+	assert.True(t, items[0].DefaultInclude, "module stream with Include=true should have DefaultInclude=true")
+}
+
+func TestClassifySelinuxPortLabel_DefaultInclude_False(t *testing.T) {
+	// Test that selinux port label with Include: false gets DefaultInclude: false
+	snap := schema.NewSnapshot()
+	snap.Selinux = &schema.SelinuxSection{
+		PortLabels: []schema.SelinuxPortLabel{
+			{Protocol: "tcp", Port: "8080", Type: "http_port_t", Include: false},
+		},
+	}
+	items := ClassifySnapshot(snap, nil)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "seport-tcp-8080", items[0].Key)
+	assert.False(t, items[0].DefaultInclude, "selinux port label with Include=false should have DefaultInclude=false")
+}
+
+func TestClassifySelinuxPortLabel_DefaultInclude_True(t *testing.T) {
+	// Test that selinux port label with Include: true gets DefaultInclude: true
+	snap := schema.NewSnapshot()
+	snap.Selinux = &schema.SelinuxSection{
+		PortLabels: []schema.SelinuxPortLabel{
+			{Protocol: "tcp", Port: "8080", Type: "http_port_t", Include: true},
+		},
+	}
+	items := ClassifySnapshot(snap, nil)
+	assert.Len(t, items, 1)
+	assert.Equal(t, "seport-tcp-8080", items[0].Key)
+	assert.True(t, items[0].DefaultInclude, "selinux port label with Include=true should have DefaultInclude=true")
+}

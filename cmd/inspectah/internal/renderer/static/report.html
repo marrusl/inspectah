@@ -1642,6 +1642,16 @@ function getSnapshotInclude(key) {
         }
       }
     }
+  } else if (key.indexOf('seport-') === 0) {
+    var seportSuffix = key.substring(7);
+    if (snap.selinux && snap.selinux.port_labels) {
+      for (var spi = 0; spi < snap.selinux.port_labels.length; spi++) {
+        var sp = snap.selinux.port_labels[spi];
+        if (sp.protocol + '-' + sp.port === seportSuffix) {
+          return sp.include !== false;
+        }
+      }
+    }
   } else if (key.indexOf('sysctl-') === 0) {
     var sysKey = key.substring(7);
     if (snap.kernel_boot && snap.kernel_boot.sysctl_overrides) {
