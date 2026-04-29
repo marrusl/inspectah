@@ -110,7 +110,7 @@ This ensures that browser reconnects (after crash, tab close, or page refresh) a
 |-------------|---------|-------------|-----------------|
 | **Overview** | Summary stats, audit findings, warnings. Landing page. | Read-only dashboard | No |
 | **Editor** | File browser + CodeMirror editing for config files, drop-ins, and quadlet files. All file types are editable here regardless of which triage section owns them. Refine mode only. | Full editing | No |
-| **Containerfile** | Live preview with syntax highlighting, copy button. Updates continuously as decisions are made. | Read-only (updated by triage decisions) | No |
+| **Containerfile** | Server-rendered preview with syntax highlighting, copy button. Shows last rebuilt Containerfile with a change-counter badge for pending decisions. | Read-only (updated on rebuild) | No |
 
 ### Migration Areas group
 
@@ -140,6 +140,20 @@ On viewports narrower than 1200px:
 - The Containerfile preview panel is hidden from the split view. The Containerfile sidebar destination becomes the only way to view the Containerfile. Its content is identical to what would appear in the right panel on wide viewports.
 
 ## Guided Triage Interaction Model
+
+### Display-only decision surfaces (v1)
+
+The following item types carry triage decisions that persist in the snapshot (survive autosave, rebuild, and session resume) but do not affect the Containerfile or other generated artifacts in v1. Triage cards for these types use "Acknowledge" / "Skip" button language instead of "Include in image" / "Leave out" to honestly reflect that the decision is informational for this version.
+
+| Item type | Section | Reason output is unaffected |
+|-----------|---------|---------------------------|
+| Network connections (NMConnection) | System | NM connection files are included via directory-level `COPY config/etc/`. Per-file filtering requires `WriteRedactedDir` changes. |
+| Fstab entries | System | The renderer generates advisory comments only, not actionable Containerfile lines for mount points. |
+| At jobs | Runtime | The renderer does not process at jobs. Cron-to-timer conversion handles cron jobs only. |
+| Running containers | Containers | Running containers are ephemeral state. Quadlet files (which DO affect output) are the actionable Containerfile items. |
+| Groups | Identity | The renderer generates user account lines but does not produce group-specific Containerfile output. |
+
+These surfaces are scoped for full renderer integration in a follow-up. The triage cards still display tier classification and risk information — "Acknowledge" records that the admin reviewed the item, and "Skip" records that they deprioritized it. Both decisions persist for cross-session continuity.
 
 ### Three tiers, descending urgency
 
@@ -254,13 +268,20 @@ All items in Secrets are tier 3 (flagged). Items land here when the redaction en
 | Certificate in non-standard path | System |
 | High-entropy string with credential-adjacent context | Any |
 
-### Continuous Containerfile updates
+### Containerfile preview updates
 
-Every include/exclude decision immediately updates the Containerfile preview panel. The changed line flashes blue briefly (animation: 2s ease-out). No batch "apply" step — the Containerfile always reflects current decisions.
+The Containerfile preview panel shows the **last server-rendered Containerfile**. It does not update client-side on individual decisions. Instead, a change counter in the preview header tracks pending changes: "N changes pending — rebuild to update preview."
 
-**Editor edits are excluded from the continuous preview.** Changes made in the CodeMirror editor (config file edits, new files) affect the snapshot but do NOT trigger a client-side Containerfile preview update. These require a full server-side rebuild to reflect accurately — they are captured in the next rebuild cycle.
+When the admin clicks "Download tarball," the server rebuilds all artifacts (including the Containerfile), and the preview refreshes with the canonical server-rendered output. This ensures the preview is always accurate — it shows exactly what the server produced, never a client-side approximation.
 
-The "Download tarball" button triggers a rebuild then export — not a pure export of client-side state.
+**Rationale:** The Go Containerfile renderer is 900+ lines with 15+ section-specific functions. A client-side approximation would cover only a subset of sections, creating false confidence when decisions on uncovered sections (network, storage, kernel, SELinux) appear to have no effect. The batch-and-review pattern matches sysadmin workflows (Kickstart, Ansible) where admins make decisions, generate the artifact, and review the result.
+
+**Change counter behavior:**
+- Increments on every include/exclude decision or undo
+- Resets to zero after a successful rebuild
+- Displayed in the preview panel header alongside the "Copy" button
+
+**Editor edits** affect the snapshot but do NOT increment the change counter or trigger a preview update. These require a full server-side rebuild to reflect accurately.
 
 ### Decided-state resting patterns
 
@@ -478,7 +499,7 @@ Click "Download tarball":
 
 ### Rebuild flow
 
-1. Admin makes decisions throughout the report. Each decision auto-persists to the server's working directory and updates the Containerfile preview continuously
+1. Admin makes decisions throughout the report. Each decision auto-persists to the server's working directory and increments the Containerfile preview change counter
 2. Admin clicks "Download tarball" in bottom toolbar (this is a checkpoint + export action — decisions are already saved)
 3. Button state changes to "Building..." with spinner. Live-region announces "Building..."
 4. Client POSTs current snapshot to `POST /api/render` to regenerate all artifacts (Containerfile, report, etc.) from the canonical snapshot state
@@ -539,7 +560,7 @@ Defers to PatternFly v6 built-in light theme variables. Toggle via `pf-v6-theme-
 - Triage badges use `aria-label` to announce counts (e.g., "2 items flagged for review").
 - Progress bar uses `role="progressbar"` with `aria-valuenow`, `aria-valuemin`, `aria-valuemax`, and `aria-label`.
 - Disabled controls in static mode use `aria-disabled="true"` with `aria-describedby` pointing to the nearest inline callout explaining the refine requirement.
-- Decision card actions use `aria-label` with full context (e.g., "Include postgresql15-server in image").
+- Decision card actions use `aria-label` with full context (e.g., "Include postgresql15-server in image"). Display-only cards use `aria-label="Acknowledge eth0"` / `aria-label="Skip eth0"` to match their button language.
 
 ## Static Assets
 
@@ -633,7 +654,7 @@ Explicit test matrix for manual verification:
 - **Fleet prevalence-driven tier defaults.** Fleet snapshots render with all data but without smart tier assignment or prevalence slider. Follow-up spec.
 - **Automated browser CI tests.** No headless browser in CI pipeline yet.
 - **Print stylesheet.** Not needed for v1.
-- **Diff view before rebuild.** The continuous Containerfile preview makes pre-rebuild diffs redundant.
+- **Diff view before rebuild.** The change-counter badge and batch rebuild pattern makes pre-rebuild diffs redundant.
 
 ## File Layout
 
