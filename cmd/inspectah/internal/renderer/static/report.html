@@ -20,6 +20,31 @@
   <style>{{.PatternFlyCSS}}</style>
   <style>
     /* SPA-specific overrides for PatternFly */
+    /* ── Theme variable definitions ── */
+    .pf-v6-theme-dark {
+      --pf-t--global--background--color--primary-default: #1b1d21;
+      --pf-t--global--background--color--secondary-default: rgba(0,0,0,0.15);
+      --pf-t--global--background--color--hover: rgba(255,255,255,0.05);
+      --pf-t--global--border--color--default: #444;
+      --pf-t--global--color--status--info--default: #2b9af3;
+      --pf-t--global--text--color--primary: #e0e0e0;
+      color-scheme: dark;
+      color: #e0e0e0;
+      background-color: #1b1d21;
+    }
+
+    .pf-v6-theme-light {
+      --pf-t--global--background--color--primary-default: #ffffff;
+      --pf-t--global--background--color--secondary-default: #f0f0f0;
+      --pf-t--global--background--color--hover: rgba(0,0,0,0.06);
+      --pf-t--global--border--color--default: #d2d2d2;
+      --pf-t--global--color--status--info--default: #0066cc;
+      --pf-t--global--text--color--primary: #151515;
+      color-scheme: light;
+      color: #151515;
+      background-color: #ffffff;
+    }
+
     .sr-only {
       position: absolute;
       width: 1px;
@@ -506,23 +531,6 @@
       background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
     }
 
-    /* Editor panel */
-    .editor-panel {
-      display: none;
-      border-top: 1px solid var(--pf-t--global--border--color--default, #444);
-      margin-top: 1.5rem;
-      padding-top: 1rem;
-    }
-
-    .editor-panel.active {
-      display: block;
-    }
-
-    .editor-panel h3 {
-      font-size: 1rem;
-      margin: 0 0 0.75rem 0;
-    }
-
     .editor-layout {
       display: flex;
       gap: 1rem;
@@ -579,7 +587,7 @@
       overflow: hidden;
     }
 
-    .editor-area .CodeMirror {
+    .editor-area .cm-editor {
       height: 400px;
       font-size: 0.85rem;
     }
@@ -687,7 +695,7 @@
         bottom: 0;
         width: 280px;
         z-index: 1000;
-        background: var(--pf-t--global--background--color--primary-default, #1b1d21);
+        background: var(--pf-t--global--background--color--primary-default);
         transform: translateX(-100%);
         overflow-y: auto;
       }
@@ -750,19 +758,6 @@
   <!-- Main content -->
   <main class="pf-v6-c-page__main" id="main-content" role="main">
     <!-- Sections rendered here by JS -->
-
-    <!-- Editor panel (shown in refine mode) -->
-    <div class="editor-panel" id="editor-panel" role="region" aria-label="File editor">
-      <h3>Edit Files</h3>
-      <div class="editor-layout">
-        <div class="file-browser" id="file-browser" role="listbox" aria-label="File list">
-          <!-- File browser items populated by renderEditorFileBrowser() -->
-        </div>
-        <div class="editor-area" id="editor-area">
-          <div class="editor-empty" id="editor-empty">Select a file to edit</div>
-        </div>
-      </div>
-    </div>
   </main>
 
   <!-- Containerfile preview panel (right sidebar in wide view) -->
@@ -866,7 +861,8 @@ var MIGRATION_SECTIONS = [
   {id: 'containers', label: 'Containers',      tracked: true},
   {id: 'identity',   label: 'Identity',        tracked: true},
   {id: 'system',     label: 'System',          tracked: true},
-  {id: 'secrets',    label: 'Secrets',         tracked: true}
+  {id: 'secrets',    label: 'Secrets',         tracked: true},
+  {id: 'editor',    label: 'Edit Files',      tracked: false}
 ];
 
 // ── Boot sequence ──
@@ -928,6 +924,9 @@ function enableStaticMode() {
       main.insertBefore(banner, main.firstChild);
     }
   }
+  // Hide editor section in static mode (editing requires refine server)
+  var editorNav = document.querySelector('[data-section="editor"]');
+  if (editorNav) editorNav.parentElement.style.display = 'none';
   // Disable decision buttons
   disableAllDecisionButtons();
 }
@@ -1968,6 +1967,9 @@ function renderAllSections() {
     renderTriageSection(section.id);
   });
 
+  // Render editor section (hidden until refine mode activates it)
+  renderEditorSection();
+
   // Initialize review states for zero-item sections
   MIGRATION_SECTIONS.forEach(function(section) {
     if (!section.tracked) return;
@@ -2374,7 +2376,7 @@ function renderEditorFileBrowser(files, container) {
 function openFileInEditor(file) {
   // Save current editor content back before switching
   if (editorInstance && currentEditorFile) {
-    currentEditorFile.ref.content = editorInstance.getValue();
+    currentEditorFile.ref.content = editorInstance.state.doc.toString();
   }
 
   currentEditorFile = file;
@@ -2394,46 +2396,77 @@ function openFileInEditor(file) {
   var emptyEl = document.getElementById('editor-empty');
   if (emptyEl) emptyEl.style.display = 'none';
 
-  // Create or update CodeMirror instance
+  // Create or update CM6 editor instance
   var editorArea = document.getElementById('editor-area');
   if (editorInstance) {
-    editorInstance.setValue(file.ref.content || '');
-    editorInstance.clearHistory();
-    editorInstance.refresh();
+    // Replace entire document content via CM6 dispatch
+    editorInstance.dispatch({
+      changes: {from: 0, to: editorInstance.state.doc.length, insert: file.ref.content || ''}
+    });
   } else {
-    // Remove any existing content except the empty placeholder
-    var existing = editorArea.querySelector('.CodeMirror');
+    // Remove any existing CM element
+    var existing = editorArea.querySelector('.cm-editor');
     if (existing) existing.remove();
 
-    editorInstance = CodeMirror(editorArea, {
-      value: file.ref.content || '',
-      lineNumbers: true,
-      theme: 'default',
-      readOnly: App.mode === 'static'
-    });
-
-    editorInstance.on('change', function() {
-      if (currentEditorFile) {
-        currentEditorFile.ref.content = editorInstance.getValue();
-        incrementChangeCounter();
-        scheduleAutosave();
+    editorInstance = CM.createEditor(editorArea, file.ref.content || '', {
+      onChange: function(newContent) {
+        if (currentEditorFile) {
+          currentEditorFile.ref.content = newContent;
+          incrementChangeCounter();
+          scheduleAutosave();
+        }
       }
     });
   }
 }
 
+function renderEditorSection() {
+  var container = document.getElementById('section-editor');
+  if (!container) return;
+  container.innerHTML = '';
+
+  var heading = document.createElement('h2');
+  heading.className = 'section-heading';
+  heading.id = 'heading-editor';
+  heading.setAttribute('tabindex', '-1');
+  heading.textContent = 'Edit Files';
+  container.appendChild(heading);
+
+  var layout = document.createElement('div');
+  layout.className = 'editor-layout';
+
+  var browser = document.createElement('div');
+  browser.className = 'file-browser';
+  browser.id = 'file-browser';
+  browser.setAttribute('role', 'listbox');
+  browser.setAttribute('aria-label', 'File list');
+  layout.appendChild(browser);
+
+  var area = document.createElement('div');
+  area.className = 'editor-area';
+  area.id = 'editor-area';
+  var empty = document.createElement('div');
+  empty.className = 'editor-empty';
+  empty.id = 'editor-empty';
+  empty.textContent = 'Select a file to edit';
+  area.appendChild(empty);
+  layout.appendChild(area);
+
+  container.appendChild(layout);
+}
+
 function initEditor() {
-  var panel = document.getElementById('editor-panel');
   var browser = document.getElementById('file-browser');
-  if (!panel || !browser) return;
+  if (!browser) return;
 
   var files = collectEditorFiles();
   if (files.length === 0) {
-    panel.style.display = 'none';
+    // Hide editor from sidebar when no files
+    var navLink = document.querySelector('[data-section="editor"]');
+    if (navLink) navLink.parentElement.style.display = 'none';
     return;
   }
 
-  panel.classList.add('active');
   renderEditorFileBrowser(files, browser);
 }
 
@@ -2478,7 +2511,7 @@ function performAutosave() {
 
   // Save current editor content back to snapshot
   if (editorInstance && currentEditorFile) {
-    currentEditorFile.ref.content = editorInstance.getValue();
+    currentEditorFile.ref.content = editorInstance.state.doc.toString();
   }
 
   setAutosaveStatus('saving');
@@ -2542,7 +2575,7 @@ function triggerRebuild() {
 
   // Save current editor content back to snapshot
   if (editorInstance && currentEditorFile) {
-    currentEditorFile.ref.content = editorInstance.getValue();
+    currentEditorFile.ref.content = editorInstance.state.doc.toString();
   }
 
   btn.disabled = true;
