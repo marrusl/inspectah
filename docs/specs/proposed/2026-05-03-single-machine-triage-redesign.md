@@ -1,6 +1,6 @@
 # Single-Machine Triage Redesign
 
-*Revision 2 — addresses round 1 review feedback from Collins, Fern, and Thorn.*
+*Revision 3 — addresses round 2 review feedback from Thorn and Collins.*
 
 ## Summary
 
@@ -101,7 +101,7 @@ Four card types in the redesigned triage:
 
 - **System users (UID < 1000):** Tier 1 decision cards (output-affecting). These come from the base image via RPM packages. Still surfaced individually because the admin should verify they're not custom system users masquerading in the system UID range.
 - **User-created accounts (UID >= 1000):** Tier 2 decision cards (output-affecting). Must be provisioned differently in image mode — through deploy-time provisioning (Ignition, cloud-init), external identity management, or deliberate image build-time creation.
-- **Groups:** Tier 2 **display-only cards** using Acknowledge/Skip. The renderer does not produce group-specific Containerfile output in v1.
+- **Groups:** Tier 2 decision cards (output-affecting). The renderer emits `groupadd` lines for included groups alongside user account creation.
 - **SELinux booleans:** Tier 2 decision cards (output-affecting). Straightforward Containerfile additions.
 - **Custom SELinux modules:** Tier 3 decision cards (output-affecting). Can conflict with image updates, hard to debug.
 - **SELinux port labels:** Tier 2 decision cards (output-affecting).
@@ -138,9 +138,13 @@ The toggle switch reflects the group state, not a separate boolean. There is no 
 
 ### Toggle behavior
 
-**Toggle OFF (from all-included or partially-excluded):** Sets `include=false` on every item in the group. The prior per-item `include` values are saved in `App.groupPriorState[groupKey]` (in-memory JS map, keyed by group name).
+**Toggle OFF (from all-included or partially-excluded):** Sets `include=false` on every item in the group and schedules autosave. The prior per-item `include` values are saved in `App.groupPriorState[groupKey]` (in-memory JS map, keyed by group name).
 
-**Toggle ON (from all-excluded):** Restores prior per-item `include` values from `App.groupPriorState[groupKey]`. If no prior state exists (first interaction), sets all items to `include=true`. This preserves row-level exceptions across an off/on cycle — toggling a group off and back on does not destroy per-item work.
+**Toggle ON (from all-excluded):** Restores prior per-item `include` values from `App.groupPriorState[groupKey]` if available, otherwise sets all items to `include=true`.
+
+**Within a single session:** Row-level exceptions are preserved across quick off/on cycles via the in-memory prior-state map.
+
+**Across resume boundaries (autosave → reconnect, or download → re-refine):** Row-level exceptions made before a toggle-off are **not preserved.** The snapshot stores only current truth (`include=false` for all items in an excluded group). On resume, toggling the group back on sets all items to `include=true`. The prior-state map is in-memory only — it is not persisted in the snapshot. This is an intentional simplification: persisting undo history in the snapshot adds schema complexity for a rare edge case (toggle off a group, save, resume in a new session, toggle back on, and expect prior exceptions to survive). The admin can re-select individual exceptions after re-enabling the group.
 
 **Row controls while group is off:** Disabled. Per-item checkboxes are grayed and non-interactive when the group toggle is OFF. The admin must re-enable the group toggle first, then adjust individual items. Rationale: allowing row edits while the group is off creates ambiguous state (is this item "excluded because the group is off" or "excluded individually"?).
 
@@ -271,7 +275,17 @@ type PackageEntry struct {
 }
 ```
 
-Same `Acknowledged` field added to `NonRpmSoftware` item entries, and to any untyped map items (`users_groups.groups[]`, `network.connections[]`, `storage.fstab_entries[]`) via the `mapAcknowledged()` helper (parallel to existing `mapInclude()`).
+Explicit `Acknowledged` carrier for every display-only and notification surface:
+
+| Snapshot type | Schema carrier | Notes |
+|---------------|---------------|-------|
+| `PackageEntry` (no-repo) | `Acknowledged bool` field | Notification card |
+| `NonRpmSoftware.Items` | `Acknowledged bool` field | Notification card |
+| `NMConnection` | `Acknowledged bool` field on typed struct | Display-only |
+| `FstabEntry` | `Acknowledged bool` field on typed struct | Display-only |
+| `RunningContainer` | `Acknowledged bool` field on typed struct | Display-only |
+
+For untyped map items that use `mapInclude()`, a parallel `mapAcknowledged()` helper reads/writes the `"acknowledged"` key. For typed structs (`NMConnection`, `FstabEntry`, `RunningContainer`), the field is added directly to the Go type definition.
 
 ### Classifier changes (triage.go)
 
@@ -279,7 +293,7 @@ Same `Acknowledged` field added to `NonRpmSoftware` item entries, and to any unt
 - `classifyConfigFiles`: Group unchanged configs as `"kind:unchanged"`, drop-ins as `"kind:drop-in"`. Modified and custom files get no group (individual cards).
 - `classifyRuntime`: Group services by state (default vs. changed), cron and timers by type. Add `dnf-makecache` and `packagekit` to a known-incompatible list → tier 3 with specific warning.
 - `classifyContainerItems`: Group quadlets as `"sub:quadlet"`. Running containers without quadlet: individual cards, `DisplayOnly: true`. Non-RPM binaries: individual cards, `CardType: "notification"`, read `Acknowledged` from snapshot.
-- `classifyIdentity`: No groups. Groups (GID): `DisplayOnly: true`. All others: individual output-affecting cards.
+- `classifyIdentity`: No groups. All individual output-affecting cards (including groups — renderer emits `groupadd` output).
 - `classifySystemItems`: Group sysctl, kmod, firewall by subsystem. Network connections: group as `"sub:network"`, `DisplayOnly: true`. Fstab entries: all `DisplayOnly: true`; entries touching `/`, `/boot`, `/var`, `/sysroot`, `/usr`, `/etc`, or using unstable device paths get no group (individual display-only cards); remaining entries group as `"sub:fstab"`.
 - Single-machine predicate: `snap.FleetMetadata == nil`.
 
@@ -358,6 +372,18 @@ In static mode (file:// or no refine server), all accordions render **collapsed*
 - Display-only surfaces: toggling acknowledge does not trigger Containerfile preview update
 - Rebuild after grouped decisions: response snapshot = working directory snapshot = tarball snapshot (three-way equality)
 - Review state reopen: changing a group toggle or per-item checkbox in a reviewed section reverts it to "in progress"
+- Resume after group toggle-off: `GET /api/snapshot` returns `include=false` for all group items; toggle-on sets all to `include=true` (prior row exceptions not restored across resume — explicitly lossy)
+
+### Output-invariance proofs (renderer contract)
+
+These tests rebuild after non-output decisions and assert the generated Containerfile and other artifacts are byte-identical to before the decision:
+
+- Acknowledge a display-only `NMConnection` → rebuild → Containerfile diff is empty
+- Acknowledge a display-only `FstabEntry` → rebuild → Containerfile diff is empty
+- Acknowledge a display-only `RunningContainer` → rebuild → Containerfile diff is empty
+- Acknowledge a notification no-repo package → rebuild → TODO comment present and unchanged
+- Acknowledge a notification non-RPM binary → rebuild → TODO comment present and unchanged
+- Undo an acknowledged notification → rebuild → TODO comment still present and unchanged (TODO output is independent of acknowledged state)
 
 ### Manual browser smoke tests
 
@@ -377,7 +403,8 @@ In static mode (file:// or no refine server), all accordions render **collapsed*
 | Notification card acknowledge | Card collapses to name + warning + undo |
 | Notification card undo | Card expands back to full view |
 | Session resume (notification) | Acknowledged cards start collapsed after re-refine |
-| Session resume (grouped) | Group states and row exceptions preserved |
+| Session resume (grouped, partial) | Partially excluded group states preserved across resume |
+| Session resume (grouped, all-off) | All-excluded group resumes as all-excluded; toggle-on sets all to included (prior row exceptions not restored — expected) |
 | Review state reopen | Change in reviewed section reverts to "in progress" |
 | Static mode | Accordions collapsed, no interactive controls, summary visible |
 | Keyboard: output accordion | Tab to header (expand), Tab to toggle (switch), Tab through rows |
