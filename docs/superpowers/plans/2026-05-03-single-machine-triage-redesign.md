@@ -1,6 +1,6 @@
 # Single-Machine Triage Redesign Implementation Plan
 
-*Revision 3 — addresses round 2 plan review feedback from Thorn and Fern.*
+*Revision 4 — addresses round 3 plan review feedback from Fern.*
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1639,9 +1639,14 @@ function buildNotificationCard(item) {
   wrapper.setAttribute('data-key', item.key);
 
   // Full (expanded) card
+  // Read acknowledged state from snapshot (source of truth), not the
+  // manifest item (which is stale after acknowledgeNotification mutates
+  // the snapshot). This ensures render reflects current state.
+  var isAcked = getSnapshotAcknowledged(item.key);
+
   var full = document.createElement('div');
   full.className = 'triage-card tier-3 notification-full';
-  if (item.acknowledged) full.style.display = 'none';
+  if (isAcked) full.style.display = 'none';
 
   var warning = document.createElement('div');
   warning.className = 'card-warning';
@@ -1676,7 +1681,7 @@ function buildNotificationCard(item) {
   // Collapsed card
   var collapsed = document.createElement('div');
   collapsed.className = 'notification-collapsed';
-  if (!item.acknowledged) collapsed.style.display = 'none';
+  if (!isAcked) collapsed.style.display = 'none';
 
   var row = document.createElement('div');
   row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
@@ -2070,7 +2075,7 @@ In static mode, interactive controls must not be rendered at all (not just disab
 - **Accordion toggle switch:** Do not create the toggle `div` element. Show "always included" label or no toggle indicator.
 - **Per-item checkboxes:** Do not create checkbox `input` elements. Show item names as plain text rows.
 - **Acknowledge/Skip buttons:** Do not create button elements. Notification cards render in their expanded informational state without action buttons.
-- **Include/Leave out buttons:** Existing `disableAllDecisionButtons()` already handles this.
+- **Include/Leave out buttons:** Do not create button elements. The existing `disableAllDecisionButtons()` is a legacy fallback — for this redesign, all interactive controls are omitted at creation time via the `App.mode === 'static'` guard, not disabled after the fact. Cards render as informational summaries showing the item name, tier, and reasoning, but with no action affordance.
 - **Accordion headers:** Still expandable in static mode (read-only review is valuable). Headers keep their `role="button"` and keyboard interaction.
 - **Tab order:** Toggle switches and checkboxes are not in the tab order because they don't exist in the DOM.
 
@@ -2082,6 +2087,47 @@ if (App.mode !== 'static') {
 }
 // In static mode, this block is skipped entirely — no element created
 ```
+
+**Focus management for new components:**
+
+Update `focusNextUndecided(sectionId)` to handle the new card types:
+
+```javascript
+function focusNextUndecided(sectionId) {
+  var container = document.getElementById('section-' + sectionId);
+  if (!container) return;
+
+  // Priority order: notification Acknowledge buttons, then display-only
+  // Acknowledge buttons, then Include/Leave out buttons
+  var selectors = [
+    '.notification-full button.btn-primary',        // notification Acknowledge
+    '.triage-card:not(.display-only-decided) button', // decision/display-only cards
+  ];
+
+  for (var s = 0; s < selectors.length; s++) {
+    var targets = container.querySelectorAll(selectors[s]);
+    for (var i = 0; i < targets.length; i++) {
+      if (!targets[i].disabled) {
+        targets[i].focus();
+        return;
+      }
+    }
+  }
+
+  // No undecided card found — focus the section heading as fallback
+  var heading = document.getElementById('heading-' + sectionId);
+  if (heading) heading.focus();
+}
+```
+
+Post-rerender focus targets:
+- **After accordion toggle:** Focus returns to the toggle switch element within the re-rendered accordion header (matched by `data-group` attribute)
+- **After accordion header expand/collapse:** Focus stays on the header element (matched by `data-group`)
+- **After notification acknowledge:** `focusNextUndecided` fires
+- **After notification undo:** Focus returns to the Acknowledge button on the re-expanded card
+- **No next undecided target:** Focus falls back to the section heading (`heading-<sectionId>`)
+
+Implementation: after each `renderTriageSection(sectionId)` call that is triggered by a user action (not initial render), restore focus by querying for the expected target element in the newly rendered DOM.
 
 - [ ] **Step 5: Run Go tests to verify no regressions**
 
@@ -2104,19 +2150,19 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 11: Rendered golden-file tests for new card types
+### Task 11: Data-contract golden tests + interaction proof strategy
+
+**Test architecture note:** The Go renderer produces a static HTML file with embedded JS. Go unit tests can verify the **data contract** (triage manifest shape, field values, grouping decisions) but cannot execute the client-side JS or inspect DOM output. The **interaction contract** (accordion behavior, notification collapse/undo, static-mode control omission, focus management) is verified by:
+- Refine-server contract tests (Task 12) for persistence/rebuild proofs
+- Manual browser smoke tests (Task 13) for interaction behavior
+- This is a principled split, not a gap.
 
 **Files:**
-- Create: `cmd/inspectah/internal/renderer/testdata/golden-grouped-packages.html`
 - Modify: `cmd/inspectah/internal/renderer/html_test.go`
 
-- [ ] **Step 1: Write test that renders HTML report and compares grouped-section fragment**
+- [ ] **Step 1: Write test that renders HTML report and verifies data contract in rendered output**
 
-Follow the existing `TestHTMLReportGoldenTierSection` pattern. Render a full HTML report from a snapshot with grouped packages, extract the `TRIAGE_MANIFEST` JSON from the rendered output, and compare against a golden file. The golden must verify:
-- Group field populated for repo-backed packages
-- CardType=notification for no-repo packages
-- DisplayOnly=true for display-only surfaces
-- Acknowledged field present
+Render a full HTML report, extract the `TRIAGE_MANIFEST` JSON from the rendered output, and verify the data contract that the JS will consume. This proves the Go classifier → renderer → embedded manifest pipeline produces correct grouping, card types, and display-only fields.
 
 ```go
 func TestHTMLReportGoldenGroupedPackages(t *testing.T) {
