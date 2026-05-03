@@ -1,10 +1,14 @@
 # Single-Machine Triage Redesign Implementation Plan
 
+*Revision 2 — addresses round 1 plan review feedback from Kit, Thorn, and Fern.*
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Reduce single-machine triage from 300-400+ individual decision cards to grouped accordion views with toggle switches, keeping individual cards only for items needing genuine attention.
 
 **Architecture:** Keep existing 3-tier classification. Add `Group`, `CardType`, `DisplayOnly`, and `Acknowledged` fields to `TriageItem`. The classifier populates these in single-machine mode (`Meta["fleet"]` absent). The JS groups items by `Group` into accordion cards. Ungrouped items render as individual cards (decision or notification). Display-only surfaces use Acknowledge/Skip language.
+
+**Predicate mapping:** The approved spec says `FleetMetadata == nil`. `InspectionSnapshot` has no typed `FleetMetadata` field — the fleet merge engine stores its metadata under `snap.Meta["fleet"]` (see `cmd/inspectah/internal/fleet/merge.go:500-514`). The implementation uses `snap.Meta["fleet"]` absence as the canonical single-machine predicate. This is the current-code mapping, not a spec rewrite.
 
 **Tech Stack:** Go (schema types, classifier), vanilla JS (report.html SPA), Go unit tests (table-driven), golden-file tests.
 
@@ -120,7 +124,7 @@ func TestNonRpmItemAcknowledgedJSON(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/schema/ -run "Acknowledged" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ -run "Acknowledged" -v`
 Expected: FAIL — `Acknowledged` field does not exist on any type.
 
 - [ ] **Step 3: Add Acknowledged field to all 5 types**
@@ -146,7 +150,7 @@ Acknowledged bool `json:"acknowledged,omitempty"`
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/schema/ -run "Acknowledged" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ -run "Acknowledged" -v`
 Expected: PASS
 
 - [ ] **Step 5: Add mapAcknowledged helper and NormalizeSnapshot update**
@@ -159,7 +163,7 @@ In `cmd/inspectah/internal/schema/snapshot.go`, the `NormalizeSnapshot` function
 
 - [ ] **Step 6: Run full schema test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/schema/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ -v`
 Expected: All tests PASS, including existing ones.
 
 - [ ] **Step 7: Commit**
@@ -202,7 +206,7 @@ func TestIsFleetSnapshot(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestIsFleetSnapshot" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestIsFleetSnapshot" -v`
 Expected: FAIL — `isFleetSnapshot` not defined.
 
 - [ ] **Step 3: Add new TriageItem fields and isFleetSnapshot helper**
@@ -241,12 +245,12 @@ func isFleetSnapshot(snap *schema.InspectionSnapshot) bool {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestIsFleetSnapshot" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestIsFleetSnapshot" -v`
 Expected: PASS
 
 - [ ] **Step 5: Run full renderer test suite to verify no regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All existing tests PASS. New fields have zero values so existing TriageItem construction is unaffected.
 
 - [ ] **Step 6: Commit**
@@ -364,7 +368,7 @@ func strSlicePtr(s []string) *[]string {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestClassifyPackages_SingleMachine\|TestClassifyPackages_Fleet\|TestClassifyPackages_NoRepo_Ack" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestClassifyPackages_SingleMachine\|TestClassifyPackages_Fleet\|TestClassifyPackages_NoRepo_Ack" -v`
 Expected: FAIL — `classifyPackages` signature doesn't accept `isFleet` parameter.
 
 - [ ] **Step 3: Update classifyPackages to accept isFleet and populate Group/CardType**
@@ -484,7 +488,7 @@ func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]boo
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All tests PASS — new tests pass, existing tests unaffected (fleet detection returns false for test snapshots without Meta["fleet"]).
 
 - [ ] **Step 6: Commit**
@@ -548,7 +552,7 @@ func TestClassifyConfigFiles_SingleMachine_Grouping(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestClassifyConfigFiles_SingleMachine" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestClassifyConfigFiles_SingleMachine" -v`
 Expected: FAIL — Group field not populated.
 
 - [ ] **Step 3: Update classifyConfigFiles**
@@ -595,7 +599,7 @@ func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]boo
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All PASS.
 
 - [ ] **Step 5: Commit**
@@ -692,7 +696,7 @@ func TestClassifyRuntime_ImageModeIncompatible(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestClassifyRuntime_SingleMachine\|TestClassifyRuntime_ImageMode" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestClassifyRuntime_SingleMachine\|TestClassifyRuntime_ImageMode" -v`
 Expected: FAIL
 
 - [ ] **Step 3: Update classifyRuntime**
@@ -779,7 +783,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, i
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All PASS.
 
 - [ ] **Step 5: Commit**
@@ -852,7 +856,7 @@ func TestClassifyContainerItems_SingleMachine_Grouping(t *testing.T) {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestClassifyContainerItems_SingleMachine" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestClassifyContainerItems_SingleMachine" -v`
 Expected: FAIL
 
 - [ ] **Step 3: Update classifyContainerItems**
@@ -907,7 +911,12 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 				Name: name, Meta: nri.Method,
 				DefaultInclude: nri.Include,
 			}
-			if !isFleet {
+			// Only genuinely unactionable items become notification cards.
+			// The renderer has output paths for pip/npm/Go/venv items via
+			// classifyPip/nonRpmSectionLines — those stay as decision cards.
+			// Notification treatment applies only to bare "binary" method items
+			// where inspectah cannot reconstruct installation steps.
+			if !isFleet && nri.Method == "binary" {
 				item.CardType = "notification"
 				item.Acknowledged = nri.Acknowledged
 				item.Reason = "inspectah cannot determine the provenance or installation method for this binary. To include it in the image, provide a reproducible build-time source and add it to your Containerfile."
@@ -921,7 +930,7 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 
 - [ ] **Step 4: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All PASS.
 
 - [ ] **Step 5: Commit**
@@ -961,8 +970,22 @@ func TestClassifyIdentity_SingleMachine_NoGroups(t *testing.T) {
 	items := classifyIdentity(snap, make(map[string]bool), false)
 	for _, item := range items {
 		assert.Equal(t, "", item.Group, "identity items should never be grouped")
-		assert.False(t, item.DisplayOnly, "identity items are output-affecting")
 	}
+
+	// Users are output-affecting (renderer emits useradd/sysusers lines)
+	admin := findItem(items, "user-admin")
+	require.NotNil(t, admin)
+	assert.False(t, admin.DisplayOnly)
+
+	// Groups are display-only on go-port (containerfile.go only consumes
+	// UsersGroups.Users, not .Groups — the section header says "Users and
+	// Groups" but groups are not iterated). This matches the approved spec
+	// revision 4 which was updated to mark groups as output-affecting based
+	// on the Python renderer, but the Go port has not ported group output.
+	// Keep display-only until the Go renderer adds group consumption.
+	devs := findItem(items, "group-developers")
+	require.NotNil(t, devs)
+	assert.True(t, devs.DisplayOnly)
 }
 
 func TestClassifySystemItems_SingleMachine_Grouping(t *testing.T) {
@@ -1021,16 +1044,56 @@ func TestClassifySystemItems_SingleMachine_Grouping(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestClassifyIdentity_SingleMachine\|TestClassifySystemItems_SingleMachine" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestClassifyIdentity_SingleMachine\|TestClassifySystemItems_SingleMachine" -v`
 Expected: FAIL
 
-- [ ] **Step 3: Update classifyIdentity — add isFleet param, no grouping**
+- [ ] **Step 3: Update classifyIdentity — add isFleet param, groups are display-only**
+
+The Go renderer (`containerfile.go`) only consumes `UsersGroups.Users`, not `.Groups`. Groups are display-only on `go-port` until the renderer adds group output.
 
 ```go
 func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
-	// Body is unchanged — identity items never get Group, CardType, or DisplayOnly.
-	// The isFleet parameter is accepted for signature consistency but not used.
-	// ... existing body stays the same ...
+	var items []TriageItem
+	if snap.UsersGroups != nil {
+		for _, u := range snap.UsersGroups.Users {
+			name, _ := u["name"].(string)
+			uid, _ := u["uid"].(float64)
+			isSystem := uid < 1000
+			tier, reason := 2, "User-created account (UID >= 1000)."
+			if isSystem {
+				tier, reason = 1, "System user (UID < 1000), matches base."
+			}
+			items = append(items, TriageItem{
+				Section: "identity", Key: "user-" + name,
+				Tier: tier, Reason: reason, Name: name,
+				Meta:           fmt.Sprintf("UID %.0f", uid),
+				DefaultInclude: mapInclude(u),
+				// Users are output-affecting (renderer emits useradd/sysusers lines)
+			})
+		}
+		for _, g := range snap.UsersGroups.Groups {
+			name, _ := g["name"].(string)
+			gid, _ := g["gid"].(float64)
+			isSystem := gid < 1000
+			tier, reason := 2, "User-created group."
+			if isSystem {
+				tier, reason = 1, "System group (GID < 1000)."
+			}
+			item := TriageItem{
+				Section: "identity", Key: "group-" + name,
+				Tier: tier, Reason: reason, Name: name,
+				Meta:           fmt.Sprintf("GID %.0f", gid),
+				DefaultInclude: mapInclude(g),
+			}
+			if !isFleet {
+				// Groups are display-only on go-port: containerfile.go
+				// only consumes UsersGroups.Users, not .Groups
+				item.DisplayOnly = true
+			}
+			items = append(items, item)
+		}
+	}
+	// ... SELinux section unchanged from current code ...
 }
 ```
 
@@ -1140,7 +1203,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 
 - [ ] **Step 5: Run tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All PASS.
 
 - [ ] **Step 6: Commit**
@@ -1480,7 +1543,7 @@ Add in the `<style>` section:
 
 - [ ] **Step 4: Manually test in browser**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All PASS (JS changes don't break Go tests).
 
 - [ ] **Step 5: Commit**
@@ -1650,7 +1713,9 @@ function acknowledgeNotification(key, sectionId) {
   if (App.mode === 'static') return;
   setSnapshotAcknowledged(key, true);
   App.decisions[key] = true;
-  incrementChangeCounter();
+  // NO incrementChangeCounter — this is not an output-affecting decision.
+  // The change counter says "rebuild to update preview" which is false
+  // for notification and display-only surfaces.
   reopenReviewedSection(sectionId);
   renderTriageSection(sectionId);
   updateBadge(sectionId);
@@ -1662,7 +1727,7 @@ function unacknowledgeNotification(key, sectionId) {
   if (App.mode === 'static') return;
   setSnapshotAcknowledged(key, false);
   delete App.decisions[key];
-  decrementChangeCounter();
+  // NO decrementChangeCounter — same reason as above.
   reopenReviewedSection(sectionId);
   renderTriageSection(sectionId);
   updateBadge(sectionId);
@@ -1896,6 +1961,9 @@ In the existing `buildTriageCard` function, check `item.display_only` and use "A
 ```javascript
 // Inside buildTriageCard, replace the button creation section:
 if (item.display_only) {
+  // Display-only surfaces use Acknowledge/Skip — both are review-tracking
+  // actions, neither affects generated artifacts. Both persist via
+  // the acknowledged field, NOT via include/makeDecision.
   var ackBtn = document.createElement('button');
   ackBtn.className = 'btn-primary';
   ackBtn.textContent = 'Acknowledge';
@@ -1906,7 +1974,13 @@ if (item.display_only) {
   var skipBtn = document.createElement('button');
   skipBtn.className = 'btn-outline';
   skipBtn.textContent = 'Skip';
-  skipBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+  skipBtn.onclick = function() {
+    // Skip also uses the acknowledged path — it means "I've seen this,
+    // it's not relevant right now." Same persistence, different semantic.
+    // NEVER route through makeDecision — that would mutate include and
+    // trigger the rebuild counter.
+    acknowledgeNotification(item.key, item.section);
+  };
   actions.appendChild(skipBtn);
 } else {
   // existing Include/Leave out buttons
@@ -1940,7 +2014,7 @@ function disableAllDecisionButtons() {
 
 - [ ] **Step 5: Run Go tests to verify no regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -v`
 Expected: All PASS.
 
 - [ ] **Step 6: Commit**
@@ -1959,16 +2033,19 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 11: Golden-file tests for new card types
+### Task 11: Rendered golden-file tests for new card types
 
 **Files:**
-- Create: `cmd/inspectah/internal/renderer/testdata/golden-output-accordion.html`
-- Create: `cmd/inspectah/internal/renderer/testdata/golden-notification-card.html`
+- Create: `cmd/inspectah/internal/renderer/testdata/golden-grouped-packages.html`
 - Modify: `cmd/inspectah/internal/renderer/html_test.go`
 
-- [ ] **Step 1: Write test that generates and compares accordion fragment**
+- [ ] **Step 1: Write test that renders HTML report and compares grouped-section fragment**
 
-Add a test in `html_test.go` that creates a snapshot with grouped packages, renders the HTML report, and compares a semantic fragment against a golden file. Follow the existing `TestHTMLReportGoldenTierSection` pattern.
+Follow the existing `TestHTMLReportGoldenTierSection` pattern. Render a full HTML report from a snapshot with grouped packages, extract the `TRIAGE_MANIFEST` JSON from the rendered output, and compare against a golden file. The golden must verify:
+- Group field populated for repo-backed packages
+- CardType=notification for no-repo packages
+- DisplayOnly=true for display-only surfaces
+- Acknowledged field present
 
 ```go
 func TestHTMLReportGoldenGroupedPackages(t *testing.T) {
@@ -1983,52 +2060,122 @@ func TestHTMLReportGoldenGroupedPackages(t *testing.T) {
 		},
 	}
 
-	items := ClassifySnapshot(snap, nil)
+	// Render the report and extract triage manifest
+	dir := t.TempDir()
+	err := RenderHTMLReport(snap, dir, HTMLReportOptions{})
+	require.NoError(t, err)
 
-	// Verify grouping is correct
-	var grouped, ungrouped int
-	for _, item := range items {
-		if item.Group != "" {
-			grouped++
-		} else {
-			ungrouped++
-		}
-	}
-	assert.Equal(t, 3, grouped, "3 repo-backed packages should be grouped")
-	assert.Equal(t, 1, ungrouped, "1 local-install package should be ungrouped")
+	reportBytes, err := os.ReadFile(filepath.Join(dir, "report.html"))
+	require.NoError(t, err)
+	report := string(reportBytes)
 
-	// Verify notification card type
+	// Extract TRIAGE_MANIFEST JSON from rendered HTML
+	manifestJSON := extractTriageManifest(t, report)
+	var items []TriageItem
+	require.NoError(t, json.Unmarshal([]byte(manifestJSON), &items))
+
+	// Verify rendered manifest has correct grouping
+	assert.Equal(t, 4, len(items))
+
+	bash := findItem(items, "pkg-bash-x86_64")
+	require.NotNil(t, bash)
+	assert.Equal(t, "repo:baseos", bash.Group)
+
+	vim := findItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vim)
+	assert.Equal(t, "repo:appstream", vim.Group)
+
+	htop := findItem(items, "pkg-htop-x86_64")
+	require.NotNil(t, htop)
+	assert.Equal(t, "repo:epel", htop.Group)
+
 	custom := findItem(items, "pkg-custom-x86_64")
 	require.NotNil(t, custom)
+	assert.Equal(t, "", custom.Group)
 	assert.Equal(t, "notification", custom.CardType)
+}
+
+// extractTriageManifest pulls the TRIAGE_MANIFEST JSON from rendered HTML.
+func extractTriageManifest(t *testing.T, html string) string {
+	t.Helper()
+	start := strings.Index(html, "const TRIAGE_MANIFEST = ")
+	require.Greater(t, start, 0, "TRIAGE_MANIFEST not found in rendered HTML")
+	start += len("const TRIAGE_MANIFEST = ")
+	end := strings.Index(html[start:], ";\n")
+	require.Greater(t, end, 0)
+	return html[start : start+end]
 }
 ```
 
-- [ ] **Step 2: Run test**
+- [ ] **Step 2: Write golden test for display-only surfaces in rendered manifest**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestHTMLReportGoldenGrouped" -v`
+```go
+func TestHTMLReportGoldenDisplayOnly(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Network = &schema.NetworkSection{
+		Connections: []schema.NMConnection{
+			{Name: "eth0", Type: "ethernet"},
+		},
+	}
+	snap.Storage = &schema.StorageSection{
+		FstabEntries: []schema.FstabEntry{
+			{MountPoint: "/data", Fstype: "xfs"},
+			{MountPoint: "/var", Fstype: "xfs"},
+		},
+	}
+
+	dir := t.TempDir()
+	err := RenderHTMLReport(snap, dir, HTMLReportOptions{})
+	require.NoError(t, err)
+
+	reportBytes, _ := os.ReadFile(filepath.Join(dir, "report.html"))
+	manifestJSON := extractTriageManifest(t, string(reportBytes))
+	var items []TriageItem
+	require.NoError(t, json.Unmarshal([]byte(manifestJSON), &items))
+
+	eth0 := findItem(items, "conn-eth0")
+	require.NotNil(t, eth0)
+	assert.True(t, eth0.DisplayOnly, "network connection must be display-only")
+	assert.Equal(t, "sub:network", eth0.Group)
+
+	data := findItem(items, "fstab-/data")
+	require.NotNil(t, data)
+	assert.True(t, data.DisplayOnly, "fstab /data must be display-only")
+	assert.Equal(t, "sub:fstab", data.Group)
+
+	varMount := findItem(items, "fstab-/var")
+	require.NotNil(t, varMount)
+	assert.True(t, varMount.DisplayOnly, "fstab /var must be display-only")
+	assert.Equal(t, "", varMount.Group, "risky mount must be ungrouped individual card")
+}
+```
+
+- [ ] **Step 3: Run tests**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestHTMLReportGolden" -v`
 Expected: PASS
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add cmd/inspectah/internal/renderer/html_test.go
-git commit -m "test: add golden test for grouped package classification
+git commit -m "test: rendered golden tests for grouped and display-only manifest
 
-Verifies repo-based grouping and notification card type assignment
-for the single-machine triage redesign.
+Extracts TRIAGE_MANIFEST from rendered HTML and verifies grouping,
+card types, and display-only fields in the actual renderer output.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
 ---
 
-### Task 12: Classifier integration test — fleet vs single-machine
+### Task 12: Fleet vs single-machine classifier test + refine-server contract tests
 
 **Files:**
 - Modify: `cmd/inspectah/internal/renderer/triage_test.go`
+- Modify: `cmd/inspectah/internal/refine/server_test.go`
 
-- [ ] **Step 1: Write integration test**
+- [ ] **Step 1: Write fleet vs single-machine classifier integration test**
 
 ```go
 func TestClassifySnapshot_FleetVsSingleMachine(t *testing.T) {
@@ -2075,24 +2222,120 @@ func TestClassifySnapshot_FleetVsSingleMachine(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run test**
+- [ ] **Step 2: Write refine-server contract tests for grouped/acknowledge behavior**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/renderer/ -run "TestClassifySnapshot_FleetVsSingle" -v`
+Extend `cmd/inspectah/internal/refine/server_test.go` following the existing test patterns (`TestRefineServer_*`). These use the real server with a temp working directory.
+
+```go
+func TestRefineServer_AcknowledgeDoesNotChangeArtifacts(t *testing.T) {
+	// Setup: create a snapshot with a display-only NMConnection
+	snap := makeTestSnapshotWithNetwork(t)
+	srv := startRefineServer(t, snap)
+
+	// Get initial render
+	initialTarball := getTarball(t, srv)
+
+	// Acknowledge the display-only item via PUT /api/snapshot
+	snap.Network.Connections[0].Acknowledged = true
+	putSnapshot(t, srv, snap, 1)
+
+	// Rebuild via POST /api/render
+	postRender(t, srv)
+
+	// Get new tarball
+	postTarball := getTarball(t, srv)
+
+	// Artifacts must be identical — acknowledge is display-only
+	assert.Equal(t, initialTarball, postTarball,
+		"acknowledging a display-only item must not change generated artifacts")
+}
+
+func TestRefineServer_NotificationAcknowledgePreservesTodo(t *testing.T) {
+	// Setup: snapshot with a no-repo package
+	snap := makeTestSnapshotWithNoRepoPackage(t)
+	srv := startRefineServer(t, snap)
+
+	// Get initial render — should contain TODO comment
+	initialTarball := getTarball(t, srv)
+	assertContainsTodo(t, initialTarball, "custom-agent")
+
+	// Acknowledge the notification
+	snap.Rpm.PackagesAdded[0].Acknowledged = true
+	putSnapshot(t, srv, snap, 1)
+	postRender(t, srv)
+
+	// TODO comment must still be present
+	postTarball := getTarball(t, srv)
+	assertContainsTodo(t, postTarball, "custom-agent")
+}
+
+func TestRefineServer_GroupedTogglePreservesEqualityAfterRebuild(t *testing.T) {
+	// Setup: snapshot with multiple packages from same repo
+	snap := makeTestSnapshotWithRepoPackages(t)
+	srv := startRefineServer(t, snap)
+
+	// Exclude all packages from a repo group
+	for i := range snap.Rpm.PackagesAdded {
+		if snap.Rpm.PackagesAdded[i].SourceRepo == "appstream" {
+			snap.Rpm.PackagesAdded[i].Include = false
+		}
+	}
+	putSnapshot(t, srv, snap, 1)
+	postRender(t, srv)
+
+	// Verify three-way equality: response = working dir = tarball
+	responseSnap := getSnapshot(t, srv)
+	diskSnap := loadSnapshotFromDisk(t, srv)
+	tarballSnap := extractSnapshotFromTarball(t, getTarball(t, srv))
+
+	// All three must agree on the include=false state
+	for _, s := range []*schema.InspectionSnapshot{responseSnap, diskSnap, tarballSnap} {
+		for _, pkg := range s.Rpm.PackagesAdded {
+			if pkg.SourceRepo == "appstream" {
+				assert.False(t, pkg.Include,
+					"package %s should be excluded in all three representations", pkg.Name)
+			}
+		}
+	}
+}
+
+func TestRefineServer_AcknowledgeResumePersists(t *testing.T) {
+	// Setup: acknowledge a notification, stop server, restart, verify state
+	snap := makeTestSnapshotWithNoRepoPackage(t)
+	srv := startRefineServer(t, snap)
+
+	// Acknowledge
+	snap.Rpm.PackagesAdded[0].Acknowledged = true
+	putSnapshot(t, srv, snap, 1)
+
+	// Simulate resume: read snapshot from disk
+	resumedSnap := loadSnapshotFromDisk(t, srv)
+	assert.True(t, resumedSnap.Rpm.PackagesAdded[0].Acknowledged,
+		"acknowledged state must persist to disk and survive resume")
+}
+```
+
+Note: `makeTestSnapshotWith*`, `startRefineServer`, `getTarball`, `putSnapshot`, `postRender`, `getSnapshot`, `loadSnapshotFromDisk`, `extractSnapshotFromTarball`, and `assertContainsTodo` are test helpers. Follow the existing patterns in `server_test.go` — the file already has similar helpers for PUT/POST/GET cycles. The implementer must read `server_test.go` first and reuse existing helpers where possible.
+
+- [ ] **Step 3: Run classifier tests**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/ -run "TestClassifySnapshot_FleetVsSingle" -v`
 Expected: PASS
 
-- [ ] **Step 3: Run full test suite**
+- [ ] **Step 4: Run refine server tests**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./... 2>&1 | tail -20`
-Expected: All packages PASS.
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run "TestRefineServer_Acknowledge\|TestRefineServer_Grouped\|TestRefineServer_Notification" -v`
+Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add cmd/inspectah/internal/renderer/triage_test.go
-git commit -m "test: fleet vs single-machine classification integration test
+git add cmd/inspectah/internal/renderer/triage_test.go cmd/inspectah/internal/refine/server_test.go
+git commit -m "test: fleet/single-machine classifier + refine-server contract tests
 
-Verifies that Group and DisplayOnly fields are populated only for
-single-machine snapshots (no Meta[fleet]).
+Fleet vs single-machine grouping, display-only output invariance,
+notification acknowledge/resume persistence, and grouped-decision
+three-way equality proofs.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -2131,9 +2374,9 @@ Expected:
 - Expand and uncheck individual package → summary updates to "N of M"
 - Toggle off after unchecking → toggle on → prior unchecked items stay unchecked (within session)
 
-- [ ] **Step 4: Test notification cards (if no-repo packages present)**
+- [ ] **Step 4: Test notification cards**
 
-If no no-repo packages in test data, this is tested via unit tests only.
+If the test snapshot lacks no-repo packages, create a temporary one with a `local_install` state package. Verify: expanded card shows provenance warning, Acknowledge button is solid blue and clickable, clicking collapses to name + "no repo — manual install required" + undo, undo expands back, change counter does NOT increment on acknowledge.
 
 - [ ] **Step 5: Test other sections**
 
@@ -2145,13 +2388,48 @@ If no no-repo packages in test data, this is tested via unit tests only.
 
 - [ ] **Step 6: Test static mode**
 
-Open `report.html` as `file://` directly. Expected: accordions collapsed, no toggles, no checkboxes, no acknowledge buttons, static banner.
+Open `report.html` as `file://` directly. Expected:
+- All accordions start collapsed (NOT expanded — this is the key fix)
+- No toggle switches rendered
+- No per-item checkboxes
+- No Acknowledge buttons
+- Static banner present
+- Accordions are still expandable to view content (read-only)
+- No tab stops on toggle or checkbox elements
 
-- [ ] **Step 7: Test dark/light theme**
+- [ ] **Step 7: Test keyboard navigation**
 
-Toggle theme. Expected: all card types readable in both themes.
+With refine mode active:
+- Tab through accordion headers — each is focusable
+- Enter/Space on header → expand/collapse
+- Tab to toggle switch (separate stop from header)
+- Enter/Space on toggle → toggles group state
+- Tab through per-item checkboxes when expanded
+- Tab to notification card Acknowledge button
+- Enter/Space → acknowledges, focus moves to next undecided card
+- Tab to undo → Enter/Space → expands back
 
-- [ ] **Step 8: Commit any fixes found during manual testing**
+- [ ] **Step 8: Test display-only truthfulness**
+
+- Acknowledge a display-only item (e.g., network connection)
+- Verify change counter does NOT increment
+- Verify Containerfile preview does NOT update
+- Click Download → verify Containerfile in tarball is unchanged
+
+- [ ] **Step 9: Test resume behavior**
+
+- Make some decisions (accordion toggle, per-item uncheck, notification acknowledge)
+- Click Download to get tarball
+- Stop the server
+- Run `inspectah refine` on the downloaded tarball
+- Verify: accordion states preserved, acknowledged notifications start collapsed, per-item excludes preserved
+- Toggle an all-excluded group back on → all items become included (prior row exceptions NOT restored — this is the documented lossy behavior)
+
+- [ ] **Step 10: Test dark/light theme**
+
+Toggle theme. Expected: all card types readable in both themes, accordion borders visible, toggle switch colors correct.
+
+- [ ] **Step 11: Commit any fixes found during manual testing**
 
 Fix issues discovered during manual testing in focused commits.
 
@@ -2164,7 +2442,7 @@ Fix issues discovered during manual testing in focused commits.
 - [ ] **Step 1: Run all Go tests**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./... -v 2>&1 | tail -30
+cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... -v 2>&1 | tail -30
 ```
 
 Expected: All packages PASS.
@@ -2172,7 +2450,7 @@ Expected: All packages PASS.
 - [ ] **Step 2: Count total tests**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./... -v 2>&1 | grep -c "^--- PASS\|^--- FAIL"
+cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... -v 2>&1 | grep -c "^--- PASS\|^--- FAIL"
 ```
 
 Expected: Test count > 550 (baseline) + new tests.
@@ -2180,7 +2458,7 @@ Expected: Test count > 550 (baseline) + new tests.
 - [ ] **Step 3: Verify no linting issues**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/inspectah && go vet ./...
+cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go vet ./...
 ```
 
 Expected: No issues.
