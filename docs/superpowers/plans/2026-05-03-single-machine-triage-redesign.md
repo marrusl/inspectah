@@ -1,6 +1,6 @@
 # Single-Machine Triage Redesign Implementation Plan
 
-*Revision 4 — addresses round 3 plan review feedback from Fern.*
+*Revision 5 — fixes stale aria-label in buildNotificationCard (round 4 feedback).*
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1710,7 +1710,7 @@ function buildNotificationCard(item) {
   collapsed.appendChild(row);
   wrapper.appendChild(collapsed);
 
-  wrapper.setAttribute('aria-label', item.name + ': ' + (item.acknowledged ? 'acknowledged' : 'manual follow-up required'));
+  wrapper.setAttribute('aria-label', item.name + ': ' + (isAcked ? 'acknowledged' : 'manual follow-up required'));
   return wrapper;
 }
 
