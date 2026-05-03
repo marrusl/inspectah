@@ -68,53 +68,67 @@ func NewResolver(exec CommandRunner) *Resolver {
 // Resolve resolves the baseline package set, base image reference, and
 // whether baseline mode is available.
 //
-// Returns (baselinePackages, baseImageRef, noBaseline).
+// Returns (baselinePackages, baseImageRef, noBaseline, error).
 //
 // Strategy (in priority order):
 //  1. TargetImage set: use that image (CLI override)
 //  2. BaselineFile set: load from file (air-gapped mode)
 //  3. Auto-detect: SelectBaseImage(osID, versionID, targetVersion) then query
 //  4. Fall back to no-baseline mode
-func (r *Resolver) Resolve(opts ResolveOptions) (map[string]schema.PackageEntry, string, bool) {
+func (r *Resolver) Resolve(opts ResolveOptions) (map[string]schema.PackageEntry, string, bool, error) {
 	// 1. CLI target-image override
 	if opts.TargetImage != "" {
 		if opts.BaselineFile != "" {
 			pkgs, err := LoadBaselinePackagesFile(opts.BaselineFile)
-			if err != nil || len(pkgs) == 0 {
-				return nil, opts.TargetImage, true
+			if err != nil {
+				return nil, opts.TargetImage, true, fmt.Errorf("baseline file load failed for %s: %w", opts.BaselineFile, err)
 			}
-			return pkgs, opts.TargetImage, false
+			if len(pkgs) == 0 {
+				return nil, opts.TargetImage, true, fmt.Errorf("baseline file %s contained no packages", opts.BaselineFile)
+			}
+			return pkgs, opts.TargetImage, false, nil
 		}
 		if r.exec != nil {
 			pkgs, err := r.QueryPackages(opts.TargetImage)
 			if err != nil {
-				return nil, opts.TargetImage, true
+				return nil, opts.TargetImage, true, fmt.Errorf("baseline query failed for %s: %w", opts.TargetImage, err)
 			}
-			return pkgs, opts.TargetImage, false
+			if len(pkgs) == 0 {
+				return nil, opts.TargetImage, true, fmt.Errorf("baseline query returned no packages for %s (image may lack rpm database)", opts.TargetImage)
+			}
+			return pkgs, opts.TargetImage, false, nil
 		}
-		return nil, opts.TargetImage, true
+		return nil, opts.TargetImage, true, nil
 	}
 
 	// 2. Explicit baseline file
 	if opts.BaselineFile != "" {
 		pkgs, err := LoadBaselinePackagesFile(opts.BaselineFile)
-		if err == nil && len(pkgs) > 0 {
-			baseImage, _ := SelectBaseImage(opts.OsID, opts.VersionID, opts.TargetVersion)
-			return pkgs, baseImage, false
+		if err != nil {
+			return nil, "", true, fmt.Errorf("baseline file load failed for %s: %w", opts.BaselineFile, err)
 		}
+		if len(pkgs) > 0 {
+			baseImage, _ := SelectBaseImage(opts.OsID, opts.VersionID, opts.TargetVersion)
+			return pkgs, baseImage, false, nil
+		}
+		return nil, "", true, fmt.Errorf("baseline file %s contained no packages", opts.BaselineFile)
 	}
 
 	// 3. Auto-detect base image and query via podman
 	baseImage, _ := SelectBaseImage(opts.OsID, opts.VersionID, opts.TargetVersion)
 	if baseImage != "" && r.exec != nil {
 		pkgs, err := r.QueryPackages(baseImage)
-		if err == nil && len(pkgs) > 0 {
-			return pkgs, baseImage, false
+		if err != nil {
+			return nil, baseImage, true, fmt.Errorf("baseline query failed for %s: %w", baseImage, err)
 		}
+		if len(pkgs) == 0 {
+			return nil, baseImage, true, fmt.Errorf("baseline query returned no packages for %s (image may lack rpm database)", baseImage)
+		}
+		return pkgs, baseImage, false, nil
 	}
 
 	// 4. No baseline available
-	return nil, baseImage, true
+	return nil, baseImage, true, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -142,8 +156,12 @@ func (r *Resolver) QueryPackages(baseImage string) (map[string]schema.PackageEnt
 		"rpm", "-qa", "--queryformat", queryformat,
 	)
 	if result.ExitCode != 0 {
+		combined := truncate(result.Stderr, 400)
+		if stdout := truncate(result.Stdout, 400); stdout != "" {
+			combined = fmt.Sprintf("stdout: %s; stderr: %s", stdout, combined)
+		}
 		return nil, fmt.Errorf("podman run rpm -qa failed (rc=%d): %s",
-			result.ExitCode, truncate(result.Stderr, 800))
+			result.ExitCode, combined)
 	}
 
 	packages := make(map[string]schema.PackageEntry)
@@ -157,6 +175,14 @@ func (r *Resolver) QueryPackages(baseImage string) (map[string]schema.PackageEnt
 			key := fmt.Sprintf("%s.%s", pkg.Name, pkg.Arch)
 			packages[key] = *pkg
 		}
+	}
+
+	if len(packages) == 0 && len(strings.TrimSpace(result.Stdout)) > 0 {
+		sample := result.Stdout
+		if len(sample) > 200 {
+			sample = sample[:200]
+		}
+		return nil, fmt.Errorf("rpm -qa returned output but no packages parsed; first 200 chars: %s", sample)
 	}
 
 	r.packageCache[baseImage] = packages

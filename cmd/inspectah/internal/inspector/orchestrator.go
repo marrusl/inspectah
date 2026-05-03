@@ -122,12 +122,21 @@ func RunAll(exec Executor, opts InspectOptions) (*schema.InspectionSnapshot, err
 			osID = osRelease.ID
 			versionID = osRelease.VersionID
 		}
-		baselinePackages, baseImageRef, noBaseline = resolver.Resolve(baseline.ResolveOptions{
+		var resolveErr error
+		baselinePackages, baseImageRef, noBaseline, resolveErr = resolver.Resolve(baseline.ResolveOptions{
 			OsID:          osID,
 			VersionID:     versionID,
 			TargetVersion: opts.TargetVersion,
 			TargetImage:   opts.TargetImage,
 		})
+		if resolveErr != nil {
+			if !opts.NoBaseline {
+				return nil, fmt.Errorf("baseline resolution failed: %w\n"+
+					"Use --no-baseline to run without baseline comparison", resolveErr)
+			}
+			// --no-baseline was set, so the error is expected; log and continue.
+			fmt.Fprintf(os.Stderr, "WARNING: baseline resolution failed (continuing with --no-baseline): %v\n", resolveErr)
+		}
 
 		// Query presets and module streams from the resolved base image.
 		if baseImageRef != "" && !noBaseline {

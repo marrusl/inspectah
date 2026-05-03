@@ -236,7 +236,8 @@ func TestRunAll_PopulatesAllSections(t *testing.T) {
 	fake := buildFullFakeExecutor()
 
 	snapshot, err := RunAll(fake, InspectOptions{
-		Version: "0.7.0-test",
+		Version:    "0.7.0-test",
+		NoBaseline: true,
 	})
 	require.NoError(t, err)
 
@@ -273,7 +274,7 @@ func TestRunAll_PopulatesAllSections(t *testing.T) {
 func TestRunAll_MetadataHostname(t *testing.T) {
 	fake := buildFullFakeExecutor()
 
-	snapshot, err := RunAll(fake, InspectOptions{})
+	snapshot, err := RunAll(fake, InspectOptions{NoBaseline: true})
 	require.NoError(t, err)
 	assert.Equal(t, "test-host.example.com", snapshot.Meta["hostname"])
 }
@@ -282,7 +283,7 @@ func TestRunAll_SystemTypeDetection(t *testing.T) {
 	// Default fake has no /ostree → package-mode
 	fake := buildFullFakeExecutor()
 
-	snapshot, err := RunAll(fake, InspectOptions{})
+	snapshot, err := RunAll(fake, InspectOptions{NoBaseline: true})
 	require.NoError(t, err)
 	assert.Equal(t, schema.SystemTypePackageMode, snapshot.SystemType)
 }
@@ -294,7 +295,7 @@ func TestRunAll_BootcSystemType(t *testing.T) {
 	})
 	fake.commands["bootc status"] = ExecResult{Stdout: "running", ExitCode: 0}
 
-	snapshot, err := RunAll(fake, InspectOptions{})
+	snapshot, err := RunAll(fake, InspectOptions{NoBaseline: true})
 	require.NoError(t, err)
 	assert.Equal(t, schema.SystemTypeBootc, snapshot.SystemType)
 }
@@ -317,6 +318,7 @@ func TestRunAll_CrossVersionWarning(t *testing.T) {
 
 	snapshot, err := RunAll(fake, InspectOptions{
 		TargetVersion: "10.0",
+		NoBaseline:    true,
 	})
 	require.NoError(t, err)
 
@@ -338,6 +340,7 @@ func TestRunAll_NoCrossVersionWarningWhenSameMajor(t *testing.T) {
 
 	snapshot, err := RunAll(fake, InspectOptions{
 		TargetVersion: "9.5",
+		NoBaseline:    true,
 	})
 	require.NoError(t, err)
 
@@ -352,7 +355,8 @@ func TestRunAll_VersionInMeta(t *testing.T) {
 	fake := buildFullFakeExecutor()
 
 	snapshot, err := RunAll(fake, InspectOptions{
-		Version: "0.7.0",
+		Version:    "0.7.0",
+		NoBaseline: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "0.7.0", snapshot.Meta["inspectah_version"])

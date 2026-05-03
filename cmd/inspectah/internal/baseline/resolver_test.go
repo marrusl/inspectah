@@ -94,9 +94,10 @@ func TestResolve_TargetImageOverride(t *testing.T) {
 	fake := buildResolverFake(image)
 	r := NewResolver(fake)
 
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		TargetImage: image,
 	})
+	require.NoError(t, err)
 	assert.False(t, noBaseline)
 	assert.Equal(t, image, ref)
 	assert.Len(t, pkgs, 3)
@@ -108,10 +109,11 @@ func TestResolve_TargetImageWithBaselineFile(t *testing.T) {
 	path := writeTempFile(t, content)
 
 	r := NewResolver(nil) // no executor needed for file mode
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		TargetImage:  "quay.io/custom/image:latest",
 		BaselineFile: path,
 	})
+	require.NoError(t, err)
 	assert.False(t, noBaseline)
 	assert.Equal(t, "quay.io/custom/image:latest", ref)
 	assert.Len(t, pkgs, 2)
@@ -122,11 +124,12 @@ func TestResolve_BaselineFileOnly(t *testing.T) {
 	path := writeTempFile(t, content)
 
 	r := NewResolver(nil)
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		OsID:         "rhel",
 		VersionID:    "9.6",
 		BaselineFile: path,
 	})
+	require.NoError(t, err)
 	assert.False(t, noBaseline)
 	assert.Equal(t, "registry.redhat.io/rhel9/rhel-bootc:9.6", ref)
 	assert.Len(t, pkgs, 1)
@@ -137,10 +140,11 @@ func TestResolve_AutoDetectCentOS(t *testing.T) {
 	fake := buildResolverFake(image)
 	r := NewResolver(fake)
 
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		OsID:      "centos",
 		VersionID: "9",
 	})
+	require.NoError(t, err)
 	assert.False(t, noBaseline)
 	assert.Equal(t, image, ref)
 	assert.Len(t, pkgs, 3)
@@ -151,10 +155,11 @@ func TestResolve_AutoDetectRHEL(t *testing.T) {
 	fake := buildResolverFakeRHEL(image)
 	r := NewResolver(fake)
 
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		OsID:      "rhel",
 		VersionID: "9.4",
 	})
+	require.NoError(t, err)
 	assert.False(t, noBaseline)
 	assert.Equal(t, image, ref)
 	assert.Len(t, pkgs, 3)
@@ -163,10 +168,11 @@ func TestResolve_AutoDetectRHEL(t *testing.T) {
 func TestResolve_NoExecutor(t *testing.T) {
 	r := NewResolver(nil)
 
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		OsID:      "rhel",
 		VersionID: "9.4",
 	})
+	require.NoError(t, err)
 	assert.True(t, noBaseline)
 	assert.Equal(t, "registry.redhat.io/rhel9/rhel-bootc:9.6", ref)
 	assert.Nil(t, pkgs)
@@ -175,10 +181,11 @@ func TestResolve_NoExecutor(t *testing.T) {
 func TestResolve_UnmappedOS(t *testing.T) {
 	r := NewResolver(nil)
 
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		OsID:      "ubuntu",
 		VersionID: "22.04",
 	})
+	require.NoError(t, err)
 	assert.True(t, noBaseline)
 	assert.Equal(t, "", ref)
 	assert.Nil(t, pkgs)
@@ -192,10 +199,50 @@ func TestResolve_PodmanFails(t *testing.T) {
 	})
 	r := NewResolver(fake)
 
-	pkgs, ref, noBaseline := r.Resolve(ResolveOptions{
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
 		OsID:      "centos",
 		VersionID: "9",
 	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "baseline query failed")
+	assert.True(t, noBaseline)
+	assert.Equal(t, image, ref)
+	assert.Nil(t, pkgs)
+}
+
+func TestResolve_QueryReturnsEmptyPackages(t *testing.T) {
+	image := "quay.io/centos-bootc/centos-bootc:stream9"
+	// rpm -qa succeeds but returns unparseable output
+	fake := newFakeRunner(map[string]CommandResult{
+		fmt.Sprintf("podman image exists %s", image): {ExitCode: 0},
+		rpmQAKey(image): {Stdout: "not-valid-nevra-format\n", ExitCode: 0},
+	})
+	r := NewResolver(fake)
+
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
+		OsID:      "centos",
+		VersionID: "9",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no packages parsed")
+	assert.True(t, noBaseline)
+	assert.Equal(t, image, ref)
+	assert.Nil(t, pkgs)
+}
+
+func TestResolve_TargetImageQueryFails(t *testing.T) {
+	image := "quay.io/custom/broken:latest"
+	fake := newFakeRunner(map[string]CommandResult{
+		fmt.Sprintf("podman image exists %s", image): {ExitCode: 0},
+		rpmQAKey(image): {Stdout: "", Stderr: "exec failed", ExitCode: 1},
+	})
+	r := NewResolver(fake)
+
+	pkgs, ref, noBaseline, err := r.Resolve(ResolveOptions{
+		TargetImage: image,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "baseline query failed")
 	assert.True(t, noBaseline)
 	assert.Equal(t, image, ref)
 	assert.Nil(t, pkgs)
