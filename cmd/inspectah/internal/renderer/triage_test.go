@@ -609,3 +609,76 @@ func TestClassifyContainerItems_SingleMachine_Grouping(t *testing.T) {
 	assert.Equal(t, "notification", agent.CardType)
 	assert.Contains(t, agent.Reason, "provenance")
 }
+
+func TestClassifyIdentity_SingleMachine_NoGroups(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.UsersGroups = &schema.UserGroupSection{
+		Users: []map[string]interface{}{
+			{"name": "admin", "uid": float64(1001), "include": true},
+		},
+		Groups: []map[string]interface{}{
+			{"name": "developers", "gid": float64(1001), "include": true},
+		},
+	}
+
+	items := classifyIdentity(snap, make(map[string]bool), false)
+	for _, item := range items {
+		assert.Equal(t, "", item.Group, "identity items should never be grouped")
+	}
+
+	admin := findItem(items, "user-admin")
+	require.NotNil(t, admin)
+	assert.False(t, admin.DisplayOnly)
+
+	devs := findItem(items, "group-developers")
+	require.NotNil(t, devs)
+	assert.True(t, devs.DisplayOnly)
+}
+
+func TestClassifySystemItems_SingleMachine_Grouping(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.KernelBoot = &schema.KernelBootSection{
+		SysctlOverrides: []schema.SysctlOverride{
+			{Key: "vm.swappiness", Runtime: "10", Include: true},
+		},
+	}
+	snap.Network = &schema.NetworkSection{
+		Connections: []schema.NMConnection{
+			{Name: "eth0", Type: "ethernet"},
+		},
+	}
+	snap.Storage = &schema.StorageSection{
+		FstabEntries: []schema.FstabEntry{
+			{MountPoint: "/data", Fstype: "xfs"},
+			{MountPoint: "/var", Fstype: "xfs"},
+			{MountPoint: "/usr/local", Fstype: "xfs"},
+		},
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), false)
+
+	sysctl := findItem(items, "sysctl-vm.swappiness")
+	require.NotNil(t, sysctl)
+	assert.Equal(t, "sub:sysctl", sysctl.Group)
+	assert.False(t, sysctl.DisplayOnly)
+
+	eth0 := findItem(items, "conn-eth0")
+	require.NotNil(t, eth0)
+	assert.Equal(t, "sub:network", eth0.Group)
+	assert.True(t, eth0.DisplayOnly)
+
+	data := findItem(items, "fstab-/data")
+	require.NotNil(t, data)
+	assert.Equal(t, "sub:fstab", data.Group)
+	assert.True(t, data.DisplayOnly)
+
+	varMount := findItem(items, "fstab-/var")
+	require.NotNil(t, varMount)
+	assert.Equal(t, "", varMount.Group)
+	assert.True(t, varMount.DisplayOnly)
+
+	usrLocal := findItem(items, "fstab-/usr/local")
+	require.NotNil(t, usrLocal)
+	assert.Equal(t, "", usrLocal.Group)
+	assert.True(t, usrLocal.DisplayOnly)
+}

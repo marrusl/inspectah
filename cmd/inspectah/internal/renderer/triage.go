@@ -272,6 +272,24 @@ var imageModeIncompatibleServices = map[string]bool{
 	"packagekit.service":    true,
 }
 
+var riskyMountPrefixes = []string{"/", "/boot", "/var", "/sysroot", "/usr", "/etc"}
+
+func isRiskyMount(mountPoint string) bool {
+	for _, prefix := range riskyMountPrefixes {
+		if mountPoint == prefix {
+			return true
+		}
+		if prefix != "/" && strings.HasPrefix(mountPoint, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func isUnstableDevicePath(device string) bool {
+	return strings.HasPrefix(device, "/dev/sd") || strings.HasPrefix(device, "/dev/hd")
+}
+
 func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
 	var items []TriageItem
 	if snap.Services != nil {
@@ -410,7 +428,6 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 }
 
 func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
-	_ = isFleet
 	var items []TriageItem
 	if snap.UsersGroups != nil {
 		for _, u := range snap.UsersGroups.Users {
@@ -436,12 +453,16 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 			if isSystem {
 				tier, reason = 1, "System group (GID < 1000)."
 			}
-			items = append(items, TriageItem{
+			item := TriageItem{
 				Section: "identity", Key: "group-" + name,
 				Tier: tier, Reason: reason, Name: name,
 				Meta:           fmt.Sprintf("GID %.0f", gid),
 				DefaultInclude: mapInclude(g),
-			})
+			}
+			if !isFleet {
+				item.DisplayOnly = true
+			}
+			items = append(items, item)
 		}
 	}
 	if snap.Selinux != nil {
@@ -476,52 +497,82 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 }
 
 func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
-	_ = isFleet
 	var items []TriageItem
 	if snap.KernelBoot != nil {
 		for _, s := range snap.KernelBoot.SysctlOverrides {
+			group := ""
+			if !isFleet {
+				group = "sub:sysctl"
+			}
 			items = append(items, TriageItem{
 				Section: "system", Key: "sysctl-" + s.Key,
 				Tier: 2, Reason: "Custom sysctl parameter.",
 				Name: s.Key, Meta: s.Runtime,
+				Group:          group,
 				DefaultInclude: s.Include,
 			})
 		}
 		for _, m := range snap.KernelBoot.NonDefaultModules {
+			group := ""
+			if !isFleet {
+				group = "sub:kmod"
+			}
 			items = append(items, TriageItem{
 				Section: "system", Key: "kmod-" + m.Name,
 				Tier: 2, Reason: "Kernel module loaded.",
 				Name: m.Name, Meta: m.UsedBy,
+				Group:          group,
 				DefaultInclude: m.Include,
 			})
 		}
 	}
 	if snap.Network != nil {
 		for _, conn := range snap.Network.Connections {
-			items = append(items, TriageItem{
+			item := TriageItem{
 				Section: "system", Key: "conn-" + conn.Name,
 				Tier: 2, Reason: "Network connection configuration.",
 				Name: conn.Name, Meta: conn.Type,
 				DefaultInclude: isIncluded(conn.Include),
-			})
+			}
+			if !isFleet {
+				item.Group = "sub:network"
+				item.DisplayOnly = true
+				item.Acknowledged = conn.Acknowledged
+			}
+			items = append(items, item)
 		}
 		for _, zone := range snap.Network.FirewallZones {
+			group := ""
+			if !isFleet {
+				group = "sub:firewall"
+			}
 			items = append(items, TriageItem{
 				Section: "system", Key: "fw-" + zone.Name,
 				Tier: 2, Reason: "Custom firewall zone.",
 				Name:           zone.Name,
+				Group:          group,
 				DefaultInclude: zone.Include,
 			})
 		}
 	}
 	if snap.Storage != nil {
 		for _, entry := range snap.Storage.FstabEntries {
-			items = append(items, TriageItem{
+			item := TriageItem{
 				Section: "system", Key: "fstab-" + entry.MountPoint,
 				Tier: 2, Reason: "Non-default mount point.",
 				Name: entry.MountPoint, Meta: entry.Fstype,
 				DefaultInclude: isIncluded(entry.Include),
-			})
+			}
+			// All fstab entries are display-only
+			if !isFleet {
+				item.DisplayOnly = true
+				item.Acknowledged = entry.Acknowledged
+				// Risky mounts and unstable device paths get individual cards
+				if !isRiskyMount(entry.MountPoint) && !isUnstableDevicePath(entry.Device) {
+					item.Group = "sub:fstab"
+				}
+			}
+			items = append(items, item)
 		}
 	}
 	return items
