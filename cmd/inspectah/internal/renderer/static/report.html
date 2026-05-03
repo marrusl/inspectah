@@ -542,36 +542,69 @@
       background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
     }
 
+    /* ── Editor section ── */
     .editor-layout {
       display: flex;
-      gap: 1rem;
-      min-height: 300px;
-    }
-
-    .file-browser {
-      width: 220px;
-      flex-shrink: 0;
+      gap: 0;
+      min-height: 400px;
       border: 1px solid var(--pf-t--global--border--color--default, #444);
       border-radius: 4px;
-      overflow-y: auto;
-      max-height: 400px;
+      overflow: hidden;
+    }
+
+    .editor-file-panel {
+      width: 240px;
+      flex-shrink: 0;
+      border-right: 1px solid var(--pf-t--global--border--color--default, #444);
+      display: flex;
+      flex-direction: column;
       background: var(--pf-t--global--background--color--secondary-default);
     }
 
-    .file-browser-group {
-      padding: 0.375rem 0;
+    .editor-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, #444);
+      flex-shrink: 0;
     }
 
-    .file-browser-group-label {
-      font-size: 0.7rem;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      padding: 0.25rem 0.75rem;
-      opacity: 0.5;
+    .editor-tab {
+      padding: 0.5rem 0.625rem;
+      font-size: 0.75rem;
+      font-weight: 500;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: inherit;
+      opacity: 0.6;
+      white-space: nowrap;
+    }
+
+    .editor-tab:hover { opacity: 0.8; }
+
+    .editor-tab[aria-selected="true"] {
+      opacity: 1;
       font-weight: 600;
+      border-bottom-color: var(--pf-t--global--color--status--info--default, #4493f8);
+      color: var(--pf-t--global--color--status--info--default, #4493f8);
     }
 
-    .file-browser-item {
+    .editor-tab .tab-dot {
+      display: inline-block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--pf-t--global--color--status--info--default, #2b9af3);
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+
+    .editor-file-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.25rem 0;
+    }
+
+    .editor-file-item {
       padding: 0.375rem 0.75rem;
       font-size: 0.8rem;
       cursor: pointer;
@@ -579,39 +612,187 @@
       overflow: hidden;
       text-overflow: ellipsis;
       outline-offset: -2px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
     }
 
-    .file-browser-item:hover,
-    .file-browser-item:focus {
+    .editor-file-item:hover,
+    .editor-file-item:focus {
       background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.05));
     }
 
-    .file-browser-item.selected {
+    .editor-file-item.selected {
       background: var(--pf-t--global--background--color--hover, rgba(255,255,255,0.1));
       font-weight: 600;
     }
 
-    .editor-area {
+    .editor-file-item .file-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--pf-t--global--color--status--info--default, #2b9af3);
+      flex-shrink: 0;
+    }
+
+    .editor-file-item .file-path { color: inherit; opacity: 0.6; }
+    .editor-file-item .file-name { font-weight: 600; }
+
+    .editor-content-pane {
       flex: 1;
       min-width: 0;
-      border: 1px solid var(--pf-t--global--border--color--default, #444);
-      border-radius: 4px;
-      overflow: hidden;
+      display: flex;
+      flex-direction: column;
       background: var(--pf-t--global--background--color--secondary-default);
     }
 
-    .editor-area .cm-editor {
-      height: 400px;
+    .editor-toolbar {
+      padding: 0.625rem 1rem;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, #444);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .editor-toolbar .file-path-display {
+      font-family: 'SF Mono', 'Fira Code', monospace;
       font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .editor-toolbar .unsaved-badge {
+      font-size: 0.7rem;
+      padding: 1px 6px;
+      border-radius: 3px;
+      background: rgba(68, 147, 248, 0.15);
+      color: var(--pf-t--global--color--status--info--default, #4493f8);
+    }
+
+    .editor-toolbar .toolbar-actions {
+      display: flex;
+      gap: 0.375rem;
+    }
+
+    .editor-toolbar .btn-edit,
+    .editor-toolbar .btn-save {
+      padding: 4px 12px;
+      background: var(--pf-t--global--color--status--info--default, #4493f8);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .editor-toolbar .btn-edit:disabled,
+    .editor-toolbar .btn-save:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
+
+    .editor-toolbar .btn-revert {
+      padding: 4px 12px;
+      background: transparent;
+      color: inherit;
+      border: 1px solid var(--pf-t--global--border--color--default, #666);
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+
+    .editor-readonly-content {
+      flex: 1;
+      padding: 0.75rem 1rem;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.8rem;
+      line-height: 1.7;
+      white-space: pre-wrap;
+      word-break: break-all;
+      overflow-y: auto;
+      margin: 0;
     }
 
     .editor-empty {
       display: flex;
       align-items: center;
       justify-content: center;
-      height: 300px;
+      flex: 1;
       opacity: 0.5;
       font-style: italic;
+    }
+
+    .editor-content-pane .cm-editor {
+      flex: 1;
+      font-size: 0.8rem;
+    }
+
+    .editor-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .editor-modal {
+      background: var(--pf-t--global--background--color--primary-default, #1b1d21);
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      border-radius: 8px;
+      padding: 1.5rem;
+      max-width: 400px;
+      width: 90%;
+    }
+
+    .editor-modal h3 { margin: 0 0 0.5rem 0; font-size: 1rem; }
+    .editor-modal p { margin: 0 0 1.25rem 0; font-size: 0.85rem; opacity: 0.8; }
+
+    .editor-modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+
+    .editor-modal-actions button {
+      padding: 6px 14px;
+      border-radius: 4px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .editor-modal-actions .btn-modal-cancel {
+      background: transparent;
+      color: inherit;
+      border: 1px solid var(--pf-t--global--border--color--default, #666);
+    }
+
+    .editor-modal-actions .btn-modal-discard {
+      background: rgba(248, 81, 73, 0.15);
+      color: #f85149;
+      border: 1px solid rgba(248, 81, 73, 0.3);
+    }
+
+    .editor-modal-actions .btn-modal-save {
+      background: var(--pf-t--global--color--status--info--default, #4493f8);
+      color: #fff;
+      border: none;
+      font-weight: 600;
+    }
+
+    .editor-tab-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex: 1;
+      opacity: 0.5;
+      font-style: italic;
+      font-size: 0.85rem;
+      padding: 2rem;
+      text-align: center;
     }
 
     /* Rebuild bar */
@@ -937,9 +1118,6 @@ function enableStaticMode() {
       main.insertBefore(banner, main.firstChild);
     }
   }
-  // Hide editor section in static mode (editing requires refine server)
-  var editorNav = document.querySelector('[data-section="editor"]');
-  if (editorNav) editorNav.parentElement.style.display = 'none';
   // Disable decision buttons
   disableAllDecisionButtons();
 }
@@ -1077,6 +1255,17 @@ function renderSidebar() {
 
 // ── SPA Navigation ──
 function navigateTo(sectionId) {
+  // Editor dirty-state guard
+  if (editorState.mode === 'editing-dirty') {
+    editorState.pendingNavAction = function() {
+      exitEditModeClean();
+      navigateTo(sectionId);
+    };
+    showUnsavedModal();
+    return;
+  }
+  if (editorState.mode.startsWith('editing')) exitEditModeClean();
+
   App.activeSection = sectionId;
 
   // Update aria-current on sidebar links
@@ -2271,45 +2460,57 @@ function applyRebuildResponse(data) {
 }
 
 // ── Editor (Task 5.1) ──
+// ── Editor State ──
 var editorInstance = null;
 var currentEditorFile = null;
 var autosaveTimer = null;
 var autosaveHadFailure = false;
 
-function collectEditorFiles() {
-  var files = [];
-  var snap = App.snapshot;
+var editorState = {
+  mode: 'empty',  // 'empty' | 'readonly' | 'editing-clean' | 'editing-dirty'
+  activeTab: 'config',
+  files: {config: [], 'drop-in': [], quadlet: []},
+  tabState: {
+    config:    {selectedPath: null, scrollTop: 0},
+    'drop-in': {selectedPath: null, scrollTop: 0},
+    quadlet:   {selectedPath: null, scrollTop: 0}
+  },
+  pendingNavAction: null
+};
 
-  // Config files
+function collectEditorFiles() {
+  var snap = App.snapshot;
+  var files = {config: [], 'drop-in': [], quadlet: []};
+
   if (snap.config && snap.config.files) {
     for (var i = 0; i < snap.config.files.length; i++) {
-      files.push({
-        path: snap.config.files[i].path,
-        family: 'config',
-        ref: snap.config.files[i]
+      var f = snap.config.files[i];
+      var content = f.content || '';
+      files.config.push({
+        path: f.path || f.name, family: 'config', ref: f,
+        originalContent: content, savedContent: content, bufferContent: content
       });
     }
   }
 
-  // Systemd drop-in files
   if (snap.services && snap.services.drop_ins) {
     for (var j = 0; j < snap.services.drop_ins.length; j++) {
-      files.push({
-        path: snap.services.drop_ins[j].path,
-        family: 'drop-in',
-        ref: snap.services.drop_ins[j]
+      var d = snap.services.drop_ins[j];
+      var dc = d.content || '';
+      files['drop-in'].push({
+        path: d.path || d.name, family: 'drop-in', ref: d,
+        originalContent: dc, savedContent: dc, bufferContent: dc
       });
     }
   }
 
-  // Quadlet files
   if (snap.containers && snap.containers.quadlet_units) {
     for (var k = 0; k < snap.containers.quadlet_units.length; k++) {
       var q = snap.containers.quadlet_units[k];
-      files.push({
-        path: q.path || q.name,
-        family: 'quadlet',
-        ref: q
+      var qc = q.content || '';
+      files.quadlet.push({
+        path: q.path || q.name, family: 'quadlet', ref: q,
+        originalContent: qc, savedContent: qc, bufferContent: qc
       });
     }
   }
@@ -2317,58 +2518,561 @@ function collectEditorFiles() {
   return files;
 }
 
-function renderEditorFileBrowser(files, container) {
-  container.innerHTML = '';
-
-  // Group by family
-  var groups = {config: [], 'drop-in': [], quadlet: []};
-  for (var i = 0; i < files.length; i++) {
-    if (groups[files[i].family]) {
-      groups[files[i].family].push(files[i]);
-    }
-  }
-
-  var groupLabels = {config: 'Config Files', 'drop-in': 'Drop-in Files', quadlet: 'Quadlet Files'};
+function findFileByPath(path) {
   var families = ['config', 'drop-in', 'quadlet'];
-  var allItems = [];
-
-  for (var gi = 0; gi < families.length; gi++) {
-    var fam = families[gi];
-    if (groups[fam].length === 0) continue;
-
-    var groupDiv = document.createElement('div');
-    groupDiv.className = 'file-browser-group';
-
-    var groupLabel = document.createElement('div');
-    groupLabel.className = 'file-browser-group-label';
-    groupLabel.textContent = groupLabels[fam];
-    groupDiv.appendChild(groupLabel);
-
-    for (var fi = 0; fi < groups[fam].length; fi++) {
-      var f = groups[fam][fi];
-      var item = document.createElement('div');
-      item.className = 'file-browser-item';
-      item.setAttribute('role', 'option');
-      item.setAttribute('tabindex', allItems.length === 0 ? '0' : '-1');
-      item.textContent = f.path;
-      item.setAttribute('data-file-path', f.path);
-      item.onclick = (function(file) {
-        return function() { openFileInEditor(file); };
-      })(f);
-      allItems.push(item);
-      groupDiv.appendChild(item);
+  for (var i = 0; i < families.length; i++) {
+    var list = editorState.files[families[i]];
+    for (var j = 0; j < list.length; j++) {
+      if (list[j].path === path) return list[j];
     }
+  }
+  return null;
+}
 
-    container.appendChild(groupDiv);
+function isFileDirty(file) { return file.bufferContent !== file.savedContent; }
+function isFileModified(file) { return file.savedContent !== file.originalContent; }
+function isAnyFileModifiedInFamily(family) {
+  var list = editorState.files[family];
+  for (var i = 0; i < list.length; i++) {
+    if (isFileModified(list[i])) return true;
+  }
+  return false;
+}
+
+function announceEditor(message) {
+  var live = document.getElementById('editor-live');
+  if (live) live.textContent = message;
+}
+
+// ── Persistence helpers ──
+// All save-like transitions must route through this to ensure durable persistence.
+function persistSave(file) {
+  file.savedContent = file.bufferContent;
+  file.ref.content = file.savedContent;
+  scheduleAutosave();
+}
+
+function persistRevert(file) {
+  file.savedContent = file.originalContent;
+  file.bufferContent = file.originalContent;
+  file.ref.content = file.originalContent;
+  scheduleAutosave();
+}
+
+// ── File path display helper ──
+function buildPathDisplay(filePath) {
+  var container = document.createElement('div');
+  container.className = 'file-path-display';
+  var lastSlash = filePath.lastIndexOf('/');
+  if (lastSlash >= 0) {
+    var dirPart = document.createElement('span');
+    dirPart.style.opacity = '0.6';
+    dirPart.textContent = filePath.substring(0, lastSlash + 1);
+    container.appendChild(dirPart);
+    var namePart = document.createElement('span');
+    namePart.style.fontWeight = '600';
+    namePart.textContent = filePath.substring(lastSlash + 1);
+    container.appendChild(namePart);
+  } else {
+    container.textContent = filePath;
+  }
+  return container;
+}
+
+// ── Content pane state machine ──
+function showEmptyState() {
+  editorState.mode = 'empty';
+  currentEditorFile = null;
+  var pane = document.getElementById('editor-content-pane');
+  if (!pane) return;
+  pane.innerHTML = '';
+  var empty = document.createElement('div');
+  empty.className = 'editor-empty';
+  empty.textContent = 'Select a file to view';
+  pane.appendChild(empty);
+}
+
+function showFileReadOnly(file) {
+  syncEditorBuffer();
+  if (editorInstance) {
+    editorInstance = null;
   }
 
-  // Roving tabindex keyboard navigation
-  container.addEventListener('keydown', function(e) {
-    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return;
-    var items = Array.prototype.slice.call(container.querySelectorAll('.file-browser-item'));
-    var idx = items.indexOf(document.activeElement);
+  editorState.mode = 'readonly';
+  currentEditorFile = file;
+  editorState.tabState[file.family].selectedPath = file.path;
+  updateFileListSelection(file.path);
+
+  var pane = document.getElementById('editor-content-pane');
+  if (!pane) return;
+  pane.innerHTML = '';
+
+  // Toolbar with path + Edit button
+  var toolbar = document.createElement('div');
+  toolbar.className = 'editor-toolbar';
+  toolbar.appendChild(buildPathDisplay(file.path));
+
+  var actions = document.createElement('div');
+  actions.className = 'toolbar-actions';
+  var editBtn = document.createElement('button');
+  editBtn.className = 'btn-edit';
+  editBtn.textContent = 'Edit';
+  editBtn.id = 'editor-edit-btn';
+
+  if (App.mode === 'static') {
+    editBtn.disabled = true;
+    editBtn.setAttribute('aria-disabled', 'true');
+    editBtn.title = 'Editing requires refine mode. Run: inspectah refine <tarball>';
+  } else {
+    editBtn.onclick = function() { enterEditMode(); };
+  }
+  actions.appendChild(editBtn);
+  toolbar.appendChild(actions);
+  pane.appendChild(toolbar);
+
+  // Read-only content
+  var content = document.createElement('pre');
+  content.className = 'editor-readonly-content';
+  content.textContent = file.savedContent;
+  content.id = 'editor-readonly-content';
+  pane.appendChild(content);
+
+  editBtn.focus();
+  announceEditor(file.path.split('/').pop() + ' selected');
+}
+
+function enterEditMode() {
+  if (!currentEditorFile || App.mode === 'static') return;
+
+  editorState.mode = 'editing-clean';
+  currentEditorFile.bufferContent = currentEditorFile.savedContent;
+
+  var pane = document.getElementById('editor-content-pane');
+  if (!pane) return;
+  pane.innerHTML = '';
+
+  // Toolbar with Revert + Save
+  var toolbar = document.createElement('div');
+  toolbar.className = 'editor-toolbar';
+  toolbar.id = 'editor-edit-toolbar';
+
+  var pathDisplay = buildPathDisplay(currentEditorFile.path);
+  var badge = document.createElement('span');
+  badge.className = 'unsaved-badge';
+  badge.id = 'editor-unsaved-badge';
+  badge.textContent = 'unsaved';
+  badge.style.display = 'none';
+  pathDisplay.appendChild(badge);
+  toolbar.appendChild(pathDisplay);
+
+  var actions = document.createElement('div');
+  actions.className = 'toolbar-actions';
+  var revertBtn = document.createElement('button');
+  revertBtn.className = 'btn-revert';
+  revertBtn.textContent = 'Revert';
+  revertBtn.onclick = function() { revertFile(); };
+  actions.appendChild(revertBtn);
+
+  var saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.id = 'editor-save-btn';
+  saveBtn.disabled = true;
+  saveBtn.onclick = function() { saveFileAndExit(); };
+  actions.appendChild(saveBtn);
+
+  toolbar.appendChild(actions);
+  pane.appendChild(toolbar);
+
+  // CodeMirror editor with low-precedence Escape handler
+  var editorArea = document.createElement('div');
+  editorArea.style.flex = '1';
+  editorArea.style.overflow = 'auto';
+  pane.appendChild(editorArea);
+
+  var escapeExtension = CM.Prec.low(CM.keymap.of([{
+    key: 'Escape',
+    run: function() {
+      handleEditorEscape();
+      return true;
+    }
+  }]));
+
+  editorInstance = CM.createEditor(editorArea, currentEditorFile.savedContent, {
+    onChange: function(newContent) {
+      if (!currentEditorFile) return;
+      currentEditorFile.bufferContent = newContent;
+      var isDirty = isFileDirty(currentEditorFile);
+      if (isDirty && editorState.mode !== 'editing-dirty') {
+        editorState.mode = 'editing-dirty';
+        updateEditToolbarState();
+      } else if (!isDirty && editorState.mode === 'editing-dirty') {
+        editorState.mode = 'editing-clean';
+        updateEditToolbarState();
+      }
+    },
+    extensions: [escapeExtension]
+  });
+
+  announceEditor('Editing ' + currentEditorFile.path.split('/').pop());
+}
+
+function updateEditToolbarState() {
+  var badge = document.getElementById('editor-unsaved-badge');
+  var saveBtn = document.getElementById('editor-save-btn');
+  var isDirty = editorState.mode === 'editing-dirty';
+  if (badge) badge.style.display = isDirty ? '' : 'none';
+  if (saveBtn) saveBtn.disabled = !isDirty;
+}
+
+function syncEditorBuffer() {
+  if (editorInstance && currentEditorFile) {
+    currentEditorFile.bufferContent = editorInstance.state.doc.toString();
+  }
+}
+
+// Save checkpoint (Ctrl+S) — persist and stay in edit mode
+function saveCheckpoint() {
+  if (!currentEditorFile) return;
+  syncEditorBuffer();
+  persistSave(currentEditorFile);
+  editorState.mode = 'editing-clean';
+  updateEditToolbarState();
+  updateFileModifiedDots();
+  announceEditor(currentEditorFile.path.split('/').pop() + ' saved');
+}
+
+// Save and exit (toolbar Save button) — persist and return to read-only
+function saveFileAndExit() {
+  if (!currentEditorFile) return;
+  syncEditorBuffer();
+  persistSave(currentEditorFile);
+  editorInstance = null;
+  updateFileModifiedDots();
+  announceEditor(currentEditorFile.path.split('/').pop() + ' saved');
+  showFileReadOnly(currentEditorFile);
+}
+
+// Revert — full reset to originalContent, persist, return to read-only
+function revertFile() {
+  if (!currentEditorFile) return;
+  persistRevert(currentEditorFile);
+  editorInstance = null;
+  updateFileModifiedDots();
+  announceEditor(currentEditorFile.path.split('/').pop() + ' reverted to original');
+  showFileReadOnly(currentEditorFile);
+}
+
+// Exit edit mode without saving (used by modal Discard and clean exits)
+function exitEditModeClean() {
+  if (editorInstance) {
+    editorInstance = null;
+  }
+  editorState.mode = 'readonly';
+}
+
+function handleEditorEscape() {
+  if (editorState.mode === 'editing-dirty') {
+    editorState.pendingNavAction = function() {
+      exitEditModeClean();
+      showFileReadOnly(currentEditorFile);
+    };
+    showUnsavedModal();
+  } else if (editorState.mode === 'editing-clean') {
+    exitEditModeClean();
+    showFileReadOnly(currentEditorFile);
+  }
+}
+
+function handleFileClick(file) {
+  if (file === currentEditorFile && editorState.mode !== 'empty') return;
+
+  function doSwitch() {
+    exitEditModeClean();
+    showFileReadOnly(file);
+  }
+
+  if (editorState.mode === 'editing-dirty') {
+    editorState.pendingNavAction = doSwitch;
+    showUnsavedModal();
+  } else {
+    if (editorState.mode.startsWith('editing')) exitEditModeClean();
+    showFileReadOnly(file);
+  }
+}
+
+// ── Unsaved changes modal ──
+function showUnsavedModal() {
+  var file = currentEditorFile;
+  if (!file) return;
+
+  var backdrop = document.createElement('div');
+  backdrop.className = 'editor-modal-backdrop';
+  backdrop.id = 'editor-modal';
+  backdrop.setAttribute('role', 'dialog');
+  backdrop.setAttribute('aria-modal', 'true');
+  backdrop.setAttribute('aria-labelledby', 'editor-modal-title');
+
+  var modal = document.createElement('div');
+  modal.className = 'editor-modal';
+
+  var title = document.createElement('h3');
+  title.id = 'editor-modal-title';
+  title.textContent = 'Unsaved changes';
+  modal.appendChild(title);
+
+  var body = document.createElement('p');
+  body.textContent = 'You have unsaved changes to ' + file.path.split('/').pop() + '. What would you like to do?';
+  modal.appendChild(body);
+
+  var actions = document.createElement('div');
+  actions.className = 'editor-modal-actions';
+
+  var cancelBtn = document.createElement('button');
+  cancelBtn.className = 'btn-modal-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.onclick = function() { dismissModal(false); };
+
+  var discardBtn = document.createElement('button');
+  discardBtn.className = 'btn-modal-discard';
+  discardBtn.textContent = 'Discard';
+  discardBtn.onclick = function() {
+    // Drop buffer to savedContent (preserve checkpoint saves)
+    currentEditorFile.bufferContent = currentEditorFile.savedContent;
+    currentEditorFile.ref.content = currentEditorFile.savedContent;
+    announceEditor('Changes discarded for ' + currentEditorFile.path.split('/').pop());
+    dismissModal(true);
+  };
+
+  var saveBtn = document.createElement('button');
+  saveBtn.className = 'btn-modal-save';
+  saveBtn.textContent = 'Save';
+  saveBtn.onclick = function() {
+    syncEditorBuffer();
+    persistSave(currentEditorFile);
+    updateFileModifiedDots();
+    announceEditor(currentEditorFile.path.split('/').pop() + ' saved');
+    dismissModal(true);
+  };
+
+  actions.appendChild(cancelBtn);
+  actions.appendChild(discardBtn);
+  actions.appendChild(saveBtn);
+  modal.appendChild(actions);
+  backdrop.appendChild(modal);
+  document.body.appendChild(backdrop);
+
+  cancelBtn.focus();
+
+  var focusables = [cancelBtn, discardBtn, saveBtn];
+  backdrop.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') { e.preventDefault(); dismissModal(false); }
+    else if (e.key === 'Tab') {
+      e.preventDefault();
+      var idx = focusables.indexOf(document.activeElement);
+      var next = e.shiftKey ? (idx - 1 + focusables.length) % focusables.length : (idx + 1) % focusables.length;
+      focusables[next].focus();
+    }
+  });
+
+  backdrop.addEventListener('click', function(e) {
+    if (e.target === backdrop) dismissModal(false);
+  });
+}
+
+function dismissModal(proceed) {
+  var modal = document.getElementById('editor-modal');
+  if (modal) modal.remove();
+
+  if (proceed && editorState.pendingNavAction) {
+    exitEditModeClean();
+    var action = editorState.pendingNavAction;
+    editorState.pendingNavAction = null;
+    action();
+  } else {
+    editorState.pendingNavAction = null;
+    if (editorInstance) editorInstance.focus();
+  }
+}
+
+// ── Tab bar ──
+function renderEditorTabBar(container) {
+  var tablist = document.createElement('div');
+  tablist.className = 'editor-tabs';
+  tablist.setAttribute('role', 'tablist');
+  tablist.setAttribute('aria-label', 'File categories');
+
+  var tabs = [
+    {id: 'config', label: 'Config', count: editorState.files.config.length},
+    {id: 'drop-in', label: 'Drop-ins', count: editorState.files['drop-in'].length},
+    {id: 'quadlet', label: 'Quadlets', count: editorState.files.quadlet.length}
+  ];
+
+  tabs.forEach(function(tab) {
+    var btn = document.createElement('button');
+    btn.className = 'editor-tab';
+    btn.setAttribute('role', 'tab');
+    btn.setAttribute('aria-selected', tab.id === editorState.activeTab ? 'true' : 'false');
+    btn.setAttribute('aria-controls', 'editor-panel-' + tab.id);
+    btn.setAttribute('tabindex', tab.id === editorState.activeTab ? '0' : '-1');
+    btn.id = 'editor-tab-' + tab.id;
+    btn.setAttribute('data-tab', tab.id);
+    btn.textContent = tab.label + ' (' + tab.count + ')';
+
+    if (isAnyFileModifiedInFamily(tab.id)) {
+      var dot = document.createElement('span');
+      dot.className = 'tab-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      btn.appendChild(dot);
+    }
+
+    btn.onclick = function() { switchTab(tab.id); };
+    tablist.appendChild(btn);
+  });
+
+  // Manual activation: Arrow/Home/End moves focus, Enter/Space activates
+  tablist.addEventListener('keydown', function(e) {
+    var tabBtns = Array.prototype.slice.call(tablist.querySelectorAll('[role="tab"]'));
+    var idx = tabBtns.indexOf(document.activeElement);
     if (idx === -1) return;
 
+    // Enter/Space activates the focused tab
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      var family = tabBtns[idx].getAttribute('data-tab');
+      switchTab(family);
+      return;
+    }
+
+    // Arrow/Home/End moves focus only (does not activate)
+    var newIdx = idx;
+    if (e.key === 'ArrowRight') newIdx = (idx + 1) % tabBtns.length;
+    else if (e.key === 'ArrowLeft') newIdx = (idx - 1 + tabBtns.length) % tabBtns.length;
+    else if (e.key === 'Home') newIdx = 0;
+    else if (e.key === 'End') newIdx = tabBtns.length - 1;
+    else return;
+    e.preventDefault();
+    tabBtns[idx].setAttribute('tabindex', '-1');
+    tabBtns[newIdx].setAttribute('tabindex', '0');
+    tabBtns[newIdx].focus();
+  });
+
+  container.appendChild(tablist);
+}
+
+function switchTab(family) {
+  if (family === editorState.activeTab) return;
+
+  var currentPanel = document.getElementById('editor-panel-' + editorState.activeTab);
+  if (currentPanel) editorState.tabState[editorState.activeTab].scrollTop = currentPanel.scrollTop;
+
+  function doSwitch() {
+    editorState.activeTab = family;
+    document.querySelectorAll('.editor-tab').forEach(function(t) {
+      var isActive = t.getAttribute('data-tab') === family;
+      t.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      t.setAttribute('tabindex', isActive ? '0' : '-1');
+    });
+    ['config', 'drop-in', 'quadlet'].forEach(function(f) {
+      var p = document.getElementById('editor-panel-' + f);
+      if (p) p.style.display = f === family ? '' : 'none';
+    });
+
+    renderEditorFileList(family);
+
+    var savedPath = editorState.tabState[family].selectedPath;
+    if (savedPath) {
+      var file = findFileByPath(savedPath);
+      if (file) { showFileReadOnly(file); return; }
+    }
+
+    showEmptyState();
+    var fileItems = document.querySelectorAll('#editor-panel-' + family + ' [role="option"]');
+    if (fileItems.length > 0) {
+      fileItems[0].focus();
+    } else {
+      var tabBtn = document.getElementById('editor-tab-' + family);
+      if (tabBtn) tabBtn.focus();
+    }
+
+    announceEditor('Showing ' + family + ' files, ' + editorState.files[family].length + ' files');
+  }
+
+  if (editorState.mode === 'editing-dirty') {
+    editorState.pendingNavAction = doSwitch;
+    showUnsavedModal();
+  } else {
+    if (editorState.mode.startsWith('editing')) exitEditModeClean();
+    doSwitch();
+  }
+}
+
+// ── File list rendering ──
+function renderEditorFileList(family) {
+  var panel = document.getElementById('editor-panel-' + family);
+  if (!panel) return;
+  panel.innerHTML = '';
+
+  var files = editorState.files[family];
+  if (files.length === 0) {
+    var emptyMsg = document.createElement('div');
+    emptyMsg.className = 'editor-tab-empty';
+    var labels = {config: 'config files', 'drop-in': 'systemd drop-in files', quadlet: 'quadlet unit files'};
+    emptyMsg.textContent = 'No ' + labels[family] + ' detected.';
+    panel.appendChild(emptyMsg);
+    return;
+  }
+
+  var list = document.createElement('div');
+  list.className = 'editor-file-list';
+  list.setAttribute('role', 'listbox');
+  list.setAttribute('aria-label', family + ' files');
+
+  var savedSelection = editorState.tabState[family].selectedPath;
+
+  files.forEach(function(file, idx) {
+    var item = document.createElement('div');
+    item.className = 'editor-file-item';
+    if (file.path === savedSelection) item.classList.add('selected');
+    item.setAttribute('role', 'option');
+    item.setAttribute('tabindex', idx === 0 ? '0' : '-1');
+    item.setAttribute('aria-selected', file.path === savedSelection ? 'true' : 'false');
+    item.setAttribute('data-file-path', file.path);
+
+    if (isFileModified(file)) {
+      item.setAttribute('aria-label', file.path.split('/').pop() + ', modified');
+      var dot = document.createElement('span');
+      dot.className = 'file-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      item.appendChild(dot);
+    }
+
+    var lastSlash = file.path.lastIndexOf('/');
+    if (lastSlash >= 0) {
+      var dirSpan = document.createElement('span');
+      dirSpan.className = 'file-path';
+      dirSpan.textContent = file.path.substring(0, lastSlash + 1);
+      item.appendChild(dirSpan);
+      var nameSpan = document.createElement('span');
+      nameSpan.className = 'file-name';
+      nameSpan.textContent = file.path.substring(lastSlash + 1);
+      item.appendChild(nameSpan);
+    } else {
+      var nameOnly = document.createElement('span');
+      nameOnly.className = 'file-name';
+      nameOnly.textContent = file.path;
+      item.appendChild(nameOnly);
+    }
+
+    item.onclick = function() { handleFileClick(file); };
+    list.appendChild(item);
+  });
+
+  // Roving tabindex keyboard navigation
+  list.addEventListener('keydown', function(e) {
+    var items = Array.prototype.slice.call(list.querySelectorAll('[role="option"]'));
+    var idx = items.indexOf(document.activeElement);
+    if (idx === -1) return;
     if (e.key === 'ArrowDown' && idx < items.length - 1) {
       e.preventDefault();
       items[idx].setAttribute('tabindex', '-1');
@@ -2384,55 +3088,38 @@ function renderEditorFileBrowser(files, container) {
       items[idx].click();
     }
   });
+
+  panel.appendChild(list);
+  panel.scrollTop = editorState.tabState[family].scrollTop || 0;
 }
 
-function openFileInEditor(file) {
-  // Save current editor content back before switching
-  if (editorInstance && currentEditorFile) {
-    currentEditorFile.ref.content = editorInstance.state.doc.toString();
-  }
+function updateFileListSelection(path) {
+  var items = document.querySelectorAll('#editor-panel-' + editorState.activeTab + ' [role="option"]');
+  items.forEach(function(item) {
+    var isSelected = item.getAttribute('data-file-path') === path;
+    item.classList.toggle('selected', isSelected);
+    item.setAttribute('aria-selected', isSelected ? 'true' : 'false');
+  });
+}
 
-  currentEditorFile = file;
-
-  // Update selected state in file browser
-  var items = document.querySelectorAll('#file-browser .file-browser-item');
-  for (var i = 0; i < items.length; i++) {
-    items[i].classList.remove('selected');
-    items[i].setAttribute('aria-selected', 'false');
-    if (items[i].getAttribute('data-file-path') === file.path) {
-      items[i].classList.add('selected');
-      items[i].setAttribute('aria-selected', 'true');
+function updateFileModifiedDots() {
+  document.querySelectorAll('.editor-tab').forEach(function(tab) {
+    var family = tab.getAttribute('data-tab');
+    var existingDot = tab.querySelector('.tab-dot');
+    var needsDot = isAnyFileModifiedInFamily(family);
+    if (needsDot && !existingDot) {
+      var dot = document.createElement('span');
+      dot.className = 'tab-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      tab.appendChild(dot);
+    } else if (!needsDot && existingDot) {
+      existingDot.remove();
     }
-  }
-
-  // Hide empty placeholder
-  var emptyEl = document.getElementById('editor-empty');
-  if (emptyEl) emptyEl.style.display = 'none';
-
-  // Create or update CM6 editor instance
-  var editorArea = document.getElementById('editor-area');
-  if (editorInstance) {
-    // Replace entire document content via CM6 dispatch
-    editorInstance.dispatch({
-      changes: {from: 0, to: editorInstance.state.doc.length, insert: file.ref.content || ''}
-    });
-  } else {
-    // Remove any existing CM element
-    var existing = editorArea.querySelector('.cm-editor');
-    if (existing) existing.remove();
-
-    editorInstance = CM.createEditor(editorArea, file.ref.content || '', {
-      onChange: function(newContent) {
-        if (currentEditorFile) {
-          currentEditorFile.ref.content = newContent;
-          incrementChangeCounter();
-          scheduleAutosave();
-        }
-      }
-    });
-  }
+  });
+  renderEditorFileList(editorState.activeTab);
 }
 
+// ── Section renderer ──
 function renderEditorSection() {
   var container = document.getElementById('section-editor');
   if (!container) return;
@@ -2445,43 +3132,92 @@ function renderEditorSection() {
   heading.textContent = 'Edit Files';
   container.appendChild(heading);
 
-  var layout = document.createElement('div');
-  layout.className = 'editor-layout';
+  editorState.files = collectEditorFiles();
 
-  var browser = document.createElement('div');
-  browser.className = 'file-browser';
-  browser.id = 'file-browser';
-  browser.setAttribute('role', 'listbox');
-  browser.setAttribute('aria-label', 'File list');
-  layout.appendChild(browser);
+  var totalFiles = editorState.files.config.length +
+                   editorState.files['drop-in'].length +
+                   editorState.files.quadlet.length;
 
-  var area = document.createElement('div');
-  area.className = 'editor-area';
-  area.id = 'editor-area';
-  var empty = document.createElement('div');
-  empty.className = 'editor-empty';
-  empty.id = 'editor-empty';
-  empty.textContent = 'Select a file to edit';
-  area.appendChild(empty);
-  layout.appendChild(area);
-
-  container.appendChild(layout);
-}
-
-function initEditor() {
-  var browser = document.getElementById('file-browser');
-  if (!browser) return;
-
-  var files = collectEditorFiles();
-  if (files.length === 0) {
-    // Hide editor from sidebar when no files
+  if (totalFiles === 0) {
     var navLink = document.querySelector('[data-section="editor"]');
     if (navLink) navLink.parentElement.style.display = 'none';
     return;
   }
 
-  renderEditorFileBrowser(files, browser);
+  var layout = document.createElement('div');
+  layout.className = 'editor-layout';
+
+  var filePanel = document.createElement('div');
+  filePanel.className = 'editor-file-panel';
+  renderEditorTabBar(filePanel);
+
+  ['config', 'drop-in', 'quadlet'].forEach(function(fam) {
+    var panel = document.createElement('div');
+    panel.id = 'editor-panel-' + fam;
+    panel.setAttribute('role', 'tabpanel');
+    panel.setAttribute('aria-labelledby', 'editor-tab-' + fam);
+    panel.style.display = fam === editorState.activeTab ? '' : 'none';
+    panel.style.flex = '1';
+    panel.style.overflowY = 'auto';
+    filePanel.appendChild(panel);
+  });
+
+  layout.appendChild(filePanel);
+
+  var contentPane = document.createElement('div');
+  contentPane.className = 'editor-content-pane';
+  contentPane.id = 'editor-content-pane';
+  var emptyEl = document.createElement('div');
+  emptyEl.className = 'editor-empty';
+  emptyEl.textContent = 'Select a file to view';
+  contentPane.appendChild(emptyEl);
+  layout.appendChild(contentPane);
+
+  container.appendChild(layout);
+
+  var liveRegion = document.createElement('div');
+  liveRegion.id = 'editor-live';
+  liveRegion.setAttribute('aria-live', 'polite');
+  liveRegion.className = 'sr-only';
+  container.appendChild(liveRegion);
+
+  renderEditorFileList(editorState.activeTab);
 }
+
+function initEditor() {
+  renderEditorFileList(editorState.activeTab);
+}
+
+// ── Editor keyboard shortcuts ──
+document.addEventListener('keydown', function(e) {
+  // E to enter edit mode — ONLY when content pane has focus (read-only content or Edit button)
+  if (e.key === 'e' && !e.ctrlKey && !e.metaKey && !e.altKey &&
+      editorState.mode === 'readonly') {
+    var contentPane = document.getElementById('editor-content-pane');
+    if (contentPane && contentPane.contains(document.activeElement)) {
+      e.preventDefault();
+      enterEditMode();
+      return;
+    }
+  }
+
+  // Ctrl+S / Cmd+S to checkpoint save
+  if ((e.ctrlKey || e.metaKey) && e.key === 's' && editorState.mode.startsWith('editing')) {
+    e.preventDefault();
+    if (editorState.mode === 'editing-dirty') {
+      saveCheckpoint();
+    }
+    return;
+  }
+});
+
+// beforeunload for dirty state
+window.addEventListener('beforeunload', function(e) {
+  if (editorState.mode === 'editing-dirty') {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 // ── Autosave (Task 5.2) ──
 function setAutosaveStatus(status, isRecovery) {
