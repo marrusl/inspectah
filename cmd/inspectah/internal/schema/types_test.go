@@ -352,3 +352,78 @@ func TestRedactionFindingJSON(t *testing.T) {
 	assert.Nil(t, decoded2.Replacement)
 	assert.Nil(t, decoded2.Confidence)
 }
+
+func TestPackageEntryAcknowledgedJSON(t *testing.T) {
+	pkg := PackageEntry{
+		Name:         "custom-agent",
+		Version:      "1.0",
+		Release:      "1",
+		Arch:         "x86_64",
+		Include:      true,
+		Acknowledged: true,
+	}
+	data, err := json.Marshal(pkg)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"acknowledged":true`)
+
+	var decoded PackageEntry
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.True(t, decoded.Acknowledged)
+}
+
+func TestNMConnectionAcknowledgedJSON(t *testing.T) {
+	conn := NMConnection{
+		Name:         "eth0",
+		Type:         "ethernet",
+		Acknowledged: true,
+	}
+	data, err := json.Marshal(conn)
+	require.NoError(t, err)
+
+	var decoded NMConnection
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.True(t, decoded.Acknowledged)
+}
+
+func TestFstabEntryAcknowledgedJSON(t *testing.T) {
+	entry := FstabEntry{
+		MountPoint:   "/data",
+		Fstype:       "xfs",
+		Acknowledged: true,
+	}
+	data, err := json.Marshal(entry)
+	require.NoError(t, err)
+
+	var decoded FstabEntry
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.True(t, decoded.Acknowledged)
+}
+
+func TestRunningContainerAcknowledgedJSON(t *testing.T) {
+	c := RunningContainer{
+		Name:         "nginx",
+		Image:        "nginx:latest",
+		Acknowledged: true,
+	}
+	data, err := json.Marshal(c)
+	require.NoError(t, err)
+
+	var decoded RunningContainer
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.True(t, decoded.Acknowledged)
+}
+
+func TestNonRpmItemAcknowledgedJSON(t *testing.T) {
+	item := NonRpmItem{
+		Path:         "/usr/local/bin/custom",
+		Method:       "binary",
+		Include:      true,
+		Acknowledged: true,
+	}
+	data, err := json.Marshal(item)
+	require.NoError(t, err)
+
+	var decoded NonRpmItem
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	assert.True(t, decoded.Acknowledged)
+}

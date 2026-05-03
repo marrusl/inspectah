@@ -139,15 +139,16 @@ type VersionChange struct {
 
 // PackageEntry is a single package from rpm -qa or baseline diff.
 type PackageEntry struct {
-	Name       string           `json:"name"`
-	Epoch      string           `json:"epoch"`
-	Version    string           `json:"version"`
-	Release    string           `json:"release"`
-	Arch       string           `json:"arch"`
-	State      PackageState     `json:"state"`
-	Include    bool             `json:"include"`
-	SourceRepo string           `json:"source_repo"`
-	Fleet      *FleetPrevalence `json:"fleet"`
+	Name         string           `json:"name"`
+	Epoch        string           `json:"epoch"`
+	Version      string           `json:"version"`
+	Release      string           `json:"release"`
+	Arch         string           `json:"arch"`
+	State        PackageState     `json:"state"`
+	Include      bool             `json:"include"`
+	Acknowledged bool             `json:"acknowledged,omitempty"`
+	SourceRepo   string           `json:"source_repo"`
+	Fleet        *FleetPrevalence `json:"fleet"`
 }
 
 // EnabledModuleStream is a DNF module stream enabled or installed on the
@@ -321,12 +322,13 @@ type ServiceSection struct {
 
 // NMConnection is a NetworkManager connection profile.
 type NMConnection struct {
-	Path    string           `json:"path"`
-	Name    string           `json:"name"`
-	Method  string           `json:"method"`
-	Type    string           `json:"type"`
-	Include *bool            `json:"include,omitempty"`
-	Fleet   *FleetPrevalence `json:"fleet,omitempty"`
+	Path         string           `json:"path"`
+	Name         string           `json:"name"`
+	Method       string           `json:"method"`
+	Type         string           `json:"type"`
+	Include      *bool            `json:"include,omitempty"`
+	Acknowledged bool             `json:"acknowledged,omitempty"`
+	Fleet        *FleetPrevalence `json:"fleet,omitempty"`
 }
 
 // FirewallZone is a firewalld zone definition.
@@ -382,12 +384,13 @@ type NetworkSection struct {
 
 // FstabEntry is a single entry from /etc/fstab.
 type FstabEntry struct {
-	Device     string           `json:"device"`
-	MountPoint string           `json:"mount_point"`
-	Fstype     string           `json:"fstype"`
-	Options    string           `json:"options"`
-	Include    *bool            `json:"include,omitempty"`
-	Fleet      *FleetPrevalence `json:"fleet,omitempty"`
+	Device       string           `json:"device"`
+	MountPoint   string           `json:"mount_point"`
+	Fstype       string           `json:"fstype"`
+	Options      string           `json:"options"`
+	Include      *bool            `json:"include,omitempty"`
+	Acknowledged bool             `json:"acknowledged,omitempty"`
+	Fleet        *FleetPrevalence `json:"fleet,omitempty"`
 }
 
 // CredentialRef is a reference to a credential file discovered in mount
@@ -530,17 +533,18 @@ type ComposeFile struct {
 
 // RunningContainer is a running OCI container (podman/docker).
 type RunningContainer struct {
-	ID       string                 `json:"id"`
-	Name     string                 `json:"name"`
-	Image    string                 `json:"image"`
-	ImageID  string                 `json:"image_id"`
-	Status   string                 `json:"status"`
-	Mounts   []ContainerMount       `json:"mounts"`
-	Networks map[string]interface{} `json:"networks"`
-	Ports    map[string]interface{} `json:"ports"`
-	Env      []string               `json:"env"`
-	Include  *bool                  `json:"include,omitempty"`
-	Fleet    *FleetPrevalence       `json:"fleet,omitempty"`
+	ID           string                 `json:"id"`
+	Name         string                 `json:"name"`
+	Image        string                 `json:"image"`
+	ImageID      string                 `json:"image_id"`
+	Status       string                 `json:"status"`
+	Mounts       []ContainerMount       `json:"mounts"`
+	Networks     map[string]interface{} `json:"networks"`
+	Ports        map[string]interface{} `json:"ports"`
+	Env          []string               `json:"env"`
+	Include      *bool                  `json:"include,omitempty"`
+	Acknowledged bool                   `json:"acknowledged,omitempty"`
+	Fleet        *FleetPrevalence       `json:"fleet,omitempty"`
 }
 
 // FlatpakApp is a Flatpak application detected on an ostree system.
@@ -571,24 +575,25 @@ type PipPackage struct {
 
 // NonRpmItem is a single item found by the Non-RPM Software inspector.
 type NonRpmItem struct {
-	Path               string                 `json:"path"`
-	Name               string                 `json:"name"`
-	Method             string                 `json:"method"`
-	Confidence         string                 `json:"confidence"`
-	Include            bool                   `json:"include"`
-	Lang               string                 `json:"lang"`
-	Static             bool                   `json:"static"`
-	Version            string                 `json:"version"`
-	SharedLibs         []string               `json:"shared_libs"`
-	SystemSitePackages bool                   `json:"system_site_packages"`
-	Packages           []PipPackage           `json:"packages"`
-	HasCExtensions     bool                   `json:"has_c_extensions"`
-	GitRemote          string                 `json:"git_remote"`
-	GitCommit          string                 `json:"git_commit"`
-	GitBranch          string                 `json:"git_branch"`
+	Path               string                  `json:"path"`
+	Name               string                  `json:"name"`
+	Method             string                  `json:"method"`
+	Confidence         string                  `json:"confidence"`
+	Include            bool                    `json:"include"`
+	Acknowledged       bool                    `json:"acknowledged,omitempty"`
+	Lang               string                  `json:"lang"`
+	Static             bool                    `json:"static"`
+	Version            string                  `json:"version"`
+	SharedLibs         []string                `json:"shared_libs"`
+	SystemSitePackages bool                    `json:"system_site_packages"`
+	Packages           []PipPackage            `json:"packages"`
+	HasCExtensions     bool                    `json:"has_c_extensions"`
+	GitRemote          string                  `json:"git_remote"`
+	GitCommit          string                  `json:"git_commit"`
+	GitBranch          string                  `json:"git_branch"`
 	Files              *map[string]interface{} `json:"files"`
-	Content            string                 `json:"content"`
-	Fleet              *FleetPrevalence       `json:"fleet"`
+	Content            string                  `json:"content"`
+	Fleet              *FleetPrevalence        `json:"fleet"`
 }
 
 // NonRpmSoftwareSection is the output of the Non-RPM Software inspector.
