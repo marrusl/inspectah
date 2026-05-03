@@ -1,6 +1,6 @@
 # Single-Machine Triage Redesign Implementation Plan
 
-*Revision 2 — addresses round 1 plan review feedback from Kit, Thorn, and Fern.*
+*Revision 3 — addresses round 2 plan review feedback from Thorn and Fern.*
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1779,6 +1779,59 @@ buildNotificationCard with Acknowledge/undo and acknowledged persistence.
 Assisted-by: Claude Code (Opus 4.6)"
 ```
 
+- [ ] **Step 6: Write buildDisplayOnlyDecidedCard function**
+
+This is the resting/collapsed state for ungrouped display-only cards after Acknowledge. It uses `acknowledged` state (not `include`), and shows Acknowledge/Skip language (not Include/Exclude). On resume, `acknowledged=true` in the snapshot causes this card to render in its collapsed state.
+
+```javascript
+function buildDisplayOnlyDecidedCard(item) {
+  var card = document.createElement('div');
+  card.className = 'decided-card display-only-decided';
+  card.setAttribute('data-key', item.key);
+
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+
+  var left = document.createElement('div');
+  left.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+  var label = document.createElement('span');
+  label.className = 'decided-label acknowledged';
+  label.textContent = 'acknowledged';
+  left.appendChild(label);
+
+  var nameEl = document.createElement('span');
+  nameEl.textContent = item.name;
+  left.appendChild(nameEl);
+  row.appendChild(left);
+
+  var undoBtn = document.createElement('button');
+  undoBtn.className = 'btn-undo';
+  undoBtn.textContent = 'undo';
+  undoBtn.onclick = function() {
+    unacknowledgeNotification(item.key, item.section);
+  };
+  row.appendChild(undoBtn);
+  card.appendChild(row);
+
+  card.setAttribute('aria-label', item.name + ': acknowledged');
+  return card;
+}
+```
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add cmd/inspectah/internal/renderer/static/report.html
+git commit -m "report: add display-only decided card for acknowledged resting state
+
+buildDisplayOnlyDecidedCard uses acknowledged field for ungrouped
+display-only cards. On resume, acknowledged=true renders collapsed.
+Uses Acknowledge language, not Include/Exclude.
+
+Assisted-by: Claude Code (Opus 4.6)"
+```
+
 ---
 
 ### Task 10: JS — Rewrite renderTriageSection with grouped rendering
@@ -1870,13 +1923,25 @@ function renderTriageSection(sectionId) {
       // Render ungrouped items first (individual cards)
       for (var u = 0; u < ungrouped.length; u++) {
         var card;
-        if (ungrouped[u].card_type === 'notification') {
-          card = buildNotificationCard(ungrouped[u]);
-        } else if (isItemDecided(ungrouped[u])) {
-          var inc = getSnapshotInclude(ungrouped[u].key);
-          card = buildDecidedCard(ungrouped[u], inc);
+        var uItem = ungrouped[u];
+        if (uItem.card_type === 'notification') {
+          // Notification cards: Acknowledge button, acknowledged-backed state
+          card = buildNotificationCard(uItem);
+        } else if (uItem.display_only) {
+          // Display-only individual cards (running containers, fstab, groups):
+          // Use acknowledged-backed resting state, NOT include-based decidedCard.
+          // On resume, acknowledged=true means card starts collapsed.
+          if (uItem.acknowledged || getSnapshotAcknowledged(uItem.key)) {
+            card = buildDisplayOnlyDecidedCard(uItem);
+          } else {
+            card = buildTriageCard(uItem);
+          }
+        } else if (isItemDecided(uItem)) {
+          // Output-affecting individual cards: include-based decided state
+          var inc = getSnapshotInclude(uItem.key);
+          card = buildDecidedCard(uItem, inc);
         } else {
-          card = buildTriageCard(ungrouped[u]);
+          card = buildTriageCard(uItem);
         }
         itemsDiv.appendChild(card);
       }
@@ -2000,16 +2065,22 @@ function enableStaticMode() {
 }
 ```
 
-Update `disableAllDecisionButtons` to also disable accordion toggles and acknowledge buttons:
+In static mode, interactive controls must not be rendered at all (not just disabled). Update `buildOutputAccordion`, `buildDisplayAccordion`, `buildNotificationCard`, and `buildTriageCard` to check `App.mode === 'static'`:
+
+- **Accordion toggle switch:** Do not create the toggle `div` element. Show "always included" label or no toggle indicator.
+- **Per-item checkboxes:** Do not create checkbox `input` elements. Show item names as plain text rows.
+- **Acknowledge/Skip buttons:** Do not create button elements. Notification cards render in their expanded informational state without action buttons.
+- **Include/Leave out buttons:** Existing `disableAllDecisionButtons()` already handles this.
+- **Accordion headers:** Still expandable in static mode (read-only review is valuable). Headers keep their `role="button"` and keyboard interaction.
+- **Tab order:** Toggle switches and checkboxes are not in the tab order because they don't exist in the DOM.
 
 ```javascript
-function disableAllDecisionButtons() {
-  var buttons = document.querySelectorAll('.triage-card button, .accordion-toggle, .notification-full button, .accordion-table input');
-  for (var i = 0; i < buttons.length; i++) {
-    buttons[i].disabled = true;
-    buttons[i].setAttribute('aria-disabled', 'true');
-  }
+// Pattern for static-mode guard in component builders:
+if (App.mode !== 'static') {
+  // Create toggle/checkbox/button element
+  // ...
 }
+// In static mode, this block is skipped entirely — no element created
 ```
 
 - [ ] **Step 5: Run Go tests to verify no regressions**
@@ -2349,8 +2420,9 @@ Assisted-by: Claude Code (Opus 4.6)"
 - [ ] **Step 1: Build and run refine against a real snapshot**
 
 ```bash
+cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah
+go build -o ../../inspectah .
 cd /Users/mrussell/Work/bootc-migration/inspectah
-go build -o inspectah ./cmd/inspectah
 ./inspectah refine input-20260323-133834/
 ```
 
@@ -2439,13 +2511,15 @@ Fix issues discovered during manual testing in focused commits.
 
 **Files:** All modified files
 
-- [ ] **Step 1: Run all Go tests**
+- [ ] **Step 1: Run all Go tests and verify zero failures**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... -v 2>&1 | tail -30
+cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./... -v
 ```
 
-Expected: All packages PASS.
+Check the exit code — `go test` returns non-zero on any failure. Do NOT pipe through `tail` (it masks failures). Scan the full output for `FAIL` lines.
+
+Expected: Exit code 0, all packages PASS, no `FAIL` lines.
 
 - [ ] **Step 2: Count total tests**
 
