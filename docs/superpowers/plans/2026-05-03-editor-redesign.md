@@ -836,11 +836,21 @@ function renderEditorTabBar(container) {
     tablist.appendChild(btn);
   });
 
-  // Manual activation: Arrow moves focus, Enter/Space activates
+  // Manual activation: Arrow/Home/End moves focus, Enter/Space activates
   tablist.addEventListener('keydown', function(e) {
     var tabBtns = Array.prototype.slice.call(tablist.querySelectorAll('[role="tab"]'));
     var idx = tabBtns.indexOf(document.activeElement);
     if (idx === -1) return;
+
+    // Enter/Space activates the focused tab
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      var family = tabBtns[idx].getAttribute('data-tab');
+      switchTab(family);
+      return;
+    }
+
+    // Arrow/Home/End moves focus only (does not activate)
     var newIdx = idx;
     if (e.key === 'ArrowRight') newIdx = (idx + 1) % tabBtns.length;
     else if (e.key === 'ArrowLeft') newIdx = (idx - 1 + tabBtns.length) % tabBtns.length;
@@ -1369,11 +1379,53 @@ await page.evaluate(() => {
 });
 await new Promise(r => setTimeout(r, 300));
 
-console.log("PASS: tab switching");
+console.log("PASS: tab switching via click");
 SCRIPT
 ```
 
-- [ ] **Step 6: Verify Escape precedence with CodeMirror search**
+- [ ] **Step 6: Verify keyboard-driven tab activation (Arrow + Enter)**
+
+```bash
+dev-browser <<'SCRIPT'
+const page = await browser.getPage("editor-verify");
+
+// Focus the Config tab
+await page.evaluate(() => {
+  var tab = document.getElementById('editor-tab-config');
+  if (tab) tab.focus();
+});
+await new Promise(r => setTimeout(r, 200));
+
+// Arrow Right to move focus to Drop-ins (should NOT activate)
+await page.keyboard.press('ArrowRight');
+await new Promise(r => setTimeout(r, 200));
+
+var afterArrow = await page.evaluate(() => ({
+  focusedTab: document.activeElement?.getAttribute('data-tab'),
+  configSelected: document.getElementById('editor-tab-config')?.getAttribute('aria-selected'),
+  dropinSelected: document.getElementById('editor-tab-drop-in')?.getAttribute('aria-selected')
+}));
+console.log("After Arrow Right:", JSON.stringify(afterArrow));
+if (afterArrow.focusedTab !== 'drop-in') throw new Error("FAIL: focus should be on drop-in tab");
+if (afterArrow.configSelected !== 'true') throw new Error("FAIL: config should still be selected (manual activation)");
+
+// Press Enter to activate the focused Drop-ins tab
+await page.keyboard.press('Enter');
+await new Promise(r => setTimeout(r, 300));
+
+var afterEnter = await page.evaluate(() => ({
+  dropinSelected: document.getElementById('editor-tab-drop-in')?.getAttribute('aria-selected'),
+  configSelected: document.getElementById('editor-tab-config')?.getAttribute('aria-selected')
+}));
+console.log("After Enter:", JSON.stringify(afterEnter));
+if (afterEnter.dropinSelected !== 'true') throw new Error("FAIL: drop-in should be selected after Enter");
+if (afterEnter.configSelected !== 'false') throw new Error("FAIL: config should be deselected");
+
+console.log("PASS: keyboard tab activation (Arrow moves focus, Enter activates)");
+SCRIPT
+```
+
+- [ ] **Step 7: Verify Escape precedence with CodeMirror search**
 
 ```bash
 dev-browser <<'SCRIPT'
@@ -1417,7 +1469,7 @@ console.log("PASS: Escape precedence");
 SCRIPT
 ```
 
-- [ ] **Step 7: Verify static mode — Edit button disabled**
+- [ ] **Step 8: Verify static mode — Edit button disabled**
 
 This requires restarting the server in static mode (opening the HTML report file directly, not through refine server). If a static report file is available:
 
@@ -1443,7 +1495,7 @@ console.log("PASS: static mode");
 SCRIPT
 ```
 
-- [ ] **Step 8: Verify dark and light mode appearance**
+- [ ] **Step 9: Verify dark and light mode appearance**
 
 ```bash
 dev-browser <<'SCRIPT'
@@ -1476,7 +1528,7 @@ console.log("PASS: theme screenshots saved");
 SCRIPT
 ```
 
-- [ ] **Step 9: Verify beforeunload — dirty vs clean**
+- [ ] **Step 10: Verify beforeunload — dirty vs clean**
 
 ```bash
 dev-browser <<'SCRIPT'
@@ -1494,7 +1546,7 @@ console.log("PASS: beforeunload handler verified via state inspection");
 SCRIPT
 ```
 
-- [ ] **Step 10: Final dark mode screenshot**
+- [ ] **Step 11: Final dark mode screenshot**
 
 Take final screenshots showing the completed editor in both themes for visual inspection.
 
@@ -1516,7 +1568,7 @@ console.log("PASS: all verification steps complete");
 SCRIPT
 ```
 
-- [ ] **Step 11: Commit any fixes discovered during verification**
+- [ ] **Step 12: Commit any fixes discovered during verification**
 
 If verification steps revealed bugs, fix them and commit:
 
