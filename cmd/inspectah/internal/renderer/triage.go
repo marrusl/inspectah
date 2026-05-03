@@ -206,7 +206,6 @@ func isThirdPartyRepo(repo string) bool {
 }
 
 func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
-	_ = isFleet
 	if snap.Config == nil {
 		return nil
 	}
@@ -219,7 +218,7 @@ func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]boo
 			continue
 		}
 		tier, reason := classifyConfigFile(f)
-		items = append(items, TriageItem{
+		item := TriageItem{
 			Section:        "config",
 			Key:            "cfg-" + f.Path,
 			Tier:           tier,
@@ -227,7 +226,19 @@ func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]boo
 			Name:           f.Path,
 			Meta:           joinNonEmpty(" | ", string(f.Kind), string(f.Category)),
 			DefaultInclude: f.Include,
-		})
+		}
+
+		if !isFleet {
+			switch f.Kind {
+			case schema.ConfigFileKindRpmOwnedDefault, "baseline_match":
+				item.Group = "kind:unchanged"
+			case "systemd_dropin":
+				item.Group = "kind:drop-in"
+			// RPM-owned-modified and custom/untracked: no group (individual cards)
+			}
+		}
+
+		items = append(items, item)
 	}
 	return items
 }

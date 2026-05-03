@@ -477,3 +477,33 @@ func TestClassifyPackages_NoRepo_Acknowledged(t *testing.T) {
 	assert.True(t, custom.Acknowledged)
 	assert.Equal(t, "notification", custom.CardType)
 }
+
+func TestClassifyConfigFiles_SingleMachine_Grouping(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/ssh/sshd_config", Kind: schema.ConfigFileKindRpmOwnedDefault, Include: true},
+			{Path: "/etc/httpd/conf/httpd.conf", Kind: schema.ConfigFileKindRpmOwnedModified, Include: true},
+			{Path: "/etc/systemd/system/foo.service.d/override.conf", Kind: "systemd_dropin", Include: true},
+			{Path: "/etc/custom/app.conf", Kind: "", Include: true},
+		},
+	}
+
+	items := classifyConfigFiles(snap, make(map[string]bool), false)
+
+	ssh := findItem(items, "cfg-/etc/ssh/sshd_config")
+	require.NotNil(t, ssh)
+	assert.Equal(t, "kind:unchanged", ssh.Group)
+
+	httpd := findItem(items, "cfg-/etc/httpd/conf/httpd.conf")
+	require.NotNil(t, httpd)
+	assert.Equal(t, "", httpd.Group)
+
+	dropin := findItem(items, "cfg-/etc/systemd/system/foo.service.d/override.conf")
+	require.NotNil(t, dropin)
+	assert.Equal(t, "kind:drop-in", dropin.Group)
+
+	custom := findItem(items, "cfg-/etc/custom/app.conf")
+	require.NotNil(t, custom)
+	assert.Equal(t, "", custom.Group)
+}
