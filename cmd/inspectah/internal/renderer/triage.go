@@ -266,20 +266,43 @@ func isQuadletPath(path string) bool {
 	return false
 }
 
+var imageModeIncompatibleServices = map[string]bool{
+	"dnf-makecache.service": true,
+	"dnf-makecache.timer":   true,
+	"packagekit.service":    true,
+}
+
 func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
-	_ = isFleet
 	var items []TriageItem
 	if snap.Services != nil {
 		for _, svc := range snap.Services.StateChanges {
 			if secrets[svc.Unit] {
 				continue
 			}
+
+			// Check for image-mode incompatible services in single-machine mode
+			if !isFleet && imageModeIncompatibleServices[svc.Unit] {
+				items = append(items, TriageItem{
+					Section: "runtime", Key: "svc-" + svc.Unit,
+					Tier: 3, Reason: "This service assumes package management at runtime, which is unavailable in image mode. Consider disabling or removing it from the image.",
+					Name: svc.Unit, Meta: svc.CurrentState,
+					DefaultInclude: svc.Include,
+				})
+				continue
+			}
+
 			isDefault := svc.CurrentState == svc.DefaultState
 			tier := 2
 			reason := fmt.Sprintf("Service state changed (%s -> %s).", svc.DefaultState, svc.CurrentState)
+			group := ""
 			if isDefault {
 				tier = 1
 				reason = "Service in default state."
+				if !isFleet {
+					group = "sub:services-default"
+				}
+			} else if !isFleet {
+				group = "sub:services-changed"
 			}
 			meta := svc.CurrentState
 			if svc.OwningPackage != nil {
@@ -288,24 +311,35 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, i
 			items = append(items, TriageItem{
 				Section: "runtime", Key: "svc-" + svc.Unit,
 				Tier: tier, Reason: reason, Name: svc.Unit, Meta: meta,
+				Group:          group,
 				DefaultInclude: svc.Include,
 			})
 		}
 	}
 	if snap.ScheduledTasks != nil {
 		for _, job := range snap.ScheduledTasks.CronJobs {
+			group := ""
+			if !isFleet {
+				group = "sub:cron"
+			}
 			items = append(items, TriageItem{
 				Section: "runtime", Key: "cron-" + job.Path,
 				Tier: 2, Reason: "Scheduled cron job.",
 				Name: job.Path, Meta: job.Source,
+				Group:          group,
 				DefaultInclude: job.Include,
 			})
 		}
 		for _, timer := range snap.ScheduledTasks.SystemdTimers {
+			group := ""
+			if !isFleet {
+				group = "sub:timers"
+			}
 			items = append(items, TriageItem{
 				Section: "runtime", Key: "timer-" + timer.Name,
 				Tier: 2, Reason: "Systemd timer unit.",
 				Name: timer.Name, Meta: timer.OnCalendar,
+				Group:          group,
 				DefaultInclude: isIncluded(timer.Include),
 			})
 		}

@@ -507,3 +507,66 @@ func TestClassifyConfigFiles_SingleMachine_Grouping(t *testing.T) {
 	require.NotNil(t, custom)
 	assert.Equal(t, "", custom.Group)
 }
+
+func TestClassifyRuntime_SingleMachine_Grouping(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Services = &schema.ServiceSection{
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "sshd.service", CurrentState: "enabled", DefaultState: "enabled", Include: true},
+			{Unit: "httpd.service", CurrentState: "enabled", DefaultState: "disabled", Include: true},
+			{Unit: "dnf-makecache.timer", CurrentState: "enabled", DefaultState: "enabled", Include: true},
+		},
+	}
+	snap.ScheduledTasks = &schema.ScheduledTaskSection{
+		CronJobs: []schema.CronJob{
+			{Path: "/etc/cron.d/backup", Source: "custom", Include: true},
+		},
+	}
+
+	items := classifyRuntime(snap, make(map[string]bool), false)
+
+	sshd := findItem(items, "svc-sshd.service")
+	require.NotNil(t, sshd)
+	assert.Equal(t, "sub:services-default", sshd.Group)
+	assert.Equal(t, 1, sshd.Tier)
+
+	httpd := findItem(items, "svc-httpd.service")
+	require.NotNil(t, httpd)
+	assert.Equal(t, "sub:services-changed", httpd.Group)
+	assert.Equal(t, 2, httpd.Tier)
+
+	dnf := findItem(items, "svc-dnf-makecache.timer")
+	require.NotNil(t, dnf)
+	assert.Equal(t, 3, dnf.Tier)
+	assert.Equal(t, "", dnf.Group)
+	assert.Contains(t, dnf.Reason, "package management at runtime")
+
+	cron := findItem(items, "cron-/etc/cron.d/backup")
+	require.NotNil(t, cron)
+	assert.Equal(t, "sub:cron", cron.Group)
+}
+
+func TestClassifyRuntime_ImageModeIncompatible(t *testing.T) {
+	tests := []struct {
+		unit string
+	}{
+		{"dnf-makecache.service"},
+		{"dnf-makecache.timer"},
+		{"packagekit.service"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.unit, func(t *testing.T) {
+			snap := schema.NewSnapshot()
+			snap.Services = &schema.ServiceSection{
+				StateChanges: []schema.ServiceStateChange{
+					{Unit: tt.unit, CurrentState: "enabled", DefaultState: "enabled", Include: true},
+				},
+			}
+			items := classifyRuntime(snap, make(map[string]bool), false)
+			svc := findItem(items, "svc-"+tt.unit)
+			require.NotNil(t, svc)
+			assert.Equal(t, 3, svc.Tier)
+			assert.Equal(t, "", svc.Group)
+		})
+	}
+}
