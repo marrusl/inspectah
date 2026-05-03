@@ -23,7 +23,7 @@
     /* ── Theme variable definitions ── */
     .pf-v6-theme-dark {
       --pf-t--global--background--color--primary-default: #1b1d21;
-      --pf-t--global--background--color--secondary-default: rgba(0,0,0,0.15);
+      --pf-t--global--background--color--secondary-default: #252729;
       --pf-t--global--background--color--hover: rgba(255,255,255,0.05);
       --pf-t--global--border--color--default: #444;
       --pf-t--global--color--status--info--default: #2b9af3;
@@ -60,6 +60,7 @@
     .pf-v6-c-page {
       display: flex;
       min-height: calc(100vh - 64px);
+      background: var(--pf-t--global--background--color--primary-default);
     }
 
     .pf-v6-c-page__sidebar {
@@ -67,6 +68,7 @@
       flex-shrink: 0;
       border-right: 1px solid var(--pf-t--global--border--color--default, #444);
       overflow-y: auto;
+      background: var(--pf-t--global--background--color--primary-default);
     }
 
     .pf-v6-c-page__main {
@@ -74,6 +76,7 @@
       min-width: 0;
       padding: 1.5rem 2rem;
       overflow-y: auto;
+      background: var(--pf-t--global--background--color--primary-default);
     }
 
     .preview-panel {
@@ -82,6 +85,7 @@
       border-left: 1px solid var(--pf-t--global--border--color--default, #444);
       overflow-y: auto;
       padding: 1rem;
+      background: var(--pf-t--global--background--color--primary-default);
     }
 
     .preview-header {
@@ -107,6 +111,7 @@
       margin: 0;
       padding: 0.75rem;
       border-radius: 4px;
+      background: var(--pf-t--global--background--color--secondary-default);
     }
 
     .pf-v6-c-masthead {
@@ -114,6 +119,7 @@
       align-items: center;
       justify-content: space-between;
       padding: 0.75rem 1.5rem;
+      background: var(--pf-t--global--background--color--primary-default);
     }
 
     .pf-v6-c-masthead__main h1 {
@@ -232,6 +238,7 @@
       margin: 0 0 1rem 0;
       padding-bottom: 0.5rem;
       border-bottom: 1px solid var(--pf-t--global--border--color--default, #444);
+      color: var(--pf-t--global--text--color--primary);
     }
 
     /* Tier group */
@@ -288,6 +295,7 @@
       border-radius: 6px;
       padding: 0.75rem 1rem;
       position: relative;
+      background: var(--pf-t--global--background--color--secondary-default);
     }
 
     .triage-card.tier-3 {
@@ -362,6 +370,7 @@
       border-radius: 4px;
       font-size: 0.85rem;
       border: 1px solid var(--pf-t--global--border--color--default, #333);
+      background: var(--pf-t--global--background--color--secondary-default);
     }
 
     .decided-card .decided-label {
@@ -470,6 +479,7 @@
       padding: 0.75rem 1rem;
       border-radius: 6px;
       border: 1px solid var(--pf-t--global--border--color--default, #444);
+      background: var(--pf-t--global--background--color--secondary-default);
     }
 
     .stat-card .stat-value {
@@ -544,6 +554,7 @@
       border-radius: 4px;
       overflow-y: auto;
       max-height: 400px;
+      background: var(--pf-t--global--background--color--secondary-default);
     }
 
     .file-browser-group {
@@ -585,6 +596,7 @@
       border: 1px solid var(--pf-t--global--border--color--default, #444);
       border-radius: 4px;
       overflow: hidden;
+      background: var(--pf-t--global--background--color--secondary-default);
     }
 
     .editor-area .cm-editor {
