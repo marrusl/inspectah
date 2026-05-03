@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Build a CodeMirror 6 bundle for inspectah's config editor.
 #
-# Produces a single IIFE bundle exposing window.CMEditor with:
-#   CMEditor.create(parent, content, onChange) → EditorView
-#   CMEditor.getContent(view) → string
-#   CMEditor.setContent(view, content)
-#   CMEditor.enableVim(view)
-#   CMEditor.disableVim(view)
+# Produces a single IIFE bundle exposing window.CM with:
+#   CM.EditorState, CM.EditorView, CM.basicSetup, CM.jsonLang, CM.keymap, CM.defaultKeymap, CM.Prec
+#   CM.createJSONViewer(parent, content) → EditorView
+#   CM.createEditor(parent, content, opts) → EditorView
+#     opts.language: language extension
+#     opts.onChange: callback(newContent)
+#     opts.extensions: array of custom extensions to append
 #
 # Requirements: node ≥18, npm
 # Output: src/inspectah/static/codemirror/codemirror.min.js
@@ -21,64 +22,94 @@ trap 'rm -rf "$WORK"' EXIT
 
 cd "$WORK"
 npm init -y --silent >/dev/null 2>&1
-npm install --silent codemirror @codemirror/view @codemirror/state @replit/codemirror-vim 2>&1 | tail -1
+npm install --silent codemirror @codemirror/view @codemirror/state @codemirror/language @codemirror/lang-json @codemirror/commands 2>&1 | tail -1
 
 cat > build.mjs << 'ENTRY'
 import {basicSetup} from "codemirror";
-import {EditorView} from "@codemirror/view";
-import {EditorState, Compartment} from "@codemirror/state";
-import {vim} from "@replit/codemirror-vim";
+import {EditorView, keymap} from "@codemirror/view";
+import {EditorState, Prec} from "@codemirror/state";
+import {LanguageSupport} from "@codemirror/language";
+import {json} from "@codemirror/lang-json";
+import {defaultKeymap} from "@codemirror/commands";
 
-var vimCompartment = new Compartment();
+function jsonLang() {
+  return new LanguageSupport(json().language);
+}
 
-export function create(parent, content, onChange) {
-  var extensions = [
-    basicSetup,
-    EditorView.lineWrapping,
-    EditorView.theme({
-      "&": {height: "100%", fontSize: "14px"},
-      ".cm-scroller": {overflow: "auto"},
+function createJSONViewer(parent, content) {
+  return new EditorView({
+    state: EditorState.create({
+      doc: typeof content === "string" ? content : JSON.stringify(content, null, 2),
+      extensions: [
+        basicSetup,
+        jsonLang(),
+        EditorState.readOnly.of(true),
+        EditorView.theme({
+          "&": {fontSize: "13px"},
+          ".cm-gutters": {backgroundColor: "transparent", border: "none"},
+          ".cm-content": {fontFamily: "'SF Mono', 'Fira Code', monospace"}
+        })
+      ]
     }),
-    vimCompartment.of([]),
-  ];
-  if (typeof onChange === "function") {
+    parent: parent
+  });
+}
+
+function createEditor(parent, content, opts = {}) {
+  var extensions = [basicSetup];
+
+  if (opts.language) {
+    extensions.push(opts.language);
+  }
+
+  if (opts.onChange) {
     extensions.push(EditorView.updateListener.of(function(update) {
-      if (update.docChanged) onChange(update.state.doc.toString());
+      if (update.docChanged && opts.onChange) {
+        opts.onChange(update.state.doc.toString());
+      }
     }));
   }
+
+  extensions.push(EditorView.theme({
+    "&": {fontSize: "13px"},
+    ".cm-gutters": {backgroundColor: "transparent", border: "none"},
+    ".cm-content": {fontFamily: "'SF Mono', 'Fira Code', monospace"}
+  }));
+
+  // Append custom extensions if provided
+  if (opts.extensions) {
+    for (var i = 0; i < opts.extensions.length; i++) {
+      extensions.push(opts.extensions[i]);
+    }
+  }
+
   return new EditorView({
     state: EditorState.create({
       doc: content || "",
-      extensions: extensions,
+      extensions: extensions
     }),
-    parent: parent,
+    parent: parent
   });
 }
 
-export function getContent(view) {
-  return view.state.doc.toString();
-}
-
-export function setContent(view, content) {
-  view.dispatch({
-    changes: {from: 0, to: view.state.doc.length, insert: content},
-  });
-}
-
-export function enableVim(view) {
-  view.dispatch({effects: vimCompartment.reconfigure(vim())});
-}
-
-export function disableVim(view) {
-  view.dispatch({effects: vimCompartment.reconfigure([])});
-}
+export {
+  EditorState,
+  EditorView,
+  basicSetup,
+  jsonLang,
+  keymap,
+  defaultKeymap,
+  Prec,
+  createJSONViewer,
+  createEditor
+};
 ENTRY
 
 npx esbuild build.mjs \
   --bundle \
   --minify \
   --format=iife \
-  --global-name=CMEditor \
+  --global-name=CM \
   --outfile=codemirror.min.js \
   2>&1 | grep -v "^$"
 
