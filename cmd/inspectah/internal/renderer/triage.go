@@ -348,46 +348,62 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, i
 }
 
 func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
-	_ = isFleet
 	var items []TriageItem
 	if snap.Containers != nil {
 		quadletNames := make(map[string]bool)
 		for _, q := range snap.Containers.QuadletUnits {
 			quadletNames[q.Name] = true
+			group := ""
+			if !isFleet {
+				group = "sub:quadlet"
+			}
 			items = append(items, TriageItem{
 				Section: "containers", Key: "quadlet-" + q.Name,
 				Tier: 2, Reason: "Quadlet file with container unit.",
 				Name: q.Name, Meta: q.Image,
+				Group:          group,
 				DefaultInclude: q.Include,
 			})
 		}
 		for _, c := range snap.Containers.RunningContainers {
 			tier, reason := 2, "Running container with quadlet backing."
 			if !quadletNames[c.Name] {
-				tier, reason = 3, "Running container without quadlet. May not survive reboot."
+				tier = 3
+				reason = "Running container without quadlet backing. This is runtime state — it will not be reproduced in the image. Consider converting to a Quadlet unit for image-mode compatibility."
 			}
-			items = append(items, TriageItem{
+			item := TriageItem{
 				Section: "containers", Key: "container-" + c.Name,
 				Tier: tier, Reason: reason, Name: c.Name, Meta: c.Image,
 				DefaultInclude: isIncluded(c.Include),
-			})
+			}
+			if !isFleet {
+				item.DisplayOnly = true
+				item.Acknowledged = c.Acknowledged
+			}
+			items = append(items, item)
 		}
 	}
 	if snap.NonRpmSoftware != nil {
-		for _, item := range snap.NonRpmSoftware.Items {
-			if secrets[item.Path] {
+		for _, nri := range snap.NonRpmSoftware.Items {
+			if secrets[nri.Path] {
 				continue
 			}
-			name := item.Path
+			name := nri.Path
 			if name == "" {
-				name = item.Name
+				name = nri.Name
 			}
-			items = append(items, TriageItem{
+			item := TriageItem{
 				Section: "containers", Key: "nonrpm-" + name,
 				Tier: 3, Reason: "Non-RPM binary with unclear provenance.",
-				Name: name, Meta: item.Method,
-				DefaultInclude: item.Include,
-			})
+				Name: name, Meta: nri.Method,
+				DefaultInclude: nri.Include,
+			}
+			if !isFleet && nri.Method == "binary" {
+				item.CardType = "notification"
+				item.Acknowledged = nri.Acknowledged
+				item.Reason = "inspectah cannot determine the provenance or installation method for this binary. To include it in the image, provide a reproducible build-time source and add it to your Containerfile."
+			}
+			items = append(items, item)
 		}
 	}
 	return items

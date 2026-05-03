@@ -570,3 +570,42 @@ func TestClassifyRuntime_ImageModeIncompatible(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyContainerItems_SingleMachine_Grouping(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{
+			{Name: "webapp.container", Image: "webapp:latest", Include: true},
+		},
+		RunningContainers: []schema.RunningContainer{
+			{Name: "webapp", Image: "webapp:latest"},
+			{Name: "orphan", Image: "orphan:latest"},
+		},
+	}
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "/opt/agent/bin/agent", Method: "binary", Include: true},
+		},
+	}
+
+	items := classifyContainerItems(snap, make(map[string]bool), false)
+
+	quadlet := findItem(items, "quadlet-webapp.container")
+	require.NotNil(t, quadlet)
+	assert.Equal(t, "sub:quadlet", quadlet.Group)
+	assert.False(t, quadlet.DisplayOnly)
+
+	webapp := findItem(items, "container-webapp")
+	require.NotNil(t, webapp)
+	assert.True(t, webapp.DisplayOnly)
+
+	orphan := findItem(items, "container-orphan")
+	require.NotNil(t, orphan)
+	assert.True(t, orphan.DisplayOnly)
+	assert.Equal(t, 3, orphan.Tier)
+
+	agent := findItem(items, "nonrpm-/opt/agent/bin/agent")
+	require.NotNil(t, agent)
+	assert.Equal(t, "notification", agent.CardType)
+	assert.Contains(t, agent.Reason, "provenance")
+}
