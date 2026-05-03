@@ -376,3 +376,16 @@ func TestModuleStream_UserExclusionSurvivesNormalization(t *testing.T) {
 
 // v11 migration test lives in schema/snapshot_test.go (TestLoadSnapshot_V11MigratesModuleStreamInclude)
 // since the migration now runs at the LoadSnapshot boundary, not in NormalizeSnapshot.
+
+func TestIsFleetSnapshot(t *testing.T) {
+	single := schema.NewSnapshot()
+	assert.False(t, isFleetSnapshot(single), "single-machine snapshot should not be fleet")
+
+	fleet := schema.NewSnapshot()
+	fleet.Meta["fleet"] = map[string]interface{}{
+		"source_hosts":   []interface{}{"host1", "host2"},
+		"total_hosts":    float64(2),
+		"min_prevalence": float64(50),
+	}
+	assert.True(t, isFleetSnapshot(fleet), "snapshot with fleet metadata should be fleet")
+}

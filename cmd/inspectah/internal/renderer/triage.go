@@ -16,6 +16,10 @@ type TriageItem struct {
 	Reason         string `json:"reason"`
 	Name           string `json:"name"`
 	Meta           string `json:"meta"`
+	Group          string `json:"group,omitempty"`
+	CardType       string `json:"card_type,omitempty"`
+	DisplayOnly    bool   `json:"display_only,omitempty"`
+	Acknowledged   bool   `json:"acknowledged,omitempty"`
 	IsSecret       bool   `json:"is_secret,omitempty"`
 	SourcePath     string `json:"source_path,omitempty"`
 	DefaultInclude bool   `json:"default_include"`
@@ -84,6 +88,14 @@ func mapInclude(m map[string]interface{}) bool {
 		return true
 	}
 	return b
+}
+
+func isFleetSnapshot(snap *schema.InspectionSnapshot) bool {
+	if snap.Meta == nil {
+		return false
+	}
+	_, ok := snap.Meta["fleet"]
+	return ok
 }
 
 func buildSecretPathSet(snap *schema.InspectionSnapshot) map[string]bool {
