@@ -6,6 +6,7 @@ import (
 
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestClassifyPackage_BaseImage(t *testing.T) {
@@ -388,4 +389,91 @@ func TestIsFleetSnapshot(t *testing.T) {
 		"min_prevalence": float64(50),
 	}
 	assert.True(t, isFleetSnapshot(fleet), "snapshot with fleet metadata should be fleet")
+}
+
+func findItem(items []TriageItem, key string) *TriageItem {
+	for i := range items {
+		if items[i].Key == key {
+			return &items[i]
+		}
+	}
+	return nil
+}
+
+func strSlicePtr(s []string) *[]string {
+	return &s
+}
+
+func TestClassifyPackages_SingleMachine_GroupByRepo(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		BaselinePackageNames: strSlicePtr([]string{"bash", "coreutils"}),
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "bash", Arch: "x86_64", Include: true, SourceRepo: "baseos"},
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+			{Name: "htop", Arch: "x86_64", Include: true, SourceRepo: "epel"},
+			{Name: "custom", Arch: "x86_64", Include: true, State: "local_install"},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+
+	bash := findItem(items, "pkg-bash-x86_64")
+	require.NotNil(t, bash)
+	assert.Equal(t, 1, bash.Tier)
+	assert.Equal(t, "repo:baseos", bash.Group)
+	assert.Equal(t, "", bash.CardType)
+	assert.False(t, bash.DisplayOnly)
+
+	vim := findItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vim)
+	assert.Equal(t, 2, vim.Tier)
+	assert.Equal(t, "repo:appstream", vim.Group)
+
+	htop := findItem(items, "pkg-htop-x86_64")
+	require.NotNil(t, htop)
+	assert.Equal(t, 2, htop.Tier)
+	assert.Equal(t, "repo:epel", htop.Group)
+
+	custom := findItem(items, "pkg-custom-x86_64")
+	require.NotNil(t, custom)
+	assert.Equal(t, 3, custom.Tier)
+	assert.Equal(t, "", custom.Group)
+	assert.Equal(t, "notification", custom.CardType)
+}
+
+func TestClassifyPackages_Fleet_NoGroups(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Meta["fleet"] = map[string]interface{}{
+		"source_hosts":   []interface{}{"host1", "host2"},
+		"total_hosts":    float64(2),
+		"min_prevalence": float64(50),
+	}
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+
+	vim := findItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vim)
+	assert.Equal(t, "", vim.Group, "fleet mode should not populate Group")
+	assert.Equal(t, "", vim.CardType)
+}
+
+func TestClassifyPackages_NoRepo_Acknowledged(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "custom", Arch: "x86_64", Include: true, State: "local_install", Acknowledged: true},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+	custom := findItem(items, "pkg-custom-x86_64")
+	require.NotNil(t, custom)
+	assert.True(t, custom.Acknowledged)
+	assert.Equal(t, "notification", custom.CardType)
 }

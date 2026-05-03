@@ -33,10 +33,11 @@ type TriageItem struct {
 // excluded this" from "this started as excluded (e.g. fleet merge
 // below-threshold)."
 func ClassifySnapshot(snap *schema.InspectionSnapshot, original *schema.InspectionSnapshot) []TriageItem {
-	items := classifyAll(snap)
+	isFleet := isFleetSnapshot(snap)
+	items := classifyAll(snap, isFleet)
 
 	if original != nil {
-		origItems := classifyAll(original)
+		origItems := classifyAll(original, isFleet)
 		origMap := make(map[string]bool)
 		for _, oi := range origItems {
 			origMap[oi.Key] = oi.DefaultInclude
@@ -54,16 +55,16 @@ func ClassifySnapshot(snap *schema.InspectionSnapshot, original *schema.Inspecti
 
 // classifyAll runs all classifiers against the snapshot and returns
 // items with DefaultInclude set to each item's current include value.
-func classifyAll(snap *schema.InspectionSnapshot) []TriageItem {
+func classifyAll(snap *schema.InspectionSnapshot, isFleet bool) []TriageItem {
 	secretPaths := buildSecretPathSet(snap)
 
 	var items []TriageItem
-	items = append(items, classifyPackages(snap, secretPaths)...)
-	items = append(items, classifyConfigFiles(snap, secretPaths)...)
-	items = append(items, classifyRuntime(snap, secretPaths)...)
-	items = append(items, classifyContainerItems(snap, secretPaths)...)
-	items = append(items, classifyIdentity(snap, secretPaths)...)
-	items = append(items, classifySystemItems(snap, secretPaths)...)
+	items = append(items, classifyPackages(snap, secretPaths, isFleet)...)
+	items = append(items, classifyConfigFiles(snap, secretPaths, isFleet)...)
+	items = append(items, classifyRuntime(snap, secretPaths, isFleet)...)
+	items = append(items, classifyContainerItems(snap, secretPaths, isFleet)...)
+	items = append(items, classifyIdentity(snap, secretPaths, isFleet)...)
+	items = append(items, classifySystemItems(snap, secretPaths, isFleet)...)
 	items = append(items, classifySecretItems(snap, secretPaths)...)
 	return items
 }
@@ -117,7 +118,7 @@ func buildSecretPathSet(snap *schema.InspectionSnapshot) map[string]bool {
 	return paths
 }
 
-func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool) []TriageItem {
+func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
 	if snap.Rpm == nil {
 		return nil
 	}
@@ -134,7 +135,7 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 			continue
 		}
 		tier, reason := classifyPackage(pkg, baselineNames)
-		items = append(items, TriageItem{
+		item := TriageItem{
 			Section:        "packages",
 			Key:            fmt.Sprintf("pkg-%s-%s", pkg.Name, pkg.Arch),
 			Tier:           tier,
@@ -142,7 +143,19 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 			Name:           pkg.Name,
 			Meta:           joinNonEmpty(" | ", pkg.Version+"-"+pkg.Release, pkg.Arch, pkg.SourceRepo),
 			DefaultInclude: pkg.Include,
-		})
+		}
+
+		if !isFleet {
+			if tier == 3 && (string(pkg.State) == "local_install" || string(pkg.State) == "no_repo") {
+				item.CardType = "notification"
+				item.Acknowledged = pkg.Acknowledged
+				item.Reason = "No repository source available. inspectah cannot reconstruct installation steps for this package."
+			} else if pkg.SourceRepo != "" {
+				item.Group = "repo:" + strings.ToLower(pkg.SourceRepo)
+			}
+		}
+
+		items = append(items, item)
 	}
 
 	for _, ms := range snap.Rpm.ModuleStreams {
@@ -192,7 +205,8 @@ func isThirdPartyRepo(repo string) bool {
 	return true
 }
 
-func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]bool) []TriageItem {
+func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
+	_ = isFleet
 	if snap.Config == nil {
 		return nil
 	}
@@ -241,7 +255,8 @@ func isQuadletPath(path string) bool {
 	return false
 }
 
-func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool) []TriageItem {
+func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
+	_ = isFleet
 	var items []TriageItem
 	if snap.Services != nil {
 		for _, svc := range snap.Services.StateChanges {
@@ -287,7 +302,8 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool) [
 	return items
 }
 
-func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]bool) []TriageItem {
+func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
+	_ = isFleet
 	var items []TriageItem
 	if snap.Containers != nil {
 		quadletNames := make(map[string]bool)
@@ -332,7 +348,8 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 	return items
 }
 
-func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool) []TriageItem {
+func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
+	_ = isFleet
 	var items []TriageItem
 	if snap.UsersGroups != nil {
 		for _, u := range snap.UsersGroups.Users {
@@ -397,7 +414,8 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool) 
 	return items
 }
 
-func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]bool) []TriageItem {
+func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
+	_ = isFleet
 	var items []TriageItem
 	if snap.KernelBoot != nil {
 		for _, s := range snap.KernelBoot.SysctlOverrides {
