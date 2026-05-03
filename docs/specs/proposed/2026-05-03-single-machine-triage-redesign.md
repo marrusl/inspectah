@@ -1,6 +1,6 @@
 # Single-Machine Triage Redesign
 
-*Revision 3 — addresses round 2 review feedback from Thorn and Collins.*
+*Revision 4 — fixes stale display-only references for identity groups (round 3 feedback).*
 
 ## Summary
 
@@ -337,7 +337,7 @@ In static mode (file:// or no refine server), all accordions render **collapsed*
 - **Fleet prevalence-driven grouping.** Fleet mode retains current card-per-item behavior. Follow-up spec for fleet-specific grouping with prevalence slider.
 - **Dependency conflict detection.** When disabling a third-party repo breaks a dependency in an enabled repo. Valuable but requires dependency graph analysis not currently in the snapshot.
 - **Package size in accordion headers.** Current `PackageEntry` / `TriageItem` do not expose package-size data. Accordion headers show item counts only. Size data can be added when the schema supports it.
-- **Renderer parity for display-only surfaces.** Network connections, fstab entries, running containers, and groups remain display-only in this spec. Follow-up work to add per-item renderer output paths would promote these to output-affecting surfaces.
+- **Renderer parity for display-only surfaces.** Network connections, fstab entries, and running containers remain display-only in this spec. Follow-up work to add per-item renderer output paths would promote these to output-affecting surfaces.
 - **"+ New File" button in editor.** Deferred from editor redesign, remains deferred.
 
 ## Testing Strategy
@@ -349,7 +349,7 @@ In static mode (file:// or no refine server), all accordions render **collapsed*
 - BaseOS group identification and toggle suppression signal
 - Third-party repo detection for badge
 - Known-incompatible service detection (`dnf-makecache`, `packagekit`)
-- Display-only surface classification: network connections, fstab entries, running containers without quadlet, identity groups
+- Display-only surface classification: network connections, fstab entries, running containers without quadlet (identity groups are output-affecting — not in this list)
 - Fstab risky-mount detection: `/`, `/boot`, `/var`, `/sysroot`, `/usr`, `/etc`, and unstable device paths
 
 ### Golden-file tests (renderer)
