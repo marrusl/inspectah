@@ -109,7 +109,9 @@ func TestParseSemanageBooleans(t *testing.T) {
 	input := loadSelinuxFixture(t, "semanage-boolean.txt")
 	got := parseSemanageBooleans(input)
 
-	require.Len(t, got, 4)
+	// Only non-default booleans are returned (samba_enable_home_dirs
+	// has current==default so it's filtered out)
+	require.Len(t, got, 3)
 
 	// httpd_can_network_connect: on != off → non_default=true
 	assert.Equal(t, "httpd_can_network_connect", got[0]["name"])
@@ -122,15 +124,11 @@ func TestParseSemanageBooleans(t *testing.T) {
 	assert.Equal(t, "virt_use_nfs", got[1]["name"])
 	assert.Equal(t, true, got[1]["non_default"])
 
-	// samba_enable_home_dirs: on == on → non_default=false
-	assert.Equal(t, "samba_enable_home_dirs", got[2]["name"])
-	assert.Equal(t, false, got[2]["non_default"])
-
 	// container_manage_cgroup: off != on → non_default=true
-	assert.Equal(t, "container_manage_cgroup", got[3]["name"])
-	assert.Equal(t, "off", got[3]["current"])
-	assert.Equal(t, "on", got[3]["default"])
-	assert.Equal(t, true, got[3]["non_default"])
+	assert.Equal(t, "container_manage_cgroup", got[2]["name"])
+	assert.Equal(t, "off", got[2]["current"])
+	assert.Equal(t, "on", got[2]["default"])
+	assert.Equal(t, true, got[2]["non_default"])
 }
 
 func TestParseSemanageBooleansEmpty(t *testing.T) {
