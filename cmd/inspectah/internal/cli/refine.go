@@ -59,6 +59,38 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 		return refine.ReRenderResult{}, fmt.Errorf("parse snapshot: %w", err)
 	}
 
+	// Sync user triage decisions into renderer-consumed structures.
+	// Service toggles rebuild EnabledUnits/DisabledUnits from StateChanges;
+	// cron toggles propagate CronJob.Include to GeneratedTimerUnits.
+	renderer.SyncServiceDecisions(&snap)
+	renderer.SyncCronDecisions(&snap)
+
+	// Re-serialize so the exported snapshot agrees with rendered output.
+	snapData, err := json.Marshal(snap)
+	if err != nil {
+		return refine.ReRenderResult{}, fmt.Errorf("marshal sync'd snapshot: %w", err)
+	}
+
+	// Reconcile secret overrides: derive a redaction view that reflects
+	// config file Include state. The canonical Redactions are preserved
+	// for SPA binding; the reconciled view is used by renderers.
+	//
+	// "overridden" findings (user included a file the scanner excluded)
+	// are dropped from the render-time slice — they should not appear
+	// in counts, placeholders, or review listings. The canonical
+	// Redactions (with original Kind values) are restored after rendering.
+	reconciled := renderer.ReconcileSecretOverrides(&snap)
+	var reconciledJSON []json.RawMessage
+	for _, f := range reconciled {
+		if f.Kind == "overridden" {
+			continue
+		}
+		raw, _ := json.Marshal(f)
+		reconciledJSON = append(reconciledJSON, raw)
+	}
+	canonicalRedactions := snap.Redactions
+	snap.Redactions = reconciledJSON // renderers see reconciled view
+
 	// Render into a temp copy — if rendering fails, the working directory
 	// is completely untouched.
 	renderDir, err := os.MkdirTemp("", "inspectah-render-")
@@ -79,7 +111,9 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 	// (sidecar, snapshot) is preserved.
 	cleanRendererOutputs(renderDir)
 
-	// Write new snapshot to render dir
+	// Write the sync'd (canonical) snapshot to render dir — renderers
+	// read Redactions from the snap struct (currently set to reconciled),
+	// not from the file, so the file gets canonical data.
 	snapPath := filepath.Join(renderDir, "inspection-snapshot.json")
 	if err := os.WriteFile(snapPath, snapData, 0644); err != nil {
 		return refine.ReRenderResult{}, fmt.Errorf("write snapshot: %w", err)
@@ -91,14 +125,20 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 		origSnapPath = ""
 	}
 
-	// Run all renderers in the temp dir — fresh output, no stale artifacts
+	// Run all renderers in the temp dir — fresh output, no stale artifacts.
+	// snap.Redactions is set to the reconciled view so renderers see
+	// overridden/excluded state without signature changes.
 	if err := renderer.RunAll(&snap, renderDir, renderer.RunAllOptions{
 		RefineMode:           true,
 		OriginalSnapshotPath: origSnapPath,
 	}); err != nil {
 		// renderDir is cleaned up by defer — outputDir untouched
+		snap.Redactions = canonicalRedactions // restore before returning
 		return refine.ReRenderResult{}, fmt.Errorf("render: %w", err)
 	}
+
+	// Restore canonical redactions for the exported snapshot.
+	snap.Redactions = canonicalRedactions
 
 	// Rendering succeeded — replace ALL renderer-owned outputs in the
 	// working directory with the rendered versions. This covers the full

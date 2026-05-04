@@ -51,12 +51,35 @@ func TestNativeReRender_ProducesCanonicalOutput(t *testing.T) {
 	if data, err := os.ReadFile(sidecarSrc); err == nil {
 		os.WriteFile(sidecarGT, data, 0444)
 	}
+	// Apply the same sync+reconcile pipeline as nativeReRender so the
+	// ground-truth render matches. nativeReRender writes the sync'd
+	// canonical snapshot to disk, then swaps in reconciled redactions
+	// for the render pass only.
 	var groundSnap schema.InspectionSnapshot
 	require.NoError(t, json.Unmarshal(snapData, &groundSnap))
+	renderer.SyncServiceDecisions(&groundSnap)
+	renderer.SyncCronDecisions(&groundSnap)
+	// Write sync'd canonical snapshot to ground-truth dir (matches
+	// what nativeReRender writes to disk before rendering).
+	groundSnapData, _ := json.Marshal(groundSnap)
+	require.NoError(t, os.WriteFile(filepath.Join(groundTruthDir, "inspection-snapshot.json"), groundSnapData, 0644))
+	// Swap in reconciled redactions for the render pass only.
+	reconciled := renderer.ReconcileSecretOverrides(&groundSnap)
+	var reconciledJSON []json.RawMessage
+	for _, f := range reconciled {
+		if f.Kind == "overridden" {
+			continue
+		}
+		raw, _ := json.Marshal(f)
+		reconciledJSON = append(reconciledJSON, raw)
+	}
+	canonicalRedactions := groundSnap.Redactions
+	groundSnap.Redactions = reconciledJSON
 	require.NoError(t, renderer.RunAll(&groundSnap, groundTruthDir, renderer.RunAllOptions{
 		RefineMode:           true,
 		OriginalSnapshotPath: sidecarGT,
 	}))
+	groundSnap.Redactions = canonicalRedactions
 
 	// Ground truth now contains every file renderer.RunAll() produces.
 	groundFiles := snapshotDirContents(t, groundTruthDir)
@@ -190,9 +213,9 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 		"config/etc/httpd/ directory must be removed after render N+1")
 
 	// ── FULL SET PROOF: working dir == ground truth for render N+1 ──
+	// Apply same sync+reconcile pipeline as nativeReRender so the
+	// ground-truth snapshot matches what nativeReRender writes.
 	groundDir := t.TempDir()
-	require.NoError(t, os.WriteFile(
-		filepath.Join(groundDir, "inspection-snapshot.json"), snapDataN1, 0644))
 	// Copy sidecar to ground-truth dir for refine-mode-equivalent render
 	sidecarGT := filepath.Join(groundDir, "original-inspection-snapshot.json")
 	sidecarData, _ := os.ReadFile(filepath.Join(workDir, "original-inspection-snapshot.json"))
@@ -200,10 +223,29 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 
 	var groundSnap schema.InspectionSnapshot
 	require.NoError(t, json.Unmarshal(snapDataN1, &groundSnap))
+	renderer.SyncServiceDecisions(&groundSnap)
+	renderer.SyncCronDecisions(&groundSnap)
+	// Write sync'd canonical snapshot to ground-truth dir first.
+	groundSnapData, _ := json.Marshal(groundSnap)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(groundDir, "inspection-snapshot.json"), groundSnapData, 0644))
+	// Swap in reconciled redactions for the render pass only.
+	reconciled := renderer.ReconcileSecretOverrides(&groundSnap)
+	var reconciledJSON []json.RawMessage
+	for _, f := range reconciled {
+		if f.Kind == "overridden" {
+			continue
+		}
+		raw, _ := json.Marshal(f)
+		reconciledJSON = append(reconciledJSON, raw)
+	}
+	canonicalRedactions := groundSnap.Redactions
+	groundSnap.Redactions = reconciledJSON
 	require.NoError(t, renderer.RunAll(&groundSnap, groundDir, renderer.RunAllOptions{
 		RefineMode:           true,
 		OriginalSnapshotPath: sidecarGT,
 	}))
+	groundSnap.Redactions = canonicalRedactions
 	groundFiles := snapshotDirContents(t, groundDir)
 
 	// Working dir must contain ONLY ground-truth files + sidecar
@@ -264,7 +306,11 @@ func TestNativeReRender_StaleArtifactRemoval(t *testing.T) {
 func TestNativeReRender_SecretExclusionRemovesConfigFile(t *testing.T) {
 	workDir := t.TempDir()
 
-	// Create a snapshot with a config file that is also flagged as a secret
+	// Create a snapshot with a config file that is also flagged as a secret.
+	// With reconciliation: when config Include=true + redaction Kind="excluded",
+	// the finding becomes "overridden" (user chose to include the secret file).
+	// When config Include=false, the redaction stays/becomes "excluded" and
+	// produces a REDACTED placeholder.
 	snap := schema.NewSnapshot()
 	snap.Rpm = &schema.RpmSection{
 		PackagesAdded: []schema.PackageEntry{
@@ -294,15 +340,16 @@ func TestNativeReRender_SecretExclusionRemovesConfigFile(t *testing.T) {
 	require.NoError(t, err)
 	_ = result1
 
-	// Verify the secret-backed config file exists in config/
+	// Verify the secret-backed config file exists in config/ (Include=true)
 	secretConfigFile := filepath.Join(workDir, "config", "etc", "secret.conf")
 	assert.FileExists(t, secretConfigFile,
-		"secret-backed config file must exist before exclusion")
+		"secret-backed config file must exist when Include=true")
 
-	// Verify redacted/ artifacts also exist
+	// With reconciliation, the "excluded" redaction is overridden because
+	// the config file is included — no REDACTED placeholder should exist.
 	redactedFile := filepath.Join(workDir, "redacted", "etc", "secret.conf.REDACTED")
-	assert.FileExists(t, redactedFile,
-		"redacted file must exist before exclusion")
+	assert.NoFileExists(t, redactedFile,
+		"overridden redaction must NOT produce a REDACTED placeholder")
 
 	// ── Simulate secret exclusion: set the backing config entry Include=false ──
 	// This is what the SPA does when the user clicks "Exclude from image" on a
@@ -324,10 +371,10 @@ func TestNativeReRender_SecretExclusionRemovesConfigFile(t *testing.T) {
 	assert.FileExists(t, normalConfigFile,
 		"non-secret config file must survive after secret exclusion")
 
-	// Redacted artifacts should still be present (redaction is about the secret
-	// detection, not the config include state)
+	// With config excluded, reconciliation preserves the "excluded" kind,
+	// so a REDACTED placeholder SHOULD now exist.
 	assert.FileExists(t, redactedFile,
-		"redacted file must survive after secret config exclusion")
+		"excluded config must produce a REDACTED placeholder")
 
 	// ── Tarball proof: excluded file absent from export ──
 	tarPath := filepath.Join(t.TempDir(), "secret-exclusion.tar.gz")
@@ -342,6 +389,210 @@ func TestNativeReRender_SecretExclusionRemovesConfigFile(t *testing.T) {
 	assert.FileExists(t,
 		filepath.Join(tarExtractDir, "config", "etc", "httpd", "conf", "httpd.conf"),
 		"non-secret config file must appear in exported tarball")
+}
+
+func TestNativeReRender_ServiceToggleAffectsContainerfile(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create snapshot with an enabled service
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "httpd", Version: "2.4", Release: "1", Arch: "x86_64",
+				State: "installed", SourceRepo: "appstream", Include: true},
+		},
+	}
+	snap.Services = &schema.ServiceSection{
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "httpd.service", CurrentState: "disabled", DefaultState: "disabled",
+				Action: "enable", Include: true},
+		},
+		EnabledUnits: []string{"httpd.service"},
+	}
+
+	snapData, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "inspection-snapshot.json"), snapData, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "original-inspection-snapshot.json"), snapData, 0444))
+
+	// ── Render 1: service included ──
+	result1, err := nativeReRender(snapData, nil, workDir)
+	require.NoError(t, err)
+	assert.Contains(t, result1.Containerfile, "systemctl enable",
+		"Containerfile should contain systemctl enable when service is included")
+	assert.Contains(t, result1.Containerfile, "httpd.service",
+		"Containerfile should reference httpd.service when included")
+
+	// ── Toggle service off ──
+	snap.Services.StateChanges[0].Include = false
+	snapDataOff, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	result2, err := nativeReRender(snapDataOff, nil, workDir)
+	require.NoError(t, err)
+
+	// Service must NOT appear in Containerfile systemctl enable
+	assert.NotContains(t, result2.Containerfile, "httpd.service",
+		"excluded service must not appear in Containerfile")
+
+	// Returned snapshot must reflect the sync'd state
+	var returnedSnap schema.InspectionSnapshot
+	require.NoError(t, json.Unmarshal(result2.Snapshot, &returnedSnap))
+	assert.NotContains(t, returnedSnap.Services.EnabledUnits, "httpd.service",
+		"excluded service must be removed from EnabledUnits in returned snapshot")
+}
+
+func TestNativeReRender_CronToggleAffectsContainerfile(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create snapshot with cron job + generated timer units
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "httpd", Version: "2.4", Release: "1", Arch: "x86_64",
+				State: "installed", SourceRepo: "appstream", Include: true},
+		},
+	}
+	snap.ScheduledTasks = &schema.ScheduledTaskSection{
+		CronJobs: []schema.CronJob{
+			{Path: "/etc/cron.d/backup", Source: "cron.d", Include: true},
+		},
+		GeneratedTimerUnits: []schema.GeneratedTimerUnit{
+			{Name: "backup-1", SourcePath: "/etc/cron.d/backup",
+				TimerContent: "[Timer]\nOnCalendar=daily", ServiceContent: "[Service]\nExecStart=/usr/bin/backup",
+				Include: true},
+		},
+	}
+
+	snapData, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "inspection-snapshot.json"), snapData, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "original-inspection-snapshot.json"), snapData, 0444))
+
+	// ── Render 1: cron included ──
+	result1, err := nativeReRender(snapData, nil, workDir)
+	require.NoError(t, err)
+	assert.Contains(t, result1.Containerfile, "backup-1",
+		"Containerfile should reference generated timer when cron is included")
+
+	// ── Toggle cron off ──
+	snap.ScheduledTasks.CronJobs[0].Include = false
+	snapDataOff, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	result2, err := nativeReRender(snapDataOff, nil, workDir)
+	require.NoError(t, err)
+
+	// Generated timer must NOT appear in Containerfile
+	assert.NotContains(t, result2.Containerfile, "backup-1",
+		"excluded cron timer must not appear in Containerfile")
+
+	// Timer Include must be false in returned snapshot
+	var returnedSnap schema.InspectionSnapshot
+	require.NoError(t, json.Unmarshal(result2.Snapshot, &returnedSnap))
+	assert.False(t, returnedSnap.ScheduledTasks.GeneratedTimerUnits[0].Include,
+		"generated timer Include must be false when parent cron is excluded")
+}
+
+func TestNativeReRender_SecretExcludedToIncluded(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create snapshot with a config file (Include=true) that has an "excluded" redaction.
+	// The reconciliation should override "excluded" → "overridden" because the
+	// config file IS included — the user has overridden the secret exclusion.
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "httpd", Version: "2.4", Release: "1", Arch: "x86_64",
+				State: "installed", SourceRepo: "appstream", Include: true},
+		},
+	}
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/secret.conf", Kind: "non_rpm",
+				Category: schema.ConfigCategoryOther, Content: "API_KEY=hunter2", Include: true},
+		},
+	}
+	snap.Redactions = []json.RawMessage{
+		json.RawMessage(`{"path":"/etc/secret.conf","source":"file","kind":"excluded","pattern":"api_key","remediation":"","detection_method":"pattern","confidence":"high"}`),
+	}
+
+	snapData, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "inspection-snapshot.json"), snapData, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "original-inspection-snapshot.json"), snapData, 0444))
+
+	result, err := nativeReRender(snapData, nil, workDir)
+	require.NoError(t, err)
+
+	// Reconciled view: "excluded" + Include=true → "overridden"
+	// The overridden finding should NOT produce a REDACTED placeholder
+	redactedFile := filepath.Join(workDir, "redacted", "etc", "secret.conf.REDACTED")
+	assert.NoFileExists(t, redactedFile,
+		"overridden secret must NOT produce a REDACTED placeholder")
+
+	// Redaction counts in README.md and audit-report.md should reflect
+	// the reconciled view. An "overridden" finding is not counted as
+	// "excluded" — so these counts should NOT include it as a redaction.
+	readmeContent, _ := os.ReadFile(filepath.Join(workDir, "README.md"))
+	assert.NotContains(t, string(readmeContent), "Secrets redacted",
+		"overridden secret should not count as redacted in README")
+
+	// The returned snapshot Redactions must still have Kind="excluded" (canonical)
+	var returnedSnap schema.InspectionSnapshot
+	require.NoError(t, json.Unmarshal(result.Snapshot, &returnedSnap))
+	require.Len(t, returnedSnap.Redactions, 1)
+	var canonicalFinding schema.RedactionFinding
+	require.NoError(t, json.Unmarshal(returnedSnap.Redactions[0], &canonicalFinding))
+	assert.Equal(t, "excluded", canonicalFinding.Kind,
+		"canonical redaction Kind must remain 'excluded' in returned snapshot")
+}
+
+func TestNativeReRender_SecretFlaggedToExcluded(t *testing.T) {
+	workDir := t.TempDir()
+
+	// Create snapshot with config file (Include=false) + "flagged" redaction.
+	// Reconciliation should override "flagged" → "excluded" because the
+	// config file is NOT included — the file is being dropped entirely.
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "httpd", Version: "2.4", Release: "1", Arch: "x86_64",
+				State: "installed", SourceRepo: "appstream", Include: true},
+		},
+	}
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/secret.conf", Kind: "non_rpm",
+				Category: schema.ConfigCategoryOther, Content: "API_KEY=hunter2", Include: false},
+		},
+	}
+	snap.Redactions = []json.RawMessage{
+		json.RawMessage(`{"path":"/etc/secret.conf","source":"file","kind":"flagged","pattern":"api_key","remediation":"","detection_method":"heuristic","confidence":"medium"}`),
+	}
+
+	snapData, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "inspection-snapshot.json"), snapData, 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "original-inspection-snapshot.json"), snapData, 0444))
+
+	result, err := nativeReRender(snapData, nil, workDir)
+	require.NoError(t, err)
+
+	// Reconciled view: "flagged" + Include=false → "excluded"
+	// The excluded finding SHOULD produce a REDACTED placeholder
+	redactedFile := filepath.Join(workDir, "redacted", "etc", "secret.conf.REDACTED")
+	assert.FileExists(t, redactedFile,
+		"reconciled-to-excluded secret MUST produce a REDACTED placeholder")
+
+	// The returned snapshot Redactions must still have Kind="flagged" (canonical)
+	var returnedSnap schema.InspectionSnapshot
+	require.NoError(t, json.Unmarshal(result.Snapshot, &returnedSnap))
+	require.Len(t, returnedSnap.Redactions, 1)
+	var canonicalFinding schema.RedactionFinding
+	require.NoError(t, json.Unmarshal(returnedSnap.Redactions[0], &canonicalFinding))
+	assert.Equal(t, "flagged", canonicalFinding.Kind,
+		"canonical redaction Kind must remain 'flagged' in returned snapshot")
 }
 
 func snapshotDirContents(t *testing.T, dir string) map[string]string {
