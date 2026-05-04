@@ -160,10 +160,11 @@ func RenderAuditReport(snap *schema.InspectionSnapshot, outputDir string, origin
 	}
 
 	// Redactions
-	if len(snap.Redactions) > 0 {
+	activeRedactions := CountActiveRedactions(snap.Redactions)
+	if activeRedactions > 0 {
 		lines = append(lines, "## Redactions")
 		lines = append(lines, "")
-		lines = append(lines, fmt.Sprintf("%d item(s) redacted. See `secrets-review.md` for details.", len(snap.Redactions)))
+		lines = append(lines, fmt.Sprintf("%d item(s) redacted. See `secrets-review.md` for details.", activeRedactions))
 		lines = append(lines, "")
 	}
 

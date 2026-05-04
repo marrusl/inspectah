@@ -74,7 +74,7 @@ func RenderReadme(snap *schema.InspectionSnapshot, outputDir string) error {
 	}
 
 	warningsCount := len(snap.Warnings)
-	redactionsCount := len(snap.Redactions)
+	redactionsCount := CountActiveRedactions(snap.Redactions)
 
 	fixmes := extractFIXMEs(outputDir)
 

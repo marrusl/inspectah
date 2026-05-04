@@ -1243,6 +1243,28 @@ func TestClassifyKernelModules_Fleet_NotDisplayOnly(t *testing.T) {
 	assert.Empty(t, brItem.Group, "fleet items must not be grouped")
 }
 
+func TestNormalizeIncludeDefaults_RespectsExcludedSecrets(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/normal.conf", Include: false},
+			{Path: "/etc/secret.conf", Include: false},
+		},
+	}
+	snap.Redactions = []json.RawMessage{
+		json.RawMessage(`{"path":"/etc/secret.conf","source":"file","kind":"excluded","pattern":"api_key"}`),
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	// normal.conf should be included (no excluded redaction)
+	assert.True(t, snap.Config.Files[0].Include,
+		"normal config file must be included after normalization")
+	// secret.conf should stay excluded (scanner decision preserved)
+	assert.False(t, snap.Config.Files[1].Include,
+		"scanner-excluded secret file must retain Include=false after normalization")
+}
+
 func TestClassifySecretItems_MultiRedactionSamePath(t *testing.T) {
 	snap := schema.NewSnapshot()
 	snap.Config = &schema.ConfigSection{

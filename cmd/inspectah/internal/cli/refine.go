@@ -76,15 +76,14 @@ func nativeReRender(snapData []byte, origData []byte, outputDir string) (refine.
 	// for SPA binding; the reconciled view is used by renderers.
 	//
 	// "overridden" findings (user included a file the scanner excluded)
-	// are dropped from the render-time slice — they should not appear
-	// in counts, placeholders, or review listings. The canonical
-	// Redactions (with original Kind values) are restored after rendering.
+	// are kept in the reconciled slice so secrets-review.md can render
+	// an audit trail. Other renderers (Containerfile, redacted/) naturally
+	// skip "overridden" because they only act on "excluded" kind.
+	// The canonical Redactions (with original Kind values) are restored
+	// after rendering.
 	reconciled := renderer.ReconcileSecretOverrides(&snap)
 	var reconciledJSON []json.RawMessage
 	for _, f := range reconciled {
-		if f.Kind == "overridden" {
-			continue
-		}
 		raw, _ := json.Marshal(f)
 		reconciledJSON = append(reconciledJSON, raw)
 	}

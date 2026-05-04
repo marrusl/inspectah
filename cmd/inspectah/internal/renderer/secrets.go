@@ -24,7 +24,7 @@ func RenderSecretsReview(snap *schema.InspectionSnapshot, outputDir string) erro
 	lines = append(lines, "")
 
 	// Parse findings
-	var excluded, inlineRedacted, flagged []schema.RedactionFinding
+	var excluded, inlineRedacted, flagged, overridden []schema.RedactionFinding
 	var legacy []map[string]interface{}
 
 	for _, raw := range snap.Redactions {
@@ -37,6 +37,8 @@ func RenderSecretsReview(snap *schema.InspectionSnapshot, outputDir string) erro
 				inlineRedacted = append(inlineRedacted, finding)
 			case "flagged":
 				flagged = append(flagged, finding)
+			case "overridden":
+				overridden = append(overridden, finding)
 			}
 		} else {
 			var m map[string]interface{}
@@ -62,8 +64,12 @@ func RenderSecretsReview(snap *schema.InspectionSnapshot, outputDir string) erro
 	if len(flagged) > 0 {
 		flaggedPart = fmt.Sprintf(", %d flagged for review", len(flagged))
 	}
+	overriddenPart := ""
+	if len(overridden) > 0 {
+		overriddenPart = fmt.Sprintf(", %d overridden", len(overridden))
+	}
 
-	lines = append(lines, fmt.Sprintf("> Detected secrets: %d redacted%s%s", nRedacted, breakdown, flaggedPart))
+	lines = append(lines, fmt.Sprintf("> Detected secrets: %d redacted%s%s%s", nRedacted, breakdown, flaggedPart, overriddenPart))
 	lines = append(lines, "")
 
 	lines = append(lines, "The following items were redacted or excluded. Handle them according to")
@@ -148,8 +154,38 @@ func RenderSecretsReview(snap *schema.InspectionSnapshot, outputDir string) erro
 		lines = append(lines, "")
 	}
 
+	// Overridden exclusions
+	if len(overridden) > 0 {
+		lines = append(lines, "## Overridden Exclusions")
+		lines = append(lines, "")
+		lines = append(lines, "These files were originally excluded by the scanner but deliberately")
+		lines = append(lines, "re-included by the operator during triage.")
+		lines = append(lines, "")
+		for _, f := range overridden {
+			lines = append(lines, fmt.Sprintf("- **%s** — %s (originally excluded for: %s)", f.Path, f.Pattern, f.DetectionMethod))
+		}
+		lines = append(lines, "")
+	}
+
 	content := strings.Join(lines, "\n")
 	return os.WriteFile(path, []byte(content), 0644)
+}
+
+// CountActiveRedactions returns the number of redaction findings that
+// represent actual redactions (excluded + inline), excluding overridden
+// findings which are audit-trail-only and should not inflate counts.
+func CountActiveRedactions(redactions []json.RawMessage) int {
+	count := 0
+	for _, raw := range redactions {
+		var finding schema.RedactionFinding
+		if err := json.Unmarshal(raw, &finding); err == nil {
+			if finding.Kind == "overridden" {
+				continue
+			}
+		}
+		count++
+	}
+	return count
 }
 
 func remediationLabel(rem string) string {

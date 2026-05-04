@@ -159,10 +159,21 @@ func NormalizeIncludeDefaults(snap *schema.InspectionSnapshot, isFleet bool) {
 		return
 	}
 
-	// Config files
+	// Config files — respect scanner-excluded secrets
 	if snap.Config != nil {
+		excludedSecretPaths := make(map[string]bool)
+		for _, raw := range snap.Redactions {
+			var finding schema.RedactionFinding
+			if err := json.Unmarshal(raw, &finding); err == nil {
+				if finding.Source == "file" && finding.Kind == "excluded" {
+					excludedSecretPaths[finding.Path] = true
+				}
+			}
+		}
 		for i := range snap.Config.Files {
-			snap.Config.Files[i].Include = true
+			if !excludedSecretPaths[snap.Config.Files[i].Path] {
+				snap.Config.Files[i].Include = true
+			}
 		}
 	}
 

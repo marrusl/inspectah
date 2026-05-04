@@ -67,9 +67,6 @@ func TestNativeReRender_ProducesCanonicalOutput(t *testing.T) {
 	reconciled := renderer.ReconcileSecretOverrides(&groundSnap)
 	var reconciledJSON []json.RawMessage
 	for _, f := range reconciled {
-		if f.Kind == "overridden" {
-			continue
-		}
 		raw, _ := json.Marshal(f)
 		reconciledJSON = append(reconciledJSON, raw)
 	}
@@ -537,6 +534,14 @@ func TestNativeReRender_SecretExcludedToIncluded(t *testing.T) {
 	readmeContent, _ := os.ReadFile(filepath.Join(workDir, "README.md"))
 	assert.NotContains(t, string(readmeContent), "Secrets redacted",
 		"overridden secret should not count as redacted in README")
+
+	// secrets-review.md must contain the overridden audit trail
+	secretsReview, err := os.ReadFile(filepath.Join(workDir, "secrets-review.md"))
+	require.NoError(t, err, "secrets-review.md must exist")
+	assert.Contains(t, string(secretsReview), "Overridden",
+		"secrets-review.md must contain Overridden Exclusions section")
+	assert.Contains(t, string(secretsReview), "/etc/secret.conf",
+		"secrets-review.md must reference the overridden file path")
 
 	// The returned snapshot Redactions must still have Kind="excluded" (canonical)
 	var returnedSnap schema.InspectionSnapshot
