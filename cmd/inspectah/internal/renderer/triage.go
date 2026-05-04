@@ -355,7 +355,7 @@ func classifyPackage(pkg schema.PackageEntry, baseline map[string]bool) (int, st
 }
 
 func isThirdPartyRepo(repo string) bool {
-	standard := []string{"baseos", "appstream", "rhel", "fedora"}
+	standard := []string{"baseos", "appstream", "rhel", "fedora", "updates", "anaconda"}
 	if repo == "" {
 		return false
 	}
@@ -376,6 +376,8 @@ func isBaseImageRepo(repo string) bool {
 		"appstream": true,
 		"crb":       true,
 		"fedora":    true,
+		"updates":   true,
+		"anaconda":  true,
 	}
 	return baseRepos[repo]
 }
