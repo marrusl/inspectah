@@ -11,8 +11,12 @@ Track the remaining work to merge `go-port` to `main` and retire the Python/cont
 
 Order matters — each item may surface issues that affect the next.
 
-- [ ] **0a. Triage UX fixups** ← CURRENT
-  Default states, wording, visual hierarchy, and information architecture fixes from live testing. Pre-spec: `docs/specs/proposed/2026-05-04-triage-ux-fixups-prespec.md`. Must complete before fleet verification.
+- [ ] **0a. Triage UX fixups** ← CURRENT (spec + plan approved, ready to execute)
+  Default states, wording, visual hierarchy, and information architecture fixes from live testing.
+  **Spec:** `docs/specs/proposed/2026-05-04-triage-ux-fixups-design.md` (approved, revision 5 — 5 design review rounds by Kit, Fern, Collins)
+  **Plan:** `docs/plans/2026-05-04-triage-ux-fixups.md` (approved — 5 plan review rounds by Kit, Thorn, Fern)
+  **Scope:** 13 tasks across 4 tiers. Default inclusion sweep, tier labels, version changes section, informational wrapper, three-state secret cards, accessible preview pane, kernel module filtering.
+  **Execution:** Subagent-driven development (Kit implements per task).
 
 - [x] **0. Single-machine triage redesign**
   Accordion grouping, notification cards, display-only surfaces, leaf-only packages (57 not 510), dep drill-down chevrons, version changes accordion (153 items), SELinux moved to System & Security. 33 commits landed on `go-port`, browser-verified against a live Fedora 43 scan. Minor fixups pending from live testing.
