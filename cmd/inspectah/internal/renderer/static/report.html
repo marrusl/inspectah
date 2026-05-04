@@ -906,6 +906,100 @@
         padding: 1rem;
       }
     }
+
+    /* ── Accordion cards ── */
+    .accordion-card {
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      margin-bottom: 6px;
+      overflow: hidden;
+    }
+    .accordion-card.accordion-disabled {
+      opacity: 0.4;
+    }
+    .accordion-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      cursor: pointer;
+      background: rgba(255,255,255,0.03);
+    }
+    .accordion-chevron {
+      font-size: 11px;
+      margin-right: 10px;
+      transition: transform 0.15s;
+    }
+    .accordion-info {
+      flex: 1;
+    }
+    .accordion-name {
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .accordion-badge {
+      background: rgba(210,153,34,0.15);
+      color: #d29922;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 500;
+      margin-left: 8px;
+    }
+    .accordion-subtitle {
+      display: block;
+      font-size: 12px;
+      opacity: 0.5;
+      margin-top: 2px;
+    }
+    .accordion-always-label {
+      font-size: 11px;
+      opacity: 0.35;
+      padding: 4px 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 10px;
+    }
+    .accordion-toggle {
+      width: 40px;
+      height: 22px;
+      border-radius: 11px;
+      background: #3fb950;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.15s;
+      flex-shrink: 0;
+    }
+    .accordion-toggle.toggle-off {
+      background: rgba(255,255,255,0.15);
+    }
+    .accordion-toggle-knob {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      transition: all 0.15s;
+    }
+    .accordion-toggle.toggle-off .accordion-toggle-knob {
+      right: auto;
+      left: 2px;
+    }
+    .accordion-table {
+      width: 100%;
+      border-collapse: collapse;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      padding: 8px 14px;
+      font-size: 13px;
+    }
+    .accordion-table td {
+      padding: 6px 8px;
+      border-top: 1px solid rgba(255,255,255,0.04);
+    }
+    .accordion-meta {
+      opacity: 0.6;
+    }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -995,7 +1089,8 @@ var App = {
   decisions: {},       // key -> true (decided). Presence means user acted; snapshot holds actual value.
   priorValues: {},     // key -> prior include value before makeDecision (for undo)
   activeSection: 'overview',
-  tierExpanded: {}     // sectionId-tier -> boolean
+  tierExpanded: {},    // sectionId-tier -> boolean
+  groupPriorState: {}  // groupName -> {key: priorInclude} for toggle restore
 };
 
 // ── Decided-state helper ──
@@ -1664,6 +1759,202 @@ function buildDecidedCard(item, included) {
   card.appendChild(undo);
 
   return card;
+}
+
+// ── Output Accordion ──
+function buildOutputAccordion(groupName, items, options) {
+  options = options || {};
+  var div = document.createElement('div');
+  div.className = 'accordion-card';
+  div.setAttribute('data-group', groupName);
+
+  // Compute group state
+  var allCount = items.length;
+  var includedCount = 0;
+  for (var i = 0; i < items.length; i++) {
+    if (getSnapshotInclude(items[i].key)) includedCount++;
+  }
+  var groupState = includedCount === allCount ? 'all' : includedCount === 0 ? 'none' : 'partial';
+  var isExpanded = App.tierExpanded['group-' + groupName] || false;
+
+  // Header
+  var header = document.createElement('div');
+  header.className = 'accordion-header';
+  header.setAttribute('role', 'button');
+  header.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+  header.setAttribute('tabindex', '0');
+
+  var chevron = document.createElement('span');
+  chevron.className = 'accordion-chevron';
+  chevron.textContent = isExpanded ? '▼' : '▶';
+  header.appendChild(chevron);
+
+  var info = document.createElement('div');
+  info.className = 'accordion-info';
+
+  var nameEl = document.createElement('span');
+  nameEl.className = 'accordion-name';
+  nameEl.textContent = options.displayName || groupName.replace(/^repo:|^kind:|^sub:/, '');
+  info.appendChild(nameEl);
+
+  if (options.badge) {
+    var badge = document.createElement('span');
+    badge.className = 'accordion-badge';
+    badge.textContent = options.badge;
+    info.appendChild(badge);
+  }
+
+  var subtitle = document.createElement('span');
+  subtitle.className = 'accordion-subtitle';
+  if (groupState === 'partial') {
+    subtitle.textContent = includedCount + ' of ' + allCount + ' included';
+  } else if (groupState === 'none') {
+    subtitle.textContent = allCount + ' items, excluded';
+  } else {
+    subtitle.textContent = allCount + ' items';
+  }
+  info.appendChild(subtitle);
+  header.appendChild(info);
+
+  // Toggle switch (unless alwaysIncluded)
+  if (!options.alwaysIncluded) {
+    var toggle = document.createElement('div');
+    toggle.className = 'accordion-toggle';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-checked', groupState !== 'none' ? 'true' : 'false');
+    toggle.setAttribute('tabindex', '0');
+    toggle.setAttribute('aria-label', (options.displayName || groupName) + ' toggle');
+    var knob = document.createElement('div');
+    knob.className = 'accordion-toggle-knob';
+    toggle.appendChild(knob);
+
+    if (groupState === 'none') {
+      toggle.classList.add('toggle-off');
+      div.classList.add('accordion-disabled');
+    }
+
+    toggle.onclick = function(e) {
+      e.stopPropagation();
+      if (App.mode === 'static') return;
+      toggleAccordionGroup(groupName, items, groupState !== 'none');
+    };
+    toggle.onkeydown = function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (App.mode === 'static') return;
+        toggleAccordionGroup(groupName, items, groupState !== 'none');
+      }
+    };
+    header.appendChild(toggle);
+  } else {
+    var label = document.createElement('span');
+    label.className = 'accordion-always-label';
+    label.textContent = 'always included';
+    header.appendChild(label);
+  }
+
+  // Header click expands/collapses
+  header.onclick = function() {
+    var expanded = App.tierExpanded['group-' + groupName];
+    App.tierExpanded['group-' + groupName] = !expanded;
+    var sectionId = items[0] ? items[0].section : '';
+    if (sectionId) renderTriageSection(sectionId);
+  };
+  header.onkeydown = function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      header.click();
+    }
+  };
+
+  div.appendChild(header);
+
+  // Expanded content
+  if (isExpanded) {
+    var table = document.createElement('table');
+    table.className = 'accordion-table';
+
+    for (var j = 0; j < items.length; j++) {
+      var item = items[j];
+      var tr = document.createElement('tr');
+      var tdCheck = document.createElement('td');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = getSnapshotInclude(item.key);
+      cb.disabled = groupState === 'none' || App.mode === 'static';
+      cb.setAttribute('aria-label', item.name);
+      (function(itemKey, sectionId) {
+        cb.onchange = function() {
+          updateSnapshotInclude(itemKey, this.checked);
+          incrementChangeCounter();
+          App.decisions[itemKey] = true;
+          reopenReviewedSection(sectionId);
+          scheduleAutosave();
+          renderTriageSection(sectionId);
+          updateBadge(sectionId);
+        };
+      })(item.key, item.section);
+      tdCheck.appendChild(cb);
+      tr.appendChild(tdCheck);
+
+      var tdName = document.createElement('td');
+      tdName.textContent = item.name;
+      tr.appendChild(tdName);
+
+      var tdMeta = document.createElement('td');
+      tdMeta.className = 'accordion-meta';
+      tdMeta.textContent = item.meta || '';
+      tr.appendChild(tdMeta);
+
+      table.appendChild(tr);
+    }
+    div.appendChild(table);
+  }
+
+  // Screen reader label
+  var srLabel = (options.displayName || groupName.replace(/^repo:|^kind:|^sub:/, ''));
+  if (options.badge) srLabel += ', ' + options.badge + ' repository';
+  srLabel += ', ' + (groupState === 'partial' ? includedCount + ' of ' + allCount + ' included' : allCount + ' items');
+  if (groupState === 'none') srLabel += ', excluded';
+  srLabel += isExpanded ? ', expanded' : ', collapsed';
+  div.setAttribute('aria-label', srLabel);
+
+  return div;
+}
+
+function toggleAccordionGroup(groupName, items, isCurrentlyOn) {
+  if (isCurrentlyOn) {
+    var prior = {};
+    for (var i = 0; i < items.length; i++) {
+      prior[items[i].key] = getSnapshotInclude(items[i].key);
+      updateSnapshotInclude(items[i].key, false);
+    }
+    App.groupPriorState[groupName] = prior;
+  } else {
+    var saved = App.groupPriorState[groupName];
+    for (var j = 0; j < items.length; j++) {
+      var val = saved ? (saved[items[j].key] !== undefined ? saved[items[j].key] : true) : true;
+      updateSnapshotInclude(items[j].key, val);
+    }
+  }
+
+  incrementChangeCounter();
+  var sectionId = items[0] ? items[0].section : '';
+  if (sectionId) {
+    reopenReviewedSection(sectionId);
+    renderTriageSection(sectionId);
+    updateBadge(sectionId);
+  }
+  scheduleAutosave();
+}
+
+function reopenReviewedSection(sectionId) {
+  if (App.reviewStates[sectionId] === 'reviewed') {
+    App.reviewStates[sectionId] = 'in-progress';
+    updateSidebarDot(sectionId);
+    updateProgressBar();
+  }
 }
 
 // ── Decision Logic ──
