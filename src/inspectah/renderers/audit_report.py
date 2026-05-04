@@ -689,18 +689,15 @@ def render(
             lines.append(f"- **Custom policy modules** ({len(snapshot.selinux.custom_modules)}):")
             for m in snapshot.selinux.custom_modules:
                 lines.append(f"  - `{m}`")
-        non_default_bools = [b for b in (snapshot.selinux.boolean_overrides or []) if b.get("non_default")]
-        if non_default_bools:
-            lines.append(f"- **Non-default booleans** ({len(non_default_bools)}):")
-            for b in non_default_bools:
+        # boolean_overrides only contains non-default entries (filtered at collection time)
+        if snapshot.selinux.boolean_overrides:
+            lines.append(f"- **Non-default booleans** ({len(snapshot.selinux.boolean_overrides)}):")
+            for b in snapshot.selinux.boolean_overrides:
                 name = b.get("name", "?")
                 cur = b.get("current", "?")
                 dflt = b.get("default", "?")
                 desc = b.get("description", "")
                 lines.append(f"  - `{name}` = **{cur}** (default: {dflt}) — {desc}")
-        unchanged_count = len(snapshot.selinux.boolean_overrides or []) - len(non_default_bools)
-        if unchanged_count > 0:
-            lines.append(f"- Unchanged booleans: {unchanged_count} (at default values)")
         if snapshot.selinux.fcontext_rules:
             lines.append(f"- **Custom fcontext rules** ({len(snapshot.selinux.fcontext_rules)}):")
             for fc in snapshot.selinux.fcontext_rules:

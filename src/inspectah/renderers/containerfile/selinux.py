@@ -22,10 +22,10 @@ def section_lines(snapshot: InspectionSnapshot) -> list[str]:
                      "export .pp files to config/selinux/ and uncomment the COPY + semodule lines below")
         lines.append("# COPY config/selinux/ /tmp/selinux/")
         lines.append("# RUN semodule -i /tmp/selinux/*.pp && rm -rf /tmp/selinux/")
-    non_default = [b for b in snapshot.selinux.boolean_overrides if b.get("non_default")]
-    if non_default:
-        lines.append(f"# FIXME: {len(non_default)} non-default boolean(s) detected — verify each is still needed")
-        for b in non_default[:20]:
+    # boolean_overrides only contains non-default entries (filtered at collection time)
+    if snapshot.selinux.boolean_overrides:
+        lines.append(f"# FIXME: {len(snapshot.selinux.boolean_overrides)} non-default boolean(s) detected — verify each is still needed")
+        for b in snapshot.selinux.boolean_overrides[:20]:
             bname = b.get("name", "unknown_bool")
             bval = b.get("current", "on")
             if (_sanitize_shell_value(bname, "setsebool name") is not None

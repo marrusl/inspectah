@@ -90,8 +90,9 @@ def _parse_semanage_ports(text: str) -> List[SelinuxPortLabel]:
 def _parse_semanage_booleans(text: str) -> List[dict]:
     """Parse ``semanage boolean -l`` output.
 
-    Returns all booleans where current state differs from the default,
-    each as ``{"name": ..., "current": ..., "default": ..., "description": ...}``.
+    Returns all booleans with their current and default states.  Each entry is
+    ``{"name": ..., "current": ..., "default": ..., "non_default": bool, "description": ...}``.
+    The caller filters to non-default entries before storing.
     """
     results: List[dict] = []
     for line in text.splitlines():
@@ -180,7 +181,10 @@ def run(
         out = executor(["chroot", str(host_root), "semanage", "boolean", "-l"])
         if out.returncode == 0 and out.stdout.strip():
             _debug(f"semanage boolean -l succeeded ({len(out.stdout.splitlines())} lines)")
-            section.boolean_overrides = _parse_semanage_booleans(out.stdout)
+            section.boolean_overrides = [
+                b for b in _parse_semanage_booleans(out.stdout)
+                if b.get("non_default")
+            ]
         else:
             _debug(f"semanage failed (rc={out.returncode}): {out.stderr.strip()[:200]}")
             # Fallback: try reading /sys/fs/selinux/booleans/ from the host

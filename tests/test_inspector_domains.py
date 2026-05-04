@@ -287,7 +287,8 @@ def test_selinux_inspector_with_fixtures(host_root, fixture_executor):
     assert "myapp" in section.custom_modules
     assert "abrt" not in section.custom_modules
 
-    assert len(section.boolean_overrides) > 0
+    # Only non-default booleans should be captured (default-value ones are filtered out)
+    assert len(section.boolean_overrides) == 3
     names = {b["name"] for b in section.boolean_overrides}
     assert "httpd_can_network_connect" in names
     assert "httpd_use_nfs" in names
@@ -298,8 +299,8 @@ def test_selinux_inspector_with_fixtures(host_root, fixture_executor):
     assert httpd_net["default"] == "off"
     assert httpd_net["non_default"] is True
 
-    httpd_cgi = next(b for b in section.boolean_overrides if b["name"] == "httpd_enable_cgi")
-    assert httpd_cgi["non_default"] is False
+    # Default-value booleans should be excluded from the snapshot
+    assert "httpd_enable_cgi" not in names
 
     assert len(section.port_labels) == 2
     port_map = {(pl.protocol, pl.port): pl.type for pl in section.port_labels}
