@@ -1,6 +1,6 @@
 # Triage UX Fixes Implementation Plan
 
-*Revision 2 — fixes semod-* routing, current_value field, sidecar proof, browser checklist, contradictory snippets, expandedDep reset.*
+*Revision 3 — fixes semod-* routing, current_value field, sidecar proof (now through RunRefine), browser checklist, contradictory snippets, expandedDep reset.*
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -1022,15 +1022,17 @@ func TestHTMLReportGoldenVersionChanges(t *testing.T) {
 
 - [ ] **Step 3: Write refine-server sidecar proof test**
 
-This test proves the approval-critical fix: after `RunRefine`-style normalization and sidecar creation, `ClassifySnapshot(snap, original)` produces `DefaultInclude: true` for leaf packages, matching the working snapshot's `Include: true`. An untouched leaf reads as NOT decided.
+This test proves the approval-critical fix: after `RunRefine` processes a tarball with leaf packages having `Include: false`, the sidecar and working snapshot both have `Include: true` for leaves, and `ClassifySnapshot(snap, original)` produces `DefaultInclude: true`.
 
-Add to `cmd/inspectah/internal/refine/server_test.go`, following existing patterns. READ the test file first for helpers like `setupTestOutputDir`, `newRefineHandler`, etc.
+**Critical requirement:** This test MUST exercise the real `RunRefine` function (or a shared helper that `RunRefine` calls) — not a test-local reenactment of the normalize-before-sidecar ordering. The proof is only valid if it goes through the same code path as production.
+
+Add to `cmd/inspectah/internal/refine/server_test.go`. READ the test file first — the existing tests at lines 292-340 show how to call `RunRefine` with a test tarball and inspect the output directory.
 
 ```go
-func TestRefineServer_LeafNormalizationSidecarAgreement(t *testing.T) {
-	// Create a snapshot with LeafPackages and Include=false (scan default)
+func TestRunRefine_LeafNormalizationSidecarAgreement(t *testing.T) {
+	// Create a tarball with a snapshot containing LeafPackages and Include=false
 	leafNames := []string{"vim"}
-	snap := makeTestSnapshot(t)
+	snap := schema.NewSnapshot()
 	snap.Rpm = &schema.RpmSection{
 		LeafPackages: &leafNames,
 		PackagesAdded: []schema.PackageEntry{
@@ -1039,33 +1041,51 @@ func TestRefineServer_LeafNormalizationSidecarAgreement(t *testing.T) {
 		},
 	}
 
-	// Write snapshot, run normalization (same sequence as RunRefine)
-	dir := setupTestOutputDir(t, snap)
+	// Build a test tarball from this snapshot
+	// (follow existing patterns in server_test.go for creating test tarballs —
+	// look for how other tests write snapshot + report.html to a temp dir,
+	// then tar it up and pass the path to RunRefine)
+	tarball := buildTestTarball(t, snap)
 
-	// Load both working and sidecar snapshots
-	workingSnap := loadSnapshotFromDir(t, dir, "inspection-snapshot.json")
-	sidecarSnap := loadSnapshotFromDir(t, dir, "original-inspection-snapshot.json")
+	// Run the REAL RunRefine against the test tarball.
+	// Use a short-lived server with immediate shutdown — we only need
+	// the extraction/normalization/sidecar pipeline, not the HTTP server.
+	// If RunRefine blocks on serving, use the existing test pattern of
+	// running it in a goroutine with a context/cancel or errCh, then
+	// inspecting the output directory after the initial render completes.
+	outputDir := runRefineAndGetOutputDir(t, tarball)
+
+	// Load both working and sidecar snapshots from the output directory
+	workingSnap, err := schema.LoadSnapshot(
+		filepath.Join(outputDir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+	sidecarSnap, err := schema.LoadSnapshot(
+		filepath.Join(outputDir, "original-inspection-snapshot.json"))
+	require.NoError(t, err)
 
 	// Both must agree: leaf vim has Include=true
 	assert.True(t, workingSnap.Rpm.PackagesAdded[0].Include,
-		"working snapshot leaf should be Include=true")
+		"working snapshot leaf should be Include=true after RunRefine normalization")
 	assert.True(t, sidecarSnap.Rpm.PackagesAdded[0].Include,
-		"sidecar leaf should be Include=true (normalized before sidecar)")
+		"sidecar leaf should be Include=true (RunRefine normalizes before sidecar)")
 
 	// Dep vim-common stays false in both
 	assert.False(t, workingSnap.Rpm.PackagesAdded[1].Include)
 	assert.False(t, sidecarSnap.Rpm.PackagesAdded[1].Include)
 
-	// ClassifySnapshot with original produces DefaultInclude=true
+	// ClassifySnapshot with original produces DefaultInclude=true for leaf
 	items := renderer.ClassifySnapshot(workingSnap, sidecarSnap)
 	vim := findTriageItem(items, "pkg-vim-x86_64")
 	require.NotNil(t, vim)
 	assert.True(t, vim.DefaultInclude,
-		"DefaultInclude should be true — sidecar and working agree")
+		"DefaultInclude must be true — both copies agree after RunRefine pipeline")
 }
 ```
 
-Note: Adapt helper names (`makeTestSnapshot`, `setupTestOutputDir`, `loadSnapshotFromDir`, `findTriageItem`) to match the actual helpers in `server_test.go`. READ the file first — the existing test infrastructure likely has similar patterns. If `setupTestOutputDir` doesn't exist, the implementer should build it following the existing `startRefineServer`/`setupTestOutputDir` patterns, ensuring it runs `NormalizeLeafDefaults` + `NormalizeSnapshot` + saves sidecar in the same order as `RunRefine`.
+**Implementation notes for the implementer:**
+- `buildTestTarball(t, snap)` and `runRefineAndGetOutputDir(t, tarball)` are test helpers the implementer must create. READ `server_test.go` carefully — the existing test patterns (lines 292-340) show how to call `RunRefine` in a goroutine, wait for the initial render, then inspect the output. The key requirement is that the test goes through `RunRefine` itself, not a manual reenactment.
+- `findTriageItem` may need to be defined if the refine test file doesn't already have it (it exists as `findItem` in `triage_test.go` — same package won't work across packages, so define a local copy).
+- If `RunRefine` requires a `ReRenderFn`, provide a minimal one from the existing test patterns.
 
 - [ ] **Step 4: Run tests**
 
