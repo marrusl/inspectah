@@ -2972,6 +2972,44 @@ function renderTriageSection(sectionId) {
     container.appendChild(tierDiv);
   }
 
+  // Section footer
+  var footer = document.createElement('div');
+  footer.className = 'section-footer';
+
+  var decidedCount = 0;
+  for (var fc = 0; fc < allItems.length; fc++) {
+    if (isItemDecided(allItems[fc]) || (allItems[fc].display_only && getSnapshotAcknowledged(allItems[fc].key))) decidedCount++;
+  }
+
+  var statsSpan = document.createElement('span');
+  statsSpan.className = 'section-stats';
+  statsSpan.textContent = decidedCount + ' / ' + allItems.length + ' decided';
+  footer.appendChild(statsSpan);
+
+  var reviewBtn = document.createElement('button');
+  reviewBtn.type = 'button';
+  reviewBtn.className = 'mark-reviewed-btn';
+  var isReviewed = App.reviewStates[sectionId] === 'reviewed';
+  if (isReviewed) {
+    reviewBtn.classList.add('reviewed');
+    reviewBtn.textContent = '✓ Reviewed';
+  } else {
+    reviewBtn.textContent = 'Mark section reviewed';
+  }
+  reviewBtn.setAttribute('aria-label', isReviewed ?
+    label + ' section reviewed' : 'Mark ' + label + ' section reviewed');
+  reviewBtn.onclick = function() {
+    if (App.mode === 'static') return;
+    App.reviewStates[sectionId] = 'reviewed';
+    updateSidebarDot(sectionId);
+    updateProgressBar();
+    renderTriageSection(sectionId);
+    var sec = document.getElementById('section-' + sectionId);
+    if (sec) sec.classList.add('active');
+  };
+  footer.appendChild(reviewBtn);
+  container.appendChild(footer);
+
   // Store inventory for rebuild comparison
   var keys = [];
   for (var k = 0; k < allItems.length; k++) {
