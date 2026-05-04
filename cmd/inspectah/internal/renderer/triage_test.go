@@ -1157,3 +1157,88 @@ func TestClassifyVersionChanges_UsesVersionChangesSection(t *testing.T) {
 	require.Len(t, items, 1)
 	assert.Equal(t, "version-changes", items[0].Section, "version changes must use 'version-changes' section, not 'packages'")
 }
+
+func TestClassifyKernelModules_OnlyModulesLoadD(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.KernelBoot = &schema.KernelBootSection{
+		NonDefaultModules: []schema.KernelModule{
+			{Name: "br_netfilter", Size: "32768", UsedBy: "0", Include: true},
+			{Name: "nf_conntrack", Size: "180224", UsedBy: "2 br_netfilter", Include: true},
+			{Name: "overlay", Size: "155648", UsedBy: "0", Include: true},
+		},
+		ModulesLoadD: []schema.ConfigSnippet{
+			{Path: "/etc/modules-load.d/k8s.conf", Content: "br_netfilter\noverlay"},
+		},
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), false)
+
+	// br_netfilter should appear (in modules-load.d)
+	brItem := findItem(items, "kmod-br_netfilter")
+	require.NotNil(t, brItem, "br_netfilter must appear (listed in modules-load.d)")
+	assert.True(t, brItem.DisplayOnly, "kmod items must be display-only")
+	assert.Equal(t, "sub:kmod", brItem.Group)
+
+	// overlay should appear (in modules-load.d)
+	ovItem := findItem(items, "kmod-overlay")
+	require.NotNil(t, ovItem, "overlay must appear (listed in modules-load.d)")
+	assert.True(t, ovItem.DisplayOnly, "kmod items must be display-only")
+
+	// nf_conntrack should NOT appear (auto-loaded, not in modules-load.d)
+	assert.Nil(t, findItem(items, "kmod-nf_conntrack"),
+		"nf_conntrack must not appear (auto-loaded, not in modules-load.d)")
+}
+
+func TestClassifyKernelModules_CommentsAndBlanks(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.KernelBoot = &schema.KernelBootSection{
+		NonDefaultModules: []schema.KernelModule{
+			{Name: "br_netfilter", Size: "32768", UsedBy: "0", Include: true},
+			{Name: "ip_tables", Size: "28672", UsedBy: "0", Include: true},
+		},
+		ModulesLoadD: []schema.ConfigSnippet{
+			{Path: "/etc/modules-load.d/k8s.conf", Content: "# Kubernetes networking\nbr_netfilter\n\n# blank lines above"},
+		},
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), false)
+
+	assert.NotNil(t, findItem(items, "kmod-br_netfilter"), "br_netfilter must appear")
+	assert.Nil(t, findItem(items, "kmod-ip_tables"), "ip_tables must not appear (not in modules-load.d)")
+}
+
+func TestClassifyKernelModules_NoModulesLoadD(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.KernelBoot = &schema.KernelBootSection{
+		NonDefaultModules: []schema.KernelModule{
+			{Name: "br_netfilter", Size: "32768", UsedBy: "0", Include: true},
+		},
+		// No ModulesLoadD entries — all modules are auto-loaded
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), false)
+
+	// No kmod items should appear when there are no modules-load.d files
+	assert.Nil(t, findItem(items, "kmod-br_netfilter"),
+		"no kmod items when modules-load.d is empty")
+}
+
+func TestClassifyKernelModules_Fleet_NotDisplayOnly(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Meta = map[string]interface{}{"fleet": true}
+	snap.KernelBoot = &schema.KernelBootSection{
+		NonDefaultModules: []schema.KernelModule{
+			{Name: "br_netfilter", Size: "32768", UsedBy: "0", Include: true},
+		},
+		ModulesLoadD: []schema.ConfigSnippet{
+			{Path: "/etc/modules-load.d/k8s.conf", Content: "br_netfilter"},
+		},
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), true)
+
+	brItem := findItem(items, "kmod-br_netfilter")
+	require.NotNil(t, brItem)
+	assert.False(t, brItem.DisplayOnly, "fleet kmod items must not be display-only")
+	assert.Empty(t, brItem.Group, "fleet items must not be grouped")
+}

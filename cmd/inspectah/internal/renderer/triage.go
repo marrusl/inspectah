@@ -648,16 +648,38 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				DefaultInclude: s.Include,
 			})
 		}
+		// Build set of module names managed via modules-load.d config files.
+		modulesLoadDSet := make(map[string]bool)
+		for _, entry := range snap.KernelBoot.ModulesLoadD {
+			for _, line := range strings.Split(entry.Content, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				modulesLoadDSet[line] = true
+			}
+		}
+
 		for _, m := range snap.KernelBoot.NonDefaultModules {
+			// Only include modules explicitly listed in modules-load.d configs.
+			// Auto-loaded modules (loaded by the kernel on demand) are not
+			// relevant to the image build.
+			if !modulesLoadDSet[m.Name] {
+				continue
+			}
 			group := ""
 			if !isFleet {
 				group = "sub:kmod"
 			}
 			items = append(items, TriageItem{
-				Section: "system", Key: "kmod-" + m.Name,
-				Tier: 2, Reason: "Kernel module loaded.",
-				Name: m.Name, Meta: m.UsedBy,
-				Group:          group,
+				Section:     "system",
+				Key:         "kmod-" + m.Name,
+				Tier:        2,
+				Reason:      "Kernel module loaded via modules-load.d.",
+				Name:        m.Name,
+				Meta:        m.UsedBy,
+				Group:       group,
+				DisplayOnly: !isFleet,
 				DefaultInclude: m.Include,
 			})
 		}

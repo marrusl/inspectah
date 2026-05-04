@@ -4042,6 +4042,91 @@ function buildInfoReadOnlyCard(item) {
   return card;
 }
 
+// ── Modprobe.d informational accordion ──
+// Shows modprobe.d policy files from the snapshot as a read-only
+// accordion for hardware migration awareness.
+function buildModprobeAccordion() {
+  var snap = App.snapshot;
+  if (!snap || !snap.kernel_boot || !snap.kernel_boot.modprobe_d) return null;
+  var files = snap.kernel_boot.modprobe_d;
+  if (files.length === 0) return null;
+
+  var wrapper = document.createElement('div');
+  wrapper.className = 'info-wrapper collapsed';
+  wrapper.style.marginTop = '1rem';
+
+  var header = document.createElement('button');
+  header.className = 'info-wrapper-header';
+  header.setAttribute('aria-expanded', 'false');
+  header.innerHTML = '<span class="tier-chevron">&#9656;</span> Module policy files — ' +
+    files.length + ' file' + (files.length !== 1 ? 's' : '');
+
+  var body = document.createElement('div');
+  body.className = 'info-wrapper-body';
+  body.hidden = true;
+
+  var subheader = document.createElement('p');
+  subheader.style.fontSize = '12px';
+  subheader.style.opacity = '0.6';
+  subheader.style.margin = '0 0 8px 0';
+  subheader.textContent = 'These modprobe configuration files will be included in the image via the config tree. Review if migrating to different hardware.';
+  body.appendChild(subheader);
+
+  var table = document.createElement('table');
+  table.className = 'accordion-table';
+
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    var tr = document.createElement('tr');
+
+    var tdPath = document.createElement('td');
+    tdPath.textContent = f.path || '';
+    tr.appendChild(tdPath);
+
+    var tdMeta = document.createElement('td');
+    tdMeta.className = 'accordion-meta';
+    // Summarize directive types from the content
+    var directives = summarizeModprobeDirectives(f.content || '');
+    tdMeta.textContent = directives;
+    tr.appendChild(tdMeta);
+
+    table.appendChild(tr);
+  }
+  body.appendChild(table);
+
+  header.onclick = function() {
+    var expanded = body.hidden;
+    body.hidden = !expanded;
+    header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    wrapper.classList.toggle('collapsed', !expanded);
+    var chevron = header.querySelector('.tier-chevron');
+    if (chevron) chevron.classList.toggle('expanded', expanded);
+  };
+
+  wrapper.appendChild(header);
+  wrapper.appendChild(body);
+  return wrapper;
+}
+
+// Summarize modprobe.d directive types (options, blacklist, install, etc.)
+function summarizeModprobeDirectives(content) {
+  var types = {};
+  var lines = content.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].replace(/^\s+/, '');
+    if (line === '' || line.charAt(0) === '#') continue;
+    var keyword = line.split(/\s+/)[0];
+    if (keyword) types[keyword] = (types[keyword] || 0) + 1;
+  }
+  var parts = [];
+  for (var k in types) {
+    if (types.hasOwnProperty(k)) {
+      parts.push(k + ' (' + types[k] + ')');
+    }
+  }
+  return parts.length > 0 ? parts.join(', ') : 'empty';
+}
+
 function renderTriageSection(sectionId) {
   var container = document.getElementById('section-' + sectionId);
   if (!container) return;
@@ -4213,6 +4298,14 @@ function renderTriageSection(sectionId) {
   // ── Informational wrapper (non-kmod display-only items) ──
   if (informationalItems.length > 0) {
     container.appendChild(buildInformationalWrapper(informationalItems, sectionId));
+  }
+
+  // ── Modprobe.d informational accordion (system section only) ──
+  if (sectionId === 'system') {
+    var modprobeAccordion = buildModprobeAccordion();
+    if (modprobeAccordion) {
+      container.appendChild(modprobeAccordion);
+    }
   }
 
   // Section footer
