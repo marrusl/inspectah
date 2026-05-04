@@ -1242,3 +1242,37 @@ func TestClassifyKernelModules_Fleet_NotDisplayOnly(t *testing.T) {
 	assert.False(t, brItem.DisplayOnly, "fleet kmod items must not be display-only")
 	assert.Empty(t, brItem.Group, "fleet items must not be grouped")
 }
+
+func TestClassifySecretItems_MultiRedactionSamePath(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/app.conf", Kind: "non_rpm", Include: true},
+		},
+	}
+	// Two redaction findings for the same path — must produce distinct items.
+	snap.Redactions = []json.RawMessage{
+		json.RawMessage(`{"path":"/etc/app.conf","finding_type":"api_key"}`),
+		json.RawMessage(`{"path":"/etc/app.conf","finding_type":"password"}`),
+	}
+
+	items := classifySecretItems(snap, make(map[string]bool))
+
+	// Must produce two distinct items, not collapsed by path.
+	require.Equal(t, 2, len(items))
+
+	// secret-0 maps to redactions[0] (api_key)
+	assert.Equal(t, "secret-0", items[0].Key)
+	assert.Contains(t, items[0].Reason, "api_key")
+
+	// secret-1 maps to redactions[1] (password)
+	assert.Equal(t, "secret-1", items[1].Key)
+	assert.Contains(t, items[1].Reason, "password")
+
+	// Keys are distinct even though the path is the same.
+	assert.NotEqual(t, items[0].Key, items[1].Key)
+
+	// Both should have SourcePath set since the config file exists.
+	assert.Equal(t, "/etc/app.conf", items[0].SourcePath)
+	assert.Equal(t, "/etc/app.conf", items[1].SourcePath)
+}
