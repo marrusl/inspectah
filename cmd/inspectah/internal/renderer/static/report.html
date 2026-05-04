@@ -1000,6 +1000,15 @@
     .accordion-meta {
       opacity: 0.6;
     }
+    .notification-card-wrapper {
+      margin-bottom: 8px;
+    }
+    .notification-collapsed {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.02);
+    }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -1957,6 +1966,202 @@ function reopenReviewedSection(sectionId) {
   }
 }
 
+// ── Display-Only Accordion ──
+function buildDisplayAccordion(groupName, items) {
+  var div = document.createElement('div');
+  div.className = 'accordion-card display-accordion';
+  div.setAttribute('data-group', groupName);
+  var isExpanded = App.tierExpanded['group-' + groupName] || false;
+
+  var header = document.createElement('div');
+  header.className = 'accordion-header';
+  header.setAttribute('role', 'button');
+  header.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+  header.setAttribute('tabindex', '0');
+
+  var chevron = document.createElement('span');
+  chevron.className = 'accordion-chevron';
+  chevron.textContent = isExpanded ? '▼' : '▶';
+  header.appendChild(chevron);
+
+  var info = document.createElement('div');
+  info.className = 'accordion-info';
+  var nameEl = document.createElement('span');
+  nameEl.className = 'accordion-name';
+  nameEl.textContent = groupName.replace(/^sub:/, '');
+  info.appendChild(nameEl);
+  var subtitle = document.createElement('span');
+  subtitle.className = 'accordion-subtitle';
+  subtitle.textContent = items.length + ' items — informational';
+  info.appendChild(subtitle);
+  header.appendChild(info);
+
+  header.onclick = function() {
+    App.tierExpanded['group-' + groupName] = !isExpanded;
+    var sectionId = items[0] ? items[0].section : '';
+    if (sectionId) renderTriageSection(sectionId);
+  };
+  header.onkeydown = function(e) {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
+  };
+  div.appendChild(header);
+
+  if (isExpanded) {
+    var table = document.createElement('table');
+    table.className = 'accordion-table';
+    for (var i = 0; i < items.length; i++) {
+      var tr = document.createElement('tr');
+      var tdName = document.createElement('td');
+      tdName.textContent = items[i].name;
+      tr.appendChild(tdName);
+      var tdMeta = document.createElement('td');
+      tdMeta.className = 'accordion-meta';
+      tdMeta.textContent = items[i].meta || '';
+      tr.appendChild(tdMeta);
+      table.appendChild(tr);
+    }
+    div.appendChild(table);
+  }
+
+  div.setAttribute('aria-label', groupName.replace(/^sub:/, '') + ', ' + items.length + ' items, informational, ' + (isExpanded ? 'expanded' : 'collapsed'));
+  return div;
+}
+
+// ── Notification Card ──
+function buildNotificationCard(item) {
+  var wrapper = document.createElement('div');
+  wrapper.className = 'notification-card-wrapper';
+  wrapper.setAttribute('data-key', item.key);
+
+  var isAcked = getSnapshotAcknowledged(item.key);
+
+  var full = document.createElement('div');
+  full.className = 'triage-card tier-3 notification-full';
+  if (isAcked) full.style.display = 'none';
+
+  var warning = document.createElement('div');
+  warning.className = 'card-warning';
+  warning.textContent = item.reason;
+  full.appendChild(warning);
+
+  var nameEl = document.createElement('div');
+  nameEl.className = 'card-name';
+  nameEl.textContent = item.name;
+  full.appendChild(nameEl);
+
+  var meta = document.createElement('div');
+  meta.className = 'card-meta';
+  meta.textContent = item.meta || '';
+  full.appendChild(meta);
+
+  var desc = document.createElement('div');
+  desc.style.cssText = 'font-size:13px;opacity:0.7;margin-bottom:10px;';
+  desc.textContent = 'Provide a reproducible build-time source and add the installation to your Containerfile.';
+  full.appendChild(desc);
+
+  var ackBtn = document.createElement('button');
+  ackBtn.className = 'btn-primary';
+  ackBtn.textContent = 'Acknowledge';
+  ackBtn.style.cssText = 'padding:8px 24px;border-radius:6px;border:none;background:#4493f8;color:#fff;font-size:14px;font-weight:500;cursor:pointer;';
+  ackBtn.onclick = function() {
+    acknowledgeNotification(item.key, item.section);
+  };
+  full.appendChild(ackBtn);
+  wrapper.appendChild(full);
+
+  // Collapsed card
+  var collapsed = document.createElement('div');
+  collapsed.className = 'notification-collapsed';
+  if (!isAcked) collapsed.style.display = 'none';
+
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+  var left = document.createElement('div');
+  left.style.cssText = 'display:flex;align-items:center;gap:10px;';
+  var cName = document.createElement('span');
+  cName.style.cssText = 'font-weight:600;font-size:14px;';
+  cName.textContent = item.name;
+  left.appendChild(cName);
+  var cWarn = document.createElement('span');
+  cWarn.style.cssText = 'font-size:12px;color:#f85149;';
+  cWarn.textContent = 'no repo — manual install required';
+  if (item.card_type === 'notification' && item.section === 'containers') {
+    cWarn.textContent = 'unclear provenance — manual follow-up required';
+  }
+  left.appendChild(cWarn);
+  row.appendChild(left);
+
+  var undoBtn = document.createElement('button');
+  undoBtn.style.cssText = 'padding:3px 10px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:inherit;font-size:12px;cursor:pointer;opacity:0.6;';
+  undoBtn.textContent = 'undo';
+  undoBtn.onclick = function() {
+    unacknowledgeNotification(item.key, item.section);
+  };
+  row.appendChild(undoBtn);
+  collapsed.appendChild(row);
+  wrapper.appendChild(collapsed);
+
+  wrapper.setAttribute('aria-label', item.name + ': ' + (isAcked ? 'acknowledged' : 'manual follow-up required'));
+  return wrapper;
+}
+
+// ── Acknowledge / Unacknowledge ──
+function acknowledgeNotification(key, sectionId) {
+  if (App.mode === 'static') return;
+  setSnapshotAcknowledged(key, true);
+  App.decisions[key] = true;
+  reopenReviewedSection(sectionId);
+  renderTriageSection(sectionId);
+  updateBadge(sectionId);
+  focusNextUndecided(sectionId);
+  scheduleAutosave();
+}
+
+function unacknowledgeNotification(key, sectionId) {
+  if (App.mode === 'static') return;
+  setSnapshotAcknowledged(key, false);
+  delete App.decisions[key];
+  reopenReviewedSection(sectionId);
+  renderTriageSection(sectionId);
+  updateBadge(sectionId);
+  scheduleAutosave();
+}
+
+// ── Display-Only Decided Card ──
+function buildDisplayOnlyDecidedCard(item) {
+  var card = document.createElement('div');
+  card.className = 'decided-card display-only-decided';
+  card.setAttribute('data-key', item.key);
+
+  var row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+
+  var left = document.createElement('div');
+  left.style.cssText = 'display:flex;align-items:center;gap:8px;';
+
+  var label = document.createElement('span');
+  label.className = 'decided-label acknowledged';
+  label.textContent = 'acknowledged';
+  left.appendChild(label);
+
+  var nameEl = document.createElement('span');
+  nameEl.textContent = item.name;
+  left.appendChild(nameEl);
+  row.appendChild(left);
+
+  var undoBtn = document.createElement('button');
+  undoBtn.className = 'btn-undo';
+  undoBtn.textContent = 'undo';
+  undoBtn.onclick = function() {
+    unacknowledgeNotification(item.key, item.section);
+  };
+  row.appendChild(undoBtn);
+  card.appendChild(row);
+
+  card.setAttribute('aria-label', item.name + ': acknowledged');
+  return card;
+}
+
 // ── Decision Logic ──
 function makeDecision(key, sectionId, include) {
   if (App.mode === 'static') return;
@@ -2011,6 +2216,124 @@ function undoDecision(key, sectionId) {
 
   // Persist undo to server
   scheduleAutosave();
+}
+
+// ── Read snapshot acknowledged state ──
+// Returns the current acknowledged value for a triage key from the snapshot.
+function getSnapshotAcknowledged(key) {
+  var snap = App.snapshot;
+
+  if (key.indexOf('pkg-') === 0) {
+    var suffix = key.substring(4);
+    if (snap.rpm && snap.rpm.packages_added) {
+      for (var i = 0; i < snap.rpm.packages_added.length; i++) {
+        var pkg = snap.rpm.packages_added[i];
+        if (pkg.name + '-' + pkg.arch === suffix) {
+          return !!pkg.acknowledged;
+        }
+      }
+    }
+  } else if (key.indexOf('container-') === 0) {
+    var cName = key.substring(10);
+    if (snap.containers && snap.containers.running_containers) {
+      for (var rci = 0; rci < snap.containers.running_containers.length; rci++) {
+        if (snap.containers.running_containers[rci].name === cName) {
+          return !!snap.containers.running_containers[rci].acknowledged;
+        }
+      }
+    }
+  } else if (key.indexOf('nonrpm-') === 0) {
+    var nrName = key.substring(7);
+    if (snap.non_rpm_software && snap.non_rpm_software.items) {
+      for (var ni = 0; ni < snap.non_rpm_software.items.length; ni++) {
+        var nrItem = snap.non_rpm_software.items[ni];
+        var itemName = nrItem.name || nrItem.path;
+        if (itemName === nrName) {
+          return !!nrItem.acknowledged;
+        }
+      }
+    }
+  } else if (key.indexOf('conn-') === 0) {
+    var connName = key.substring(5);
+    if (snap.network && snap.network.connections) {
+      for (var coi = 0; coi < snap.network.connections.length; coi++) {
+        if (snap.network.connections[coi].name === connName) {
+          return !!snap.network.connections[coi].acknowledged;
+        }
+      }
+    }
+  } else if (key.indexOf('fstab-') === 0) {
+    var mountPoint = key.substring(6);
+    if (snap.storage && snap.storage.fstab_entries) {
+      for (var fsi = 0; fsi < snap.storage.fstab_entries.length; fsi++) {
+        if (snap.storage.fstab_entries[fsi].mount_point === mountPoint) {
+          return !!snap.storage.fstab_entries[fsi].acknowledged;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+// ── Write snapshot acknowledged state ──
+function setSnapshotAcknowledged(key, value) {
+  var snap = App.snapshot;
+
+  if (key.indexOf('pkg-') === 0) {
+    var suffix = key.substring(4);
+    if (snap.rpm && snap.rpm.packages_added) {
+      for (var i = 0; i < snap.rpm.packages_added.length; i++) {
+        var pkg = snap.rpm.packages_added[i];
+        if (pkg.name + '-' + pkg.arch === suffix) {
+          pkg.acknowledged = value;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('container-') === 0) {
+    var cName = key.substring(10);
+    if (snap.containers && snap.containers.running_containers) {
+      for (var rci = 0; rci < snap.containers.running_containers.length; rci++) {
+        if (snap.containers.running_containers[rci].name === cName) {
+          snap.containers.running_containers[rci].acknowledged = value;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('nonrpm-') === 0) {
+    var nrName = key.substring(7);
+    if (snap.non_rpm_software && snap.non_rpm_software.items) {
+      for (var ni = 0; ni < snap.non_rpm_software.items.length; ni++) {
+        var nrItem = snap.non_rpm_software.items[ni];
+        var itemName = nrItem.name || nrItem.path;
+        if (itemName === nrName) {
+          nrItem.acknowledged = value;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('conn-') === 0) {
+    var connName = key.substring(5);
+    if (snap.network && snap.network.connections) {
+      for (var coi = 0; coi < snap.network.connections.length; coi++) {
+        if (snap.network.connections[coi].name === connName) {
+          snap.network.connections[coi].acknowledged = value;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('fstab-') === 0) {
+    var mountPoint = key.substring(6);
+    if (snap.storage && snap.storage.fstab_entries) {
+      for (var fsi = 0; fsi < snap.storage.fstab_entries.length; fsi++) {
+        if (snap.storage.fstab_entries[fsi].mount_point === mountPoint) {
+          snap.storage.fstab_entries[fsi].acknowledged = value;
+          return;
+        }
+      }
+    }
+  }
 }
 
 // ── Read snapshot include state ──
