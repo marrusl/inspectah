@@ -379,6 +379,7 @@
     }
 
     .tier-indicator.tier-3 { background: #f85149; }
+    .tier-indicator.tier-2-decide { background: #d29922; }
     .tier-indicator.tier-2 { background: #3fb950; }
     .tier-indicator.tier-1 { background: #3fb950; }
 
@@ -2455,19 +2456,23 @@ function renderOverview() {
 
   var manifestTotal = App.triageManifest.length;
   var tier3Count = 0;
-  var tier2Count = 0;
+  var tier2IncludedCount = 0;
+  var tier2DecideCount = 0;
   var tier1Count = 0;
   for (var i = 0; i < App.triageManifest.length; i++) {
-    if (App.triageManifest[i].tier === 3) tier3Count++;
-    else if (App.triageManifest[i].tier === 2) tier2Count++;
+    var mi = App.triageManifest[i];
+    if (mi.tier === 3) tier3Count++;
+    else if (mi.tier === 2 && mi.default_include === false) tier2DecideCount++;
+    else if (mi.tier === 2) tier2IncludedCount++;
     else tier1Count++;
   }
 
   var statItems = [
     {label: 'Total Items', value: manifestTotal},
-    {label: 'Flagged (Tier 3)', value: tier3Count},
-    {label: 'Included (Tier 2)', value: tier2Count},
-    {label: 'Auto-included (Tier 1)', value: tier1Count},
+    {label: 'Flagged', value: tier3Count},
+    {label: 'Needs Decision', value: tier2DecideCount},
+    {label: 'Included', value: tier2IncludedCount},
+    {label: 'Auto-included', value: tier1Count},
     {label: 'Packages Added', value: pkgCount},
     {label: 'Config Files', value: cfgCount},
     {label: 'Service Changes', value: svcCount},
@@ -5245,18 +5250,37 @@ function renderTriageSection(sectionId) {
   }
 
   var groups = groupByTier(mainItems);
-  var tiers = [3, 2, 1];
 
-  for (var ti = 0; ti < tiers.length; ti++) {
-    var tier = tiers[ti];
-    var tierItems = groups[tier] || [];
+  // Split tier 2 into "Included" (default_include=true) and "Needs decision" (default_include=false)
+  var tier2All = groups[2] || [];
+  var tier2Included = [];
+  var tier2NeedsDecision = [];
+  for (var s = 0; s < tier2All.length; s++) {
+    if (tier2All[s].default_include === false) {
+      tier2NeedsDecision.push(tier2All[s]);
+    } else {
+      tier2Included.push(tier2All[s]);
+    }
+  }
+
+  // Render order: Flagged → Needs Decision → Included → Auto-included
+  var tierSlots = [
+    { key: 3, items: groups[3] || [], label: 'Flagged', indicator: 'tier-3' },
+    { key: '2-decide', items: tier2NeedsDecision, label: 'Needs decision', indicator: 'tier-2-decide' },
+    { key: 2, items: tier2Included, label: 'Included', indicator: 'tier-2' },
+    { key: 1, items: groups[1] || [], label: 'Auto-included', indicator: 'tier-1' }
+  ];
+
+  for (var ti = 0; ti < tierSlots.length; ti++) {
+    var tier = tierSlots[ti].key;
+    var tierItems = tierSlots[ti].items;
     if (tierItems.length === 0) continue;
 
     var tierDiv = document.createElement('div');
     tierDiv.className = 'tier-group';
     tierDiv.setAttribute('data-tier', String(tier));
 
-    var tierLabel = tier === 3 ? 'Flagged' : tier === 2 ? 'Included' : 'Auto-included';
+    var tierLabel = tierSlots[ti].label;
     var tierHeader = document.createElement('div');
     tierHeader.className = 'tier-group-header';
     tierHeader.setAttribute('role', 'button');
@@ -5266,7 +5290,7 @@ function renderTriageSection(sectionId) {
     tierHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
 
     var indicator = document.createElement('span');
-    indicator.className = 'tier-indicator tier-' + tier;
+    indicator.className = 'tier-indicator ' + tierSlots[ti].indicator;
     tierHeader.appendChild(indicator);
     var headerText = document.createElement('span');
     headerText.textContent = tierLabel + ' (' + tierItems.length + ')';
