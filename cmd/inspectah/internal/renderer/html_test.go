@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // normalizeWhitespace trims trailing spaces from each line, normalizes
@@ -755,4 +757,37 @@ func TestHTMLReportGoldenDisplayOnly(t *testing.T) {
 	if varMount.Group != "" {
 		t.Errorf("/var group = %q, want empty (risky mount must be ungrouped)", varMount.Group)
 	}
+}
+
+func TestHTMLReportNotificationPackageNoInstallLine(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "local-tool", Arch: "x86_64", Include: true, State: schema.PackageStateLocalInstall, Version: "1.0", Release: "1"},
+		},
+	}
+
+	dir := t.TempDir()
+	err := RenderHTMLReport(snap, dir, HTMLReportOptions{})
+	require.NoError(t, err)
+
+	// Check Containerfile output embedded in the report
+	reportBytes, err := os.ReadFile(filepath.Join(dir, "report.html"))
+	require.NoError(t, err)
+	report := string(reportBytes)
+
+	// The manifest should have local-tool as notification
+	manifestJSON := extractTriageManifest(t, report)
+	var items []TriageItem
+	require.NoError(t, json.Unmarshal([]byte(manifestJSON), &items))
+
+	localTool := findItem(items, "pkg-local-tool-x86_64")
+	require.NotNil(t, localTool)
+	assert.Equal(t, "notification", localTool.CardType)
+
+	// vim should be in the manifest as a regular grouped item
+	vim := findItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vim)
+	assert.Equal(t, "repo:appstream", vim.Group)
 }

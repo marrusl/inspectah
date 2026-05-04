@@ -381,3 +381,81 @@ func TestContainerfile_DisplayOnlyIncludeDoesNotAffectOutput(t *testing.T) {
 	assert.Equal(t, string(cf1), string(cf2),
 		"display-only Include changes must not affect Containerfile output")
 }
+
+func TestPackagesSectionLines_LocalInstallEmitsTODO(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "custom-agent", Arch: "x86_64", Include: true, State: schema.PackageStateLocalInstall, Version: "1.0", Release: "1"},
+			{Name: "orphan-tool", Arch: "x86_64", Include: true, State: schema.PackageStateNoRepo, Version: "2.0", Release: "1"},
+		},
+	}
+
+	lines := packagesSectionLines(snap, "registry.redhat.io/rhel9/rhel-bootc:9.4", nil, false)
+	output := strings.Join(lines, "\n")
+
+	// vim should be in dnf install
+	assert.Contains(t, output, "vim")
+	assert.Contains(t, output, "dnf install")
+
+	// custom-agent and orphan-tool should NOT be in dnf install
+	assert.NotContains(t, output, "dnf install -y custom-agent")
+	assert.NotContains(t, output, "dnf install -y orphan-tool")
+
+	// They should have TODO comments
+	assert.Contains(t, output, "# TODO: 'custom-agent'")
+	assert.Contains(t, output, "local_install")
+	assert.Contains(t, output, "# TODO: 'orphan-tool'")
+	assert.Contains(t, output, "no_repo")
+	assert.Contains(t, output, "Manual Follow-up Required")
+}
+
+func TestPackagesSectionLines_LeafPackagesFiltersUnreachable(t *testing.T) {
+	leafNames := []string{"vim", "custom-agent"}
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		LeafPackages: &leafNames,
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+			{Name: "custom-agent", Arch: "x86_64", Include: true, State: schema.PackageStateLocalInstall},
+		},
+	}
+
+	lines := packagesSectionLines(snap, "registry.redhat.io/rhel9/rhel-bootc:9.4", nil, false)
+	output := strings.Join(lines, "\n")
+
+	// vim should be installed
+	assert.Contains(t, output, "vim")
+
+	// custom-agent should be a TODO, not in dnf install
+	assert.NotContains(t, output, "dnf install -y custom-agent")
+	assert.Contains(t, output, "# TODO: 'custom-agent'")
+}
+
+func TestServicesSectionLines_UnreachableOwnerExcluded(t *testing.T) {
+	ownerPkg := "custom-agent"
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "custom-agent", Arch: "x86_64", Include: true, State: schema.PackageStateLocalInstall},
+			{Name: "httpd", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+	snap.Services = &schema.ServiceSection{
+		EnabledUnits: []string{"custom-agent.service", "httpd.service"},
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "custom-agent.service", OwningPackage: &ownerPkg},
+			{Unit: "httpd.service"},
+		},
+	}
+
+	lines := servicesSectionLines(snap)
+	output := strings.Join(lines, "\n")
+
+	// httpd.service should be enabled (no owner restriction)
+	assert.Contains(t, output, "httpd.service")
+
+	// custom-agent.service should NOT be enabled (owner is unreachable)
+	assert.NotContains(t, output, "custom-agent.service")
+}
