@@ -661,24 +661,24 @@ func TestHTMLReportGoldenGroupedPackages(t *testing.T) {
 	if bash == nil {
 		t.Fatal("bash package not found in manifest")
 	}
-	if bash.Group != "repo:baseos" {
-		t.Errorf("bash group = %q, want %q", bash.Group, "repo:baseos")
+	if bash.Group != "base:baseos" {
+		t.Errorf("bash group = %q, want %q", bash.Group, "base:baseos")
 	}
 
 	vim := findItem(items, "pkg-vim-x86_64")
 	if vim == nil {
 		t.Fatal("vim package not found in manifest")
 	}
-	if vim.Group != "repo:appstream" {
-		t.Errorf("vim group = %q, want %q", vim.Group, "repo:appstream")
+	if vim.Group != "user:appstream" {
+		t.Errorf("vim group = %q, want %q", vim.Group, "user:appstream")
 	}
 
 	htop := findItem(items, "pkg-htop-x86_64")
 	if htop == nil {
 		t.Fatal("htop package not found in manifest")
 	}
-	if htop.Group != "repo:epel" {
-		t.Errorf("htop group = %q, want %q", htop.Group, "repo:epel")
+	if htop.Group != "user:epel" {
+		t.Errorf("htop group = %q, want %q", htop.Group, "user:epel")
 	}
 
 	custom := findItem(items, "pkg-custom-x86_64")
@@ -789,7 +789,7 @@ func TestHTMLReportNotificationPackageNoInstallLine(t *testing.T) {
 	// vim should be in the manifest as a regular grouped item
 	vim := findItem(items, "pkg-vim-x86_64")
 	require.NotNil(t, vim)
-	assert.Equal(t, "repo:appstream", vim.Group)
+	assert.Equal(t, "user:appstream", vim.Group)
 }
 
 func TestHTMLReportGoldenLeafDeps(t *testing.T) {
@@ -851,7 +851,7 @@ func TestHTMLReportGoldenVersionChanges(t *testing.T) {
 
 	bash := findItem(items, "verchg-bash-x86_64")
 	require.NotNil(t, bash)
-	assert.Equal(t, "packages", bash.Section)
+	assert.Equal(t, "version-changes", bash.Section)
 	assert.True(t, bash.DisplayOnly)
 	assert.Equal(t, "sub:version-upgrades", bash.Group)
 }

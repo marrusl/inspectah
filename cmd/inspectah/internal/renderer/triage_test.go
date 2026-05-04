@@ -421,19 +421,20 @@ func TestClassifyPackages_SingleMachine_GroupByRepo(t *testing.T) {
 	bash := findItem(items, "pkg-bash-x86_64")
 	require.NotNil(t, bash)
 	assert.Equal(t, 1, bash.Tier)
-	assert.Equal(t, "repo:baseos", bash.Group)
+	assert.Equal(t, "base:baseos", bash.Group)
+	assert.True(t, bash.AlwaysIncluded)
 	assert.Equal(t, "", bash.CardType)
 	assert.False(t, bash.DisplayOnly)
 
 	vim := findItem(items, "pkg-vim-x86_64")
 	require.NotNil(t, vim)
 	assert.Equal(t, 2, vim.Tier)
-	assert.Equal(t, "repo:appstream", vim.Group)
+	assert.Equal(t, "user:appstream", vim.Group)
 
 	htop := findItem(items, "pkg-htop-x86_64")
 	require.NotNil(t, htop)
 	assert.Equal(t, 2, htop.Tier)
-	assert.Equal(t, "repo:epel", htop.Group)
+	assert.Equal(t, "user:epel", htop.Group)
 
 	custom := findItem(items, "pkg-custom-x86_64")
 	require.NotNil(t, custom)
@@ -704,7 +705,7 @@ func TestClassifySnapshot_FleetVsSingleMachine(t *testing.T) {
 		items := ClassifySnapshot(snap, nil)
 		vim := findItem(items, "pkg-vim-x86_64")
 		require.NotNil(t, vim)
-		assert.Equal(t, "repo:appstream", vim.Group)
+		assert.Equal(t, "user:appstream", vim.Group)
 		eth0 := findItem(items, "conn-eth0")
 		require.NotNil(t, eth0)
 		assert.True(t, eth0.DisplayOnly)
@@ -781,7 +782,7 @@ func TestClassifyPackages_LeafOnly_SingleMachine(t *testing.T) {
 
 	vim := findItem(items, "pkg-vim-x86_64")
 	require.NotNil(t, vim)
-	assert.Equal(t, "repo:appstream", vim.Group)
+	assert.Equal(t, "user:appstream", vim.Group)
 	assert.Equal(t, []string{"vim-common", "gpm-libs"}, vim.Deps)
 
 	htop := findItem(items, "pkg-htop-x86_64")
@@ -883,7 +884,7 @@ func TestClassifyVersionChanges_SingleMachine(t *testing.T) {
 
 	bash := findItem(items, "verchg-bash-x86_64")
 	require.NotNil(t, bash)
-	assert.Equal(t, "packages", bash.Section)
+	assert.Equal(t, "version-changes", bash.Section)
 	assert.Equal(t, 1, bash.Tier)
 	assert.True(t, bash.DisplayOnly)
 	assert.Equal(t, "sub:version-upgrades", bash.Group)
@@ -1086,4 +1087,73 @@ func TestNormalizeIncludeDefaults_SystemdTimerNilInclude(t *testing.T) {
 
 	require.NotNil(t, snap.ScheduledTasks.SystemdTimers[0].Include, "nil *bool must be set")
 	assert.True(t, *snap.ScheduledTasks.SystemdTimers[0].Include, "nil *bool must be set to true")
+}
+
+func TestClassifyPackages_FedoraRepoAlwaysIncluded(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		BaselinePackageNames: strSlicePtr([]string{"bash"}),
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "bash", Arch: "x86_64", Include: true, SourceRepo: "fedora"},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+
+	bash := findItem(items, "pkg-bash-x86_64")
+	require.NotNil(t, bash)
+	assert.Equal(t, 1, bash.Tier)
+	assert.True(t, bash.AlwaysIncluded, "fedora repo packages must have AlwaysIncluded=true")
+	assert.Equal(t, "base:fedora", bash.Group)
+}
+
+func TestClassifyPackages_TierLabels(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		BaselinePackageNames: strSlicePtr([]string{"coreutils"}),
+		PackagesAdded: []schema.PackageEntry{
+			// Tier 1: baseline package from baseos
+			{Name: "coreutils", Arch: "x86_64", Include: true, SourceRepo: "baseos"},
+			// Tier 2: non-baseline from appstream (standard repo, not third-party)
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+			// Tier 2: third-party repo
+			{Name: "htop", Arch: "x86_64", Include: true, SourceRepo: "epel"},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+
+	// Tier 1 items use "base:" prefix
+	coreutils := findItem(items, "pkg-coreutils-x86_64")
+	require.NotNil(t, coreutils)
+	assert.Equal(t, 1, coreutils.Tier)
+	assert.Equal(t, "base:baseos", coreutils.Group, "tier 1 packages use 'base:' group prefix")
+	assert.True(t, coreutils.AlwaysIncluded)
+
+	// Tier 2 standard repo uses "user:" prefix
+	vim := findItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vim)
+	assert.Equal(t, 2, vim.Tier)
+	assert.Equal(t, "user:appstream", vim.Group, "tier 2 standard repo packages use 'user:' group prefix")
+	assert.False(t, vim.AlwaysIncluded)
+
+	// Tier 2 third-party repo also uses "user:" prefix
+	htop := findItem(items, "pkg-htop-x86_64")
+	require.NotNil(t, htop)
+	assert.Equal(t, 2, htop.Tier)
+	assert.Equal(t, "user:epel", htop.Group, "tier 2 third-party repo packages use 'user:' group prefix")
+	assert.False(t, htop.AlwaysIncluded)
+}
+
+func TestClassifyVersionChanges_UsesVersionChangesSection(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		VersionChanges: []schema.VersionChange{
+			{Name: "bash", Arch: "x86_64", HostVersion: "5.2.26", BaseVersion: "5.2.32", Direction: schema.VersionChangeUpgrade},
+		},
+	}
+
+	items := classifyVersionChanges(snap, false)
+	require.Len(t, items, 1)
+	assert.Equal(t, "version-changes", items[0].Section, "version changes must use 'version-changes' section, not 'packages'")
 }

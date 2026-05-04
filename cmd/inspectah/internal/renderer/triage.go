@@ -24,6 +24,7 @@ type TriageItem struct {
 	IsSecret       bool     `json:"is_secret,omitempty"`
 	SourcePath     string   `json:"source_path,omitempty"`
 	DefaultInclude bool     `json:"default_include"`
+	AlwaysIncluded bool     `json:"always_included,omitempty"`
 }
 
 // ClassifySnapshot classifies all triageable items in the snapshot.
@@ -297,7 +298,13 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 				item.Acknowledged = pkg.Acknowledged
 				item.Reason = "No repository source available. inspectah cannot reconstruct installation steps for this package."
 			} else if pkg.SourceRepo != "" {
-				item.Group = "repo:" + strings.ToLower(pkg.SourceRepo)
+				repoLower := strings.ToLower(pkg.SourceRepo)
+				if tier == 1 {
+					item.Group = "base:" + repoLower
+					item.AlwaysIncluded = true
+				} else {
+					item.Group = "user:" + repoLower
+				}
 			}
 		}
 
@@ -348,6 +355,18 @@ func isThirdPartyRepo(repo string) bool {
 		}
 	}
 	return true
+}
+
+// isBaseImageRepo returns true for repos that ship with the base OS image.
+// Packages from these repos are always included and cannot be toggled off.
+func isBaseImageRepo(repo string) bool {
+	baseRepos := map[string]bool{
+		"baseos":    true,
+		"appstream": true,
+		"crb":       true,
+		"fedora":    true,
+	}
+	return baseRepos[repo]
 }
 
 func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
@@ -803,7 +822,7 @@ func classifyVersionChanges(snap *schema.InspectionSnapshot, isFleet bool) []Tri
 			group = "sub:version-downgrades"
 		}
 		items = append(items, TriageItem{
-			Section:     "packages",
+			Section:     "version-changes",
 			Key:         "verchg-" + vc.Name + "-" + vc.Arch,
 			Tier:        1,
 			Reason:      fmt.Sprintf("Package %s from %s to %s.", vc.Direction, vc.HostVersion, vc.BaseVersion),
