@@ -868,3 +868,39 @@ func TestNormalizeLeafDefaults(t *testing.T) {
 		assert.False(t, snap.Rpm.PackagesAdded[0].Include)
 	})
 }
+
+func TestClassifyVersionChanges_SingleMachine(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		VersionChanges: []schema.VersionChange{
+			{Name: "bash", Arch: "x86_64", HostVersion: "5.2.26", BaseVersion: "5.2.32", Direction: schema.VersionChangeUpgrade},
+			{Name: "openssl", Arch: "x86_64", HostVersion: "3.2.2", BaseVersion: "3.2.1", Direction: schema.VersionChangeDowngrade},
+		},
+	}
+
+	items := classifyVersionChanges(snap, false)
+	assert.Equal(t, 2, len(items))
+
+	bash := findItem(items, "verchg-bash-x86_64")
+	require.NotNil(t, bash)
+	assert.Equal(t, "packages", bash.Section)
+	assert.Equal(t, 1, bash.Tier)
+	assert.True(t, bash.DisplayOnly)
+	assert.Equal(t, "sub:version-upgrades", bash.Group)
+	assert.Contains(t, bash.Meta, "→")
+
+	openssl := findItem(items, "verchg-openssl-x86_64")
+	require.NotNil(t, openssl)
+	assert.Equal(t, "sub:version-downgrades", openssl.Group)
+}
+
+func TestClassifyVersionChanges_Fleet_ReturnsNil(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		VersionChanges: []schema.VersionChange{
+			{Name: "bash", Arch: "x86_64", Direction: schema.VersionChangeUpgrade},
+		},
+	}
+	items := classifyVersionChanges(snap, true)
+	assert.Nil(t, items)
+}

@@ -67,6 +67,7 @@ func classifyAll(snap *schema.InspectionSnapshot, isFleet bool) []TriageItem {
 	items = append(items, classifyIdentity(snap, secretPaths, isFleet)...)
 	items = append(items, classifySystemItems(snap, secretPaths, isFleet)...)
 	items = append(items, classifySecretItems(snap, secretPaths)...)
+	items = append(items, classifyVersionChanges(snap, isFleet)...)
 	return items
 }
 
@@ -694,6 +695,30 @@ func classifySecretItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 			IsSecret:       true,
 			SourcePath:     sourcePath,
 			DefaultInclude: true,
+		})
+	}
+	return items
+}
+
+func classifyVersionChanges(snap *schema.InspectionSnapshot, isFleet bool) []TriageItem {
+	if snap.Rpm == nil || len(snap.Rpm.VersionChanges) == 0 || isFleet {
+		return nil
+	}
+	var items []TriageItem
+	for _, vc := range snap.Rpm.VersionChanges {
+		group := "sub:version-upgrades"
+		if vc.Direction == schema.VersionChangeDowngrade {
+			group = "sub:version-downgrades"
+		}
+		items = append(items, TriageItem{
+			Section:     "packages",
+			Key:         "verchg-" + vc.Name + "-" + vc.Arch,
+			Tier:        1,
+			Reason:      fmt.Sprintf("Package %s from %s to %s.", vc.Direction, vc.HostVersion, vc.BaseVersion),
+			Name:        vc.Name,
+			Meta:        vc.HostVersion + " → " + vc.BaseVersion,
+			Group:       group,
+			DisplayOnly: true,
 		})
 	}
 	return items
