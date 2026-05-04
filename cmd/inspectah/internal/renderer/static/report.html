@@ -609,6 +609,126 @@
       text-decoration: underline;
     }
 
+    /* Version changes detail section */
+    .vc-section-subtitle {
+      font-size: 0.85rem;
+      opacity: 0.7;
+      margin: -0.75rem 0 1rem 0;
+    }
+
+    .vc-filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+    }
+
+    .vc-filter-bar [role="radiogroup"] {
+      display: flex;
+      gap: 0;
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+
+    .vc-filter-bar [role="radio"] {
+      padding: 0.35rem 0.75rem;
+      font-size: 0.8rem;
+      cursor: pointer;
+      border: none;
+      border-right: 1px solid var(--pf-t--global--border--color--default, #444);
+      background: var(--pf-t--global--background--color--secondary-default);
+      color: var(--pf-t--global--text--color--primary);
+      user-select: none;
+      outline: none;
+      white-space: nowrap;
+    }
+
+    .vc-filter-bar [role="radio"]:last-child {
+      border-right: none;
+    }
+
+    .vc-filter-bar [role="radio"][aria-checked="true"] {
+      background: var(--pf-t--global--color--status--info--default, #2b9af3);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    .vc-filter-bar [role="radio"]:focus-visible {
+      box-shadow: 0 0 0 2px var(--pf-t--global--color--status--info--default, #2b9af3);
+      z-index: 1;
+      position: relative;
+    }
+
+    .vc-detail-table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .vc-detail-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    .vc-detail-table th {
+      text-align: left;
+      padding: 0.5rem 0.75rem;
+      font-weight: 600;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      opacity: 0.7;
+      border-bottom: 2px solid var(--pf-t--global--border--color--default, #444);
+      white-space: nowrap;
+    }
+
+    .vc-detail-table td {
+      padding: 0.5rem 0.75rem;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, rgba(255,255,255,0.06));
+    }
+
+    .vc-detail-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .vc-detail-table .vc-arrow-col {
+      width: 2rem;
+      text-align: center;
+      opacity: 0.5;
+    }
+
+    .vc-detail-table .vc-dir-upgrade {
+      color: #3e8635;
+    }
+    .pf-v6-theme-dark .vc-detail-table .vc-dir-upgrade {
+      color: #5ba352;
+    }
+
+    .vc-detail-table .vc-dir-downgrade {
+      color: #c9190b;
+    }
+    .pf-v6-theme-dark .vc-detail-table .vc-dir-downgrade {
+      color: #ef6e64;
+    }
+
+    .vc-detail-table .vc-empty-row td {
+      text-align: center;
+      font-style: italic;
+      opacity: 0.6;
+      padding: 1rem 0.75rem;
+    }
+
+    .vc-sidebar-badge {
+      font-size: 0.7rem;
+      padding: 0.0625rem 0.375rem;
+      border-radius: 8px;
+      margin-left: auto;
+      background: rgba(43, 154, 243, 0.15);
+      color: var(--pf-t--global--color--status--info--default, #2b9af3);
+      font-weight: 600;
+    }
+
     /* Section container */
     .report-section {
       display: none;
@@ -1310,6 +1430,7 @@ var MIGRATION_SECTIONS = [
   {id: 'identity',   label: 'Identity',        tracked: true},
   {id: 'system',     label: 'System & Security', tracked: true},
   {id: 'secrets',    label: 'Secrets',         tracked: true},
+  {id: 'version-changes', label: 'Version Changes', tracked: false, infoBadge: true},
   {id: 'editor',    label: 'Edit Files',      tracked: false}
 ];
 
@@ -1450,6 +1571,14 @@ function renderSidebar() {
   list.setAttribute('role', 'list');
 
   MIGRATION_SECTIONS.forEach(function(section) {
+    // Conditionally hide version-changes if no data
+    if (section.id === 'version-changes') {
+      var snap = App.snapshot;
+      if (!snap.rpm || !snap.rpm.version_changes || snap.rpm.version_changes.length === 0) {
+        return; // skip this sidebar entry entirely
+      }
+    }
+
     var li = document.createElement('li');
     li.className = 'pf-v6-c-nav__item';
 
@@ -1482,6 +1611,14 @@ function renderSidebar() {
       badge.className = 'triage-badge';
       badge.style.display = 'none';
       a.appendChild(badge);
+    }
+
+    // Info badge for non-triage sections (version-changes)
+    if (section.infoBadge) {
+      var infoBadge = document.createElement('span');
+      infoBadge.className = 'vc-sidebar-badge';
+      infoBadge.textContent = 'info';
+      a.appendChild(infoBadge);
     }
 
     li.appendChild(a);
@@ -3084,6 +3221,215 @@ function updateSnapshotInclude(key, include) {
   }
 }
 
+// ── Version Changes Detail Section ──
+function renderVersionChangesSection() {
+  var container = document.getElementById('section-version-changes');
+  if (!container) return;
+  container.innerHTML = '';
+
+  var snap = App.snapshot;
+  var changes = (snap.rpm && snap.rpm.version_changes) ? snap.rpm.version_changes : [];
+
+  // If no version changes, hide the sidebar entry and bail
+  if (changes.length === 0) {
+    var navLink = document.querySelector('[data-section="version-changes"]');
+    if (navLink) navLink.parentElement.style.display = 'none';
+    return;
+  }
+
+  // Heading
+  var heading = document.createElement('h2');
+  heading.className = 'section-heading';
+  heading.id = 'heading-version-changes';
+  heading.setAttribute('tabindex', '-1');
+  heading.textContent = 'Package Version Changes (' + changes.length + ')';
+  container.appendChild(heading);
+
+  // Subtitle
+  var subtitle = document.createElement('p');
+  subtitle.className = 'vc-section-subtitle';
+  subtitle.textContent = 'Packages with version differences between your host and the target base image';
+  container.appendChild(subtitle);
+
+  // Count upgrades/downgrades for filter labels
+  var upgradeCount = 0;
+  var downgradeCount = 0;
+  for (var c = 0; c < changes.length; c++) {
+    if (changes[c].direction === 'upgrade') upgradeCount++;
+    else if (changes[c].direction === 'downgrade') downgradeCount++;
+  }
+
+  // Filter bar
+  var filterBar = document.createElement('div');
+  filterBar.className = 'vc-filter-bar';
+
+  var filterGroup = document.createElement('div');
+  filterGroup.setAttribute('role', 'radiogroup');
+  filterGroup.setAttribute('aria-label', 'Filter version changes');
+
+  var filters = [
+    {value: 'all', label: 'All (' + changes.length + ')'},
+    {value: 'upgrade', label: 'Upgrades (' + upgradeCount + ')'},
+    {value: 'downgrade', label: 'Downgrades (' + downgradeCount + ')'}
+  ];
+
+  for (var fi = 0; fi < filters.length; fi++) {
+    var radio = document.createElement('button');
+    radio.type = 'button';
+    radio.setAttribute('role', 'radio');
+    radio.setAttribute('aria-checked', fi === 0 ? 'true' : 'false');
+    radio.setAttribute('data-filter', filters[fi].value);
+    radio.tabIndex = fi === 0 ? 0 : -1;
+    radio.textContent = filters[fi].label;
+    radio.onclick = function() {
+      var radios = filterGroup.querySelectorAll('[role="radio"]');
+      for (var ri = 0; ri < radios.length; ri++) {
+        radios[ri].setAttribute('aria-checked', 'false');
+        radios[ri].tabIndex = -1;
+      }
+      this.setAttribute('aria-checked', 'true');
+      this.tabIndex = 0;
+      applyVersionFilter(this.dataset.filter);
+    };
+    filterGroup.appendChild(radio);
+  }
+
+  // ARIA-compliant radio-group keyboard model: arrow keys move AND select
+  filterGroup.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      var radios = filterGroup.querySelectorAll('[role="radio"]');
+      var current = filterGroup.querySelector('[aria-checked="true"]');
+      var idx = Array.prototype.indexOf.call(radios, current);
+      var next = e.key === 'ArrowRight'
+        ? (idx + 1) % radios.length
+        : (idx - 1 + radios.length) % radios.length;
+      radios[idx].setAttribute('aria-checked', 'false');
+      radios[idx].tabIndex = -1;
+      radios[next].setAttribute('aria-checked', 'true');
+      radios[next].tabIndex = 0;
+      radios[next].focus();
+      applyVersionFilter(radios[next].dataset.filter);
+    }
+  });
+
+  filterBar.appendChild(filterGroup);
+  container.appendChild(filterBar);
+
+  // Table
+  var tableWrap = document.createElement('div');
+  tableWrap.className = 'vc-detail-table-wrap';
+
+  var table = document.createElement('table');
+  table.className = 'vc-detail-table';
+  table.id = 'vc-detail-table';
+
+  // Table header
+  var thead = document.createElement('thead');
+  var headerRow = document.createElement('tr');
+  var cols = ['Package', 'Your Host', '', 'Target Image', 'Change'];
+  for (var hi = 0; hi < cols.length; hi++) {
+    var th = document.createElement('th');
+    th.setAttribute('scope', 'col');
+    if (hi === 2) {
+      th.className = 'vc-arrow-col';
+      th.setAttribute('aria-hidden', 'true');
+    }
+    th.textContent = cols[hi];
+    headerRow.appendChild(th);
+  }
+  thead.appendChild(headerRow);
+  table.appendChild(thead);
+
+  // Table body
+  var tbody = document.createElement('tbody');
+  tbody.id = 'vc-detail-tbody';
+
+  // Sort: downgrades first, then upgrades, alphabetical within each
+  var sorted = changes.slice().sort(function(a, b) {
+    if (a.direction === 'downgrade' && b.direction !== 'downgrade') return -1;
+    if (a.direction !== 'downgrade' && b.direction === 'downgrade') return 1;
+    return (a.name || '').localeCompare(b.name || '');
+  });
+
+  for (var si = 0; si < sorted.length; si++) {
+    var item = sorted[si];
+    var tr = document.createElement('tr');
+    tr.setAttribute('data-vc-direction', item.direction || 'unknown');
+
+    // Package name
+    var tdName = document.createElement('td');
+    tdName.textContent = item.name || '';
+    tr.appendChild(tdName);
+
+    // Host version
+    var tdHost = document.createElement('td');
+    tdHost.textContent = item.host_version || item.old_version || '';
+    tr.appendChild(tdHost);
+
+    // Arrow
+    var tdArrow = document.createElement('td');
+    tdArrow.className = 'vc-arrow-col';
+    tdArrow.setAttribute('aria-hidden', 'true');
+    tdArrow.textContent = '→';
+    tr.appendChild(tdArrow);
+
+    // Target version
+    var tdTarget = document.createElement('td');
+    tdTarget.textContent = item.target_version || item.new_version || '';
+    tr.appendChild(tdTarget);
+
+    // Change direction
+    var tdChange = document.createElement('td');
+    var changeLabel = item.direction === 'upgrade' ? 'Upgrade' : 'Downgrade';
+    tdChange.className = item.direction === 'upgrade' ? 'vc-dir-upgrade' : 'vc-dir-downgrade';
+    tdChange.textContent = changeLabel;
+    tr.appendChild(tdChange);
+
+    tbody.appendChild(tr);
+  }
+
+  table.appendChild(tbody);
+  tableWrap.appendChild(table);
+  container.appendChild(tableWrap);
+}
+
+function applyVersionFilter(filter) {
+  var tbody = document.getElementById('vc-detail-tbody');
+  if (!tbody) return;
+
+  var rows = tbody.querySelectorAll('tr[data-vc-direction]');
+  var visibleCount = 0;
+
+  for (var i = 0; i < rows.length; i++) {
+    var dir = rows[i].getAttribute('data-vc-direction');
+    if (filter === 'all' || dir === filter) {
+      rows[i].style.display = '';
+      visibleCount++;
+    } else {
+      rows[i].style.display = 'none';
+    }
+  }
+
+  // Remove any existing empty-state row
+  var existingEmpty = tbody.querySelector('.vc-empty-row');
+  if (existingEmpty) {
+    tbody.removeChild(existingEmpty);
+  }
+
+  // If filter returns zero results, show empty state
+  if (visibleCount === 0 && filter !== 'all') {
+    var emptyRow = document.createElement('tr');
+    emptyRow.className = 'vc-empty-row';
+    var emptyTd = document.createElement('td');
+    emptyTd.setAttribute('colspan', '5');
+    var label = filter === 'downgrade' ? 'downgrades' : 'upgrades';
+    emptyTd.textContent = 'No ' + label + ' detected.';
+    emptyRow.appendChild(emptyTd);
+    tbody.appendChild(emptyRow);
+  }
+}
+
 // ── Section Renderers ──
 function renderAllSections() {
   var main = document.getElementById('main-content');
@@ -3115,6 +3461,9 @@ function renderAllSections() {
 
   // Render editor section (hidden until refine mode activates it)
   renderEditorSection();
+
+  // Render version changes detail section (informational, not tracked)
+  renderVersionChangesSection();
 
   // Initialize review states for zero-item sections
   MIGRATION_SECTIONS.forEach(function(section) {
