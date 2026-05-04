@@ -1875,7 +1875,10 @@ function buildOutputAccordion(groupName, items, options) {
     var expanded = App.tierExpanded['group-' + groupName];
     App.tierExpanded['group-' + groupName] = !expanded;
     var sectionId = items[0] ? items[0].section : '';
-    if (sectionId) renderTriageSection(sectionId);
+    if (sectionId) {
+      renderTriageSection(sectionId);
+      restoreFocus(sectionId, 'accordion-header', groupName);
+    }
   };
   header.onkeydown = function(e) {
     if (e.key === 'Enter' || e.key === ' ') {
@@ -1911,6 +1914,7 @@ function buildOutputAccordion(groupName, items, options) {
             scheduleAutosave();
             renderTriageSection(sectionId);
             updateBadge(sectionId);
+            restoreFocus(sectionId, 'accordion-header', groupName);
           };
         })(item.key, item.section);
         tdCheck.appendChild(cb);
@@ -1964,6 +1968,7 @@ function toggleAccordionGroup(groupName, items, isCurrentlyOn) {
     reopenReviewedSection(sectionId);
     renderTriageSection(sectionId);
     updateBadge(sectionId);
+    restoreFocus(sectionId, 'accordion-toggle', groupName);
   }
   scheduleAutosave();
 }
@@ -2009,7 +2014,10 @@ function buildDisplayAccordion(groupName, items) {
   header.onclick = function() {
     App.tierExpanded['group-' + groupName] = !isExpanded;
     var sectionId = items[0] ? items[0].section : '';
-    if (sectionId) renderTriageSection(sectionId);
+    if (sectionId) {
+      renderTriageSection(sectionId);
+      restoreFocus(sectionId, 'accordion-header', groupName);
+    }
   };
   header.onkeydown = function(e) {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); header.click(); }
@@ -2140,6 +2148,7 @@ function unacknowledgeNotification(key, sectionId) {
   reopenReviewedSection(sectionId);
   renderTriageSection(sectionId);
   updateBadge(sectionId);
+  restoreFocus(sectionId, 'notification-ack', key);
   scheduleAutosave();
 }
 
@@ -2887,6 +2896,7 @@ function renderTriageSection(sectionId) {
 
     var tierDiv = document.createElement('div');
     tierDiv.className = 'tier-group';
+    tierDiv.setAttribute('data-tier', String(tier));
 
     var tierLabel = tier === 3 ? 'Flagged' : tier === 2 ? 'Needs decision' : 'Auto-included';
     var tierHeader = document.createElement('div');
@@ -2905,14 +2915,15 @@ function renderTriageSection(sectionId) {
     tierHeader.appendChild(headerText);
 
     tierHeader.setAttribute('tabindex', '0');
-    tierHeader.onclick = (function(key, sId) {
+    tierHeader.onclick = (function(key, sId, t) {
       return function() {
         var exp = App.tierExpanded[key];
-        if (exp === undefined) exp = (tier !== 1);
+        if (exp === undefined) exp = (t !== 1);
         App.tierExpanded[key] = !exp;
         renderTriageSection(sId);
+        restoreFocus(sId, 'tier-header', String(t));
       };
-    })(expandKey, sectionId);
+    })(expandKey, sectionId, tier);
     tierHeader.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -4064,6 +4075,34 @@ function focusNextUndecided(sectionId) {
 
   var heading = document.getElementById('heading-' + sectionId);
   if (heading) heading.focus();
+}
+
+// ── Focus restoration after re-renders ──
+function restoreFocus(sectionId, targetType, targetId) {
+  var container = document.getElementById('section-' + sectionId);
+  if (!container) return;
+
+  var target = null;
+  if (targetType === 'accordion-header') {
+    var acc = container.querySelector('[data-group="' + targetId + '"]');
+    if (acc) target = acc.querySelector('.accordion-header');
+  } else if (targetType === 'accordion-toggle') {
+    var acc2 = container.querySelector('[data-group="' + targetId + '"]');
+    if (acc2) target = acc2.querySelector('.accordion-toggle');
+  } else if (targetType === 'notification-ack') {
+    var wrapper = container.querySelector('[data-key="' + targetId + '"]');
+    if (wrapper) target = wrapper.querySelector('.notification-full button.btn-primary');
+  } else if (targetType === 'tier-header') {
+    var tierDiv = container.querySelector('[data-tier="' + targetId + '"]');
+    if (tierDiv) target = tierDiv.querySelector('.tier-group-header');
+  }
+
+  if (target) {
+    target.focus();
+  } else {
+    var heading = document.getElementById('heading-' + sectionId);
+    if (heading) heading.focus();
+  }
 }
 
 // ── Sidebar overlay (narrow viewport) ──
