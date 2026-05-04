@@ -2,6 +2,7 @@ package renderer
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
@@ -1297,4 +1298,49 @@ func TestClassifySecretItems_MultiRedactionSamePath(t *testing.T) {
 	// Both should have SourcePath set since the config file exists.
 	assert.Equal(t, "/etc/app.conf", items[0].SourcePath)
 	assert.Equal(t, "/etc/app.conf", items[1].SourcePath)
+}
+
+func TestClassifyIdentity_UserPrivateGroups(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.UsersGroups = &schema.UserGroupSection{
+		Users: []map[string]interface{}{
+			{"name": "mrussell", "uid": float64(1000), "include": true},
+			{"name": "admin", "uid": float64(1001), "include": true},
+		},
+		Groups: []map[string]interface{}{
+			{"name": "mrussell", "gid": float64(1000), "include": true},
+			{"name": "admin", "gid": float64(1001), "include": true},
+			{"name": "developers", "gid": float64(1002), "include": true},
+			{"name": "wheel", "gid": float64(10), "include": true},
+		},
+	}
+	items := ClassifySnapshot(snap, nil)
+
+	// Collect group items by name.
+	groupItems := make(map[string]TriageItem)
+	for _, item := range items {
+		if item.Section == "identity" && strings.HasPrefix(item.Key, "group-") {
+			groupItems[item.Name] = item
+		}
+	}
+
+	// "mrussell" group matches user "mrussell" → user-private.
+	require.Contains(t, groupItems, "mrussell")
+	assert.True(t, groupItems["mrussell"].UserPrivate, "mrussell group should be flagged as user-private")
+	assert.Equal(t, "mrussell", groupItems["mrussell"].ParentUser)
+
+	// "admin" group matches user "admin" → also user-private.
+	require.Contains(t, groupItems, "admin")
+	assert.True(t, groupItems["admin"].UserPrivate, "admin group should be flagged as user-private")
+	assert.Equal(t, "admin", groupItems["admin"].ParentUser)
+
+	// "developers" has no matching user → NOT user-private.
+	require.Contains(t, groupItems, "developers")
+	assert.False(t, groupItems["developers"].UserPrivate, "developers group should not be user-private")
+	assert.Empty(t, groupItems["developers"].ParentUser)
+
+	// "wheel" (system group, no matching user) → NOT user-private.
+	require.Contains(t, groupItems, "wheel")
+	assert.False(t, groupItems["wheel"].UserPrivate, "wheel group should not be user-private")
+	assert.Empty(t, groupItems["wheel"].ParentUser)
 }

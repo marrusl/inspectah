@@ -25,6 +25,8 @@ type TriageItem struct {
 	SourcePath     string   `json:"source_path,omitempty"`
 	DefaultInclude bool     `json:"default_include"`
 	AlwaysIncluded bool     `json:"always_included,omitempty"`
+	UserPrivate    bool     `json:"user_private,omitempty"`
+	ParentUser     string   `json:"parent_user,omitempty"`
 }
 
 // ClassifySnapshot classifies all triageable items in the snapshot.
@@ -607,6 +609,15 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
 	var items []TriageItem
 	if snap.UsersGroups != nil {
+		// Build a set of usernames for user-private group detection.
+		// POSIX convention: a user-private group has the same name as the user.
+		userNames := make(map[string]bool, len(snap.UsersGroups.Users))
+		for _, u := range snap.UsersGroups.Users {
+			if name, ok := u["name"].(string); ok {
+				userNames[name] = true
+			}
+		}
+
 		for _, u := range snap.UsersGroups.Users {
 			name, _ := u["name"].(string)
 			uid, _ := u["uid"].(float64)
@@ -638,6 +649,11 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 			}
 			if !isFleet {
 				item.DisplayOnly = true
+			}
+			// Flag user-private groups: group name matches a user's login name.
+			if userNames[name] {
+				item.UserPrivate = true
+				item.ParentUser = name
 			}
 			items = append(items, item)
 		}
