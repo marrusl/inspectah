@@ -139,13 +139,15 @@ func parseSemanageBooleans(text string) []map[string]interface{} {
 			continue
 		}
 		name, current, defaultVal, desc := m[1], m[2], m[3], strings.TrimSpace(m[4])
-		results = append(results, map[string]interface{}{
-			"name":        name,
-			"current":     current,
-			"default":     defaultVal,
-			"non_default": current != defaultVal,
-			"description": desc,
-		})
+		if current != defaultVal {
+			results = append(results, map[string]interface{}{
+				"name":        name,
+				"current":     current,
+				"default":     defaultVal,
+				"non_default": true,
+				"description": desc,
+			})
+		}
 	}
 	return results
 }

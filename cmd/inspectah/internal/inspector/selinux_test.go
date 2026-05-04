@@ -410,8 +410,8 @@ func TestRunSelinux_Full(t *testing.T) {
 	// Custom modules
 	assert.Equal(t, []string{"custom_policy"}, section.CustomModules)
 
-	// Boolean overrides
-	require.Len(t, section.BooleanOverrides, 4)
+	// Boolean overrides — only non-default booleans
+	require.Len(t, section.BooleanOverrides, 3)
 	assert.Equal(t, "httpd_can_network_connect", section.BooleanOverrides[0]["name"])
 
 	// Fcontext rules
