@@ -1267,6 +1267,32 @@
       opacity: 0.4;
       margin-top: 2px;
     }
+    /* ── Informational wrapper ── */
+    .info-wrapper {
+      border-left: 3px solid var(--pf-t--global--border--color--default, #666);
+      margin-top: 1rem;
+      opacity: 0.85;
+    }
+    .info-wrapper-header {
+      cursor: pointer;
+      padding: 0.5rem 0.75rem;
+      background: none;
+      border: none;
+      width: 100%;
+      text-align: left;
+      font-size: 0.85rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      color: inherit;
+      font-family: inherit;
+    }
+    .info-wrapper-header:hover {
+      opacity: 1;
+    }
+    .info-wrapper-body {
+      padding: 0 0.75rem 0.5rem;
+    }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -1369,7 +1395,8 @@ var App = {
 //   2. Started false (fleet), never touched → current=false, default=false → undecided
 //   3. Started false, user re-included → current=true, default=false → decided
 function isPassiveItem(item) {
-  return item.display_only && item.group && item.key.indexOf('verchg-') === 0;
+  if (item.display_only) return true;
+  return false;
 }
 
 function isItemDecided(item) {
@@ -3508,6 +3535,75 @@ function isThirdPartyRepoJS(repoName) {
   return true;
 }
 
+// ── Informational Wrapper Builder ──
+function buildInformationalWrapper(items, sectionId) {
+  var wrapper = document.createElement('div');
+  wrapper.className = 'info-wrapper collapsed';
+
+  var header = document.createElement('button');
+  header.className = 'info-wrapper-header';
+  header.setAttribute('aria-expanded', 'false');
+  header.innerHTML = '<span class="tier-chevron">&#9656;</span> Informational — ' + items.length + ' item' + (items.length !== 1 ? 's' : '');
+
+  var body = document.createElement('div');
+  body.className = 'info-wrapper-body';
+  body.hidden = true;
+
+  header.onclick = function() {
+    var expanded = body.hidden;
+    body.hidden = !expanded;
+    header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    wrapper.classList.toggle('collapsed', !expanded);
+    var chevron = header.querySelector('.tier-chevron');
+    if (chevron) chevron.classList.toggle('expanded', expanded);
+  };
+
+  wrapper.appendChild(header);
+  wrapper.appendChild(body);
+
+  // Render each informational item as read-only (no toggles, no decision buttons)
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    var card = buildInfoReadOnlyCard(item);
+    body.appendChild(card);
+  }
+
+  return wrapper;
+}
+
+// ── Read-only card for informational wrapper items ──
+function buildInfoReadOnlyCard(item) {
+  var card = document.createElement('div');
+  card.className = 'triage-card tier-' + item.tier + ' info-readonly';
+  card.setAttribute('data-key', item.key);
+  card.style.opacity = '0.85';
+
+  // Name
+  var nameEl = document.createElement('div');
+  nameEl.className = 'card-name';
+  nameEl.textContent = item.name || item.key;
+  card.appendChild(nameEl);
+
+  // Meta
+  if (item.meta) {
+    var metaEl = document.createElement('div');
+    metaEl.className = 'card-meta';
+    metaEl.textContent = item.meta;
+    card.appendChild(metaEl);
+  }
+
+  // Reason / guidance text
+  if (item.reason) {
+    var reasonEl = document.createElement('div');
+    reasonEl.className = 'card-reason';
+    reasonEl.textContent = item.reason;
+    card.appendChild(reasonEl);
+  }
+
+  // No action buttons — read-only
+  return card;
+}
+
 function renderTriageSection(sectionId) {
   var container = document.getElementById('section-' + sectionId);
   if (!container) return;
@@ -3537,7 +3633,21 @@ function renderTriageSection(sectionId) {
     return;
   }
 
-  var groups = groupByTier(allItems);
+  // ── Two-pass item splitting ──
+  // Pass 1: Items that render in the main section (actionable + kmod display-only)
+  // Pass 2: Items that render in the Informational wrapper (display_only, non-kmod)
+  var mainItems = [];
+  var informationalItems = [];
+  for (var si = 0; si < allItems.length; si++) {
+    var sItem = allItems[si];
+    if (sItem.display_only && sItem.key.indexOf('kmod-') !== 0) {
+      informationalItems.push(sItem);
+    } else {
+      mainItems.push(sItem);
+    }
+  }
+
+  var groups = groupByTier(mainItems);
   var tiers = [3, 2, 1];
 
   for (var ti = 0; ti < tiers.length; ti++) {
@@ -3614,11 +3724,8 @@ function renderTriageSection(sectionId) {
         if (uItem.card_type === 'notification') {
           card = buildNotificationCard(uItem);
         } else if (uItem.display_only) {
-          if (uItem.acknowledged || getSnapshotAcknowledged(uItem.key)) {
-            card = buildDisplayOnlyDecidedCard(uItem);
-          } else {
-            card = buildTriageCard(uItem);
-          }
+          // kmod items: display-only treatment in main section (no toggles)
+          card = buildInfoReadOnlyCard(uItem);
         } else if (isItemDecided(uItem)) {
           var inc = getSnapshotInclude(uItem.key);
           card = buildDecidedCard(uItem, inc);
@@ -3658,6 +3765,11 @@ function renderTriageSection(sectionId) {
     }
 
     container.appendChild(tierDiv);
+  }
+
+  // ── Informational wrapper (non-kmod display-only items) ──
+  if (informationalItems.length > 0) {
+    container.appendChild(buildInformationalWrapper(informationalItems, sectionId));
   }
 
   // Section footer
