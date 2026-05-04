@@ -1009,6 +1009,42 @@
       padding: 10px 14px;
       background: rgba(255,255,255,0.02);
     }
+    .dep-badge {
+      font-size: 11px;
+      opacity: 0.5;
+      margin-left: 8px;
+    }
+    .dep-chevron {
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      padding: 0 4px;
+      opacity: 0.5;
+      margin-left: 4px;
+    }
+    .dep-chevron:hover, .dep-chevron:focus {
+      opacity: 1;
+    }
+    .dep-row ul {
+      margin: 4px 0 8px 24px;
+      padding: 0;
+      list-style: disc;
+      font-size: 12px;
+      opacity: 0.6;
+      columns: 2;
+      column-gap: 24px;
+    }
+    .dep-row li {
+      padding: 1px 0;
+    }
+    .dep-list-static {
+      display: block;
+      font-size: 11px;
+      opacity: 0.4;
+      margin-top: 2px;
+    }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -1098,7 +1134,8 @@ var App = {
   priorValues: {},     // key -> prior include value before makeDecision (for undo)
   activeSection: 'overview',
   tierExpanded: {},    // sectionId-tier -> boolean
-  groupPriorState: {}  // groupName -> {key: priorInclude} for toggle restore
+  groupPriorState: {},  // groupName -> {key: priorInclude} for toggle restore
+  expandedDep: null
 };
 
 // ── Decided-state helper ──
@@ -1885,6 +1922,7 @@ function buildOutputAccordion(groupName, items, options) {
 
   // Header click expands/collapses
   header.onclick = function() {
+    App.expandedDep = null;
     var expanded = App.tierExpanded['group-' + groupName];
     App.tierExpanded['group-' + groupName] = !expanded;
     var sectionId = items[0] ? items[0].section : '';
@@ -1910,6 +1948,7 @@ function buildOutputAccordion(groupName, items, options) {
     for (var j = 0; j < items.length; j++) {
       var item = items[j];
       var tr = document.createElement('tr');
+      tr.setAttribute('data-dep-key', item.key);
       // Per-item checkbox (omitted in static mode)
       if (App.mode !== 'static') {
         var tdCheck = document.createElement('td');
@@ -1936,6 +1975,37 @@ function buildOutputAccordion(groupName, items, options) {
 
       var tdName = document.createElement('td');
       tdName.textContent = item.name;
+      if (item.deps && item.deps.length > 0) {
+        var depBadge = document.createElement('span');
+        depBadge.className = 'dep-badge';
+        depBadge.textContent = item.deps.length + ' deps';
+        tdName.appendChild(depBadge);
+
+        if (App.mode !== 'static') {
+          var depChevron = document.createElement('button');
+          depChevron.className = 'dep-chevron';
+          depChevron.type = 'button';
+          var isDepExpanded = App.expandedDep === item.key;
+          depChevron.setAttribute('aria-expanded', isDepExpanded ? 'true' : 'false');
+          depChevron.setAttribute('aria-controls', 'deps-' + item.key.replace(/[^a-zA-Z0-9-]/g, '_'));
+          depChevron.setAttribute('aria-label', (isDepExpanded ? 'Hide' : 'Show ' + item.deps.length) + ' dependencies for ' + item.name);
+          depChevron.textContent = isDepExpanded ? '▾' : '▸';
+          (function(itemKey, sId) {
+            depChevron.onclick = function(e) {
+              e.stopPropagation();
+              App.expandedDep = (App.expandedDep === itemKey) ? null : itemKey;
+              renderTriageSection(sId);
+              restoreFocus(sId, 'dep-chevron', itemKey);
+            };
+          })(item.key, item.section);
+          tdName.appendChild(depChevron);
+        } else {
+          var depStatic = document.createElement('span');
+          depStatic.className = 'dep-list-static';
+          depStatic.textContent = item.deps.join(', ');
+          tdName.appendChild(depStatic);
+        }
+      }
       tr.appendChild(tdName);
 
       var tdMeta = document.createElement('td');
@@ -1944,6 +2014,23 @@ function buildOutputAccordion(groupName, items, options) {
       tr.appendChild(tdMeta);
 
       table.appendChild(tr);
+      if (item.deps && item.deps.length > 0 && App.expandedDep === item.key && App.mode !== 'static') {
+        var depTr = document.createElement('tr');
+        depTr.className = 'dep-row';
+        var depTd = document.createElement('td');
+        depTd.setAttribute('colspan', '3');
+        var depUl = document.createElement('ul');
+        depUl.setAttribute('aria-label', 'Dependencies for ' + item.name);
+        depUl.id = 'deps-' + item.key.replace(/[^a-zA-Z0-9-]/g, '_');
+        for (var d = 0; d < item.deps.length; d++) {
+          var depLi = document.createElement('li');
+          depLi.textContent = item.deps[d];
+          depUl.appendChild(depLi);
+        }
+        depTd.appendChild(depUl);
+        depTr.appendChild(depTd);
+        table.appendChild(depTr);
+      }
     }
     div.appendChild(table);
   }
@@ -1960,6 +2047,7 @@ function buildOutputAccordion(groupName, items, options) {
 }
 
 function toggleAccordionGroup(groupName, items, isCurrentlyOn) {
+  App.expandedDep = null;
   if (isCurrentlyOn) {
     var prior = {};
     for (var i = 0; i < items.length; i++) {
@@ -2025,6 +2113,7 @@ function buildDisplayAccordion(groupName, items) {
   header.appendChild(info);
 
   header.onclick = function() {
+    App.expandedDep = null;
     App.tierExpanded['group-' + groupName] = !isExpanded;
     var sectionId = items[0] ? items[0].section : '';
     if (sectionId) {
