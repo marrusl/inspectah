@@ -53,6 +53,8 @@ const (
 	PackageStateAdded        PackageState = "added"
 	PackageStateBaseImageOnly PackageState = "base_image_only"
 	PackageStateModified     PackageState = "modified"
+	PackageStateLocalInstall PackageState = "local_install"
+	PackageStateNoRepo       PackageState = "no_repo"
 )
 
 // VersionChangeDirection indicates whether a package was upgraded or

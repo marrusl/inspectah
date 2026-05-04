@@ -226,15 +226,27 @@ func packagesSectionLines(snap *schema.InspectionSnapshot, base string, cExtPip 
 
 	// Packages
 	var installNames []string
+	var todoLines []string
 	if snap.Rpm.LeafPackages != nil {
+		unreachable := unreachablePackageNames(snap)
 		for _, name := range *snap.Rpm.LeafPackages {
 			if sanitizeShellValue(name, "dnf install") != nil {
+				if unreachable[name] {
+					todoLines = append(todoLines, fmt.Sprintf("# TODO: '%s' was installed locally (state: %s) — no repository source. Provide a .rpm or custom repo.",
+						name, unreachableState(snap, name)))
+					continue
+				}
 				installNames = append(installNames, name)
 			}
 		}
 	} else {
 		for _, pkg := range snap.Rpm.PackagesAdded {
 			if pkg.Include && sanitizeShellValue(pkg.Name, "dnf install") != nil {
+				if pkg.State == schema.PackageStateLocalInstall || pkg.State == schema.PackageStateNoRepo {
+					todoLines = append(todoLines, fmt.Sprintf("# TODO: '%s' was installed locally (state: %s) — no repository source. Provide a .rpm or custom repo.",
+						pkg.Name, string(pkg.State)))
+					continue
+				}
 				installNames = append(installNames, pkg.Name)
 			}
 		}
@@ -260,6 +272,13 @@ func packagesSectionLines(snap *schema.InspectionSnapshot, base string, cExtPip 
 		lines = append(lines, "")
 	}
 
+	if len(todoLines) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, "# === Manual Follow-up Required ===")
+		lines = append(lines, todoLines...)
+		lines = append(lines, "")
+	}
+
 	// Version locks
 	var includedLocks []schema.VersionLockEntry
 	for _, vl := range snap.Rpm.VersionLocks {
@@ -278,6 +297,31 @@ func packagesSectionLines(snap *schema.InspectionSnapshot, base string, cExtPip 
 	}
 
 	return lines
+}
+
+func unreachablePackageNames(snap *schema.InspectionSnapshot) map[string]bool {
+	result := make(map[string]bool)
+	if snap.Rpm == nil {
+		return result
+	}
+	for _, pkg := range snap.Rpm.PackagesAdded {
+		if pkg.State == schema.PackageStateLocalInstall || pkg.State == schema.PackageStateNoRepo {
+			result[pkg.Name] = true
+		}
+	}
+	return result
+}
+
+func unreachableState(snap *schema.InspectionSnapshot, name string) string {
+	if snap.Rpm == nil {
+		return "unknown"
+	}
+	for _, pkg := range snap.Rpm.PackagesAdded {
+		if pkg.Name == name {
+			return string(pkg.State)
+		}
+	}
+	return "unknown"
 }
 
 // --- Services section ---
@@ -331,6 +375,12 @@ func servicesSectionLines(snap *schema.InspectionSnapshot) []string {
 		for _, p := range snap.Rpm.PackagesAdded {
 			if p.Include {
 				installable[p.Name] = true
+			}
+		}
+		// Remove unreachable packages from installable set
+		for _, p := range snap.Rpm.PackagesAdded {
+			if p.State == schema.PackageStateLocalInstall || p.State == schema.PackageStateNoRepo {
+				delete(installable, p.Name)
 			}
 		}
 	}

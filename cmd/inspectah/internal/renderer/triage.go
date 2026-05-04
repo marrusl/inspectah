@@ -146,7 +146,7 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 		}
 
 		if !isFleet {
-			if tier == 3 && (string(pkg.State) == "local_install" || string(pkg.State) == "no_repo") {
+			if tier == 3 && (pkg.State == schema.PackageStateLocalInstall || pkg.State == schema.PackageStateNoRepo) {
 				item.CardType = "notification"
 				item.Acknowledged = pkg.Acknowledged
 				item.Reason = "No repository source available. inspectah cannot reconstruct installation steps for this package."
@@ -176,10 +176,9 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 }
 
 func classifyPackage(pkg schema.PackageEntry, baseline map[string]bool) (int, string) {
-	state := string(pkg.State)
 	repo := strings.ToLower(pkg.SourceRepo)
 
-	if state == "local_install" || state == "no_repo" {
+	if pkg.State == schema.PackageStateLocalInstall || pkg.State == schema.PackageStateNoRepo {
 		return 3, "Package installed locally (no repository). Verify provenance."
 	}
 	if baseline[pkg.Name] {
