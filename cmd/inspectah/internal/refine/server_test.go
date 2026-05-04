@@ -1226,3 +1226,180 @@ func snapshotDirContents(t *testing.T, dir string) map[string]string {
 	})
 	return contents
 }
+
+func TestRunRefine_IncludeDefaultsNormalization(t *testing.T) {
+	// Build a schema-compliant single-machine snapshot with tier-2 surfaces
+	// that all start with Include: false. After RunRefine normalizes,
+	// working snapshot + sidecar + classifier must all agree on Include=true.
+	typedSnap := schema.NewSnapshot()
+	typedSnap.Meta = map[string]interface{}{"hostname": "include-defaults-test"}
+	typedSnap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/httpd/conf/httpd.conf", Kind: schema.ConfigFileKindRpmOwnedModified, Include: false},
+		},
+	}
+	typedSnap.Services = &schema.ServiceSection{
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "httpd.service", CurrentState: "enabled", DefaultState: "disabled", Include: false},
+			{Unit: "dnf-makecache.service", CurrentState: "enabled", DefaultState: "enabled", Include: true},
+		},
+		EnabledUnits: []string{"httpd.service", "dnf-makecache.service"},
+	}
+	typedSnap.ScheduledTasks = &schema.ScheduledTaskSection{
+		CronJobs: []schema.CronJob{
+			{Path: "/etc/cron.d/backup", Source: "custom", Include: false},
+		},
+	}
+	typedSnap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{
+			{Name: "webapp.container", Image: "webapp:latest", Include: false},
+		},
+	}
+	typedSnap.Network = &schema.NetworkSection{
+		FirewallZones: []schema.FirewallZone{
+			{Name: "public", Path: "/etc/firewalld/zones/public.xml", Include: false},
+		},
+	}
+	typedSnap.KernelBoot = &schema.KernelBootSection{
+		SysctlOverrides: []schema.SysctlOverride{
+			{Key: "vm.swappiness", Runtime: "10", Include: false},
+		},
+	}
+	snapJSON, err := json.Marshal(typedSnap)
+	require.NoError(t, err)
+
+	files := map[string]string{
+		"report.html":              "<html><body>include defaults test</body></html>",
+		"inspection-snapshot.json": string(snapJSON),
+		"Containerfile":            "FROM ubi9\n",
+	}
+	tarball := createTestTarball(t, files)
+
+	port, err := findFreePort(0)
+	require.NoError(t, err)
+
+	var capturedDir string
+	reRenderFn := func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		capturedDir = outputDir
+		os.WriteFile(filepath.Join(outputDir, "report.html"), []byte("<html>rendered</html>"), 0644)
+		return ReRenderResult{
+			HTML:           "<html>rendered</html>",
+			Snapshot:       json.RawMessage(snapData),
+			Containerfile:  "FROM ubi9\n",
+			TriageManifest: json.RawMessage("[]"),
+		}, nil
+	}
+
+	errCh := make(chan error, 1)
+	opts := RunRefineOptions{
+		TarballPath: tarball,
+		Port:        port,
+		NoBrowser:   true,
+		ReRenderFn:  reRenderFn,
+		StopCh:      make(chan struct{}),
+	}
+
+	go func() {
+		errCh <- RunRefine(opts)
+	}()
+
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/health", port)
+	client := &http.Client{}
+	ready := false
+	for i := 0; i < 50; i++ {
+		resp, err := client.Get(healthURL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				ready = true
+				break
+			}
+		}
+		select {
+		case <-errCh:
+			t.Fatal("server exited early")
+		default:
+		}
+	}
+	require.True(t, ready, "server never became ready")
+	require.NotEmpty(t, capturedDir, "ReRenderFn must have been called during init")
+
+	// ── Verify working snapshot ──
+	workingTyped, err := schema.LoadSnapshot(filepath.Join(capturedDir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	assert.True(t, workingTyped.Config.Files[0].Include,
+		"working: config file must have Include=true")
+	assert.True(t, workingTyped.Services.StateChanges[0].Include,
+		"working: httpd.service must have Include=true")
+	assert.False(t, workingTyped.Services.StateChanges[1].Include,
+		"working: dnf-makecache.service must have Include=false (incompatible)")
+	assert.True(t, workingTyped.ScheduledTasks.CronJobs[0].Include,
+		"working: cron job must have Include=true")
+	assert.True(t, workingTyped.Containers.QuadletUnits[0].Include,
+		"working: quadlet must have Include=true")
+	assert.True(t, workingTyped.Network.FirewallZones[0].Include,
+		"working: firewall zone must have Include=true")
+	assert.True(t, workingTyped.KernelBoot.SysctlOverrides[0].Include,
+		"working: sysctl must have Include=true")
+
+	// Incompatible service removed from EnabledUnits
+	assert.NotContains(t, workingTyped.Services.EnabledUnits, "dnf-makecache.service",
+		"working: incompatible service must be removed from EnabledUnits")
+
+	// ── Verify sidecar matches working snapshot ──
+	sidecarTyped, err := schema.LoadSnapshot(filepath.Join(capturedDir, "original-inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	assert.True(t, sidecarTyped.Config.Files[0].Include,
+		"sidecar: config file must have Include=true")
+	assert.True(t, sidecarTyped.Services.StateChanges[0].Include,
+		"sidecar: httpd.service must have Include=true")
+	assert.False(t, sidecarTyped.Services.StateChanges[1].Include,
+		"sidecar: dnf-makecache.service must have Include=false (incompatible)")
+
+	// ── Verify ClassifySnapshot produces correct DefaultInclude ──
+	items := renderer.ClassifySnapshot(workingTyped, sidecarTyped)
+
+	cfgItem := findTriageItem(items, "cfg-/etc/httpd/conf/httpd.conf")
+	require.NotNil(t, cfgItem, "config file must appear in classifier output")
+	assert.True(t, cfgItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for config file")
+
+	svcItem := findTriageItem(items, "svc-httpd.service")
+	require.NotNil(t, svcItem, "httpd.service must appear in classifier output")
+	assert.True(t, svcItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for httpd.service")
+
+	dnfItem := findTriageItem(items, "svc-dnf-makecache.service")
+	require.NotNil(t, dnfItem, "dnf-makecache.service must appear in classifier output")
+	assert.False(t, dnfItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=false for incompatible service")
+
+	cronItem := findTriageItem(items, "cron-/etc/cron.d/backup")
+	require.NotNil(t, cronItem, "cron job must appear in classifier output")
+	assert.True(t, cronItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for cron job")
+
+	quadletItem := findTriageItem(items, "quadlet-webapp.container")
+	require.NotNil(t, quadletItem, "quadlet must appear in classifier output")
+	assert.True(t, quadletItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for quadlet")
+
+	fwItem := findTriageItem(items, "fw-public")
+	require.NotNil(t, fwItem, "firewall zone must appear in classifier output")
+	assert.True(t, fwItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for firewall zone")
+
+	sysctlItem := findTriageItem(items, "sysctl-vm.swappiness")
+	require.NotNil(t, sysctlItem, "sysctl must appear in classifier output")
+	assert.True(t, sysctlItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for sysctl")
+
+	// Stop server
+	close(opts.StopCh)
+	select {
+	case serverErr := <-errCh:
+		assert.NoError(t, serverErr)
+	}
+}

@@ -145,6 +145,82 @@ func NormalizeLeafDefaults(snap *schema.InspectionSnapshot) {
 	}
 }
 
+// NormalizeIncludeDefaults sets Include=true on all tier-2 surfaces in
+// single-machine mode so that untouched items render as "included by
+// default." Skips fleet snapshots (fleet merge handles include state
+// separately).
+//
+// Exception: image-mode incompatible services (dnf-makecache.service,
+// dnf-makecache.timer, packagekit.service) are set to Include=false and
+// removed from EnabledUnits.
+func NormalizeIncludeDefaults(snap *schema.InspectionSnapshot, isFleet bool) {
+	if isFleet {
+		return
+	}
+
+	// Config files
+	if snap.Config != nil {
+		for i := range snap.Config.Files {
+			snap.Config.Files[i].Include = true
+		}
+	}
+
+	// Services — with incompatible service exception
+	if snap.Services != nil {
+		incompatible := make(map[string]bool)
+		for i := range snap.Services.StateChanges {
+			unit := snap.Services.StateChanges[i].Unit
+			if imageModeIncompatibleServices[unit] {
+				snap.Services.StateChanges[i].Include = false
+				incompatible[unit] = true
+			} else {
+				snap.Services.StateChanges[i].Include = true
+			}
+		}
+		// Remove incompatible units from EnabledUnits
+		if len(incompatible) > 0 {
+			filtered := snap.Services.EnabledUnits[:0]
+			for _, u := range snap.Services.EnabledUnits {
+				if !incompatible[u] {
+					filtered = append(filtered, u)
+				}
+			}
+			snap.Services.EnabledUnits = filtered
+		}
+	}
+
+	// Scheduled tasks
+	if snap.ScheduledTasks != nil {
+		for i := range snap.ScheduledTasks.CronJobs {
+			snap.ScheduledTasks.CronJobs[i].Include = true
+		}
+		for i := range snap.ScheduledTasks.SystemdTimers {
+			snap.ScheduledTasks.SystemdTimers[i].Include = boolPtr(true)
+		}
+	}
+
+	// Quadlet units
+	if snap.Containers != nil {
+		for i := range snap.Containers.QuadletUnits {
+			snap.Containers.QuadletUnits[i].Include = true
+		}
+	}
+
+	// Firewall zones
+	if snap.Network != nil {
+		for i := range snap.Network.FirewallZones {
+			snap.Network.FirewallZones[i].Include = true
+		}
+	}
+
+	// Sysctl overrides
+	if snap.KernelBoot != nil {
+		for i := range snap.KernelBoot.SysctlOverrides {
+			snap.KernelBoot.SysctlOverrides[i].Include = true
+		}
+	}
+}
+
 func isFleetSnapshot(snap *schema.InspectionSnapshot) bool {
 	if snap.Meta == nil {
 		return false

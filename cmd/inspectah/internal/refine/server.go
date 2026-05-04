@@ -108,10 +108,13 @@ func RunRefine(opts RunRefineOptions) error {
 		}
 	}
 
-	// Normalize snapshot BEFORE sidecar — leaf defaults and nil *bool fixes.
-	// Both the sidecar and working copy must agree on initial include state.
+	// Normalize snapshot BEFORE sidecar — leaf defaults, surface defaults,
+	// and nil *bool fixes. Both the sidecar and working copy must agree on
+	// initial include state.
 	if snap, err := schema.LoadSnapshot(snapPath); err == nil {
 		renderer.NormalizeLeafDefaults(snap)
+		_, isFleet := snap.Meta["fleet"]
+		renderer.NormalizeIncludeDefaults(snap, isFleet)
 		schema.NormalizeSnapshot(snap)
 		schema.SaveSnapshot(snap, snapPath)
 	}

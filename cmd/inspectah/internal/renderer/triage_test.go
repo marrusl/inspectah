@@ -946,3 +946,144 @@ func TestClassifySELinux_InSystemSection(t *testing.T) {
 		}
 	}
 }
+
+// ── NormalizeIncludeDefaults tests ──
+
+func TestNormalizeIncludeDefaults_SingleMachine_AllSurfaces(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/httpd/conf/httpd.conf", Kind: schema.ConfigFileKindRpmOwnedModified, Include: false},
+		},
+	}
+	snap.Services = &schema.ServiceSection{
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "httpd.service", CurrentState: "enabled", DefaultState: "disabled", Include: false},
+		},
+		EnabledUnits: []string{"httpd.service"},
+	}
+	snap.ScheduledTasks = &schema.ScheduledTaskSection{
+		CronJobs: []schema.CronJob{
+			{Path: "/etc/cron.d/backup", Source: "custom", Include: false},
+		},
+		SystemdTimers: []schema.SystemdTimer{
+			{Name: "fstrim.timer", Include: boolPtr(false)},
+		},
+	}
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{
+			{Name: "webapp.container", Image: "webapp:latest", Include: false},
+		},
+	}
+	snap.Network = &schema.NetworkSection{
+		FirewallZones: []schema.FirewallZone{
+			{Name: "public", Path: "/etc/firewalld/zones/public.xml", Include: false},
+		},
+	}
+	snap.KernelBoot = &schema.KernelBootSection{
+		SysctlOverrides: []schema.SysctlOverride{
+			{Key: "vm.swappiness", Runtime: "10", Include: false},
+		},
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	assert.True(t, snap.Config.Files[0].Include, "config file must be included")
+	assert.True(t, snap.Services.StateChanges[0].Include, "service must be included")
+	assert.True(t, snap.ScheduledTasks.CronJobs[0].Include, "cron job must be included")
+	assert.True(t, *snap.ScheduledTasks.SystemdTimers[0].Include, "systemd timer must be included")
+	assert.True(t, snap.Containers.QuadletUnits[0].Include, "quadlet unit must be included")
+	assert.True(t, snap.Network.FirewallZones[0].Include, "firewall zone must be included")
+	assert.True(t, snap.KernelBoot.SysctlOverrides[0].Include, "sysctl override must be included")
+}
+
+func TestNormalizeIncludeDefaults_FleetMode_Untouched(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Meta["fleet"] = map[string]interface{}{
+		"source_hosts":   []interface{}{"host1", "host2"},
+		"total_hosts":    float64(2),
+		"min_prevalence": float64(50),
+	}
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/httpd/conf/httpd.conf", Include: false},
+		},
+	}
+	snap.Services = &schema.ServiceSection{
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "httpd.service", Include: false},
+		},
+	}
+
+	NormalizeIncludeDefaults(snap, true)
+
+	assert.False(t, snap.Config.Files[0].Include, "fleet mode must not change config include")
+	assert.False(t, snap.Services.StateChanges[0].Include, "fleet mode must not change service include")
+}
+
+func TestNormalizeIncludeDefaults_Idempotent(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/httpd/conf/httpd.conf", Include: true},
+		},
+	}
+	snap.Services = &schema.ServiceSection{
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "httpd.service", Include: true},
+		},
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	assert.True(t, snap.Config.Files[0].Include, "already-true must stay true")
+	assert.True(t, snap.Services.StateChanges[0].Include, "already-true must stay true")
+}
+
+func TestNormalizeIncludeDefaults_IncompatibleServices(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Services = &schema.ServiceSection{
+		StateChanges: []schema.ServiceStateChange{
+			{Unit: "httpd.service", CurrentState: "enabled", DefaultState: "disabled", Include: false},
+			{Unit: "dnf-makecache.service", CurrentState: "enabled", DefaultState: "enabled", Include: true},
+			{Unit: "dnf-makecache.timer", CurrentState: "enabled", DefaultState: "enabled", Include: true},
+			{Unit: "packagekit.service", CurrentState: "enabled", DefaultState: "enabled", Include: true},
+		},
+		EnabledUnits: []string{"httpd.service", "dnf-makecache.service", "dnf-makecache.timer", "packagekit.service"},
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	// Normal service gets included
+	assert.True(t, snap.Services.StateChanges[0].Include, "httpd must be included")
+
+	// Incompatible services get excluded
+	assert.False(t, snap.Services.StateChanges[1].Include, "dnf-makecache.service must be excluded")
+	assert.False(t, snap.Services.StateChanges[2].Include, "dnf-makecache.timer must be excluded")
+	assert.False(t, snap.Services.StateChanges[3].Include, "packagekit.service must be excluded")
+
+	// Incompatible services removed from EnabledUnits
+	assert.Equal(t, []string{"httpd.service"}, snap.Services.EnabledUnits,
+		"incompatible services must be removed from EnabledUnits")
+}
+
+func TestNormalizeIncludeDefaults_NilSections(t *testing.T) {
+	snap := schema.NewSnapshot()
+	// All section pointers are nil — must not panic
+	NormalizeIncludeDefaults(snap, false)
+}
+
+func TestNormalizeIncludeDefaults_SystemdTimerNilInclude(t *testing.T) {
+	// SystemdTimer.Include is *bool — nil means "not set"
+	snap := schema.NewSnapshot()
+	snap.ScheduledTasks = &schema.ScheduledTaskSection{
+		SystemdTimers: []schema.SystemdTimer{
+			{Name: "fstrim.timer"}, // Include is nil
+		},
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	require.NotNil(t, snap.ScheduledTasks.SystemdTimers[0].Include, "nil *bool must be set")
+	assert.True(t, *snap.ScheduledTasks.SystemdTimers[0].Include, "nil *bool must be set to true")
+}
