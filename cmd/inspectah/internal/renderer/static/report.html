@@ -530,6 +530,85 @@
       color: #d29922;
     }
 
+    /* Version changes overview block */
+    .overview-version-changes {
+      margin-top: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .overview-version-changes h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+
+    .version-changes-stats {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .vc-stat-card {
+      padding: 0.625rem 1rem;
+      border-radius: 6px;
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      background: var(--pf-t--global--background--color--secondary-default);
+      min-width: 120px;
+    }
+
+    .vc-stat-card .vc-stat-value {
+      font-size: 1.25rem;
+      font-weight: 700;
+    }
+
+    .vc-stat-card .vc-stat-label {
+      font-size: 0.75rem;
+      opacity: 0.7;
+    }
+
+    .vc-stat-card.vc-upgrade .vc-stat-value {
+      color: #3e8635;
+    }
+    .pf-v6-theme-dark .vc-stat-card.vc-upgrade .vc-stat-value {
+      color: #5ba352;
+    }
+
+    .vc-stat-card.vc-downgrade .vc-stat-value {
+      color: #c9190b;
+    }
+    .pf-v6-theme-dark .vc-stat-card.vc-downgrade .vc-stat-value {
+      color: #ef6e64;
+    }
+
+    .vc-downgrade-callout {
+      font-size: 0.85rem;
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 0.75rem;
+      border-radius: 4px;
+      background: rgba(210, 153, 34, 0.1);
+      border: 1px solid rgba(210, 153, 34, 0.3);
+      color: #d29922;
+    }
+
+    .vc-downgrade-callout strong {
+      font-weight: 600;
+    }
+
+    .vc-view-all {
+      font-size: 0.85rem;
+      color: var(--pf-t--global--color--status--info--default, #2b9af3);
+      cursor: pointer;
+      border: none;
+      background: none;
+      padding: 0;
+      text-decoration: none;
+    }
+
+    .vc-view-all:hover {
+      text-decoration: underline;
+    }
+
     /* Section container */
     .report-section {
       display: none;
@@ -1630,6 +1709,82 @@ function renderOverview() {
     sysInfo.textContent = 'System: ' + (osr.pretty_name || osr.name || 'Unknown') +
       ' | Type: ' + (snap.system_type || 'unknown');
     container.appendChild(sysInfo);
+  }
+
+  // Version changes overview
+  var vcUpgrades = 0, vcDowngrades = 0, vcDowngradeNames = [];
+  if (snap.rpm && snap.rpm.version_changes) {
+    for (var vc = 0; vc < snap.rpm.version_changes.length; vc++) {
+      var change = snap.rpm.version_changes[vc];
+      if (change.direction === 'upgrade') vcUpgrades++;
+      else if (change.direction === 'downgrade') {
+        vcDowngrades++;
+        vcDowngradeNames.push(change.name);
+      }
+    }
+  }
+  if (vcUpgrades + vcDowngrades > 0) {
+    var vcBlock = document.createElement('div');
+    vcBlock.className = 'overview-version-changes';
+
+    var vcHead = document.createElement('h3');
+    vcHead.textContent = 'Version Changes';
+    vcBlock.appendChild(vcHead);
+
+    var vcStats = document.createElement('div');
+    vcStats.className = 'version-changes-stats';
+
+    // Upgrades card
+    var upCard = document.createElement('div');
+    upCard.className = 'vc-stat-card vc-upgrade';
+    var upVal = document.createElement('div');
+    upVal.className = 'vc-stat-value';
+    upVal.textContent = vcUpgrades;
+    var upLbl = document.createElement('div');
+    upLbl.className = 'vc-stat-label';
+    upLbl.textContent = vcUpgrades === 1 ? 'Upgrade' : 'Upgrades';
+    upCard.appendChild(upVal);
+    upCard.appendChild(upLbl);
+    vcStats.appendChild(upCard);
+
+    // Downgrades card
+    var dnCard = document.createElement('div');
+    dnCard.className = 'vc-stat-card vc-downgrade';
+    var dnVal = document.createElement('div');
+    dnVal.className = 'vc-stat-value';
+    dnVal.textContent = vcDowngrades;
+    var dnLbl = document.createElement('div');
+    dnLbl.className = 'vc-stat-label';
+    dnLbl.textContent = vcDowngrades === 1 ? 'Downgrade' : 'Downgrades';
+    dnCard.appendChild(dnVal);
+    dnCard.appendChild(dnLbl);
+    vcStats.appendChild(dnCard);
+
+    vcBlock.appendChild(vcStats);
+
+    // Downgrade callout
+    if (vcDowngrades > 0) {
+      var callout = document.createElement('div');
+      callout.className = 'vc-downgrade-callout';
+      var calloutStrong = document.createElement('strong');
+      calloutStrong.textContent = 'Downgraded packages: ';
+      callout.appendChild(calloutStrong);
+      callout.appendChild(document.createTextNode(vcDowngradeNames.join(', ')));
+      vcBlock.appendChild(callout);
+    }
+
+    // View all link
+    var vcTotal = vcUpgrades + vcDowngrades;
+    var viewAll = document.createElement('button');
+    viewAll.type = 'button';
+    viewAll.className = 'vc-view-all';
+    viewAll.textContent = 'View all ' + vcTotal + ' →';
+    viewAll.onclick = function() {
+      navigateTo('version-changes');
+    };
+    vcBlock.appendChild(viewAll);
+
+    container.appendChild(vcBlock);
   }
 
   // Warnings
