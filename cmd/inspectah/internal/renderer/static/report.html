@@ -34,7 +34,7 @@
     }
 
     .pf-v6-theme-light {
-      --pf-t--global--background--color--primary-default: #ffffff;
+      --pf-t--global--background--color--primary-default: #f8f7f5;
       --pf-t--global--background--color--secondary-default: #f0f0f0;
       --pf-t--global--background--color--hover: rgba(0,0,0,0.06);
       --pf-t--global--border--color--default: #d2d2d2;
@@ -42,7 +42,13 @@
       --pf-t--global--text--color--primary: #151515;
       color-scheme: light;
       color: #151515;
-      background-color: #ffffff;
+      background-color: #f8f7f5;
+    }
+
+    /* Dark mode: make theme toggle button visible */
+    .pf-v6-theme-dark .pf-v6-c-button.pf-m-plain {
+      border: 1px solid rgba(255,255,255,0.3);
+      color: rgba(255,255,255,0.8);
     }
 
     .sr-only {
@@ -254,8 +260,25 @@
       font-size: 0.9rem;
       font-weight: 600;
       margin-bottom: 0.75rem;
+      padding: 0.35rem 0.5rem;
+      border-radius: 4px;
       cursor: pointer;
       user-select: none;
+    }
+
+    .tier-group-header:hover {
+      background: var(--pf-t--global--background--color--hover, rgba(128,128,128,0.08));
+    }
+
+    .tier-chevron {
+      margin-left: auto;
+      font-size: 0.7rem;
+      transition: transform 0.15s ease;
+      display: inline-block;
+    }
+
+    .tier-chevron.expanded {
+      transform: rotate(90deg);
     }
 
     .tier-group-header .tier-indicator {
@@ -3037,6 +3060,12 @@ function renderTriageSection(sectionId) {
     var headerText = document.createElement('span');
     headerText.textContent = tierLabel + ' (' + tierItems.length + ')';
     tierHeader.appendChild(headerText);
+
+    var tierChevron = document.createElement('span');
+    tierChevron.className = 'tier-chevron' + (isExpanded ? ' expanded' : '');
+    tierChevron.textContent = '▸';
+    tierChevron.setAttribute('aria-hidden', 'true');
+    tierHeader.appendChild(tierChevron);
 
     tierHeader.setAttribute('tabindex', '0');
     tierHeader.onclick = (function(key, sId, t) {
