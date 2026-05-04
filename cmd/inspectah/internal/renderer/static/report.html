@@ -453,6 +453,9 @@
       border-radius: 4px;
       border: 1px solid transparent;
       cursor: pointer;
+      background: none;
+      appearance: none;
+      -webkit-appearance: none;
     }
 
     .btn-primary {
@@ -701,6 +704,11 @@
       display: flex;
       gap: 0.5rem;
       margin-top: 0.5rem;
+    }
+    .default-included-body .card-actions button {
+      background: none;
+      appearance: none;
+      -webkit-appearance: none;
     }
     .default-included-body .card-reason {
       font-size: 0.8rem;
@@ -1564,6 +1572,181 @@
     }
     .info-wrapper-body {
       padding: 0 0.75rem 0.5rem;
+    }
+
+    /* ── File viewer modal ── */
+    .file-viewer-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .file-viewer-content {
+      background: var(--pf-t--global--background--color--primary-default, #1b1d21);
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      border-radius: 8px;
+      max-width: 700px;
+      width: 90%;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .file-viewer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, #444);
+    }
+    .file-viewer-header h3 {
+      margin: 0;
+      font-size: 0.9rem;
+      font-family: monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-viewer-close {
+      background: none;
+      border: none;
+      color: inherit;
+      font-size: 1.1rem;
+      cursor: pointer;
+      padding: 0.25rem 0.5rem;
+      opacity: 0.7;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .file-viewer-close:hover { opacity: 1; }
+    .file-viewer-body {
+      overflow: auto;
+      padding: 1rem 1.25rem;
+      margin: 0;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-family: monospace;
+      line-height: 1.5;
+    }
+    .file-viewer-body code {
+      font-family: inherit;
+    }
+    .view-contents-btn {
+      background: none;
+      border: none;
+      color: #4493f8;
+      font-size: 0.8rem;
+      cursor: pointer;
+      padding: 0;
+      text-decoration: underline;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .view-contents-btn:hover { opacity: 0.8; }
+
+    /* ── Services summary bar ── */
+    .services-summary-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      border-radius: 4px;
+      border-left: 3px solid #3fb950;
+      background: rgba(63, 185, 80, 0.08);
+      font-size: 0.85rem;
+      opacity: 0.85;
+      margin-bottom: 0.5rem;
+    }
+    .services-summary-bar .tier-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+    .summary-expand-btn {
+      background: none;
+      border: none;
+      color: #4493f8;
+      font-size: 0.8rem;
+      cursor: pointer;
+      margin-left: auto;
+      padding: 0.25rem 0.5rem;
+      appearance: none;
+      -webkit-appearance: none;
+    }
+    .summary-expand-btn:hover { text-decoration: underline; }
+    .services-summary-table {
+      width: 100%;
+      font-size: 0.8rem;
+      border-collapse: collapse;
+      margin-top: 0.5rem;
+    }
+    .services-summary-table td {
+      padding: 0.2rem 0.5rem;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, #333);
+    }
+    .services-summary-table td:first-child {
+      font-family: monospace;
+    }
+
+    /* ── Informational tier ── */
+    .info-tier {
+      margin-top: 1rem;
+      opacity: 0.85;
+    }
+    .info-tier-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    .info-tier-header:hover { opacity: 1; }
+    .tier-indicator.tier-info {
+      background: #666;
+    }
+    .info-category {
+      margin-top: 0.5rem;
+      border-left: 3px solid var(--pf-t--global--border--color--default, #666);
+    }
+    .info-category-header {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 0.75rem;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .info-category-header:hover { opacity: 1; }
+    .info-category-card {
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      border-radius: 6px;
+      margin: 0.25rem 0.75rem 0.5rem;
+      background: var(--pf-t--global--background--color--secondary-default);
+    }
+    .info-category-table {
+      width: 100%;
+      font-size: 0.8rem;
+      border-collapse: collapse;
+    }
+    .info-category-table td {
+      padding: 0.35rem 0.75rem;
+      border-bottom: 1px solid var(--pf-t--global--border--color--default, #333);
+    }
+    .info-category-table tr:last-child td {
+      border-bottom: none;
+    }
+    .info-category-table td:first-child {
+      font-family: monospace;
+    }
+    .info-category-table td:last-child {
+      opacity: 0.7;
+      font-size: 0.75rem;
     }
   </style>
 </head>
@@ -2581,6 +2764,10 @@ function buildTriageCard(item) {
     card.appendChild(reasonEl);
   }
 
+  // View contents button (config files with snapshot content)
+  var viewContentsBtn = buildViewContentsButton(item);
+  if (viewContentsBtn) card.appendChild(viewContentsBtn);
+
   // Action buttons (omitted entirely in static mode)
   if (App.mode !== 'static') {
     var actions = document.createElement('div');
@@ -2792,6 +2979,10 @@ function buildDefaultIncludedCard(item) {
     bodyMeta.textContent = item.meta;
     body.appendChild(bodyMeta);
   }
+
+  // View contents button (config files with snapshot content)
+  var viewContentsBtnDI = buildViewContentsButton(item);
+  if (viewContentsBtnDI) body.appendChild(viewContentsBtnDI);
 
   if (App.mode !== 'static') {
     var actions = document.createElement('div');
@@ -4292,6 +4483,299 @@ function buildInfoReadOnlyCard(item) {
   return card;
 }
 
+// ── View Contents Button ──
+// Returns a "View contents" button for config file items that have
+// content in the snapshot, or null if not applicable.
+function buildViewContentsButton(item) {
+  if (item.key.indexOf('cfg-') !== 0) return null;
+  var cfgPath = item.key.substring(4);
+  var snap = App.snapshot;
+  if (!snap || !snap.config || !snap.config.files) return null;
+  var fileEntry = null;
+  for (var i = 0; i < snap.config.files.length; i++) {
+    if (snap.config.files[i].path === cfgPath) {
+      fileEntry = snap.config.files[i];
+      break;
+    }
+  }
+  if (!fileEntry || !fileEntry.content) return null;
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'view-contents-btn';
+  btn.textContent = 'View contents';
+  btn.setAttribute('aria-label', 'View contents of ' + cfgPath);
+  btn.onclick = function(e) {
+    e.stopPropagation();
+    openFileViewer(cfgPath, fileEntry.content, btn);
+  };
+  return btn;
+}
+
+// ── File Viewer Modal ──
+function openFileViewer(filePath, content, returnFocusEl) {
+  // Remove any existing viewer
+  var existing = document.getElementById('file-viewer-modal');
+  if (existing) existing.remove();
+
+  var backdrop = document.createElement('div');
+  backdrop.className = 'file-viewer-backdrop';
+  backdrop.id = 'file-viewer-modal';
+  backdrop.setAttribute('role', 'dialog');
+  backdrop.setAttribute('aria-modal', 'true');
+  backdrop.setAttribute('aria-label', 'File contents: ' + filePath);
+
+  var content_div = document.createElement('div');
+  content_div.className = 'file-viewer-content';
+
+  var header = document.createElement('div');
+  header.className = 'file-viewer-header';
+
+  var title = document.createElement('h3');
+  title.textContent = filePath;
+  header.appendChild(title);
+
+  var closeBtn = document.createElement('button');
+  closeBtn.className = 'file-viewer-close';
+  closeBtn.type = 'button';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.textContent = '✕';
+  header.appendChild(closeBtn);
+
+  content_div.appendChild(header);
+
+  var body = document.createElement('pre');
+  body.className = 'file-viewer-body';
+  var code = document.createElement('code');
+  code.textContent = content;
+  body.appendChild(code);
+  content_div.appendChild(body);
+
+  backdrop.appendChild(content_div);
+  document.body.appendChild(backdrop);
+
+  function closeViewer() {
+    var modal = document.getElementById('file-viewer-modal');
+    if (modal) modal.remove();
+    if (returnFocusEl) returnFocusEl.focus();
+  }
+
+  closeBtn.onclick = closeViewer;
+  backdrop.addEventListener('click', function(e) {
+    if (e.target === backdrop) closeViewer();
+  });
+  document.addEventListener('keydown', function handler(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeViewer();
+      document.removeEventListener('keydown', handler);
+    }
+  });
+
+  // Focus trap
+  closeBtn.focus();
+  var focusable = content_div.querySelectorAll('button, [tabindex]');
+  content_div.addEventListener('keydown', function(e) {
+    if (e.key !== 'Tab') return;
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  });
+}
+
+// ── Services Summary Bar ──
+// Collapses unchanged (default-state) services into a compact summary bar
+// with an expandable table.
+function buildServicesSummaryBar(items, sectionId) {
+  var wrapper = document.createElement('div');
+
+  var bar = document.createElement('div');
+  bar.className = 'services-summary-bar';
+
+  var indicator = document.createElement('span');
+  indicator.className = 'tier-indicator tier-1';
+  bar.appendChild(indicator);
+
+  var text = document.createElement('span');
+  text.textContent = items.length + ' service' + (items.length !== 1 ? 's' : '') + ' in default state — included automatically, no action needed';
+  bar.appendChild(text);
+
+  var expandKey = sectionId + '-svc-default';
+  var isExpanded = App.tierExpanded[expandKey] || false;
+
+  var expandBtn = document.createElement('button');
+  expandBtn.type = 'button';
+  expandBtn.className = 'summary-expand-btn';
+  expandBtn.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+  expandBtn.textContent = isExpanded ? 'Hide list ▾' : 'Show list ▸';
+  expandBtn.onclick = function() {
+    App.tierExpanded[expandKey] = !isExpanded;
+    renderTriageSection(sectionId);
+  };
+  bar.appendChild(expandBtn);
+
+  wrapper.appendChild(bar);
+
+  if (isExpanded) {
+    var table = document.createElement('table');
+    table.className = 'services-summary-table';
+    for (var i = 0; i < items.length; i++) {
+      var tr = document.createElement('tr');
+      var tdName = document.createElement('td');
+      tdName.textContent = items[i].name || items[i].key;
+      tr.appendChild(tdName);
+      var tdState = document.createElement('td');
+      tdState.textContent = items[i].meta || '';
+      tr.appendChild(tdState);
+      table.appendChild(tr);
+    }
+    wrapper.appendChild(table);
+  }
+
+  return wrapper;
+}
+
+// ── Informational Tier Builder ──
+// Replaces buildInformationalWrapper with a structured, category-grouped tier.
+function buildInformationalTier(items, sectionId) {
+  var tier = document.createElement('div');
+  tier.className = 'info-tier';
+
+  // Tier header (collapsed by default)
+  var expandKey = sectionId + '-info';
+  var isExpanded = App.tierExpanded[expandKey] || false;
+
+  var tierHeader = document.createElement('div');
+  tierHeader.className = 'info-tier-header';
+  tierHeader.setAttribute('role', 'button');
+  tierHeader.setAttribute('tabindex', '0');
+  tierHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
+
+  var indicator = document.createElement('span');
+  indicator.className = 'tier-indicator tier-info';
+  tierHeader.appendChild(indicator);
+
+  var headerText = document.createElement('span');
+  headerText.textContent = 'Informational (' + items.length + ')';
+  tierHeader.appendChild(headerText);
+
+  var chevron = document.createElement('span');
+  chevron.className = 'tier-chevron' + (isExpanded ? ' expanded' : '');
+  chevron.textContent = '▸';
+  chevron.setAttribute('aria-hidden', 'true');
+  tierHeader.appendChild(chevron);
+
+  tierHeader.onclick = function() {
+    App.tierExpanded[expandKey] = !isExpanded;
+    renderTriageSection(sectionId);
+  };
+  tierHeader.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      this.click();
+    }
+  });
+
+  tier.appendChild(tierHeader);
+
+  if (!isExpanded) return tier;
+
+  // Category label mapping
+  var CATEGORY_LABELS = {
+    'sub:network': 'Network connections',
+    'sub:firewall': 'Firewall zones',
+    'sub:fstab': 'Filesystems',
+    'sub:sysctl': 'Sysctl parameters',
+    'sub:services-default': 'Default-state services',
+    'sub:cron': 'Cron jobs',
+    'sub:timers': 'Systemd timers'
+  };
+
+  // Group items by category
+  var categories = {};
+  for (var i = 0; i < items.length; i++) {
+    var catKey = items[i].group || '';
+    if (!categories[catKey]) categories[catKey] = [];
+    categories[catKey].push(items[i]);
+  }
+
+  var catKeys = Object.keys(categories).sort();
+  for (var c = 0; c < catKeys.length; c++) {
+    var ck = catKeys[c];
+    var catItems = categories[ck];
+    var catLabel = CATEGORY_LABELS[ck] || (ck ? ck.replace(/^sub:/, '').charAt(0).toUpperCase() + ck.replace(/^sub:/, '').slice(1) : 'Other');
+
+    var catDiv = document.createElement('div');
+    catDiv.className = 'info-category';
+
+    var catExpandKey = sectionId + '-infocat-' + ck;
+    var catExpanded = App.tierExpanded[catExpandKey] || false;
+
+    var catHeader = document.createElement('div');
+    catHeader.className = 'info-category-header';
+    catHeader.setAttribute('role', 'button');
+    catHeader.setAttribute('tabindex', '0');
+    catHeader.setAttribute('aria-expanded', catExpanded ? 'true' : 'false');
+
+    var catChevron = document.createElement('span');
+    catChevron.className = 'tier-chevron' + (catExpanded ? ' expanded' : '');
+    catChevron.textContent = '▸';
+    catChevron.setAttribute('aria-hidden', 'true');
+    catHeader.appendChild(catChevron);
+
+    var catText = document.createElement('span');
+    catText.textContent = catLabel + ' (' + catItems.length + ')';
+    catHeader.appendChild(catText);
+
+    catHeader.onclick = (function(key, sid) {
+      return function() {
+        App.tierExpanded[key] = !App.tierExpanded[key];
+        renderTriageSection(sid);
+      };
+    })(catExpandKey, sectionId);
+    catHeader.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        this.click();
+      }
+    });
+
+    catDiv.appendChild(catHeader);
+
+    if (catExpanded) {
+      var cardDiv = document.createElement('div');
+      cardDiv.className = 'info-category-card';
+
+      var table = document.createElement('table');
+      table.className = 'info-category-table';
+
+      for (var ci = 0; ci < catItems.length; ci++) {
+        var tr = document.createElement('tr');
+        var tdName = document.createElement('td');
+        tdName.textContent = catItems[ci].name || catItems[ci].key;
+        tr.appendChild(tdName);
+        var tdMeta = document.createElement('td');
+        tdMeta.textContent = catItems[ci].meta || '';
+        tr.appendChild(tdMeta);
+        table.appendChild(tr);
+      }
+
+      cardDiv.appendChild(table);
+      catDiv.appendChild(cardDiv);
+    }
+
+    tier.appendChild(catDiv);
+  }
+
+  return tier;
+}
+
 // ── Modprobe.d informational accordion ──
 // Shows modprobe.d policy files from the snapshot as a read-only
 // accordion for hardware migration awareness.
@@ -4527,6 +5011,12 @@ function renderTriageSection(sectionId) {
         var gItems = groupedMap[gName];
         var isDisplayOnlyGroup = gItems[0] && gItems[0].display_only;
 
+        // Services summary bar: collapse sub:services-default into a compact bar
+        if (gName === 'sub:services-default' && tier === 1) {
+          itemsDiv.appendChild(buildServicesSummaryBar(gItems, sectionId));
+          continue;
+        }
+
         if (isDisplayOnlyGroup) {
           itemsDiv.appendChild(buildDisplayAccordion(gName, gItems));
         } else {
@@ -4570,9 +5060,9 @@ function renderTriageSection(sectionId) {
     container.appendChild(tierDiv);
   }
 
-  // ── Informational wrapper (non-kmod display-only items) ──
+  // ── Informational tier (non-kmod display-only items, category-grouped) ──
   if (informationalItems.length > 0) {
-    container.appendChild(buildInformationalWrapper(informationalItems, sectionId));
+    container.appendChild(buildInformationalTier(informationalItems, sectionId));
   }
 
   // ── Modprobe.d informational accordion (system section only) ──
