@@ -598,3 +598,161 @@ func TestGoldenContainerfile(t *testing.T) {
 	goldenPath := filepath.Join("testdata", "golden-containerfile.txt")
 	goldenCompare(t, goldenPath, value)
 }
+
+// extractTriageManifest extracts TRIAGE_MANIFEST JSON from rendered HTML.
+func extractTriageManifest(t *testing.T, html string) string {
+	t.Helper()
+	marker := "const TRIAGE_MANIFEST = "
+	start := strings.Index(html, marker)
+	if start == -1 {
+		t.Fatal("TRIAGE_MANIFEST not found in rendered HTML")
+	}
+	start += len(marker)
+	end := strings.Index(html[start:], ";\n")
+	if end == -1 {
+		end = strings.Index(html[start:], ";")
+	}
+	if end == -1 {
+		t.Fatal("could not find end of TRIAGE_MANIFEST")
+	}
+	// Unescape script-close escaping
+	return strings.ReplaceAll(html[start:start+end], `<\/`, "</")
+}
+
+func TestHTMLReportGoldenGroupedPackages(t *testing.T) {
+	baseline := []string{"bash"}
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		BaselinePackageNames: &baseline,
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "bash", Arch: "x86_64", Include: true, SourceRepo: "baseos", Version: "5.2", Release: "1.el9"},
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "htop", Arch: "x86_64", Include: true, SourceRepo: "epel", Version: "3.3", Release: "1.el9"},
+			{Name: "custom", Arch: "x86_64", Include: true, State: "local_install", Version: "1.0", Release: "1"},
+		},
+	}
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Containerfile"), []byte("FROM test\n"), 0644)
+	err := RenderHTMLReport(snap, dir, HTMLReportOptions{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	reportBytes, err := os.ReadFile(filepath.Join(dir, "report.html"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	report := string(reportBytes)
+
+	manifestJSON := extractTriageManifest(t, report)
+	var items []TriageItem
+	if err := json.Unmarshal([]byte(manifestJSON), &items); err != nil {
+		t.Fatalf("unmarshal TRIAGE_MANIFEST: %v", err)
+	}
+
+	if len(items) != 4 {
+		t.Errorf("expected 4 items, got %d", len(items))
+	}
+
+	bash := findItem(items, "pkg-bash-x86_64")
+	if bash == nil {
+		t.Fatal("bash package not found in manifest")
+	}
+	if bash.Group != "repo:baseos" {
+		t.Errorf("bash group = %q, want %q", bash.Group, "repo:baseos")
+	}
+
+	vim := findItem(items, "pkg-vim-x86_64")
+	if vim == nil {
+		t.Fatal("vim package not found in manifest")
+	}
+	if vim.Group != "repo:appstream" {
+		t.Errorf("vim group = %q, want %q", vim.Group, "repo:appstream")
+	}
+
+	htop := findItem(items, "pkg-htop-x86_64")
+	if htop == nil {
+		t.Fatal("htop package not found in manifest")
+	}
+	if htop.Group != "repo:epel" {
+		t.Errorf("htop group = %q, want %q", htop.Group, "repo:epel")
+	}
+
+	custom := findItem(items, "pkg-custom-x86_64")
+	if custom == nil {
+		t.Fatal("custom package not found in manifest")
+	}
+	if custom.Group != "" {
+		t.Errorf("custom group = %q, want empty (ungrouped)", custom.Group)
+	}
+	if custom.CardType != "notification" {
+		t.Errorf("custom cardType = %q, want %q", custom.CardType, "notification")
+	}
+}
+
+func TestHTMLReportGoldenDisplayOnly(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Network = &schema.NetworkSection{
+		Connections: []schema.NMConnection{
+			{Name: "eth0", Type: "ethernet"},
+		},
+	}
+	snap.Storage = &schema.StorageSection{
+		FstabEntries: []schema.FstabEntry{
+			{MountPoint: "/data", Fstype: "xfs"},
+			{MountPoint: "/var", Fstype: "xfs"},
+		},
+	}
+
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "Containerfile"), []byte("FROM test\n"), 0644)
+	err := RenderHTMLReport(snap, dir, HTMLReportOptions{})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	reportBytes, err := os.ReadFile(filepath.Join(dir, "report.html"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	manifestJSON := extractTriageManifest(t, string(reportBytes))
+	var items []TriageItem
+	if err := json.Unmarshal([]byte(manifestJSON), &items); err != nil {
+		t.Fatalf("unmarshal TRIAGE_MANIFEST: %v", err)
+	}
+
+	eth0 := findItem(items, "conn-eth0")
+	if eth0 == nil {
+		t.Fatal("eth0 connection not found in manifest")
+	}
+	if !eth0.DisplayOnly {
+		t.Error("network connection must be display-only")
+	}
+	if eth0.Group != "sub:network" {
+		t.Errorf("eth0 group = %q, want %q", eth0.Group, "sub:network")
+	}
+
+	data := findItem(items, "fstab-/data")
+	if data == nil {
+		t.Fatal("/data fstab entry not found in manifest")
+	}
+	if !data.DisplayOnly {
+		t.Error("fstab /data must be display-only")
+	}
+	if data.Group != "sub:fstab" {
+		t.Errorf("/data group = %q, want %q", data.Group, "sub:fstab")
+	}
+
+	varMount := findItem(items, "fstab-/var")
+	if varMount == nil {
+		t.Fatal("/var fstab entry not found in manifest")
+	}
+	if !varMount.DisplayOnly {
+		t.Error("fstab /var must be display-only")
+	}
+	if varMount.Group != "" {
+		t.Errorf("/var group = %q, want empty (risky mount must be ungrouped)", varMount.Group)
+	}
+}
