@@ -1,6 +1,6 @@
 # Triage UX Fixes: Leaf Packages, Version Changes, SELinux Separation
 
-**Status:** Proposed (revision 3)
+**Status:** Approved (revision 4)
 **Date:** 2026-05-03
 **Context:** Follow-up fixes discovered during live testing of the single-machine triage redesign.
 **Revision 2 notes:** Addresses round 1 blockers: leaf-default state source, fleet gate, SELinux module truthfulness, browser interaction contracts, proof strategy.
@@ -196,8 +196,9 @@ function isPassiveItem(item) {
 This function gates three accounting paths:
 
 1. **Section footer** (`renderTriageSection`): The `X / Y decided` count skips items where `isPassiveItem(item)` is true.
-2. **Sidebar badge** (`updateBadge`): The undecided counter skips `isPassiveItem` items. Without this, version change items would show as undecided tier-1 items forever, but since the badge only shows tier 2/3 counts, this is technically not a visible bug — however, excluding them is correct for consistency and future-proofing.
-3. **Progress bar/sidebar dot** (`updateProgressBar`, `updateSidebarDot`): Calculations exclude `isPassiveItem` items from both total and decided counts.
+2. **Sidebar badge** (`updateBadge`): The undecided counter skips `isPassiveItem` items. The badge only shows tier 2/3 counts so version-change tier-1 items are not currently visible in the badge, but excluding them is correct for consistency and future-proofing.
+
+Note: `updateProgressBar` and `updateSidebarDot` are not affected — they operate on section-level review states (`App.reviewStates`), not per-item decided counts. The two real accounting seams for version-change exclusion are `updateBadge()` and the Packages footer count in `renderTriageSection()`.
 
 This means the Packages section can reach "all decided" without interacting with version change accordions.
 
