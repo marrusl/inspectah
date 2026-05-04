@@ -820,3 +820,51 @@ func TestClassifyPackages_NoLeafPackages_ShowsAll(t *testing.T) {
 	items := classifyPackages(snap, make(map[string]bool), false)
 	assert.Equal(t, 2, len(items), "without LeafPackages, all packages should appear")
 }
+
+func TestNormalizeLeafDefaults(t *testing.T) {
+	t.Run("sets leaf includes to true", func(t *testing.T) {
+		leafNames := []string{"vim", "htop"}
+		snap := schema.NewSnapshot()
+		snap.Rpm = &schema.RpmSection{
+			LeafPackages: &leafNames,
+			PackagesAdded: []schema.PackageEntry{
+				{Name: "vim", Arch: "x86_64", Include: false},
+				{Name: "vim-common", Arch: "x86_64", Include: false},
+				{Name: "htop", Arch: "x86_64", Include: false},
+			},
+		}
+
+		NormalizeLeafDefaults(snap)
+
+		assert.True(t, snap.Rpm.PackagesAdded[0].Include, "leaf vim should be true")
+		assert.False(t, snap.Rpm.PackagesAdded[1].Include, "dep vim-common should stay false")
+		assert.True(t, snap.Rpm.PackagesAdded[2].Include, "leaf htop should be true")
+	})
+
+	t.Run("skips fleet snapshots", func(t *testing.T) {
+		leafNames := []string{"vim"}
+		snap := schema.NewSnapshot()
+		snap.Meta["fleet"] = map[string]interface{}{"source_hosts": []interface{}{"h1"}}
+		snap.Rpm = &schema.RpmSection{
+			LeafPackages: &leafNames,
+			PackagesAdded: []schema.PackageEntry{
+				{Name: "vim", Arch: "x86_64", Include: false},
+			},
+		}
+
+		NormalizeLeafDefaults(snap)
+		assert.False(t, snap.Rpm.PackagesAdded[0].Include, "fleet snapshot should not be normalized")
+	})
+
+	t.Run("no-op when LeafPackages nil", func(t *testing.T) {
+		snap := schema.NewSnapshot()
+		snap.Rpm = &schema.RpmSection{
+			PackagesAdded: []schema.PackageEntry{
+				{Name: "vim", Arch: "x86_64", Include: false},
+			},
+		}
+
+		NormalizeLeafDefaults(snap)
+		assert.False(t, snap.Rpm.PackagesAdded[0].Include)
+	})
+}

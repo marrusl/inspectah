@@ -125,6 +125,25 @@ func extractDeps(depTree map[string]interface{}, leafName string) []string {
 	return deps
 }
 
+// NormalizeLeafDefaults sets Include=true on leaf packages so that
+// untouched leaves render as "included by default." Skips fleet
+// snapshots (fleet merge handles include separately) and snapshots
+// without computed LeafPackages.
+func NormalizeLeafDefaults(snap *schema.InspectionSnapshot) {
+	if snap.Rpm == nil || snap.Rpm.LeafPackages == nil || isFleetSnapshot(snap) {
+		return
+	}
+	leafSet := make(map[string]bool)
+	for _, name := range *snap.Rpm.LeafPackages {
+		leafSet[name] = true
+	}
+	for i := range snap.Rpm.PackagesAdded {
+		if leafSet[snap.Rpm.PackagesAdded[i].Name] {
+			snap.Rpm.PackagesAdded[i].Include = true
+		}
+	}
+}
+
 func isFleetSnapshot(snap *schema.InspectionSnapshot) bool {
 	if snap.Meta == nil {
 		return false

@@ -34,6 +34,8 @@ func RenderHTMLReport(snap *schema.InspectionSnapshot, outputDir string, opts HT
 		return fmt.Errorf("parse report template: %w", err)
 	}
 
+	NormalizeLeafDefaults(snap)
+
 	snapJSON, err := json.Marshal(snap)
 	if err != nil {
 		return fmt.Errorf("marshal snapshot: %w", err)

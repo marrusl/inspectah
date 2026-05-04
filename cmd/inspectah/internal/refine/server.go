@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/renderer"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 )
 
@@ -107,19 +108,20 @@ func RunRefine(opts RunRefineOptions) error {
 		}
 	}
 
-	// Create immutable sidecar — original snapshot before any edits
+	// Normalize snapshot BEFORE sidecar — leaf defaults and nil *bool fixes.
+	// Both the sidecar and working copy must agree on initial include state.
+	if snap, err := schema.LoadSnapshot(snapPath); err == nil {
+		renderer.NormalizeLeafDefaults(snap)
+		schema.NormalizeSnapshot(snap)
+		schema.SaveSnapshot(snap, snapPath)
+	}
+
+	// Create immutable sidecar from the NORMALIZED snapshot
 	sidecarPath := filepath.Join(tmpDir, "original-inspection-snapshot.json")
 	if _, err := os.Stat(sidecarPath); os.IsNotExist(err) {
 		if snapData, err := os.ReadFile(snapPath); err == nil {
 			os.WriteFile(sidecarPath, snapData, 0444)
 		}
-	}
-
-	// Normalize snapshot: convert nil *bool Include fields to explicit true.
-	// Done after sidecar creation so the original snapshot is preserved.
-	if snap, err := schema.LoadSnapshot(snapPath); err == nil {
-		schema.NormalizeSnapshot(snap)
-		schema.SaveSnapshot(snap, snapPath)
 	}
 
 	// Initial re-render if re-render function is available
