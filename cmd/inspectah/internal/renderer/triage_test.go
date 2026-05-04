@@ -1344,3 +1344,234 @@ func TestClassifyIdentity_UserPrivateGroups(t *testing.T) {
 	assert.False(t, groupItems["wheel"].UserPrivate, "wheel group should not be user-private")
 	assert.Empty(t, groupItems["wheel"].ParentUser)
 }
+
+// ── Machine-bound config classification tests ──
+
+func TestClassifySystemItems_StaticNMConnectionNeedsDecision(t *testing.T) {
+	tests := []struct {
+		method string
+	}{
+		{"manual"},
+		{"static"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			snap := schema.NewSnapshot()
+			snap.Network = &schema.NetworkSection{
+				Connections: []schema.NMConnection{
+					{Name: "bond0", Type: "bond", Method: tt.method},
+				},
+			}
+
+			items := classifySystemItems(snap, make(map[string]bool), false)
+
+			conn := findItem(items, "conn-bond0")
+			require.NotNil(t, conn)
+			assert.False(t, conn.DefaultInclude,
+				"static/manual NM connection must have DefaultInclude=false")
+			assert.False(t, conn.DisplayOnly,
+				"static connection should be toggleable, not display-only")
+			assert.Contains(t, conn.Reason, "machine-bound")
+		})
+	}
+}
+
+func TestClassifySystemItems_StaticNMConnection_FleetMode(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Meta["fleet"] = map[string]interface{}{
+		"source_hosts": []interface{}{"h1", "h2"},
+		"total_hosts":  float64(2),
+	}
+	snap.Network = &schema.NetworkSection{
+		Connections: []schema.NMConnection{
+			{Name: "eth0", Type: "ethernet", Method: "manual"},
+		},
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), true)
+
+	conn := findItem(items, "conn-eth0")
+	require.NotNil(t, conn)
+	assert.False(t, conn.DefaultInclude,
+		"static connection in fleet mode must also have DefaultInclude=false")
+	assert.Empty(t, conn.Group, "fleet mode must not populate Group")
+}
+
+func TestClassifySystemItems_DHCPConnectionIsDisplayOnly(t *testing.T) {
+	tests := []struct {
+		method string
+	}{
+		{"auto"},
+		{"dhcp"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.method, func(t *testing.T) {
+			snap := schema.NewSnapshot()
+			snap.Network = &schema.NetworkSection{
+				Connections: []schema.NMConnection{
+					{Name: "eth0", Type: "ethernet", Method: tt.method},
+				},
+			}
+
+			// Single-machine mode
+			items := classifySystemItems(snap, make(map[string]bool), false)
+			conn := findItem(items, "conn-eth0")
+			require.NotNil(t, conn)
+			assert.True(t, conn.DisplayOnly,
+				"DHCP connection must be display-only in single-machine mode")
+			assert.Equal(t, "sub:network", conn.Group)
+		})
+	}
+}
+
+func TestClassifySystemItems_DHCPConnectionIsDisplayOnly_Fleet(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Network = &schema.NetworkSection{
+		Connections: []schema.NMConnection{
+			{Name: "eth0", Type: "ethernet", Method: "auto"},
+		},
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), true)
+	conn := findItem(items, "conn-eth0")
+	require.NotNil(t, conn)
+	assert.True(t, conn.DisplayOnly,
+		"DHCP connection must be display-only in fleet mode too")
+}
+
+func TestClassifyConfigFiles_AutomountNeedsDecision(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/auto.master.d/data.autofs", Kind: schema.ConfigFileKindUnowned, Category: schema.ConfigCategoryAutomount, Include: true},
+			{Path: "/etc/httpd/conf/httpd.conf", Kind: schema.ConfigFileKindRpmOwnedModified, Category: schema.ConfigCategoryOther, Include: true},
+		},
+	}
+
+	items := classifyConfigFiles(snap, make(map[string]bool), false)
+
+	autofs := findItem(items, "cfg-/etc/auto.master.d/data.autofs")
+	require.NotNil(t, autofs)
+	assert.False(t, autofs.DefaultInclude,
+		"automount config must have DefaultInclude=false")
+	assert.Contains(t, autofs.Reason, "Automount")
+
+	httpd := findItem(items, "cfg-/etc/httpd/conf/httpd.conf")
+	require.NotNil(t, httpd)
+	assert.True(t, httpd.DefaultInclude,
+		"non-automount config must retain original DefaultInclude")
+}
+
+func TestClassifySystemItems_StaticRouteFileNeedsDecision(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Network = &schema.NetworkSection{
+		StaticRoutes: []schema.StaticRouteFile{
+			{Path: "/etc/sysconfig/network-scripts/route-eth0", Name: "route-eth0"},
+		},
+	}
+
+	items := classifySystemItems(snap, make(map[string]bool), false)
+
+	route := findItem(items, "route-/etc/sysconfig/network-scripts/route-eth0")
+	require.NotNil(t, route, "static route file must produce a triage item")
+	assert.False(t, route.DefaultInclude,
+		"static route must have DefaultInclude=false")
+	assert.Contains(t, route.Reason, "machine-bound")
+	assert.Equal(t, "sub:network", route.Group)
+}
+
+func TestClassifyConfigFiles_StaticRoutePathNeedsDecision(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/sysconfig/network-scripts/route-eth0", Kind: schema.ConfigFileKindUnowned, Category: schema.ConfigCategoryOther, Include: true},
+		},
+	}
+
+	items := classifyConfigFiles(snap, make(map[string]bool), false)
+
+	route := findItem(items, "cfg-/etc/sysconfig/network-scripts/route-eth0")
+	require.NotNil(t, route)
+	assert.False(t, route.DefaultInclude,
+		"static route config file must have DefaultInclude=false")
+	assert.Contains(t, route.Reason, "Static route")
+}
+
+func TestNormalizeIncludeDefaults_SkipsAutomountConfigs(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/auto.master.d/data.autofs", Category: schema.ConfigCategoryAutomount, Include: false},
+			{Path: "/etc/httpd/conf/httpd.conf", Category: schema.ConfigCategoryOther, Include: false},
+		},
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	assert.False(t, snap.Config.Files[0].Include,
+		"automount config must not be force-included by normalization")
+	assert.True(t, snap.Config.Files[1].Include,
+		"non-automount config must be included by normalization")
+}
+
+func TestNormalizeIncludeDefaults_SkipsStaticRouteConfigs(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Config = &schema.ConfigSection{
+		Files: []schema.ConfigFileEntry{
+			{Path: "/etc/sysconfig/network-scripts/route-eth0", Category: schema.ConfigCategoryOther, Include: false},
+			{Path: "/etc/httpd/conf/httpd.conf", Category: schema.ConfigCategoryOther, Include: false},
+		},
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	assert.False(t, snap.Config.Files[0].Include,
+		"static route config must not be force-included by normalization")
+	assert.True(t, snap.Config.Files[1].Include,
+		"non-route config must be included by normalization")
+}
+
+func TestNormalizeIncludeDefaults_StaticNMConnectionStaysExcluded(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Network = &schema.NetworkSection{
+		Connections: []schema.NMConnection{
+			{Name: "bond0", Method: "manual"},
+			{Name: "eth0", Method: "auto"},
+		},
+		FirewallZones: []schema.FirewallZone{
+			{Name: "public", Path: "/etc/firewalld/zones/public.xml", Include: false},
+		},
+	}
+
+	NormalizeIncludeDefaults(snap, false)
+
+	assert.False(t, *snap.Network.Connections[0].Include,
+		"static NM connection must stay excluded after normalization")
+	assert.True(t, *snap.Network.Connections[1].Include,
+		"DHCP NM connection must be included after normalization")
+	assert.True(t, snap.Network.FirewallZones[0].Include,
+		"firewall zone must still be included by normalization")
+}
+
+func TestIsDHCPConnection(t *testing.T) {
+	assert.True(t, isDHCPConnection("auto"))
+	assert.True(t, isDHCPConnection("dhcp"))
+	assert.False(t, isDHCPConnection("manual"))
+	assert.False(t, isDHCPConnection("static"))
+	assert.False(t, isDHCPConnection(""))
+}
+
+func TestIsStaticConnection(t *testing.T) {
+	assert.True(t, isStaticConnection("manual"))
+	assert.True(t, isStaticConnection("static"))
+	assert.False(t, isStaticConnection("auto"))
+	assert.False(t, isStaticConnection("dhcp"))
+	assert.False(t, isStaticConnection(""))
+}
+
+func TestIsStaticRoutePath(t *testing.T) {
+	assert.True(t, isStaticRoutePath("/etc/sysconfig/network-scripts/route-eth0"))
+	assert.True(t, isStaticRoutePath("/etc/sysconfig/network-scripts/route-bond0"))
+	assert.False(t, isStaticRoutePath("/etc/sysconfig/network-scripts/ifcfg-eth0"))
+	assert.False(t, isStaticRoutePath("/etc/httpd/conf/httpd.conf"))
+}

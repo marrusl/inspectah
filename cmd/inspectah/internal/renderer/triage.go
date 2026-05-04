@@ -173,9 +173,17 @@ func NormalizeIncludeDefaults(snap *schema.InspectionSnapshot, isFleet bool) {
 			}
 		}
 		for i := range snap.Config.Files {
-			if !excludedSecretPaths[snap.Config.Files[i].Path] {
-				snap.Config.Files[i].Include = true
+			if excludedSecretPaths[snap.Config.Files[i].Path] {
+				continue
 			}
+			// Machine-bound config stays excluded — operator must opt in
+			if snap.Config.Files[i].Category == schema.ConfigCategoryAutomount {
+				continue
+			}
+			if isStaticRoutePath(snap.Config.Files[i].Path) {
+				continue
+			}
+			snap.Config.Files[i].Include = true
 		}
 	}
 
@@ -220,8 +228,16 @@ func NormalizeIncludeDefaults(snap *schema.InspectionSnapshot, isFleet bool) {
 		}
 	}
 
-	// Firewall zones
+	// Network connections — static/manual connections stay excluded
+	// (machine-bound), all others get included.
 	if snap.Network != nil {
+		for i := range snap.Network.Connections {
+			if isStaticConnection(snap.Network.Connections[i].Method) {
+				snap.Network.Connections[i].Include = boolPtr(false)
+			} else {
+				snap.Network.Connections[i].Include = boolPtr(true)
+			}
+		}
 		for i := range snap.Network.FirewallZones {
 			snap.Network.FirewallZones[i].Include = true
 		}
@@ -407,6 +423,17 @@ func classifyConfigFiles(snap *schema.InspectionSnapshot, secrets map[string]boo
 			DefaultInclude: f.Include,
 		}
 
+		// Machine-bound config categories default to excluded —
+		// operator must opt in.
+		if f.Category == schema.ConfigCategoryAutomount {
+			item.DefaultInclude = false
+			item.Reason = "Automount map — references site-specific NFS infrastructure, requires operator decision."
+		}
+		if isStaticRoutePath(f.Path) {
+			item.DefaultInclude = false
+			item.Reason = "Static route file — machine-bound routing requires operator decision."
+		}
+
 		if !isFleet {
 			switch f.Kind {
 			case schema.ConfigFileKindRpmOwnedDefault, "baseline_match":
@@ -467,6 +494,21 @@ func isRiskyMount(mountPoint string) bool {
 
 func isUnstableDevicePath(device string) bool {
 	return strings.HasPrefix(device, "/dev/sd") || strings.HasPrefix(device, "/dev/hd")
+}
+
+// isDHCPConnection returns true for DHCP/auto NM connection methods.
+func isDHCPConnection(method string) bool {
+	return method == "auto" || method == "dhcp"
+}
+
+// isStaticConnection returns true for static/manual NM connection methods.
+func isStaticConnection(method string) bool {
+	return method == "manual" || method == "static"
+}
+
+// isStaticRoutePath returns true for static route config files.
+func isStaticRoutePath(path string) bool {
+	return strings.HasPrefix(path, "/etc/sysconfig/network-scripts/route-")
 }
 
 func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
@@ -721,12 +763,52 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Name: conn.Name, Meta: conn.Type,
 				DefaultInclude: isIncluded(conn.Include),
 			}
-			if !isFleet {
-				item.Group = "sub:network"
+
+			// DHCP connections are display-only in both modes — they are
+			// already skipped during Containerfile generation and should
+			// not present a toggle in triage.
+			if isDHCPConnection(conn.Method) {
 				item.DisplayOnly = true
-				item.Acknowledged = conn.Acknowledged
+				if !isFleet {
+					item.Group = "sub:network"
+					item.Acknowledged = conn.Acknowledged
+				}
+			} else if isStaticConnection(conn.Method) {
+				// Static/manual connections are machine-bound — require
+				// operator decision rather than auto-including.
+				item.DefaultInclude = false
+				item.Reason = "Static network connection — machine-bound addressing requires operator decision."
+				if !isFleet {
+					item.Group = "sub:network"
+					item.Acknowledged = conn.Acknowledged
+				}
+			} else {
+				if !isFleet {
+					item.Group = "sub:network"
+					item.DisplayOnly = true
+					item.Acknowledged = conn.Acknowledged
+				}
 			}
+
 			items = append(items, item)
+		}
+
+		// Static route files — machine-bound routing, needs operator decision
+		for _, route := range snap.Network.StaticRoutes {
+			group := ""
+			if !isFleet {
+				group = "sub:network"
+			}
+			items = append(items, TriageItem{
+				Section:        "system",
+				Key:            "route-" + route.Path,
+				Tier:           2,
+				Reason:         "Static route file — machine-bound routing requires operator decision.",
+				Name:           route.Path,
+				Meta:           route.Name,
+				Group:          group,
+				DefaultInclude: false,
+			})
 		}
 		for _, zone := range snap.Network.FirewallZones {
 			group := ""
