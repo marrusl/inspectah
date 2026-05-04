@@ -10,19 +10,20 @@ import (
 
 // TriageItem represents a classified snapshot item for the SPA.
 type TriageItem struct {
-	Section        string `json:"section"`
-	Key            string `json:"key"`
-	Tier           int    `json:"tier"`
-	Reason         string `json:"reason"`
-	Name           string `json:"name"`
-	Meta           string `json:"meta"`
-	Group          string `json:"group,omitempty"`
-	CardType       string `json:"card_type,omitempty"`
-	DisplayOnly    bool   `json:"display_only,omitempty"`
-	Acknowledged   bool   `json:"acknowledged,omitempty"`
-	IsSecret       bool   `json:"is_secret,omitempty"`
-	SourcePath     string `json:"source_path,omitempty"`
-	DefaultInclude bool   `json:"default_include"`
+	Section        string   `json:"section"`
+	Key            string   `json:"key"`
+	Tier           int      `json:"tier"`
+	Reason         string   `json:"reason"`
+	Name           string   `json:"name"`
+	Meta           string   `json:"meta"`
+	Group          string   `json:"group,omitempty"`
+	CardType       string   `json:"card_type,omitempty"`
+	DisplayOnly    bool     `json:"display_only,omitempty"`
+	Acknowledged   bool     `json:"acknowledged,omitempty"`
+	Deps           []string `json:"deps,omitempty"`
+	IsSecret       bool     `json:"is_secret,omitempty"`
+	SourcePath     string   `json:"source_path,omitempty"`
+	DefaultInclude bool     `json:"default_include"`
 }
 
 // ClassifySnapshot classifies all triageable items in the snapshot.
@@ -89,6 +90,39 @@ func mapInclude(m map[string]interface{}) bool {
 		return true
 	}
 	return b
+}
+
+// extractDeps extracts dependency list from LeafDepTree for a given package.
+// Handles both []interface{} (JSON-decoded) and []string (Go-native) shapes.
+// Returns nil for missing keys, nil values, empty arrays, or non-slice types.
+func extractDeps(depTree map[string]interface{}, leafName string) []string {
+	if depTree == nil {
+		return nil
+	}
+	raw, ok := depTree[leafName]
+	if !ok || raw == nil {
+		return nil
+	}
+	if strSlice, ok := raw.([]string); ok {
+		if len(strSlice) == 0 {
+			return nil
+		}
+		return strSlice
+	}
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	deps := make([]string, 0, len(arr))
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			deps = append(deps, s)
+		}
+	}
+	if len(deps) == 0 {
+		return nil
+	}
+	return deps
 }
 
 func isFleetSnapshot(snap *schema.InspectionSnapshot) bool {

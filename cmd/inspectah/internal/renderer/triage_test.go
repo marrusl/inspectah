@@ -725,3 +725,34 @@ func TestClassifySnapshot_FleetVsSingleMachine(t *testing.T) {
 		assert.False(t, eth0.DisplayOnly)
 	})
 }
+
+func TestExtractDeps(t *testing.T) {
+	tests := []struct {
+		name     string
+		depTree  map[string]interface{}
+		leafName string
+		want     []string
+	}{
+		{"nil tree", nil, "vim", nil},
+		{"missing key", map[string]interface{}{"bash": []interface{}{"readline"}}, "vim", nil},
+		{"nil value", map[string]interface{}{"vim": nil}, "vim", nil},
+		{"empty array interface", map[string]interface{}{"vim": []interface{}{}}, "vim", nil},
+		{"valid interface slice", map[string]interface{}{
+			"vim": []interface{}{"vim-common", "gpm-libs", "vim-filesystem"},
+		}, "vim", []string{"vim-common", "gpm-libs", "vim-filesystem"}},
+		{"string slice (Go-native)", map[string]interface{}{
+			"vim": []string{"vim-common", "gpm-libs"},
+		}, "vim", []string{"vim-common", "gpm-libs"}},
+		{"empty string slice", map[string]interface{}{"vim": []string{}}, "vim", nil},
+		{"mixed types in interface slice", map[string]interface{}{
+			"vim": []interface{}{"vim-common", 42, "gpm-libs"},
+		}, "vim", []string{"vim-common", "gpm-libs"}},
+		{"wrong type value", map[string]interface{}{"vim": "not-a-slice"}, "vim", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractDeps(tt.depTree, tt.leafName)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
