@@ -1,9 +1,10 @@
 # Triage UX Fixes: Leaf Packages, Version Changes, SELinux Separation
 
-**Status:** Proposed (revision 2)
+**Status:** Proposed (revision 3)
 **Date:** 2026-05-03
 **Context:** Follow-up fixes discovered during live testing of the single-machine triage redesign.
-**Revision notes:** Addresses round 1 review blockers: leaf-default state source, fleet gate, SELinux module truthfulness, browser interaction contracts, proof strategy.
+**Revision 2 notes:** Addresses round 1 blockers: leaf-default state source, fleet gate, SELinux module truthfulness, browser interaction contracts, proof strategy.
+**Revision 3 notes:** Addresses round 2 blockers: sidecar timing (normalize BEFORE sidecar so baselines agree), `semod-*` notification copy/state/acknowledge persistence, version-change `updateBadge` exclusion, `LeafDepTree` dual-shape handling.
 
 ## Problem
 
@@ -21,11 +22,11 @@ Three UX issues surfaced when running the triage redesign against a real Fedora 
 
 **Problem:** The scan sets `Include: false` on all `PackagesAdded` entries when `LeafPackages` is computed (Containerfile optimization — only leaf names go in `dnf install`). But leaf packages should render as "included by default" in the triage UI.
 
-**Rejected approach (rev 1):** Mutating `pkg.Include` during classification. This breaks the snapshot/manifest/rerender contract because `SnapshotJSON` and `TRIAGE_MANIFEST` are produced separately, the browser reads state from the snapshot, and refine rerender recomputes the manifest independently.
+**Rejected approach (rev 1):** Mutating `pkg.Include` during classification. This breaks the snapshot/manifest/rerender contract.
 
-**Approach (rev 2): Normalize at extraction time, before any rendering.**
+**Approach: Normalize at extraction time, before sidecar creation.**
 
-When the refine server extracts a tarball, it runs a one-time normalization step on the snapshot BEFORE the first render:
+When the refine server extracts a tarball, it runs a one-time normalization step on the snapshot. Critically, this happens BEFORE the sidecar is saved — so the sidecar and the working snapshot both start with `Include: true` for leaf packages. This makes all downstream comparisons agree.
 
 ```go
 func normalizeLeafDefaults(snap *schema.InspectionSnapshot) {
@@ -44,16 +45,28 @@ func normalizeLeafDefaults(snap *schema.InspectionSnapshot) {
 }
 ```
 
-**Where it runs:** In `RunRefine` (refine/server.go), after extracting the tarball and reading the snapshot, before writing the original sidecar and before the initial re-render. The original snapshot bytes are saved as the sidecar BEFORE normalization runs, so `DefaultInclude` reflects the scan's original intent.
+**Pipeline sequence in `RunRefine`:**
 
-For static HTML report generation (`RenderHTMLReport` without refine), the same normalization runs at the entry point before serialization and classification.
+1. Extract tarball → read snapshot bytes
+2. Deserialize snapshot
+3. Run `normalizeLeafDefaults(snap)` — leaf packages now have `Include: true`
+4. Re-serialize normalized snapshot to bytes
+5. Write sidecar from the NORMALIZED bytes (not the raw tarball bytes)
+6. Write working snapshot
+7. Proceed with initial re-render
 
-**Why this is safe:**
-- Mutation happens once, explicitly, at the pipeline entry — not in the classifier.
-- The snapshot JSON, triage manifest, and browser state all read the same normalized `Include` values.
-- The original sidecar preserves the scan's raw values for `DefaultInclude` comparison.
-- User changes persist to the normalized snapshot — re-renders don't clobber them because normalization only runs once at extraction.
-- `isItemDecided` works correctly: on resume, if the user excluded a leaf, `current (false) !== default (true)` → decided → accordion shows "off". If the user never acted, `current (true) === default (true)` → undecided → accordion shows "on".
+**Why this ordering closes the round 1/2 blocker:**
+
+The rev 2 approach saved the sidecar from raw tarball bytes (pre-normalization), then normalized. This meant `ClassifySnapshot(snap, original)` would compute `DefaultInclude` from the sidecar's `Include: false`, while the working snapshot had `Include: true`. Result: `current (true) !== default (false)` → all leaf packages read as "already decided" even though the user hadn't touched them.
+
+By normalizing BEFORE saving the sidecar, both copies start with `Include: true` for leaves:
+- `DefaultInclude = true` (from normalized sidecar)
+- `getSnapshotInclude = true` (from normalized working snapshot)
+- `isItemDecided`: `current (true) === default (true)` → NOT decided. Correct.
+- User excludes a leaf → working snapshot `Include: false`, sidecar still `true` → `current (false) !== default (true)` → decided. Correct.
+- Resume: working snapshot persisted with `false`, sidecar immutable at `true` → decided. Correct.
+
+For static HTML report generation (`RenderHTMLReport` without refine), the same normalization runs at the entry point. No sidecar is involved — `OriginalSnapshot` is nil, and `DefaultInclude` comes directly from `pkg.Include` (which is now normalized to `true` for leaves).
 
 ### Classifier change
 
@@ -61,7 +74,7 @@ When `!isFleet && snap.Rpm.LeafPackages != nil`, `classifyPackages` creates tria
 
 **Leaf detection:** Build a `leafSet map[string]bool` from `*snap.Rpm.LeafPackages`. In the `PackagesAdded` loop, skip any package whose name is not in `leafSet`.
 
-**Fleet gate (blocker 2 fix):** The leaf-only filter is gated on `!isFleet`, not on `LeafPackages != nil` alone. Merged fleet snapshots carry `LeafPackages`, `AutoPackages`, and `LeafDepTree` from the merge engine. Without the fleet gate, leaf-only behavior would leak into fleet mode. The canonical single-machine predicate is `!isFleetSnapshot(snap)` — the same gate used by all other single-machine grouping in the classifier.
+**Fleet gate:** The leaf-only filter is gated on `!isFleet`, not on `LeafPackages != nil` alone. Merged fleet snapshots carry `LeafPackages`, `AutoPackages`, and `LeafDepTree` from the merge engine. The canonical single-machine predicate is `!isFleetSnapshot(snap)`.
 
 **Dependency data:** Each leaf's `TriageItem` gets a new field:
 
@@ -69,7 +82,7 @@ When `!isFleet && snap.Rpm.LeafPackages != nil`, `classifyPackages` creates tria
 Deps []string `json:"deps,omitempty"`
 ```
 
-Populated from `snap.Rpm.LeafDepTree[pkg.Name]`. `LeafDepTree` is `map[string]interface{}` where each value is a `[]interface{}` of dependency name strings. The classifier normalizes this to `[]string` with explicit type assertion and nil/empty handling:
+Populated from `snap.Rpm.LeafDepTree[pkg.Name]`. `LeafDepTree` is `map[string]interface{}` where values can be either `[]interface{}` (JSON-decoded from snapshot) or `[]string` (when the Go inspector builds it natively). The `extractDeps` helper handles both shapes:
 
 ```go
 func extractDeps(depTree map[string]interface{}, leafName string) []string {
@@ -77,9 +90,17 @@ func extractDeps(depTree map[string]interface{}, leafName string) []string {
         return nil
     }
     raw, ok := depTree[leafName]
-    if !ok {
+    if !ok || raw == nil {
         return nil
     }
+    // Shape 1: []string (Go-native inspector path)
+    if strSlice, ok := raw.([]string); ok {
+        if len(strSlice) == 0 {
+            return nil
+        }
+        return strSlice
+    }
+    // Shape 2: []interface{} (JSON-decoded path)
     arr, ok := raw.([]interface{})
     if !ok {
         return nil
@@ -97,7 +118,7 @@ func extractDeps(depTree map[string]interface{}, leafName string) []string {
 }
 ```
 
-**Fallback:** When `LeafPackages` is nil (older scan format, no-baseline scans) OR when `isFleet` is true, all `PackagesAdded` render as before. The leaf-only filter and dep drill-down are single-machine features only.
+**Fallback:** When `LeafPackages` is nil OR `isFleet` is true, all `PackagesAdded` render as before.
 
 ### JS change — dependency drill-down
 
@@ -106,22 +127,22 @@ Each leaf package row in the expanded accordion table gets a dependency disclosu
 **DOM pattern:** The existing accordion table has rows `<tr>` with cells for checkbox, name, and meta. The dependency disclosure adds:
 
 - In the **name cell** (`<td>`): after the package name text, a dep count badge (`<span class="dep-badge">12 deps</span>`) and a chevron button (`<button class="dep-chevron" aria-expanded="false" aria-controls="deps-{key}">`).
-- When expanded, a **new `<tr class="dep-row">`** is inserted immediately after the leaf's row. This row spans all columns (`colspan`) and contains a `<ul aria-label="Dependencies for {name}">` with `<li>` elements for each dependency name. The `<ul>` preserves native list semantics (not `role="group"`).
+- When expanded, a **new `<tr class="dep-row">`** is inserted immediately after the leaf's row. This row spans all columns (`colspan`) and contains a `<ul aria-label="Dependencies for {name}">` with `<li>` elements for each dependency name. The `<ul>` preserves native list semantics.
 
 **Interaction:**
 - **Click/Enter/Space on chevron:** Toggles the dep row. Chevron `aria-expanded` toggles. Only one leaf's deps are expanded at a time within the accordion — expanding a second collapses the first. Tracked via `App.expandedDep` (string key of currently expanded leaf, or null).
-- **Tab order:** Checkbox → package name (not focusable) → chevron button → (next row's checkbox). The chevron is a `<button>` element, naturally in tab order. Dep list items are NOT in the tab order — they are informational.
-- **Focus after chevron toggle:** Focus stays on the chevron button. Since `renderTriageSection` does a full re-render, the `restoreFocus` helper is called with `targetType: 'dep-chevron'` and `targetId: item.key` to find the chevron in the new DOM.
-- **Focus after accordion collapse/expand:** Dep expansion state resets when the parent accordion re-renders (expand/collapse clears `App.expandedDep` for that accordion). This is acceptable — dep disclosure is a convenience feature.
-- **Screen reader:** Chevron label: `"Show 12 dependencies for vim-enhanced"` (when collapsed) / `"Hide dependencies for vim-enhanced"` (when expanded). Dep list announced as a list with item count.
+- **Tab order:** Checkbox → chevron button → (next row's checkbox). The chevron is a `<button>` element, naturally in tab order. Dep list items are NOT in the tab order.
+- **Focus after chevron toggle:** `restoreFocus(sectionId, 'dep-chevron', item.key)` finds the chevron in the re-rendered DOM.
+- **Focus after accordion collapse/expand:** Dep expansion state (`App.expandedDep`) resets when the parent accordion re-renders.
+- **Screen reader:** Chevron label: `"Show 12 dependencies for vim-enhanced"` (collapsed) / `"Hide dependencies for vim-enhanced"` (expanded). Dep list announced as a list with item count.
 
 **Zero deps:** If `item.deps` is null/empty/undefined, no chevron or badge is rendered.
 
-**Static mode:** The chevron button is omitted (no interactive element). Instead, dep names are rendered inline as a comma-separated list in a `<span class="dep-list-static">` after the package name, styled muted. The dep count badge is also shown. This makes dependency information available in read-only reports, not just refine mode.
+**Static mode:** The chevron button is omitted. Dep names are rendered inline as a comma-separated list in a `<span class="dep-list-static">` after the package name, styled muted. The dep count badge is also shown.
 
 ### Containerfile renderer interaction
 
-No change needed. The renderer already uses `LeafPackages` when available and the TODO comment logic for unreachable packages checks `PackagesAdded` state independently.
+No change needed.
 
 ## Fix 2: Version Changes Accordion
 
@@ -155,21 +176,30 @@ func classifyVersionChanges(snap *schema.InspectionSnapshot, isFleet bool) []Tri
 }
 ```
 
-**Tier 1** because these are informational — the base image already has the correct version. No user action needed.
-
-**Display-only** — no toggle, no checkboxes. Renders as a `buildDisplayAccordion`.
-
-**Single-machine only.** Fleet mode skips version changes.
+**Tier 1**, display-only, single-machine only.
 
 ### JS rendering and section accounting
 
-The existing `buildDisplayAccordion` component renders the version changes accordion. However, the section footer and progress accounting need explicit handling:
+The existing `buildDisplayAccordion` component renders the version changes accordion. The section accounting needs exclusion at ALL three points:
 
-**Decision accounting:** Version change items are display-only, so `isItemDecided` returns true when they are acknowledged (via `getSnapshotAcknowledged`). But version changes have no acknowledge button — they are passive informational surfaces. To prevent them from blocking section progress:
+**`isItemDecided`:** Already returns true for display-only items via `getSnapshotAcknowledged` (rev 2 fix). Version change items have no acknowledge path, so they would never become "decided" — blocking section progress indefinitely.
 
-- The section footer's `X / Y decided` count **excludes** display-only grouped items that have no acknowledge path. The footer loop adds a filter: if `item.display_only && item.group` → skip from total and decided counts.
-- The progress bar and sidebar dot calculations exclude these items for the same reason.
-- This means the Packages section can reach "all decided" without the user interacting with version change accordions at all — which is correct, because version changes require no action.
+**Fix: Exclude passive display-only grouped items from ALL accounting paths.** A helper function identifies items that are passive (display-only, grouped, no acknowledge mechanism):
+
+```javascript
+function isPassiveItem(item) {
+    return item.display_only && item.group &&
+           item.key.indexOf('verchg-') === 0;
+}
+```
+
+This function gates three accounting paths:
+
+1. **Section footer** (`renderTriageSection`): The `X / Y decided` count skips items where `isPassiveItem(item)` is true.
+2. **Sidebar badge** (`updateBadge`): The undecided counter skips `isPassiveItem` items. Without this, version change items would show as undecided tier-1 items forever, but since the badge only shows tier 2/3 counts, this is technically not a visible bug — however, excluding them is correct for consistency and future-proofing.
+3. **Progress bar/sidebar dot** (`updateProgressBar`, `updateSidebarDot`): Calculations exclude `isPassiveItem` items from both total and decided counts.
+
+This means the Packages section can reach "all decided" without interacting with version change accordions.
 
 ## Fix 3: SELinux → System Section
 
@@ -183,9 +213,31 @@ Move SELinux boolean, module, and port classification from `classifyIdentity` to
 
 - `sebool-*` → `Group: "sub:selinux"`, tier 2, reason "SELinux boolean changed from default." **Output-affecting** — the renderer emits `setsebool` commands. Normal toggle behavior.
 - `seport-*` → `Group: "sub:selinux"`, tier 2, reason "Custom SELinux port label." **Output-affecting** — the renderer emits `semanage port` commands. Normal toggle behavior.
-- `semod-*` → `Group: "sub:selinux"`, tier 3, `CardType: "notification"`, reason "Custom SELinux policy module. The renderer cannot yet generate semodule installation commands — manual Containerfile steps required." **Not output-affecting as a normal toggle** — the current renderer emits FIXME/comment stubs (`# COPY ... # RUN semodule -i ...`), not executable commands. `getSnapshotInclude` is a no-op for `semod-*`. Treating these as notification cards is truthful to the current renderer contract.
+- `semod-*` → `Group: "sub:selinux"`, tier 3, `CardType: "notification"`. **Not output-affecting** — the current renderer emits FIXME/comment stubs, not executable commands.
 
-This avoids the honesty problem from rev 1 where all SELinux items were claimed as output-affecting.
+### `semod-*` notification contract
+
+The `semod-*` notification card uses SELinux-specific copy, not the package-oriented notification copy used for `local_install` packages:
+
+- **Full card reason:** "Custom SELinux policy module. inspectah cannot yet generate semodule installation commands. To include this module in the image, add COPY and semodule -i steps to your Containerfile manually."
+- **Collapsed card warning:** "custom module — manual Containerfile steps required"
+- **Acknowledge button:** Same `acknowledgeNotification` path as other notification cards.
+
+**Acknowledged persistence for `semod-*`:** The current JS has `semod-*` as a no-op in `getSnapshotInclude`/`updateSnapshotInclude` because custom modules are `[]string` with no per-item `include` field. The `getSnapshotAcknowledged`/`setSnapshotAcknowledged` helpers also lack a `semod-*` handler.
+
+Fix: Add `semod-*` support to `getSnapshotAcknowledged`/`setSnapshotAcknowledged`. Since `selinux.custom_modules` is `[]string` (no typed struct with an `acknowledged` field), use the same session-only proxy as `group-*` identity items: `App.decisions[key]` tracks the acknowledged state. This means `semod-*` acknowledged state does NOT survive page reload — same limitation as identity groups, documented as a known constraint.
+
+```javascript
+// In getSnapshotAcknowledged:
+if (key.indexOf('semod-') === 0) {
+    return App.decisions[key] || false;
+}
+
+// In setSnapshotAcknowledged:
+if (key.indexOf('semod-') === 0) {
+    return; // Cannot persist — []string has no acknowledged field
+}
+```
 
 ### Section label
 
@@ -207,26 +259,26 @@ No other schema changes needed.
 ## Test Strategy
 
 ### Classifier tests (Go)
-- **Leaf-only filtering:** When `!isFleet && LeafPackages != nil`, only leaf packages appear in manifest. When `isFleet && LeafPackages != nil`, ALL packages appear (fleet gate). When `LeafPackages == nil`, ALL packages appear (fallback).
-- **Deps normalization:** `extractDeps` correctly handles: valid `LeafDepTree` entry → `[]string`; missing key → nil; wrong type → nil; empty array → nil; mixed types in array → strings only.
-- **Version changes:** Items classified in `packages` section, tier 1, display-only, grouped by direction. Fleet mode → nil.
-- **SELinux section:** `sebool-*` and `seport-*` in `system` section, output-affecting. `semod-*` in `system` section, `CardType: "notification"`. None in `identity` section.
+- **Leaf-only filtering:** `!isFleet && LeafPackages != nil` → only leaf packages. `isFleet && LeafPackages != nil` → ALL packages (fleet gate). `LeafPackages == nil` → ALL packages (fallback).
+- **Deps normalization:** `extractDeps` handles: `[]interface{}` of strings → `[]string`; `[]string` (Go-native) → returned directly; nil value → nil; missing key → nil; wrong type → nil; empty array → nil; mixed types → strings only.
+- **Version changes:** Classified in `packages` section, tier 1, display-only, grouped by direction. Fleet → nil.
+- **SELinux section:** `sebool-*`/`seport-*` in `system`, output-affecting. `semod-*` in `system`, `CardType: "notification"`. None in `identity`.
 
 ### Rendered output tests (Go)
-- **Golden HTML:** Rendered manifest contains `deps` array on leaf items. Version change items present as display-only grouped. SELinux items in `system` section.
-- **Leaf normalization:** After `normalizeLeafDefaults`, leaf packages have `Include: true` in the snapshot. Non-leaf packages remain `Include: false`. Fleet snapshots are untouched.
+- **Golden HTML:** Manifest contains `deps` array on leaf items. Version changes present as display-only grouped. SELinux items in `system`.
+- **Leaf normalization:** After `normalizeLeafDefaults`, leaf packages have `Include: true`. Non-leaf remain `Include: false`. Fleet untouched. Normalized sidecar and working snapshot agree on leaf `Include` values.
 
 ### Browser contract tests (manual verification checklist)
-Go tests cannot execute client-side JS or inspect DOM. The following are verified by manual browser testing:
-
+- [ ] Leaf package accordions show with toggles ON by default
 - [ ] Leaf package rows show dep count badge and chevron
-- [ ] Chevron click expands dep sub-list, second chevron collapses first
+- [ ] Chevron click expands dep sub-list; second chevron collapses first
 - [ ] Zero-dep leaves have no chevron or badge
 - [ ] Static mode: dep names shown inline, no chevron
 - [ ] Version changes accordion renders in Packages section
-- [ ] Version changes do not affect section progress bar
+- [ ] Version changes do not affect section progress bar or sidebar badge
 - [ ] SELinux accordion appears in System & Security
-- [ ] `semod-*` renders as notification card, not toggle
+- [ ] `semod-*` renders as notification card with SELinux-specific copy, not package copy
+- [ ] `semod-*` Acknowledge/undo works (session-only persistence)
 - [ ] Keyboard: Tab reaches chevron, Enter/Space toggles deps
 - [ ] Focus returns to chevron after dep toggle re-render
 
@@ -235,4 +287,5 @@ Go tests cannot execute client-side JS or inspect DOM. The following are verifie
 - Crypto policy in the security section (future).
 - Dep tree visualization (graph). Flat list is sufficient.
 - Version lock suggestions from version changes (display-only, no output).
-- Full renderer support for `semod-*` (current FIXME stubs are acknowledged as a limitation).
+- Full renderer support for `semod-*` (current FIXME stubs acknowledged as a limitation).
+- Persistent acknowledged state for `semod-*` and `group-*` items (requires schema change to add per-item fields to `[]string` arrays — deferred).
