@@ -1091,7 +1091,7 @@ func TestRunRefine_LeafNormalizationSidecarAgreement(t *testing.T) {
 
 Run: `cd cmd/inspectah && go test ./internal/renderer/ -run "TestHTMLReportGoldenLeaf" -v`
 Run: `cd cmd/inspectah && go test ./internal/renderer/ -run "TestHTMLReportGoldenVersion" -v`
-Run: `cd cmd/inspectah && go test ./internal/refine/ -run "TestRefineServer_LeafNormalization" -v`
+Run: `cd cmd/inspectah && go test ./internal/refine/ -run "TestRunRefine_LeafNormalization" -v`
 Expected: All PASS
 
 - [ ] **Step 5: Commit**
