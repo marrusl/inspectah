@@ -164,8 +164,20 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 		}
 	}
 
+	var leafSet map[string]bool
+	leafOnly := !isFleet && snap.Rpm.LeafPackages != nil
+	if leafOnly {
+		leafSet = make(map[string]bool)
+		for _, name := range *snap.Rpm.LeafPackages {
+			leafSet[name] = true
+		}
+	}
+
 	for _, pkg := range snap.Rpm.PackagesAdded {
 		if secrets[pkg.Name] {
+			continue
+		}
+		if leafOnly && !leafSet[pkg.Name] {
 			continue
 		}
 		tier, reason := classifyPackage(pkg, baselineNames)
@@ -177,6 +189,10 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 			Name:           pkg.Name,
 			Meta:           joinNonEmpty(" | ", pkg.Version+"-"+pkg.Release, pkg.Arch, pkg.SourceRepo),
 			DefaultInclude: pkg.Include,
+		}
+
+		if leafOnly {
+			item.Deps = extractDeps(snap.Rpm.LeafDepTree, pkg.Name)
 		}
 
 		if !isFleet {

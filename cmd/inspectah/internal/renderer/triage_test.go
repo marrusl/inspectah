@@ -756,3 +756,67 @@ func TestExtractDeps(t *testing.T) {
 		})
 	}
 }
+
+func TestClassifyPackages_LeafOnly_SingleMachine(t *testing.T) {
+	leafNames := []string{"vim", "htop"}
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		LeafPackages: &leafNames,
+		AutoPackages: &[]string{"vim-common", "gpm-libs"},
+		LeafDepTree: map[string]interface{}{
+			"vim":  []interface{}{"vim-common", "gpm-libs"},
+			"htop": []interface{}{},
+		},
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "vim-common", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "gpm-libs", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "1.20", Release: "1.el9"},
+			{Name: "htop", Arch: "x86_64", Include: true, SourceRepo: "epel", Version: "3.3", Release: "1.el9"},
+		},
+	}
+
+	items := classifyPackages(snap, make(map[string]bool), false)
+
+	assert.Equal(t, 2, len(items), "should only have 2 leaf packages, not 4")
+
+	vim := findItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vim)
+	assert.Equal(t, "repo:appstream", vim.Group)
+	assert.Equal(t, []string{"vim-common", "gpm-libs"}, vim.Deps)
+
+	htop := findItem(items, "pkg-htop-x86_64")
+	require.NotNil(t, htop)
+	assert.Nil(t, htop.Deps, "htop has empty deps, should be nil")
+
+	assert.Nil(t, findItem(items, "pkg-vim-common-x86_64"))
+	assert.Nil(t, findItem(items, "pkg-gpm-libs-x86_64"))
+}
+
+func TestClassifyPackages_LeafOnly_FleetStillShowsAll(t *testing.T) {
+	leafNames := []string{"vim"}
+	snap := schema.NewSnapshot()
+	snap.Meta["fleet"] = map[string]interface{}{"source_hosts": []interface{}{"h1"}}
+	snap.Rpm = &schema.RpmSection{
+		LeafPackages: &leafNames,
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+			{Name: "vim-common", Arch: "x86_64", Include: false, SourceRepo: "appstream"},
+		},
+	}
+
+	items := classifyPackages(snap, make(map[string]bool), true)
+	assert.Equal(t, 2, len(items), "fleet mode should show ALL packages including deps")
+}
+
+func TestClassifyPackages_NoLeafPackages_ShowsAll(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+			{Name: "vim-common", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+
+	items := classifyPackages(snap, make(map[string]bool), false)
+	assert.Equal(t, 2, len(items), "without LeafPackages, all packages should appear")
+}
