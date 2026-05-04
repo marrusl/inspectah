@@ -1111,6 +1111,14 @@ var App = {
 //   3. Started false, user re-included → current=true, default=false → decided
 function isItemDecided(item) {
   if (App.decisions[item.key]) return true;
+  // Display-only items are "decided" when acknowledged in the snapshot
+  if (item.display_only) {
+    return getSnapshotAcknowledged(item.key);
+  }
+  // Notification items are "decided" when acknowledged
+  if (item.card_type === 'notification') {
+    return getSnapshotAcknowledged(item.key);
+  }
   var current = getSnapshotInclude(item.key);
   var original = item.default_include;
   if (original === undefined || original === null) original = true;
@@ -2299,6 +2307,10 @@ function getSnapshotAcknowledged(key) {
         }
       }
     }
+  } else if (key.indexOf('group-') === 0) {
+    // group-* identity items: no snapshot-level acknowledged field
+    // (groups use untyped maps). Use session decisions as proxy.
+    return App.decisions[key] || false;
   }
 
   return false;
@@ -2361,6 +2373,9 @@ function setSnapshotAcknowledged(key, value) {
         }
       }
     }
+  } else if (key.indexOf('group-') === 0) {
+    // Cannot persist to snapshot (untyped map). Decision tracking only.
+    return;
   }
 }
 
