@@ -716,6 +716,151 @@
       margin-bottom: 0.5rem;
     }
 
+    /* ── Toggle switch card ── */
+    .toggle-card {
+      border: 1px solid var(--pf-t--global--border--color--default, #333);
+      border-radius: 4px;
+      background: var(--pf-t--global--background--color--secondary-default);
+      margin-bottom: 4px;
+    }
+    .toggle-card-row {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      padding: 0.375rem 0.75rem;
+      font-size: 0.85rem;
+      min-height: 36px;
+    }
+    .toggle-card-row[data-excluded="true"] .toggle-card-content {
+      opacity: 0.65;
+    }
+    .item-toggle {
+      position: relative;
+      width: 36px;
+      height: 20px;
+      border-radius: 10px;
+      background: var(--pf-t--global--color--nonstatus--gray--default, #6a6e73);
+      border: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s ease-out;
+      padding: 0;
+    }
+    .item-toggle[aria-checked="true"] {
+      background: var(--pf-t--global--color--brand--default, #0066cc);
+    }
+    .item-toggle::after {
+      content: '';
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: white;
+      transition: transform 0.15s ease-out;
+    }
+    .item-toggle[aria-checked="true"]::after {
+      transform: translateX(16px);
+    }
+    /* Touch target: minimum 44x44px clickable area */
+    .item-toggle::before {
+      content: '';
+      position: absolute;
+      top: -12px;
+      left: -4px;
+      width: 44px;
+      height: 44px;
+    }
+    .item-toggle:focus-visible {
+      outline: 2px solid var(--pf-t--global--color--brand--default, #0066cc);
+      outline-offset: 2px;
+    }
+    .toggle-card-divider {
+      width: 1px;
+      height: 20px;
+      background: var(--pf-t--global--border--color--default, #444);
+      flex-shrink: 0;
+      margin: 0 12px;
+    }
+    .toggle-card-content {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex: 1;
+      min-width: 0;
+      transition: opacity 0.15s ease-out;
+    }
+    .toggle-card-name {
+      font-weight: 600;
+      font-size: 0.8rem;
+      white-space: nowrap;
+    }
+    .toggle-card-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      padding: 0.0625rem 0.375rem;
+      border-radius: 4px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .toggle-card-badge.badge-included {
+      background: rgba(63, 185, 80, 0.15);
+      color: #3fb950;
+    }
+    .toggle-card-badge.badge-excluded {
+      background: rgba(139, 148, 158, 0.15);
+      color: #8b949e;
+    }
+    .toggle-card-meta {
+      font-size: 0.75rem;
+      opacity: 0.6;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .toggle-card-expand {
+      margin-left: auto;
+      flex-shrink: 0;
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 0.7rem;
+      opacity: 0.6;
+      padding: 0.25rem;
+      color: inherit;
+      transition: transform 0.15s ease;
+    }
+    .toggle-card-expand:focus-visible {
+      outline: 2px solid var(--pf-t--global--color--brand--default, #0066cc);
+      outline-offset: 2px;
+    }
+    .toggle-card-expand[aria-expanded="true"] {
+      transform: rotate(90deg);
+    }
+    .toggle-card-detail {
+      padding: 0.5rem 0.75rem 0.75rem;
+      padding-left: calc(36px + 12px + 1px + 12px + 0.75rem);
+      border-top: 1px solid var(--pf-t--global--border--color--default, #333);
+    }
+    .toggle-card-detail .detail-reason {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-bottom: 0.5rem;
+    }
+    .toggle-card-detail .detail-meta {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-bottom: 0.5rem;
+    }
+
+    /* Dark theme override for toggle */
+    .pf-v6-theme-dark .item-toggle[aria-checked="true"] {
+      background: var(--pf-t--global--color--brand--200, #4394e5);
+    }
+
     /* Section footer */
     .section-footer {
       margin-top: 1rem;
@@ -2045,7 +2190,7 @@ function disableAllDecisionButtons() {
     document.body.appendChild(desc);
   }
 
-  var buttons = document.querySelectorAll('.card-actions button, .undo-link');
+  var buttons = document.querySelectorAll('.card-actions button, .undo-link, .item-toggle');
   for (var i = 0; i < buttons.length; i++) {
     buttons[i].setAttribute('aria-disabled', 'true');
     buttons[i].setAttribute('aria-describedby', 'static-mode-desc');
@@ -3042,6 +3187,193 @@ function toggleDefaultIncludedExpand(wrapper, row, chevron, body) {
     chevron.classList.add('expanded');
     body.style.display = '';
   }
+}
+
+// ── Toggle Card Builder ──
+// Compact toggle-switch row for all non-secret, non-display-only triage items.
+// Two tab stops per row: toggle switch + expand chevron.
+function buildToggleCard(item, sectionId) {
+  var included = getSnapshotInclude(item.key);
+  var wrapper = document.createElement('div');
+  wrapper.className = 'toggle-card';
+  wrapper.setAttribute('data-key', item.key);
+
+  // --- Row ---
+  var row = document.createElement('div');
+  row.className = 'toggle-card-row';
+  row.setAttribute('data-excluded', included ? 'false' : 'true');
+
+  // Tab stop 1: Toggle switch
+  var toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'item-toggle';
+  toggle.setAttribute('role', 'switch');
+  toggle.setAttribute('aria-checked', included ? 'true' : 'false');
+  toggle.setAttribute('aria-label', (included ? 'Exclude ' : 'Include ') + (item.name || item.key));
+  toggle.setAttribute('tabindex', '0');
+  toggle.setAttribute('data-focus-key', item.key);
+
+  // Toggle click handler
+  toggle.onclick = function(e) {
+    e.stopPropagation();
+    var currentIncluded = getSnapshotInclude(item.key);
+    var newIncluded = !currentIncluded;
+
+    // Track that user acted on this item
+    App.decisions[item.key] = true;
+    // Store prior for undo capability
+    if (App.priorValues[item.key] === undefined) {
+      App.priorValues[item.key] = currentIncluded;
+    }
+    updateSnapshotInclude(item.key, newIncluded);
+    incrementChangeCounter();
+
+    // Transition review state
+    var current = App.reviewStates[sectionId];
+    if (current === 'unreviewed' || !current) {
+      App.reviewStates[sectionId] = 'in-progress';
+      updateSidebarDot(sectionId);
+      updateProgressBar();
+    }
+
+    // Update in-place without re-rendering the section
+    toggle.setAttribute('aria-checked', newIncluded ? 'true' : 'false');
+    toggle.setAttribute('aria-label', (newIncluded ? 'Exclude ' : 'Include ') + (item.name || item.key));
+    row.setAttribute('data-excluded', newIncluded ? 'false' : 'true');
+    badge.textContent = newIncluded ? 'Included' : 'Excluded';
+    badge.className = 'toggle-card-badge ' + (newIncluded ? 'badge-included' : 'badge-excluded');
+
+    updateBadge(sectionId);
+    scheduleAutosave();
+  };
+
+  // Keyboard for toggle
+  toggle.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggle.click();
+    }
+  });
+
+  row.appendChild(toggle);
+
+  // Visual divider
+  var divider = document.createElement('div');
+  divider.className = 'toggle-card-divider';
+  divider.setAttribute('aria-hidden', 'true');
+  row.appendChild(divider);
+
+  // Content area (fades when excluded)
+  var content = document.createElement('div');
+  content.className = 'toggle-card-content';
+
+  // Item name
+  var nameEl = document.createElement('span');
+  nameEl.className = 'toggle-card-name';
+  nameEl.textContent = item.name || item.key;
+  content.appendChild(nameEl);
+
+  // Status badge with aria-live for screen reader announcements
+  var badge = document.createElement('span');
+  badge.className = 'toggle-card-badge ' + (included ? 'badge-included' : 'badge-excluded');
+  badge.textContent = included ? 'Included' : 'Excluded';
+  badge.setAttribute('aria-live', 'polite');
+  content.appendChild(badge);
+
+  // One-line meta / reason (truncated)
+  var metaText = item.reason || item.meta || '';
+  if (metaText) {
+    var metaEl = document.createElement('span');
+    metaEl.className = 'toggle-card-meta';
+    metaEl.textContent = metaText;
+    content.appendChild(metaEl);
+  }
+
+  row.appendChild(content);
+
+  // Tab stop 2: Expand chevron
+  var chevron = document.createElement('button');
+  chevron.type = 'button';
+  chevron.className = 'toggle-card-expand';
+  chevron.textContent = '▸'; // ▸
+  chevron.setAttribute('aria-expanded', 'false');
+  chevron.setAttribute('aria-label', 'Expand details for ' + (item.name || item.key));
+  chevron.setAttribute('tabindex', '0');
+
+  row.appendChild(chevron);
+
+  wrapper.appendChild(row);
+
+  // --- Detail pane (hidden by default) ---
+  var detail = document.createElement('div');
+  detail.className = 'toggle-card-detail';
+  detail.style.display = 'none';
+
+  // Full reason text
+  if (item.reason) {
+    var reasonEl = document.createElement('div');
+    reasonEl.className = 'detail-reason';
+    reasonEl.textContent = item.reason;
+    detail.appendChild(reasonEl);
+  }
+
+  // Meta details (only if different from reason)
+  if (item.meta && item.meta !== item.reason) {
+    var detailMeta = document.createElement('div');
+    detailMeta.className = 'detail-meta';
+    detailMeta.textContent = item.meta;
+    detail.appendChild(detailMeta);
+  }
+
+  // Tier 3 warning in detail pane
+  if (item.tier === 3) {
+    var warning = document.createElement('div');
+    warning.className = 'card-warning';
+    warning.textContent = item.reason;
+    detail.insertBefore(warning, detail.firstChild);
+  }
+
+  // View contents button for config files
+  var viewContentsBtn = buildViewContentsButton(item);
+  if (viewContentsBtn) detail.appendChild(viewContentsBtn);
+
+  wrapper.appendChild(detail);
+
+  // Expand/collapse: click chevron or content area
+  var toggleExpand = function() {
+    var isExpanded = chevron.getAttribute('aria-expanded') === 'true';
+    if (isExpanded) {
+      chevron.setAttribute('aria-expanded', 'false');
+      chevron.setAttribute('aria-label', 'Expand details for ' + (item.name || item.key));
+      detail.style.display = 'none';
+    } else {
+      chevron.setAttribute('aria-expanded', 'true');
+      chevron.setAttribute('aria-label', 'Collapse details for ' + (item.name || item.key));
+      detail.style.display = '';
+    }
+  };
+
+  chevron.onclick = function(e) {
+    e.stopPropagation();
+    toggleExpand();
+  };
+
+  chevron.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleExpand();
+    }
+  });
+
+  // Click on content area also expands
+  content.style.cursor = 'pointer';
+  content.onclick = function(e) {
+    // Don't toggle expand if clicking the badge
+    if (e.target === badge) return;
+    toggleExpand();
+  };
+
+  return wrapper;
 }
 
 // ── Output Accordion ──
@@ -4978,28 +5310,23 @@ function renderTriageSection(sectionId) {
       for (var u = 0; u < ungrouped.length; u++) {
         var card;
         var uItem = ungrouped[u];
-        if (uItem.card_type === 'notification') {
-          card = buildNotificationCard(uItem);
-        } else if (uItem.display_only) {
-          // kmod items: display-only treatment in main section (no toggles)
-          card = buildInfoReadOnlyCard(uItem);
-        } else if (isItemDecided(uItem)) {
-          var uIsSecret = uItem.is_secret || uItem.section === 'secrets';
-          if (uIsSecret) {
+        var uIsSecret = uItem.is_secret || uItem.section === 'secrets';
+        if (uIsSecret) {
+          // Secrets keep three-state card pattern (higher friction)
+          if (isItemDecided(uItem)) {
             card = buildSecretDecidedCard(uItem);
           } else {
-            var inc = getSnapshotInclude(uItem.key);
-            card = buildDecidedCard(uItem, inc);
+            card = buildSecretCard(uItem);
           }
+        } else if (uItem.display_only) {
+          // Display-only: no toggle, informational only
+          card = buildInfoReadOnlyCard(uItem);
+        } else if (uItem.card_type === 'notification') {
+          // Notifications keep acknowledge pattern
+          card = buildNotificationCard(uItem);
         } else {
-          // Default-included items (tier 1/2, included by default, user hasn't acted)
-          // get the collapsed card; tier 3 and secrets always get the full triage card
-          var uIsSecretForCard = uItem.is_secret || uItem.section === 'secrets';
-          if (!uIsSecretForCard && uItem.tier !== 3 && getSnapshotInclude(uItem.key) === true) {
-            card = buildDefaultIncludedCard(uItem);
-          } else {
-            card = buildTriageCard(uItem);
-          }
+          // Everything else: toggle card
+          card = buildToggleCard(uItem, sectionId);
         }
         itemsDiv.appendChild(card);
       }
@@ -6258,6 +6585,7 @@ function focusNextUndecided(sectionId) {
   var selectors = [
     '.notification-full button.btn-primary',
     '.triage-card .card-actions button',
+    '.toggle-card .item-toggle',
   ];
 
   for (var s = 0; s < selectors.length; s++) {
@@ -6295,6 +6623,9 @@ function restoreFocus(sectionId, targetType, targetId) {
   } else if (targetType === 'tier-header') {
     var tierDiv = container.querySelector('[data-tier="' + targetId + '"]');
     if (tierDiv) target = tierDiv.querySelector('.tier-group-header');
+  } else if (targetType === 'item-toggle') {
+    var toggleCard = container.querySelector('[data-key="' + targetId + '"]');
+    if (toggleCard) target = toggleCard.querySelector('.item-toggle');
   }
 
   if (target) {
