@@ -2210,18 +2210,20 @@ function buildSecretCard(item) {
   var details = document.createElement('details');
   details.className = 'secret-consequence';
   var summary = document.createElement('summary');
-  summary.textContent = 'Show consequence preview';
+  summary.textContent = 'What happens to this file';
   details.appendChild(summary);
-  var pre = document.createElement('pre');
-  var path = (redaction && redaction.path) || item.name || item.key;
+  var consequenceText = document.createElement('p');
+  consequenceText.style.fontSize = '0.8rem';
+  consequenceText.style.margin = '0.5rem 0 0 0';
+  consequenceText.style.lineHeight = '1.5';
   if (kind === 'excluded') {
-    pre.textContent = '# EXCLUDED by inspectah: secret detected\n# Path: ' + path + '\n# Pattern: ' + ((redaction && redaction.pattern) || 'n/a');
+    consequenceText.textContent = 'This file is omitted from the image. A comment block in the Containerfile documents the exclusion reason.';
   } else if (kind === 'inline') {
-    pre.textContent = 'COPY ' + path + ' ' + path + '\n# Secret values replaced with REDACTED placeholders';
+    consequenceText.textContent = 'This file is included via the config tree copy. Secret values have been replaced with REDACTED placeholders.';
   } else {
-    pre.textContent = '# File content may be carried as-is (no redaction applied)\n# Path: ' + path;
+    consequenceText.textContent = 'This file will be included as-is. It may contain sensitive values that the scanner could not definitively classify.';
   }
-  details.appendChild(pre);
+  details.appendChild(consequenceText);
   card.appendChild(details);
 
   // Decision buttons (omitted in static mode)
@@ -2636,7 +2638,7 @@ function buildOutputAccordion(groupName, items, options) {
 
   var nameEl = document.createElement('span');
   nameEl.className = 'accordion-name';
-  nameEl.textContent = options.displayName || groupName.replace(/^repo:|^kind:|^sub:/, '');
+  nameEl.textContent = options.displayName || groupName.replace(/^base:|^user:|^repo:|^kind:|^sub:/, '');
   info.appendChild(nameEl);
 
   if (options.badge) {
@@ -2816,7 +2818,7 @@ function buildOutputAccordion(groupName, items, options) {
   }
 
   // Screen reader label
-  var srLabel = (options.displayName || groupName.replace(/^repo:|^kind:|^sub:/, ''));
+  var srLabel = (options.displayName || groupName.replace(/^base:|^user:|^repo:|^kind:|^sub:/, ''));
   if (options.badge) srLabel += ', ' + options.badge + ' repository';
   srLabel += ', ' + (groupState === 'partial' ? includedCount + ' of ' + allCount + ' included' : allCount + ' items');
   if (groupState === 'none') srLabel += ', excluded';
@@ -3829,7 +3831,7 @@ function renderVersionChangesSection() {
 
     // Host version
     var tdHost = document.createElement('td');
-    tdHost.textContent = item.host_version || item.old_version || '';
+    tdHost.textContent = item.host_version || '';
     tr.appendChild(tdHost);
 
     // Arrow
@@ -3839,9 +3841,9 @@ function renderVersionChangesSection() {
     tdArrow.textContent = '→';
     tr.appendChild(tdArrow);
 
-    // Target version
+    // Target version (base image)
     var tdTarget = document.createElement('td');
-    tdTarget.textContent = item.target_version || item.new_version || '';
+    tdTarget.textContent = item.base_version || '';
     tr.appendChild(tdTarget);
 
     // Change direction
@@ -4274,16 +4276,34 @@ function renderTriageSection(sectionId) {
           itemsDiv.appendChild(buildDisplayAccordion(gName, gItems));
         } else {
           var opts = {};
-          if (gName.indexOf('repo:baseos') === 0) {
+          // Check manifest-level always_included on the group's items
+          var hasAlwaysIncluded = gItems[0] && gItems[0].always_included;
+          if (gName.indexOf('base:') === 0) {
+            // Base-image group: suppress toggles, label as "Base image"
+            var baseRepo = gName.substring(5);
             opts.alwaysIncluded = true;
-            opts.displayName = 'BaseOS';
-          }
-          if (gName.indexOf('repo:') === 0) {
+            opts.displayName = 'Base image (' + baseRepo + ')';
+          } else if (gName.indexOf('user:') === 0) {
+            // User-added repo group
+            var userRepo = gName.substring(5);
+            opts.displayName = userRepo;
+            if (isThirdPartyRepoJS(userRepo)) {
+              opts.badge = 'third-party';
+            }
+          } else if (gName.indexOf('repo:') === 0) {
+            // Legacy repo: prefix fallback
             var repoName = gName.substring(5);
-            opts.displayName = opts.displayName || repoName;
+            opts.displayName = repoName;
+            if (repoName === 'baseos' || repoName === 'BaseOS') {
+              opts.alwaysIncluded = true;
+            }
             if (isThirdPartyRepoJS(repoName)) {
               opts.badge = 'third-party';
             }
+          }
+          // Honor manifest-level always_included regardless of prefix
+          if (hasAlwaysIncluded) {
+            opts.alwaysIncluded = true;
           }
           itemsDiv.appendChild(buildOutputAccordion(gName, gItems, opts));
         }
@@ -4492,8 +4512,10 @@ function copyContainerfile() {
         collapseBtn.setAttribute('aria-expanded', 'false');
         collapseBtn.setAttribute('aria-label', 'Expand preview panel');
         collapseBtn.innerHTML = '&#x25C0;';
-        collapseBtn.focus();
       }
+      // Focus the splitter (visible separator with role="separator" and tabindex="0")
+      // instead of the collapse button which is inside the zero-width hidden pane
+      splitter.focus();
     }
     savePreviewState();
   };
