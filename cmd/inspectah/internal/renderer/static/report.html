@@ -1272,8 +1272,7 @@
       flex-shrink: 0;
     }
 
-    .editor-file-item .file-path { color: inherit; opacity: 0.6; }
-    .editor-file-item .file-name { font-weight: 600; }
+    .editor-file-item .file-full-path { font-weight: 500; }
 
     .editor-content-pane {
       flex: 1;
@@ -6253,22 +6252,10 @@ function renderEditorFileList(family) {
       item.appendChild(dot);
     }
 
-    var lastSlash = file.path.lastIndexOf('/');
-    if (lastSlash >= 0) {
-      var dirSpan = document.createElement('span');
-      dirSpan.className = 'file-path';
-      dirSpan.textContent = file.path.substring(0, lastSlash + 1);
-      item.appendChild(dirSpan);
-      var nameSpan = document.createElement('span');
-      nameSpan.className = 'file-name';
-      nameSpan.textContent = file.path.substring(lastSlash + 1);
-      item.appendChild(nameSpan);
-    } else {
-      var nameOnly = document.createElement('span');
-      nameOnly.className = 'file-name';
-      nameOnly.textContent = file.path;
-      item.appendChild(nameOnly);
-    }
+    var pathSpan = document.createElement('span');
+    pathSpan.className = 'file-full-path';
+    pathSpan.textContent = file.path;
+    item.appendChild(pathSpan);
 
     item.onclick = function() { handleFileClick(file); };
     list.appendChild(item);
