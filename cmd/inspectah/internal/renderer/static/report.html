@@ -435,6 +435,100 @@
       color: #3fb950;
     }
 
+    /* ── Three-state secret card badges ── */
+    .secret-badge {
+      display: inline-block;
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.125rem 0.5rem;
+      border-radius: 4px;
+      margin-bottom: 0.25rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .secret-badge.badge-excluded {
+      background: rgba(248, 81, 73, 0.15);
+      color: #f85149;
+    }
+
+    .secret-badge.badge-inline {
+      background: rgba(210, 153, 34, 0.15);
+      color: #d29922;
+    }
+
+    .secret-badge.badge-flagged {
+      background: rgba(210, 186, 34, 0.15);
+      color: #c9b21a;
+    }
+
+    .secret-explanation {
+      font-size: 0.8rem;
+      margin-bottom: 0.5rem;
+      line-height: 1.4;
+    }
+
+    .secret-consequence {
+      margin-bottom: 0.5rem;
+    }
+
+    .secret-consequence summary {
+      font-size: 0.75rem;
+      cursor: pointer;
+      opacity: 0.7;
+      user-select: none;
+    }
+
+    .secret-consequence pre {
+      font-size: 0.75rem;
+      margin: 0.25rem 0 0 0;
+      padding: 0.375rem 0.5rem;
+      border-radius: 4px;
+      background: var(--pf-t--global--background--color--primary-default);
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Collapsed secret card (post-decision) */
+    .secret-collapsed {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.375rem 0.75rem;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      border: 1px solid var(--pf-t--global--border--color--default, #333);
+      background: var(--pf-t--global--background--color--secondary-default);
+    }
+
+    .secret-collapsed .secret-collapsed-icon {
+      flex-shrink: 0;
+    }
+
+    .secret-collapsed .secret-collapsed-path {
+      font-weight: 600;
+      font-size: 0.8rem;
+      margin-right: 0.25rem;
+    }
+
+    .secret-collapsed .secret-collapsed-summary {
+      font-size: 0.8rem;
+      opacity: 0.8;
+    }
+
+    .secret-collapsed .undo-btn {
+      margin-left: auto;
+      font-size: 0.75rem;
+      cursor: pointer;
+      color: #4493f8;
+      background: none;
+      border: none;
+      text-decoration: underline;
+      flex-shrink: 0;
+    }
+
     .decided-card .undo-link {
       margin-left: auto;
       font-size: 0.75rem;
@@ -1380,6 +1474,7 @@ var App = {
   prevInventories: {}, // sectionId -> sorted key string for rebuild comparison
   decisions: {},       // key -> true (decided). Presence means user acted; snapshot holds actual value.
   priorValues: {},     // key -> prior include value before makeDecision (for undo)
+  secretDecisions: {}, // key -> {include: bool, kind: string} for three-state secret cards
   activeSection: 'overview',
   tierExpanded: {},    // sectionId-tier -> boolean
   groupPriorState: {},  // groupName -> {key: priorInclude} for toggle restore
@@ -1972,8 +2067,287 @@ function renderOverview() {
   }
 }
 
+// ── Secret card helpers ──
+function getRedactionForItem(item) {
+  if (item.key.indexOf('secret-') !== 0) return null;
+  var idx = parseInt(item.key.substring(7), 10);
+  if (isNaN(idx) || !App.snapshot.redactions || idx >= App.snapshot.redactions.length) return null;
+  return App.snapshot.redactions[idx];
+}
+
+function buildSecretCard(item) {
+  var redaction = getRedactionForItem(item);
+  var kind = (redaction && redaction.kind) ? redaction.kind : 'flagged';
+
+  var card = document.createElement('div');
+  card.className = 'triage-card tier-' + item.tier;
+  card.setAttribute('data-key', item.key);
+
+  // Badge
+  var badge = document.createElement('span');
+  badge.className = 'secret-badge';
+  if (kind === 'excluded') {
+    badge.classList.add('badge-excluded');
+    badge.textContent = 'Excluded';
+  } else if (kind === 'inline') {
+    badge.classList.add('badge-inline');
+    badge.textContent = 'Inline Redacted';
+  } else {
+    badge.classList.add('badge-flagged');
+    badge.textContent = 'Flagged for Review';
+  }
+  card.appendChild(badge);
+
+  // Name
+  var nameEl = document.createElement('div');
+  nameEl.className = 'card-name';
+  nameEl.textContent = item.name || item.key;
+  card.appendChild(nameEl);
+
+  // Meta
+  if (item.meta) {
+    var metaEl = document.createElement('div');
+    metaEl.className = 'card-meta';
+    metaEl.textContent = item.meta;
+    card.appendChild(metaEl);
+  }
+
+  // Explanation
+  var explanation = document.createElement('div');
+  explanation.className = 'secret-explanation';
+  if (kind === 'excluded') {
+    explanation.textContent = 'This file was excluded from the image because it contains a detected secret.';
+  } else if (kind === 'inline') {
+    explanation.textContent = 'The secret value was replaced with a REDACTED placeholder in the exported config file.';
+  } else {
+    explanation.textContent = 'This file was flagged by heuristic analysis. The content may or may not contain a real secret.';
+  }
+  card.appendChild(explanation);
+
+  // Consequence preview (collapsed by default)
+  var details = document.createElement('details');
+  details.className = 'secret-consequence';
+  var summary = document.createElement('summary');
+  summary.textContent = 'Show consequence preview';
+  details.appendChild(summary);
+  var pre = document.createElement('pre');
+  var path = (redaction && redaction.path) || item.name || item.key;
+  if (kind === 'excluded') {
+    pre.textContent = '# EXCLUDED by inspectah: secret detected\n# Path: ' + path + '\n# Pattern: ' + ((redaction && redaction.pattern) || 'n/a');
+  } else if (kind === 'inline') {
+    pre.textContent = 'COPY ' + path + ' ' + path + '\n# Secret values replaced with REDACTED placeholders';
+  } else {
+    pre.textContent = '# File content may be carried as-is (no redaction applied)\n# Path: ' + path;
+  }
+  details.appendChild(pre);
+  card.appendChild(details);
+
+  // Decision buttons (omitted in static mode)
+  if (App.mode !== 'static') {
+    var actions = document.createElement('div');
+    actions.className = 'card-actions';
+
+    if (kind === 'excluded') {
+      // Override: include despite secret; Confirm: keep excluded
+      var overrideBtn = document.createElement('button');
+      overrideBtn.type = 'button';
+      overrideBtn.className = 'btn-outline';
+      overrideBtn.textContent = 'Include anyway';
+      overrideBtn.setAttribute('aria-label', 'Include ' + (item.name || item.key) + ' despite detected secret');
+      overrideBtn.onclick = function() {
+        makeSecretDecision(item.key, item.section, true, 'excluded');
+      };
+      actions.appendChild(overrideBtn);
+
+      var confirmBtn = document.createElement('button');
+      confirmBtn.type = 'button';
+      confirmBtn.className = 'btn-primary';
+      confirmBtn.textContent = 'Keep excluded';
+      confirmBtn.setAttribute('aria-label', 'Keep ' + (item.name || item.key) + ' excluded from image');
+      confirmBtn.onclick = function() {
+        makeSecretDecision(item.key, item.section, false, 'excluded');
+      };
+      actions.appendChild(confirmBtn);
+    } else if (kind === 'inline') {
+      // Override: exclude from image; Confirm: keep redacted
+      var excludeBtn = document.createElement('button');
+      excludeBtn.type = 'button';
+      excludeBtn.className = 'btn-outline';
+      excludeBtn.textContent = 'Exclude from image';
+      excludeBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
+      excludeBtn.onclick = function() {
+        makeSecretDecision(item.key, item.section, false, 'inline');
+      };
+      actions.appendChild(excludeBtn);
+
+      var keepBtn = document.createElement('button');
+      keepBtn.type = 'button';
+      keepBtn.className = 'btn-primary';
+      keepBtn.textContent = 'Keep redacted';
+      keepBtn.setAttribute('aria-label', 'Keep ' + (item.name || item.key) + ' with redacted placeholders');
+      keepBtn.onclick = function() {
+        makeSecretDecision(item.key, item.section, true, 'inline');
+      };
+      actions.appendChild(keepBtn);
+    } else {
+      // Flagged: exclude or keep as-is
+      var exclBtn = document.createElement('button');
+      exclBtn.type = 'button';
+      exclBtn.className = 'btn-outline';
+      exclBtn.textContent = 'Exclude from image';
+      exclBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
+      exclBtn.onclick = function() {
+        makeSecretDecision(item.key, item.section, false, 'flagged');
+      };
+      actions.appendChild(exclBtn);
+
+      var keepAsIsBtn = document.createElement('button');
+      keepAsIsBtn.type = 'button';
+      keepAsIsBtn.className = 'btn-primary';
+      keepAsIsBtn.textContent = 'Keep as-is';
+      keepAsIsBtn.setAttribute('aria-label', 'Keep ' + (item.name || item.key) + ' as-is in image');
+      keepAsIsBtn.onclick = function() {
+        makeSecretDecision(item.key, item.section, true, 'flagged');
+      };
+      actions.appendChild(keepAsIsBtn);
+    }
+
+    card.appendChild(actions);
+  }
+
+  return card;
+}
+
+function makeSecretDecision(key, sectionId, include, kind) {
+  if (App.mode === 'static') return;
+  // Store prior values for undo
+  App.priorValues[key] = getSnapshotInclude(key);
+  if (!App.secretDecisions) App.secretDecisions = {};
+  App.secretDecisions[key] = { include: include, kind: kind };
+  App.decisions[key] = true;
+  updateSnapshotInclude(key, include);
+  incrementChangeCounter();
+
+  var current = App.reviewStates[sectionId];
+  if (current === 'unreviewed' || !current) {
+    App.reviewStates[sectionId] = 'in-progress';
+    updateSidebarDot(sectionId);
+    updateProgressBar();
+  }
+
+  renderTriageSection(sectionId);
+  updateBadge(sectionId);
+  focusNextUndecided(sectionId);
+  scheduleAutosave();
+}
+
+function undoSecretDecision(key, sectionId) {
+  if (App.mode === 'static') return;
+  if (App.priorValues[key] !== undefined) {
+    updateSnapshotInclude(key, App.priorValues[key]);
+    delete App.priorValues[key];
+  }
+  delete App.decisions[key];
+  if (App.secretDecisions) delete App.secretDecisions[key];
+  decrementChangeCounter();
+
+  if (App.reviewStates[sectionId] === 'reviewed') {
+    App.reviewStates[sectionId] = 'in-progress';
+    updateSidebarDot(sectionId);
+    updateProgressBar();
+  }
+
+  renderTriageSection(sectionId);
+  updateBadge(sectionId);
+  scheduleAutosave();
+
+  // After undo re-render, focus the first action button on the restored card
+  var restored = document.querySelector('[data-key="' + key + '"] .card-actions button');
+  if (restored) restored.focus();
+}
+
+function buildSecretDecidedCard(item) {
+  if (!App.secretDecisions || !App.secretDecisions[item.key]) {
+    // Fallback to legacy decided card for decisions made before this feature
+    var inc = getSnapshotInclude(item.key);
+    return buildDecidedCard(item, inc);
+  }
+
+  var decision = App.secretDecisions[item.key];
+  var kind = decision.kind;
+  var included = decision.include;
+
+  var card = document.createElement('div');
+  card.className = 'secret-collapsed';
+  card.setAttribute('data-key', item.key);
+
+  // Icon
+  var icon = document.createElement('span');
+  icon.className = 'secret-collapsed-icon';
+  if (kind === 'excluded' && included) {
+    icon.textContent = '⚠';  // warning sign — included despite secret
+  } else if (!included) {
+    icon.textContent = '✖';  // heavy x — excluded
+  } else {
+    icon.textContent = '✔';  // heavy check — kept
+  }
+  card.appendChild(icon);
+
+  // Path
+  var pathEl = document.createElement('span');
+  pathEl.className = 'secret-collapsed-path';
+  pathEl.textContent = item.name || item.key;
+  card.appendChild(pathEl);
+
+  // Summary text
+  var summaryEl = document.createElement('span');
+  summaryEl.className = 'secret-collapsed-summary';
+  if (kind === 'excluded' && included) {
+    summaryEl.textContent = 'Included despite secret';
+  } else if (kind === 'excluded' && !included) {
+    summaryEl.textContent = 'Excluded from image';
+  } else if (kind === 'inline' && !included) {
+    summaryEl.textContent = 'Excluded from image';
+  } else if (kind === 'inline' && included) {
+    summaryEl.textContent = 'Kept with redacted values';
+  } else if (kind === 'flagged' && !included) {
+    summaryEl.textContent = 'Excluded from image';
+  } else {
+    summaryEl.textContent = 'Kept as-is';
+  }
+  card.appendChild(summaryEl);
+
+  // Undo button (omitted in static mode)
+  if (App.mode !== 'static') {
+    var undoBtn = document.createElement('button');
+    undoBtn.type = 'button';
+    undoBtn.className = 'undo-btn';
+    undoBtn.textContent = 'undo';
+    undoBtn.setAttribute('aria-label', 'Undo decision for ' + (item.name || item.key));
+    undoBtn.onclick = function() {
+      undoSecretDecision(item.key, item.section);
+    };
+    card.appendChild(undoBtn);
+
+    // Focus management: after render, focus the undo button
+    setTimeout(function() {
+      var btn = card.querySelector('.undo-btn');
+      if (btn) btn.focus();
+    }, 0);
+  }
+
+  card.setAttribute('aria-label', (item.name || item.key) + ': ' + summaryEl.textContent);
+  return card;
+}
+
 // ── Triage Card Builder ──
 function buildTriageCard(item) {
+  // Delegate to three-state secret card builder for secret items
+  var isSecret = item.is_secret || item.section === 'secrets';
+  if (isSecret) {
+    return buildSecretCard(item);
+  }
+
   var card = document.createElement('div');
   card.className = 'triage-card tier-' + item.tier;
   card.setAttribute('data-key', item.key);
@@ -2014,26 +2388,8 @@ function buildTriageCard(item) {
     actions.className = 'card-actions';
 
     var displayOnly = item.display_only || isDisplayOnly(item.key);
-    var isSecret = item.is_secret || item.section === 'secrets';
 
-    if (isSecret) {
-      // Secrets: "Exclude from image" is primary, "Keep in image (acknowledged)" is secondary
-      var excludeBtn = document.createElement('button');
-      excludeBtn.type = 'button';
-      excludeBtn.className = 'btn-primary';
-      excludeBtn.textContent = 'Exclude from image';
-      excludeBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
-      excludeBtn.onclick = function() { makeDecision(item.key, item.section, false); };
-      actions.appendChild(excludeBtn);
-
-      var keepBtn = document.createElement('button');
-      keepBtn.type = 'button';
-      keepBtn.className = 'btn-outline';
-      keepBtn.textContent = 'Keep in image (acknowledged)';
-      keepBtn.setAttribute('aria-label', 'Keep ' + (item.name || item.key) + ' in image');
-      keepBtn.onclick = function() { makeDecision(item.key, item.section, true); };
-      actions.appendChild(keepBtn);
-    } else if (displayOnly) {
+    if (displayOnly) {
       // Display-only: "Acknowledge" / "Skip"
       var ackBtn = document.createElement('button');
       ackBtn.type = 'button';
@@ -3727,8 +4083,13 @@ function renderTriageSection(sectionId) {
           // kmod items: display-only treatment in main section (no toggles)
           card = buildInfoReadOnlyCard(uItem);
         } else if (isItemDecided(uItem)) {
-          var inc = getSnapshotInclude(uItem.key);
-          card = buildDecidedCard(uItem, inc);
+          var uIsSecret = uItem.is_secret || uItem.section === 'secrets';
+          if (uIsSecret) {
+            card = buildSecretDecidedCard(uItem);
+          } else {
+            var inc = getSnapshotInclude(uItem.key);
+            card = buildDecidedCard(uItem, inc);
+          }
         } else {
           card = buildTriageCard(uItem);
         }
