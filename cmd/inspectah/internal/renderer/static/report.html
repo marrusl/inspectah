@@ -1109,6 +1109,10 @@ var App = {
 //   1. Started true, user excluded → current=false, default=true → decided
 //   2. Started false (fleet), never touched → current=false, default=false → undecided
 //   3. Started false, user re-included → current=true, default=false → decided
+function isPassiveItem(item) {
+  return item.display_only && item.group && item.key.indexOf('verchg-') === 0;
+}
+
 function isItemDecided(item) {
   if (App.decisions[item.key]) return true;
   // Display-only items are "decided" when acknowledged in the snapshot
@@ -1165,7 +1169,7 @@ var MIGRATION_SECTIONS = [
   {id: 'runtime',    label: 'Runtime',         tracked: true},
   {id: 'containers', label: 'Containers',      tracked: true},
   {id: 'identity',   label: 'Identity',        tracked: true},
-  {id: 'system',     label: 'System',          tracked: true},
+  {id: 'system',     label: 'System & Security', tracked: true},
   {id: 'secrets',    label: 'Secrets',         tracked: true},
   {id: 'editor',    label: 'Edit Files',      tracked: false}
 ];
@@ -1442,6 +1446,7 @@ function updateBadge(sectionId) {
   var undecided3 = 0;
   var undecided2 = 0;
   for (var i = 0; i < items.length; i++) {
+    if (isPassiveItem(items[i])) continue;
     if (isItemDecided(items[i])) continue;  // user has acted on this item
     if (items[i].tier === 3) undecided3++;
     else if (items[i].tier === 2) undecided2++;
@@ -2082,7 +2087,11 @@ function buildNotificationCard(item) {
 
   var desc = document.createElement('div');
   desc.style.cssText = 'font-size:13px;opacity:0.7;margin-bottom:10px;';
-  desc.textContent = 'Provide a reproducible build-time source and add the installation to your Containerfile.';
+  if (item.section === 'system' && item.key.indexOf('semod-') === 0) {
+    desc.textContent = 'To include this module in the image, add COPY and semodule -i steps to your Containerfile manually.';
+  } else {
+    desc.textContent = 'Provide a reproducible build-time source and add the installation to your Containerfile.';
+  }
   full.appendChild(desc);
 
   // Acknowledge button (omitted in static mode)
@@ -2113,9 +2122,12 @@ function buildNotificationCard(item) {
   left.appendChild(cName);
   var cWarn = document.createElement('span');
   cWarn.style.cssText = 'font-size:12px;color:#f85149;';
-  cWarn.textContent = 'no repo — manual install required';
-  if (item.card_type === 'notification' && item.section === 'containers') {
+  if (item.section === 'system' && item.key.indexOf('semod-') === 0) {
+    cWarn.textContent = 'custom module — manual Containerfile steps required';
+  } else if (item.card_type === 'notification' && item.section === 'containers') {
     cWarn.textContent = 'unclear provenance — manual follow-up required';
+  } else {
+    cWarn.textContent = 'no repo — manual install required';
   }
   left.appendChild(cWarn);
   row.appendChild(left);
@@ -2313,6 +2325,10 @@ function getSnapshotAcknowledged(key) {
     return App.decisions[key] || false;
   }
 
+  if (key.indexOf('semod-') === 0) {
+    return App.decisions[key] || false;
+  }
+
   return false;
 }
 
@@ -2375,6 +2391,10 @@ function setSnapshotAcknowledged(key, value) {
     }
   } else if (key.indexOf('group-') === 0) {
     // Cannot persist to snapshot (untyped map). Decision tracking only.
+    return;
+  }
+
+  if (key.indexOf('semod-') === 0) {
     return;
   }
 }
@@ -3023,13 +3043,16 @@ function renderTriageSection(sectionId) {
   footer.className = 'section-footer';
 
   var decidedCount = 0;
+  var accountableTotal = 0;
   for (var fc = 0; fc < allItems.length; fc++) {
+    if (isPassiveItem(allItems[fc])) continue;
+    accountableTotal++;
     if (isItemDecided(allItems[fc]) || (allItems[fc].display_only && getSnapshotAcknowledged(allItems[fc].key))) decidedCount++;
   }
 
   var statsSpan = document.createElement('span');
   statsSpan.className = 'section-stats';
-  statsSpan.textContent = decidedCount + ' / ' + allItems.length + ' decided';
+  statsSpan.textContent = decidedCount + ' / ' + accountableTotal + ' decided';
   footer.appendChild(statsSpan);
 
   var reviewBtn = document.createElement('button');
@@ -4107,6 +4130,9 @@ function restoreFocus(sectionId, targetType, targetId) {
   } else if (targetType === 'notification-ack') {
     var wrapper = container.querySelector('[data-key="' + targetId + '"]');
     if (wrapper) target = wrapper.querySelector('.notification-full button.btn-primary');
+  } else if (targetType === 'dep-chevron') {
+    var row = container.querySelector('[data-dep-key="' + targetId + '"]');
+    if (row) target = row.querySelector('.dep-chevron');
   } else if (targetType === 'tier-header') {
     var tierDiv = container.querySelector('[data-tier="' + targetId + '"]');
     if (tierDiv) target = tierDiv.querySelector('.tier-group-header');
