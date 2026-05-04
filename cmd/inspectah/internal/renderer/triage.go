@@ -534,34 +534,6 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 			items = append(items, item)
 		}
 	}
-	if snap.Selinux != nil {
-		for _, b := range snap.Selinux.BooleanOverrides {
-			name, _ := b["name"].(string)
-			val, _ := b["current_value"].(string)
-			items = append(items, TriageItem{
-				Section: "identity", Key: "sebool-" + name,
-				Tier: 2, Reason: "SELinux boolean changed from default.",
-				Name: name, Meta: val,
-				DefaultInclude: mapInclude(b),
-			})
-		}
-		for _, m := range snap.Selinux.CustomModules {
-			items = append(items, TriageItem{
-				Section: "identity", Key: "semod-" + m,
-				Tier: 3, Reason: "Custom SELinux policy module.",
-				Name: m,
-				DefaultInclude: true,
-			})
-		}
-		for _, p := range snap.Selinux.PortLabels {
-			items = append(items, TriageItem{
-				Section: "identity", Key: fmt.Sprintf("seport-%s-%s", p.Protocol, p.Port),
-				Tier: 2, Reason: "Custom SELinux port label.",
-				Name:           fmt.Sprintf("%s/%s -> %s", p.Protocol, p.Port, p.Type),
-				DefaultInclude: p.Include,
-			})
-		}
-	}
 	return items
 }
 
@@ -642,6 +614,50 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				}
 			}
 			items = append(items, item)
+		}
+	}
+	if snap.Selinux != nil {
+		for _, b := range snap.Selinux.BooleanOverrides {
+			name, _ := b["name"].(string)
+			val, _ := b["current_value"].(string)
+			if name == "" {
+				continue
+			}
+			group := ""
+			if !isFleet {
+				group = "sub:selinux"
+			}
+			items = append(items, TriageItem{
+				Section: "system", Key: "sebool-" + name,
+				Tier: 2, Reason: "SELinux boolean changed from default.",
+				Name: name, Meta: val,
+				DefaultInclude: mapInclude(b),
+				Group:          group,
+			})
+		}
+		for _, m := range snap.Selinux.CustomModules {
+			// semod-* is UNGROUPED — must route to buildNotificationCard,
+			// which only renders ungrouped items
+			items = append(items, TriageItem{
+				Section: "system", Key: "semod-" + m,
+				Tier: 3, Reason: "Custom SELinux policy module. inspectah cannot yet generate semodule installation commands — manual Containerfile steps required.",
+				Name:           m,
+				DefaultInclude: true,
+				CardType:       "notification",
+			})
+		}
+		for _, p := range snap.Selinux.PortLabels {
+			group := ""
+			if !isFleet {
+				group = "sub:selinux"
+			}
+			items = append(items, TriageItem{
+				Section: "system", Key: fmt.Sprintf("seport-%s-%s", p.Protocol, p.Port),
+				Tier: 2, Reason: "Custom SELinux port label.",
+				Name:           fmt.Sprintf("%s/%s -> %s", p.Protocol, p.Port, p.Type),
+				DefaultInclude: p.Include,
+				Group:          group,
+			})
 		}
 	}
 	return items

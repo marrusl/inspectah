@@ -904,3 +904,45 @@ func TestClassifyVersionChanges_Fleet_ReturnsNil(t *testing.T) {
 	items := classifyVersionChanges(snap, true)
 	assert.Nil(t, items)
 }
+
+func TestClassifySELinux_InSystemSection(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Selinux = &schema.SelinuxSection{
+		BooleanOverrides: []map[string]interface{}{
+			{"name": "httpd_can_network_connect", "current_value": "on", "include": true},
+		},
+		CustomModules: []string{"myapp"},
+		PortLabels: []schema.SelinuxPortLabel{
+			{Protocol: "tcp", Port: "8443", Type: "http_port_t", Include: true},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+
+	sebool := findItem(items, "sebool-httpd_can_network_connect")
+	require.NotNil(t, sebool)
+	assert.Equal(t, "system", sebool.Section)
+	assert.Equal(t, "sub:selinux", sebool.Group)
+	assert.Equal(t, 2, sebool.Tier)
+	assert.Equal(t, "on", sebool.Meta)
+
+	semod := findItem(items, "semod-myapp")
+	require.NotNil(t, semod)
+	assert.Equal(t, "system", semod.Section)
+	assert.Equal(t, "", semod.Group, "semod-* must be ungrouped to route to buildNotificationCard")
+	assert.Equal(t, 3, semod.Tier)
+	assert.Equal(t, "notification", semod.CardType)
+
+	seport := findItem(items, "seport-tcp-8443")
+	require.NotNil(t, seport)
+	assert.Equal(t, "system", seport.Section)
+	assert.Equal(t, "sub:selinux", seport.Group)
+
+	for _, item := range items {
+		if item.Section == "identity" {
+			assert.NotContains(t, item.Key, "sebool-")
+			assert.NotContains(t, item.Key, "semod-")
+			assert.NotContains(t, item.Key, "seport-")
+		}
+	}
+}
