@@ -4989,6 +4989,12 @@ function buildInformationalTier(items, sectionId) {
   tierHeader.setAttribute('tabindex', '0');
   tierHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
 
+  var chevron = document.createElement('span');
+  chevron.className = 'tier-chevron' + (isExpanded ? ' expanded' : '');
+  chevron.textContent = '▸';
+  chevron.setAttribute('aria-hidden', 'true');
+  tierHeader.appendChild(chevron);
+
   var indicator = document.createElement('span');
   indicator.className = 'tier-indicator tier-info';
   tierHeader.appendChild(indicator);
@@ -4996,10 +5002,6 @@ function buildInformationalTier(items, sectionId) {
   var headerText = document.createElement('span');
   headerText.textContent = 'Informational (' + items.length + ')';
   tierHeader.appendChild(headerText);
-
-  var chevron = document.createElement('span');
-  chevron.className = 'tier-chevron' + (isExpanded ? ' expanded' : '');
-  chevron.textContent = '▸';
   chevron.setAttribute('aria-hidden', 'true');
   tierHeader.appendChild(chevron);
 
