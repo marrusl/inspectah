@@ -1074,13 +1074,12 @@ const SNAPSHOT = {{.SnapshotJSON}};
 const INITIAL_CONTAINERFILE = {{.Containerfile}};
 const TRIAGE_MANIFEST = {{.TriageManifest}};
 
-// ── Display-only key prefixes ──
-// These item types use "Acknowledge / Skip" instead of "Include / Leave out"
-var DISPLAY_ONLY_PREFIXES = ['conn-', 'fstab-', 'container-', 'group-'];
-
+// ── Display-only check (manifest-based) ──
 function isDisplayOnly(key) {
-  for (var i = 0; i < DISPLAY_ONLY_PREFIXES.length; i++) {
-    if (key.indexOf(DISPLAY_ONLY_PREFIXES[i]) === 0) return true;
+  for (var i = 0; i < App.triageManifest.length; i++) {
+    if (App.triageManifest[i].key === key) {
+      return App.triageManifest[i].display_only || false;
+    }
   }
   return false;
 }
@@ -1621,7 +1620,7 @@ function buildTriageCard(item) {
   var actions = document.createElement('div');
   actions.className = 'card-actions';
 
-  var displayOnly = isDisplayOnly(item.key);
+  var displayOnly = item.display_only || isDisplayOnly(item.key);
   var isSecret = item.is_secret || item.section === 'secrets';
 
   if (isSecret) {
@@ -1648,7 +1647,7 @@ function buildTriageCard(item) {
     ackBtn.className = 'btn-primary';
     ackBtn.textContent = 'Acknowledge';
     ackBtn.setAttribute('aria-label', 'Acknowledge ' + (item.name || item.key));
-    ackBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+    ackBtn.onclick = function() { acknowledgeNotification(item.key, item.section); };
     actions.appendChild(ackBtn);
 
     var skipBtn = document.createElement('button');
@@ -1656,7 +1655,7 @@ function buildTriageCard(item) {
     skipBtn.className = 'btn-outline';
     skipBtn.textContent = 'Skip';
     skipBtn.setAttribute('aria-label', 'Skip ' + (item.name || item.key));
-    skipBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+    skipBtn.onclick = function() { acknowledgeNotification(item.key, item.section); };
     actions.appendChild(skipBtn);
   } else if (item.tier === 3) {
     // Non-secret tier 3: "Acknowledge & include" / "Exclude"
@@ -1711,7 +1710,7 @@ function buildDecidedCard(item, included) {
   var label = document.createElement('span');
   label.className = 'decided-label';
 
-  var displayOnly = isDisplayOnly(item.key);
+  var displayOnly = item.display_only || isDisplayOnly(item.key);
   var isSecret = item.is_secret || item.section === 'secrets';
 
   if (isSecret) {
@@ -2819,17 +2818,25 @@ function renderAllSections() {
   }
 }
 
+// ── Third-party repo detection (JS-side) ──
+function isThirdPartyRepoJS(repoName) {
+  var standard = ['baseos', 'appstream', 'rhel', 'fedora', 'crb', 'codeready'];
+  var lower = repoName.toLowerCase();
+  for (var i = 0; i < standard.length; i++) {
+    if (lower.indexOf(standard[i]) !== -1) return false;
+  }
+  return true;
+}
+
 function renderTriageSection(sectionId) {
   var container = document.getElementById('section-' + sectionId);
   if (!container) return;
   container.innerHTML = '';
 
-  // Section heading
   var heading = document.createElement('h2');
   heading.className = 'section-heading';
   heading.id = 'heading-' + sectionId;
   heading.setAttribute('tabindex', '-1');
-  // Find label
   var label = sectionId;
   for (var s = 0; s < MIGRATION_SECTIONS.length; s++) {
     if (MIGRATION_SECTIONS[s].id === sectionId) {
@@ -2840,10 +2847,8 @@ function renderTriageSection(sectionId) {
   heading.textContent = label;
   container.appendChild(heading);
 
-  var items = getManifestItemsForSection(sectionId);
-
-  // Zero-item section
-  if (items.length === 0) {
+  var allItems = getManifestItemsForSection(sectionId);
+  if (allItems.length === 0) {
     var emptyMsg = document.createElement('p');
     emptyMsg.style.opacity = '0.6';
     emptyMsg.style.fontStyle = 'italic';
@@ -2852,92 +2857,42 @@ function renderTriageSection(sectionId) {
     return;
   }
 
-  // Group by tier, render 3 -> 2 -> 1
-  var groups = groupByTier(items);
+  var groups = groupByTier(allItems);
   var tiers = [3, 2, 1];
 
   for (var ti = 0; ti < tiers.length; ti++) {
     var tier = tiers[ti];
-    var tierItems = groups[tier];
-    if (!tierItems || tierItems.length === 0) continue;
+    var tierItems = groups[tier] || [];
+    if (tierItems.length === 0) continue;
 
     var tierDiv = document.createElement('div');
     tierDiv.className = 'tier-group';
-    tierDiv.setAttribute('data-tier', tier);
 
-    // Separate decided and undecided items
-    var decided = [];
-    var undecided = [];
-    // For tier 1, also track overrides (excluded auto-includes)
-    var overrides = [];
-
-    for (var ii = 0; ii < tierItems.length; ii++) {
-      var item = tierItems[ii];
-      if (isItemDecided(item)) {  // user has acted on this item
-        if (tier === 1 && getSnapshotInclude(item.key) === false) {
-          overrides.push(item);
-        } else {
-          decided.push(item);
-        }
-      } else {
-        undecided.push(item);
-      }
-    }
-
-    // Tier header
     var tierLabel = tier === 3 ? 'Flagged' : tier === 2 ? 'Needs decision' : 'Auto-included';
     var tierHeader = document.createElement('div');
     tierHeader.className = 'tier-group-header';
     tierHeader.setAttribute('role', 'button');
-    tierHeader.setAttribute('aria-expanded', 'true');
-
     var expandKey = sectionId + '-' + tier;
-    // Tier 1 collapsed by default unless previously expanded
     var isExpanded = App.tierExpanded[expandKey];
-    if (isExpanded === undefined) {
-      isExpanded = (tier !== 1);
-    }
+    if (isExpanded === undefined) isExpanded = (tier !== 1);
     tierHeader.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
 
     var indicator = document.createElement('span');
     indicator.className = 'tier-indicator tier-' + tier;
     tierHeader.appendChild(indicator);
-
     var headerText = document.createElement('span');
     headerText.textContent = tierLabel + ' (' + tierItems.length + ')';
     tierHeader.appendChild(headerText);
 
-    // Toggle expand/collapse
-    tierHeader.onclick = (function(key, headerEl) {
-      return function() {
-        var expanded = headerEl.getAttribute('aria-expanded') === 'true';
-        App.tierExpanded[key] = !expanded;
-        headerEl.setAttribute('aria-expanded', !expanded ? 'true' : 'false');
-        var itemsContainer = headerEl.nextElementSibling;
-        // Skip the tier1-summary if it exists
-        while (itemsContainer && !itemsContainer.classList.contains('tier-group-items')) {
-          itemsContainer = itemsContainer.nextElementSibling;
-        }
-        if (itemsContainer) {
-          if (!expanded) {
-            itemsContainer.classList.remove('collapsed');
-          } else {
-            itemsContainer.classList.add('collapsed');
-          }
-        }
-        // Expanding tier 1 transitions to in-progress
-        if (!expanded && tier === 1) {
-          var currentState = App.reviewStates[sectionId];
-          if (currentState === 'unreviewed' || !currentState) {
-            App.reviewStates[sectionId] = 'in-progress';
-            updateSidebarDot(sectionId);
-            updateProgressBar();
-          }
-        }
-      };
-    })(expandKey, tierHeader);
-
     tierHeader.setAttribute('tabindex', '0');
+    tierHeader.onclick = (function(key, sId) {
+      return function() {
+        var exp = App.tierExpanded[key];
+        if (exp === undefined) exp = (tier !== 1);
+        App.tierExpanded[key] = !exp;
+        renderTriageSection(sId);
+      };
+    })(expandKey, sectionId);
     tierHeader.addEventListener('keydown', function(e) {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -2947,80 +2902,90 @@ function renderTriageSection(sectionId) {
 
     tierDiv.appendChild(tierHeader);
 
-    // Tier 1 summary line (shown when collapsed)
-    if (tier === 1 && !isExpanded && undecided.length > 0) {
-      var summary = document.createElement('div');
-      summary.className = 'tier1-summary';
-      summary.textContent = undecided.length + ' standard item' +
-        (undecided.length !== 1 ? 's' : '') + ' auto-included';
-      summary.onclick = function() { tierHeader.click(); };
-      tierDiv.appendChild(summary);
-    }
+    if (isExpanded) {
+      var itemsDiv = document.createElement('div');
+      itemsDiv.className = 'tier-group-items';
 
-    // Overrides surface above collapsed tier-1 items
-    if (tier === 1 && overrides.length > 0) {
-      for (var oi = 0; oi < overrides.length; oi++) {
-        tierDiv.appendChild(buildDecidedCard(overrides[oi], false));
+      // Separate grouped vs ungrouped items
+      var groupedMap = {};
+      var ungrouped = [];
+      for (var i = 0; i < tierItems.length; i++) {
+        var item = tierItems[i];
+        if (item.group) {
+          if (!groupedMap[item.group]) groupedMap[item.group] = [];
+          groupedMap[item.group].push(item);
+        } else {
+          ungrouped.push(item);
+        }
       }
+
+      // Render ungrouped items first (individual cards)
+      for (var u = 0; u < ungrouped.length; u++) {
+        var card;
+        var uItem = ungrouped[u];
+        if (uItem.card_type === 'notification') {
+          card = buildNotificationCard(uItem);
+        } else if (uItem.display_only) {
+          if (uItem.acknowledged || getSnapshotAcknowledged(uItem.key)) {
+            card = buildDisplayOnlyDecidedCard(uItem);
+          } else {
+            card = buildTriageCard(uItem);
+          }
+        } else if (isItemDecided(uItem)) {
+          var inc = getSnapshotInclude(uItem.key);
+          card = buildDecidedCard(uItem, inc);
+        } else {
+          card = buildTriageCard(uItem);
+        }
+        itemsDiv.appendChild(card);
+      }
+
+      // Render grouped items as accordions
+      var groupNames = Object.keys(groupedMap).sort();
+      for (var g = 0; g < groupNames.length; g++) {
+        var gName = groupNames[g];
+        var gItems = groupedMap[gName];
+        var isDisplayOnlyGroup = gItems[0] && gItems[0].display_only;
+
+        if (isDisplayOnlyGroup) {
+          itemsDiv.appendChild(buildDisplayAccordion(gName, gItems));
+        } else {
+          var opts = {};
+          if (gName.indexOf('repo:baseos') === 0) {
+            opts.alwaysIncluded = true;
+            opts.displayName = 'BaseOS';
+          }
+          if (gName.indexOf('repo:') === 0) {
+            var repoName = gName.substring(5);
+            opts.displayName = opts.displayName || repoName;
+            if (isThirdPartyRepoJS(repoName)) {
+              opts.badge = 'third-party';
+            }
+          }
+          itemsDiv.appendChild(buildOutputAccordion(gName, gItems, opts));
+        }
+      }
+
+      tierDiv.appendChild(itemsDiv);
     }
 
-    // Items container
-    var itemsDiv = document.createElement('div');
-    itemsDiv.className = 'tier-group-items';
-    if (!isExpanded) itemsDiv.classList.add('collapsed');
-
-    // Show decided items first (collapsed cards)
-    for (var di = 0; di < decided.length; di++) {
-      itemsDiv.appendChild(buildDecidedCard(decided[di], getSnapshotInclude(decided[di].key)));
-    }
-
-    // Show undecided items (full cards)
-    for (var ui = 0; ui < undecided.length; ui++) {
-      itemsDiv.appendChild(buildTriageCard(undecided[ui]));
-    }
-
-    tierDiv.appendChild(itemsDiv);
     container.appendChild(tierDiv);
   }
 
-  // Section footer
-  var footer = document.createElement('div');
-  footer.className = 'section-footer';
-
-  var decidedCount = 0;
-  for (var fc = 0; fc < items.length; fc++) {
-    if (isItemDecided(items[fc])) decidedCount++;
+  // Store inventory for rebuild comparison
+  var keys = [];
+  for (var k = 0; k < allItems.length; k++) {
+    keys.push(allItems[k].key + ':' + allItems[k].tier);
   }
-
-  var statsSpan = document.createElement('span');
-  statsSpan.className = 'section-stats';
-  statsSpan.textContent = decidedCount + ' / ' + items.length + ' decided';
-  footer.appendChild(statsSpan);
-
-  var reviewBtn = document.createElement('button');
-  reviewBtn.type = 'button';
-  reviewBtn.className = 'mark-reviewed-btn';
-  var isReviewed = App.reviewStates[sectionId] === 'reviewed';
-  if (isReviewed) {
-    reviewBtn.classList.add('reviewed');
-    reviewBtn.textContent = '✓ Reviewed';
-  } else {
-    reviewBtn.textContent = 'Mark section reviewed';
-  }
-  reviewBtn.setAttribute('aria-label', isReviewed ?
-    label + ' section reviewed' : 'Mark ' + label + ' section reviewed');
-  reviewBtn.onclick = function() {
-    if (App.mode === 'static') return;
-    App.reviewStates[sectionId] = 'reviewed';
+  keys.sort();
+  var newInv = keys.join(',');
+  var oldInv = App.prevInventories[sectionId];
+  if (oldInv && oldInv !== newInv && App.reviewStates[sectionId] === 'reviewed') {
+    App.reviewStates[sectionId] = 'in-progress';
     updateSidebarDot(sectionId);
     updateProgressBar();
-    renderTriageSection(sectionId);
-    // Re-show the section
-    var sec = document.getElementById('section-' + sectionId);
-    if (sec) sec.classList.add('active');
-  };
-  footer.appendChild(reviewBtn);
-  container.appendChild(footer);
+  }
+  App.prevInventories[sectionId] = newInv;
 }
 
 // ── Containerfile Preview ──
@@ -4023,10 +3988,24 @@ function toggleTheme() {
 function focusNextUndecided(sectionId) {
   var container = document.getElementById('section-' + sectionId);
   if (!container) return;
-  var nextCard = container.querySelector('.triage-card .card-actions button');
-  if (nextCard) {
-    nextCard.focus();
+
+  var selectors = [
+    '.notification-full button.btn-primary',
+    '.triage-card .card-actions button',
+  ];
+
+  for (var s = 0; s < selectors.length; s++) {
+    var targets = container.querySelectorAll(selectors[s]);
+    for (var i = 0; i < targets.length; i++) {
+      if (!targets[i].disabled) {
+        targets[i].focus();
+        return;
+      }
+    }
   }
+
+  var heading = document.getElementById('heading-' + sectionId);
+  if (heading) heading.focus();
 }
 
 // ── Sidebar overlay (narrow viewport) ──
