@@ -1192,7 +1192,7 @@
     }
 
     .editor-file-panel {
-      width: 240px;
+      width: 340px;
       flex-shrink: 0;
       border-right: 1px solid var(--pf-t--global--border--color--default, #444);
       display: flex;
@@ -1247,9 +1247,8 @@
       padding: 0.375rem 0.75rem;
       font-size: 0.8rem;
       cursor: pointer;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      word-break: break-all;
+      overflow-wrap: anywhere;
       outline-offset: -2px;
       display: flex;
       align-items: center;
