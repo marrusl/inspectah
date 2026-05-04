@@ -791,3 +791,67 @@ func TestHTMLReportNotificationPackageNoInstallLine(t *testing.T) {
 	require.NotNil(t, vim)
 	assert.Equal(t, "repo:appstream", vim.Group)
 }
+
+func TestHTMLReportGoldenLeafDeps(t *testing.T) {
+	leafNames := []string{"vim", "htop"}
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		LeafPackages: &leafNames,
+		LeafDepTree: map[string]interface{}{
+			"vim":  []interface{}{"vim-common", "gpm-libs"},
+			"htop": nil,
+		},
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "vim-common", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "gpm-libs", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "1.20", Release: "1.el9"},
+			{Name: "htop", Arch: "x86_64", Include: false, SourceRepo: "epel", Version: "3.3", Release: "1.el9"},
+		},
+	}
+
+	dir := t.TempDir()
+	err := RenderHTMLReport(snap, dir, HTMLReportOptions{})
+	require.NoError(t, err)
+
+	reportBytes, err := os.ReadFile(filepath.Join(dir, "report.html"))
+	require.NoError(t, err)
+	manifestJSON := extractTriageManifest(t, string(reportBytes))
+	var items []TriageItem
+	require.NoError(t, json.Unmarshal([]byte(manifestJSON), &items))
+
+	assert.Equal(t, 2, len(items))
+
+	vim := findItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vim)
+	assert.Equal(t, []string{"vim-common", "gpm-libs"}, vim.Deps)
+	assert.True(t, vim.DefaultInclude, "leaf should have DefaultInclude true after normalization")
+
+	htop := findItem(items, "pkg-htop-x86_64")
+	require.NotNil(t, htop)
+	assert.Nil(t, htop.Deps)
+	assert.True(t, htop.DefaultInclude)
+}
+
+func TestHTMLReportGoldenVersionChanges(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		VersionChanges: []schema.VersionChange{
+			{Name: "bash", Arch: "x86_64", HostVersion: "5.2.26", BaseVersion: "5.2.32", Direction: schema.VersionChangeUpgrade},
+		},
+	}
+
+	dir := t.TempDir()
+	err := RenderHTMLReport(snap, dir, HTMLReportOptions{})
+	require.NoError(t, err)
+
+	reportBytes, _ := os.ReadFile(filepath.Join(dir, "report.html"))
+	manifestJSON := extractTriageManifest(t, string(reportBytes))
+	var items []TriageItem
+	require.NoError(t, json.Unmarshal([]byte(manifestJSON), &items))
+
+	bash := findItem(items, "verchg-bash-x86_64")
+	require.NotNil(t, bash)
+	assert.Equal(t, "packages", bash.Section)
+	assert.True(t, bash.DisplayOnly)
+	assert.Equal(t, "sub:version-upgrades", bash.Group)
+}

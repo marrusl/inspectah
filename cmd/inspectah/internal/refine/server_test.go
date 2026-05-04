@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/renderer"
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1055,6 +1057,157 @@ func TestRefineServer_AcknowledgeResumePersists(t *testing.T) {
 	pkg := pkgs[0].(map[string]interface{})
 	assert.Equal(t, true, pkg["acknowledged"],
 		"acknowledged=true must survive the PUT → disk write round-trip")
+}
+
+func TestRunRefine_LeafNormalization(t *testing.T) {
+	// Build a schema-compliant snapshot with leaf packages and Include: false.
+	// Use typed schema to ensure correct serialization (system_type, etc.).
+	typedSnap := schema.NewSnapshot()
+	typedSnap.Meta = map[string]interface{}{"hostname": "leaf-test"}
+	leafNames := []string{"vim", "htop"}
+	typedSnap.Rpm = &schema.RpmSection{
+		LeafPackages: &leafNames,
+		LeafDepTree: map[string]interface{}{
+			"vim":  []interface{}{"vim-common", "gpm-libs"},
+			"htop": nil,
+		},
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "vim-common", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "9.1", Release: "1.el9"},
+			{Name: "gpm-libs", Arch: "x86_64", Include: false, SourceRepo: "appstream", Version: "1.20", Release: "1.el9"},
+			{Name: "htop", Arch: "x86_64", Include: false, SourceRepo: "epel", Version: "3.3", Release: "1.el9"},
+		},
+	}
+	snapJSON, err := json.Marshal(typedSnap)
+	require.NoError(t, err)
+
+	files := map[string]string{
+		"report.html":              "<html><body>leaf test</body></html>",
+		"inspection-snapshot.json": string(snapJSON),
+		"Containerfile":            "FROM ubi9\n",
+	}
+	tarball := createTestTarball(t, files)
+
+	port, err := findFreePort(0)
+	require.NoError(t, err)
+
+	// Capture the output directory from the ReRenderFn callback.
+	var capturedDir string
+	reRenderFn := func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		capturedDir = outputDir
+		os.WriteFile(filepath.Join(outputDir, "report.html"), []byte("<html>rendered</html>"), 0644)
+		return ReRenderResult{
+			HTML:           "<html>rendered</html>",
+			Snapshot:       json.RawMessage(snapData),
+			Containerfile:  "FROM ubi9\n",
+			TriageManifest: json.RawMessage("[]"),
+		}, nil
+	}
+
+	errCh := make(chan error, 1)
+	opts := RunRefineOptions{
+		TarballPath: tarball,
+		Port:        port,
+		NoBrowser:   true,
+		ReRenderFn:  reRenderFn,
+		StopCh:      make(chan struct{}),
+	}
+
+	go func() {
+		errCh <- RunRefine(opts)
+	}()
+
+	// Wait for server to be ready.
+	healthURL := fmt.Sprintf("http://127.0.0.1:%d/api/health", port)
+	client := &http.Client{}
+	ready := false
+	for i := 0; i < 50; i++ {
+		resp, err := client.Get(healthURL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				ready = true
+				break
+			}
+		}
+		select {
+		case <-errCh:
+			t.Fatal("server exited early")
+		default:
+		}
+	}
+	require.True(t, ready, "server never became ready")
+
+	// The ReRenderFn was called during init — capturedDir is the working dir.
+	require.NotEmpty(t, capturedDir, "ReRenderFn must have been called during init")
+
+	// ── Verify working snapshot has Include normalized to true for leaves ──
+	workingData, err := os.ReadFile(filepath.Join(capturedDir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	var workingSnap map[string]interface{}
+	require.NoError(t, json.Unmarshal(workingData, &workingSnap))
+
+	workingPkgs := workingSnap["rpm"].(map[string]interface{})["packages_added"].([]interface{})
+	for _, p := range workingPkgs {
+		pm := p.(map[string]interface{})
+		name := pm["name"].(string)
+		if name == "vim" || name == "htop" {
+			assert.Equal(t, true, pm["include"],
+				"working snapshot: leaf package %s must have include=true after normalization", name)
+		}
+	}
+
+	// ── Verify sidecar has the same normalized values ──
+	sidecarData, err := os.ReadFile(filepath.Join(capturedDir, "original-inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	var sidecarSnap map[string]interface{}
+	require.NoError(t, json.Unmarshal(sidecarData, &sidecarSnap))
+
+	sidecarPkgs := sidecarSnap["rpm"].(map[string]interface{})["packages_added"].([]interface{})
+	for _, p := range sidecarPkgs {
+		pm := p.(map[string]interface{})
+		name := pm["name"].(string)
+		if name == "vim" || name == "htop" {
+			assert.Equal(t, true, pm["include"],
+				"sidecar: leaf package %s must have include=true after normalization", name)
+		}
+	}
+
+	// ── Verify ClassifySnapshot with working + sidecar produces DefaultInclude=true ──
+	// Load typed snapshots for ClassifySnapshot.
+	workingTyped, err := schema.LoadSnapshot(filepath.Join(capturedDir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+	sidecarTyped, err := schema.LoadSnapshot(filepath.Join(capturedDir, "original-inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	items := renderer.ClassifySnapshot(workingTyped, sidecarTyped)
+	vimItem := findTriageItem(items, "pkg-vim-x86_64")
+	require.NotNil(t, vimItem, "vim must appear in classified manifest")
+	assert.True(t, vimItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for leaf package vim")
+
+	htopItem := findTriageItem(items, "pkg-htop-x86_64")
+	require.NotNil(t, htopItem, "htop must appear in classified manifest")
+	assert.True(t, htopItem.DefaultInclude,
+		"ClassifySnapshot must produce DefaultInclude=true for leaf package htop")
+
+	// Stop server.
+	close(opts.StopCh)
+	select {
+	case serverErr := <-errCh:
+		assert.NoError(t, serverErr)
+	}
+}
+
+func findTriageItem(items []renderer.TriageItem, key string) *renderer.TriageItem {
+	for i := range items {
+		if items[i].Key == key {
+			return &items[i]
+		}
+	}
+	return nil
 }
 
 // snapshotDirContents reads all files in dir recursively and returns
