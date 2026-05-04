@@ -682,3 +682,46 @@ func TestClassifySystemItems_SingleMachine_Grouping(t *testing.T) {
 	assert.Equal(t, "", usrLocal.Group)
 	assert.True(t, usrLocal.DisplayOnly)
 }
+
+func TestClassifySnapshot_FleetVsSingleMachine(t *testing.T) {
+	makeSnap := func() *schema.InspectionSnapshot {
+		snap := schema.NewSnapshot()
+		snap.Rpm = &schema.RpmSection{
+			PackagesAdded: []schema.PackageEntry{
+				{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+			},
+		}
+		snap.Network = &schema.NetworkSection{
+			Connections: []schema.NMConnection{
+				{Name: "eth0", Type: "ethernet"},
+			},
+		}
+		return snap
+	}
+
+	t.Run("single-machine populates groups", func(t *testing.T) {
+		snap := makeSnap()
+		items := ClassifySnapshot(snap, nil)
+		vim := findItem(items, "pkg-vim-x86_64")
+		require.NotNil(t, vim)
+		assert.Equal(t, "repo:appstream", vim.Group)
+		eth0 := findItem(items, "conn-eth0")
+		require.NotNil(t, eth0)
+		assert.True(t, eth0.DisplayOnly)
+	})
+
+	t.Run("fleet does not populate groups", func(t *testing.T) {
+		snap := makeSnap()
+		snap.Meta["fleet"] = map[string]interface{}{
+			"source_hosts": []interface{}{"h1", "h2"},
+			"total_hosts":  float64(2),
+		}
+		items := ClassifySnapshot(snap, nil)
+		vim := findItem(items, "pkg-vim-x86_64")
+		require.NotNil(t, vim)
+		assert.Equal(t, "", vim.Group)
+		eth0 := findItem(items, "conn-eth0")
+		require.NotNil(t, eth0)
+		assert.False(t, eth0.DisplayOnly)
+	})
+}

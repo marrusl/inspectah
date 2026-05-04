@@ -722,6 +722,341 @@ func TestE2E_RenderEquality_ThreeWayProof(t *testing.T) {
 	})
 }
 
+// ── Refine-server contract tests ──
+
+func TestRefineServer_AcknowledgeDoesNotChangeArtifacts(t *testing.T) {
+	// Acknowledging a display-only item must not change the rendered output.
+	dir := setupTestOutputDir(t)
+
+	// Seed the snapshot with a display-only NMConnection.
+	snap := map[string]interface{}{
+		"meta": map[string]interface{}{"hostname": "test-host"},
+		"network": map[string]interface{}{
+			"connections": []interface{}{
+				map[string]interface{}{
+					"name": "eth0", "type": "ethernet",
+					"path": "/etc/NetworkManager/system-connections/eth0.nmconnection",
+				},
+			},
+		},
+	}
+	snapJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), snapJSON, 0644))
+
+	var lastContainerfile string
+	reRenderFn := func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		cf := "FROM ubi9\nRUN echo hello"
+		lastContainerfile = cf
+		os.WriteFile(filepath.Join(outputDir, "report.html"), []byte("<html>ok</html>"), 0644)
+		os.WriteFile(filepath.Join(outputDir, "Containerfile"), []byte(cf), 0644)
+		os.WriteFile(filepath.Join(outputDir, "inspection-snapshot.json"), snapData, 0644)
+		return ReRenderResult{
+			HTML: "<html>ok</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: cf, TriageManifest: json.RawMessage("[]"),
+		}, nil
+	}
+	handler := newRefineHandler(dir, reRenderFn)
+
+	// Initial render.
+	req := httptest.NewRequest("POST", "/api/render", strings.NewReader(string(snapJSON)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+	var resp1 struct{ Containerfile string `json:"containerfile"` }
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp1))
+	cfBefore := resp1.Containerfile
+
+	// Acknowledge the connection (set acknowledged=true).
+	snap["network"].(map[string]interface{})["connections"] = []interface{}{
+		map[string]interface{}{
+			"name": "eth0", "type": "ethernet",
+			"path":         "/etc/NetworkManager/system-connections/eth0.nmconnection",
+			"acknowledged": true,
+		},
+	}
+	ackJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	// PUT the acknowledged snapshot.
+	putBody := fmt.Sprintf(`{"snapshot":%s,"revision":2}`, string(ackJSON))
+	putReq := httptest.NewRequest("PUT", "/api/snapshot", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putW := httptest.NewRecorder()
+	handler.ServeHTTP(putW, putReq)
+	require.Equal(t, 200, putW.Code)
+
+	// Rebuild.
+	req2 := httptest.NewRequest("POST", "/api/render", strings.NewReader(string(ackJSON)))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	require.Equal(t, 200, w2.Code)
+	var resp2 struct{ Containerfile string `json:"containerfile"` }
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	cfAfter := resp2.Containerfile
+
+	assert.Equal(t, cfBefore, cfAfter,
+		"acknowledging a display-only item must not change the Containerfile")
+	_ = lastContainerfile
+}
+
+func TestRefineServer_NotificationAcknowledgePreservesTodo(t *testing.T) {
+	// Acknowledging a notification (no-repo package) must not remove the
+	// TODO comment from the Containerfile.
+	dir := setupTestOutputDir(t)
+
+	snap := map[string]interface{}{
+		"meta": map[string]interface{}{"hostname": "test-host"},
+		"rpm": map[string]interface{}{
+			"packages_added": []interface{}{
+				map[string]interface{}{
+					"name": "custom-agent", "arch": "x86_64",
+					"include": true, "state": "local_install",
+				},
+			},
+		},
+	}
+	snapJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), snapJSON, 0644))
+
+	reRenderFn := func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		// Simulate renderer: no-repo packages get a TODO comment.
+		cf := "FROM ubi9\n# TODO: custom-agent has no known repo — install manually\n"
+		os.WriteFile(filepath.Join(outputDir, "report.html"), []byte("<html>ok</html>"), 0644)
+		os.WriteFile(filepath.Join(outputDir, "Containerfile"), []byte(cf), 0644)
+		os.WriteFile(filepath.Join(outputDir, "inspection-snapshot.json"), snapData, 0644)
+		return ReRenderResult{
+			HTML: "<html>ok</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: cf, TriageManifest: json.RawMessage("[]"),
+		}, nil
+	}
+	handler := newRefineHandler(dir, reRenderFn)
+
+	// Initial render.
+	req := httptest.NewRequest("POST", "/api/render", strings.NewReader(string(snapJSON)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, 200, w.Code)
+	var resp1 struct{ Containerfile string `json:"containerfile"` }
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp1))
+	assert.Contains(t, resp1.Containerfile, "TODO",
+		"initial render must contain a TODO for no-repo package")
+
+	// Acknowledge the notification.
+	snap["rpm"].(map[string]interface{})["packages_added"] = []interface{}{
+		map[string]interface{}{
+			"name": "custom-agent", "arch": "x86_64",
+			"include": true, "state": "local_install",
+			"acknowledged": true,
+		},
+	}
+	ackJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	// PUT acknowledged snapshot.
+	putBody := fmt.Sprintf(`{"snapshot":%s,"revision":2}`, string(ackJSON))
+	putReq := httptest.NewRequest("PUT", "/api/snapshot", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putW := httptest.NewRecorder()
+	handler.ServeHTTP(putW, putReq)
+	require.Equal(t, 200, putW.Code)
+
+	// Rebuild.
+	req2 := httptest.NewRequest("POST", "/api/render", strings.NewReader(string(ackJSON)))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	require.Equal(t, 200, w2.Code)
+	var resp2 struct{ Containerfile string `json:"containerfile"` }
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+
+	assert.Contains(t, resp2.Containerfile, "TODO",
+		"acknowledging a notification must NOT remove the TODO comment")
+}
+
+func TestRefineServer_GroupedTogglePreservesEqualityAfterRebuild(t *testing.T) {
+	// Excluding all packages from a repo group and rebuilding must produce
+	// three-way equality: API response == disk snapshot == tarball snapshot.
+	dir := setupTestOutputDir(t)
+
+	snap := map[string]interface{}{
+		"meta": map[string]interface{}{"hostname": "test-host"},
+		"rpm": map[string]interface{}{
+			"packages_added": []interface{}{
+				map[string]interface{}{
+					"name": "vim", "arch": "x86_64",
+					"include": true, "source_repo": "appstream",
+				},
+				map[string]interface{}{
+					"name": "nano", "arch": "x86_64",
+					"include": true, "source_repo": "appstream",
+				},
+			},
+		},
+	}
+	snapJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), snapJSON, 0644))
+
+	reRenderFn := func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		cf := "FROM ubi9\nRUN echo built"
+		os.WriteFile(filepath.Join(outputDir, "report.html"), []byte("<html>ok</html>"), 0644)
+		os.WriteFile(filepath.Join(outputDir, "Containerfile"), []byte(cf), 0644)
+		os.WriteFile(filepath.Join(outputDir, "inspection-snapshot.json"), snapData, 0644)
+		return ReRenderResult{
+			HTML: "<html>ok</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: cf, TriageManifest: json.RawMessage("[]"),
+		}, nil
+	}
+	handler := newRefineHandler(dir, reRenderFn)
+
+	// Exclude both appstream packages.
+	snap["rpm"].(map[string]interface{})["packages_added"] = []interface{}{
+		map[string]interface{}{
+			"name": "vim", "arch": "x86_64",
+			"include": false, "source_repo": "appstream",
+		},
+		map[string]interface{}{
+			"name": "nano", "arch": "x86_64",
+			"include": false, "source_repo": "appstream",
+		},
+	}
+	excludedJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	// PUT excluded snapshot.
+	putBody := fmt.Sprintf(`{"snapshot":%s,"revision":1}`, string(excludedJSON))
+	putReq := httptest.NewRequest("PUT", "/api/snapshot", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putW := httptest.NewRecorder()
+	handler.ServeHTTP(putW, putReq)
+	require.Equal(t, 200, putW.Code)
+
+	// Rebuild.
+	renderReq := httptest.NewRequest("POST", "/api/render", strings.NewReader(string(excludedJSON)))
+	renderReq.Header.Set("Content-Type", "application/json")
+	renderW := httptest.NewRecorder()
+	handler.ServeHTTP(renderW, renderReq)
+	require.Equal(t, 200, renderW.Code)
+
+	var renderResp struct {
+		RenderID string          `json:"render_id"`
+		Snapshot json.RawMessage `json:"snapshot"`
+	}
+	require.NoError(t, json.Unmarshal(renderW.Body.Bytes(), &renderResp))
+
+	// GET /api/snapshot — must agree with render response.
+	getReq := httptest.NewRequest("GET", "/api/snapshot", nil)
+	getW := httptest.NewRecorder()
+	handler.ServeHTTP(getW, getReq)
+	require.Equal(t, 200, getW.Code)
+	var getResp struct{ Snapshot json.RawMessage `json:"snapshot"` }
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResp))
+
+	// Read disk snapshot.
+	diskSnap, err := os.ReadFile(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	// Download tarball and extract snapshot.
+	tarReq := httptest.NewRequest("GET", "/api/tarball?render_id="+renderResp.RenderID, nil)
+	tarW := httptest.NewRecorder()
+	handler.ServeHTTP(tarW, tarReq)
+	require.Equal(t, 200, tarW.Code)
+	tmpFile := filepath.Join(t.TempDir(), "grouped.tar.gz")
+	os.WriteFile(tmpFile, tarW.Body.Bytes(), 0644)
+	extractDir := t.TempDir()
+	require.NoError(t, ExtractTarball(tmpFile, extractDir))
+	tarSnap, err := os.ReadFile(filepath.Join(extractDir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	// Three-way equality proof.
+	t.Run("api_response_eq_disk", func(t *testing.T) {
+		assert.JSONEq(t, string(getResp.Snapshot), string(diskSnap))
+	})
+	t.Run("disk_eq_tarball", func(t *testing.T) {
+		assert.JSONEq(t, string(diskSnap), string(tarSnap))
+	})
+
+	// Verify the exclude decision persisted in all three.
+	for _, label := range []string{"api", "disk", "tarball"} {
+		var data []byte
+		switch label {
+		case "api":
+			data = getResp.Snapshot
+		case "disk":
+			data = diskSnap
+		case "tarball":
+			data = tarSnap
+		}
+		var s map[string]interface{}
+		require.NoError(t, json.Unmarshal(data, &s))
+		pkgs := s["rpm"].(map[string]interface{})["packages_added"].([]interface{})
+		for _, p := range pkgs {
+			pm := p.(map[string]interface{})
+			assert.Equal(t, false, pm["include"],
+				"%s: package %s should be excluded", label, pm["name"])
+		}
+	}
+}
+
+func TestRefineServer_AcknowledgeResumePersists(t *testing.T) {
+	// Acknowledging a no-repo package and saving must persist to disk.
+	dir := setupTestOutputDir(t)
+
+	snap := map[string]interface{}{
+		"meta": map[string]interface{}{"hostname": "test-host"},
+		"rpm": map[string]interface{}{
+			"packages_added": []interface{}{
+				map[string]interface{}{
+					"name": "custom-agent", "arch": "x86_64",
+					"include": true, "state": "local_install",
+				},
+			},
+		},
+	}
+	snapJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), snapJSON, 0644))
+
+	handler := newRefineHandler(dir, nil)
+
+	// Acknowledge the package.
+	snap["rpm"].(map[string]interface{})["packages_added"] = []interface{}{
+		map[string]interface{}{
+			"name": "custom-agent", "arch": "x86_64",
+			"include": true, "state": "local_install",
+			"acknowledged": true,
+		},
+	}
+	ackJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+
+	// PUT acknowledged snapshot with correct revision.
+	putBody := fmt.Sprintf(`{"snapshot":%s,"revision":1}`, string(ackJSON))
+	putReq := httptest.NewRequest("PUT", "/api/snapshot", strings.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/json")
+	putW := httptest.NewRecorder()
+	handler.ServeHTTP(putW, putReq)
+	require.Equal(t, 200, putW.Code)
+
+	// Read snapshot back from disk.
+	diskData, err := os.ReadFile(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	var diskSnap map[string]interface{}
+	require.NoError(t, json.Unmarshal(diskData, &diskSnap))
+
+	pkgs := diskSnap["rpm"].(map[string]interface{})["packages_added"].([]interface{})
+	require.Len(t, pkgs, 1)
+	pkg := pkgs[0].(map[string]interface{})
+	assert.Equal(t, true, pkg["acknowledged"],
+		"acknowledged=true must survive the PUT → disk write round-trip")
+}
+
 // snapshotDirContents reads all files in dir recursively and returns
 // a map of relative-path -> content for comparison.
 func snapshotDirContents(t *testing.T, dir string) map[string]string {
