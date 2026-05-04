@@ -1616,84 +1616,86 @@ function buildTriageCard(item) {
     card.appendChild(reasonEl);
   }
 
-  // Action buttons
-  var actions = document.createElement('div');
-  actions.className = 'card-actions';
+  // Action buttons (omitted entirely in static mode)
+  if (App.mode !== 'static') {
+    var actions = document.createElement('div');
+    actions.className = 'card-actions';
 
-  var displayOnly = item.display_only || isDisplayOnly(item.key);
-  var isSecret = item.is_secret || item.section === 'secrets';
+    var displayOnly = item.display_only || isDisplayOnly(item.key);
+    var isSecret = item.is_secret || item.section === 'secrets';
 
-  if (isSecret) {
-    // Secrets: "Exclude from image" is primary, "Keep in image (acknowledged)" is secondary
-    var excludeBtn = document.createElement('button');
-    excludeBtn.type = 'button';
-    excludeBtn.className = 'btn-primary';
-    excludeBtn.textContent = 'Exclude from image';
-    excludeBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
-    excludeBtn.onclick = function() { makeDecision(item.key, item.section, false); };
-    actions.appendChild(excludeBtn);
+    if (isSecret) {
+      // Secrets: "Exclude from image" is primary, "Keep in image (acknowledged)" is secondary
+      var excludeBtn = document.createElement('button');
+      excludeBtn.type = 'button';
+      excludeBtn.className = 'btn-primary';
+      excludeBtn.textContent = 'Exclude from image';
+      excludeBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
+      excludeBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+      actions.appendChild(excludeBtn);
 
-    var keepBtn = document.createElement('button');
-    keepBtn.type = 'button';
-    keepBtn.className = 'btn-outline';
-    keepBtn.textContent = 'Keep in image (acknowledged)';
-    keepBtn.setAttribute('aria-label', 'Keep ' + (item.name || item.key) + ' in image');
-    keepBtn.onclick = function() { makeDecision(item.key, item.section, true); };
-    actions.appendChild(keepBtn);
-  } else if (displayOnly) {
-    // Display-only: "Acknowledge" / "Skip"
-    var ackBtn = document.createElement('button');
-    ackBtn.type = 'button';
-    ackBtn.className = 'btn-primary';
-    ackBtn.textContent = 'Acknowledge';
-    ackBtn.setAttribute('aria-label', 'Acknowledge ' + (item.name || item.key));
-    ackBtn.onclick = function() { acknowledgeNotification(item.key, item.section); };
-    actions.appendChild(ackBtn);
+      var keepBtn = document.createElement('button');
+      keepBtn.type = 'button';
+      keepBtn.className = 'btn-outline';
+      keepBtn.textContent = 'Keep in image (acknowledged)';
+      keepBtn.setAttribute('aria-label', 'Keep ' + (item.name || item.key) + ' in image');
+      keepBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+      actions.appendChild(keepBtn);
+    } else if (displayOnly) {
+      // Display-only: "Acknowledge" / "Skip"
+      var ackBtn = document.createElement('button');
+      ackBtn.type = 'button';
+      ackBtn.className = 'btn-primary';
+      ackBtn.textContent = 'Acknowledge';
+      ackBtn.setAttribute('aria-label', 'Acknowledge ' + (item.name || item.key));
+      ackBtn.onclick = function() { acknowledgeNotification(item.key, item.section); };
+      actions.appendChild(ackBtn);
 
-    var skipBtn = document.createElement('button');
-    skipBtn.type = 'button';
-    skipBtn.className = 'btn-outline';
-    skipBtn.textContent = 'Skip';
-    skipBtn.setAttribute('aria-label', 'Skip ' + (item.name || item.key));
-    skipBtn.onclick = function() { acknowledgeNotification(item.key, item.section); };
-    actions.appendChild(skipBtn);
-  } else if (item.tier === 3) {
-    // Non-secret tier 3: "Acknowledge & include" / "Exclude"
-    var ackIncBtn = document.createElement('button');
-    ackIncBtn.type = 'button';
-    ackIncBtn.className = 'btn-primary';
-    ackIncBtn.textContent = 'Acknowledge & include';
-    ackIncBtn.setAttribute('aria-label', 'Acknowledge and include ' + (item.name || item.key) + ' in image');
-    ackIncBtn.onclick = function() { makeDecision(item.key, item.section, true); };
-    actions.appendChild(ackIncBtn);
+      var skipBtn = document.createElement('button');
+      skipBtn.type = 'button';
+      skipBtn.className = 'btn-outline';
+      skipBtn.textContent = 'Skip';
+      skipBtn.setAttribute('aria-label', 'Skip ' + (item.name || item.key));
+      skipBtn.onclick = function() { acknowledgeNotification(item.key, item.section); };
+      actions.appendChild(skipBtn);
+    } else if (item.tier === 3) {
+      // Non-secret tier 3: "Acknowledge & include" / "Exclude"
+      var ackIncBtn = document.createElement('button');
+      ackIncBtn.type = 'button';
+      ackIncBtn.className = 'btn-primary';
+      ackIncBtn.textContent = 'Acknowledge & include';
+      ackIncBtn.setAttribute('aria-label', 'Acknowledge and include ' + (item.name || item.key) + ' in image');
+      ackIncBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+      actions.appendChild(ackIncBtn);
 
-    var exclBtn = document.createElement('button');
-    exclBtn.type = 'button';
-    exclBtn.className = 'btn-outline';
-    exclBtn.textContent = 'Exclude';
-    exclBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
-    exclBtn.onclick = function() { makeDecision(item.key, item.section, false); };
-    actions.appendChild(exclBtn);
-  } else {
-    // Standard tier 2 / tier 1: "Include in image" / "Leave out"
-    var inclBtn = document.createElement('button');
-    inclBtn.type = 'button';
-    inclBtn.className = 'btn-primary';
-    inclBtn.textContent = 'Include in image';
-    inclBtn.setAttribute('aria-label', 'Include ' + (item.name || item.key) + ' in image');
-    inclBtn.onclick = function() { makeDecision(item.key, item.section, true); };
-    actions.appendChild(inclBtn);
+      var exclBtn = document.createElement('button');
+      exclBtn.type = 'button';
+      exclBtn.className = 'btn-outline';
+      exclBtn.textContent = 'Exclude';
+      exclBtn.setAttribute('aria-label', 'Exclude ' + (item.name || item.key) + ' from image');
+      exclBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+      actions.appendChild(exclBtn);
+    } else {
+      // Standard tier 2 / tier 1: "Include in image" / "Leave out"
+      var inclBtn = document.createElement('button');
+      inclBtn.type = 'button';
+      inclBtn.className = 'btn-primary';
+      inclBtn.textContent = 'Include in image';
+      inclBtn.setAttribute('aria-label', 'Include ' + (item.name || item.key) + ' in image');
+      inclBtn.onclick = function() { makeDecision(item.key, item.section, true); };
+      actions.appendChild(inclBtn);
 
-    var leaveBtn = document.createElement('button');
-    leaveBtn.type = 'button';
-    leaveBtn.className = 'btn-outline';
-    leaveBtn.textContent = 'Leave out';
-    leaveBtn.setAttribute('aria-label', 'Leave ' + (item.name || item.key) + ' out of image');
-    leaveBtn.onclick = function() { makeDecision(item.key, item.section, false); };
-    actions.appendChild(leaveBtn);
+      var leaveBtn = document.createElement('button');
+      leaveBtn.type = 'button';
+      leaveBtn.className = 'btn-outline';
+      leaveBtn.textContent = 'Leave out';
+      leaveBtn.setAttribute('aria-label', 'Leave ' + (item.name || item.key) + ' out of image');
+      leaveBtn.onclick = function() { makeDecision(item.key, item.section, false); };
+      actions.appendChild(leaveBtn);
+    }
+
+    card.appendChild(actions);
   }
-
-  card.appendChild(actions);
   return card;
 }
 
@@ -1757,14 +1759,16 @@ function buildDecidedCard(item, included) {
 
   card.appendChild(label);
 
-  // Undo button
-  var undo = document.createElement('button');
-  undo.type = 'button';
-  undo.className = 'undo-link';
-  undo.textContent = 'undo';
-  undo.setAttribute('aria-label', 'Undo decision for ' + (item.name || item.key));
-  undo.onclick = function() { undoDecision(item.key, item.section); };
-  card.appendChild(undo);
+  // Undo button (omitted in static mode)
+  if (App.mode !== 'static') {
+    var undo = document.createElement('button');
+    undo.type = 'button';
+    undo.className = 'undo-link';
+    undo.textContent = 'undo';
+    undo.setAttribute('aria-label', 'Undo decision for ' + (item.name || item.key));
+    undo.onclick = function() { undoDecision(item.key, item.section); };
+    card.appendChild(undo);
+  }
 
   return card;
 }
@@ -1824,37 +1828,41 @@ function buildOutputAccordion(groupName, items, options) {
   info.appendChild(subtitle);
   header.appendChild(info);
 
-  // Toggle switch (unless alwaysIncluded)
+  // Toggle switch (unless alwaysIncluded; omitted in static mode)
   if (!options.alwaysIncluded) {
-    var toggle = document.createElement('div');
-    toggle.className = 'accordion-toggle';
-    toggle.setAttribute('role', 'switch');
-    toggle.setAttribute('aria-checked', groupState !== 'none' ? 'true' : 'false');
-    toggle.setAttribute('tabindex', '0');
-    toggle.setAttribute('aria-label', (options.displayName || groupName) + ' toggle');
-    var knob = document.createElement('div');
-    knob.className = 'accordion-toggle-knob';
-    toggle.appendChild(knob);
+    if (App.mode !== 'static') {
+      var toggle = document.createElement('div');
+      toggle.className = 'accordion-toggle';
+      toggle.setAttribute('role', 'switch');
+      toggle.setAttribute('aria-checked', groupState !== 'none' ? 'true' : 'false');
+      toggle.setAttribute('tabindex', '0');
+      toggle.setAttribute('aria-label', (options.displayName || groupName) + ' toggle');
+      var knob = document.createElement('div');
+      knob.className = 'accordion-toggle-knob';
+      toggle.appendChild(knob);
 
-    if (groupState === 'none') {
-      toggle.classList.add('toggle-off');
+      if (groupState === 'none') {
+        toggle.classList.add('toggle-off');
+        div.classList.add('accordion-disabled');
+      }
+
+      toggle.onclick = function(e) {
+        e.stopPropagation();
+        toggleAccordionGroup(groupName, items, groupState !== 'none');
+      };
+      toggle.onkeydown = function(e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleAccordionGroup(groupName, items, groupState !== 'none');
+        }
+      };
+      header.appendChild(toggle);
+    }
+    // In static mode: no toggle rendered, but still apply disabled styling
+    if (groupState === 'none' && App.mode === 'static') {
       div.classList.add('accordion-disabled');
     }
-
-    toggle.onclick = function(e) {
-      e.stopPropagation();
-      if (App.mode === 'static') return;
-      toggleAccordionGroup(groupName, items, groupState !== 'none');
-    };
-    toggle.onkeydown = function(e) {
-      if (e.key === 'Enter' || e.key === ' ') {
-        e.preventDefault();
-        e.stopPropagation();
-        if (App.mode === 'static') return;
-        toggleAccordionGroup(groupName, items, groupState !== 'none');
-      }
-    };
-    header.appendChild(toggle);
   } else {
     var label = document.createElement('span');
     label.className = 'accordion-always-label';
@@ -1886,25 +1894,28 @@ function buildOutputAccordion(groupName, items, options) {
     for (var j = 0; j < items.length; j++) {
       var item = items[j];
       var tr = document.createElement('tr');
-      var tdCheck = document.createElement('td');
-      var cb = document.createElement('input');
-      cb.type = 'checkbox';
-      cb.checked = getSnapshotInclude(item.key);
-      cb.disabled = groupState === 'none' || App.mode === 'static';
-      cb.setAttribute('aria-label', item.name);
-      (function(itemKey, sectionId) {
-        cb.onchange = function() {
-          updateSnapshotInclude(itemKey, this.checked);
-          incrementChangeCounter();
-          App.decisions[itemKey] = true;
-          reopenReviewedSection(sectionId);
-          scheduleAutosave();
-          renderTriageSection(sectionId);
-          updateBadge(sectionId);
-        };
-      })(item.key, item.section);
-      tdCheck.appendChild(cb);
-      tr.appendChild(tdCheck);
+      // Per-item checkbox (omitted in static mode)
+      if (App.mode !== 'static') {
+        var tdCheck = document.createElement('td');
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = getSnapshotInclude(item.key);
+        cb.disabled = groupState === 'none';
+        cb.setAttribute('aria-label', item.name);
+        (function(itemKey, sectionId) {
+          cb.onchange = function() {
+            updateSnapshotInclude(itemKey, this.checked);
+            incrementChangeCounter();
+            App.decisions[itemKey] = true;
+            reopenReviewedSection(sectionId);
+            scheduleAutosave();
+            renderTriageSection(sectionId);
+            updateBadge(sectionId);
+          };
+        })(item.key, item.section);
+        tdCheck.appendChild(cb);
+        tr.appendChild(tdCheck);
+      }
 
       var tdName = document.createElement('td');
       tdName.textContent = item.name;
@@ -2058,14 +2069,17 @@ function buildNotificationCard(item) {
   desc.textContent = 'Provide a reproducible build-time source and add the installation to your Containerfile.';
   full.appendChild(desc);
 
-  var ackBtn = document.createElement('button');
-  ackBtn.className = 'btn-primary';
-  ackBtn.textContent = 'Acknowledge';
-  ackBtn.style.cssText = 'padding:8px 24px;border-radius:6px;border:none;background:#4493f8;color:#fff;font-size:14px;font-weight:500;cursor:pointer;';
-  ackBtn.onclick = function() {
-    acknowledgeNotification(item.key, item.section);
-  };
-  full.appendChild(ackBtn);
+  // Acknowledge button (omitted in static mode)
+  if (App.mode !== 'static') {
+    var ackBtn = document.createElement('button');
+    ackBtn.className = 'btn-primary';
+    ackBtn.textContent = 'Acknowledge';
+    ackBtn.style.cssText = 'padding:8px 24px;border-radius:6px;border:none;background:#4493f8;color:#fff;font-size:14px;font-weight:500;cursor:pointer;';
+    ackBtn.onclick = function() {
+      acknowledgeNotification(item.key, item.section);
+    };
+    full.appendChild(ackBtn);
+  }
   wrapper.appendChild(full);
 
   // Collapsed card
@@ -2090,13 +2104,16 @@ function buildNotificationCard(item) {
   left.appendChild(cWarn);
   row.appendChild(left);
 
-  var undoBtn = document.createElement('button');
-  undoBtn.style.cssText = 'padding:3px 10px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:inherit;font-size:12px;cursor:pointer;opacity:0.6;';
-  undoBtn.textContent = 'undo';
-  undoBtn.onclick = function() {
-    unacknowledgeNotification(item.key, item.section);
-  };
-  row.appendChild(undoBtn);
+  // Undo button (omitted in static mode)
+  if (App.mode !== 'static') {
+    var undoBtn = document.createElement('button');
+    undoBtn.style.cssText = 'padding:3px 10px;border-radius:4px;border:1px solid rgba(255,255,255,0.15);background:transparent;color:inherit;font-size:12px;cursor:pointer;opacity:0.6;';
+    undoBtn.textContent = 'undo';
+    undoBtn.onclick = function() {
+      unacknowledgeNotification(item.key, item.section);
+    };
+    row.appendChild(undoBtn);
+  }
   collapsed.appendChild(row);
   wrapper.appendChild(collapsed);
 
@@ -2148,13 +2165,16 @@ function buildDisplayOnlyDecidedCard(item) {
   left.appendChild(nameEl);
   row.appendChild(left);
 
-  var undoBtn = document.createElement('button');
-  undoBtn.className = 'btn-undo';
-  undoBtn.textContent = 'undo';
-  undoBtn.onclick = function() {
-    unacknowledgeNotification(item.key, item.section);
-  };
-  row.appendChild(undoBtn);
+  // Undo button (omitted in static mode)
+  if (App.mode !== 'static') {
+    var undoBtn = document.createElement('button');
+    undoBtn.className = 'btn-undo';
+    undoBtn.textContent = 'undo';
+    undoBtn.onclick = function() {
+      unacknowledgeNotification(item.key, item.section);
+    };
+    row.appendChild(undoBtn);
+  }
   card.appendChild(row);
 
   card.setAttribute('aria-label', item.name + ': acknowledged');
