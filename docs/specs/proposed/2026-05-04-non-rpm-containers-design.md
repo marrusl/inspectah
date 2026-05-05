@@ -155,7 +155,7 @@ These fields live on the snapshot's `non_rpm_software.items[]` entries, alongsid
 **Lifecycle:**
 - Initial scan: all items start as `review_status: "not_reviewed"`, `notes: ""`
 - Refine session: operator changes status and adds notes via the SPA
-- Save: snapshot JSON updated on status change (via re-render) and notes blur (via save endpoint)
+- Save: snapshot JSON updated on status change and notes blur via `PUT /api/snapshot` (routine durability, no re-render)
 - Re-render: only items with `review_status: "migration_planned"` produce Containerfile scaffolding
 - Export: the final tarball includes the snapshot with review status and notes, so they survive the refine → build handoff
 
@@ -276,7 +276,7 @@ None. Filtering at detection, not adding fields.
 - ~~System vs. user flatpak detection~~ — specified: inspector must add `--system` flag
 
 ### Resolved in revision 3
-- ~~Non-RPM autosave truth~~ — corrected: save happens via re-render endpoint, not per-keystroke autosave. Notes save on blur via lightweight endpoint.
+- ~~Non-RPM autosave truth~~ — corrected: routine save via `PUT /api/snapshot`, rebuild via `POST /api/render`. No per-keystroke autosave.
 - ~~Review-status control pattern~~ — defined: segmented radio-group with three states
 - ~~Generate Quadlet Draft behavior~~ — defined: post-click flow, durable sink in `snap.containers.quadlet_units`, error/repeat states
 - ~~Non-RPM section chrome/progress~~ — defined: does not participate in progress bar, sidebar shows `not_reviewed` count, header shows review progress
