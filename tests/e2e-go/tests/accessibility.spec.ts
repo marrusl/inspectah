@@ -4,7 +4,7 @@
  * live region announcements.
  */
 import { test, expect } from '@playwright/test';
-import { waitForBoot, navigateToSection } from './helpers';
+import { waitForBoot, navigateToSection, resetServer } from './helpers';
 
 test.describe('ARIA landmarks and attributes', () => {
   test.beforeEach(async ({ page }) => {
@@ -87,6 +87,9 @@ test.describe('ARIA landmarks and attributes', () => {
 });
 
 test.describe('Keyboard navigation', () => {
+  test.beforeAll(async () => { await resetServer(); });
+  test.afterAll(async () => { await resetServer(); });
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBoot(page);
@@ -178,6 +181,9 @@ test.describe('Keyboard navigation', () => {
 });
 
 test.describe('Live region announcements', () => {
+  test.beforeAll(async () => { await resetServer(); });
+  test.afterAll(async () => { await resetServer(); });
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBoot(page);

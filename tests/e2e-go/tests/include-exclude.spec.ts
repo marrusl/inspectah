@@ -10,7 +10,7 @@
  * a specific section, because fixture data varies.
  */
 import { test, expect } from '@playwright/test';
-import { waitForRefineBoot, navigateToSection } from './helpers';
+import { waitForRefineBoot, navigateToSection, resetServer } from './helpers';
 
 /** Tracked sections that may contain triage items. */
 const TRACKED_SECTIONS = ['packages', 'config', 'runtime', 'containers',
@@ -51,6 +51,9 @@ async function findSectionWithToggles(page: import('@playwright/test').Page): Pr
 }
 
 test.describe('Include/exclude decisions', () => {
+  test.beforeAll(async () => { await resetServer(); });
+  test.afterAll(async () => { await resetServer(); });
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForRefineBoot(page);

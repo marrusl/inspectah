@@ -8,9 +8,12 @@
  * and the error-recovery behavior.
  */
 import { test, expect } from '@playwright/test';
-import { waitForBoot, navigateToSection, isRefineMode, findToggleInSection } from './helpers';
+import { waitForBoot, navigateToSection, isRefineMode, findToggleInSection, resetServer } from './helpers';
 
 test.describe('Rebuild cycle', () => {
+  test.beforeAll(async () => { await resetServer(); });
+  test.afterAll(async () => { await resetServer(); });
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     await waitForBoot(page);

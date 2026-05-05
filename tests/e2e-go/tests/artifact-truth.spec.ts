@@ -10,9 +10,12 @@
  * SystemType). Tests handle both success and structured error responses.
  */
 import { test, expect } from '@playwright/test';
-import { waitForRefineBoot, navigateToSection, findToggleInSection } from './helpers';
+import { waitForRefineBoot, navigateToSection, findToggleInSection, resetServer } from './helpers';
 
 test.describe('Artifact truth: toggle-to-tarball proof', () => {
+  test.beforeAll(async () => { await resetServer(); });
+  test.afterAll(async () => { await resetServer(); });
+
   test.use({ viewport: { width: 1600, height: 900 } });
 
   test.beforeEach(async ({ page }) => {
