@@ -107,7 +107,7 @@ test.describe('Refine API - single host', () => {
   test('single-host server health check', async ({ request }) => {
     const url = process.env.REFINE_SINGLE_URL;
     if (!url) {
-      test.skip();
+      test.skip(true, 'REFINE_SINGLE_URL not set');
       return;
     }
 
@@ -120,7 +120,7 @@ test.describe('Refine API - single host', () => {
   test('single-host snapshot has expected structure', async ({ request }) => {
     const url = process.env.REFINE_SINGLE_URL;
     if (!url) {
-      test.skip();
+      test.skip(true, 'REFINE_SINGLE_URL not set');
       return;
     }
 
