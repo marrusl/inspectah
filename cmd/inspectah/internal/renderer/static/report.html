@@ -5819,6 +5819,108 @@ function renderTriageSection(sectionId) {
     { key: 1, items: groups[1] || [], label: 'Auto-included', indicator: 'tier-1' }
   ];
 
+  // ── Containers section: flat subsection rendering (skip tier grouping) ──
+  // Containers use subsection ordering, not tier grouping. Rendering per-tier
+  // would duplicate subsection headers for items spanning tiers 2 and 3.
+  if (sectionId === 'containers') {
+    var cGroupedMap = {};
+    var cUngrouped = [];
+    for (var ai = 0; ai < mainItems.length; ai++) {
+      var aItem = mainItems[ai];
+      if (aItem.group) {
+        if (!cGroupedMap[aItem.group]) cGroupedMap[aItem.group] = [];
+        cGroupedMap[aItem.group].push(aItem);
+      } else {
+        cUngrouped.push(aItem);
+      }
+    }
+
+    var cLabels = {
+      'sub:quadlet': 'Quadlet Units',
+      'sub:flatpak': 'Flatpak Apps',
+      'sub:compose': 'Compose Files'
+    };
+    var cOrder = ['sub:quadlet', 'sub:flatpak', '__running__', 'sub:compose'];
+    var cDiv = document.createElement('div');
+    cDiv.className = 'tier-group-items';
+
+    for (var cs = 0; cs < cOrder.length; cs++) {
+      var csKey = cOrder[cs];
+
+      if (csKey === '__running__') {
+        // Running containers (ungrouped items)
+        var rcHeader = document.createElement('div');
+        rcHeader.className = 'container-subsection-header';
+        rcHeader.textContent = 'Running Containers';
+        cDiv.appendChild(rcHeader);
+        if (cUngrouped.length > 0) {
+          for (var ru = 0; ru < cUngrouped.length; ru++) {
+            var rcItem = cUngrouped[ru];
+            var rcCard;
+            if (rcItem.display_only) {
+              rcCard = buildInfoReadOnlyCard(rcItem);
+            } else if (rcItem.card_type === 'notification') {
+              rcCard = buildNotificationCard(rcItem);
+            } else {
+              rcCard = buildToggleCard(rcItem, sectionId);
+            }
+            cDiv.appendChild(rcCard);
+          }
+        } else {
+          var rcEmptyMsg = document.createElement('div');
+          rcEmptyMsg.style.cssText = 'padding:12px 0;opacity:0.5;font-size:13px;font-style:italic;';
+          var cSnap = App.snapshot;
+          if (cSnap && cSnap.containers && cSnap.containers.running_containers === null) {
+            rcEmptyMsg.textContent = 'No running containers detected. Run inspectah with --query-podman to inspect running workloads.';
+          } else {
+            rcEmptyMsg.textContent = 'No running containers found.';
+          }
+          cDiv.appendChild(rcEmptyMsg);
+        }
+        continue;
+      }
+
+      // Named subsection groups
+      var csItems = cGroupedMap[csKey];
+      if (!csItems || csItems.length === 0) continue;
+      var csHeader = document.createElement('div');
+      csHeader.className = 'container-subsection-header';
+      csHeader.textContent = cLabels[csKey] || csKey;
+      cDiv.appendChild(csHeader);
+
+      // Compose: individual read-only cards, no accordion
+      if (csItems[0] && csItems[0].card_type === 'compose-info') {
+        for (var ci = 0; ci < csItems.length; ci++) {
+          cDiv.appendChild(buildComposeInfoCard(csItems[ci]));
+        }
+      } else if (csItems[0] && csItems[0].display_only) {
+        cDiv.appendChild(buildDisplayAccordion(csKey, csItems));
+      } else {
+        cDiv.appendChild(buildOutputAccordion(csKey, csItems, {
+          displayName: cLabels[csKey]
+        }));
+      }
+    }
+
+    // Render any remaining groups not in the container order
+    var cHandledGroups = {'sub:quadlet': true, 'sub:flatpak': true, 'sub:compose': true};
+    var cRemainingGroupNames = Object.keys(cGroupedMap).sort();
+    for (var rg = 0; rg < cRemainingGroupNames.length; rg++) {
+      if (cHandledGroups[cRemainingGroupNames[rg]]) continue;
+      var rgName = cRemainingGroupNames[rg];
+      var rgItems = cGroupedMap[rgName];
+      var rgIsDisplayOnly = rgItems[0] && rgItems[0].display_only;
+      if (rgIsDisplayOnly) {
+        cDiv.appendChild(buildDisplayAccordion(rgName, rgItems));
+      } else {
+        cDiv.appendChild(buildOutputAccordion(rgName, rgItems, {}));
+      }
+    }
+
+    container.appendChild(cDiv);
+  }
+
+  if (sectionId !== 'containers') {
   for (var ti = 0; ti < tierSlots.length; ti++) {
     var tier = tierSlots[ti].key;
     var tierItems = tierSlots[ti].items;
@@ -5884,96 +5986,6 @@ function renderTriageSection(sectionId) {
         } else {
           ungrouped.push(item);
         }
-      }
-
-      // ── Container subsection hierarchy ──
-      // For the containers section, render in a specific order with subsection headers:
-      // Quadlet Units → Flatpak Apps → Running Containers → Compose Files
-      if (sectionId === 'containers') {
-        var containerSubsectionLabels = {
-          'sub:quadlet': 'Quadlet Units',
-          'sub:flatpak': 'Flatpak Apps',
-          'sub:compose': 'Compose Files'
-        };
-        var containerSubsectionOrder = ['sub:quadlet', 'sub:flatpak', '__running__', 'sub:compose'];
-
-        for (var cs = 0; cs < containerSubsectionOrder.length; cs++) {
-          var csKey = containerSubsectionOrder[cs];
-
-          if (csKey === '__running__') {
-            // Running containers (ungrouped items) slot
-            if (ungrouped.length > 0) {
-              var rcHeader = document.createElement('div');
-              rcHeader.className = 'container-subsection-header';
-              rcHeader.textContent = 'Running Containers';
-              itemsDiv.appendChild(rcHeader);
-              for (var ru = 0; ru < ungrouped.length; ru++) {
-                var rcCard;
-                var rcItem = ungrouped[ru];
-                if (rcItem.card_type === 'notification') {
-                  rcCard = buildNotificationCard(rcItem);
-                } else if (rcItem.display_only) {
-                  rcCard = buildInfoReadOnlyCard(rcItem);
-                } else {
-                  rcCard = buildToggleCard(rcItem, sectionId);
-                }
-                itemsDiv.appendChild(rcCard);
-              }
-            } else {
-              // Running container empty state
-              var rcEmptyHeader = document.createElement('div');
-              rcEmptyHeader.className = 'container-subsection-header';
-              rcEmptyHeader.textContent = 'Running Containers';
-              itemsDiv.appendChild(rcEmptyHeader);
-              var rcEmptyMsg = document.createElement('div');
-              rcEmptyMsg.style.cssText = 'padding:12px 0;opacity:0.5;font-size:13px;font-style:italic;';
-              var cSnap2 = App.snapshot;
-              if (cSnap2 && cSnap2.containers && cSnap2.containers.running_containers === null) {
-                rcEmptyMsg.textContent = 'No running containers detected. Run inspectah with --query-podman to inspect running workloads.';
-              } else {
-                rcEmptyMsg.textContent = 'No running containers found.';
-              }
-              itemsDiv.appendChild(rcEmptyMsg);
-            }
-            continue;
-          }
-
-          // Named subsection groups (quadlet, flatpak, compose)
-          var csItems = groupedMap[csKey];
-          if (!csItems || csItems.length === 0) continue;
-          var csHeader = document.createElement('div');
-          csHeader.className = 'container-subsection-header';
-          csHeader.textContent = containerSubsectionLabels[csKey] || csKey;
-          itemsDiv.appendChild(csHeader);
-
-          var csIsDisplayOnly = csItems[0] && csItems[0].display_only;
-          if (csIsDisplayOnly) {
-            itemsDiv.appendChild(buildDisplayAccordion(csKey, csItems));
-          } else {
-            itemsDiv.appendChild(buildOutputAccordion(csKey, csItems, {
-              displayName: containerSubsectionLabels[csKey]
-            }));
-          }
-        }
-
-        // Render any remaining groups not in the container order
-        var handledGroups = {'sub:quadlet': true, 'sub:flatpak': true, 'sub:compose': true};
-        var remainingGroupNames = Object.keys(groupedMap).sort();
-        for (var rg = 0; rg < remainingGroupNames.length; rg++) {
-          if (handledGroups[remainingGroupNames[rg]]) continue;
-          var rgName = remainingGroupNames[rg];
-          var rgItems = groupedMap[rgName];
-          var rgIsDisplayOnly = rgItems[0] && rgItems[0].display_only;
-          if (rgIsDisplayOnly) {
-            itemsDiv.appendChild(buildDisplayAccordion(rgName, rgItems));
-          } else {
-            itemsDiv.appendChild(buildOutputAccordion(rgName, rgItems, {}));
-          }
-        }
-
-        tierDiv.appendChild(itemsDiv);
-        container.appendChild(tierDiv);
-        continue;
       }
 
       // ── Default rendering for non-containers sections ──
@@ -6061,6 +6073,7 @@ function renderTriageSection(sectionId) {
 
     container.appendChild(tierDiv);
   }
+  } // end if (sectionId !== 'containers')
 
   // ── Informational tier (non-kmod display-only items, category-grouped) ──
   if (informationalItems.length > 0) {

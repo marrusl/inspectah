@@ -985,3 +985,60 @@ func TestRenderHTML_FullContainersAndNonRpm(t *testing.T) {
 		t.Error("should reference oneshot service in Containerfile output")
 	}
 }
+
+func TestRenderHTML_ComposeNotInAccordion(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		ComposeFiles: []schema.ComposeFile{
+			{Path: "opt/dc.yml", Images: []schema.ComposeService{{Service: "web", Image: "nginx"}}, Include: true},
+		},
+	}
+	containerfile := "FROM rhel-bootc:9.4\n"
+	html := goldenTestHelper(t, snap, containerfile)
+
+	// The HTML must contain the buildComposeInfoCard function (it renders compose items)
+	if !strings.Contains(html, "buildComposeInfoCard") {
+		t.Error("should contain buildComposeInfoCard function")
+	}
+	// compose-info card type should be present in the card routing logic
+	if !strings.Contains(html, "compose-info") {
+		t.Error("should contain compose-info card type reference")
+	}
+	// Compose items should NOT go through buildOutputAccordion in the containers path
+	// The flat containers branch routes compose items via buildComposeInfoCard directly
+	if !strings.Contains(html, "Compose Files") {
+		t.Error("should contain Compose Files subsection header")
+	}
+}
+
+func TestRenderHTML_ContainersFlatSubsections(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits:      []schema.QuadletUnit{{Name: "web.container", Image: "web:latest", Include: true}},
+		RunningContainers: []schema.RunningContainer{{Name: "backed", Image: "web:latest"}},
+		ComposeFiles:      []schema.ComposeFile{{Path: "opt/dc.yml", Images: []schema.ComposeService{{Service: "svc", Image: "img"}}, Include: true}},
+	}
+	containerfile := "FROM rhel-bootc:9.4\n"
+	html := goldenTestHelper(t, snap, containerfile)
+
+	// Containers section should use flat subsection rendering (tier-group-items without tier-group wrapper)
+	// The containers branch creates a div.tier-group-items directly appended to container,
+	// NOT wrapped in div.tier-group with tier headers.
+	if !strings.Contains(html, "Quadlet Units") {
+		t.Error("should contain Quadlet Units subsection")
+	}
+	if !strings.Contains(html, "Running Containers") {
+		t.Error("should contain Running Containers subsection")
+	}
+	if !strings.Contains(html, "Compose Files") {
+		t.Error("should contain Compose Files subsection")
+	}
+
+	// The JS code should contain the flat containers branch that skips the tier loop
+	if !strings.Contains(html, `sectionId === 'containers'`) {
+		t.Error("should contain containers-specific flat rendering branch")
+	}
+	if !strings.Contains(html, `sectionId !== 'containers'`) {
+		t.Error("should contain guard to skip tier loop for containers")
+	}
+}
