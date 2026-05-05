@@ -165,3 +165,9 @@ export async function waitForArchitectBoot(page: Page): Promise<void> {
 export function architectURL(): string {
   return process.env.ARCHITECT_URL || 'http://localhost:9202';
 }
+
+export async function resetServer(baseURL?: string): Promise<void> {
+  const url = baseURL || process.env.REFINE_FLEET_URL || 'http://localhost:9200';
+  const resp = await fetch(`${url}/api/reset`, { method: 'POST' });
+  if (!resp.ok) throw new Error(`Server reset failed: ${resp.status}`);
+}
