@@ -468,7 +468,8 @@ func parsePodmanPS(data []map[string]interface{}) []schema.RunningContainer {
 // Flatpak detection
 // ---------------------------------------------------------------------------
 
-// detectFlatpakApps lists installed Flatpak applications.
+// detectFlatpakApps lists installed system-level Flatpak applications
+// and resolves remote URLs for each origin.
 func detectFlatpakApps(exec Executor) []schema.FlatpakApp {
 	// Check if flatpak is installed.
 	which := exec.Run("which", "flatpak")
@@ -476,9 +477,25 @@ func detectFlatpakApps(exec Executor) []schema.FlatpakApp {
 		return nil
 	}
 
-	result := exec.Run("flatpak", "list", "--app", "--columns=application,origin,branch")
+	result := exec.Run("flatpak", "list", "--app", "--system", "--columns=application,origin,branch")
 	if result.ExitCode != 0 {
 		return nil
+	}
+
+	// Build remote name → URL map (best-effort).
+	remoteURLs := make(map[string]string)
+	remotesResult := exec.Run("flatpak", "remotes", "--system", "--columns=name,url")
+	if remotesResult.ExitCode == 0 {
+		for _, line := range strings.Split(remotesResult.Stdout, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			parts := strings.SplitN(line, "\t", 2)
+			if len(parts) == 2 {
+				remoteURLs[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			}
+		}
 	}
 
 	var apps []schema.FlatpakApp
@@ -489,19 +506,17 @@ func detectFlatpakApps(exec Executor) []schema.FlatpakApp {
 		}
 
 		parts := strings.Split(line, "\t")
-		if len(parts) < 2 {
+		if len(parts) < 3 {
 			continue
 		}
 
-		branch := ""
-		if len(parts) >= 3 {
-			branch = strings.TrimSpace(parts[2])
-		}
-
+		origin := strings.TrimSpace(parts[1])
 		apps = append(apps, schema.FlatpakApp{
-			AppID:  strings.TrimSpace(parts[0]),
-			Origin: strings.TrimSpace(parts[1]),
-			Branch: branch,
+			AppID:     strings.TrimSpace(parts[0]),
+			Origin:    origin,
+			Remote:    origin,
+			RemoteURL: remoteURLs[origin],
+			Branch:    strings.TrimSpace(parts[2]),
 		})
 	}
 	return apps

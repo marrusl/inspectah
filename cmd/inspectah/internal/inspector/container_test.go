@@ -438,7 +438,7 @@ func TestDetectFlatpakApps(t *testing.T) {
 
 	exec := NewFakeExecutor(map[string]ExecResult{
 		"which flatpak": {ExitCode: 0, Stdout: "/usr/bin/flatpak"},
-		"flatpak list --app --columns=application,origin,branch": {
+		"flatpak list --app --system --columns=application,origin,branch": {
 			ExitCode: 0,
 			Stdout:   flatpakOutput,
 		},
@@ -451,9 +451,9 @@ func TestDetectFlatpakApps(t *testing.T) {
 	}
 
 	want := []schema.FlatpakApp{
-		{AppID: "org.mozilla.firefox", Origin: "flathub", Branch: "stable"},
-		{AppID: "org.gnome.Calculator", Origin: "fedora", Branch: "stable"},
-		{AppID: "com.visualstudio.code", Origin: "flathub", Branch: "stable"},
+		{AppID: "org.mozilla.firefox", Origin: "flathub", Branch: "stable", Remote: "flathub"},
+		{AppID: "org.gnome.Calculator", Origin: "fedora", Branch: "stable", Remote: "fedora"},
+		{AppID: "com.visualstudio.code", Origin: "flathub", Branch: "stable", Remote: "flathub"},
 	}
 
 	for i, app := range apps {
@@ -466,6 +466,78 @@ func TestDetectFlatpakApps(t *testing.T) {
 		if app.Branch != want[i].Branch {
 			t.Errorf("app[%d].Branch = %q, want %q", i, app.Branch, want[i].Branch)
 		}
+		if app.Remote != want[i].Remote {
+			t.Errorf("app[%d].Remote = %q, want %q", i, app.Remote, want[i].Remote)
+		}
+	}
+}
+
+func TestDetectFlatpakApps_SystemFlagAndRemotes(t *testing.T) {
+	flatpakOutput := loadContainerFixture(t, "flatpak_list.txt")
+	remotesOutput := loadContainerFixture(t, "flatpak_remotes.txt")
+
+	exec := NewFakeExecutor(map[string]ExecResult{
+		"which flatpak": {ExitCode: 0, Stdout: "/usr/bin/flatpak"},
+		"flatpak list --app --system --columns=application,origin,branch": {
+			ExitCode: 0,
+			Stdout:   flatpakOutput,
+		},
+		"flatpak remotes --system --columns=name,url": {
+			ExitCode: 0,
+			Stdout:   remotesOutput,
+		},
+	})
+
+	apps := detectFlatpakApps(exec)
+
+	if len(apps) != 3 {
+		t.Fatalf("got %d apps, want 3", len(apps))
+	}
+
+	// Firefox should have flathub remote URL
+	if apps[0].Remote != "flathub" {
+		t.Errorf("apps[0].Remote = %q, want %q", apps[0].Remote, "flathub")
+	}
+	if apps[0].RemoteURL != "https://dl.flathub.org/repo/" {
+		t.Errorf("apps[0].RemoteURL = %q, want %q", apps[0].RemoteURL, "https://dl.flathub.org/repo/")
+	}
+
+	// Calculator should have fedora remote URL
+	if apps[1].Remote != "fedora" {
+		t.Errorf("apps[1].Remote = %q, want %q", apps[1].Remote, "fedora")
+	}
+	if apps[1].RemoteURL != "oci+https://registry.fedoraproject.org" {
+		t.Errorf("apps[1].RemoteURL = %q, want %q", apps[1].RemoteURL, "oci+https://registry.fedoraproject.org")
+	}
+}
+
+func TestDetectFlatpakApps_RemotesFailGracefully(t *testing.T) {
+	flatpakOutput := loadContainerFixture(t, "flatpak_list.txt")
+
+	exec := NewFakeExecutor(map[string]ExecResult{
+		"which flatpak": {ExitCode: 0, Stdout: "/usr/bin/flatpak"},
+		"flatpak list --app --system --columns=application,origin,branch": {
+			ExitCode: 0,
+			Stdout:   flatpakOutput,
+		},
+		"flatpak remotes --system --columns=name,url": {
+			ExitCode: 1,
+			Stderr:   "error fetching remotes",
+		},
+	})
+
+	apps := detectFlatpakApps(exec)
+
+	if len(apps) != 3 {
+		t.Fatalf("got %d apps, want 3 even when remotes fails", len(apps))
+	}
+
+	// RemoteURL should be empty but apps still detected with Remote from origin
+	if apps[0].Remote != "flathub" {
+		t.Errorf("apps[0].Remote = %q, want %q (always set from origin)", apps[0].Remote, "flathub")
+	}
+	if apps[0].RemoteURL != "" {
+		t.Errorf("apps[0].RemoteURL = %q, want empty when remotes fails", apps[0].RemoteURL)
 	}
 }
 
@@ -527,7 +599,7 @@ func TestRunContainers_Integration(t *testing.T) {
 		"podman ps -a --format json": {ExitCode: 0, Stdout: podmanJSON},
 		"podman inspect abc123def456 789012345678": {ExitCode: 0, Stdout: podmanJSON},
 		"which flatpak": {ExitCode: 0, Stdout: "/usr/bin/flatpak"},
-		"flatpak list --app --columns=application,origin,branch": {
+		"flatpak list --app --system --columns=application,origin,branch": {
 			ExitCode: 0,
 			Stdout:   flatpakOutput,
 		},
