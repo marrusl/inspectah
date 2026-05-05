@@ -1,10 +1,11 @@
 # Non-RPM Software & Containers Triage — Design Spec
 
-**Status:** Revision 3 (addressing round-2 review blockers)
+**Status:** Revision 4 (addressing round-3 review blockers)
 **Date:** 2026-05-04
 **Participants:** Mark Russell, Collins (architecture), Fern (UX), Ember (strategy), Seal (container tooling)
 **Revision 2 notes:** Addresses four round-1 review blockers: Non-RPM review-state persistence contract, Containers section current-state overclaim, Non-RPM scaffolding build-context truth, and Flatpak scope/lifecycle. Mark's decision: flatpak is migration-assist only, not ongoing desired state.
 **Revision 3 notes:** Addresses three round-2 blockers: Non-RPM interaction/persistence truth (autosave overclaim, control pattern, draft behavior, a11y), non-RPM export/build-context truth (no live non-rpm/ tree), Flatpak remote auto-config boundary (best-effort for public remotes). Also fixes compose current-state overclaim and specifies Quadlet draft sink.
+**Revision 4 notes:** Fixes save-seam mismatch: spec now correctly references `PUT /api/snapshot` for durability and `POST /api/render` for rebuild. Compose current-state tightened to `ComposeFile.Images` ([]ComposeService) not generic service count.
 
 ---
 
@@ -92,7 +93,7 @@ The button label says "Draft" explicitly — the generated `.container` file nee
 
 Compose files cannot be safely auto-migrated. Show a service inventory with key metadata per service.
 
-**Current state:** The Go inspector stores compose file path and parsed service/image pairs (not raw YAML content). The schema carries `ComposeFile.Path` and `ComposeFile.Services` (list of service name + image). This is sufficient for v1: show the file path, service count, and per-service image names.
+**Current state:** The Go schema stores `ComposeFile.Path` and `ComposeFile.Images` (a `[]ComposeService`, each carrying a service name + image reference). Raw YAML content is not stored. This is sufficient for v1: show the file path and the captured image-backed service pairs (service name + image per entry).
 
 **(NEW WORK):** Extracting ports, volumes, and other per-service metadata requires additional compose YAML parsing. Expand-to-YAML disclosure requires storing or re-reading the raw file content. Both are follow-up work beyond v1.
 
@@ -149,7 +150,7 @@ Notes        string `json:"notes,omitempty"`
 
 These fields live on the snapshot's `non_rpm_software.items[]` entries, alongside existing fields like `path` and `method`.
 
-**Save mechanism:** The existing refine SPA saves snapshot state via the re-render API endpoint: the SPA sends the modified snapshot JSON to the server, which writes it to disk as part of `nativeReRender`. There is no per-keystroke autosave. **(NEW WORK)** Review-status changes must be wired into the same `updateSnapshot` → re-render flow that toggle switches use. Notes field changes should trigger a save on blur (same endpoint, but notes do not require a full re-render — only a snapshot write). This requires a new lightweight save endpoint or a flag on the re-render request to skip re-rendering when only notes changed.
+**Save mechanism:** The existing refine SPA uses two API endpoints: `PUT /api/snapshot` for routine snapshot durability (writes the snapshot JSON to disk without re-rendering), and `POST /api/render` for full rebuild/re-render (writes snapshot, runs the renderer pipeline, returns updated HTML + Containerfile + manifest). There is no per-keystroke autosave. **(NEW WORK)** Review-status changes should save via `PUT /api/snapshot` (durable but no re-render needed for status-only changes). When the operator clicks "Re-render," `POST /api/render` picks up the latest snapshot including review status and produces Containerfile scaffolding for `migration_planned` items. Notes field changes save on blur via `PUT /api/snapshot`.
 
 **Lifecycle:**
 - Initial scan: all items start as `review_status: "not_reviewed"`, `notes: ""`
@@ -293,7 +294,7 @@ None. Filtering at detection, not adding fields.
 5. **Non-RPM payload export (future):** Add `non-rpm/` tree to output tarball for directly executable stubs. Significant tarball size impact — design separately.
 6. **Compose v2 features:** Per-service ports/volumes parsing, expand-to-YAML. Beyond v1.
 7. **Flatpak remote capture:** Inspector collects remote URLs via `flatpak remotes --columns=name,url`.
-8. **Notes-only save endpoint:** Lightweight save that writes snapshot without triggering full re-render.
+8. ~~Notes-only save endpoint~~ — resolved: `PUT /api/snapshot` already provides lightweight save without re-render.
 
 ---
 
