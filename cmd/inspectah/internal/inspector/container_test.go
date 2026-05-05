@@ -754,6 +754,81 @@ func TestFilteredWalk_SkipsSkipDirs(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Quadlet PublishPort and Volume parsing
+// ---------------------------------------------------------------------------
+
+func TestScanQuadletDir_ParsesPortsAndVolumes(t *testing.T) {
+	exec := NewFakeExecutor(nil).
+		WithDirs(map[string][]string{
+			"/etc/containers/systemd": {"web.container"},
+		}).
+		WithFiles(map[string]string{
+			"/etc/containers/systemd/web.container": `[Container]
+Image=registry.example.com/web:latest
+PublishPort=8080:8080
+PublishPort=443:443
+Volume=data.volume:/data
+Volume=/host/config:/etc/app:ro
+
+[Service]
+Restart=always
+`,
+		})
+
+	units := scanQuadletDir(exec, "/etc/containers/systemd")
+
+	if len(units) != 1 {
+		t.Fatalf("got %d units, want 1", len(units))
+	}
+
+	u := units[0]
+	if len(u.Ports) != 2 {
+		t.Fatalf("Ports len = %d, want 2", len(u.Ports))
+	}
+	if u.Ports[0] != "8080:8080" {
+		t.Errorf("Ports[0] = %q, want %q", u.Ports[0], "8080:8080")
+	}
+	if u.Ports[1] != "443:443" {
+		t.Errorf("Ports[1] = %q, want %q", u.Ports[1], "443:443")
+	}
+
+	if len(u.Volumes) != 2 {
+		t.Fatalf("Volumes len = %d, want 2", len(u.Volumes))
+	}
+	if u.Volumes[0] != "data.volume:/data" {
+		t.Errorf("Volumes[0] = %q, want %q", u.Volumes[0], "data.volume:/data")
+	}
+	if u.Volumes[1] != "/host/config:/etc/app:ro" {
+		t.Errorf("Volumes[1] = %q, want %q", u.Volumes[1], "/host/config:/etc/app:ro")
+	}
+}
+
+func TestScanQuadletDir_NoPortsOrVolumes(t *testing.T) {
+	exec := NewFakeExecutor(nil).
+		WithDirs(map[string][]string{
+			"/etc/containers/systemd": {"simple.container"},
+		}).
+		WithFiles(map[string]string{
+			"/etc/containers/systemd/simple.container": `[Container]
+Image=registry.example.com/simple:latest
+`,
+		})
+
+	units := scanQuadletDir(exec, "/etc/containers/systemd")
+
+	if len(units) != 1 {
+		t.Fatalf("got %d units, want 1", len(units))
+	}
+
+	if len(units[0].Ports) != 0 {
+		t.Errorf("Ports should be empty, got %v", units[0].Ports)
+	}
+	if len(units[0].Volumes) != 0 {
+		t.Errorf("Volumes should be empty, got %v", units[0].Volumes)
+	}
+}
+
 // jsonUnmarshal is a test helper wrapping json.Unmarshal.
 func jsonUnmarshal(data []byte, v interface{}) error {
 	return json.Unmarshal(data, v)

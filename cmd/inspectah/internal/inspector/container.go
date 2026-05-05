@@ -135,9 +135,11 @@ func scanQuadletDir(exec Executor, dir string) []schema.QuadletUnit {
 			continue
 		}
 
-		imageRef := ""
+		var imageRef string
+		var ports, volumes []string
 		if ext == ".container" {
 			imageRef = extractQuadletImage(content)
+			ports, volumes = extractQuadletPortsAndVolumes(content)
 		}
 
 		// Store path relative to host root.
@@ -149,6 +151,8 @@ func scanQuadletDir(exec Executor, dir string) []schema.QuadletUnit {
 			Name:    entry.Name(),
 			Content: content,
 			Image:   imageRef,
+			Ports:   ports,
+			Volumes: volumes,
 		})
 	}
 	return units
@@ -171,6 +175,27 @@ func extractQuadletImage(content string) string {
 		}
 	}
 	return ""
+}
+
+// extractQuadletPortsAndVolumes parses PublishPort= and Volume= directives
+// from a .container quadlet file.
+func extractQuadletPortsAndVolumes(content string) (ports, volumes []string) {
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "publishport") && strings.Contains(trimmed, "=") {
+			val := strings.TrimSpace(trimmed[strings.Index(trimmed, "=")+1:])
+			if val != "" {
+				ports = append(ports, val)
+			}
+		} else if strings.HasPrefix(lower, "volume") && !strings.HasPrefix(lower, "volumedriver") && strings.Contains(trimmed, "=") {
+			val := strings.TrimSpace(trimmed[strings.Index(trimmed, "=")+1:])
+			if val != "" {
+				volumes = append(volumes, val)
+			}
+		}
+	}
+	return
 }
 
 // userQuadletDirs discovers per-user quadlet directories by parsing
