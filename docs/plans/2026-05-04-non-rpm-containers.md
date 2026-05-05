@@ -1,5 +1,10 @@
 # Non-RPM + Containers Design Implementation Plan
 
+> **Revision 6** (2026-05-04): Fixes compile-level type mismatch in Task 17 success-test stub.
+>
+> **Changes from revision 5:**
+> - **Task 17 stub signature (type fix):** The success-test `stubReRender` now returns `(ReRenderResult, error)` (value type, not pointer) and uses `json.RawMessage` for `Snapshot` and `TriageManifest` fields — matching the live `ReRenderFunc` signature and `ReRenderResult` struct in `server.go`.
+>
 > **Revision 5** (2026-05-04): Addresses one must-fix and two should-fix issues from round-4 review.
 >
 > **Changes from revision 4:**
@@ -3484,12 +3489,12 @@ func TestHandleQuadletDraft(t *testing.T) {
 	// rebuild response (html, snapshot, containerfile, triage_manifest,
 	// render_id, revision). Passing nil would only test the fallback
 	// path, which doesn't prove the contract the SPA consumes.
-	stubReRender := func(snapData, origData []byte, outDir string) (*RenderResult, error) {
-		return &RenderResult{
+	stubReRender := func(snapData, origData []byte, outDir string) (ReRenderResult, error) {
+		return ReRenderResult{
 			HTML:           "<html>rebuilt</html>",
-			Snapshot:       string(snapData),
+			Snapshot:       json.RawMessage(snapData),
 			Containerfile:  "FROM example\n",
-			TriageManifest: `{"sections":{}}`,
+			TriageManifest: json.RawMessage([]byte(`{"sections":{}}`)),
 		}, nil
 	}
 
