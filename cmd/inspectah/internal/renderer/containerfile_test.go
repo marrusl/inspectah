@@ -584,6 +584,38 @@ func TestWriteConfigTree_FlatpakManifest(t *testing.T) {
 	}
 }
 
+func TestContainerfile_ComposeProducesZeroOutput(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		ComposeFiles: []schema.ComposeFile{{Path: "opt/app/docker-compose.yml", Images: []schema.ComposeService{{Service: "web", Image: "nginx"}}, Include: true}},
+	}
+	lines := containersSectionLines(snap)
+	if len(lines) != 0 {
+		t.Errorf("compose should produce zero lines, got %d: %v", len(lines), lines)
+	}
+}
+
+func TestContainerfile_FlatpakRetryDirectives(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		FlatpakApps: []schema.FlatpakApp{{AppID: "org.example.app", Origin: "custom", Branch: "stable", Include: true, Remote: "custom", RemoteURL: "https://example.com/repo"}},
+	}
+	outDir := t.TempDir()
+	writeConfigTree(snap, outDir)
+	servicePath := filepath.Join(outDir, "flatpak", "flatpak-provision.service")
+	svcData, err := os.ReadFile(servicePath)
+	if err != nil {
+		t.Fatalf("service not written: %v", err)
+	}
+	svcContent := string(svcData)
+	if !strings.Contains(svcContent, "Restart=on-failure") {
+		t.Error("need retry directive Restart=on-failure")
+	}
+	if !strings.Contains(svcContent, "StartLimitBurst=3") {
+		t.Error("need StartLimitBurst=3")
+	}
+}
+
 func TestWriteConfigTree_FlatpakUnreconstructableRemote(t *testing.T) {
 	snap := schema.NewSnapshot()
 	snap.Containers = &schema.ContainerSection{

@@ -918,3 +918,70 @@ func TestRenderHTML_RunningContainerEmptyState(t *testing.T) {
 		t.Error("missing --query-podman guidance")
 	}
 }
+
+func TestRenderHTML_FullContainersAndNonRpm(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits:      []schema.QuadletUnit{{Name: "webapp.container", Image: "webapp:latest", Include: true, Ports: []string{"8080:8080"}, Volumes: []string{"data:/data"}}},
+		FlatpakApps:       []schema.FlatpakApp{{AppID: "org.mozilla.firefox", Origin: "flathub", Branch: "stable", Include: true, Remote: "flathub", RemoteURL: "https://dl.flathub.org/repo/"}},
+		RunningContainers: []schema.RunningContainer{{Name: "orphan", Image: "orphan:latest"}},
+		ComposeFiles:      []schema.ComposeFile{{Path: "opt/app/docker-compose.yml", Images: []schema.ComposeService{{Service: "web", Image: "nginx"}}, Include: true}},
+	}
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "opt/tool", Name: "tool", Method: "standalone binary", Confidence: "high", ReviewStatus: "migration_planned", Static: true, Lang: "go"},
+			{Path: "opt/reviewed", Name: "reviewed", Method: "standalone binary", Confidence: "high", ReviewStatus: "reviewed"},
+			{Path: "opt/unreviewed", Name: "unreviewed", Method: "standalone binary", Confidence: "high", ReviewStatus: "not_reviewed"},
+		},
+	}
+	containerfile := "FROM rhel-bootc:9.4\n"
+	html := goldenTestHelper(t, snap, containerfile)
+
+	// --- Part 1: HTML structure checks ---
+	if !strings.Contains(html, "Containers") {
+		t.Error("should contain Containers section")
+	}
+	if !strings.Contains(html, "Non-RPM Software") {
+		t.Error("should contain Non-RPM section")
+	}
+	if !strings.Contains(html, "first boot") {
+		t.Error("should contain flatpak first-boot annotation")
+	}
+	if !strings.Contains(html, "buildReviewStatusCard") {
+		t.Error("missing buildReviewStatusCard JS function")
+	}
+	if !strings.Contains(html, "buildComposeInfoCard") {
+		t.Error("missing buildComposeInfoCard JS function")
+	}
+	if !strings.Contains(html, "Quadlet Units") {
+		t.Error("missing Quadlet Units subsection label")
+	}
+	if !strings.Contains(html, "Running Containers") {
+		t.Error("missing Running Containers subsection label")
+	}
+
+	// --- Part 2: Real Containerfile output checks ---
+	nrLines := nonRpmSectionLines(snap, nil, false)
+	nrContent := strings.Join(nrLines, "\n")
+	if !strings.Contains(nrContent, "COPY opt/tool") {
+		t.Error("migration_planned should produce COPY stub")
+	}
+	if strings.Contains(nrContent, "reviewed") {
+		t.Error("reviewed item should not appear in Containerfile output")
+	}
+	if strings.Contains(nrContent, "unreviewed") {
+		t.Error("not_reviewed item should not appear in Containerfile output")
+	}
+
+	cLines := containersSectionLines(snap)
+	cContent := strings.Join(cLines, "\n")
+	if strings.Contains(cContent, "compose") || strings.Contains(cContent, "docker-compose") {
+		t.Error("compose should produce ZERO Containerfile output")
+	}
+	if !strings.Contains(cContent, "flatpak") {
+		t.Error("flatpak should produce Containerfile output")
+	}
+	if !strings.Contains(cContent, "flatpak-provision.service") {
+		t.Error("should reference oneshot service in Containerfile output")
+	}
+}
