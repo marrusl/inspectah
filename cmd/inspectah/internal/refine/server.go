@@ -572,12 +572,12 @@ func (h *refineHandler) handleQuadletDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// 409 if a generated unit with the same name already exists
+	// 409 if any unit with the same name already exists
 	draftName := req.ContainerName + ".container"
 	if snap.Containers != nil {
 		for _, qu := range snap.Containers.QuadletUnits {
-			if qu.Generated && qu.Name == draftName {
-				h.sendError(w, 409, "quadlet draft already exists: "+draftName)
+			if qu.Name == draftName {
+				h.sendError(w, 409, "quadlet unit already exists: "+draftName)
 				return
 			}
 		}

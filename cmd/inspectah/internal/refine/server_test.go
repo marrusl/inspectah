@@ -1557,3 +1557,29 @@ func TestHandleQuadletDraft_MissingImage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(respBody), "no image")
 }
+
+func TestHandleQuadletDraft_BlocksRealQuadletCollision(t *testing.T) {
+	dir := setupTestOutputDirWithContainer(t,
+		[]schema.RunningContainer{
+			{Name: "webapp", Image: "webapp:latest"},
+		},
+		[]schema.QuadletUnit{
+			{Name: "webapp.container", Content: "real unit", Generated: false},
+		},
+	)
+
+	handler := newRefineHandler(dir, nil)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	body := strings.NewReader(`{"container_name":"webapp"}`)
+	resp, err := http.Post(srv.URL+"/api/quadlet-draft", "application/json", body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 409, resp.StatusCode)
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(respBody), "already exists")
+}

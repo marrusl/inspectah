@@ -1707,3 +1707,38 @@ func TestClassifyContainerItems_NoLongerIncludesNonRpm(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeIncludeDefaults_PreservesGeneratedQuadletInclude(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{
+			{Name: "real.container", Include: false},
+			{Name: "draft.container", Include: false, Generated: true},
+		},
+	}
+	NormalizeIncludeDefaults(snap, false)
+	if !snap.Containers.QuadletUnits[0].Include {
+		t.Error("real quadlet should be normalized to Include=true")
+	}
+	if snap.Containers.QuadletUnits[1].Include {
+		t.Error("generated quadlet should preserve Include=false")
+	}
+}
+
+func TestClassifyContainerItems_BackingDetectionNormalized(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{
+			{Name: "webapp.container", Image: "webapp:latest", Include: true},
+		},
+		RunningContainers: []schema.RunningContainer{
+			{Name: "webapp", Image: "webapp:latest"},
+		},
+	}
+	items := classifyContainerItems(snap, make(map[string]bool), false)
+	for _, item := range items {
+		if item.Key == "container-webapp" && item.Tier == 3 {
+			t.Error("webapp should be detected as backed (tier 2), got tier 3")
+		}
+	}
+}

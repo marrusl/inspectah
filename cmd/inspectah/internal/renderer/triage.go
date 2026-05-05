@@ -225,7 +225,9 @@ func NormalizeIncludeDefaults(snap *schema.InspectionSnapshot, isFleet bool) {
 	// Quadlet units and flatpak apps
 	if snap.Containers != nil {
 		for i := range snap.Containers.QuadletUnits {
-			snap.Containers.QuadletUnits[i].Include = true
+			if !snap.Containers.QuadletUnits[i].Generated {
+				snap.Containers.QuadletUnits[i].Include = true
+			}
 		}
 		for i := range snap.Containers.FlatpakApps {
 			snap.Containers.FlatpakApps[i].Include = true
@@ -596,6 +598,9 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 		quadletNames := make(map[string]bool)
 		for _, q := range snap.Containers.QuadletUnits {
 			quadletNames[q.Name] = true
+			// Also index without .container suffix for backing detection
+			bare := strings.TrimSuffix(q.Name, ".container")
+			quadletNames[bare] = true
 			group := ""
 			if !isFleet {
 				group = "sub:quadlet"
