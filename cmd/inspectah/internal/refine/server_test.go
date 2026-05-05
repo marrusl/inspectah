@@ -1443,8 +1443,9 @@ func TestHandleQuadletDraft(t *testing.T) {
 	dir := setupTestOutputDirWithContainer(t,
 		[]schema.RunningContainer{
 			{
-				Name:  "webapp",
-				Image: "registry.example.com/webapp:latest",
+				Name:        "webapp",
+				Image:       "registry.example.com/webapp:latest",
+				InspectData: true,
 				Ports: map[string]interface{}{
 					"8080/tcp": []interface{}{
 						map[string]interface{}{"HostIp": "0.0.0.0", "HostPort": "8080"},
@@ -1511,7 +1512,7 @@ func TestHandleQuadletDraft(t *testing.T) {
 func TestHandleQuadletDraft_DuplicateSuppression(t *testing.T) {
 	dir := setupTestOutputDirWithContainer(t,
 		[]schema.RunningContainer{
-			{Name: "webapp", Image: "webapp:latest"},
+			{Name: "webapp", Image: "webapp:latest", InspectData: true},
 		},
 		[]schema.QuadletUnit{
 			{Name: "webapp.container", Generated: true, Image: "webapp:latest"},
@@ -1558,10 +1559,34 @@ func TestHandleQuadletDraft_MissingImage(t *testing.T) {
 	assert.Contains(t, string(respBody), "no image")
 }
 
+func TestHandleQuadletDraft_RefusesWithoutInspectData(t *testing.T) {
+	dir := setupTestOutputDirWithContainer(t,
+		[]schema.RunningContainer{
+			{Name: "partial", Image: "app:latest", InspectData: false},
+		},
+		nil,
+	)
+
+	handler := newRefineHandler(dir, nil)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	body := strings.NewReader(`{"container_name":"partial"}`)
+	resp, err := http.Post(srv.URL+"/api/quadlet-draft", "application/json", body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 422, resp.StatusCode, "must return 422 for ps-only data")
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(respBody), "inspect data")
+}
+
 func TestHandleQuadletDraft_BlocksRealQuadletCollision(t *testing.T) {
 	dir := setupTestOutputDirWithContainer(t,
 		[]schema.RunningContainer{
-			{Name: "webapp", Image: "webapp:latest"},
+			{Name: "webapp", Image: "webapp:latest", InspectData: true},
 		},
 		[]schema.QuadletUnit{
 			{Name: "webapp.container", Content: "real unit", Generated: false},

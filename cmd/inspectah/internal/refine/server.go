@@ -572,6 +572,12 @@ func (h *refineHandler) handleQuadletDraft(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// 422 if container lacks full inspect data (ps-only fallback)
+	if !target.InspectData {
+		h.sendError(w, 422, "Draft generation requires full inspect data. Re-run with podman inspect available.")
+		return
+	}
+
 	// 409 if any unit with the same name already exists
 	draftName := req.ContainerName + ".container"
 	if snap.Containers != nil {

@@ -548,6 +548,7 @@ type RunningContainer struct {
 	Networks      map[string]interface{} `json:"networks"`
 	Ports         map[string]interface{} `json:"ports"`
 	Env           []string               `json:"env"`
+	InspectData   bool                   `json:"inspect_data,omitempty"`
 	Include       *bool                  `json:"include,omitempty"`
 	Acknowledged  bool                   `json:"acknowledged,omitempty"`
 	Fleet         *FleetPrevalence       `json:"fleet,omitempty"`

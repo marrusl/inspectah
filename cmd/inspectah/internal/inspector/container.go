@@ -373,7 +373,7 @@ func extractComposeImages(content string) []schema.ComposeService {
 func queryPodmanContainers(exec Executor) ([]schema.RunningContainer, []Warning) {
 	var warnings []Warning
 
-	result := exec.Run("podman", "ps", "-a", "--format", "json")
+	result := exec.Run("podman", "ps", "--format", "json")
 	if result.ExitCode != 0 {
 		warnings = append(warnings, makeWarning(
 			"containers",
@@ -454,6 +454,7 @@ func parsePodmanInspect(data []map[string]interface{}) []schema.RunningContainer
 			Networks:      networks,
 			Ports:         ports,
 			Env:           env,
+			InspectData:   true,
 		})
 	}
 	return containers

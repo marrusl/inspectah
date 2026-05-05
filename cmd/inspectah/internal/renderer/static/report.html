@@ -4996,12 +4996,16 @@ function buildInfoReadOnlyCard(item) {
                 applyRebuildResponse(data);
                 btn.textContent = 'Draft generated';
                 btn.setAttribute('aria-disabled', 'true');
-                // Scroll to the new quadlet entry
+                // Scroll to the new quadlet entry after DOM settles
                 var newKey = 'quadlet-' + cName + '.container';
                 setTimeout(function() {
-                  var newCard = document.querySelector('[data-key="' + newKey + '"]');
-                  if (newCard) newCard.scrollIntoView({behavior: 'smooth', block: 'center'});
-                }, 200);
+                  var newEntry = document.querySelector('[data-key="' + newKey + '"]');
+                  if (newEntry) {
+                    newEntry.scrollIntoView({behavior: 'smooth', block: 'center'});
+                    newEntry.style.outline = '2px solid var(--pf-t--global--color--status--info--default)';
+                    setTimeout(function() { newEntry.style.outline = ''; }, 2000);
+                  }
+                }, 100);
               } catch (e) {
                 btn.disabled = false;
                 btn.textContent = 'Generate Quadlet Draft';
@@ -5026,6 +5030,47 @@ function buildInfoReadOnlyCard(item) {
       })(containerName, draftBtn);
     }
     card.appendChild(draftBtn);
+  }
+
+  // Running container metadata — show ports, volumes, status
+  if (item.key.indexOf('container-') === 0) {
+    var snap = App.snapshot;
+    var containerName = item.key.substring(10);
+    if (snap && snap.containers && snap.containers.running_containers) {
+      for (var ri = 0; ri < snap.containers.running_containers.length; ri++) {
+        var rc = snap.containers.running_containers[ri];
+        if (rc.name === containerName) {
+          var metaBlock = document.createElement('div');
+          metaBlock.style.cssText = 'font-size:12px;opacity:0.8;margin-top:6px;';
+          if (rc.status) {
+            var statusLine = document.createElement('div');
+            statusLine.textContent = 'Status: ' + rc.status;
+            metaBlock.appendChild(statusLine);
+          }
+          if (rc.ports) {
+            var portKeys = Object.keys(rc.ports);
+            if (portKeys.length > 0) {
+              var portsLine = document.createElement('div');
+              portsLine.textContent = 'Ports: ' + portKeys.join(', ');
+              metaBlock.appendChild(portsLine);
+            }
+          }
+          if (rc.mounts && rc.mounts.length > 0) {
+            var mountsLine = document.createElement('div');
+            mountsLine.textContent = 'Volumes: ' + rc.mounts.map(function(m) { return m.source + ':' + m.destination; }).join(', ');
+            metaBlock.appendChild(mountsLine);
+          }
+          if (!rc.inspect_data) {
+            var warnLine = document.createElement('div');
+            warnLine.style.cssText = 'color:var(--pf-t--global--color--status--warning--default,#f0ab00);margin-top:4px;';
+            warnLine.textContent = 'Limited data — podman inspect was not available.';
+            metaBlock.appendChild(warnLine);
+          }
+          card.appendChild(metaBlock);
+          break;
+        }
+      }
+    }
   }
 
   return card;

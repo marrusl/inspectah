@@ -398,12 +398,19 @@ func TestParsePodmanInspect(t *testing.T) {
 		t.Errorf("got %d env vars, want 2", len(c1.Env))
 	}
 
+	if !c1.InspectData {
+		t.Error("InspectData = false, want true for inspect-sourced container")
+	}
+
 	c2 := containers[1]
 	if c2.ID != "789012345678" {
 		t.Errorf("ID = %q, want %q", c2.ID, "789012345678")
 	}
 	if c2.Image != "redis:7-alpine" {
 		t.Errorf("Image = %q, want %q", c2.Image, "redis:7-alpine")
+	}
+	if !c2.InspectData {
+		t.Error("InspectData = false, want true for inspect-sourced container")
 	}
 }
 
@@ -426,6 +433,9 @@ func TestParsePodmanPS_Fallback(t *testing.T) {
 	}
 	if containers[0].Status != "exited" {
 		t.Errorf("Status = %q, want %q", containers[0].Status, "exited")
+	}
+	if containers[0].InspectData {
+		t.Error("InspectData = true, want false for ps-only fallback container")
 	}
 }
 
@@ -596,7 +606,7 @@ func TestRunContainers_Integration(t *testing.T) {
 	flatpakOutput := loadContainerFixture(t, "flatpak_list.txt")
 
 	exec := NewFakeExecutor(map[string]ExecResult{
-		"podman ps -a --format json": {ExitCode: 0, Stdout: podmanJSON},
+		"podman ps --format json": {ExitCode: 0, Stdout: podmanJSON},
 		"podman inspect abc123def456 789012345678": {ExitCode: 0, Stdout: podmanJSON},
 		"which flatpak": {ExitCode: 0, Stdout: "/usr/bin/flatpak"},
 		"flatpak list --app --system --columns=application,origin,branch": {
@@ -678,7 +688,7 @@ func TestRunContainers_NoPodman(t *testing.T) {
 
 func TestRunContainers_PodmanFailure(t *testing.T) {
 	exec := NewFakeExecutor(map[string]ExecResult{
-		"podman ps -a --format json": {ExitCode: 1, Stderr: "podman not found"},
+		"podman ps --format json": {ExitCode: 1, Stderr: "podman not found"},
 		"which flatpak":              {ExitCode: 1},
 	})
 
