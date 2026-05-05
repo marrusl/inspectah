@@ -16,6 +16,7 @@ func TestSystemTypeJSON(t *testing.T) {
 		val  SystemType
 		json string
 	}{
+		{SystemTypeUnknown, `"unknown"`},
 		{SystemTypePackageMode, `"package-mode"`},
 		{SystemTypeRpmOstree, `"rpm-ostree"`},
 		{SystemTypeBootc, `"bootc"`},
@@ -35,11 +36,26 @@ func TestSystemTypeJSON(t *testing.T) {
 		})
 	}
 
-	// Unknown value must fail.
-	var st SystemType
-	err := json.Unmarshal([]byte(`"unknown"`), &st)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown SystemType")
+	t.Run("empty-string-to-unknown", func(t *testing.T) {
+		var st SystemType
+		err := json.Unmarshal([]byte(`""`), &st)
+		require.NoError(t, err)
+		assert.Equal(t, SystemTypeUnknown, st)
+	})
+
+	t.Run("unknown-string-accepted", func(t *testing.T) {
+		var st SystemType
+		err := json.Unmarshal([]byte(`"unknown"`), &st)
+		require.NoError(t, err)
+		assert.Equal(t, SystemTypeUnknown, st)
+	})
+
+	t.Run("bogus-value-rejected", func(t *testing.T) {
+		var st SystemType
+		err := json.Unmarshal([]byte(`"bogus-type"`), &st)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown SystemType")
+	})
 }
 
 // TestOsReleaseJSON verifies round-trip with all fields populated.

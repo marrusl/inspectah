@@ -20,6 +20,7 @@ const SchemaVersion = 13
 type SystemType string
 
 const (
+	SystemTypeUnknown     SystemType = "unknown"
 	SystemTypePackageMode SystemType = "package-mode"
 	SystemTypeRpmOstree   SystemType = "rpm-ostree"
 	SystemTypeBootc       SystemType = "bootc"
@@ -38,8 +39,11 @@ func (s *SystemType) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	switch SystemType(raw) {
-	case SystemTypePackageMode, SystemTypeRpmOstree, SystemTypeBootc:
+	case SystemTypeUnknown, SystemTypePackageMode, SystemTypeRpmOstree, SystemTypeBootc:
 		*s = SystemType(raw)
+		return nil
+	case "":
+		*s = SystemTypeUnknown
 		return nil
 	default:
 		return fmt.Errorf("unknown SystemType %q", raw)

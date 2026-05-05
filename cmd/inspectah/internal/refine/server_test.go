@@ -1595,6 +1595,30 @@ func TestHandleQuadletDraft_RefusesWithoutInspectData(t *testing.T) {
 	assert.NotEmpty(t, errResp["error"], "422 response should contain error message in JSON")
 }
 
+func TestRenderAPI_SystemTypeUnknown_GenericPath(t *testing.T) {
+	dir := setupTestOutputDir(t)
+
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		var snap schema.InspectionSnapshot
+		if err := json.Unmarshal(snapData, &snap); err != nil {
+			return ReRenderResult{}, fmt.Errorf("parse snapshot: %w", err)
+		}
+		return ReRenderResult{
+			HTML: "<html>generic</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: "FROM ubi9\n", TriageManifest: json.RawMessage("[]"),
+		}, nil
+	})
+
+	req := httptest.NewRequest("POST", "/api/render",
+		strings.NewReader(`{"snapshot": {"meta":{"hostname":"test"},"system_type":""}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code,
+		"empty system_type must not cause render failure after SystemTypeUnknown fix")
+}
+
 func TestHandleQuadletDraft_BlocksRealQuadletCollision(t *testing.T) {
 	dir := setupTestOutputDirWithContainer(t,
 		[]schema.RunningContainer{
