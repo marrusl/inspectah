@@ -862,6 +862,27 @@
       background: var(--pf-t--global--color--brand--200, #4394e5);
     }
 
+    /* Review-status cards (non-RPM section) */
+    .review-status-card {
+      padding: 12px 16px; border-radius: 8px; margin-bottom: 6px;
+      background: var(--pf-t--global--background--color--secondary-default);
+      border-left: 3px solid var(--pf-t--global--border--color--default);
+    }
+    .review-status-card[data-status="reviewed"] { border-left-color: var(--pf-t--global--color--status--info--default); }
+    .review-status-card[data-status="migration_planned"] { border-left-color: #3fb950; }
+    .review-status-row { display: flex; align-items: center; gap: 12px; }
+    .review-status-content { flex: 1; min-width: 0; cursor: pointer; }
+    .review-status-name { font-weight: 600; font-size: 14px; }
+    .review-status-meta { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+    .review-status-control [role="radiogroup"] { display: flex; gap: 0; border: 1px solid var(--pf-t--global--border--color--default, #444); border-radius: 6px; overflow: hidden; }
+    .review-status-control [role="radio"] { padding: 0.35rem 0.75rem; font-size: 0.8rem; cursor: pointer; border: none; border-right: 1px solid var(--pf-t--global--border--color--default, #444); background: var(--pf-t--global--background--color--secondary-default); color: var(--pf-t--global--text--color--primary); user-select: none; outline: none; white-space: nowrap; }
+    .review-status-control [role="radio"]:last-child { border-right: none; }
+    .review-status-control [role="radio"][aria-checked="true"] { background: var(--pf-t--global--color--status--info--default, #2b9af3); color: #fff; font-weight: 600; }
+    .review-status-control [role="radio"][data-value="migration_planned"][aria-checked="true"] { background: #3fb950; }
+    .review-status-control [role="radio"]:focus-visible { box-shadow: 0 0 0 2px var(--pf-t--global--color--status--info--default, #2b9af3); z-index: 1; position: relative; }
+    .review-notes-field { width: 100%; margin-top: 8px; padding: 6px 8px; border: 1px solid var(--pf-t--global--border--color--default); border-radius: 4px; font-size: 13px; resize: vertical; min-height: 32px; background: transparent; color: inherit; }
+    .review-status-detail { display: none; padding: 8px 0 4px 0; }
+
     /* Section footer */
     .section-footer {
       margin-top: 1rem;
@@ -4893,6 +4914,212 @@ function buildInfoReadOnlyCard(item) {
   return card;
 }
 
+// ── Review-status card for non-RPM items ──
+function buildReviewStatusCard(item, sectionId) {
+  var snap = App.snapshot;
+  var nrItem = findNonRpmItem(snap, item.key);
+  var currentStatus = (nrItem && nrItem.review_status) ? nrItem.review_status : 'not_reviewed';
+
+  var card = document.createElement('div');
+  card.className = 'review-status-card';
+  card.setAttribute('data-key', item.key);
+  card.setAttribute('data-status', currentStatus);
+
+  // --- Row ---
+  var row = document.createElement('div');
+  row.className = 'review-status-row';
+
+  // --- Radio-group control ---
+  var control = document.createElement('div');
+  control.className = 'review-status-control';
+
+  var radioGroup = document.createElement('div');
+  radioGroup.setAttribute('role', 'radiogroup');
+  radioGroup.setAttribute('aria-label', 'Review status for ' + (item.name || item.key));
+
+  var statusOptions = [
+    { value: 'not_reviewed', label: 'Not reviewed' },
+    { value: 'reviewed', label: 'Reviewed' },
+    { value: 'migration_planned', label: 'Migration planned' }
+  ];
+
+  // Live region for screen reader announcements
+  var liveRegion = document.createElement('span');
+  liveRegion.setAttribute('role', 'status');
+  liveRegion.setAttribute('aria-live', 'polite');
+  liveRegion.className = 'sr-only';
+  liveRegion.textContent = '';
+
+  var radioButtons = [];
+
+  for (var si = 0; si < statusOptions.length; si++) {
+    (function(opt) {
+      var radio = document.createElement('button');
+      radio.type = 'button';
+      radio.setAttribute('role', 'radio');
+      radio.setAttribute('aria-checked', currentStatus === opt.value ? 'true' : 'false');
+      radio.setAttribute('data-value', opt.value);
+      radio.setAttribute('tabindex', currentStatus === opt.value ? '0' : '-1');
+      radio.textContent = opt.label;
+
+      radio.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (nrItem) {
+          nrItem.review_status = opt.value;
+        }
+        card.setAttribute('data-status', opt.value);
+
+        // Update all radio buttons
+        var allRadios = radioGroup.querySelectorAll('[role="radio"]');
+        for (var r = 0; r < allRadios.length; r++) {
+          var isChecked = allRadios[r].getAttribute('data-value') === opt.value;
+          allRadios[r].setAttribute('aria-checked', isChecked ? 'true' : 'false');
+          allRadios[r].setAttribute('tabindex', isChecked ? '0' : '-1');
+        }
+
+        liveRegion.textContent = 'Status changed to ' + opt.label;
+
+        scheduleAutosave();
+        updateNonRpmSidebarBadge();
+      });
+
+      radioButtons.push(radio);
+      radioGroup.appendChild(radio);
+    })(statusOptions[si]);
+  }
+
+  // Arrow key navigation between radio buttons
+  radioGroup.addEventListener('keydown', function(e) {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    var focused = document.activeElement;
+    var idx = radioButtons.indexOf(focused);
+    if (idx === -1) return;
+    var newIdx;
+    if (e.key === 'ArrowRight') {
+      newIdx = (idx + 1) % radioButtons.length;
+    } else {
+      newIdx = (idx - 1 + radioButtons.length) % radioButtons.length;
+    }
+    radioButtons[newIdx].focus();
+    radioButtons[newIdx].click();
+  });
+
+  control.appendChild(radioGroup);
+  row.appendChild(control);
+
+  // --- Content area ---
+  var content = document.createElement('div');
+  content.className = 'review-status-content';
+
+  var nameEl = document.createElement('div');
+  nameEl.className = 'review-status-name';
+  nameEl.textContent = item.name || item.key;
+  content.appendChild(nameEl);
+
+  var metaText = item.reason || item.meta || '';
+  if (metaText) {
+    var metaEl = document.createElement('div');
+    metaEl.className = 'review-status-meta';
+    metaEl.textContent = metaText;
+    content.appendChild(metaEl);
+  }
+
+  row.appendChild(content);
+
+  // --- Expand chevron ---
+  var chevron = document.createElement('button');
+  chevron.type = 'button';
+  chevron.className = 'toggle-card-expand';
+  chevron.textContent = '▸';
+  chevron.setAttribute('aria-expanded', 'false');
+  chevron.setAttribute('aria-label', 'Expand details for ' + (item.name || item.key));
+  chevron.setAttribute('tabindex', '0');
+  row.appendChild(chevron);
+
+  card.appendChild(row);
+  card.appendChild(liveRegion);
+
+  // --- Detail pane (hidden by default) ---
+  var detail = document.createElement('div');
+  detail.className = 'review-status-detail';
+
+  // Reason / type info
+  var detailInfo = '';
+  if (nrItem) {
+    if (nrItem.type) detailInfo += 'Type: ' + nrItem.type;
+    if (nrItem.path) detailInfo += (detailInfo ? ' • ' : '') + nrItem.path;
+  }
+  if (item.reason) detailInfo += (detailInfo ? ' — ' : '') + item.reason;
+  if (detailInfo) {
+    var reasonEl = document.createElement('div');
+    reasonEl.className = 'detail-reason';
+    reasonEl.style.fontSize = '0.8rem';
+    reasonEl.style.opacity = '0.7';
+    reasonEl.style.marginBottom = '0.5rem';
+    reasonEl.textContent = detailInfo;
+    detail.appendChild(reasonEl);
+  }
+
+  // Notes textarea
+  var notesLabel = document.createElement('label');
+  notesLabel.style.fontSize = '0.8rem';
+  notesLabel.style.opacity = '0.7';
+  notesLabel.textContent = 'Notes';
+  var notesId = 'notes-' + item.key;
+  notesLabel.setAttribute('for', notesId);
+  detail.appendChild(notesLabel);
+
+  var textarea = document.createElement('textarea');
+  textarea.className = 'review-notes-field';
+  textarea.id = notesId;
+  textarea.setAttribute('rows', '2');
+  textarea.setAttribute('placeholder', 'Add migration notes…');
+  textarea.value = (nrItem && nrItem.review_notes) ? nrItem.review_notes : '';
+  textarea.addEventListener('blur', function() {
+    if (nrItem) {
+      nrItem.review_notes = textarea.value;
+      scheduleAutosave();
+    }
+  });
+  // Prevent card expand/collapse on textarea click
+  textarea.addEventListener('click', function(e) { e.stopPropagation(); });
+  detail.appendChild(textarea);
+
+  card.appendChild(detail);
+
+  // --- Expand/collapse ---
+  var toggleExpand = function() {
+    var isExpanded = chevron.getAttribute('aria-expanded') === 'true';
+    if (isExpanded) {
+      chevron.setAttribute('aria-expanded', 'false');
+      chevron.setAttribute('aria-label', 'Expand details for ' + (item.name || item.key));
+      detail.style.display = 'none';
+    } else {
+      chevron.setAttribute('aria-expanded', 'true');
+      chevron.setAttribute('aria-label', 'Collapse details for ' + (item.name || item.key));
+      detail.style.display = '';
+    }
+  };
+
+  chevron.onclick = function(e) {
+    e.stopPropagation();
+    toggleExpand();
+  };
+  chevron.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleExpand();
+    }
+  });
+  content.addEventListener('click', function(e) {
+    e.stopPropagation();
+    toggleExpand();
+  });
+
+  return card;
+}
+
 // ── View Contents Button ──
 // Returns a "View contents" button for config file items that have
 // content in the snapshot, or null if not applicable.
@@ -5452,6 +5679,8 @@ function renderTriageSection(sectionId) {
         } else if (uItem.card_type === 'notification') {
           // Notifications keep acknowledge pattern
           card = buildNotificationCard(uItem);
+        } else if (sectionId === 'nonrpm') {
+          card = buildReviewStatusCard(uItem, sectionId);
         } else {
           // Everything else: toggle card
           card = buildToggleCard(uItem, sectionId);
