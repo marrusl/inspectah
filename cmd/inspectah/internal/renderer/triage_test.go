@@ -1585,6 +1585,61 @@ func TestClassifyNonRpmItems_NewSection(t *testing.T) {
 	}
 }
 
+func TestClassifyContainerItems_FlatpakApps(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		FlatpakApps: []schema.FlatpakApp{
+			{AppID: "org.mozilla.firefox", Origin: "flathub", Branch: "stable", Include: true},
+			{AppID: "org.gnome.Calculator", Origin: "fedora", Branch: "stable", Include: true},
+		},
+	}
+	items := classifyContainerItems(snap, make(map[string]bool), false)
+	var flatpakItems []TriageItem
+	for _, item := range items {
+		if strings.HasPrefix(item.Key, "flatpak-") {
+			flatpakItems = append(flatpakItems, item)
+		}
+	}
+	if len(flatpakItems) != 2 {
+		t.Fatalf("got %d flatpak items, want 2", len(flatpakItems))
+	}
+	ff := flatpakItems[0]
+	if ff.Section != "containers" {
+		t.Errorf("Section = %q, want %q", ff.Section, "containers")
+	}
+	if ff.Group != "sub:flatpak" {
+		t.Errorf("Group = %q, want %q", ff.Group, "sub:flatpak")
+	}
+	if ff.Tier != 2 {
+		t.Errorf("Tier = %d, want 2", ff.Tier)
+	}
+	if ff.Key != "flatpak-org.mozilla.firefox" {
+		t.Errorf("Key = %q, want %q", ff.Key, "flatpak-org.mozilla.firefox")
+	}
+}
+
+func TestClassifyContainerItems_FlatpakApps_Fleet(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		FlatpakApps: []schema.FlatpakApp{
+			{AppID: "org.mozilla.firefox", Origin: "flathub", Branch: "stable", Include: true},
+		},
+	}
+	items := classifyContainerItems(snap, make(map[string]bool), true)
+	var flatpakItems []TriageItem
+	for _, item := range items {
+		if strings.HasPrefix(item.Key, "flatpak-") {
+			flatpakItems = append(flatpakItems, item)
+		}
+	}
+	if len(flatpakItems) != 1 {
+		t.Fatalf("got %d flatpak items, want 1", len(flatpakItems))
+	}
+	if flatpakItems[0].Group != "" {
+		t.Errorf("Group should be empty in fleet mode, got %q", flatpakItems[0].Group)
+	}
+}
+
 func TestClassifyContainerItems_NoLongerIncludesNonRpm(t *testing.T) {
 	snap := schema.NewSnapshot()
 	snap.Containers = &schema.ContainerSection{

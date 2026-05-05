@@ -222,10 +222,13 @@ func NormalizeIncludeDefaults(snap *schema.InspectionSnapshot, isFleet bool) {
 		}
 	}
 
-	// Quadlet units
+	// Quadlet units and flatpak apps
 	if snap.Containers != nil {
 		for i := range snap.Containers.QuadletUnits {
 			snap.Containers.QuadletUnits[i].Include = true
+		}
+		for i := range snap.Containers.FlatpakApps {
+			snap.Containers.FlatpakApps[i].Include = true
 		}
 	}
 
@@ -621,6 +624,23 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 				item.Acknowledged = c.Acknowledged
 			}
 			items = append(items, item)
+		}
+		// Flatpak apps
+		for _, app := range snap.Containers.FlatpakApps {
+			group := ""
+			if !isFleet {
+				group = "sub:flatpak"
+			}
+			items = append(items, TriageItem{
+				Section:        "containers",
+				Key:            "flatpak-" + app.AppID,
+				Tier:           2,
+				Reason:         "Flatpak application — installed on first boot, not baked into image.",
+				Name:           app.AppID,
+				Meta:           app.Origin + "/" + app.Branch,
+				Group:          group,
+				DefaultInclude: app.Include,
+			})
 		}
 	}
 	return items

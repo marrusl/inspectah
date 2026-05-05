@@ -4180,6 +4180,15 @@ function getSnapshotInclude(key) {
         }
       }
     }
+  } else if (key.indexOf('flatpak-') === 0) {
+    var fpId = key.substring(8);
+    if (snap.containers && snap.containers.flatpak_apps) {
+      for (var fi = 0; fi < snap.containers.flatpak_apps.length; fi++) {
+        if (snap.containers.flatpak_apps[fi].app_id === fpId) {
+          return snap.containers.flatpak_apps[fi].include !== false;
+        }
+      }
+    }
   } else if (key.indexOf('nonrpm-') === 0) {
     var nrName = key.substring(7);
     if (snap.non_rpm_software && snap.non_rpm_software.items) {
@@ -4384,6 +4393,16 @@ function updateSnapshotInclude(key, include) {
       for (var rci = 0; rci < snap.containers.running_containers.length; rci++) {
         if (snap.containers.running_containers[rci].name === cName) {
           snap.containers.running_containers[rci].include = include;
+          return;
+        }
+      }
+    }
+  } else if (key.indexOf('flatpak-') === 0) {
+    var fpId = key.substring(8);
+    if (snap.containers && snap.containers.flatpak_apps) {
+      for (var fi = 0; fi < snap.containers.flatpak_apps.length; fi++) {
+        if (snap.containers.flatpak_apps[fi].app_id === fpId) {
+          snap.containers.flatpak_apps[fi].include = include;
           return;
         }
       }
