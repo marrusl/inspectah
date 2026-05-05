@@ -687,14 +687,14 @@ func containersSectionLines(snap *schema.InspectionSnapshot) []string {
 		}
 	}
 
-	var includedCompose []schema.ComposeFile
-	for _, c := range snap.Containers.ComposeFiles {
-		if c.Include {
-			includedCompose = append(includedCompose, c)
+	var includedFlatpaks []schema.FlatpakApp
+	for _, app := range snap.Containers.FlatpakApps {
+		if app.Include {
+			includedFlatpaks = append(includedFlatpaks, app)
 		}
 	}
 
-	if len(includedQuadlets) == 0 && len(includedCompose) == 0 {
+	if len(includedQuadlets) == 0 && len(includedFlatpaks) == 0 {
 		return lines
 	}
 
@@ -702,13 +702,12 @@ func containersSectionLines(snap *schema.InspectionSnapshot) []string {
 	if len(includedQuadlets) > 0 {
 		lines = append(lines, "COPY quadlet/ /etc/containers/systemd/")
 	}
-	if len(includedCompose) > 0 {
-		for _, cf := range includedCompose {
-			lines = append(lines, fmt.Sprintf("# Compose file included: %s", cf.Path))
-		}
-		lines = append(lines, "# Compose file(s) included as-is. For native systemd integration,")
-		lines = append(lines, "# consider converting to Quadlet units — see https://github.com/containers/podlet")
-		lines = append(lines, "# or https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html")
+	if len(includedFlatpaks) > 0 {
+		lines = append(lines, "# Flatpak applications — installed on first boot via oneshot service")
+		lines = append(lines, "# Manifest: flatpak/flatpak-install.json")
+		lines = append(lines, "COPY flatpak/ /usr/share/inspectah/flatpak/")
+		lines = append(lines, "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service")
+		lines = append(lines, "RUN systemctl enable flatpak-provision.service")
 	}
 	lines = append(lines, "")
 	return lines

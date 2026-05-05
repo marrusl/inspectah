@@ -185,6 +185,108 @@ func writeConfigTree(snap *schema.InspectionSnapshot, outputDir string) {
 		}
 	}
 
+	// Flatpak manifest and provisioning service
+	if snap.Containers != nil {
+		var includedFlatpaks []schema.FlatpakApp
+		for _, app := range snap.Containers.FlatpakApps {
+			if app.Include {
+				includedFlatpaks = append(includedFlatpaks, app)
+			}
+		}
+		if len(includedFlatpaks) > 0 {
+			flatpakDir := filepath.Join(outputDir, "flatpak")
+			os.MkdirAll(flatpakDir, 0755)
+
+			// Write JSON manifest
+			type flatpakManifestEntry struct {
+				AppID     string `json:"app_id"`
+				Remote    string `json:"remote"`
+				Branch    string `json:"branch"`
+				RemoteURL string `json:"remote_url,omitempty"`
+			}
+			var manifest []flatpakManifestEntry
+			for _, app := range includedFlatpaks {
+				manifest = append(manifest, flatpakManifestEntry{
+					AppID:     app.AppID,
+					Remote:    app.Remote,
+					Branch:    app.Branch,
+					RemoteURL: app.RemoteURL,
+				})
+			}
+			manifestData, _ := json.MarshalIndent(manifest, "", "  ")
+			os.WriteFile(filepath.Join(flatpakDir, "flatpak-install.json"), manifestData, 0644)
+
+			// Collect unique remotes for ExecStartPre commands
+			type remoteInfo struct {
+				Name string
+				URL  string
+			}
+			seen := make(map[string]bool)
+			var remotes []remoteInfo
+			var unreconstructable []string
+			for _, app := range includedFlatpaks {
+				if app.Remote == "" || seen[app.Remote] {
+					continue
+				}
+				seen[app.Remote] = true
+				if app.RemoteURL == "" {
+					unreconstructable = append(unreconstructable, app.Remote)
+				} else {
+					remotes = append(remotes, remoteInfo{Name: app.Remote, URL: app.RemoteURL})
+				}
+			}
+
+			// Build service file
+			var svc strings.Builder
+			svc.WriteString("[Unit]\n")
+			svc.WriteString("Description=Provision Flatpak applications from inspectah manifest\n")
+			svc.WriteString("After=network-online.target\n")
+			svc.WriteString("Wants=network-online.target\n")
+			svc.WriteString("ConditionPathExists=!/var/lib/inspectah/.flatpak-provisioned\n")
+			svc.WriteString("\n")
+			svc.WriteString("[Service]\n")
+			svc.WriteString("Type=oneshot\n")
+			svc.WriteString("RemainAfterExit=yes\n")
+			svc.WriteString("Restart=on-failure\n")
+			svc.WriteString("RestartSec=30s\n")
+			svc.WriteString("\n")
+
+			// Unreconstructable remote warnings
+			if len(unreconstructable) > 0 {
+				svc.WriteString("# WARNING: The following remote(s) could not be fully reconstructed\n")
+				svc.WriteString("# because no URL was captured. You must configure them manually.\n")
+				svc.WriteString("# See: flatpak remote-modify --help\n")
+				for _, name := range unreconstructable {
+					svc.WriteString(fmt.Sprintf("# Remote '%s': URL unknown\n", name))
+				}
+				svc.WriteString("\n")
+			}
+
+			// Remote setup
+			for _, r := range remotes {
+				svc.WriteString(fmt.Sprintf("ExecStartPre=/usr/bin/flatpak remote-add --if-not-exists %s %s\n", r.Name, r.URL))
+			}
+
+			// Install each app
+			for _, app := range includedFlatpaks {
+				svc.WriteString(fmt.Sprintf("ExecStart=/usr/bin/flatpak install -y --noninteractive %s %s//%s\n", app.Remote, app.AppID, app.Branch))
+			}
+
+			// Sentinel
+			svc.WriteString("ExecStartPost=/usr/bin/mkdir -p /var/lib/inspectah\n")
+			svc.WriteString("ExecStartPost=/usr/bin/touch /var/lib/inspectah/.flatpak-provisioned\n")
+			svc.WriteString("\n")
+			svc.WriteString("[Install]\n")
+			svc.WriteString("WantedBy=multi-user.target\n")
+			svc.WriteString("\n")
+			svc.WriteString("[Unit]\n")
+			svc.WriteString("StartLimitBurst=3\n")
+			svc.WriteString("StartLimitIntervalSec=300s\n")
+
+			os.WriteFile(filepath.Join(flatpakDir, "flatpak-provision.service"), []byte(svc.String()), 0644)
+		}
+	}
+
 	// Non-RPM env files
 	if snap.NonRpmSoftware != nil {
 		for _, entry := range snap.NonRpmSoftware.EnvFiles {

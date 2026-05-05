@@ -1,6 +1,7 @@
 package renderer
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -505,4 +506,99 @@ func TestNonRpmSectionLines_NoMigrationPlannedItems(t *testing.T) {
 	}
 	lines := nonRpmSectionLines(snap, nil, false)
 	assert.Empty(t, lines, "should produce no output for non-migration_planned items")
+}
+
+// --- Flatpak output tests ---
+
+func TestContainersSectionLines_FlatpakOutput(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		FlatpakApps: []schema.FlatpakApp{
+			{AppID: "org.mozilla.firefox", Origin: "flathub", Branch: "stable", Include: true, Remote: "flathub", RemoteURL: "https://dl.flathub.org/repo/"},
+			{AppID: "org.gnome.Calculator", Origin: "fedora", Branch: "stable", Include: false},
+		},
+	}
+	lines := containersSectionLines(snap)
+	content := strings.Join(lines, "\n")
+	if !strings.Contains(content, "flatpak/flatpak-install.json") {
+		t.Error("should reference flatpak manifest file")
+	}
+	if !strings.Contains(content, "flatpak-provision.service") {
+		t.Error("should reference oneshot service")
+	}
+	if strings.Contains(content, "Calculator") {
+		t.Error("excluded flatpak should not appear")
+	}
+}
+
+func TestWriteConfigTree_FlatpakManifest(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		FlatpakApps: []schema.FlatpakApp{
+			{AppID: "org.mozilla.firefox", Origin: "flathub", Branch: "stable", Include: true, Remote: "flathub", RemoteURL: "https://dl.flathub.org/repo/"},
+		},
+	}
+	outDir := t.TempDir()
+	writeConfigTree(snap, outDir)
+	manifestPath := filepath.Join(outDir, "flatpak", "flatpak-install.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("flatpak manifest not written: %v", err)
+	}
+	var manifest []map[string]string
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("invalid manifest JSON: %v", err)
+	}
+	if len(manifest) != 1 {
+		t.Fatalf("manifest has %d entries, want 1", len(manifest))
+	}
+	if manifest[0]["app_id"] != "org.mozilla.firefox" {
+		t.Errorf("app_id = %q", manifest[0]["app_id"])
+	}
+	servicePath := filepath.Join(outDir, "flatpak", "flatpak-provision.service")
+	svcData, err := os.ReadFile(servicePath)
+	if err != nil {
+		t.Fatalf("flatpak service not written: %v", err)
+	}
+	svcContent := string(svcData)
+	if !strings.Contains(svcContent, "ConditionPathExists") {
+		t.Error("should use sentinel")
+	}
+	if strings.Contains(svcContent, "jq") {
+		t.Error("must not depend on jq")
+	}
+	if !strings.Contains(svcContent, "remote-add --if-not-exists") {
+		t.Error("should configure remotes")
+	}
+	if !strings.Contains(svcContent, "Restart=on-failure") {
+		t.Error("should retry")
+	}
+	if !strings.Contains(svcContent, "RestartSec=30s") {
+		t.Error("need RestartSec")
+	}
+	if !strings.Contains(svcContent, "StartLimitBurst=3") {
+		t.Error("need StartLimitBurst")
+	}
+	if !strings.Contains(svcContent, "StartLimitIntervalSec=300s") {
+		t.Error("need StartLimitIntervalSec")
+	}
+}
+
+func TestWriteConfigTree_FlatpakUnreconstructableRemote(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		FlatpakApps: []schema.FlatpakApp{
+			{AppID: "com.example.app", Origin: "custom", Branch: "stable", Include: true, Remote: "custom", RemoteURL: ""},
+		},
+	}
+	outDir := t.TempDir()
+	writeConfigTree(snap, outDir)
+	servicePath := filepath.Join(outDir, "flatpak", "flatpak-provision.service")
+	svcData, _ := os.ReadFile(servicePath)
+	if !strings.Contains(string(svcData), "could not be fully reconstructed") {
+		t.Error("should warn about unreconstructable remotes")
+	}
+	if !strings.Contains(string(svcData), "flatpak remote-modify --help") {
+		t.Error("should reference remote-modify help")
+	}
 }
