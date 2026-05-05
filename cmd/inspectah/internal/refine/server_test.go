@@ -1533,6 +1533,10 @@ func TestHandleQuadletDraft_DuplicateSuppression(t *testing.T) {
 	respBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(respBody), "already exists")
+
+	var errResp map[string]string
+	require.NoError(t, json.Unmarshal(respBody, &errResp), "409 response must be valid JSON")
+	assert.NotEmpty(t, errResp["error"], "409 response should contain error message in JSON")
 }
 
 func TestHandleQuadletDraft_MissingImage(t *testing.T) {
@@ -1557,6 +1561,10 @@ func TestHandleQuadletDraft_MissingImage(t *testing.T) {
 	respBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(respBody), "no image")
+
+	var errResp map[string]string
+	require.NoError(t, json.Unmarshal(respBody, &errResp), "422 response must be valid JSON")
+	assert.NotEmpty(t, errResp["error"], "422 response should contain error message in JSON")
 }
 
 func TestHandleQuadletDraft_RefusesWithoutInspectData(t *testing.T) {
@@ -1581,6 +1589,10 @@ func TestHandleQuadletDraft_RefusesWithoutInspectData(t *testing.T) {
 	respBody, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	assert.Contains(t, string(respBody), "inspect data")
+
+	var errResp map[string]string
+	require.NoError(t, json.Unmarshal(respBody, &errResp), "422 response must be valid JSON")
+	assert.NotEmpty(t, errResp["error"], "422 response should contain error message in JSON")
 }
 
 func TestHandleQuadletDraft_BlocksRealQuadletCollision(t *testing.T) {

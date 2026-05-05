@@ -322,9 +322,9 @@ func (h *refineHandler) sendFile(w http.ResponseWriter, path, contentType string
 
 func (h *refineHandler) sendError(w http.ResponseWriter, code int, msg string) {
 	h.addCacheHeaders(w)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(code)
-	w.Write([]byte(msg))
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
 
 func (h *refineHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {

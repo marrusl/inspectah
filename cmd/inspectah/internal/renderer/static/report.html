@@ -4989,7 +4989,7 @@ function buildInfoReadOnlyCard(item) {
 
     if (hasCollision) {
       draftBtn.textContent = collisionIsGenerated
-        ? 'Draft already generated — review in Quadlet Units above'
+        ? 'Draft generated — review in Quadlet Units above'
         : 'Quadlet unit already exists';
       draftBtn.disabled = true;
       draftBtn.setAttribute('aria-disabled', 'true');
@@ -5015,8 +5015,9 @@ function buildInfoReadOnlyCard(item) {
               try {
                 var data = JSON.parse(xhr.responseText);
                 applyRebuildResponse(data);
-                btn.textContent = 'Draft generated — review in Quadlet Units above';
-                btn.setAttribute('aria-disabled', 'true');
+                // Note: applyRebuildResponse rebuilds the card from scratch.
+                // The rebuilt card hits the hasCollision pre-check and shows
+                // "Draft generated — review in Quadlet Units above" automatically.
                 // Scroll to the new quadlet entry after DOM settles
                 var newKey = 'quadlet-' + cName + '.container';
                 setTimeout(function() {
