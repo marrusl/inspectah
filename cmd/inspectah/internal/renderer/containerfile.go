@@ -732,6 +732,9 @@ func nonRpmSectionLines(snap *schema.InspectionSnapshot, purePip []schema.NonRpm
 	}
 
 	lines = append(lines, "# === Non-RPM Software (migration planned) ===")
+	lines = append(lines, "# WARNING: These stubs are advisory — source files are NOT in the build context.")
+	lines = append(lines, "# You must manually stage each referenced file/package before building.")
+	lines = append(lines, "#")
 	for _, item := range migrationItems {
 		note := ""
 		if item.Notes != "" {

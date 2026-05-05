@@ -508,6 +508,24 @@ func TestNonRpmSectionLines_NoMigrationPlannedItems(t *testing.T) {
 	assert.Empty(t, lines, "should produce no output for non-migration_planned items")
 }
 
+func TestNonRpmSectionLines_BuildContextWarning(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "opt/tool", Name: "tool", Method: "standalone binary",
+				ReviewStatus: "migration_planned", Static: true, Lang: "go"},
+		},
+	}
+	lines := nonRpmSectionLines(snap, nil, false)
+	content := strings.Join(lines, "\n")
+	if !strings.Contains(content, "advisory") {
+		t.Error("should contain advisory warning about build context")
+	}
+	if !strings.Contains(content, "manually stage") {
+		t.Error("should tell operator to manually stage files")
+	}
+}
+
 // --- Flatpak output tests ---
 
 func TestContainersSectionLines_FlatpakOutput(t *testing.T) {
