@@ -1,6 +1,11 @@
 # Non-RPM + Containers Design Implementation Plan
 
-> **Revision 4** (2026-05-04): Addresses two must-fix issues from round-3 review.
+> **Revision 5** (2026-05-04): Addresses one must-fix and two should-fix issues from round-4 review.
+>
+> **Changes from revision 4:**
+> - **Task 8 self-containment (must-fix):** `findNonRpmItem()` and `updateNonRpmSidebarBadge()` function definitions moved from Task 14 into Task 8 (new Step 12), before the steps that call them. Task 8 is now fully self-contained — every function it calls is either already on the live branch or defined within Task 8 itself. Task 14 no longer defines these helpers (it still calls `updateNonRpmSidebarBadge()` from the radio-button click handler, which works because Task 14 depends on Task 8). Steps renumbered: former Steps 12-20 are now Steps 13-21.
+> - **Task 17 test contract (should-fix):** The success test now passes a stub `reRenderFn` instead of `nil`, and asserts the response contains ALL rebuild payload fields (`html`, `snapshot`, `containerfile`, `triage_manifest`, `render_id`, `revision`). This pins the contract the SPA depends on — the test fails if the draft endpoint doesn't return the full payload.
+> - **Task 19 test name (should-fix):** Step 3 run command corrected from `TestContainerfile_ComposeProducesNoOutput` to `TestContainerfile_ComposeProducesZeroOutput` to match the actual test function name. The previous regex silently skipped the compose test.
 >
 > **Changes from revision 3:**
 > - **Task 8 / Task 14 atomicity:** Former Task 8 (classifier routes non-RPM items to `section="nonrpm"`) and former Task 14 (SPA section plumbing for nonrpm) are merged into a single indivisible Task 8. The classifier change and SPA section plumbing land in one commit — no window where items route to a section the SPA cannot render. Former Tasks 15-20 renumbered to 14-19.
@@ -1246,7 +1251,48 @@ Change to:
   });
 ```
 
-- [ ] **Step 12: Wire updateAllBadges() to initialize the nonrpm sidebar badge**
+- [ ] **Step 12: Add `findNonRpmItem()` and `updateNonRpmSidebarBadge()` helper functions**
+
+These helpers are called by Steps 13, 16, and 17 below, and by Task 14's review-status card. They must be defined here in Task 8 so this task is self-contained — every function it calls is either already on the live branch or defined within Task 8 itself.
+
+In the JavaScript section, add after the `MIGRATION_SECTIONS` array and the sidebar nav badge element (Step 9):
+
+```javascript
+function findNonRpmItem(snap, key) {
+  if (!snap || !snap.non_rpm_software || !snap.non_rpm_software.items) return null;
+  var nrName = key.substring(7); // strip 'nonrpm-'
+  for (var i = 0; i < snap.non_rpm_software.items.length; i++) {
+    var item = snap.non_rpm_software.items[i];
+    var itemName = item.path || item.name;
+    if (itemName === nrName) return item;
+  }
+  return null;
+}
+
+function updateNonRpmSidebarBadge() {
+  var snap = App.snapshot;
+  if (!snap || !snap.non_rpm_software || !snap.non_rpm_software.items) return;
+  var unreviewed = 0;
+  for (var i = 0; i < snap.non_rpm_software.items.length; i++) {
+    var item = snap.non_rpm_software.items[i];
+    if (!item.review_status || item.review_status === 'not_reviewed') {
+      unreviewed++;
+    }
+  }
+  // Update the sidebar badge for nonrpm section
+  var navItem = document.querySelector('[data-section="nonrpm"] .nav-badge');
+  if (navItem) {
+    if (unreviewed > 0) {
+      navItem.textContent = unreviewed;
+      navItem.style.display = '';
+    } else {
+      navItem.style.display = 'none';
+    }
+  }
+}
+```
+
+- [ ] **Step 13: Wire updateAllBadges() to initialize the nonrpm sidebar badge**
 
 The live `updateAllBadges()` only calls `updateBadge()` for `section.tracked` entries. Non-RPM uses a separate badge handler (`updateNonRpmSidebarBadge()`). Wire it in.
 
@@ -1269,7 +1315,7 @@ function updateAllBadges() {
 }
 ```
 
-- [ ] **Step 13: Wire navigateTo() to lazy-render uninitialized countBadge sections**
+- [ ] **Step 14: Wire navigateTo() to lazy-render uninitialized countBadge sections**
 
 The live `navigateTo()` does not lazy-render uninitialized sections. If a user clicks the Non-RPM sidebar entry before `renderAllSections()` runs (e.g., deep link), the section container is empty. Add a guard.
 
@@ -1291,7 +1337,7 @@ In `navigateTo()`, after the section visibility toggle, add:
   }
 ```
 
-- [ ] **Step 14: Use approved heading format for nonrpm section**
+- [ ] **Step 15: Use approved heading format for nonrpm section**
 
 The approved heading is `Non-RPM Software (X of Y reviewed)`. In `renderTriageSection`, after the heading is created and the label is set, add a nonrpm-specific heading override:
 
@@ -1316,7 +1362,7 @@ The approved heading is `Non-RPM Software (X of Y reviewed)`. In `renderTriageSe
 
 Insert this after `heading.textContent = label;`, replacing the label for the nonrpm section only.
 
-- [ ] **Step 15: Suppress section footer for nonrpm section**
+- [ ] **Step 16: Suppress section footer for nonrpm section**
 
 The live section footer uses generic checklist semantics (`X / Y decided` + `Mark section reviewed`). Non-RPM is a planning worksheet, not a decision checklist — the footer should be suppressed.
 
@@ -1338,9 +1384,9 @@ Wrap the entire footer block (through the `container.appendChild(footer)` line) 
   }
 ```
 
-- [ ] **Step 16: Call updateNonRpmSidebarBadge on initial render and snapshot load**
+- [ ] **Step 17: Call updateNonRpmSidebarBadge on initial render and snapshot load**
 
-The live code only calls `updateNonRpmSidebarBadge()` on status change (Task 14). The sidebar count would start empty even when Non-RPM items exist. Fix: call it at the end of `renderAllSections()` and in `applyRebuildResponse()`.
+The live code only calls `updateNonRpmSidebarBadge()` on status change (Task 14). The sidebar count would start empty even when Non-RPM items exist. Fix: call it at the end of `renderAllSections()` and in `applyRebuildResponse()`. The `updateNonRpmSidebarBadge()` function was defined in Step 12 above.
 
 In `renderAllSections()`, after the call to `updateAllBadges()` (or at the end of the function if `updateAllBadges` is not called there), add:
 ```javascript
@@ -1357,7 +1403,7 @@ In `enableRefineMode()`, in the `xhr.onload` callback after `renderAllSections()
   updateNonRpmSidebarBadge();
 ```
 
-- [ ] **Step 17: Write the HTML test for nonrpm section**
+- [ ] **Step 18: Write the HTML test for nonrpm section**
 
 ```go
 // In html_test.go
@@ -1399,17 +1445,17 @@ func TestRenderHTML_NonRpmEmptyState(t *testing.T) {
 }
 ```
 
-- [ ] **Step 18: Run tests to verify**
+- [ ] **Step 19: Run tests to verify**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/... -run "TestClassifyNonRpmItems_NewSection|TestClassifyContainerItems_NoLongerIncludesNonRpm|TestRenderHTML_NonRpm" -v`
 Expected: PASS
 
-- [ ] **Step 19: Run all triage and renderer tests for regressions**
+- [ ] **Step 20: Run all triage and renderer tests for regressions**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/... -v`
 Expected: PASS
 
-- [ ] **Step 20: Commit (atomic: classifier + SPA plumbing)**
+- [ ] **Step 21: Commit (atomic: classifier + SPA plumbing)**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah
@@ -2956,39 +3002,9 @@ function buildReviewStatusCard(item, sectionId) {
 
   return card;
 }
-
-function findNonRpmItem(snap, key) {
-  if (!snap || !snap.non_rpm_software || !snap.non_rpm_software.items) return null;
-  var nrName = key.substring(7); // strip 'nonrpm-'
-  for (var i = 0; i < snap.non_rpm_software.items.length; i++) {
-    var item = snap.non_rpm_software.items[i];
-    var itemName = item.path || item.name;
-    if (itemName === nrName) return item;
-  }
-  return null;
-}
-
-function updateNonRpmSidebarBadge() {
-  var snap = App.snapshot;
-  if (!snap || !snap.non_rpm_software || !snap.non_rpm_software.items) return;
-  var unreviewed = 0;
-  for (var i = 0; i < snap.non_rpm_software.items.length; i++) {
-    var item = snap.non_rpm_software.items[i];
-    if (!item.review_status || item.review_status === 'not_reviewed') {
-      unreviewed++;
-    }
-  }
-  // Update the sidebar badge for nonrpm section
-  var navItem = document.querySelector('[data-section="nonrpm"] .nav-badge');
-  if (navItem) {
-    if (unreviewed > 0) {
-      navItem.textContent = unreviewed;
-      navItem.style.display = '';
-    } else {
-      navItem.style.display = 'none';
-    }
-  }
-}
+// findNonRpmItem() and updateNonRpmSidebarBadge() are defined in Task 8 (Step 12).
+// buildReviewStatusCard calls findNonRpmItem; the radio-button click handler calls
+// updateNonRpmSidebarBadge. Both are available because Task 14 depends on Task 8.
 ```
 
 - [ ] **Step 3: Wire buildReviewStatusCard into renderTriageSection**
@@ -3462,11 +3478,22 @@ func TestHandleQuadletDraft(t *testing.T) {
 	outDir := t.TempDir()
 	schema.SaveSnapshot(snap, filepath.Join(outDir, "inspection-snapshot.json"))
 
-	// newRefineHandler returns http.Handler (not *refineHandler).
-	// Use httptest.NewServer(handler) directly — the handler's
-	// ServeHTTP dispatches via the manual switch, exercising
-	// the real route path including the /api/quadlet-draft case.
-	handler := newRefineHandler(outDir, nil)
+	// Stub reRenderFn returns a synthetic rebuild payload.
+	// This exercises the real code path the SPA depends on —
+	// the draft endpoint calls reRenderFn and returns the full
+	// rebuild response (html, snapshot, containerfile, triage_manifest,
+	// render_id, revision). Passing nil would only test the fallback
+	// path, which doesn't prove the contract the SPA consumes.
+	stubReRender := func(snapData, origData []byte, outDir string) (*RenderResult, error) {
+		return &RenderResult{
+			HTML:           "<html>rebuilt</html>",
+			Snapshot:       string(snapData),
+			Containerfile:  "FROM example\n",
+			TriageManifest: `{"sections":{}}`,
+		}, nil
+	}
+
+	handler := newRefineHandler(outDir, stubReRender)
 	srv := httptest.NewServer(handler)
 	defer srv.Close()
 
@@ -3484,18 +3511,19 @@ func TestHandleQuadletDraft(t *testing.T) {
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
 
-	// When reRenderFn is nil (no refine pipeline in test), response
-	// falls back to minimal format with draft + unit_name + revision.
-	// When reRenderFn is provided, response is full rebuild format
-	// (html, snapshot, containerfile, triage_manifest, render_id, revision).
-	// Either way, verify the draft was generated correctly.
-	if draft, ok := result["draft"].(string); ok {
-		if !strings.Contains(draft, "Image=registry.example.com/webapp:latest") {
-			t.Error("draft should contain the Image directive")
+	// Assert the full rebuild payload — every field the SPA depends on.
+	// This pins the contract: if the draft endpoint stops returning any
+	// of these fields, this test fails.
+	requiredFields := []string{"html", "snapshot", "containerfile", "triage_manifest", "render_id", "revision"}
+	for _, field := range requiredFields {
+		if _, ok := result[field]; !ok {
+			t.Errorf("response missing required field %q", field)
 		}
-	} else if _, hasHTML := result["html"]; hasHTML {
-		// Full rebuild response — snapshot field contains the updated snapshot
-		// with the generated draft
+	}
+
+	// Verify the HTML came from our stub (not a fallback path)
+	if html, ok := result["html"].(string); !ok || html != "<html>rebuilt</html>" {
+		t.Errorf("html = %v, want stub output", result["html"])
 	}
 
 	// Verify it was added to the snapshot with Include: false
@@ -4206,7 +4234,7 @@ func TestQuadletDraft_NonDefaultHostIpPortMapping(t *testing.T) {
 
 - [ ] **Step 3: Run the integration test**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/... -run "TestRenderHTML_FullContainersAndNonRpm|TestContainerfile_ComposeProducesNoOutput" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/renderer/... -run "TestRenderHTML_FullContainersAndNonRpm|TestContainerfile_ComposeProducesZeroOutput" -v`
 Expected: PASS
 
 - [ ] **Step 4: Run ALL tests across the codebase**
