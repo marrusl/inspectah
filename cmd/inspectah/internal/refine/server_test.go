@@ -1596,6 +1596,79 @@ func TestHandleQuadletDraft_RefusesWithoutInspectData(t *testing.T) {
 	assert.NotEmpty(t, errResp["error"], "422 response should contain error message in JSON")
 }
 
+func TestResetAPI_RestoresSidecarState(t *testing.T) {
+	dir := setupTestOutputDir(t)
+
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		os.WriteFile(filepath.Join(outputDir, "inspection-snapshot.json"), snapData, 0644)
+		return ReRenderResult{
+			HTML: "<html>rendered</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: "FROM ubi9\nRUN echo rendered", TriageManifest: json.RawMessage("[]"),
+		}, nil
+	})
+
+	sidecarPath := filepath.Join(dir, "original-inspection-snapshot.json")
+	sidecarData, err := os.ReadFile(sidecarPath)
+	require.NoError(t, err)
+
+	dirtySnap := []byte(`{"meta":{"hostname":"DIRTY-STATE"}}`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), dirtySnap, 0644))
+
+	workingData, _ := os.ReadFile(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NotEqual(t, string(sidecarData), string(workingData), "working state must differ from sidecar before reset")
+
+	reqReset := httptest.NewRequest("POST", "/api/reset", nil)
+	wReset := httptest.NewRecorder()
+	handler.ServeHTTP(wReset, reqReset)
+
+	assert.Equal(t, 200, wReset.Code)
+
+	var resetResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(wReset.Body.Bytes(), &resetResp))
+	assert.Equal(t, "reset", resetResp["status"])
+	assert.NotEmpty(t, resetResp["render_id"])
+
+	restoredData, err := os.ReadFile(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+	assert.JSONEq(t, string(sidecarData), string(restoredData),
+		"working snapshot must match sidecar after reset")
+
+	sidecarAfter, err := os.ReadFile(sidecarPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(sidecarData), string(sidecarAfter),
+		"sidecar must remain unchanged after reset")
+}
+
+func TestResetAPI_FailedRender_WorkingDirUnchanged(t *testing.T) {
+	dir := setupTestOutputDir(t)
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		return ReRenderResult{}, fmt.Errorf("reset render exploded")
+	})
+
+	beforeFiles := snapshotDirContents(t, dir)
+
+	req := httptest.NewRequest("POST", "/api/reset", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 500, w.Code)
+
+	afterFiles := snapshotDirContents(t, dir)
+	assert.Equal(t, beforeFiles, afterFiles,
+		"working directory must be unchanged after failed reset")
+}
+
+func TestResetAPI_MethodNotAllowed(t *testing.T) {
+	dir := setupTestOutputDir(t)
+	handler := newRefineHandler(dir, nil)
+
+	req := httptest.NewRequest("GET", "/api/reset", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 405, w.Code)
+}
+
 func TestRenderAPI_SystemTypeUnknown_GenericPath(t *testing.T) {
 	dir := setupTestOutputDir(t)
 

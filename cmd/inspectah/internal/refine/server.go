@@ -256,6 +256,7 @@ func newRefineHandler(outputDir string, reRenderFn ReRenderFunc) http.Handler {
 	h.mux.HandleFunc("/api/tarball", h.handleTarball)
 	h.mux.HandleFunc("/api/render", h.handleRender)
 	h.mux.HandleFunc("/api/quadlet-draft", h.handleQuadletDraft)
+	h.mux.HandleFunc("/api/reset", h.handleReset)
 
 	return h
 }
@@ -296,6 +297,8 @@ func (h *refineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleRender(w, r)
 	case path == "/api/quadlet-draft":
 		h.handleQuadletDraft(w, r)
+	case path == "/api/reset":
+		h.handleReset(w, r)
 	default:
 		// Try serving as a static file from the output directory
 		h.handleStatic(w, r)
@@ -560,6 +563,45 @@ func safeReRender(fn ReRenderFunc, snapData, origData []byte, outputDir string) 
 		}
 	}()
 	return fn(snapData, origData, outputDir)
+}
+
+func (h *refineHandler) handleReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		h.sendError(w, 405, "method not allowed")
+		return
+	}
+
+	if h.reRenderFn == nil {
+		h.sendError(w, 503, "re-rendering not available")
+		return
+	}
+
+	sidecarPath := filepath.Join(h.outputDir, "original-inspection-snapshot.json")
+	snapData, err := os.ReadFile(sidecarPath)
+	if err != nil {
+		h.sendError(w, 500, "failed to read original snapshot: "+err.Error())
+		return
+	}
+
+	result, err := safeReRender(h.reRenderFn, snapData, nil, h.outputDir)
+	if err != nil {
+		h.sendError(w, 500, "reset re-render failed: "+err.Error())
+		return
+	}
+	_ = result
+
+	h.mu.Lock()
+	h.revision++
+	h.renderID = generateRenderID()
+	rev := h.revision
+	rid := h.renderID
+	h.mu.Unlock()
+
+	h.sendJSON(w, 200, map[string]interface{}{
+		"status":    "reset",
+		"revision":  rev,
+		"render_id": rid,
+	})
 }
 
 func (h *refineHandler) handleQuadletDraft(w http.ResponseWriter, r *http.Request) {
