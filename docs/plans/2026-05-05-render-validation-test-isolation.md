@@ -1,14 +1,18 @@
 # Render Validation & E2E Test Isolation Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Revision 2** — addresses round 1 plan review feedback from Kit, Thorn, Collins.
 
 **Goal:** Reject malformed render payloads at the server boundary, accept empty SystemType as a defensive fallback, add a server-owned reset endpoint, and add per-spec-file reset hooks to the Playwright e2e suite so the 21 currently-skipping tests pass.
 
-**Architecture:** Validation gate (`Meta != nil`) added to `handleRender` and `handleSnapshot` PUT before processing. SystemType `""` maps to `SystemTypeUnknown`. New `POST /api/reset` endpoint restores from existing `original-inspection-snapshot.json` sidecar via the existing re-render path. E2E specs that mutate server state reset before/after via `resetServer()` helper.
+**Architecture:** Validation gate (`Meta != nil`) added to `handleRender` and `handleSnapshot` PUT before processing. SystemType `""` maps to `SystemTypeUnknown` (bounded compatibility shim for legacy fixture data, not a new first-class producer semantic). New `POST /api/reset` endpoint restores from existing `original-inspection-snapshot.json` sidecar via the existing re-render path. E2E specs that mutate server state reset before/after via `resetServer()` helper.
 
 **Tech Stack:** Go 1.23+, Playwright (TypeScript), `testify/assert` + `testify/require`
 
 **Spec:** `docs/specs/proposed/2026-05-05-render-validation-test-isolation-design.md`
+
+**Go module root:** `cmd/inspectah/` — all `go test` commands run from this directory, not the repo root.
 
 ---
 
@@ -18,8 +22,8 @@
 |------|--------|---------------|
 | `cmd/inspectah/internal/schema/types.go` | Modify | Add `SystemTypeUnknown`, accept `""` and `"unknown"` in unmarshal |
 | `cmd/inspectah/internal/schema/types_test.go` | Modify | Add empty-string and `"unknown"` unmarshal test cases |
-| `cmd/inspectah/internal/refine/server.go` | Modify | Add `Meta != nil` gate in `handleRender` and `handleSnapshot` PUT; add `handleReset` |
-| `cmd/inspectah/internal/refine/server_test.go` | Modify | Add tests for malformed rejection, PUT validation, and reset endpoint |
+| `cmd/inspectah/internal/refine/server.go` | Modify | Add `Meta != nil` gate in `handleRender` and `handleSnapshot` PUT; add `handleReset` with route in `ServeHTTP` switch; register route in `newRefineHandler` |
+| `cmd/inspectah/internal/refine/server_test.go` | Modify | Add tests for malformed rejection (render + PUT with disk proof), reset with dirty-then-restore proof, render-level SystemTypeUnknown proof |
 | `tests/e2e-go/tests/helpers.ts` | Modify | Add `resetServer()` export |
 | `tests/e2e-go/tests/accessibility.spec.ts` | Modify | Add reset hooks |
 | `tests/e2e-go/tests/api-endpoints.spec.ts` | Modify | Add reset hooks, rewrite malformed + valid render tests |
@@ -29,11 +33,12 @@
 
 ---
 
-### Task 1: Accept empty SystemType in schema
+### Task 1: Accept empty SystemType in schema + render-level proof
 
 **Files:**
 - Modify: `cmd/inspectah/internal/schema/types.go:22-47`
 - Modify: `cmd/inspectah/internal/schema/types_test.go:14-43`
+- Modify: `cmd/inspectah/internal/refine/server_test.go`
 
 - [ ] **Step 1: Write the failing test for empty string**
 
@@ -60,7 +65,7 @@ t.Run("empty-string-to-unknown", func(t *testing.T) {
 
 - [ ] **Step 3: Update the existing "unknown must fail" test**
 
-The existing test at line 38-42 asserts that `"unknown"` fails. After our change, `"unknown"` is a valid value (it's what `SystemTypeUnknown` marshals to). Replace lines 38-42:
+The existing test at line 38-42 asserts that `"unknown"` fails. After our change, `"unknown"` is a valid value (it's what `SystemTypeUnknown` marshals to, so it must round-trip). Replace lines 38-42:
 
 ```go
 // "unknown" is now a valid value (SystemTypeUnknown marshals to it).
@@ -82,7 +87,7 @@ t.Run("bogus-value-rejected", func(t *testing.T) {
 
 - [ ] **Step 4: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/schema/ -run TestSystemTypeJSON -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ -run TestSystemTypeJSON -v`
 Expected: compile error — `SystemTypeUnknown` undefined.
 
 - [ ] **Step 5: Add SystemTypeUnknown constant and update UnmarshalJSON**
@@ -118,26 +123,63 @@ func (s *SystemType) UnmarshalJSON(data []byte) error {
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 6: Run schema tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/schema/ -run TestSystemTypeJSON -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ -run TestSystemTypeJSON -v`
 Expected: all subtests PASS.
 
-- [ ] **Step 7: Run the full schema test suite**
+- [ ] **Step 7: Write the render-level proof**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/schema/ -v`
+Add to `server_test.go` — this proves `SystemTypeUnknown` falls through the generic render path without hard error:
+
+```go
+func TestRenderAPI_SystemTypeUnknown_GenericPath(t *testing.T) {
+	dir := setupTestOutputDir(t)
+
+	// Write a snapshot with system_type:"unknown" to the test directory
+	snap := `{"meta":{"hostname":"test"},"system_type":"unknown"}`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), []byte(snap), 0644))
+
+	renderCalled := false
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		renderCalled = true
+		return ReRenderResult{
+			HTML: "<html>generic</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: "FROM ubi9\n", TriageManifest: json.RawMessage("[]"),
+		}, nil
+	})
+
+	req := httptest.NewRequest("POST", "/api/render",
+		strings.NewReader(`{"snapshot": {"meta":{"hostname":"test"},"system_type":"unknown"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code, "SystemTypeUnknown must not cause render rejection")
+	assert.True(t, renderCalled, "reRenderFn must be called for unknown system type")
+}
+```
+
+- [ ] **Step 8: Run refine tests to verify the render-level proof passes**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run TestRenderAPI_SystemTypeUnknown -v`
+Expected: PASS.
+
+- [ ] **Step 9: Run full schema + refine test suites**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ ./internal/refine/ -v`
 Expected: all PASS, no regressions.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah
-git add cmd/inspectah/internal/schema/types.go cmd/inspectah/internal/schema/types_test.go
+git add cmd/inspectah/internal/schema/types.go cmd/inspectah/internal/schema/types_test.go cmd/inspectah/internal/refine/server_test.go
 git commit -m "fix(schema): accept empty SystemType as defensive fallback
 
 Empty system_type now unmarshals to SystemTypeUnknown instead of
-hard-failing. Defensive compatibility for legacy fixture data that
-omits the field.
+hard-failing. Bounded compatibility shim for legacy fixture data that
+omits the field. Includes schema-level and render-level proof.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -208,17 +250,14 @@ func TestRenderAPI_EmptyMeta_Accepted(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -run "TestRenderAPI_Malformed|TestRenderAPI_EmptyMeta" -v`
-Expected: `TestRenderAPI_MalformedSnapshot_Rejected` FAILS (gets 200 instead of 400). `TestRenderAPI_EmptyMeta_Accepted` may pass or fail depending on the render function.
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run "TestRenderAPI_Malformed|TestRenderAPI_EmptyMeta" -v`
+Expected: `TestRenderAPI_MalformedSnapshot_Rejected` FAILS (gets 200 instead of 400, and `t.Fatal` fires because the render function is called). `TestRenderAPI_EmptyMeta_Accepted` PASSES (mock render always succeeds).
 
 - [ ] **Step 3: Add the validation gate to handleRender**
 
 In `server.go`, insert the following block between line 512 (end of wrapper parsing) and line 514 (`result, err := safeReRender(...)`):
 
 ```go
-	// Validate snapshot shape — reject payloads that are not recognizable
-	// as inspectah snapshots. This is a minimum malformed-shape floor, not
-	// a complete validity contract.
 	var probe schema.InspectionSnapshot
 	if err := json.Unmarshal(snapData, &probe); err != nil {
 		h.sendError(w, 400, "invalid snapshot: "+err.Error())
@@ -232,13 +271,13 @@ In `server.go`, insert the following block between line 512 (end of wrapper pars
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -run "TestRenderAPI_Malformed|TestRenderAPI_EmptyMeta" -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run "TestRenderAPI_Malformed|TestRenderAPI_EmptyMeta" -v`
 Expected: both PASS.
 
 - [ ] **Step 5: Run full refine test suite to check for regressions**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -v`
-Expected: all PASS. The existing `TestRenderAPI_FailedRender_EntireWorkingDirUnchanged` test uses `{"meta":{}}` which passes the gate (Meta is non-nil).
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -v`
+Expected: all PASS. The existing `TestRenderAPI_FailedRender_EntireWorkingDirUnchanged` test uses `{"meta":{}}` which passes the gate.
 
 - [ ] **Step 6: Commit**
 
@@ -263,51 +302,22 @@ Assisted-by: Claude Code (Opus 4.6)"
 - Modify: `cmd/inspectah/internal/refine/server.go:393-402`
 - Modify: `cmd/inspectah/internal/refine/server_test.go`
 
-- [ ] **Step 1: Write the failing test for malformed PUT rejection**
+- [ ] **Step 1: Add "missing meta" case to the existing malformed PUT table test**
 
-Add to `server_test.go`:
+The existing `TestAPISnapshot_PutMalformedSnapshot` at line 435 uses a table-driven pattern and already asserts disk non-advance. Extend the table with a "missing meta" case. Add this entry to the `tests` slice inside that function:
 
 ```go
-func TestSnapshotPUT_MalformedSnapshot_Rejected(t *testing.T) {
-	dir := setupTestOutputDir(t)
-	handler := newRefineHandler(dir, nil)
-
-	// Get current revision
-	reqGet := httptest.NewRequest("GET", "/api/snapshot", nil)
-	wGet := httptest.NewRecorder()
-	handler.ServeHTTP(wGet, reqGet)
-	var snapResp map[string]interface{}
-	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &snapResp))
-	revision := int(snapResp["revision"].(float64))
-
-	// PUT a malformed snapshot
-	putBody := fmt.Sprintf(`{"snapshot": {"not_valid": true}, "revision": %d}`, revision)
-	reqPut := httptest.NewRequest("PUT", "/api/snapshot", strings.NewReader(putBody))
-	reqPut.Header.Set("Content-Type", "application/json")
-	wPut := httptest.NewRecorder()
-	handler.ServeHTTP(wPut, reqPut)
-
-	assert.Equal(t, 400, wPut.Code)
-
-	// Revision must be unchanged
-	reqGet2 := httptest.NewRequest("GET", "/api/snapshot", nil)
-	wGet2 := httptest.NewRecorder()
-	handler.ServeHTTP(wGet2, reqGet2)
-	var snapResp2 map[string]interface{}
-	require.NoError(t, json.Unmarshal(wGet2.Body.Bytes(), &snapResp2))
-	assert.Equal(t, float64(revision), snapResp2["revision"],
-		"revision must be unchanged after malformed PUT rejection")
-}
+{"valid JSON but missing meta", `{"snapshot": {"not_valid": true}, "revision": 1}`},
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run test to verify the new case fails**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -run TestSnapshotPUT_MalformedSnapshot -v`
-Expected: FAIL — gets 200 instead of 400.
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run TestAPISnapshot_PutMalformedSnapshot -v`
+Expected: the new "valid JSON but missing meta" subtest FAILS (gets 200 instead of 400).
 
 - [ ] **Step 3: Add the Meta gate to handleSnapshot PUT**
 
-In `server.go`, after the existing unmarshal at line 398-402 (the `var validSnap` block), add the Meta check. The existing code already has:
+In `server.go`, after the existing unmarshal block at line 398-402:
 
 ```go
 var validSnap schema.InspectionSnapshot
@@ -317,7 +327,7 @@ if err := json.Unmarshal(req.Snapshot, &validSnap); err != nil {
 }
 ```
 
-Add immediately after that block (after line 402):
+Add immediately after (after line 402):
 
 ```go
 if validSnap.Meta == nil {
@@ -328,12 +338,12 @@ if validSnap.Meta == nil {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -run TestSnapshotPUT_MalformedSnapshot -v`
-Expected: PASS.
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run TestAPISnapshot_PutMalformedSnapshot -v`
+Expected: all subtests PASS including the new "valid JSON but missing meta" case. The existing disk-state assertion at line 460-464 verifies `inspection-snapshot.json` was not modified.
 
 - [ ] **Step 5: Run full refine test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -v`
 Expected: all PASS.
 
 - [ ] **Step 6: Commit**
@@ -344,8 +354,8 @@ git add cmd/inspectah/internal/refine/server.go cmd/inspectah/internal/refine/se
 git commit -m "fix(refine): reject malformed snapshots in PUT /api/snapshot
 
 Same Meta != nil gate as the render endpoint. PUT remains save-only
-with no render dependency — this just prevents junk from being
-persisted as working state.
+with no render dependency. Extends existing malformed PUT table test
+with disk non-advance proof.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -355,20 +365,19 @@ Assisted-by: Claude Code (Opus 4.6)"
 ### Task 4: Add POST /api/reset endpoint
 
 **Files:**
-- Modify: `cmd/inspectah/internal/refine/server.go` (route registration + handler)
+- Modify: `cmd/inspectah/internal/refine/server.go` (route in `ServeHTTP` switch + handler)
 - Modify: `cmd/inspectah/internal/refine/server_test.go`
 
-- [ ] **Step 1: Write the failing test for reset**
+- [ ] **Step 1: Write the failing test for reset with dirty-then-restore proof**
 
-Add to `server_test.go`:
+Add to `server_test.go`. This test first mutates working state away from the sidecar, then resets and asserts sidecar restoration:
 
 ```go
 func TestResetAPI_RestoresSidecarState(t *testing.T) {
 	dir := setupTestOutputDir(t)
 
-	renderCalls := 0
 	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
-		renderCalls++
+		// Write the snapshot to the working file (simulating a real render)
 		os.WriteFile(filepath.Join(outputDir, "inspection-snapshot.json"), snapData, 0644)
 		return ReRenderResult{
 			HTML: "<html>rendered</html>", Snapshot: json.RawMessage(snapData),
@@ -376,15 +385,20 @@ func TestResetAPI_RestoresSidecarState(t *testing.T) {
 		}, nil
 	})
 
-	// Get initial revision
-	reqSnap := httptest.NewRequest("GET", "/api/snapshot", nil)
-	wSnap := httptest.NewRecorder()
-	handler.ServeHTTP(wSnap, reqSnap)
-	var snap0 map[string]interface{}
-	require.NoError(t, json.Unmarshal(wSnap.Body.Bytes(), &snap0))
-	rev0 := snap0["revision"].(float64)
+	// Capture the sidecar content (created by newRefineHandler)
+	sidecarPath := filepath.Join(dir, "original-inspection-snapshot.json")
+	sidecarData, err := os.ReadFile(sidecarPath)
+	require.NoError(t, err)
 
-	// POST /api/reset
+	// Step 1: Dirty the working snapshot so it diverges from the sidecar
+	dirtySnap := []byte(`{"meta":{"hostname":"DIRTY-STATE"}}`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), dirtySnap, 0644))
+
+	// Verify working state is now different from sidecar
+	workingData, _ := os.ReadFile(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NotEqual(t, string(sidecarData), string(workingData), "working state must differ from sidecar before reset")
+
+	// Step 2: POST /api/reset
 	reqReset := httptest.NewRequest("POST", "/api/reset", nil)
 	wReset := httptest.NewRecorder()
 	handler.ServeHTTP(wReset, reqReset)
@@ -394,11 +408,38 @@ func TestResetAPI_RestoresSidecarState(t *testing.T) {
 	var resetResp map[string]interface{}
 	require.NoError(t, json.Unmarshal(wReset.Body.Bytes(), &resetResp))
 	assert.Equal(t, "reset", resetResp["status"])
-	assert.Greater(t, resetResp["revision"].(float64), rev0)
 	assert.NotEmpty(t, resetResp["render_id"])
 
-	// reRenderFn must have been called
-	assert.Equal(t, 1, renderCalls)
+	// Step 3: Assert working snapshot was restored to sidecar content
+	restoredData, err := os.ReadFile(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+	assert.JSONEq(t, string(sidecarData), string(restoredData),
+		"working snapshot must match sidecar after reset")
+
+	// Step 4: Assert sidecar itself was not modified
+	sidecarAfter, err := os.ReadFile(sidecarPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(sidecarData), string(sidecarAfter),
+		"sidecar must remain unchanged after reset")
+}
+
+func TestResetAPI_FailedRender_WorkingDirUnchanged(t *testing.T) {
+	dir := setupTestOutputDir(t)
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		return ReRenderResult{}, fmt.Errorf("reset render exploded")
+	})
+
+	beforeFiles := snapshotDirContents(t, dir)
+
+	req := httptest.NewRequest("POST", "/api/reset", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 500, w.Code)
+
+	afterFiles := snapshotDirContents(t, dir)
+	assert.Equal(t, beforeFiles, afterFiles,
+		"working directory must be unchanged after failed reset")
 }
 
 func TestResetAPI_MethodNotAllowed(t *testing.T) {
@@ -415,15 +456,16 @@ func TestResetAPI_MethodNotAllowed(t *testing.T) {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -run "TestResetAPI" -v`
-Expected: FAIL — 404 (route not registered).
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run "TestResetAPI" -v`
+Expected: all three FAIL — requests hit the `default` case in `ServeHTTP` and serve a static file (likely 200 with HTML or 404), not the expected handler responses.
 
-- [ ] **Step 3: Register the route and implement handleReset**
+- [ ] **Step 3: Add the route to ServeHTTP switch AND implement handleReset**
 
-In `server.go`, add the route registration in `newRefineHandler` after line 258:
+In `server.go`, add the route case in the `ServeHTTP` switch (around line 297, after the `api/quadlet-draft` case):
 
 ```go
-h.mux.HandleFunc("/api/reset", h.handleReset)
+	case path == "/api/reset":
+		h.handleReset(w, r)
 ```
 
 Add the handler function after `handleRender` (after line 536):
@@ -471,12 +513,12 @@ func (h *refineHandler) handleReset(w http.ResponseWriter, r *http.Request) {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -run "TestResetAPI" -v`
-Expected: both PASS.
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run "TestResetAPI" -v`
+Expected: all three PASS.
 
 - [ ] **Step 5: Run full refine test suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/refine/ -v`
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -v`
 Expected: all PASS.
 
 - [ ] **Step 6: Commit**
@@ -489,7 +531,8 @@ git commit -m "feat(refine): add POST /api/reset endpoint
 Restores the server to startup state by re-rendering from the
 existing original-inspection-snapshot.json sidecar. Uses the same
 temp-render + sync-on-success path as handleRender. Bumps both
-revision and render_id on success.
+revision and render_id on success. Route wired through both
+ServeHTTP switch and mux registration.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -506,7 +549,6 @@ Assisted-by: Claude Code (Opus 4.6)"
 Add at the end of `helpers.ts` (after the `architectURL` function):
 
 ```typescript
-/** Reset the refine server to its startup state via POST /api/reset. */
 export async function resetServer(baseURL?: string): Promise<void> {
   const url = baseURL || process.env.REFINE_FLEET_URL || 'http://localhost:9200';
   const resp = await fetch(`${url}/api/reset`, { method: 'POST' });
@@ -545,12 +587,7 @@ Add `resetServer` to the import at line 7:
 import { waitForBoot, navigateToSection, resetServer } from './helpers';
 ```
 
-Add hooks to each `test.describe` block. In `'ARIA landmarks and attributes'` (line 9), add before the `beforeEach`:
-
-```typescript
-  test.beforeAll(async () => { await resetServer(); });
-  test.afterAll(async () => { await resetServer(); });
-```
+Add file-level hooks. `accessibility.spec.ts` has three `test.describe` blocks. The cleanest approach is to add hooks to each block that contains mutating tests. The mutating tests are in the `'Keyboard navigation'` (Enter/Space toggle) and `'Live region announcements'` (toggle + rebuild) blocks. The `'ARIA landmarks and attributes'` block is read-only.
 
 In `'Keyboard navigation'` (line 89), add before the `beforeEach`:
 
@@ -618,9 +655,9 @@ cd /Users/mrussell/Work/bootc-migration/inspectah
 git add tests/e2e-go/tests/accessibility.spec.ts tests/e2e-go/tests/artifact-truth.spec.ts tests/e2e-go/tests/include-exclude.spec.ts tests/e2e-go/tests/rebuild-cycle.spec.ts
 git commit -m "test(e2e): add reset hooks to mutating spec files
 
-beforeAll/afterAll resetServer() on accessibility, artifact-truth,
-include-exclude, and rebuild-cycle specs. These specs toggle switches,
-trigger rebuilds, or otherwise mutate shared refine server state.
+beforeAll/afterAll resetServer() on accessibility (keyboard nav +
+live region blocks only), artifact-truth, include-exclude, and
+rebuild-cycle specs. Read-only describe blocks are not hooked.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -634,7 +671,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 - [ ] **Step 1: Add resetServer import and hooks**
 
-Update the import at line 6. Currently there is no helpers import — add one:
+Add a helpers import after line 5:
 
 ```typescript
 import { test, expect } from '@playwright/test';
@@ -712,37 +749,40 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 ---
 
-### Task 8: Run full E2E suite and verify 0 skips
+### Task 8: Verification
 
 **Files:** None (verification only)
 
-- [ ] **Step 1: Kill any stale servers**
+- [ ] **Step 1: Run Go unit tests**
 
-```bash
-for port in 9200 9201 9202; do lsof -ti :$port | xargs kill 2>/dev/null; done
-```
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ ./internal/refine/ -v`
+Expected: all PASS.
 
-- [ ] **Step 2: Run the full suite**
+- [ ] **Step 2: Run the targeted isolation probe**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/tests/e2e-go && npx playwright test --reporter=list`
-Expected: 107 passed, 0 skipped, 0 failed.
-
-If any tests still skip, investigate which spec caused state contamination and add reset hooks to it.
-
-- [ ] **Step 3: Run the isolation probe**
+This is the primary e2e proof for this plan's stated regression:
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/tests/e2e-go && npx playwright test tests/api-endpoints.spec.ts tests/include-exclude.spec.ts --reporter=list`
-Expected: all tests pass (include-exclude finds cards after api-endpoints runs).
+Expected: all tests pass — include-exclude finds cards after api-endpoints runs.
 
-- [ ] **Step 4: Run the full suite two more times for determinism**
+- [ ] **Step 3: Run the secondary isolation probe**
 
-Run the full suite two more times:
-```bash
-cd /Users/mrussell/Work/bootc-migration/inspectah/tests/e2e-go && npx playwright test --reporter=list
-```
-Expected: identical results each time — 0 skips, 0 failures.
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/tests/e2e-go && npx playwright test tests/api-endpoints.spec.ts tests/editor.spec.ts --reporter=list`
+Expected: all editor tests pass (no skips) after api-endpoints runs.
 
-- [ ] **Step 5: Run Go test suite to confirm no regressions**
+- [ ] **Step 4: Run the full Playwright suite**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah && go test ./cmd/inspectah/internal/... -v`
-Expected: all PASS.
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/tests/e2e-go && npx playwright test --reporter=list`
+
+Note: the full suite may have pre-existing failures unrelated to this plan (server-liveness / connection-refused issues identified during Kit's review). The acceptance criteria for THIS plan are:
+
+- The 21 previously-skipping tests (editor, include-exclude, triage-cards) now pass
+- The malformed render test asserts 400 (not 200)
+- The valid render test asserts 200 (not 500)
+- No new test failures introduced
+
+If the suite has broader failures beyond the 21 targeted skips, those are pre-existing and tracked separately.
+
+- [ ] **Step 5: Run the full suite two more times for determinism**
+
+Run the full suite two more times. The targeted tests should produce identical results each time.
