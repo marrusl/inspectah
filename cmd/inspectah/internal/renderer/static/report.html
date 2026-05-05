@@ -3369,6 +3369,28 @@ function buildToggleCard(item, sectionId) {
     content.appendChild(metaEl);
   }
 
+  if (item.key.indexOf('flatpak-') === 0) {
+    var annotation = document.createElement('div');
+    annotation.style.cssText = 'font-size:11px;color:#d29922;margin-top:4px;font-style:italic;';
+    annotation.textContent = 'Installed on first boot (not baked into image)';
+    content.appendChild(annotation);
+
+    var caveats = document.createElement('ul');
+    caveats.style.cssText = 'font-size:11px;opacity:0.7;margin:4px 0 0 16px;padding:0;list-style:disc;';
+    var caveatItems = [
+      'Network access required at first boot',
+      'Remote configuration is best-effort',
+      'Custom/enterprise remotes may require manual setup'
+    ];
+    for (var ci = 0; ci < caveatItems.length; ci++) {
+      var li = document.createElement('li');
+      li.style.cssText = 'margin:1px 0;';
+      li.textContent = caveatItems[ci];
+      caveats.appendChild(li);
+    }
+    content.appendChild(caveats);
+  }
+
   row.appendChild(content);
 
   // Tab stop 2: Expand chevron
