@@ -2,6 +2,7 @@ package schema
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -426,4 +427,53 @@ func TestNonRpmItemAcknowledgedJSON(t *testing.T) {
 	var decoded NonRpmItem
 	require.NoError(t, json.Unmarshal(data, &decoded))
 	assert.True(t, decoded.Acknowledged)
+}
+
+func TestNonRpmItem_ReviewStatusJSON(t *testing.T) {
+	item := NonRpmItem{
+		Path:         "usr/local/bin/agent",
+		Name:         "agent",
+		Method:       "standalone binary",
+		Confidence:   "high",
+		ReviewStatus: "migration_planned",
+		Notes:        "Will COPY binary directly",
+	}
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded NonRpmItem
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.ReviewStatus != "migration_planned" {
+		t.Errorf("ReviewStatus = %q, want %q", decoded.ReviewStatus, "migration_planned")
+	}
+	if decoded.Notes != "Will COPY binary directly" {
+		t.Errorf("Notes = %q, want %q", decoded.Notes, "Will COPY binary directly")
+	}
+}
+
+func TestNonRpmItem_ReviewStatusOmitEmpty(t *testing.T) {
+	item := NonRpmItem{
+		Path:   "usr/local/bin/tool",
+		Name:   "tool",
+		Method: "standalone binary",
+	}
+
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	s := string(data)
+	if strings.Contains(s, "review_status") {
+		t.Error("review_status should be omitted when empty")
+	}
+	if strings.Contains(s, `"notes"`) {
+		t.Error("notes should be omitted when empty")
+	}
 }

@@ -596,6 +596,8 @@ type NonRpmItem struct {
 	Files              *map[string]interface{} `json:"files"`
 	Content            string                  `json:"content"`
 	Fleet              *FleetPrevalence        `json:"fleet"`
+	ReviewStatus       string                  `json:"review_status,omitempty"`
+	Notes              string                  `json:"notes,omitempty"`
 }
 
 // NonRpmSoftwareSection is the output of the Non-RPM Software inspector.
