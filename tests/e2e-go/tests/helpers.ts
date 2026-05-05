@@ -1,7 +1,7 @@
 /**
  * Shared helpers for inspectah Go port e2e tests.
  */
-import { Page, expect } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 
 /** Wait for the report SPA to fully boot (sidebar + sections rendered). */
 export async function waitForBoot(page: Page): Promise<void> {
@@ -9,6 +9,18 @@ export async function waitForBoot(page: Page): Promise<void> {
   // Wait for the sidebar nav to have links and the overview heading to appear.
   await page.waitForSelector('#sidebar .pf-v6-c-nav__link', { timeout: 10_000 });
   await page.waitForSelector('#heading-overview', { timeout: 10_000 });
+}
+
+/**
+ * Wait for the report SPA to boot AND refine mode to be fully established.
+ * Refine mode is async (XHR to /api/health, then /api/snapshot), so the
+ * rebuild bar becoming active is the definitive signal.
+ */
+export async function waitForRefineBoot(page: Page): Promise<void> {
+  await waitForBoot(page);
+  // The rebuild bar gets class 'active' when enableRefineMode() fires.
+  // This is the definitive signal that refine mode is ready.
+  await page.waitForSelector('#rebuild-bar.active', { timeout: 10_000 });
 }
 
 /** Navigate to a section via sidebar link click. */
@@ -44,19 +56,32 @@ export async function getTheme(page: Page): Promise<'dark' | 'light'> {
 }
 
 /**
- * Find the first interactive toggle in a section.
- * Tries accordion-toggle first (grouped items), then item-toggle (flat items).
+ * Find the first interactive toggle (role="switch") in a section.
+ * Uses semantic selectors: tries accordion-toggle first, then item-toggle.
  * Returns null if no toggles exist.
  */
 export async function findToggleInSection(
   page: Page,
   sectionId: string
-): Promise<ReturnType<Page['locator']> | null> {
+): Promise<Locator | null> {
+  // item-toggle buttons use role="switch" with aria-checked
+  const toggle = page.locator(`#section-${sectionId} button[role="switch"]`).first();
+  if ((await toggle.count()) > 0) return toggle;
+
+  // Fallback: accordion toggles
   const accordion = page.locator(`#section-${sectionId} .accordion-toggle`).first();
   if ((await accordion.count()) > 0) return accordion;
 
-  const item = page.locator(`#section-${sectionId} .item-toggle`).first();
-  if ((await item.count()) > 0) return item;
-
   return null;
+}
+
+/** Wait for the architect page to be fully rendered (fleet sidebar + layer tree). */
+export async function waitForArchitectBoot(page: Page): Promise<void> {
+  await page.waitForSelector('#fleet-list', { timeout: 10_000 });
+  await page.waitForSelector('#layer-tree', { timeout: 10_000 });
+}
+
+/** Get the architect URL from env, with fallback. */
+export function architectURL(): string {
+  return process.env.ARCHITECT_URL || 'http://localhost:9202';
 }

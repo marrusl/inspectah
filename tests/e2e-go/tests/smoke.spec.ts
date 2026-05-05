@@ -22,8 +22,8 @@ test.describe('Refine server smoke tests', () => {
     await expect(page).toHaveTitle('inspectah Report');
 
     // Masthead should show the report heading
-    const masthead = page.locator('.pf-v6-c-masthead__main h1');
-    await expect(masthead).toHaveText('inspectah Report');
+    const masthead = page.getByRole('heading', { name: 'inspectah Report', level: 1 });
+    await expect(masthead).toBeVisible();
   });
 
   test('sidebar renders core migration sections', async ({ page }) => {

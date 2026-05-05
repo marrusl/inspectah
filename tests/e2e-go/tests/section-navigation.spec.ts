@@ -14,7 +14,9 @@ test.describe('Section navigation', () => {
   // Sections that are always present regardless of fixture data.
   // nonrpm and version-changes are conditionally rendered by the SPA
   // based on snapshot content, so they are tested separately.
-  const sections = [
+  // Core sections that are always present regardless of fixture data.
+  // Editor is conditionally rendered (only when fixture has config/drop-in/quadlet files).
+  const coreSections = [
     { id: 'overview', label: 'Overview' },
     { id: 'packages', label: 'Packages' },
     { id: 'config', label: 'Configuration' },
@@ -23,10 +25,16 @@ test.describe('Section navigation', () => {
     { id: 'identity', label: 'Identity' },
     { id: 'system', label: 'System & Security' },
     { id: 'secrets', label: 'Secrets' },
+  ];
+
+  // Sections that may or may not be visible depending on fixture data
+  const conditionalSections = [
     { id: 'editor', label: 'Edit Files' },
   ];
 
-  for (const section of sections) {
+  const sections = [...coreSections, ...conditionalSections];
+
+  for (const section of coreSections) {
     test(`navigates to ${section.label} section`, async ({ page }) => {
       await navigateToSection(page, section.id);
 
@@ -40,6 +48,26 @@ test.describe('Section navigation', () => {
     });
   }
 
+  for (const section of conditionalSections) {
+    test(`navigates to ${section.label} section`, async ({ page }) => {
+      const navLink = page.locator(`[data-section="${section.id}"]`);
+      const isVisible = (await navLink.count()) > 0 &&
+        await navLink.evaluate((el) => {
+          const li = el.closest('li');
+          return li ? getComputedStyle(li).display !== 'none' : true;
+        });
+
+      if (!isVisible) {
+        test.skip(true, `${section.label} section not present in fixture`);
+        return;
+      }
+
+      await navigateToSection(page, section.id);
+      const heading = page.locator(`#heading-${section.id}`);
+      await expect(heading).toBeVisible();
+    });
+  }
+
   test('only one section is active at a time', async ({ page }) => {
     await navigateToSection(page, 'packages');
 
@@ -49,10 +77,24 @@ test.describe('Section navigation', () => {
   });
 
   test('section containers use proper IDs', async ({ page }) => {
-    for (const section of sections) {
+    for (const section of coreSections) {
       await navigateToSection(page, section.id);
       const container = page.locator(`#section-${section.id}`);
       await expect(container).toBeAttached();
+    }
+    // Also check conditional sections if visible
+    for (const section of conditionalSections) {
+      const navLink = page.locator(`[data-section="${section.id}"]`);
+      const isVisible = (await navLink.count()) > 0 &&
+        await navLink.evaluate((el) => {
+          const li = el.closest('li');
+          return li ? getComputedStyle(li).display !== 'none' : true;
+        });
+      if (isVisible) {
+        await navigateToSection(page, section.id);
+        const container = page.locator(`#section-${section.id}`);
+        await expect(container).toBeAttached();
+      }
     }
   });
 
