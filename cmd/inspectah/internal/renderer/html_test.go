@@ -885,3 +885,36 @@ func TestRenderHTML_NonRpmEmptyState(t *testing.T) {
 		t.Error("HTML should contain empty state message")
 	}
 }
+
+func TestRenderHTML_ContainerSubsectionHeaders(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{{Name: "web.container", Image: "web:latest", Include: true}},
+		FlatpakApps:  []schema.FlatpakApp{{AppID: "org.example.app", Origin: "flathub", Branch: "stable", Include: true}},
+		ComposeFiles: []schema.ComposeFile{{Path: "opt/dc.yml", Images: []schema.ComposeService{{Service: "svc", Image: "img"}}, Include: true}},
+	}
+	containerfile := "FROM rhel-bootc:9.4\n"
+	html := goldenTestHelper(t, snap, containerfile)
+	if !strings.Contains(html, "container-subsection-header") {
+		t.Error("missing subsection header CSS")
+	}
+	if !strings.Contains(html, "Quadlet Units") {
+		t.Error("missing Quadlet Units label")
+	}
+	if !strings.Contains(html, "Flatpak Apps") {
+		t.Error("missing Flatpak Apps label")
+	}
+	if !strings.Contains(html, "Compose Files") {
+		t.Error("missing Compose Files label")
+	}
+}
+
+func TestRenderHTML_RunningContainerEmptyState(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{}
+	containerfile := "FROM rhel-bootc:9.4\n"
+	html := goldenTestHelper(t, snap, containerfile)
+	if !strings.Contains(html, "query-podman") {
+		t.Error("missing --query-podman guidance")
+	}
+}

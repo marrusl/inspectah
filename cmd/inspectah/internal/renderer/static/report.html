@@ -1922,6 +1922,12 @@
       opacity: 0.7;
       font-size: 0.75rem;
     }
+    .container-subsection-header {
+      font-size: 13px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; opacity: 0.6; margin: 16px 0 8px 0;
+      padding-bottom: 4px; border-bottom: 1px solid var(--pf-t--global--border--color--default);
+    }
+    .container-subsection-header:first-child { margin-top: 0; }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -4933,6 +4939,95 @@ function buildInfoReadOnlyCard(item) {
   }
 
   // No action buttons — read-only
+
+  // Generate Quadlet Draft button for container- keys in refine mode
+  if (App.mode === 'refine' && item.key && item.key.indexOf('container-') === 0) {
+    var containerName = item.key.substring(10);
+    var draftBtn = document.createElement('button');
+    draftBtn.className = 'btn-generate-draft';
+    draftBtn.style.marginTop = '8px';
+
+    // Check if a draft already exists
+    var hasDraft = false;
+    var draftName = containerName + '.container';
+    if (App.snapshot && App.snapshot.containers && App.snapshot.containers.quadlet_units) {
+      for (var qi = 0; qi < App.snapshot.containers.quadlet_units.length; qi++) {
+        if (App.snapshot.containers.quadlet_units[qi].generated && App.snapshot.containers.quadlet_units[qi].name === draftName) {
+          hasDraft = true;
+          break;
+        }
+      }
+    }
+
+    // Check if the container has no image
+    var hasImage = true;
+    if (App.snapshot && App.snapshot.containers && App.snapshot.containers.running_containers) {
+      for (var ci = 0; ci < App.snapshot.containers.running_containers.length; ci++) {
+        if (App.snapshot.containers.running_containers[ci].name === containerName) {
+          if (!App.snapshot.containers.running_containers[ci].image) {
+            hasImage = false;
+          }
+          break;
+        }
+      }
+    }
+
+    if (hasDraft) {
+      draftBtn.textContent = 'Draft generated';
+      draftBtn.disabled = true;
+      draftBtn.setAttribute('aria-disabled', 'true');
+    } else if (!hasImage) {
+      draftBtn.textContent = 'No image — cannot generate draft';
+      draftBtn.disabled = true;
+      draftBtn.setAttribute('aria-disabled', 'true');
+    } else {
+      draftBtn.textContent = 'Generate Quadlet Draft';
+      draftBtn.onclick = (function(cName, btn) {
+        return function() {
+          btn.disabled = true;
+          btn.textContent = 'Generating...';
+          var xhr = new XMLHttpRequest();
+          xhr.open('POST', '/api/quadlet-draft', true);
+          xhr.setRequestHeader('Content-Type', 'application/json');
+          xhr.onload = function() {
+            if (xhr.status === 200) {
+              try {
+                var data = JSON.parse(xhr.responseText);
+                applyRebuildResponse(data);
+                btn.textContent = 'Draft generated';
+                btn.setAttribute('aria-disabled', 'true');
+                // Scroll to the new quadlet entry
+                var newKey = 'quadlet-' + cName + '.container';
+                setTimeout(function() {
+                  var newCard = document.querySelector('[data-key="' + newKey + '"]');
+                  if (newCard) newCard.scrollIntoView({behavior: 'smooth', block: 'center'});
+                }, 200);
+              } catch (e) {
+                btn.disabled = false;
+                btn.textContent = 'Generate Quadlet Draft';
+              }
+            } else if (xhr.status === 409) {
+              btn.textContent = 'Draft generated';
+              btn.setAttribute('aria-disabled', 'true');
+            } else if (xhr.status === 422) {
+              btn.textContent = 'No image — cannot generate draft';
+              btn.setAttribute('aria-disabled', 'true');
+            } else {
+              btn.disabled = false;
+              btn.textContent = 'Generate Quadlet Draft';
+            }
+          };
+          xhr.onerror = function() {
+            btn.disabled = false;
+            btn.textContent = 'Generate Quadlet Draft';
+          };
+          xhr.send(JSON.stringify({container_name: cName}));
+        };
+      })(containerName, draftBtn);
+    }
+    card.appendChild(draftBtn);
+  }
+
   return card;
 }
 
@@ -5621,6 +5716,18 @@ function renderTriageSection(sectionId) {
     }
   }
 
+  if (sectionId === 'containers') {
+    var cSnap = App.snapshot;
+    var cAllItems = getManifestItemsForSection('containers');
+    if (cAllItems.length === 0) {
+      var cEmptyMsg = document.createElement('div');
+      cEmptyMsg.style.cssText = 'padding:24px;text-align:center;opacity:0.6;font-size:14px;';
+      cEmptyMsg.textContent = 'No container workloads detected.';
+      container.appendChild(cEmptyMsg);
+      return;
+    }
+  }
+
   var allItems = getManifestItemsForSection(sectionId);
   if (allItems.length === 0) {
     var emptyMsg = document.createElement('p');
@@ -5734,6 +5841,97 @@ function renderTriageSection(sectionId) {
         }
       }
 
+      // ── Container subsection hierarchy ──
+      // For the containers section, render in a specific order with subsection headers:
+      // Quadlet Units → Flatpak Apps → Running Containers → Compose Files
+      if (sectionId === 'containers') {
+        var containerSubsectionLabels = {
+          'sub:quadlet': 'Quadlet Units',
+          'sub:flatpak': 'Flatpak Apps',
+          'sub:compose': 'Compose Files'
+        };
+        var containerSubsectionOrder = ['sub:quadlet', 'sub:flatpak', '__running__', 'sub:compose'];
+
+        for (var cs = 0; cs < containerSubsectionOrder.length; cs++) {
+          var csKey = containerSubsectionOrder[cs];
+
+          if (csKey === '__running__') {
+            // Running containers (ungrouped items) slot
+            if (ungrouped.length > 0) {
+              var rcHeader = document.createElement('div');
+              rcHeader.className = 'container-subsection-header';
+              rcHeader.textContent = 'Running Containers';
+              itemsDiv.appendChild(rcHeader);
+              for (var ru = 0; ru < ungrouped.length; ru++) {
+                var rcCard;
+                var rcItem = ungrouped[ru];
+                if (rcItem.card_type === 'notification') {
+                  rcCard = buildNotificationCard(rcItem);
+                } else if (rcItem.display_only) {
+                  rcCard = buildInfoReadOnlyCard(rcItem);
+                } else {
+                  rcCard = buildToggleCard(rcItem, sectionId);
+                }
+                itemsDiv.appendChild(rcCard);
+              }
+            } else {
+              // Running container empty state
+              var rcEmptyHeader = document.createElement('div');
+              rcEmptyHeader.className = 'container-subsection-header';
+              rcEmptyHeader.textContent = 'Running Containers';
+              itemsDiv.appendChild(rcEmptyHeader);
+              var rcEmptyMsg = document.createElement('div');
+              rcEmptyMsg.style.cssText = 'padding:12px 0;opacity:0.5;font-size:13px;font-style:italic;';
+              var cSnap2 = App.snapshot;
+              if (cSnap2 && cSnap2.containers && cSnap2.containers.running_containers === null) {
+                rcEmptyMsg.textContent = 'No running containers detected. Run inspectah with --query-podman to inspect running workloads.';
+              } else {
+                rcEmptyMsg.textContent = 'No running containers found.';
+              }
+              itemsDiv.appendChild(rcEmptyMsg);
+            }
+            continue;
+          }
+
+          // Named subsection groups (quadlet, flatpak, compose)
+          var csItems = groupedMap[csKey];
+          if (!csItems || csItems.length === 0) continue;
+          var csHeader = document.createElement('div');
+          csHeader.className = 'container-subsection-header';
+          csHeader.textContent = containerSubsectionLabels[csKey] || csKey;
+          itemsDiv.appendChild(csHeader);
+
+          var csIsDisplayOnly = csItems[0] && csItems[0].display_only;
+          if (csIsDisplayOnly) {
+            itemsDiv.appendChild(buildDisplayAccordion(csKey, csItems));
+          } else {
+            itemsDiv.appendChild(buildOutputAccordion(csKey, csItems, {
+              displayName: containerSubsectionLabels[csKey]
+            }));
+          }
+        }
+
+        // Render any remaining groups not in the container order
+        var handledGroups = {'sub:quadlet': true, 'sub:flatpak': true, 'sub:compose': true};
+        var remainingGroupNames = Object.keys(groupedMap).sort();
+        for (var rg = 0; rg < remainingGroupNames.length; rg++) {
+          if (handledGroups[remainingGroupNames[rg]]) continue;
+          var rgName = remainingGroupNames[rg];
+          var rgItems = groupedMap[rgName];
+          var rgIsDisplayOnly = rgItems[0] && rgItems[0].display_only;
+          if (rgIsDisplayOnly) {
+            itemsDiv.appendChild(buildDisplayAccordion(rgName, rgItems));
+          } else {
+            itemsDiv.appendChild(buildOutputAccordion(rgName, rgItems, {}));
+          }
+        }
+
+        tierDiv.appendChild(itemsDiv);
+        container.appendChild(tierDiv);
+        continue;
+      }
+
+      // ── Default rendering for non-containers sections ──
       // Render ungrouped items first (individual cards)
       for (var u = 0; u < ungrouped.length; u++) {
         var card;
