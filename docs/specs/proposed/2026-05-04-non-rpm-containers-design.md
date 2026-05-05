@@ -51,9 +51,10 @@ The annotation reads *"Installed on first boot (not baked into image)"* and is a
 
 **Output:** A declarative JSON manifest listing selected flatpaks (app ID, remote, branch) + a reference systemd oneshot service. The oneshot uses a sentinel file (`ConditionPathExists=!/var/lib/.flatpak-provisioned`) to run once. This follows the uBlue/Fedora Atomic pattern.
 
+**Remote configuration:** The generated oneshot must configure flatpak remotes before installing apps. The inspector captures which remote each app came from via `flatpak list --columns=application,origin`. The oneshot includes a `flatpak remote-add --if-not-exists` command for each unique remote (e.g., `flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`). **(NEW WORK — inspector):** Capture remote name per app and remote URLs via `flatpak remotes --columns=name,url`.
+
 **Caveats the triage section must surface:**
 - Flatpak installation requires network access at first boot
-- The generated service does not manage flatpak remotes or trust material — the operator must ensure the target system has the correct remotes configured (e.g., Flathub)
 - The generated service is best-effort: if network is unavailable at first boot, flatpaks will not be installed. The service should include retry logic, but the operator should not assume guaranteed installation.
 
 ### 1.3 Running Containers
@@ -222,7 +223,7 @@ None. Filtering at detection, not adding fields.
 4. **Node.js native module detection:** Add `.so` scanning in `node_modules/` for lockfile-detected apps. Currently not implemented.
 5. **Non-RPM export verification:** Confirm the Go-port export tarball includes non-RPM payloads. If not, add an export step or adjust stub paths.
 6. **Compose service parsing:** Extracting per-service metadata (image, ports, volumes) from compose YAML requires new parsing. v1 can show file path + service count only.
-7. **Flatpak remote/trust material:** The generated oneshot assumes remotes are pre-configured. Document this assumption; do not attempt to auto-configure remotes.
+7. **Flatpak remote capture:** Inspector must collect remote URLs via `flatpak remotes --columns=name,url` and associate each app with its origin remote for the oneshot's `remote-add` commands.
 
 ---
 
