@@ -1403,3 +1403,157 @@ func TestRunRefine_IncludeDefaultsNormalization(t *testing.T) {
 		assert.NoError(t, serverErr)
 	}
 }
+
+// setupTestOutputDirWithContainer creates a temp directory with a snapshot
+// containing a running container named "webapp" for quadlet draft tests.
+func setupTestOutputDirWithContainer(t *testing.T, containers []schema.RunningContainer, quadlets []schema.QuadletUnit) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "report.html"),
+		[]byte("<html><body>test report</body></html>"),
+		0644,
+	))
+
+	snap := schema.NewSnapshot()
+	snap.Meta = map[string]interface{}{"hostname": "quadlet-test"}
+	snap.Containers = &schema.ContainerSection{
+		RunningContainers: containers,
+		QuadletUnits:      quadlets,
+	}
+	snapJSON, err := json.Marshal(snap)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "inspection-snapshot.json"),
+		snapJSON,
+		0644,
+	))
+
+	require.NoError(t, os.WriteFile(
+		filepath.Join(dir, "Containerfile"),
+		[]byte("FROM ubi9\n"),
+		0644,
+	))
+
+	return dir
+}
+
+func TestHandleQuadletDraft(t *testing.T) {
+	dir := setupTestOutputDirWithContainer(t,
+		[]schema.RunningContainer{
+			{
+				Name:  "webapp",
+				Image: "registry.example.com/webapp:latest",
+				Ports: map[string]interface{}{
+					"8080/tcp": []interface{}{
+						map[string]interface{}{"HostIp": "0.0.0.0", "HostPort": "8080"},
+					},
+				},
+			},
+		},
+		nil,
+	)
+
+	reRenderFn := func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		os.WriteFile(filepath.Join(outputDir, "report.html"), []byte("<html>drafted</html>"), 0644)
+		return ReRenderResult{
+			HTML:           "<html>drafted</html>",
+			Snapshot:       json.RawMessage(snapData),
+			Containerfile:  "FROM ubi9",
+			TriageManifest: json.RawMessage(`[{"key":"quadlet-webapp.container"}]`),
+		}, nil
+	}
+
+	handler := newRefineHandler(dir, reRenderFn)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	body := strings.NewReader(`{"container_name":"webapp"}`)
+	resp, err := http.Post(srv.URL+"/api/quadlet-draft", "application/json", body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 200, resp.StatusCode)
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal(respBody, &result))
+
+	// Verify ALL rebuild fields are present
+	assert.NotEmpty(t, result["html"], "response must include html")
+	assert.NotNil(t, result["snapshot"], "response must include snapshot")
+	assert.NotEmpty(t, result["containerfile"], "response must include containerfile")
+	assert.NotNil(t, result["triage_manifest"], "response must include triage_manifest")
+	assert.NotEmpty(t, result["render_id"], "response must include render_id")
+	assert.NotNil(t, result["revision"], "response must include revision")
+
+	// Verify the generated unit was added to the snapshot on disk
+	snap, err := schema.LoadSnapshot(filepath.Join(dir, "inspection-snapshot.json"))
+	require.NoError(t, err)
+
+	var found *schema.QuadletUnit
+	for i := range snap.Containers.QuadletUnits {
+		if snap.Containers.QuadletUnits[i].Name == "webapp.container" {
+			found = &snap.Containers.QuadletUnits[i]
+			break
+		}
+	}
+	require.NotNil(t, found, "generated quadlet unit must exist in snapshot")
+	assert.True(t, found.Generated, "generated quadlet must have Generated=true")
+	assert.False(t, found.Include, "generated quadlet must have Include=false")
+	assert.Equal(t, "registry.example.com/webapp:latest", found.Image)
+	assert.NotEmpty(t, found.Content, "generated quadlet must have content")
+}
+
+func TestHandleQuadletDraft_DuplicateSuppression(t *testing.T) {
+	dir := setupTestOutputDirWithContainer(t,
+		[]schema.RunningContainer{
+			{Name: "webapp", Image: "webapp:latest"},
+		},
+		[]schema.QuadletUnit{
+			{Name: "webapp.container", Generated: true, Image: "webapp:latest"},
+		},
+	)
+
+	handler := newRefineHandler(dir, nil)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	body := strings.NewReader(`{"container_name":"webapp"}`)
+	resp, err := http.Post(srv.URL+"/api/quadlet-draft", "application/json", body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 409, resp.StatusCode)
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(respBody), "already exists")
+}
+
+func TestHandleQuadletDraft_MissingImage(t *testing.T) {
+	dir := setupTestOutputDirWithContainer(t,
+		[]schema.RunningContainer{
+			{Name: "noimage", Image: ""},
+		},
+		nil,
+	)
+
+	handler := newRefineHandler(dir, nil)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	body := strings.NewReader(`{"container_name":"noimage"}`)
+	resp, err := http.Post(srv.URL+"/api/quadlet-draft", "application/json", body)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	assert.Equal(t, 422, resp.StatusCode)
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	assert.Contains(t, string(respBody), "no image")
+}

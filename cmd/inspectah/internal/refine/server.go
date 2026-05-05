@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/inspector"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/renderer"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 )
@@ -254,6 +255,7 @@ func newRefineHandler(outputDir string, reRenderFn ReRenderFunc) http.Handler {
 	h.mux.HandleFunc("/api/snapshot", h.handleAPISnapshot)
 	h.mux.HandleFunc("/api/tarball", h.handleTarball)
 	h.mux.HandleFunc("/api/render", h.handleRender)
+	h.mux.HandleFunc("/api/quadlet-draft", h.handleQuadletDraft)
 
 	return h
 }
@@ -279,6 +281,8 @@ func (h *refineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleTarball(w, r)
 	case path == "/api/render":
 		h.handleRender(w, r)
+	case path == "/api/quadlet-draft":
+		h.handleQuadletDraft(w, r)
 	default:
 		// Try serving as a static file from the output directory
 		h.handleStatic(w, r)
@@ -515,6 +519,138 @@ func (h *refineHandler) handleRender(w http.ResponseWriter, r *http.Request) {
 		"triage_manifest": result.TriageManifest,
 		"render_id":       rid,
 		"revision":        rev,
+	})
+}
+
+func (h *refineHandler) handleQuadletDraft(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		h.sendError(w, 405, "method not allowed")
+		return
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		h.sendError(w, 400, "failed to read request body")
+		return
+	}
+	defer r.Body.Close()
+
+	var req struct {
+		ContainerName string `json:"container_name"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || req.ContainerName == "" {
+		h.sendError(w, 400, "missing or invalid container_name")
+		return
+	}
+
+	// Load snapshot
+	snapPath := filepath.Join(h.outputDir, "inspection-snapshot.json")
+	snap, err := schema.LoadSnapshot(snapPath)
+	if err != nil {
+		h.sendError(w, 500, "failed to load snapshot: "+err.Error())
+		return
+	}
+
+	// Find the running container by name
+	var target *schema.RunningContainer
+	if snap.Containers != nil {
+		for i := range snap.Containers.RunningContainers {
+			if snap.Containers.RunningContainers[i].Name == req.ContainerName {
+				target = &snap.Containers.RunningContainers[i]
+				break
+			}
+		}
+	}
+	if target == nil {
+		h.sendError(w, 404, "running container not found: "+req.ContainerName)
+		return
+	}
+
+	// 422 if container has no image
+	if target.Image == "" {
+		h.sendError(w, 422, "container has no image — cannot generate quadlet draft")
+		return
+	}
+
+	// 409 if a generated unit with the same name already exists
+	draftName := req.ContainerName + ".container"
+	if snap.Containers != nil {
+		for _, qu := range snap.Containers.QuadletUnits {
+			if qu.Generated && qu.Name == draftName {
+				h.sendError(w, 409, "quadlet draft already exists: "+draftName)
+				return
+			}
+		}
+	}
+
+	// Generate the draft
+	draftContent := renderer.GenerateQuadletDraft(*target)
+
+	// Extract ports/volumes from the draft content
+	ports, volumes := inspector.ExtractQuadletPortsAndVolumes(draftContent)
+
+	// Add the generated unit to the snapshot
+	unit := schema.QuadletUnit{
+		Name:      draftName,
+		Content:   draftContent,
+		Image:     target.Image,
+		Include:   false,
+		Generated: true,
+		Ports:     ports,
+		Volumes:   volumes,
+	}
+	if snap.Containers == nil {
+		snap.Containers = &schema.ContainerSection{}
+	}
+	snap.Containers.QuadletUnits = append(snap.Containers.QuadletUnits, unit)
+
+	// Save snapshot
+	if err := schema.SaveSnapshot(snap, snapPath); err != nil {
+		h.sendError(w, 500, "failed to save snapshot: "+err.Error())
+		return
+	}
+
+	// Return full rebuild response via reRenderFn
+	if h.reRenderFn != nil {
+		snapData, err := os.ReadFile(snapPath)
+		if err != nil {
+			h.sendError(w, 500, "failed to read updated snapshot")
+			return
+		}
+
+		var origData []byte
+		origPath := filepath.Join(h.outputDir, "original-inspection-snapshot.json")
+		if data, err := os.ReadFile(origPath); err == nil {
+			origData = data
+		}
+
+		result, err := h.reRenderFn(snapData, origData, h.outputDir)
+		if err != nil {
+			h.sendError(w, 500, "re-render failed: "+err.Error())
+			return
+		}
+
+		h.mu.Lock()
+		h.revision++
+		h.renderID = generateRenderID()
+		rev := h.revision
+		rid := h.renderID
+		h.mu.Unlock()
+
+		h.sendJSON(w, 200, map[string]interface{}{
+			"html":            result.HTML,
+			"snapshot":        result.Snapshot,
+			"containerfile":   result.Containerfile,
+			"triage_manifest": result.TriageManifest,
+			"render_id":       rid,
+			"revision":        rev,
+		})
+		return
+	}
+
+	// Fallback if reRenderFn is nil
+	h.sendJSON(w, 200, map[string]interface{}{
+		"draft_name": draftName,
 	})
 }
 

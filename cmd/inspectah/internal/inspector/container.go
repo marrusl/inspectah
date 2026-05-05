@@ -139,7 +139,7 @@ func scanQuadletDir(exec Executor, dir string) []schema.QuadletUnit {
 		var ports, volumes []string
 		if ext == ".container" {
 			imageRef = extractQuadletImage(content)
-			ports, volumes = extractQuadletPortsAndVolumes(content)
+			ports, volumes = ExtractQuadletPortsAndVolumes(content)
 		}
 
 		// Store path relative to host root.
@@ -177,9 +177,9 @@ func extractQuadletImage(content string) string {
 	return ""
 }
 
-// extractQuadletPortsAndVolumes parses PublishPort= and Volume= directives
+// ExtractQuadletPortsAndVolumes parses PublishPort= and Volume= directives
 // from a .container quadlet file.
-func extractQuadletPortsAndVolumes(content string) (ports, volumes []string) {
+func ExtractQuadletPortsAndVolumes(content string) (ports, volumes []string) {
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
 		lower := strings.ToLower(trimmed)
