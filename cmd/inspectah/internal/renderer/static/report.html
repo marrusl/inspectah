@@ -4947,13 +4947,15 @@ function buildInfoReadOnlyCard(item) {
     draftBtn.className = 'btn-generate-draft';
     draftBtn.style.marginTop = '8px';
 
-    // Check if a draft already exists
-    var hasDraft = false;
+    // Check if a quadlet unit with this name already exists (generated or real)
+    var hasCollision = false;
+    var collisionIsGenerated = false;
     var draftName = containerName + '.container';
     if (App.snapshot && App.snapshot.containers && App.snapshot.containers.quadlet_units) {
       for (var qi = 0; qi < App.snapshot.containers.quadlet_units.length; qi++) {
-        if (App.snapshot.containers.quadlet_units[qi].generated && App.snapshot.containers.quadlet_units[qi].name === draftName) {
-          hasDraft = true;
+        if (App.snapshot.containers.quadlet_units[qi].name === draftName) {
+          hasCollision = true;
+          collisionIsGenerated = !!App.snapshot.containers.quadlet_units[qi].generated;
           break;
         }
       }
@@ -4972,12 +4974,31 @@ function buildInfoReadOnlyCard(item) {
       }
     }
 
-    if (hasDraft) {
-      draftBtn.textContent = 'Draft generated';
+    // Check if the container has inspect data
+    var hasInspectData = true;
+    if (App.snapshot && App.snapshot.containers && App.snapshot.containers.running_containers) {
+      for (var ii = 0; ii < App.snapshot.containers.running_containers.length; ii++) {
+        if (App.snapshot.containers.running_containers[ii].name === containerName) {
+          if (!App.snapshot.containers.running_containers[ii].inspect_data) {
+            hasInspectData = false;
+          }
+          break;
+        }
+      }
+    }
+
+    if (hasCollision) {
+      draftBtn.textContent = collisionIsGenerated
+        ? 'Draft already generated — review in Quadlet Units above'
+        : 'Quadlet unit already exists';
       draftBtn.disabled = true;
       draftBtn.setAttribute('aria-disabled', 'true');
     } else if (!hasImage) {
       draftBtn.textContent = 'No image — cannot generate draft';
+      draftBtn.disabled = true;
+      draftBtn.setAttribute('aria-disabled', 'true');
+    } else if (!hasInspectData) {
+      draftBtn.textContent = 'Limited data — full inspect required for draft';
       draftBtn.disabled = true;
       draftBtn.setAttribute('aria-disabled', 'true');
     } else {
@@ -4994,7 +5015,7 @@ function buildInfoReadOnlyCard(item) {
               try {
                 var data = JSON.parse(xhr.responseText);
                 applyRebuildResponse(data);
-                btn.textContent = 'Draft generated';
+                btn.textContent = 'Draft generated — review in Quadlet Units above';
                 btn.setAttribute('aria-disabled', 'true');
                 // Scroll to the new quadlet entry after DOM settles
                 var newKey = 'quadlet-' + cName + '.container';
@@ -5004,17 +5025,30 @@ function buildInfoReadOnlyCard(item) {
                     newEntry.scrollIntoView({behavior: 'smooth', block: 'center'});
                     newEntry.style.outline = '2px solid var(--pf-t--global--color--status--info--default)';
                     setTimeout(function() { newEntry.style.outline = ''; }, 2000);
+                    // Focus the first interactive element in the new card
+                    var focusTarget = newEntry.querySelector('button, [tabindex="0"], input');
+                    if (focusTarget) focusTarget.focus();
                   }
-                }, 100);
+                }, 150);
               } catch (e) {
                 btn.disabled = false;
                 btn.textContent = 'Generate Quadlet Draft';
               }
             } else if (xhr.status === 409) {
-              btn.textContent = 'Draft generated';
+              try {
+                var errData = JSON.parse(xhr.responseText);
+                btn.textContent = errData.error || 'Quadlet unit already exists';
+              } catch (e) {
+                btn.textContent = 'Quadlet unit already exists';
+              }
               btn.setAttribute('aria-disabled', 'true');
             } else if (xhr.status === 422) {
-              btn.textContent = 'No image — cannot generate draft';
+              try {
+                var errData = JSON.parse(xhr.responseText);
+                btn.textContent = errData.error || 'Cannot generate draft';
+              } catch (e) {
+                btn.textContent = 'Cannot generate draft';
+              }
               btn.setAttribute('aria-disabled', 'true');
             } else {
               btn.disabled = false;
