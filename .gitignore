@@ -29,3 +29,12 @@ fleet-aggregate.*.tar.gz
 # Go CLI wrapper
 cmd/inspectah/inspectah
 cmd/inspectah/inspectah-linux-*
+cmd/inspectah/inspectah-darwin-*
+cmd/inspectah/inspectah-*.tar.gz
+
+# Root-level build outputs
+/inspectah
+/inspectah-*
+
+# Test artifacts
+*.actual.json
