@@ -10,7 +10,7 @@ import (
 )
 
 // SchemaVersion is the current inspection snapshot schema version.
-const SchemaVersion = 12
+const SchemaVersion = 13
 
 // ---------------------------------------------------------------------------
 // Enums

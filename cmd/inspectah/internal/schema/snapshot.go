@@ -63,12 +63,17 @@ func LoadSnapshot(path string) (*InspectionSnapshot, error) {
 	// v11→v12 migration: inspector didn't set Include on module streams,
 	// leaving the zero value (false). In v12+ the inspector sets Include=true
 	// at creation, so false means "user or fleet excluded."
+	// v12→v13 migration: new fields (QuadletUnit.Ports/Volumes/Generated,
+	// FlatpakApp.Remote/RemoteURL, NonRpmItem.ReviewStatus/Notes) have
+	// zero-value defaults that are correct for existing snapshots.
 	if snap.SchemaVersion < SchemaVersion && snap.Rpm != nil {
 		for i := range snap.Rpm.ModuleStreams {
 			if !snap.Rpm.ModuleStreams[i].Include {
 				snap.Rpm.ModuleStreams[i].Include = true
 			}
 		}
+	}
+	if snap.SchemaVersion < SchemaVersion {
 		snap.SchemaVersion = SchemaVersion
 	}
 

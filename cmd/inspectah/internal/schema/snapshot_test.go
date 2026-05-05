@@ -353,3 +353,36 @@ func TestLoadSnapshot_V12PreservesModuleStreamExclusion(t *testing.T) {
 		t.Error("v12 module stream Include=false must be preserved")
 	}
 }
+
+func TestLoadSnapshot_V12AcceptedAndMigrated(t *testing.T) {
+	snap := NewSnapshot()
+	snap.SchemaVersion = 12
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	data, _ := json.Marshal(snap)
+	os.WriteFile(path, data, 0644)
+
+	loaded, err := LoadSnapshot(path)
+	if err != nil {
+		t.Fatalf("LoadSnapshot should accept v12: %v", err)
+	}
+	if loaded.SchemaVersion != SchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", loaded.SchemaVersion, SchemaVersion)
+	}
+}
+
+func TestLoadSnapshot_V11Rejected(t *testing.T) {
+	snap := NewSnapshot()
+	snap.SchemaVersion = 11
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "snapshot.json")
+	data, _ := json.Marshal(snap)
+	os.WriteFile(path, data, 0644)
+
+	_, err := LoadSnapshot(path)
+	if err == nil {
+		t.Fatal("LoadSnapshot should reject v11 when SchemaVersion is 13")
+	}
+}
