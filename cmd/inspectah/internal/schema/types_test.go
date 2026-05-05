@@ -477,3 +477,57 @@ func TestNonRpmItem_ReviewStatusOmitEmpty(t *testing.T) {
 		t.Error("notes should be omitted when empty")
 	}
 }
+
+func TestQuadletUnit_PortsVolumesGenerated(t *testing.T) {
+	unit := QuadletUnit{
+		Path:      "etc/containers/systemd/webapp.container",
+		Name:      "webapp.container",
+		Content:   "[Container]\nImage=foo\n",
+		Image:     "foo",
+		Ports:     []string{"8080:8080", "443:443"},
+		Volumes:   []string{"data.volume:/data"},
+		Generated: true,
+	}
+
+	data, err := json.Marshal(unit)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded QuadletUnit
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if len(decoded.Ports) != 2 {
+		t.Errorf("Ports len = %d, want 2", len(decoded.Ports))
+	}
+	if len(decoded.Volumes) != 1 {
+		t.Errorf("Volumes len = %d, want 1", len(decoded.Volumes))
+	}
+	if !decoded.Generated {
+		t.Error("Generated should be true")
+	}
+}
+
+func TestQuadletUnit_PortsVolumesOmitEmpty(t *testing.T) {
+	unit := QuadletUnit{
+		Name: "simple.container",
+	}
+
+	data, err := json.Marshal(unit)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	s := string(data)
+	if strings.Contains(s, `"ports"`) {
+		t.Error("ports should be omitted when nil")
+	}
+	if strings.Contains(s, `"volumes"`) {
+		t.Error("volumes should be omitted when nil")
+	}
+	if strings.Contains(s, `"generated"`) {
+		t.Error("generated should be omitted when false")
+	}
+}

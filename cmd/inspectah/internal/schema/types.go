@@ -515,6 +515,9 @@ type QuadletUnit struct {
 	Tie       bool             `json:"tie"`
 	TieWinner bool             `json:"tie_winner"`
 	Fleet     *FleetPrevalence `json:"fleet"`
+	Ports     []string         `json:"ports,omitempty"`
+	Volumes   []string         `json:"volumes,omitempty"`
+	Generated bool             `json:"generated,omitempty"`
 }
 
 // ComposeService is a single service within a compose file.
