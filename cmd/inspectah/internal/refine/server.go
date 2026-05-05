@@ -400,6 +400,10 @@ func (h *refineHandler) handleAPISnapshot(w http.ResponseWriter, r *http.Request
 			h.sendError(w, 400, "invalid snapshot: "+err.Error())
 			return
 		}
+		if validSnap.Meta == nil {
+			h.sendError(w, 400, "invalid snapshot: missing meta field")
+			return
+		}
 
 		h.mu.Lock()
 		if req.Revision != h.revision {

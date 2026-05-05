@@ -444,6 +444,7 @@ func TestAPISnapshot_PutMalformedSnapshot(t *testing.T) {
 		{"null snapshot", `{"snapshot":null,"revision":1}`},
 		{"snapshot is string not object", `{"snapshot":"not an object","revision":1}`},
 		{"snapshot is array not object", `{"snapshot":[1,2,3],"revision":1}`},
+		{"valid JSON but missing meta", `{"snapshot": {"not_valid": true}, "revision": 1}`},
 	}
 
 	for _, tt := range tests {
