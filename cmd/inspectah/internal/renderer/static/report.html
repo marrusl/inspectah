@@ -2079,6 +2079,7 @@ var MIGRATION_SECTIONS = [
   {id: 'config',     label: 'Configuration',  tracked: true},
   {id: 'runtime',    label: 'Runtime',         tracked: true},
   {id: 'containers', label: 'Containers',      tracked: true},
+  {id: 'nonrpm',     label: 'Non-RPM Software', tracked: false, countBadge: true},
   {id: 'identity',   label: 'Identity',        tracked: true},
   {id: 'system',     label: 'System & Security', tracked: true},
   {id: 'secrets',    label: 'Secrets',         tracked: true},
@@ -2265,6 +2266,15 @@ function renderSidebar() {
       a.appendChild(badge);
     }
 
+    // Count badge for non-tracked sections with item counts (nonrpm)
+    if (section.countBadge) {
+      var countBadge = document.createElement('span');
+      countBadge.className = 'nav-badge';
+      countBadge.id = 'nonrpm-badge';
+      countBadge.style.cssText = 'font-size:11px;padding:1px 6px;border-radius:8px;background:var(--pf-t--global--background--color--secondary-default);margin-left:auto;';
+      a.appendChild(countBadge);
+    }
+
     // Info badge for non-triage sections (version-changes)
     if (section.infoBadge) {
       var infoBadge = document.createElement('span');
@@ -2329,6 +2339,16 @@ function navigateTo(sectionId) {
     } else {
       sections[j].classList.remove('active');
     }
+  }
+
+  // Lazy-render countBadge sections on first navigation
+  var sectionDiv = document.getElementById('section-' + sectionId);
+  if (sectionDiv && sectionDiv.children.length === 0) {
+    var sectionMeta = null;
+    for (var ms = 0; ms < MIGRATION_SECTIONS.length; ms++) {
+      if (MIGRATION_SECTIONS[ms].id === sectionId) { sectionMeta = MIGRATION_SECTIONS[ms]; break; }
+    }
+    if (sectionMeta && (sectionMeta.tracked || sectionMeta.countBadge)) renderTriageSection(sectionId);
   }
 
   // Focus to section heading
@@ -2399,7 +2419,34 @@ function updateBadge(sectionId) {
 function updateAllBadges() {
   MIGRATION_SECTIONS.forEach(function(s) {
     if (s.tracked) updateBadge(s.id);
+    if (s.countBadge) updateNonRpmSidebarBadge();
   });
+}
+
+function findNonRpmItem(snap, key) {
+  if (!snap || !snap.non_rpm_software || !snap.non_rpm_software.items) return null;
+  var nrName = key.substring(7);
+  for (var i = 0; i < snap.non_rpm_software.items.length; i++) {
+    var item = snap.non_rpm_software.items[i];
+    var itemName = item.path || item.name;
+    if (itemName === nrName) return item;
+  }
+  return null;
+}
+
+function updateNonRpmSidebarBadge() {
+  var snap = App.snapshot;
+  if (!snap || !snap.non_rpm_software || !snap.non_rpm_software.items) return;
+  var unreviewed = 0;
+  for (var i = 0; i < snap.non_rpm_software.items.length; i++) {
+    var item = snap.non_rpm_software.items[i];
+    if (!item.review_status || item.review_status === 'not_reviewed') unreviewed++;
+  }
+  var navItem = document.querySelector('[data-section="nonrpm"] .nav-badge');
+  if (navItem) {
+    if (unreviewed > 0) { navItem.textContent = unreviewed; navItem.style.display = ''; }
+    else { navItem.style.display = 'none'; }
+  }
 }
 
 // ── Manifest helpers ──
@@ -4705,7 +4752,7 @@ function renderAllSections() {
 
   // Render each triage section and set initial review states
   MIGRATION_SECTIONS.forEach(function(section) {
-    if (!section.tracked) return;
+    if (!section.tracked && !section.countBadge) return;
     renderTriageSection(section.id);
   });
 
@@ -5224,7 +5271,36 @@ function renderTriageSection(sectionId) {
     }
   }
   heading.textContent = label;
+
+  if (sectionId === 'nonrpm') {
+    var nrSnap = App.snapshot;
+    var totalNr = 0, reviewedNr = 0;
+    if (nrSnap && nrSnap.non_rpm_software && nrSnap.non_rpm_software.items) {
+      totalNr = nrSnap.non_rpm_software.items.length;
+      for (var nri = 0; nri < nrSnap.non_rpm_software.items.length; nri++) {
+        var nrStatus = nrSnap.non_rpm_software.items[nri].review_status;
+        if (nrStatus === 'reviewed' || nrStatus === 'migration_planned') reviewedNr++;
+      }
+    }
+    heading.textContent = label + ' (' + reviewedNr + ' of ' + totalNr + ' reviewed)';
+  }
+
   container.appendChild(heading);
+
+  if (sectionId === 'nonrpm') {
+    var snap = App.snapshot;
+    if (!snap.non_rpm_software || !snap.non_rpm_software.items || snap.non_rpm_software.items.length === 0) {
+      var emptyMsg = document.createElement('div');
+      emptyMsg.style.cssText = 'padding:24px;text-align:center;opacity:0.6;font-size:14px;';
+      if (snap.non_rpm_software) {
+        emptyMsg.textContent = 'No non-RPM software detected.';
+      } else {
+        emptyMsg.textContent = 'Non-RPM scanning was not performed. Re-run inspectah to detect non-package software.';
+      }
+      container.appendChild(emptyMsg);
+      return;
+    }
+  }
 
   var allItems = getManifestItemsForSection(sectionId);
   if (allItems.length === 0) {
@@ -5433,7 +5509,8 @@ function renderTriageSection(sectionId) {
     }
   }
 
-  // Section footer
+  // Section footer (suppressed for nonrpm — uses its own review UX)
+  if (sectionId !== 'nonrpm') {
   var footer = document.createElement('div');
   footer.className = 'section-footer';
 
@@ -5473,6 +5550,7 @@ function renderTriageSection(sectionId) {
   };
   footer.appendChild(reviewBtn);
   container.appendChild(footer);
+  }
 
   // Store inventory for rebuild comparison
   var keys = [];

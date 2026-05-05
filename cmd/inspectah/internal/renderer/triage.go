@@ -67,6 +67,7 @@ func classifyAll(snap *schema.InspectionSnapshot, isFleet bool) []TriageItem {
 	items = append(items, classifyConfigFiles(snap, secretPaths, isFleet)...)
 	items = append(items, classifyRuntime(snap, secretPaths, isFleet)...)
 	items = append(items, classifyContainerItems(snap, secretPaths, isFleet)...)
+	items = append(items, classifyNonRpmItems(snap, secretPaths, isFleet)...)
 	items = append(items, classifyIdentity(snap, secretPaths, isFleet)...)
 	items = append(items, classifySystemItems(snap, secretPaths, isFleet)...)
 	items = append(items, classifySecretItems(snap, secretPaths)...)
@@ -622,28 +623,31 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 			items = append(items, item)
 		}
 	}
-	if snap.NonRpmSoftware != nil {
-		for _, nri := range snap.NonRpmSoftware.Items {
-			if secrets[nri.Path] {
-				continue
-			}
-			name := nri.Path
-			if name == "" {
-				name = nri.Name
-			}
-			item := TriageItem{
-				Section: "containers", Key: "nonrpm-" + name,
-				Tier: 3, Reason: "Non-RPM binary with unclear provenance.",
-				Name: name, Meta: nri.Method,
-				DefaultInclude: nri.Include,
-			}
-			if !isFleet && nri.Method == "binary" {
-				item.CardType = "notification"
-				item.Acknowledged = nri.Acknowledged
-				item.Reason = "inspectah cannot determine the provenance or installation method for this binary. To include it in the image, provide a reproducible build-time source and add it to your Containerfile."
-			}
-			items = append(items, item)
+	return items
+}
+
+func classifyNonRpmItems(snap *schema.InspectionSnapshot, secrets map[string]bool, isFleet bool) []TriageItem {
+	var items []TriageItem
+	if snap.NonRpmSoftware == nil {
+		return items
+	}
+	for _, nri := range snap.NonRpmSoftware.Items {
+		if secrets[nri.Path] {
+			continue
 		}
+		name := nri.Path
+		if name == "" {
+			name = nri.Name
+		}
+		item := TriageItem{
+			Section: "nonrpm",
+			Key:     "nonrpm-" + name,
+			Tier:    3,
+			Reason:  "Non-RPM software — requires manual review for image-mode migration.",
+			Name:    name,
+			Meta:    nri.Method,
+		}
+		items = append(items, item)
 	}
 	return items
 }

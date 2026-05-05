@@ -584,11 +584,6 @@ func TestClassifyContainerItems_SingleMachine_Grouping(t *testing.T) {
 			{Name: "orphan", Image: "orphan:latest"},
 		},
 	}
-	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
-		Items: []schema.NonRpmItem{
-			{Path: "/opt/agent/bin/agent", Method: "binary", Include: true},
-		},
-	}
 
 	items := classifyContainerItems(snap, make(map[string]bool), false)
 
@@ -605,11 +600,6 @@ func TestClassifyContainerItems_SingleMachine_Grouping(t *testing.T) {
 	require.NotNil(t, orphan)
 	assert.True(t, orphan.DisplayOnly)
 	assert.Equal(t, 3, orphan.Tier)
-
-	agent := findItem(items, "nonrpm-/opt/agent/bin/agent")
-	require.NotNil(t, agent)
-	assert.Equal(t, "notification", agent.CardType)
-	assert.Contains(t, agent.Reason, "provenance")
 }
 
 func TestClassifyIdentity_SingleMachine_NoGroups(t *testing.T) {
@@ -1574,4 +1564,46 @@ func TestIsStaticRoutePath(t *testing.T) {
 	assert.True(t, isStaticRoutePath("/etc/sysconfig/network-scripts/route-bond0"))
 	assert.False(t, isStaticRoutePath("/etc/sysconfig/network-scripts/ifcfg-eth0"))
 	assert.False(t, isStaticRoutePath("/etc/httpd/conf/httpd.conf"))
+}
+
+func TestClassifyNonRpmItems_NewSection(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "opt/agent/bin/agent", Name: "agent", Method: "standalone binary", Confidence: "high", Lang: "go", Static: true},
+			{Path: "usr/local/lib/python3.12/site-packages/requests-2.31.0.dist-info", Name: "requests", Method: "pip dist-info", Confidence: "high", Version: "2.31.0"},
+		},
+	}
+	items := classifyNonRpmItems(snap, make(map[string]bool), false)
+	for _, item := range items {
+		if item.Section != "nonrpm" {
+			t.Errorf("item %q has Section=%q, want %q", item.Key, item.Section, "nonrpm")
+		}
+	}
+	if len(items) != 2 {
+		t.Fatalf("got %d items, want 2", len(items))
+	}
+}
+
+func TestClassifyContainerItems_NoLongerIncludesNonRpm(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{
+			{Name: "webapp.container", Image: "webapp:latest", Include: true},
+		},
+	}
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "opt/agent/bin/agent", Name: "agent", Method: "standalone binary", Confidence: "high"},
+		},
+	}
+	items := classifyContainerItems(snap, make(map[string]bool), false)
+	for _, item := range items {
+		if item.Section == "nonrpm" {
+			t.Error("classifyContainerItems should not produce nonrpm-section items")
+		}
+		if strings.HasPrefix(item.Key, "nonrpm-") {
+			t.Errorf("classifyContainerItems should not produce nonrpm keys, got %q", item.Key)
+		}
+	}
 }

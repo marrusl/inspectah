@@ -855,3 +855,33 @@ func TestHTMLReportGoldenVersionChanges(t *testing.T) {
 	assert.True(t, bash.DisplayOnly)
 	assert.Equal(t, "sub:version-upgrades", bash.Group)
 }
+
+func TestRenderHTML_NonRpmSection(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "opt/agent/bin/agent", Name: "agent", Method: "standalone binary", Confidence: "high"},
+		},
+	}
+	containerfile := "FROM rhel-bootc:9.4\n"
+	html := goldenTestHelper(t, snap, containerfile)
+	if !strings.Contains(html, "Non-RPM Software") {
+		t.Error("HTML should contain Non-RPM Software section label")
+	}
+	if !strings.Contains(html, `id: 'nonrpm'`) || !strings.Contains(html, `label: 'Non-RPM Software'`) {
+		t.Error("MIGRATION_SECTIONS should include nonrpm entry")
+	}
+	if !strings.Contains(html, `tracked: false, countBadge: true`) {
+		t.Error("nonrpm entry should have tracked: false and countBadge: true")
+	}
+}
+
+func TestRenderHTML_NonRpmEmptyState(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{Items: []schema.NonRpmItem{}}
+	containerfile := "FROM rhel-bootc:9.4\n"
+	html := goldenTestHelper(t, snap, containerfile)
+	if !strings.Contains(html, "No non-RPM software detected") {
+		t.Error("HTML should contain empty state message")
+	}
+}
