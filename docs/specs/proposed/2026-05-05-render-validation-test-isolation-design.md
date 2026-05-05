@@ -1,7 +1,7 @@
 # Render Endpoint Validation & E2E Test Isolation
 
 **Date:** 2026-05-05
-**Status:** Proposed (revision 3 — addresses round 1 + round 2 review feedback)
+**Status:** Approved (revision 3 — approved round 3 by Thorn)
 **Scope:** Go refine server (`POST /api/render`, `PUT /api/snapshot`) + Playwright e2e test suite
 **Reviewers (round 1):** Kit, Thorn, Collins
 
@@ -256,7 +256,7 @@ No error branch. If this test fails, it means the fixture or schema contract has
 | Reset response missing render_id | Added `render_id` to reset response. |
 | E2E malformed render too tolerant | Assert HTTP 400 specifically. Assert revision unchanged after rejection. |
 | E2E valid render tolerates error branch | Strict HTTP 200 assertion. No error branch. |
-| Reset participation is filename-guessed | Defined by mutating behavior criteria. Corrected accessibility.spec.ts classification (read-only). |
+| Reset participation is filename-guessed | Defined by mutating behavior criteria (toggles state, saves via PUT, triggers rebuilds, generates drafts). |
 | Repeatability claim too strong | Narrowed to "serial spec-file boundary hygiene." |
 | SystemType: fixture mismatch vs new semantic (open) | Accept empty as defensive fallback (`SystemTypeUnknown`). Not a new first-class state. Fixture refresh tracked separately. |
 | `accessibility.spec.ts` misclassified as read-only (round 2) | Moved to mutating set. Three tests toggle switches via keyboard (Enter/Space) and one triggers a rebuild with live region assertion. |
