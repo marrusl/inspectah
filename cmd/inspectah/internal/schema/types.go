@@ -554,10 +554,12 @@ type RunningContainer struct {
 
 // FlatpakApp is a Flatpak application detected on an ostree system.
 type FlatpakApp struct {
-	AppID   string `json:"app_id"`
-	Origin  string `json:"origin"`
-	Branch  string `json:"branch"`
-	Include bool   `json:"include"`
+	AppID     string `json:"app_id"`
+	Origin    string `json:"origin"`
+	Branch    string `json:"branch"`
+	Include   bool   `json:"include"`
+	Remote    string `json:"remote,omitempty"`
+	RemoteURL string `json:"remote_url,omitempty"`
 }
 
 // ContainerSection is the output of the Container inspector.

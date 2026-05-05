@@ -531,3 +531,52 @@ func TestQuadletUnit_PortsVolumesOmitEmpty(t *testing.T) {
 		t.Error("generated should be omitted when false")
 	}
 }
+
+func TestFlatpakApp_RemoteFields(t *testing.T) {
+	app := FlatpakApp{
+		AppID:     "org.mozilla.firefox",
+		Origin:    "flathub",
+		Branch:    "stable",
+		Include:   true,
+		Remote:    "flathub",
+		RemoteURL: "https://dl.flathub.org/repo/",
+	}
+
+	data, err := json.Marshal(app)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var decoded FlatpakApp
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if decoded.Remote != "flathub" {
+		t.Errorf("Remote = %q, want %q", decoded.Remote, "flathub")
+	}
+	if decoded.RemoteURL != "https://dl.flathub.org/repo/" {
+		t.Errorf("RemoteURL = %q, want %q", decoded.RemoteURL, "https://dl.flathub.org/repo/")
+	}
+}
+
+func TestFlatpakApp_RemoteFieldsOmitEmpty(t *testing.T) {
+	app := FlatpakApp{
+		AppID:  "org.gnome.Calculator",
+		Origin: "fedora",
+		Branch: "stable",
+	}
+
+	data, err := json.Marshal(app)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	s := string(data)
+	if strings.Contains(s, `"remote"`) {
+		t.Error("remote should be omitted when empty")
+	}
+	if strings.Contains(s, `"remote_url"`) {
+		t.Error("remote_url should be omitted when empty")
+	}
+}
