@@ -1644,3 +1644,49 @@ func TestHandleQuadletDraft_BlocksRealQuadletCollision(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(respBody), "already exists")
 }
+
+func TestRenderAPI_MalformedSnapshot_Rejected(t *testing.T) {
+	dir := setupTestOutputDir(t)
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		t.Fatal("reRenderFn must not be called for malformed snapshots")
+		return ReRenderResult{}, nil
+	})
+
+	beforeFiles := snapshotDirContents(t, dir)
+
+	req := httptest.NewRequest("POST", "/api/render",
+		strings.NewReader(`{"snapshot": {"not_valid": true}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 400, w.Code)
+	var body map[string]interface{}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	assert.Contains(t, body["error"], "missing meta")
+
+	afterFiles := snapshotDirContents(t, dir)
+	assert.Equal(t, beforeFiles, afterFiles,
+		"working directory must be unchanged after malformed render rejection")
+}
+
+func TestRenderAPI_EmptyMeta_Accepted(t *testing.T) {
+	dir := setupTestOutputDir(t)
+	renderCalled := false
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		renderCalled = true
+		return ReRenderResult{
+			HTML: "<html>ok</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: "FROM ubi9\n", TriageManifest: json.RawMessage("[]"),
+		}, nil
+	})
+
+	req := httptest.NewRequest("POST", "/api/render",
+		strings.NewReader(`{"snapshot": {"meta": {}}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code)
+	assert.True(t, renderCalled, "reRenderFn must be called for valid snapshots")
+}

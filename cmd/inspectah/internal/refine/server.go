@@ -511,6 +511,16 @@ func (h *refineHandler) handleRender(w http.ResponseWriter, r *http.Request) {
 		snapData = body
 	}
 
+	var probe schema.InspectionSnapshot
+	if err := json.Unmarshal(snapData, &probe); err != nil {
+		h.sendError(w, 400, "invalid snapshot: "+err.Error())
+		return
+	}
+	if probe.Meta == nil {
+		h.sendError(w, 400, "invalid snapshot: missing meta field")
+		return
+	}
+
 	result, err := safeReRender(h.reRenderFn, snapData, origData, h.outputDir)
 	if err != nil {
 		h.sendError(w, 500, err.Error())
