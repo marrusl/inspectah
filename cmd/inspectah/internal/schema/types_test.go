@@ -580,3 +580,28 @@ func TestFlatpakApp_RemoteFieldsOmitEmpty(t *testing.T) {
 		t.Error("remote_url should be omitted when empty")
 	}
 }
+
+func TestNonRpmItem_NotesRoundTrip(t *testing.T) {
+	item := NonRpmItem{
+		Path:         "opt/tool",
+		Name:         "tool",
+		Method:       "standalone binary",
+		ReviewStatus: "migration_planned",
+		Notes:        "Ship as-is into /usr/local/bin",
+	}
+	data, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// Verify JSON uses "notes" field name
+	if !strings.Contains(string(data), `"notes":"Ship as-is`) {
+		t.Errorf("JSON should use 'notes' field, got: %s", string(data))
+	}
+	var decoded NonRpmItem
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded.Notes != "Ship as-is into /usr/local/bin" {
+		t.Errorf("Notes = %q, want original value", decoded.Notes)
+	}
+}

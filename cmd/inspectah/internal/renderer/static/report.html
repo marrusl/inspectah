@@ -5243,10 +5243,10 @@ function buildReviewStatusCard(item, sectionId) {
   textarea.id = notesId;
   textarea.setAttribute('rows', '2');
   textarea.setAttribute('placeholder', 'Add migration notes…');
-  textarea.value = (nrItem && nrItem.review_notes) ? nrItem.review_notes : '';
+  textarea.value = (nrItem && nrItem.notes) ? nrItem.notes : '';
   textarea.addEventListener('blur', function() {
     if (nrItem) {
-      nrItem.review_notes = textarea.value;
+      nrItem.notes = textarea.value;
       scheduleAutosave();
     }
   });
