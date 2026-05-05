@@ -695,6 +695,72 @@ func TestRunNonRpmSoftware_PipDistInfo(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// scanPip RPM ownership filtering
+// ---------------------------------------------------------------------------
+
+func TestScanPip_SkipsRpmOwnedDistInfo(t *testing.T) {
+	exec := NewFakeExecutor(map[string]ExecResult{
+		// rpm -qf returns the owning package — this dist-info is RPM-managed
+		"rpm -qf /usr/lib/python3.12/site-packages/dnf-4.18.0.dist-info": {
+			ExitCode: 0,
+			Stdout:   "python3-dnf-4.18.0-1.fc40.noarch",
+		},
+		// rpm -qf fails — this dist-info is pip-installed
+		"rpm -qf /usr/lib/python3.12/site-packages/requests-2.31.0.dist-info": {
+			ExitCode: 1,
+			Stderr:   "file /usr/lib/python3.12/site-packages/requests-2.31.0.dist-info is not owned by any package",
+		},
+	}).WithDirs(map[string][]string{
+		"/usr/lib":                          {"python3.12"},
+		"/usr/lib/python3.12":               {"site-packages"},
+		"/usr/lib/python3.12/site-packages": {"dnf-4.18.0.dist-info", "requests-2.31.0.dist-info"},
+		"/usr/lib/python3.12/site-packages/dnf-4.18.0.dist-info":      {"RECORD"},
+		"/usr/lib/python3.12/site-packages/requests-2.31.0.dist-info": {"RECORD"},
+	}).WithFiles(map[string]string{
+		"/usr/lib/python3.12/site-packages/dnf-4.18.0.dist-info/RECORD":      "",
+		"/usr/lib/python3.12/site-packages/requests-2.31.0.dist-info/RECORD": "",
+	})
+
+	section := &schema.NonRpmSoftwareSection{}
+	scanPip(exec, section, false)
+
+	// Should only find requests, not dnf
+	if len(section.Items) != 1 {
+		t.Fatalf("got %d items, want 1 (only non-RPM pip packages)", len(section.Items))
+	}
+	if section.Items[0].Name != "requests" {
+		t.Errorf("item name = %q, want %q", section.Items[0].Name, "requests")
+	}
+}
+
+func TestScanPip_SkipsRpmCheckOnOstree(t *testing.T) {
+	// On ostree systems, scanPip scans /usr/local/ paths only.
+	// RPM check should not be invoked because ostree paths are
+	// outside RPM's domain. This test verifies the scanner still
+	// finds items in /usr/local/ without rpm -qf calls.
+	exec := NewFakeExecutor(nil).
+		WithDirs(map[string][]string{
+			"/usr/local/lib":                          {"python3.12"},
+			"/usr/local/lib/python3.12":               {"site-packages"},
+			"/usr/local/lib/python3.12/site-packages": {"custom_lib-1.0.0.dist-info"},
+			"/usr/local/lib/python3.12/site-packages/custom_lib-1.0.0.dist-info": {"RECORD"},
+		}).
+		WithFiles(map[string]string{
+			"/usr/local/lib/python3.12/site-packages/custom_lib-1.0.0.dist-info/RECORD": "",
+		})
+
+	section := &schema.NonRpmSoftwareSection{}
+	scanPip(exec, section, true)
+
+	if len(section.Items) != 1 {
+		t.Fatalf("got %d items, want 1", len(section.Items))
+	}
+	if section.Items[0].Name != "custom_lib" {
+		t.Errorf("item name = %q, want %q", section.Items[0].Name, "custom_lib")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

@@ -835,6 +835,17 @@ func scanPip(exec Executor, section *schema.NonRpmSoftwareSection, isOstree bool
 					}
 				}
 
+				// On package-mode systems, check if this dist-info dir
+				// is owned by an RPM. If so, skip it — it's not a pip
+				// finding, it's a system package.
+				if !isOstree {
+					distInfoFullPath := filepath.Join(spDir, sp.Name())
+					rpmResult := exec.Run("rpm", "-qf", distInfoFullPath)
+					if rpmResult.ExitCode == 0 {
+						continue
+					}
+				}
+
 				relPath := strings.TrimPrefix(
 					filepath.Join(spDir, sp.Name()), "/",
 				)
