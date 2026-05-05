@@ -441,16 +441,19 @@ func parsePodmanInspect(data []map[string]interface{}) []schema.RunningContainer
 		config, _ := c["Config"].(map[string]interface{})
 		env := parseStringSlice(config, "Env")
 
+		restartPolicy := extractRestartPolicy(c)
+
 		containers = append(containers, schema.RunningContainer{
-			ID:       id,
-			Name:     name,
-			Image:    image,
-			ImageID:  imageID,
-			Status:   status,
-			Mounts:   mounts,
-			Networks: networks,
-			Ports:    ports,
-			Env:      env,
+			ID:            id,
+			Name:          name,
+			Image:         image,
+			ImageID:       imageID,
+			Status:        status,
+			RestartPolicy: restartPolicy,
+			Mounts:        mounts,
+			Networks:      networks,
+			Ports:         ports,
+			Env:           env,
 		})
 	}
 	return containers
@@ -545,6 +548,25 @@ func detectFlatpakApps(exec Executor) []schema.FlatpakApp {
 		})
 	}
 	return apps
+}
+
+// ---------------------------------------------------------------------------
+// Restart policy extraction
+// ---------------------------------------------------------------------------
+
+// extractRestartPolicy pulls the restart policy name from a podman inspect
+// JSON object. Podman stores this under HostConfig.RestartPolicy.Name.
+func extractRestartPolicy(c map[string]interface{}) string {
+	hostConfig, _ := c["HostConfig"].(map[string]interface{})
+	if hostConfig != nil {
+		rp, _ := hostConfig["RestartPolicy"].(map[string]interface{})
+		if rp != nil {
+			if name, ok := rp["Name"].(string); ok && name != "" && name != "no" {
+				return name
+			}
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------

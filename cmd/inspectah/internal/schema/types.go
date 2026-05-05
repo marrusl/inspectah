@@ -538,18 +538,19 @@ type ComposeFile struct {
 
 // RunningContainer is a running OCI container (podman/docker).
 type RunningContainer struct {
-	ID           string                 `json:"id"`
-	Name         string                 `json:"name"`
-	Image        string                 `json:"image"`
-	ImageID      string                 `json:"image_id"`
-	Status       string                 `json:"status"`
-	Mounts       []ContainerMount       `json:"mounts"`
-	Networks     map[string]interface{} `json:"networks"`
-	Ports        map[string]interface{} `json:"ports"`
-	Env          []string               `json:"env"`
-	Include      *bool                  `json:"include,omitempty"`
-	Acknowledged bool                   `json:"acknowledged,omitempty"`
-	Fleet        *FleetPrevalence       `json:"fleet,omitempty"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Image         string                 `json:"image"`
+	ImageID       string                 `json:"image_id"`
+	Status        string                 `json:"status"`
+	RestartPolicy string                 `json:"restart_policy,omitempty"`
+	Mounts        []ContainerMount       `json:"mounts"`
+	Networks      map[string]interface{} `json:"networks"`
+	Ports         map[string]interface{} `json:"ports"`
+	Env           []string               `json:"env"`
+	Include       *bool                  `json:"include,omitempty"`
+	Acknowledged  bool                   `json:"acknowledged,omitempty"`
+	Fleet         *FleetPrevalence       `json:"fleet,omitempty"`
 }
 
 // FlatpakApp is a Flatpak application detected on an ostree system.
