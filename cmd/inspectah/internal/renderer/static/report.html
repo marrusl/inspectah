@@ -4936,6 +4936,57 @@ function buildInfoReadOnlyCard(item) {
   return card;
 }
 
+// ── Compose file informational card with service inventory ──
+function buildComposeInfoCard(item) {
+  var card = document.createElement('div');
+  card.className = 'triage-card tier-' + item.tier + ' info-readonly compose-info';
+  card.setAttribute('data-key', item.key);
+  card.style.opacity = '0.85';
+
+  var nameEl = document.createElement('div');
+  nameEl.className = 'card-name';
+  nameEl.textContent = item.name || item.key;
+  card.appendChild(nameEl);
+
+  if (item.meta) {
+    var metaEl = document.createElement('div');
+    metaEl.className = 'card-meta';
+    metaEl.textContent = item.meta;
+    card.appendChild(metaEl);
+  }
+
+  // Render service inventory from snapshot data
+  var snap = App.snapshot;
+  var composePath = item.key.substring(8); // strip 'compose-' prefix
+  if (snap && snap.containers && snap.containers.compose_files) {
+    for (var ci = 0; ci < snap.containers.compose_files.length; ci++) {
+      var cf = snap.containers.compose_files[ci];
+      if (cf.path === composePath && cf.images) {
+        var svcList = document.createElement('div');
+        svcList.style.cssText = 'margin-top:6px;font-size:12px;opacity:0.8;';
+        for (var si = 0; si < cf.images.length; si++) {
+          var svc = cf.images[si];
+          var svcLine = document.createElement('div');
+          svcLine.style.cssText = 'padding:2px 0;';
+          svcLine.textContent = svc.service + ' → ' + svc.image;
+          svcList.appendChild(svcLine);
+        }
+        card.appendChild(svcList);
+        break;
+      }
+    }
+  }
+
+  if (item.reason) {
+    var reasonEl = document.createElement('div');
+    reasonEl.className = 'card-reason';
+    reasonEl.textContent = item.reason;
+    card.appendChild(reasonEl);
+  }
+
+  return card;
+}
+
 // ── Review-status card for non-RPM items ──
 function buildReviewStatusCard(item, sectionId) {
   var snap = App.snapshot;
@@ -5695,6 +5746,8 @@ function renderTriageSection(sectionId) {
           } else {
             card = buildSecretCard(uItem);
           }
+        } else if (uItem.card_type === 'compose-info') {
+          card = buildComposeInfoCard(uItem);
         } else if (uItem.display_only) {
           // Display-only: no toggle, informational only
           card = buildInfoReadOnlyCard(uItem);
