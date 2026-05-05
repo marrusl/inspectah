@@ -261,6 +261,19 @@ func newRefineHandler(outputDir string, reRenderFn ReRenderFunc) http.Handler {
 }
 
 func (h *refineHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Recover from panics in any handler — prevents a renderer panic from
+	// crashing the server process mid-test-suite. net/http has its own
+	// per-connection recovery, but it logs a stack trace and closes the
+	// connection without sending a structured JSON response. This layer
+	// catches panics first and returns a proper 500 so clients see a
+	// coherent error instead of a broken pipe.
+	defer func() {
+		if rec := recover(); rec != nil {
+			logf("recovered panic in %s %s: %v", r.Method, r.URL.Path, rec)
+			h.sendError(w, 500, fmt.Sprintf("internal server error: panic: %v", rec))
+		}
+	}()
+
 	if r.Method == "OPTIONS" {
 		h.handleOptions(w, r)
 		return
@@ -498,7 +511,7 @@ func (h *refineHandler) handleRender(w http.ResponseWriter, r *http.Request) {
 		snapData = body
 	}
 
-	result, err := h.reRenderFn(snapData, origData, h.outputDir)
+	result, err := safeReRender(h.reRenderFn, snapData, origData, h.outputDir)
 	if err != nil {
 		h.sendError(w, 500, err.Error())
 		return
@@ -520,6 +533,19 @@ func (h *refineHandler) handleRender(w http.ResponseWriter, r *http.Request) {
 		"render_id":       rid,
 		"revision":        rev,
 	})
+}
+
+// safeReRender wraps a ReRenderFunc call with panic recovery so that a
+// panic in the renderer pipeline is converted to a normal error instead
+// of crashing the server process.
+func safeReRender(fn ReRenderFunc, snapData, origData []byte, outputDir string) (result ReRenderResult, err error) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			err = fmt.Errorf("render panic: %v", rec)
+			logf("recovered panic in re-render: %v", rec)
+		}
+	}()
+	return fn(snapData, origData, outputDir)
 }
 
 func (h *refineHandler) handleQuadletDraft(w http.ResponseWriter, r *http.Request) {
@@ -630,7 +656,7 @@ func (h *refineHandler) handleQuadletDraft(w http.ResponseWriter, r *http.Reques
 			origData = data
 		}
 
-		result, err := h.reRenderFn(snapData, origData, h.outputDir)
+		result, err := safeReRender(h.reRenderFn, snapData, origData, h.outputDir)
 		if err != nil {
 			h.sendError(w, 500, "re-render failed: "+err.Error())
 			return
