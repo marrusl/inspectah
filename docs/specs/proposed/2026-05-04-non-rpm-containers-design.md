@@ -1,9 +1,10 @@
 # Non-RPM Software & Containers Triage — Design Spec
 
-**Status:** Revision 2 (addressing round-1 review blockers)
+**Status:** Revision 3 (addressing round-2 review blockers)
 **Date:** 2026-05-04
 **Participants:** Mark Russell, Collins (architecture), Fern (UX), Ember (strategy), Seal (container tooling)
 **Revision 2 notes:** Addresses four round-1 review blockers: Non-RPM review-state persistence contract, Containers section current-state overclaim, Non-RPM scaffolding build-context truth, and Flatpak scope/lifecycle. Mark's decision: flatpak is migration-assist only, not ongoing desired state.
+**Revision 3 notes:** Addresses three round-2 blockers: Non-RPM interaction/persistence truth (autosave overclaim, control pattern, draft behavior, a11y), non-RPM export/build-context truth (no live non-rpm/ tree), Flatpak remote auto-config boundary (best-effort for public remotes). Also fixes compose current-state overclaim and specifies Quadlet draft sink.
 
 ---
 
@@ -33,7 +34,7 @@ Include/exclude directly affects Containerfile output — included units get `CO
 
 **Current state:** The inspector detects quadlet units and stores name, path, content, and image (extracted from `Image=` directive). The triage classifier creates items with toggles. The Containerfile renderer handles `COPY` for included unit files.
 
-**(NEW WORK)** Show ports and volumes extracted from the `.container` file — this requires parsing additional quadlet directives (`PublishPort=`, `Volume=`) that the inspector currently captures in raw `content` but does not extract as structured fields. `.network` and `.volume` units rendering as supporting items under their parent container requires a new parent-child association that does not exist in the current schema.
+**(NEW WORK)** Show ports and volumes extracted from the `.container` file — this requires parsing additional quadlet directives (`PublishPort=`, `Volume=`) that the inspector currently captures in raw `content` but does not extract as structured fields. `.network` and `.volume` units are peers in the quadlet model, not children of `.container` units. The triage section should group them visually near related containers (matched by name convention) but not imply a strict parent-child hierarchy. **(NEW WORK)** — name-based association heuristic for visual grouping.
 
 ### 1.2 Flatpak Apps
 
@@ -51,10 +52,15 @@ The annotation reads *"Installed on first boot (not baked into image)"* and is a
 
 **Output:** A declarative JSON manifest listing selected flatpaks (app ID, remote, branch) + a reference systemd oneshot service. The oneshot uses a sentinel file (`ConditionPathExists=!/var/lib/.flatpak-provisioned`) to run once. This follows the uBlue/Fedora Atomic pattern.
 
-**Remote configuration:** The generated oneshot must configure flatpak remotes before installing apps. The inspector captures which remote each app came from via `flatpak list --columns=application,origin`. The oneshot includes a `flatpak remote-add --if-not-exists` command for each unique remote (e.g., `flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`). **(NEW WORK — inspector):** Capture remote name per app and remote URLs via `flatpak remotes --columns=name,url`.
+**Remote configuration (best-effort for conventional remotes):** The generated oneshot configures flatpak remotes before installing apps using `flatpak remote-add --if-not-exists <name> <url>`. This works reliably for public remotes (Flathub, Fedora, GNOME Nightly) where name + URL is sufficient.
+
+**Operator responsibility for non-conventional remotes:** Custom remotes that use GPG trust material, authenticator plugins, filter configuration, or non-standard options cannot be fully reconstructed from name + URL alone. The generated service includes a comment listing any remotes it could not fully reconstruct, with guidance: "This remote may require additional configuration. See `flatpak remote-modify --help`."
+
+**(NEW WORK — inspector):** Capture remote name per app via `flatpak list --columns=application,origin` and remote URLs via `flatpak remotes --columns=name,url`. These two data points are sufficient for the best-effort `remote-add` story. The inspector does NOT attempt to capture GPG keys, authenticator config, or filter settings — those are operator-managed.
 
 **Caveats the triage section must surface:**
 - Flatpak installation requires network access at first boot
+- Remote configuration is best-effort: public remotes (Flathub etc.) are auto-configured; custom/enterprise remotes may require manual setup
 - The generated service is best-effort: if network is unavailable at first boot, flatpaks will not be installed. The service should include retry logic, but the operator should not assume guaranteed installation.
 
 ### 1.3 Running Containers
@@ -73,13 +79,22 @@ Running containers (from `podman ps`) cannot be included as-is — they're runti
 
 The button label says "Draft" explicitly — the generated `.container` file needs operator review. Lighter visual weight than quadlet toggles.
 
+**Post-click behavior for "Generate Quadlet Draft":**
+- First click: generates the draft `.container` file content and adds it to `snap.containers.quadlet_units` as a new entry with `Include: false` (operator must review and toggle on). The card updates to show a "Draft generated — see Quadlet Units above" message with a link/scroll to the new quadlet entry.
+- Repeated clicks: no-op if draft already exists. Button shows "Draft generated" in disabled state.
+- Error state: if `podman inspect` data is insufficient (missing image field), button shows inline error: "Cannot generate draft — container image unknown."
+- **Durable sink:** The generated draft is stored in `snap.containers.quadlet_units` — the same typed array as inspector-detected quadlets. This means it persists via the normal snapshot autosave, appears in the Quadlet Units subsection with a toggle, and is editable via the existing file editor. **(NEW WORK)** — the draft needs a `generated: true` flag so the UI can distinguish inspector-detected quadlets from generated drafts.
+- **Keyboard:** button is focusable (`tabindex="0"`), activates on Enter/Space. After generation, focus moves to the new quadlet entry in the Quadlet Units subsection.
+
 ### 1.4 Compose Files
 
 **Treatment:** Informational only.
 
 Compose files cannot be safely auto-migrated. Show a service inventory with key metadata per service.
 
-**(NEW WORK):** The current inspector stores compose file path and raw content. Parsing service-level metadata (service name, image, ports, volumes) from the YAML requires new parsing logic in the inspector or classifier. For v1, showing the file path + service count (extractable from top-level YAML keys) is sufficient. Full service inventory and expand-to-YAML disclosure is a follow-up.
+**Current state:** The Go inspector stores compose file path and parsed service/image pairs (not raw YAML content). The schema carries `ComposeFile.Path` and `ComposeFile.Services` (list of service name + image). This is sufficient for v1: show the file path, service count, and per-service image names.
+
+**(NEW WORK):** Extracting ports, volumes, and other per-service metadata requires additional compose YAML parsing. Expand-to-YAML disclosure requires storing or re-reading the raw file content. Both are follow-up work beyond v1.
 
 Muted card styling, no action affordances beyond inspect.
 
@@ -132,20 +147,55 @@ ReviewStatus string `json:"review_status,omitempty"` // "not_reviewed" | "review
 Notes        string `json:"notes,omitempty"`
 ```
 
-These fields live on the snapshot's `non_rpm_software.items[]` entries, alongside existing fields like `include` and `path`. They are saved via the existing autosave mechanism (snapshot JSON written to disk on every state change).
+These fields live on the snapshot's `non_rpm_software.items[]` entries, alongside existing fields like `path` and `method`.
+
+**Save mechanism:** The existing refine SPA saves snapshot state via the re-render API endpoint: the SPA sends the modified snapshot JSON to the server, which writes it to disk as part of `nativeReRender`. There is no per-keystroke autosave. **(NEW WORK)** Review-status changes must be wired into the same `updateSnapshot` → re-render flow that toggle switches use. Notes field changes should trigger a save on blur (same endpoint, but notes do not require a full re-render — only a snapshot write). This requires a new lightweight save endpoint or a flag on the re-render request to skip re-rendering when only notes changed.
 
 **Lifecycle:**
 - Initial scan: all items start as `review_status: "not_reviewed"`, `notes: ""`
 - Refine session: operator changes status and adds notes via the SPA
-- Autosave: snapshot JSON updated, persists across page reloads and re-opens
+- Save: snapshot JSON updated on status change (via re-render) and notes blur (via save endpoint)
 - Re-render: only items with `review_status: "migration_planned"` produce Containerfile scaffolding
 - Export: the final tarball includes the snapshot with review status and notes, so they survive the refine → build handoff
 
-**Interaction contract:**
-- Status change: click cycles `Not reviewed` → `Reviewed` → `Migration planned` (or direct selection via dropdown/radio)
-- Notes field: inline text input, visible when card is expanded, auto-saves on blur
-- Focus: after status change, focus stays on the status control (no reorder, no jump)
-- Empty state: section shows "No non-RPM software detected" when the snapshot has zero items after false-positive filtering
+**Primary control pattern: segmented button group.**
+
+The review-status control is a three-segment button group (not a cycling click, not a dropdown):
+
+```
+[ Not reviewed | Reviewed | Migration planned ]
+```
+
+- Rendered as `role="radiogroup"` with three `role="radio"` buttons
+- Only one segment active at a time (mutually exclusive)
+- Active segment is visually filled; inactive segments are outlined
+- Left/Right arrow keys move selection (true radio-group keyboard model, same as version-changes filter)
+- Tab enters the group on the active segment; Tab exits
+- `aria-label="Review status for <item name>"`
+- Each segment has `aria-checked="true"` / `"false"`
+
+This avoids the ambiguity of a cycling click (operator can't tell which state is next) and is more compact than a dropdown.
+
+**Notes field contract:**
+- Visible when card is expanded (below the status control, above the detection metadata)
+- `<textarea>` with `aria-label="Migration notes for <item name>"`, placeholder "Add migration notes..."
+- Saves on blur via the lightweight save endpoint
+- Collapsed card shows first line of notes (truncated) as a preview if non-empty
+- Empty notes field: no preview in collapsed state
+
+**Section chrome and progress:**
+- The Non-RPM section does NOT participate in the progress bar or sidebar completion dots (it's a planning worksheet, not a decision checklist)
+- Sidebar badge shows count of `not_reviewed` items (e.g., "8") as a neutral indicator, not a "needs attention" warning
+- Section header shows: "Non-RPM Software (3 of 11 reviewed)" as a progress summary
+
+**Empty state:** Section shows "No non-RPM software detected" when the snapshot has zero items after false-positive filtering. If the inspector was not run with non-RPM scanning enabled, show: "Non-RPM scanning was not performed. Re-run inspectah to detect non-package software."
+
+**Keyboard/accessibility contract:**
+- Each card row: two tab stops (segmented status control + expand chevron)
+- Expanded card: additional tab stops for notes textarea and detection metadata links (e.g., "View contents" for items with captured files)
+- Focus after status change: stays on the active segment within the radio group
+- Focus after expand/collapse: stays on the chevron
+- Screen reader: status change announces new state via `aria-live="polite"` on the status group
 
 ### Containerfile Output: Data-Driven Stubs
 
@@ -155,37 +205,45 @@ Items marked "Migration planned" produce output in a fenced block at the bottom 
 
 | Type | Output | Rationale |
 |------|--------|-----------|
-| Shell scripts | **Stub:** `# COPY /usr/local/bin/deploy.sh /usr/local/bin/` | No hidden deps |
-| Go binary (static) | **Stub:** `# COPY /usr/local/bin/foo /usr/local/bin/` | Self-contained per ldd |
-| Go binary (CGO/dynamic) | **Comment only** with ldd warning | Shared lib graph fragile |
-| C/C++ dynamic binary | **Comment only** with ldd warning | Same — dependency analysis needed |
+| Shell scripts | **Stub:** `# COPY deploy.sh /usr/local/bin/` | No hidden deps |
+| Go binary (static) | **Stub:** `# COPY foo /usr/local/bin/` | Self-contained per readelf `static: true` |
+| Go binary (CGO/dynamic) | **Comment only** with `shared_libs` list | Shared lib graph fragile |
+| C/C++ dynamic binary | **Comment only** with `shared_libs` list | Same — dependency analysis needed |
 | Python with requirements.txt | **Stub:** `# COPY requirements.txt` + `# RUN pip install -r` | Rebuild is correct, not venv COPY (Venvs embed absolute paths) |
 | npm with node_modules | **Comment only** | Native modules may break across base images |
 
 **The decision is automatic:** inspectah uses `readelf`-derived signals already on the `NonRpmItem` schema: the `static` boolean (true = statically linked, safe to COPY) and the `shared_libs` list (non-empty = dynamically linked, needs review). For Python, the `has_c_extensions` field (derived from `.so` file scan in dist-info) indicates native module risk. Node.js native module detection is not currently implemented — **(NEW WORK)** to add `.so` scanning in `node_modules/` if lockfile-detected apps are included.
 
-**Build-context reality:** The `COPY` stubs below use source-host absolute paths (e.g., `/usr/local/bin/foo`). These paths are valid because inspectah's export tarball already captures non-RPM artifacts in a `non-rpm/` directory within the output. **(VERIFY)** Confirm the Go-port export path includes non-RPM payloads in the tarball. If it does not, the stubs must reference the tarball-relative path or the spec must add an export step. Until verified, stubs should note: `# Source: captured in output tarball at non-rpm/usr/local/bin/foo`.
+**Build-context reality (NEW WORK — export):** The Go-port export path does NOT currently create a `non-rpm/` payload tree in the output tarball. Non-RPM items are detected and stored in the snapshot as metadata (path, type, signals), but the actual files are not captured.
+
+**v1 approach:** Containerfile stubs use source-host absolute paths as documentation of where the file was found, NOT as executable `COPY` sources. The operator must manually copy the files from the source host into their build context. Stubs clearly state this:
 
 **Fenced block format:**
 ```dockerfile
 # === Non-RPM Software (operator review required) ===
 # Items below were identified on the source system and marked for migration.
-# Review and uncomment/adjust before building.
-# Source files are captured in the output tarball under non-rpm/.
+# These are NOT automatically included in the build context.
+# Copy the source files from the original host into your build directory,
+# then uncomment and adjust the instructions below.
 
-# DETECTED: /usr/local/bin/driftify-probe (Go binary, 14MB, statically linked)
-# COPY non-rpm/usr/local/bin/driftify-probe /usr/local/bin/
+# DETECTED: /usr/local/bin/driftify-probe (Go binary, statically linked)
+# Source host path: /usr/local/bin/driftify-probe
+# COPY driftify-probe /usr/local/bin/
 
 # DETECTED: /opt/myapp (Python venv, has requirements.txt)
-# COPY non-rpm/opt/myapp/requirements.txt /opt/myapp/
+# Source host path: /opt/myapp/requirements.txt
+# COPY requirements.txt /opt/myapp/
 # RUN pip install -r /opt/myapp/requirements.txt
 
 # WARNING: /usr/local/bin/mystery-tool (C/C++ binary, dynamically linked)
+# Source host path: /usr/local/bin/mystery-tool
 # Requires manual dependency analysis — shared library graph may differ on target image.
 # Shared libs: libssl.so.3, libcrypto.so.3 (from readelf)
 ```
 
-Each stub carries detection metadata (path, type, size, linking status) as annotation above the instruction. This is what makes it a useful starting point rather than a misleading one.
+**Future improvement:** Add a `non-rpm/` payload export step that captures selected files into the output tarball, making the stubs directly executable. This requires new plumbing in the export pipeline and may significantly increase tarball size.
+
+Each stub carries detection metadata (path, type, linking status) as annotation. The `size` field is not currently on the `NonRpmItem` schema — stubs omit file size until the schema is extended. The `requirements.txt` association for Python venvs uses the `files` field on `NonRpmItem` if populated, but this association is not guaranteed for all venvs — stubs note the source host path and let the operator verify.
 
 ---
 
@@ -212,18 +270,30 @@ None. Filtering at detection, not adding fields.
 ## Open Items for Implementation Plan
 
 ### Resolved in revision 2
-- ~~Review-status persistence~~ — defined: `ReviewStatus` and `Notes` fields on `NonRpmItem`, snapshot-backed, autosave
+- ~~Review-status persistence~~ — defined: `ReviewStatus` and `Notes` fields on `NonRpmItem`, snapshot-backed
 - ~~Flatpak lifecycle~~ — decided: migration-assist only, not desired-state
 - ~~System vs. user flatpak detection~~ — specified: inspector must add `--system` flag
 
+### Resolved in revision 3
+- ~~Non-RPM autosave truth~~ — corrected: save happens via re-render endpoint, not per-keystroke autosave. Notes save on blur via lightweight endpoint.
+- ~~Review-status control pattern~~ — defined: segmented radio-group with three states
+- ~~Generate Quadlet Draft behavior~~ — defined: post-click flow, durable sink in `snap.containers.quadlet_units`, error/repeat states
+- ~~Non-RPM section chrome/progress~~ — defined: does not participate in progress bar, sidebar shows `not_reviewed` count, header shows review progress
+- ~~Accessibility contract~~ — defined: keyboard model, focus management, screen reader announcements
+- ~~Non-RPM export truth~~ — corrected: no `non-rpm/` tree exists. v1 stubs document source paths, operator copies files manually. Future: payload export step.
+- ~~Flatpak remote boundary~~ — narrowed: best-effort for public remotes (name + URL). Custom trust/auth is operator responsibility.
+- ~~Compose data truth~~ — corrected: Go schema stores path + parsed service/image pairs, not raw YAML.
+- ~~Quadlet .network/.volume~~ — corrected: peers not children, visual grouping by name convention.
+
 ### Remaining
-1. **Quadlet draft generation:** Define the `podman inspect` field → quadlet `[Container]` directive mapping. Note: restart policy maps to `[Service]` not `[Container]`. Healthcheck, dependency ordering, and user namespace mapping deferred from v1 drafts.
-2. **Flatpak manifest format:** Decide JSON vs. YAML. Follow uBlue's format for ecosystem compatibility. Include: app ID, remote name, branch.
-3. **Non-RPM card styling:** Fern to spec the visual treatment that distinguishes review-status cards from toggle cards.
-4. **Node.js native module detection:** Add `.so` scanning in `node_modules/` for lockfile-detected apps. Currently not implemented.
-5. **Non-RPM export verification:** Confirm the Go-port export tarball includes non-RPM payloads. If not, add an export step or adjust stub paths.
-6. **Compose service parsing:** Extracting per-service metadata (image, ports, volumes) from compose YAML requires new parsing. v1 can show file path + service count only.
-7. **Flatpak remote capture:** Inspector must collect remote URLs via `flatpak remotes --columns=name,url` and associate each app with its origin remote for the oneshot's `remote-add` commands.
+1. **Quadlet draft generation mapping:** Define `podman inspect` field → quadlet `[Container]` + `[Service]` directive mapping. Restart → `[Service]`. Healthcheck, dependency ordering, user namespace deferred from v1.
+2. **Flatpak manifest format:** JSON vs. YAML. Follow uBlue format. Include: app ID, remote name, branch.
+3. **Non-RPM card styling:** Fern to spec visual treatment distinguishing review-status cards from toggle cards.
+4. **Node.js native module detection:** `.so` scanning in `node_modules/`. Not currently implemented.
+5. **Non-RPM payload export (future):** Add `non-rpm/` tree to output tarball for directly executable stubs. Significant tarball size impact — design separately.
+6. **Compose v2 features:** Per-service ports/volumes parsing, expand-to-YAML. Beyond v1.
+7. **Flatpak remote capture:** Inspector collects remote URLs via `flatpak remotes --columns=name,url`.
+8. **Notes-only save endpoint:** Lightweight save that writes snapshot without triggering full re-render.
 
 ---
 
