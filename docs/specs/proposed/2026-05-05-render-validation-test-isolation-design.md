@@ -1,7 +1,7 @@
 # Render Endpoint Validation & E2E Test Isolation
 
 **Date:** 2026-05-05
-**Status:** Proposed (revision 2 — addresses round 1 review feedback)
+**Status:** Proposed (revision 3 — addresses round 1 + round 2 review feedback)
 **Scope:** Go refine server (`POST /api/render`, `PUT /api/snapshot`) + Playwright e2e test suite
 **Reviewers (round 1):** Kit, Thorn, Collins
 
@@ -146,13 +146,13 @@ test.afterAll(async () => { await resetServer(); });
 ```
 
 **Mutating specs** (need reset hooks):
+- `accessibility.spec.ts` — keyboard toggle activation (Enter/Space on switches) and rebuild-triggered live region announcements
 - `api-endpoints.spec.ts` — POST /api/render with valid and malformed payloads
 - `artifact-truth.spec.ts` — toggles switches, triggers rebuilds
 - `include-exclude.spec.ts` — toggles include/exclude switches
 - `rebuild-cycle.spec.ts` — triggers rebuilds
 
 **Read-only specs** (no reset needed):
-- `accessibility.spec.ts` — reads aria attributes on rebuild bar and toggle buttons, does not click them
 - `smoke.spec.ts` — page load and structure checks
 - `containerfile-preview.spec.ts` — reads preview panel content
 - `section-navigation.spec.ts` — clicks sidebar nav links (no state mutation)
@@ -259,3 +259,4 @@ No error branch. If this test fails, it means the fixture or schema contract has
 | Reset participation is filename-guessed | Defined by mutating behavior criteria. Corrected accessibility.spec.ts classification (read-only). |
 | Repeatability claim too strong | Narrowed to "serial spec-file boundary hygiene." |
 | SystemType: fixture mismatch vs new semantic (open) | Accept empty as defensive fallback (`SystemTypeUnknown`). Not a new first-class state. Fixture refresh tracked separately. |
+| `accessibility.spec.ts` misclassified as read-only (round 2) | Moved to mutating set. Three tests toggle switches via keyboard (Enter/Space) and one triggers a rebuild with live region assertion. |
