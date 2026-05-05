@@ -3,8 +3,12 @@
  * Validates REST API responses independently of the UI.
  */
 import { test, expect } from '@playwright/test';
+import { resetServer } from './helpers';
 
 test.describe('Refine API endpoints', () => {
+  test.beforeAll(async () => { await resetServer(); });
+  test.afterAll(async () => { await resetServer(); });
+
   test('GET /api/health returns status and re_render flag', async ({ request }) => {
     const resp = await request.get('/api/health');
     expect(resp.ok()).toBeTruthy();
@@ -42,55 +46,40 @@ test.describe('Refine API endpoints', () => {
     expect(resp.status()).toBe(404);
   });
 
-  test('POST /api/render validates snapshot format', async ({ request }) => {
-    // Get the current snapshot
+  test('POST /api/render accepts valid snapshot with 200', async ({ request }) => {
     const snapResp = await request.get('/api/snapshot');
     const snapBody = await snapResp.json();
 
-    // The render endpoint re-parses the snapshot through the Go schema.
-    // Some fixture snapshots fail validation (e.g., empty SystemType).
-    // Verify the endpoint accepts POST and returns a JSON response
-    // with either the rendered output or a structured error.
     const renderResp = await request.post('/api/render', {
       data: { snapshot: snapBody.snapshot },
     });
 
+    expect(renderResp.status()).toBe(200);
     const body = await renderResp.json();
-
-    if (renderResp.ok()) {
-      // Successful render
-      expect(body.html).toBeDefined();
-      expect(body.snapshot).toBeDefined();
-      expect(body.containerfile).toBeDefined();
-      expect(body.triage_manifest).toBeDefined();
-      expect(body.render_id).toBeDefined();
-      expect(body.revision).toBeGreaterThan(0);
-    } else {
-      // Validation error -- should be a structured JSON error
-      expect(body.error).toBeDefined();
-      expect(typeof body.error).toBe('string');
-    }
+    expect(body.html).toBeDefined();
+    expect(body.containerfile).toBeDefined();
+    expect(body.containerfile).toContain('FROM');
+    expect(body.render_id).toBeDefined();
+    expect(body.revision).toBeGreaterThan(0);
+    expect(body.triage_manifest).toBeDefined();
   });
 
-  test('POST /api/render handles malformed payload gracefully', async ({ request }) => {
-    // Send a payload that is not a valid snapshot.
-    // The Go server may be lenient (200 with partial output) or strict (4xx).
-    // Either way, the response must be valid JSON with a coherent structure.
+  test('POST /api/render rejects malformed payload with 400', async ({ request }) => {
+    const snapBefore = await request.get('/api/snapshot');
+    const revisionBefore = (await snapBefore.json()).revision;
+
     const renderResp = await request.post('/api/render', {
       data: { snapshot: { not_valid: true } },
     });
-    const body = await renderResp.json();
 
-    if (renderResp.ok()) {
-      // Lenient path: server accepted partial/empty snapshot and rendered it.
-      // Verify the response has the expected render output shape.
-      expect(body.html).toBeDefined();
-      expect(body.render_id).toBeDefined();
-    } else {
-      // Strict path: server rejected the malformed input.
-      expect(body.error).toBeDefined();
-      expect(typeof body.error).toBe('string');
-    }
+    expect(renderResp.status()).toBe(400);
+    const body = await renderResp.json();
+    expect(body.error).toBeDefined();
+    expect(typeof body.error).toBe('string');
+
+    const snapAfter = await request.get('/api/snapshot');
+    const revisionAfter = (await snapAfter.json()).revision;
+    expect(revisionAfter).toBe(revisionBefore);
   });
 
   test('GET /api/tarball returns gzip when render_id is current', async ({ request }) => {
