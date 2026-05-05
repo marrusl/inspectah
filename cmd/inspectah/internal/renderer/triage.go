@@ -642,6 +642,29 @@ func classifyContainerItems(snap *schema.InspectionSnapshot, secrets map[string]
 				DefaultInclude: app.Include,
 			})
 		}
+		// Compose files — use CardType "compose-info"
+		for _, cf := range snap.Containers.ComposeFiles {
+			group := ""
+			if !isFleet {
+				group = "sub:compose"
+			}
+			var serviceNames []string
+			for _, svc := range cf.Images {
+				serviceNames = append(serviceNames, svc.Service)
+			}
+			meta := fmt.Sprintf("%d services: %s", len(serviceNames), strings.Join(serviceNames, ", "))
+			items = append(items, TriageItem{
+				Section:        "containers",
+				Key:            "compose-" + cf.Path,
+				Tier:           2,
+				Reason:         "Compose file — cannot be safely auto-migrated. Review services and consider converting to Quadlet units.",
+				Name:           cf.Path,
+				Meta:           meta,
+				Group:          group,
+				CardType:       "compose-info",
+				DefaultInclude: cf.Include,
+			})
+		}
 	}
 	return items
 }

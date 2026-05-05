@@ -3,7 +3,7 @@
 Track the remaining work to merge `go-port` to `main` and retire the Python/container implementation.
 
 **Branch:** `go-port`
-**Last updated:** 2026-05-04
+**Last updated:** 2026-05-05
 
 ---
 
@@ -16,6 +16,13 @@ Order matters — each item may surface issues that affect the next.
   **Spec:** `docs/specs/proposed/2026-05-04-triage-ux-fixups-design.md` (approved, revision 5 — 5 design review rounds by Kit, Fern, Collins)
   **Plan:** `docs/plans/2026-05-04-triage-ux-fixups.md` (approved — 5 plan review rounds by Kit, Thorn, Fern)
   **Scope:** 13 tasks across 4 tiers. Default inclusion sweep, tier labels, version changes section, informational wrapper, three-state secret cards, accessible preview pane, kernel module filtering.
+  **Execution:** Subagent-driven development (Kit implements per task).
+
+- [ ] **0b. Non-RPM + containers triage restructure** ← NEXT (plan approved, ready to execute)
+  Split overloaded "Containers" section into four subsections (quadlets, flatpaks, running containers, compose). Extract non-RPM software into its own planning-worksheet section with review-status controls. Fix pip false-positive detection. Add data-driven Containerfile stubs for non-RPM items, flatpak manifest + oneshot service output, and running-container-to-quadlet draft generation.
+  **Spec:** `docs/specs/proposed/2026-05-04-non-rpm-containers-design.md` (approved, revision 4 — 5 design review rounds by Collins, Fern, Ember, Seal)
+  **Plan:** `docs/plans/2026-05-04-non-rpm-containers.md` (approved, revision 6 — 6 plan review rounds by Thorn, Fern, Seal)
+  **Scope:** 19 tasks across 5 phases. Schema evolution, inspector fixes (pip/flatpak/quadlet), triage classifier restructure, renderer output (non-RPM stubs, flatpak manifest, quadlet draft), SPA (containers hierarchy, non-RPM review-status cards, draft button, compose cards).
   **Execution:** Subagent-driven development (Kit implements per task).
 
 - [x] **0. Single-machine triage redesign**

@@ -1059,6 +1059,51 @@ func TestNormalizeIncludeDefaults_IncompatibleServices(t *testing.T) {
 		"incompatible services must be removed from EnabledUnits")
 }
 
+func TestClassifyContainerItems_ComposeFiles(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		ComposeFiles: []schema.ComposeFile{
+			{
+				Path: "opt/myapp/docker-compose.yml",
+				Images: []schema.ComposeService{
+					{Service: "web", Image: "nginx:latest"},
+					{Service: "db", Image: "postgres:15"},
+				},
+				Include: true,
+			},
+		},
+	}
+	items := classifyContainerItems(snap, make(map[string]bool), false)
+	var composeItems []TriageItem
+	for _, item := range items {
+		if strings.HasPrefix(item.Key, "compose-") {
+			composeItems = append(composeItems, item)
+		}
+	}
+	if len(composeItems) != 1 {
+		t.Fatalf("got %d compose items, want 1", len(composeItems))
+	}
+	ci := composeItems[0]
+	if ci.Section != "containers" {
+		t.Errorf("Section = %q, want %q", ci.Section, "containers")
+	}
+	if ci.Group != "sub:compose" {
+		t.Errorf("Group = %q, want %q", ci.Group, "sub:compose")
+	}
+	if ci.CardType != "compose-info" {
+		t.Errorf("CardType = %q, want %q", ci.CardType, "compose-info")
+	}
+	if ci.DisplayOnly {
+		t.Error("compose items should NOT be DisplayOnly")
+	}
+	if ci.Tier != 2 {
+		t.Errorf("Tier = %d, want 2", ci.Tier)
+	}
+	if ci.Meta != "2 services: web, db" {
+		t.Errorf("Meta = %q, want %q", ci.Meta, "2 services: web, db")
+	}
+}
+
 func TestNormalizeIncludeDefaults_NilSections(t *testing.T) {
 	snap := schema.NewSnapshot()
 	// All section pointers are nil — must not panic
