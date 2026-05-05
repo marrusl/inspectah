@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Revision 2** — addresses round 1 plan review feedback from Kit, Thorn, Collins.
+> **Revision 3** — addresses round 1 + round 2 plan review feedback.
 
 **Goal:** Reject malformed render payloads at the server boundary, accept empty SystemType as a defensive fallback, add a server-owned reset endpoint, and add per-spec-file reset hooks to the Playwright e2e suite so the 21 currently-skipping tests pass.
 
@@ -40,17 +40,52 @@
 - Modify: `cmd/inspectah/internal/schema/types_test.go:14-43`
 - Modify: `cmd/inspectah/internal/refine/server_test.go`
 
-- [ ] **Step 1: Write the failing test for empty string**
+**TDD note:** The render-level proof is written first because it compiles and runs on the current branch (it doesn't reference `SystemTypeUnknown`). It goes red now, proving the real compatibility seam is broken. Then the schema tests and fix are applied, turning everything green.
+
+- [ ] **Step 1: Write the render-level proof (goes red on current branch)**
+
+Add to `server_test.go`. The test's `reRenderFn` mirrors the real `nativeReRender` unmarshal step (`cli/refine.go:57-59`): it calls `json.Unmarshal(snapData, &snap)` into `schema.InspectionSnapshot` before proceeding. This is the exact code path that currently fails with `parse snapshot: unknown SystemType ""`.
+
+```go
+func TestRenderAPI_SystemTypeUnknown_GenericPath(t *testing.T) {
+	dir := setupTestOutputDir(t)
+
+	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
+		// Mirror the real nativeReRender unmarshal step (cli/refine.go:57-59).
+		// This is the exact seam where SystemType "" currently fails.
+		var snap schema.InspectionSnapshot
+		if err := json.Unmarshal(snapData, &snap); err != nil {
+			return ReRenderResult{}, fmt.Errorf("parse snapshot: %w", err)
+		}
+		return ReRenderResult{
+			HTML: "<html>generic</html>", Snapshot: json.RawMessage(snapData),
+			Containerfile: "FROM ubi9\n", TriageManifest: json.RawMessage("[]"),
+		}, nil
+	})
+
+	req := httptest.NewRequest("POST", "/api/render",
+		strings.NewReader(`{"snapshot": {"meta":{"hostname":"test"},"system_type":""}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, 200, w.Code,
+		"empty system_type must not cause render failure after SystemTypeUnknown fix")
+}
+```
+
+- [ ] **Step 2: Run render-level proof — must fail on current branch**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run TestRenderAPI_SystemTypeUnknown -v`
+Expected: FAIL — gets `500` instead of `200`. The `reRenderFn` returns `parse snapshot: unknown SystemType ""` because the schema fix hasn't been applied yet. **If this passes, the test is not coupled to the real compatibility seam.**
+
+- [ ] **Step 3: Write the schema-level tests**
 
 Add a test case to the existing table in `types_test.go`. Insert this entry into the `tests` slice at line 21:
 
 ```go
 {SystemTypeUnknown, `"unknown"`},
 ```
-
-This will fail with a compile error because `SystemTypeUnknown` doesn't exist yet.
-
-- [ ] **Step 2: Write the failing test for empty-string unmarshal**
 
 Below the existing table-driven loop (after line 36), add a new subtest for empty-string input:
 
@@ -63,12 +98,9 @@ t.Run("empty-string-to-unknown", func(t *testing.T) {
 })
 ```
 
-- [ ] **Step 3: Update the existing "unknown must fail" test**
-
-The existing test at line 38-42 asserts that `"unknown"` fails. After our change, `"unknown"` is a valid value (it's what `SystemTypeUnknown` marshals to, so it must round-trip). Replace lines 38-42:
+Replace the existing "unknown must fail" test at lines 38-42 (after our change, `"unknown"` is a valid value that must round-trip):
 
 ```go
-// "unknown" is now a valid value (SystemTypeUnknown marshals to it).
 t.Run("unknown-string-accepted", func(t *testing.T) {
     var st SystemType
     err := json.Unmarshal([]byte(`"unknown"`), &st)
@@ -76,7 +108,6 @@ t.Run("unknown-string-accepted", func(t *testing.T) {
     assert.Equal(t, SystemTypeUnknown, st)
 })
 
-// Truly unknown values must still fail.
 t.Run("bogus-value-rejected", func(t *testing.T) {
     var st SystemType
     err := json.Unmarshal([]byte(`"bogus-type"`), &st)
@@ -85,12 +116,9 @@ t.Run("bogus-value-rejected", func(t *testing.T) {
 })
 ```
 
-- [ ] **Step 4: Run tests to verify they fail**
+These won't compile yet (`SystemTypeUnknown` undefined).
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ -run TestSystemTypeJSON -v`
-Expected: compile error — `SystemTypeUnknown` undefined.
-
-- [ ] **Step 5: Add SystemTypeUnknown constant and update UnmarshalJSON**
+- [ ] **Step 4: Apply the fix — add SystemTypeUnknown constant and update UnmarshalJSON**
 
 In `types.go`, replace the const block at lines 22-26 with:
 
@@ -123,54 +151,20 @@ func (s *SystemType) UnmarshalJSON(data []byte) error {
 }
 ```
 
-- [ ] **Step 6: Run schema tests to verify they pass**
+- [ ] **Step 5: Run all tests — schema + render-level proof must now pass**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ -run TestSystemTypeJSON -v`
 Expected: all subtests PASS.
 
-- [ ] **Step 7: Write the render-level proof**
-
-Add to `server_test.go` — this proves `SystemTypeUnknown` falls through the generic render path without hard error:
-
-```go
-func TestRenderAPI_SystemTypeUnknown_GenericPath(t *testing.T) {
-	dir := setupTestOutputDir(t)
-
-	// Write a snapshot with system_type:"unknown" to the test directory
-	snap := `{"meta":{"hostname":"test"},"system_type":"unknown"}`
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "inspection-snapshot.json"), []byte(snap), 0644))
-
-	renderCalled := false
-	handler := newRefineHandler(dir, func(snapData []byte, origData []byte, outputDir string) (ReRenderResult, error) {
-		renderCalled = true
-		return ReRenderResult{
-			HTML: "<html>generic</html>", Snapshot: json.RawMessage(snapData),
-			Containerfile: "FROM ubi9\n", TriageManifest: json.RawMessage("[]"),
-		}, nil
-	})
-
-	req := httptest.NewRequest("POST", "/api/render",
-		strings.NewReader(`{"snapshot": {"meta":{"hostname":"test"},"system_type":"unknown"}}`))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	assert.Equal(t, 200, w.Code, "SystemTypeUnknown must not cause render rejection")
-	assert.True(t, renderCalled, "reRenderFn must be called for unknown system type")
-}
-```
-
-- [ ] **Step 8: Run refine tests to verify the render-level proof passes**
-
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/refine/ -run TestRenderAPI_SystemTypeUnknown -v`
-Expected: PASS.
+Expected: PASS — the same test that failed in Step 2 now succeeds because the unmarshal accepts `""`.
 
-- [ ] **Step 9: Run full schema + refine test suites**
+- [ ] **Step 6: Run full schema + refine test suites**
 
 Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/cmd/inspectah && go test ./internal/schema/ ./internal/refine/ -v`
 Expected: all PASS, no regressions.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah
