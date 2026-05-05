@@ -459,3 +459,50 @@ func TestServicesSectionLines_UnreachableOwnerExcluded(t *testing.T) {
 	// custom-agent.service should NOT be enabled (owner is unreachable)
 	assert.NotContains(t, output, "custom-agent.service")
 }
+
+// --- Non-RPM section tests ---
+
+func TestNonRpmSectionLines_MigrationPlannedStubs(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "opt/deploy.sh", Name: "deploy.sh", Method: "standalone binary", ReviewStatus: "migration_planned", Notes: "Ship as-is", Lang: "shell", Static: false},
+			{Path: "usr/local/bin/myapp", Name: "myapp", Method: "go binary", ReviewStatus: "migration_planned", Lang: "go", Static: true},
+			{Path: "usr/local/bin/cbridge", Name: "cbridge", Method: "standalone binary", ReviewStatus: "migration_planned", Lang: "c", Static: false, SharedLibs: []string{"libc.so.6", "libssl.so"}},
+			{Path: "opt/app/venv", Name: "custom_lib", Method: "pip dist-info", ReviewStatus: "migration_planned", Version: "1.0.0", HasCExtensions: false},
+			{Path: "opt/app2/venv", Name: "numpy", Method: "pip dist-info", ReviewStatus: "migration_planned", Version: "1.24.0", HasCExtensions: true},
+			{Path: "opt/agent/bin/agent", Name: "agent", Method: "standalone binary", ReviewStatus: "reviewed"},
+			{Path: "opt/other", Name: "other", Method: "standalone binary", ReviewStatus: "not_reviewed"},
+		},
+	}
+	lines := nonRpmSectionLines(snap, nil, false)
+	content := strings.Join(lines, "\n")
+
+	// Shell script should produce COPY stub
+	assert.Contains(t, content, "# COPY opt/deploy.sh /usr/local/bin/", "shell script should produce COPY stub")
+	// Static Go binary should produce COPY stub
+	assert.Contains(t, content, "# COPY usr/local/bin/myapp /usr/local/bin/", "static Go binary should produce COPY stub")
+	// Dynamic binary should list shared libs
+	assert.Contains(t, content, "libc.so.6", "dynamic binary should list shared libs")
+	// Dynamic binary should NOT produce COPY stub
+	assert.NotContains(t, content, "COPY usr/local/bin/cbridge", "dynamic binary should NOT produce COPY stub")
+	// Pure pip should produce pip install stub
+	assert.Contains(t, content, "pip install", "pure pip should produce pip install stub")
+	// C-extension pip should produce warning about native extensions
+	assert.Contains(t, content, "native extensions", "c-extension pip should produce warning")
+	// Reviewed items should not appear
+	assert.NotContains(t, content, "agent", "reviewed items should not appear")
+	// Not-reviewed items should not appear
+	assert.NotContains(t, content, "other", "not_reviewed items should not appear")
+}
+
+func TestNonRpmSectionLines_NoMigrationPlannedItems(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.NonRpmSoftware = &schema.NonRpmSoftwareSection{
+		Items: []schema.NonRpmItem{
+			{Path: "opt/tool", Name: "tool", Method: "standalone binary", ReviewStatus: "reviewed"},
+		},
+	}
+	lines := nonRpmSectionLines(snap, nil, false)
+	assert.Empty(t, lines, "should produce no output for non-migration_planned items")
+}

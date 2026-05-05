@@ -722,68 +722,44 @@ func nonRpmSectionLines(snap *schema.InspectionSnapshot, purePip []schema.NonRpm
 		return lines
 	}
 
-	var includedItems []schema.NonRpmItem
+	var migrationItems []schema.NonRpmItem
 	for _, item := range snap.NonRpmSoftware.Items {
-		if item.Include {
-			includedItems = append(includedItems, item)
+		if item.ReviewStatus == "migration_planned" {
+			migrationItems = append(migrationItems, item)
 		}
 	}
-	if len(includedItems) == 0 {
+	if len(migrationItems) == 0 {
 		return lines
 	}
 
-	lines = append(lines, "# === Non-RPM Software ===")
-
-	// Group by method
-	var pipItems, npmItems, goItems, standaloneItems []schema.NonRpmItem
-	for _, item := range includedItems {
+	lines = append(lines, "# === Non-RPM Software (migration planned) ===")
+	for _, item := range migrationItems {
+		note := ""
+		if item.Notes != "" {
+			note = " — " + item.Notes
+		}
 		switch {
-		case strings.HasPrefix(item.Method, "pip"):
-			pipItems = append(pipItems, item)
-		case strings.Contains(item.Method, "npm") || strings.Contains(item.Method, "yarn"):
-			npmItems = append(npmItems, item)
-		case item.Lang == "go" || item.Method == "go binary":
-			goItems = append(goItems, item)
+		case item.Method == "pip dist-info" && item.HasCExtensions:
+			lines = append(lines, fmt.Sprintf("# %s==%s — pip package with native extensions, rebuild required%s", item.Name, item.Version, note))
+		case item.Method == "pip dist-info":
+			lines = append(lines, fmt.Sprintf("# %s==%s — pip package%s", item.Name, item.Version, note))
+			lines = append(lines, fmt.Sprintf("# RUN pip install %s==%s", item.Name, item.Version))
+		case (item.Lang == "go" || item.Method == "go binary") && item.Static:
+			dest := filepath.Base(item.Path)
+			lines = append(lines, fmt.Sprintf("# COPY %s /usr/local/bin/%s", item.Path, dest)+note)
+		case item.Lang == "shell" || strings.HasSuffix(item.Path, ".sh"):
+			dest := filepath.Base(item.Path)
+			lines = append(lines, fmt.Sprintf("# COPY %s /usr/local/bin/%s", item.Path, dest)+note)
+		case len(item.SharedLibs) > 0:
+			lines = append(lines, fmt.Sprintf("# %s — dynamic binary, shared libs: %s%s", item.Path, strings.Join(item.SharedLibs, ", "), note))
+			lines = append(lines, "# Dependency analysis required before COPY")
+		case item.Static:
+			dest := filepath.Base(item.Path)
+			lines = append(lines, fmt.Sprintf("# COPY %s /usr/local/bin/%s", item.Path, dest)+note)
 		default:
-			standaloneItems = append(standaloneItems, item)
+			lines = append(lines, fmt.Sprintf("# %s (%s) — review required for migration%s", item.Path, item.Method, note))
 		}
 	}
-
-	if len(pipItems) > 0 {
-		lines = append(lines, fmt.Sprintf("# pip packages (%d):", len(pipItems)))
-		for _, p := range pipItems {
-			if p.Version != "" {
-				lines = append(lines, fmt.Sprintf("#   %s==%s", p.Name, p.Version))
-			} else {
-				lines = append(lines, fmt.Sprintf("#   %s", p.Name))
-			}
-		}
-		if needsMultistage {
-			lines = append(lines, "COPY --from=builder /opt/venv /opt/venv")
-		}
-	}
-
-	if len(npmItems) > 0 {
-		lines = append(lines, fmt.Sprintf("# Node.js packages (%d):", len(npmItems)))
-		for _, n := range npmItems {
-			lines = append(lines, fmt.Sprintf("#   %s (%s)", n.Name, n.Method))
-		}
-	}
-
-	if len(goItems) > 0 {
-		lines = append(lines, fmt.Sprintf("# Go binaries (%d):", len(goItems)))
-		for _, g := range goItems {
-			lines = append(lines, fmt.Sprintf("#   %s at %s", g.Name, g.Path))
-		}
-	}
-
-	if len(standaloneItems) > 0 {
-		lines = append(lines, fmt.Sprintf("# Other non-RPM software (%d):", len(standaloneItems)))
-		for _, s := range standaloneItems {
-			lines = append(lines, fmt.Sprintf("#   %s at %s (%s)", s.Name, s.Path, s.Method))
-		}
-	}
-
 	lines = append(lines, "")
 	return lines
 }
