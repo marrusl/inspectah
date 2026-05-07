@@ -266,10 +266,6 @@
       background: #8b949e;
     }
 
-    .review-dot.in-progress {
-      background: #d29922;
-    }
-
     .review-dot.reviewed {
       background: #3fb950;
     }
@@ -2033,7 +2029,7 @@ var App = {
   mode: 'static',
   renderId: '',
   revision: 0,
-  reviewStates: {},    // sectionId -> 'unreviewed' | 'in-progress' | 'reviewed'
+  reviewStates: {},    // sectionId -> 'unreviewed' | 'reviewed'
   prevInventories: {}, // sectionId -> sorted key string for rebuild comparison
   decisions: {},       // key -> true (decided). Presence means user acted; snapshot holds actual value.
   priorValues: {},     // key -> prior include value before makeDecision (for undo)
@@ -2412,9 +2408,7 @@ function updateSidebarDot(sectionId) {
   if (!dot) return;
   var state = App.reviewStates[sectionId] || 'unreviewed';
   dot.className = 'review-dot';
-  if (state === 'in-progress') {
-    dot.classList.add('in-progress');
-  } else if (state === 'reviewed') {
+  if (state === 'reviewed') {
     dot.classList.add('reviewed');
   }
 }
@@ -2847,13 +2841,6 @@ function makeSecretDecision(key, sectionId, include, kind) {
   updateSnapshotInclude(key, include);
   incrementChangeCounter();
 
-  var current = App.reviewStates[sectionId];
-  if (current === 'unreviewed' || !current) {
-    App.reviewStates[sectionId] = 'in-progress';
-    updateSidebarDot(sectionId);
-    updateProgressBar();
-  }
-
   renderTriageSection(sectionId);
   updateBadge(sectionId);
   focusNextUndecided(sectionId);
@@ -2871,7 +2858,7 @@ function undoSecretDecision(key, sectionId) {
   decrementChangeCounter();
 
   if (App.reviewStates[sectionId] === 'reviewed') {
-    App.reviewStates[sectionId] = 'in-progress';
+    App.reviewStates[sectionId] = 'unreviewed';
     updateSidebarDot(sectionId);
     updateProgressBar();
   }
@@ -3320,14 +3307,6 @@ function buildToggleCard(item, sectionId) {
     updateSnapshotInclude(item.key, newIncluded);
     incrementChangeCounter();
 
-    // Transition review state
-    var current = App.reviewStates[sectionId];
-    if (current === 'unreviewed' || !current) {
-      App.reviewStates[sectionId] = 'in-progress';
-      updateSidebarDot(sectionId);
-      updateProgressBar();
-    }
-
     // Update in-place without re-rendering the section
     toggle.setAttribute('aria-checked', newIncluded ? 'true' : 'false');
     toggle.setAttribute('aria-label', (newIncluded ? 'Exclude ' : 'Include ') + (item.name || item.key));
@@ -3743,7 +3722,7 @@ function toggleAccordionGroup(groupName, items, isCurrentlyOn) {
 
 function reopenReviewedSection(sectionId) {
   if (App.reviewStates[sectionId] === 'reviewed') {
-    App.reviewStates[sectionId] = 'in-progress';
+    App.reviewStates[sectionId] = 'unreviewed';
     updateSidebarDot(sectionId);
     updateProgressBar();
   }
@@ -3975,14 +3954,6 @@ function makeDecision(key, sectionId, include) {
   updateSnapshotInclude(key, include);
   incrementChangeCounter();
 
-  // Transition review state
-  var current = App.reviewStates[sectionId];
-  if (current === 'unreviewed' || !current) {
-    App.reviewStates[sectionId] = 'in-progress';
-    updateSidebarDot(sectionId);
-    updateProgressBar();
-  }
-
   // Re-render the section
   renderTriageSection(sectionId);
   updateBadge(sectionId);
@@ -4007,9 +3978,9 @@ function undoDecision(key, sectionId) {
   delete App.decisions[key];
   decrementChangeCounter();
 
-  // If section was reviewed, revert to in-progress
+  // If section was reviewed, revert to unreviewed
   if (App.reviewStates[sectionId] === 'reviewed') {
-    App.reviewStates[sectionId] = 'in-progress';
+    App.reviewStates[sectionId] = 'unreviewed';
     updateSidebarDot(sectionId);
     updateProgressBar();
   }
@@ -6082,7 +6053,7 @@ function renderTriageSection(sectionId) {
   var newInv = keys.join(',');
   var oldInv = App.prevInventories[sectionId];
   if (oldInv && oldInv !== newInv && App.reviewStates[sectionId] === 'reviewed') {
-    App.reviewStates[sectionId] = 'in-progress';
+    App.reviewStates[sectionId] = 'unreviewed';
     updateSidebarDot(sectionId);
     updateProgressBar();
   }
@@ -6248,7 +6219,7 @@ function applyRebuildResponse(data) {
     var oldInventory = App.prevInventories[section.id] || '';
 
     if (newInventory !== oldInventory && App.reviewStates[section.id] === 'reviewed') {
-      App.reviewStates[section.id] = 'in-progress';
+      App.reviewStates[section.id] = 'unreviewed';
     }
     App.prevInventories[section.id] = newInventory;
 
