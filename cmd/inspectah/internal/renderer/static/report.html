@@ -4882,16 +4882,16 @@ function isThirdPartyRepoJS(repoName) {
 // ── Informational Wrapper Builder ──
 function buildInformationalWrapper(items, sectionId) {
   var wrapper = document.createElement('div');
-  wrapper.className = 'info-wrapper collapsed';
+  wrapper.className = 'info-wrapper';
 
   var header = document.createElement('button');
   header.className = 'info-wrapper-header';
-  header.setAttribute('aria-expanded', 'false');
-  header.innerHTML = '<span class="tier-chevron">&#9656;</span> Informational — ' + items.length + ' item' + (items.length !== 1 ? 's' : '');
+  header.setAttribute('aria-expanded', 'true');
+  header.innerHTML = '<span class="tier-chevron expanded">&#9656;</span> Informational — ' + items.length + ' item' + (items.length !== 1 ? 's' : '');
 
   var body = document.createElement('div');
   body.className = 'info-wrapper-body';
-  body.hidden = true;
+  body.hidden = false;
 
   header.onclick = function() {
     var expanded = body.hidden;
@@ -5447,13 +5447,14 @@ function buildServicesSummaryBar(items, sectionId) {
 
 // ── Informational Tier Builder ──
 // Replaces buildInformationalWrapper with a structured, category-grouped tier.
-function buildInformationalTier(items, sectionId) {
+// Optional extraEl is appended inside the tier body (e.g. modprobe accordion).
+function buildInformationalTier(items, sectionId, extraEl) {
   var tier = document.createElement('div');
   tier.className = 'info-tier';
 
-  // Tier header (collapsed by default)
+  // Tier header (expanded by default)
   var expandKey = sectionId + '-info';
-  var isExpanded = App.tierExpanded[expandKey] || false;
+  var isExpanded = App.tierExpanded[expandKey] !== false;
 
   var tierHeader = document.createElement('div');
   tierHeader.className = 'info-tier-header';
@@ -5579,6 +5580,11 @@ function buildInformationalTier(items, sectionId) {
     tier.appendChild(catDiv);
   }
 
+  // Append extra element (e.g. modprobe accordion) inside the tier body
+  if (extraEl) {
+    tier.appendChild(extraEl);
+  }
+
   return tier;
 }
 
@@ -5592,18 +5598,18 @@ function buildModprobeAccordion() {
   if (files.length === 0) return null;
 
   var wrapper = document.createElement('div');
-  wrapper.className = 'info-wrapper collapsed';
+  wrapper.className = 'info-wrapper';
   wrapper.style.marginTop = '1rem';
 
   var header = document.createElement('button');
   header.className = 'info-wrapper-header';
-  header.setAttribute('aria-expanded', 'false');
-  header.innerHTML = '<span class="tier-chevron">&#9656;</span> Module policy files — ' +
+  header.setAttribute('aria-expanded', 'true');
+  header.innerHTML = '<span class="tier-chevron expanded">&#9656;</span> Module policy files — ' +
     files.length + ' file' + (files.length !== 1 ? 's' : '');
 
   var body = document.createElement('div');
   body.className = 'info-wrapper-body';
-  body.hidden = true;
+  body.hidden = false;
 
   var subheader = document.createElement('p');
   subheader.style.fontSize = '12px';
@@ -6030,16 +6036,11 @@ function renderTriageSection(sectionId) {
   } // end if (sectionId !== 'containers')
 
   // ── Informational tier (non-kmod display-only items, category-grouped) ──
-  if (informationalItems.length > 0) {
-    container.appendChild(buildInformationalTier(informationalItems, sectionId));
-  }
-
-  // ── Modprobe.d informational accordion (system section only) ──
-  if (sectionId === 'system') {
-    var modprobeAccordion = buildModprobeAccordion();
-    if (modprobeAccordion) {
-      container.appendChild(modprobeAccordion);
-    }
+  // Module policy files accordion is included inside the informational tier
+  // for the system section so it collapses/expands with its parent.
+  var modprobeEl = (sectionId === 'system') ? buildModprobeAccordion() : null;
+  if (informationalItems.length > 0 || modprobeEl) {
+    container.appendChild(buildInformationalTier(informationalItems, sectionId, modprobeEl));
   }
 
   // Section footer (suppressed for nonrpm — uses its own review UX)
