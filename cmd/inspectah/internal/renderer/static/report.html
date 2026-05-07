@@ -865,7 +865,7 @@
       background: #8b8d91;
     }
     .pf-v6-theme-dark .accordion-toggle.toggle-off {
-      background: rgba(255,255,255,0.30);
+      background: #8b8d91;
     }
 
     /* Review-status cards (non-RPM section) */
@@ -1629,7 +1629,7 @@
       font-size: 11px;
       opacity: 0.35;
       padding: 4px 10px;
-      border: 1px solid rgba(255,255,255,0.1);
+      border: 1px solid var(--pf-t--global--border--color--default, #444);
       border-radius: 10px;
     }
     .accordion-toggle {
@@ -1643,7 +1643,7 @@
       flex-shrink: 0;
     }
     .accordion-toggle.toggle-off {
-      background: rgba(255,255,255,0.15);
+      background: var(--pf-t--global--color--nonstatus--gray--default, #6a6e73);
     }
     .accordion-toggle-knob {
       width: 18px;
@@ -7138,6 +7138,13 @@ function triggerRebuild() {
           statusEl.textContent = 'Rebuild complete — downloading...';
           statusEl.setAttribute('tabindex', '-1');
           statusEl.focus();
+
+          // Auto-dismiss the status message after 3 seconds
+          setTimeout(function() {
+            if (statusEl.textContent === 'Rebuild complete — downloading...') {
+              statusEl.textContent = '';
+            }
+          }, 3000);
 
           // Trigger tarball download
           if (data.render_id) {

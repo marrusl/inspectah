@@ -228,8 +228,20 @@ func packagesSectionLines(snap *schema.InspectionSnapshot, base string, cExtPip 
 	var installNames []string
 	var todoLines []string
 	if snap.Rpm.LeafPackages != nil {
+		// Build a set of excluded package names from PackagesAdded so that
+		// user toggle decisions (Include=false) are respected even when the
+		// renderer uses the LeafPackages list.
+		excludedPkgs := make(map[string]bool)
+		for _, pkg := range snap.Rpm.PackagesAdded {
+			if !pkg.Include {
+				excludedPkgs[pkg.Name] = true
+			}
+		}
 		unreachable := unreachablePackageNames(snap)
 		for _, name := range *snap.Rpm.LeafPackages {
+			if excludedPkgs[name] {
+				continue
+			}
 			if sanitizeShellValue(name, "dnf install") != nil {
 				if unreachable[name] {
 					todoLines = append(todoLines, fmt.Sprintf("# TODO: '%s' was installed locally (state: %s) — no repository source. Provide a .rpm or custom repo.",
