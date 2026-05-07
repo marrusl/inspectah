@@ -434,6 +434,29 @@ func TestPackagesSectionLines_LeafPackagesFiltersUnreachable(t *testing.T) {
 	assert.Contains(t, output, "# TODO: 'custom-agent'")
 }
 
+// Regression: when LeafPackages is present, excluded packages (Include=false
+// in PackagesAdded) must be filtered out of the dnf install line. Previously
+// the renderer iterated LeafPackages names without consulting Include state.
+func TestPackagesSectionLines_LeafPackagesRespectsIncludeFalse(t *testing.T) {
+	leafNames := []string{"vim", "htop", "nginx"}
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		LeafPackages: &leafNames,
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "vim", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+			{Name: "htop", Arch: "x86_64", Include: false, SourceRepo: "appstream"},
+			{Name: "nginx", Arch: "x86_64", Include: true, SourceRepo: "appstream"},
+		},
+	}
+
+	lines := packagesSectionLines(snap, "registry.redhat.io/rhel9/rhel-bootc:9.4", nil, false)
+	output := strings.Join(lines, "\n")
+
+	assert.Contains(t, output, "vim", "included leaf package should appear")
+	assert.Contains(t, output, "nginx", "included leaf package should appear")
+	assert.NotContains(t, output, "htop", "excluded leaf package must not appear in dnf install")
+}
+
 func TestServicesSectionLines_UnreachableOwnerExcluded(t *testing.T) {
 	ownerPkg := "custom-agent"
 	snap := schema.NewSnapshot()
