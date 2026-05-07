@@ -4865,7 +4865,7 @@ function renderAllSections() {
 
 // ── Third-party repo detection (JS-side) ──
 function isThirdPartyRepoJS(repoName) {
-  var standard = ['baseos', 'appstream', 'rhel', 'fedora', 'crb', 'codeready'];
+  var standard = ['baseos', 'appstream', 'rhel', 'fedora', 'crb', 'codeready', 'updates', 'anaconda'];
   var lower = repoName.toLowerCase();
   for (var i = 0; i < standard.length; i++) {
     if (lower.indexOf(standard[i]) !== -1) return false;
