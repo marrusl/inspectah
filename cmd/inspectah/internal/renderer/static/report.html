@@ -6128,19 +6128,6 @@ function renderTriageSection(sectionId) {
   var footer = document.createElement('div');
   footer.className = 'section-footer';
 
-  var decidedCount = 0;
-  var accountableTotal = 0;
-  for (var fc = 0; fc < allItems.length; fc++) {
-    if (isPassiveItem(allItems[fc])) continue;
-    accountableTotal++;
-    if (isItemDecided(allItems[fc]) || (allItems[fc].display_only && getSnapshotAcknowledged(allItems[fc].key))) decidedCount++;
-  }
-
-  var statsSpan = document.createElement('span');
-  statsSpan.className = 'section-stats';
-  statsSpan.textContent = decidedCount + ' / ' + accountableTotal + ' decided';
-  footer.appendChild(statsSpan);
-
   var reviewBtn = document.createElement('button');
   reviewBtn.type = 'button';
   reviewBtn.className = 'mark-reviewed-btn';
