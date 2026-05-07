@@ -2551,7 +2551,7 @@ function renderOverview() {
   var statItems = [
     {label: 'Total Items', value: manifestTotal},
     {label: 'Flagged', value: tier3Count},
-    {label: 'Needs Decision', value: tier2DecideCount},
+    {label: 'Review', value: tier2DecideCount},
     {label: 'Included', value: tier2IncludedCount},
     {label: 'Auto-included', value: tier1Count},
     {label: 'Packages Added', value: pkgCount},
@@ -5759,22 +5759,22 @@ function renderTriageSection(sectionId) {
 
   var groups = groupByTier(mainItems);
 
-  // Split tier 2 into "Included" (default_include=true) and "Needs decision" (default_include=false)
+  // Split tier 2 into "Included" (default_include=true) and "Review" (default_include=false)
   var tier2All = groups[2] || [];
   var tier2Included = [];
-  var tier2NeedsDecision = [];
+  var tier2NeedsReview = [];
   for (var s = 0; s < tier2All.length; s++) {
     if (tier2All[s].default_include === false) {
-      tier2NeedsDecision.push(tier2All[s]);
+      tier2NeedsReview.push(tier2All[s]);
     } else {
       tier2Included.push(tier2All[s]);
     }
   }
 
-  // Render order: Flagged → Needs Decision → Included → Auto-included
+  // Render order: Flagged → Review → Included → Auto-included
   var tierSlots = [
     { key: 3, items: groups[3] || [], label: 'Flagged', indicator: 'tier-3' },
-    { key: '2-decide', items: tier2NeedsDecision, label: 'Needs decision', indicator: 'tier-2-decide' },
+    { key: '2-decide', items: tier2NeedsReview, label: 'Review', indicator: 'tier-2-decide' },
     { key: 2, items: tier2Included, label: 'Included', indicator: 'tier-2' },
     { key: 1, items: groups[1] || [], label: 'Auto-included', indicator: 'tier-1' }
   ];
