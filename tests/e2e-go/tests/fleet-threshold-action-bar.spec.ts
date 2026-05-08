@@ -119,4 +119,83 @@ test.describe('fleet threshold action bar', () => {
       expect(['include', 'exclude']).toContain(mismatch.direction);
     }
   });
+
+  test('action-bar-include-flips-toggles', async ({ page }) => {
+    await navigateToSection(page, 'overview');
+
+    const select = page.locator('#threshold-select');
+    const changesBadge = page.locator('#changes-badge');
+    await expect(changesBadge).toBeHidden();
+
+    // Capture snapshot before
+    const snapshotBefore = await page.evaluate(() =>
+      JSON.stringify((window as any).App.snapshot)
+    );
+
+    // Lower threshold to trigger mismatches
+    await select.selectOption('0.8');
+
+    const bar = page.locator('.threshold-action-bar');
+    await expect(bar).toBeVisible();
+
+    // Click the action button (Include or Exclude, depending on fixture direction)
+    const actionBtn = page.locator('#threshold-action-btn');
+    await actionBtn.click();
+
+    // Wait for bar to disappear (confirmation dwell ~1s)
+    await expect(bar).toBeHidden({ timeout: 3000 });
+
+    // Changes badge should now be visible
+    await expect(changesBadge).toBeVisible();
+
+    // Snapshot should have changed (include values flipped)
+    const snapshotAfter = await page.evaluate(() =>
+      JSON.stringify((window as any).App.snapshot)
+    );
+    expect(snapshotAfter).not.toBe(snapshotBefore);
+
+    // Focus should return to the select
+    const focusedId = await page.evaluate(() => document.activeElement?.id);
+    expect(focusedId).toBe('threshold-select');
+  });
+
+  test('action-bar-exclude-flips-toggles', async ({ page }) => {
+    await navigateToSection(page, 'overview');
+
+    const select = page.locator('#threshold-select');
+    const changesBadge = page.locator('#changes-badge');
+
+    // First lower threshold to 0 ("Any presence") so everything is above
+    await select.selectOption('0');
+    // Then raise to Unanimous — items below Unanimous that are included → exclude
+    await select.selectOption('1');
+
+    const bar = page.locator('.threshold-action-bar');
+    if (!(await bar.isVisible())) {
+      // If no mismatches at this threshold with fixture data, skip
+      test.skip();
+      return;
+    }
+
+    const snapshotBefore = await page.evaluate(() =>
+      JSON.stringify((window as any).App.snapshot)
+    );
+
+    // Click the action button
+    await page.locator('#threshold-action-btn').click();
+    await expect(bar).toBeHidden({ timeout: 3000 });
+
+    // Changes badge should be visible
+    await expect(changesBadge).toBeVisible();
+
+    // Snapshot should have changed
+    const snapshotAfter = await page.evaluate(() =>
+      JSON.stringify((window as any).App.snapshot)
+    );
+    expect(snapshotAfter).not.toBe(snapshotBefore);
+
+    // Focus returns to select
+    const focusedId = await page.evaluate(() => document.activeElement?.id);
+    expect(focusedId).toBe('threshold-select');
+  });
 });
