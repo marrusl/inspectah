@@ -304,4 +304,167 @@ test.describe('fleet threshold action bar', () => {
     const focusAfterTab2 = await page.evaluate(() => document.activeElement?.id);
     expect(focusAfterTab2).toBe('threshold-dismiss-btn');
   });
+
+  test('action-bar-pre-dirtied-toggle-card', async ({ page }) => {
+    await navigateToSection(page, 'packages');
+
+    // Find a toggle-card and its key
+    const card = page.locator('#section-packages .toggle-card').first();
+    await expect(card).toBeVisible();
+    const key = await card.getAttribute('data-key');
+    expect(key).toBeTruthy();
+
+    // Capture original include state
+    const originalInclude = await page.evaluate(
+      (k) => (window as any).getSnapshotInclude(k),
+      key
+    );
+
+    // Dirty the item via makeDecision (simulates inline toggle click)
+    await page.evaluate(
+      ({k, s}) => (window as any).makeDecision(k, s, !((window as any).getSnapshotInclude(k))),
+      {k: key, s: 'packages'}
+    );
+
+    // Verify priorValues captured the original
+    const priorVal = await page.evaluate(
+      (k) => (window as any).App.priorValues[k],
+      key
+    );
+    expect(priorVal).toBe(originalInclude);
+
+    // Now trigger bulk action
+    await navigateToSection(page, 'overview');
+    const select = page.locator('#threshold-select');
+    await select.selectOption('0.8');
+
+    const bar = page.locator('.threshold-action-bar');
+    if (!(await bar.isVisible())) {
+      test.skip();
+      return;
+    }
+
+    await page.locator('#threshold-action-btn').click();
+    await expect(bar).toBeHidden({ timeout: 3000 });
+
+    // priorValues for the pre-dirtied key must still hold the ORIGINAL value
+    const priorAfterBulk = await page.evaluate(
+      (k) => (window as any).App.priorValues[k],
+      key
+    );
+    expect(priorAfterBulk).toBe(originalInclude);
+  });
+
+  test('action-bar-pre-dirtied-triage-card', async ({ page }) => {
+    await navigateToSection(page, 'packages');
+
+    // Find a tier-3 flagged item with decision buttons (calls makeDecision)
+    const keepBtn = page.locator('#section-packages .card-actions button:has-text("Keep")').first();
+    if (await keepBtn.count() === 0) {
+      // Try runtime section
+      await navigateToSection(page, 'runtime');
+      const keepBtnRuntime = page.locator('#section-runtime .card-actions button:has-text("Keep")').first();
+      if (await keepBtnRuntime.count() === 0) {
+        test.skip();
+        return;
+      }
+    }
+
+    // Re-locate the button in whichever section we're in
+    const activeSection = await page.evaluate(() => (window as any).App.activeSection);
+    const btn = page.locator(`#section-${activeSection} .card-actions button:has-text("Keep")`).first();
+
+    // Get the card's key
+    const cardEl = btn.locator('xpath=ancestor::*[@data-key]').first();
+    const key = await cardEl.getAttribute('data-key');
+    if (!key) {
+      test.skip();
+      return;
+    }
+
+    // Capture original include state
+    const originalInclude = await page.evaluate(
+      (k) => (window as any).getSnapshotInclude(k),
+      key
+    );
+
+    // Click Keep — calls makeDecision(key, section, true)
+    await btn.click();
+
+    // Verify priorValues captured the original
+    const priorVal = await page.evaluate(
+      (k) => (window as any).App.priorValues[k],
+      key
+    );
+    expect(priorVal).toBe(originalInclude);
+
+    // Trigger bulk action
+    await navigateToSection(page, 'overview');
+    const select = page.locator('#threshold-select');
+    await select.selectOption('0.8');
+
+    const bar = page.locator('.threshold-action-bar');
+    if (!(await bar.isVisible())) {
+      test.skip();
+      return;
+    }
+
+    await page.locator('#threshold-action-btn').click();
+    await expect(bar).toBeHidden({ timeout: 3000 });
+
+    // priorValues must still hold the ORIGINAL value
+    const priorAfterBulk = await page.evaluate(
+      (k) => (window as any).App.priorValues[k],
+      key
+    );
+    expect(priorAfterBulk).toBe(originalInclude);
+  });
+
+  test('action-bar-sections-reopen', async ({ page }) => {
+    // Navigate to packages and mark it as reviewed
+    await navigateToSection(page, 'packages');
+
+    // Check if there's a mark-reviewed button
+    const markReviewedBtn = page.locator('#section-packages .mark-reviewed-btn').first();
+    if (await markReviewedBtn.count() === 0) {
+      test.skip();
+      return;
+    }
+
+    await markReviewedBtn.click();
+
+    // Verify sidebar dot has 'reviewed' class
+    const dot = page.locator('#dot-packages');
+    await expect(dot).toHaveClass(/reviewed/);
+
+    // Go to overview and trigger action bar
+    await navigateToSection(page, 'overview');
+    const select = page.locator('#threshold-select');
+    await select.selectOption('0.8');
+
+    const bar = page.locator('.threshold-action-bar');
+    if (!(await bar.isVisible())) {
+      test.skip();
+      return;
+    }
+
+    // Check if the message includes Packages
+    const msg = await page.locator('#threshold-suggestion-text').textContent();
+    if (!msg || !msg.includes('Packages')) {
+      // Mismatch doesn't affect packages section — skip
+      test.skip();
+      return;
+    }
+
+    // Apply
+    await page.locator('#threshold-action-btn').click();
+    await expect(bar).toBeHidden({ timeout: 3000 });
+
+    // Sidebar dot should have reverted to unreviewed
+    await expect(dot).not.toHaveClass(/reviewed/);
+
+    // Progress bar should reflect the change
+    const progressText = await page.locator('#review-progress-text').textContent();
+    expect(progressText).toBeTruthy();
+  });
 });
