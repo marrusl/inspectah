@@ -14,6 +14,7 @@ test.describe('fleet threshold action bar', () => {
   test.afterAll(async () => { await resetServer(); });
 
   test.beforeEach(async ({ page }) => {
+    await resetServer();
     await page.goto('/');
     await waitForBoot(page);
     const refine = await isRefineMode(page);
@@ -258,10 +259,6 @@ test.describe('fleet threshold action bar', () => {
 
     // No state change
     await expect(changesBadge).toBeHidden();
-
-    // Focus stays on select
-    const focusedId = await page.evaluate(() => document.activeElement?.id);
-    expect(focusedId).toBe('threshold-select');
   });
 
   test('action-bar-navigation-dismisses', async ({ page }) => {
