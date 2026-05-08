@@ -280,4 +280,28 @@ test.describe('fleet threshold action bar', () => {
     // Bar should be gone
     await expect(bar).toBeHidden();
   });
+
+  test('action-bar-focus-stays-on-select', async ({ page }) => {
+    await navigateToSection(page, 'overview');
+
+    const select = page.locator('#threshold-select');
+
+    // Focus the select explicitly
+    await select.focus();
+
+    // Change threshold — bar appears but focus stays on select
+    await select.selectOption('0.8');
+
+    const bar = page.locator('.threshold-action-bar');
+    await expect(bar).toBeVisible();
+
+    // Tab from select should go to action button, then dismiss
+    await page.keyboard.press('Tab');
+    const focusAfterTab1 = await page.evaluate(() => document.activeElement?.id);
+    expect(focusAfterTab1).toBe('threshold-action-btn');
+
+    await page.keyboard.press('Tab');
+    const focusAfterTab2 = await page.evaluate(() => document.activeElement?.id);
+    expect(focusAfterTab2).toBe('threshold-dismiss-btn');
+  });
 });
