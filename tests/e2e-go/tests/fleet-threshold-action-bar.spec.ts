@@ -198,4 +198,89 @@ test.describe('fleet threshold action bar', () => {
     const focusedId = await page.evaluate(() => document.activeElement?.id);
     expect(focusedId).toBe('threshold-select');
   });
+
+  test('action-bar-dismiss-no-state-change', async ({ page }) => {
+    await navigateToSection(page, 'overview');
+
+    const select = page.locator('#threshold-select');
+    const changesBadge = page.locator('#changes-badge');
+    await expect(changesBadge).toBeHidden();
+
+    const snapshotBefore = await page.evaluate(() =>
+      JSON.stringify((window as any).App.snapshot)
+    );
+
+    // Lower threshold to show bar
+    await select.selectOption('0.8');
+    const bar = page.locator('.threshold-action-bar');
+    await expect(bar).toBeVisible();
+
+    // Click Dismiss
+    const dismissBtn = page.locator('#threshold-dismiss-btn');
+    await dismissBtn.click();
+
+    // Wait for bar to disappear
+    await expect(bar).toBeHidden({ timeout: 3000 });
+
+    // Changes badge stays hidden
+    await expect(changesBadge).toBeHidden();
+
+    // Snapshot unchanged
+    const snapshotAfter = await page.evaluate(() =>
+      JSON.stringify((window as any).App.snapshot)
+    );
+    expect(snapshotAfter).toBe(snapshotBefore);
+
+    // Focus returns to select
+    const focusedId = await page.evaluate(() => document.activeElement?.id);
+    expect(focusedId).toBe('threshold-select');
+  });
+
+  test('action-bar-replaces-on-rechange', async ({ page }) => {
+    await navigateToSection(page, 'overview');
+
+    const select = page.locator('#threshold-select');
+    const changesBadge = page.locator('#changes-badge');
+
+    // Lower to 80%
+    await select.selectOption('0.8');
+    const bar = page.locator('.threshold-action-bar');
+    await expect(bar).toBeVisible();
+
+    const msg1 = await page.locator('#threshold-suggestion-text').textContent();
+
+    // Lower again to 50% — bar replaces with new content
+    await select.selectOption('0.5');
+    await expect(bar).toBeVisible();
+
+    const msg2 = await page.locator('#threshold-suggestion-text').textContent();
+    expect(msg2).toBeTruthy();
+
+    // No state change
+    await expect(changesBadge).toBeHidden();
+
+    // Focus stays on select
+    const focusedId = await page.evaluate(() => document.activeElement?.id);
+    expect(focusedId).toBe('threshold-select');
+  });
+
+  test('action-bar-navigation-dismisses', async ({ page }) => {
+    await navigateToSection(page, 'overview');
+
+    const select = page.locator('#threshold-select');
+
+    // Show action bar
+    await select.selectOption('0.8');
+    const bar = page.locator('.threshold-action-bar');
+    await expect(bar).toBeVisible();
+
+    // Navigate to Packages
+    await navigateToSection(page, 'packages');
+
+    // Return to Overview
+    await navigateToSection(page, 'overview');
+
+    // Bar should be gone
+    await expect(bar).toBeHidden();
+  });
 });

@@ -2464,6 +2464,10 @@ function navigateTo(sectionId) {
   }
   if (editorState.mode.startsWith('editing')) exitEditModeClean();
 
+  // Remove threshold action bar when leaving overview
+  var actionBar = document.getElementById('threshold-action-bar');
+  if (actionBar) actionBar.remove();
+
   App.activeSection = sectionId;
 
   // Update aria-current on sidebar links
