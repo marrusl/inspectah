@@ -407,17 +407,24 @@ test.describe('fleet threshold action bar', () => {
     const countAfter = await page.evaluate(() => (window as any).changeCount);
     expect(countAfter - countBefore).toBe(expectedNewlyDecided);
 
-    // (e) Undo restores the original pre-first-touch state
-    await page.evaluate((k: string) => {
-      var App = (window as any).App;
-      (window as any).updateSnapshotInclude(k, App.priorValues[k]);
-      delete App.priorValues[k];
-      delete App.decisions[k];
-    }, key);
+    // (e) Undo via real product path: click the toggle switch again
+    await navigateToSection(page, 'packages');
+    const undoToggle = page.locator(`[data-key="${key}"] button[role="switch"]`);
+    await expect(undoToggle).toBeVisible();
+    await undoToggle.click();
+
+    // Include state should have flipped from the post-bulk state (true → false)
     const afterUndo = await page.evaluate(
       (k: string) => (window as any).getSnapshotInclude(k), key
     );
-    expect(afterUndo).toBe(originalInclude);
+    expect(afterUndo).toBe(false);
+
+    // priorValues still holds the original pre-first-touch value
+    // (the real toggle onclick handler preserves first-touch semantics)
+    const priorAfterUndo = await page.evaluate(
+      (k: string) => (window as any).App.priorValues[k], key
+    );
+    expect(priorAfterUndo).toBe(originalInclude);
   });
 
   test('action-bar-pre-dirtied-triage-card', async ({ page }) => {
@@ -546,17 +553,26 @@ test.describe('fleet threshold action bar', () => {
     const countAfter = await page.evaluate(() => (window as any).changeCount);
     expect(countAfter - countBefore).toBe(expectedNewlyDecided);
 
-    // (e) Undo restores the original pre-first-touch state
-    await page.evaluate((k: string) => {
-      var App = (window as any).App;
-      (window as any).updateSnapshotInclude(k, App.priorValues[k]);
-      delete App.priorValues[k];
-      delete App.decisions[k];
-    }, foundKey);
+    // (e) Undo via real product path: find and click the undo/toggle control
+    await navigateToSection(page, foundSection);
+    // After bulk apply + re-render, the card may show as decided with toggle or undo link
+    const undoControl = page.locator(
+      `[data-key="${foundKey}"] button[role="switch"], [data-key="${foundKey}"] .undo-link`
+    ).first();
+    await expect(undoControl).toBeVisible();
+    await undoControl.click();
+
     const afterUndo = await page.evaluate(
       (k: string) => (window as any).getSnapshotInclude(k), foundKey
     );
-    expect(afterUndo).toBe(originalInclude);
+    // State should have changed from post-bulk (true → false)
+    expect(afterUndo).toBe(false);
+
+    // priorValues still holds the original
+    const priorAfterUndo = await page.evaluate(
+      (k: string) => (window as any).App.priorValues[k], foundKey
+    );
+    expect(priorAfterUndo).toBe(originalInclude);
   });
 
   test('action-bar-sections-reopen', async ({ page }) => {
