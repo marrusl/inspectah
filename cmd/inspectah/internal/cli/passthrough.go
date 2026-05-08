@@ -31,7 +31,7 @@ func registerScanPassthrough(cmd *cobra.Command) {
 
 func registerFleetPassthrough(cmd *cobra.Command) {
 	f := cmd.Flags()
-	f.IntP("min-prevalence", "p", 0, "include items on >= N%% of hosts")
+	f.IntP("min-prevalence", "p", 100, "include items on >= N%% of hosts")
 	f.String("output-file", "", "output tarball path")
 	f.String("output-dir", "", "write to directory instead of tarball")
 	f.Bool("json-only", false, "write merged JSON only")
