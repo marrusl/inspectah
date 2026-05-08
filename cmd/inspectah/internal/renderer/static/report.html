@@ -4264,7 +4264,9 @@ function buildDisplayOnlyDecidedCard(item) {
 function makeDecision(key, sectionId, include) {
   if (App.mode === 'static') return;
   // Store prior snapshot value so undo can restore it
-  App.priorValues[key] = getSnapshotInclude(key);
+  if (App.priorValues[key] === undefined) {
+    App.priorValues[key] = getSnapshotInclude(key);
+  }
   App.decisions[key] = true;  // presence means "user acted on this"
   updateSnapshotInclude(key, include);
   incrementChangeCounter();
