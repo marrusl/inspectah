@@ -27,3 +27,10 @@ func TestFleetCmd_RequiresArg(t *testing.T) {
 	err := cmd.Args(cmd, []string{})
 	assert.Error(t, err)
 }
+
+func TestFleetCmd_DefaultPrevalence(t *testing.T) {
+	cmd := newFleetCmd(&GlobalOpts{Version: "0.7.0"})
+	f := cmd.Flags().Lookup("min-prevalence")
+	assert.NotNil(t, f)
+	assert.Equal(t, "0", f.DefValue)
+}
