@@ -1974,6 +1974,40 @@
       color: var(--pf-t--global--text--color--primary);
       border: 1px solid var(--pf-t--global--border--color--default);
     }
+    .threshold-action-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.5rem 0.75rem;
+      margin-top: 0.5rem;
+      margin-bottom: 0.5rem;
+      border-radius: 6px;
+      background: var(--pf-t--global--color--status--info--default, #2b9af3);
+      color: #fff;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    .threshold-action-bar button {
+      padding: 0.25rem 0.75rem;
+      border: 1px solid rgba(255,255,255,0.4);
+      border-radius: 4px;
+      background: rgba(255,255,255,0.15);
+      color: #fff;
+      font-size: 0.8rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .threshold-action-bar button:hover {
+      background: rgba(255,255,255,0.3);
+    }
+    .threshold-action-bar button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+    .threshold-action-bar button.dismiss-btn {
+      background: transparent;
+      border-color: rgba(255,255,255,0.3);
+    }
     .fleet-reason {
       font-size: 0.8rem;
       opacity: 0.8;
@@ -2708,6 +2742,148 @@ function invalidateApplicableSections() {
   });
 }
 
+function getSectionLabel(sectionId) {
+  for (var i = 0; i < MIGRATION_SECTIONS.length; i++) {
+    if (MIGRATION_SECTIONS[i].id === sectionId) return MIGRATION_SECTIONS[i].label;
+  }
+  return sectionId;
+}
+
+function computeThresholdMismatch(threshold) {
+  var result = {count: 0, direction: '', perSection: {}};
+  var includeCount = 0;
+  var excludeCount = 0;
+  var applicableSections = ['packages', 'runtime', 'identity', 'system'];
+
+  for (var i = 0; i < App.triageManifest.length; i++) {
+    var item = App.triageManifest[i];
+    if (applicableSections.indexOf(item.section) === -1) continue;
+    if (!item.fleet) continue;
+
+    var zone = computePrevalenceZone(item, threshold);
+    var included = getSnapshotInclude(item.key);
+
+    if ((zone === 'above' || zone === 'unanimous') && !included) {
+      includeCount++;
+      if (!result.perSection[item.section]) result.perSection[item.section] = 0;
+      result.perSection[item.section]++;
+    } else if (zone === 'below' && included) {
+      excludeCount++;
+      if (!result.perSection[item.section]) result.perSection[item.section] = 0;
+      result.perSection[item.section]++;
+    }
+  }
+
+  if (includeCount > 0 && excludeCount === 0) {
+    result.count = includeCount;
+    result.direction = 'include';
+  } else if (excludeCount > 0 && includeCount === 0) {
+    result.count = excludeCount;
+    result.direction = 'exclude';
+  } else if (includeCount > 0 && excludeCount > 0) {
+    if (includeCount >= excludeCount) {
+      result.count = includeCount;
+      result.direction = 'include';
+    } else {
+      result.count = excludeCount;
+      result.direction = 'exclude';
+    }
+  }
+
+  return result;
+}
+
+function formatMismatchMessage(mismatch) {
+  var sections = [];
+  for (var sectionId in mismatch.perSection) {
+    sections.push(getSectionLabel(sectionId) + ' (' + mismatch.perSection[sectionId] + ')');
+  }
+  var sectionList = sections.join(', ');
+  if (mismatch.direction === 'include') {
+    return mismatch.count + ' item' + (mismatch.count !== 1 ? 's' : '') +
+      ' above threshold but excluded: ' + sectionList;
+  } else {
+    return mismatch.count + ' item' + (mismatch.count !== 1 ? 's' : '') +
+      ' below threshold but included: ' + sectionList;
+  }
+}
+
+function renderThresholdActionBar(container, mismatch) {
+  var existing = document.getElementById('threshold-action-bar');
+  if (existing) existing.remove();
+
+  if (mismatch.count === 0) {
+    var liveRegion = document.getElementById('threshold-suggestion-text');
+    if (liveRegion) liveRegion.textContent = '';
+    return;
+  }
+
+  var bar = document.createElement('div');
+  bar.className = 'threshold-action-bar';
+  bar.id = 'threshold-action-bar';
+
+  var msgSpan = document.createElement('span');
+  msgSpan.setAttribute('aria-live', 'polite');
+  msgSpan.id = 'threshold-suggestion-text';
+  msgSpan.textContent = formatMismatchMessage(mismatch);
+  bar.appendChild(msgSpan);
+
+  var actionLabel = mismatch.direction === 'include' ? 'Include them' : 'Exclude them';
+  var actionBtn = document.createElement('button');
+  actionBtn.type = 'button';
+  actionBtn.textContent = actionLabel;
+  actionBtn.id = 'threshold-action-btn';
+  actionBtn.onclick = function() {
+    applyThresholdSuggestion(mismatch.direction, App.prevalenceThreshold);
+    dismissThresholdActionBar('Applied: ' + actionLabel.toLowerCase().replace('them', mismatch.count + ' items'));
+  };
+  bar.appendChild(actionBtn);
+
+  var dismissBtn = document.createElement('button');
+  dismissBtn.type = 'button';
+  dismissBtn.textContent = 'Dismiss';
+  dismissBtn.className = 'dismiss-btn';
+  dismissBtn.id = 'threshold-dismiss-btn';
+  dismissBtn.onclick = function() {
+    dismissThresholdActionBar('Suggestion dismissed');
+  };
+  bar.appendChild(dismissBtn);
+
+  // Insert after the threshold dropdown div
+  var thresholdDiv = container.querySelector('#threshold-select');
+  if (thresholdDiv && thresholdDiv.parentElement) {
+    thresholdDiv.parentElement.insertAdjacentElement('afterend', bar);
+  } else {
+    container.appendChild(bar);
+  }
+}
+
+function dismissThresholdActionBar(announcement) {
+  var bar = document.getElementById('threshold-action-bar');
+  if (!bar) return;
+
+  var buttons = bar.querySelectorAll('button');
+  for (var i = 0; i < buttons.length; i++) {
+    buttons[i].disabled = true;
+  }
+
+  var msgSpan = document.getElementById('threshold-suggestion-text');
+  if (msgSpan) {
+    msgSpan.textContent = announcement;
+  }
+
+  setTimeout(function() {
+    var barEl = document.getElementById('threshold-action-bar');
+    if (barEl) barEl.remove();
+    var select = document.getElementById('threshold-select');
+    if (select) select.focus();
+  }, 1000);
+}
+
+function applyThresholdSuggestion(direction, threshold) {
+  // Stub — full implementation in Task 3
+}
+
 // ── Overview Section ──
 function renderOverview() {
   var container = document.getElementById('section-overview');
@@ -2753,6 +2929,8 @@ function renderOverview() {
       invalidateApplicableSections();
       updateAllBadges();
       updateSidebarThreshold();
+      var mismatch = computeThresholdMismatch(App.prevalenceThreshold);
+      renderThresholdActionBar(container, mismatch);
     };
     thresholdDiv.appendChild(thresholdSelect);
     container.appendChild(thresholdDiv);
