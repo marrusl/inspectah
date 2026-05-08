@@ -1930,6 +1930,75 @@
       padding-bottom: 4px; border-bottom: 1px solid var(--pf-t--global--border--color--default);
     }
     .container-subsection-header:first-child { margin-top: 0; }
+
+    /* Prevalence badge */
+    .prevalence-badge {
+      font-size: 0.75rem;
+      padding: 0.125rem 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      display: inline-block;
+      min-width: 24px;
+      min-height: 24px;
+      line-height: 24px;
+      text-align: center;
+      user-select: none;
+      background: rgba(139, 148, 158, 0.15);
+      margin-left: 0.5rem;
+      vertical-align: middle;
+    }
+    .prevalence-badge:hover { opacity: 0.8; }
+    .prevalence-badge:focus-visible {
+      outline: 2px solid var(--pf-t--global--color--brand--default, #0066cc);
+      outline-offset: 2px;
+    }
+    .prevalence-badge.zone-unanimous { color: #8b949e; }
+    .prevalence-badge.zone-above { color: #d29922; }
+    .prevalence-badge.zone-below { color: #d29922; font-weight: 600; }
+
+    .pf-v6-theme-dark .prevalence-badge.zone-unanimous { color: #8b949e; }
+    .pf-v6-theme-dark .prevalence-badge.zone-above { color: #e3b341; }
+    .pf-v6-theme-dark .prevalence-badge.zone-below { color: #e3b341; font-weight: 600; }
+
+    .sidebar-threshold {
+      font-size: 0.8rem;
+      opacity: 0.7;
+      margin-top: 0.25rem;
+      padding: 0.25rem 1rem;
+    }
+    .threshold-select {
+      font-size: 0.85rem;
+      padding: 0.25rem 0.5rem;
+      border-radius: 4px;
+      background: var(--pf-t--global--background--color--secondary-default);
+      color: var(--pf-t--global--text--color--primary);
+      border: 1px solid var(--pf-t--global--border--color--default);
+    }
+    .fleet-reason {
+      font-size: 0.8rem;
+      opacity: 0.8;
+      margin-top: 0.25rem;
+      font-style: italic;
+    }
+    #prevalence-format-announce {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+    .fleet-review-badge {
+      font-size: 0.65rem;
+      padding: 0 4px;
+      border-radius: 6px;
+      margin-left: 4px;
+      opacity: 0.6;
+      background: rgba(210, 153, 34, 0.15);
+      color: #d29922;
+    }
   </style>
 </head>
 <body class="pf-v6-theme-dark">
@@ -1975,6 +2044,7 @@
 
   <!-- Main content -->
   <main class="pf-v6-c-page__main" id="main-content" role="main">
+    <div id="prevalence-format-announce" aria-live="polite" role="status"></div>
     <!-- Sections rendered here by JS -->
   </main>
 
@@ -2037,7 +2107,9 @@ var App = {
   activeSection: 'overview',
   tierExpanded: {},    // sectionId-tier -> boolean
   groupPriorState: {},  // groupName -> {key: priorInclude} for toggle restore
-  expandedDep: null
+  expandedDep: null,
+  prevalenceThreshold: 1.0,
+  prevalenceFormat: 'count'
 };
 
 // ── Decided-state helper ──
@@ -2318,6 +2390,16 @@ function renderSidebar() {
 
   nav.appendChild(list);
 
+  // Threshold indicator (fleet mode only) — below review progress in sidebar
+  if (isFleetSnapshot()) {
+    var thresholdSpan = document.createElement('div');
+    thresholdSpan.id = 'sidebar-threshold';
+    thresholdSpan.className = 'sidebar-threshold';
+    thresholdSpan.setAttribute('aria-live', 'polite');
+    thresholdSpan.textContent = 'Threshold: ' + getThresholdPresetLabel(App.prevalenceThreshold);
+    nav.parentElement.appendChild(thresholdSpan);
+  }
+
   // Keyboard navigation: ArrowDown/ArrowUp within the nav list
   list.addEventListener('keydown', function(e) {
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
@@ -2441,6 +2523,33 @@ function updateBadge(sectionId) {
   } else {
     badge.style.display = 'none';
   }
+
+  // Fleet mode: secondary fleet review badge (never replaces tier badge)
+  var fleetBadge = document.getElementById('fleet-badge-' + sectionId);
+  if (isFleetSnapshot() && isApplicableForPrevalence(sectionId)) {
+    var fleetReviewCount = getFleetReviewCount(sectionId);
+    if (!fleetBadge) {
+      // Create fleet badge element on first call
+      var navLink = badge.parentElement;
+      if (navLink) {
+        fleetBadge = document.createElement('span');
+        fleetBadge.id = 'fleet-badge-' + sectionId;
+        fleetBadge.className = 'fleet-review-badge';
+        navLink.appendChild(fleetBadge);
+      }
+    }
+    if (fleetBadge) {
+      if (fleetReviewCount > 0) {
+        fleetBadge.textContent = fleetReviewCount;
+        fleetBadge.style.display = '';
+        fleetBadge.setAttribute('aria-label', fleetReviewCount + ' items below prevalence threshold');
+      } else {
+        fleetBadge.style.display = 'none';
+      }
+    }
+  } else if (fleetBadge) {
+    fleetBadge.style.display = 'none';
+  }
 }
 
 function updateAllBadges() {
@@ -2497,6 +2606,108 @@ function groupByTier(items) {
   return groups;
 }
 
+// ── Fleet Prevalence Helpers ──
+function isFleetSnapshot() {
+  return App.snapshot && App.snapshot.meta && App.snapshot.meta.fleet;
+}
+
+function isApplicableForPrevalence(sectionId) {
+  return sectionId === 'packages' || sectionId === 'runtime' ||
+         sectionId === 'identity' || sectionId === 'system';
+}
+
+function computePrevalenceZone(item, threshold) {
+  if (!item.fleet) return '';
+  if (item.fleet.count === item.fleet.total) return 'unanimous';
+  var ratio = item.fleet.count / item.fleet.total;
+  if (ratio >= threshold) return 'above';
+  return 'below';
+}
+
+function formatPrevalenceBadge(item) {
+  if (!item.fleet) return '';
+  if (App.prevalenceFormat === 'percent') {
+    return Math.round((item.fleet.count / item.fleet.total) * 100) + '%';
+  }
+  return item.fleet.count + '/' + item.fleet.total;
+}
+
+function formatPrevalenceAriaLabel(item) {
+  if (!item.fleet) return '';
+  if (App.prevalenceFormat === 'percent') {
+    return Math.round((item.fleet.count / item.fleet.total) * 100) + ' percent';
+  }
+  return item.fleet.count + ' of ' + item.fleet.total + ' hosts';
+}
+
+function findManifestItem(key) {
+  for (var i = 0; i < App.triageManifest.length; i++) {
+    if (App.triageManifest[i].key === key) return App.triageManifest[i];
+  }
+  return null;
+}
+
+function updateAllPrevalenceBadges() {
+  var badges = document.querySelectorAll('.prevalence-badge');
+  for (var i = 0; i < badges.length; i++) {
+    var key = badges[i].getAttribute('data-item-key');
+    var item = findManifestItem(key);
+    if (item && item.fleet) {
+      var zone = computePrevalenceZone(item, App.prevalenceThreshold);
+      badges[i].textContent = formatPrevalenceBadge(item);
+      badges[i].className = 'prevalence-badge' + (zone ? ' zone-' + zone : '');
+      badges[i].setAttribute('aria-label',
+        'Fleet prevalence: ' + formatPrevalenceAriaLabel(item) + '. Activate to toggle format.');
+    }
+  }
+}
+
+function getFleetReviewCount(sectionId) {
+  if (!isApplicableForPrevalence(sectionId)) return 0;
+  var items = getManifestItemsForSection(sectionId);
+  var count = 0;
+  for (var i = 0; i < items.length; i++) {
+    if (computePrevalenceZone(items[i], App.prevalenceThreshold) === 'below') count++;
+  }
+  return count;
+}
+
+function generateFleetReason(item) {
+  if (!item.fleet) return '';
+  var count = item.fleet.count;
+  var total = item.fleet.total;
+  if (count === total) {
+    return 'Present on all ' + total + ' hosts';
+  }
+  var zone = computePrevalenceZone(item, App.prevalenceThreshold);
+  var suffix = (zone === 'below') ? ' — review recommended' : '';
+  if (count === 1 && item.fleet.hosts && item.fleet.hosts.length === 1) {
+    return 'Present on ' + count + '/' + total + ' hosts (' + item.fleet.hosts[0] + ' only)' + suffix;
+  }
+  return 'Present on ' + count + '/' + total + ' hosts' + suffix;
+}
+
+function getThresholdPresetLabel(threshold) {
+  var presets = {1: 'Unanimous (100%)', 0.8: 'Strong consensus (80%)',
+                 0.5: 'Majority (50%)', 0: 'Any presence'};
+  return presets[threshold] || (Math.round(threshold * 100) + '%');
+}
+
+function updateSidebarThreshold() {
+  var el = document.getElementById('sidebar-threshold');
+  if (!el) return;
+  el.textContent = 'Threshold: ' + getThresholdPresetLabel(App.prevalenceThreshold);
+}
+
+function invalidateApplicableSections() {
+  MIGRATION_SECTIONS.forEach(function(s) {
+    if (isApplicableForPrevalence(s.id)) {
+      var container = document.getElementById('section-' + s.id);
+      if (container) container.innerHTML = '';
+    }
+  });
+}
+
 // ── Overview Section ──
 function renderOverview() {
   var container = document.getElementById('section-overview');
@@ -2509,6 +2720,43 @@ function renderOverview() {
   heading.setAttribute('tabindex', '-1');
   heading.textContent = 'Overview';
   container.appendChild(heading);
+
+  // Threshold presets dropdown (fleet mode only)
+  if (isFleetSnapshot()) {
+    var thresholdDiv = document.createElement('div');
+    thresholdDiv.style.cssText = 'display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;';
+
+    var thresholdLabel = document.createElement('label');
+    thresholdLabel.setAttribute('for', 'threshold-select');
+    thresholdLabel.textContent = 'Prevalence threshold:';
+    thresholdLabel.style.fontSize = '0.85rem';
+    thresholdDiv.appendChild(thresholdLabel);
+
+    var thresholdSelect = document.createElement('select');
+    thresholdSelect.id = 'threshold-select';
+    thresholdSelect.className = 'threshold-select';
+    var presets = [
+      {label: 'Unanimous (100%)', value: '1'},
+      {label: 'Strong consensus (80%)', value: '0.8'},
+      {label: 'Majority (50%)', value: '0.5'},
+      {label: 'Any presence', value: '0'}
+    ];
+    for (var pi = 0; pi < presets.length; pi++) {
+      var opt = document.createElement('option');
+      opt.value = presets[pi].value;
+      opt.textContent = presets[pi].label;
+      if (parseFloat(presets[pi].value) === App.prevalenceThreshold) opt.selected = true;
+      thresholdSelect.appendChild(opt);
+    }
+    thresholdSelect.onchange = function() {
+      App.prevalenceThreshold = parseFloat(this.value);
+      invalidateApplicableSections();
+      updateAllBadges();
+      updateSidebarThreshold();
+    };
+    thresholdDiv.appendChild(thresholdSelect);
+    container.appendChild(thresholdDiv);
+  }
 
   // Stats grid
   var stats = document.createElement('div');
@@ -3360,6 +3608,36 @@ function buildToggleCard(item, sectionId) {
     content.appendChild(metaEl);
   }
 
+  // Prevalence badge (fleet mode, applicable sections only)
+  if (item.fleet && isApplicableForPrevalence(sectionId)) {
+    var prevBadge = document.createElement('span');
+    var zone = computePrevalenceZone(item, App.prevalenceThreshold);
+    prevBadge.className = 'prevalence-badge' + (zone ? ' zone-' + zone : '');
+    prevBadge.textContent = formatPrevalenceBadge(item);
+    prevBadge.setAttribute('role', 'button');
+    prevBadge.setAttribute('tabindex', '0');
+    prevBadge.setAttribute('data-item-key', item.key);
+    prevBadge.setAttribute('aria-label',
+      'Fleet prevalence: ' + formatPrevalenceAriaLabel(item) + '. Activate to toggle format.');
+    prevBadge.onclick = function(e) {
+      e.stopPropagation();
+      App.prevalenceFormat = App.prevalenceFormat === 'count' ? 'percent' : 'count';
+      updateAllPrevalenceBadges();
+      var announce = document.getElementById('prevalence-format-announce');
+      if (announce) {
+        announce.textContent = App.prevalenceFormat === 'percent'
+          ? 'Showing percentages' : 'Showing host counts';
+      }
+    };
+    prevBadge.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        prevBadge.click();
+      }
+    });
+    content.appendChild(prevBadge);
+  }
+
   if (item.key.indexOf('flatpak-') === 0) {
     var annotation = document.createElement('div');
     annotation.style.cssText = 'font-size:11px;color:#d29922;margin-top:4px;font-style:italic;';
@@ -3416,6 +3694,43 @@ function buildToggleCard(item, sectionId) {
     detailMeta.className = 'detail-meta';
     detailMeta.textContent = item.meta;
     detail.appendChild(detailMeta);
+  }
+
+  // Fleet reason text + host list
+  if (item.fleet && isApplicableForPrevalence(sectionId)) {
+    var fleetReason = document.createElement('div');
+    fleetReason.className = 'fleet-reason';
+    fleetReason.textContent = generateFleetReason(item);
+    detail.appendChild(fleetReason);
+
+    // Host list with missing hosts
+    var fleetMeta = App.snapshot.meta && App.snapshot.meta.fleet;
+    if (fleetMeta && fleetMeta.host_title_map && item.fleet.hosts) {
+      var allHosts = Object.keys(fleetMeta.host_title_map);
+      var presentSet = {};
+      for (var hi = 0; hi < item.fleet.hosts.length; hi++) {
+        presentSet[item.fleet.hosts[hi]] = true;
+      }
+      var missing = [];
+      for (var ai = 0; ai < allHosts.length; ai++) {
+        if (!presentSet[allHosts[ai]]) {
+          var displayName = fleetMeta.host_title_map[allHosts[ai]] || allHosts[ai];
+          missing.push(displayName);
+        }
+      }
+      var presentNames = item.fleet.hosts.map(function(h) {
+        return (fleetMeta.host_title_map && fleetMeta.host_title_map[h]) || h;
+      });
+      var hostText = 'Hosts: ' + presentNames.join(', ');
+      if (missing.length > 0) {
+        hostText += ' (missing: ' + missing.join(', ') + ')';
+      }
+      var hostEl = document.createElement('div');
+      hostEl.className = 'detail-meta';
+      hostEl.style.fontSize = '0.8rem';
+      hostEl.textContent = hostText;
+      detail.appendChild(hostEl);
+    }
   }
 
   // Tier 3 warning in detail pane
@@ -5660,7 +5975,18 @@ function renderTriageSection(sectionId) {
       break;
     }
   }
-  heading.textContent = label;
+  if (sectionId !== 'nonrpm' && isFleetSnapshot() && isApplicableForPrevalence(sectionId)) {
+    var allItemsForCount = getManifestItemsForSection(sectionId);
+    var itemCount = allItemsForCount.length;
+    var reviewCount = getFleetReviewCount(sectionId);
+    if (reviewCount > 0) {
+      heading.textContent = label + ' (' + itemCount + ' items, ' + reviewCount + ' to review)';
+    } else {
+      heading.textContent = label + ' (' + itemCount + ' items)';
+    }
+  } else if (sectionId !== 'nonrpm') {
+    heading.textContent = label;
+  }
 
   if (sectionId === 'nonrpm') {
     var nrSnap = App.snapshot;
@@ -5749,6 +6075,27 @@ function renderTriageSection(sectionId) {
     { key: 2, items: tier2Included, label: 'Included', indicator: 'tier-2' },
     { key: 1, items: groups[1] || [], label: 'Auto-included', indicator: 'tier-1' }
   ];
+
+  // Prevalence-aware sort within each tier group (fleet mode, applicable sections)
+  if (isFleetSnapshot() && isApplicableForPrevalence(sectionId)) {
+    for (var ts = 0; ts < tierSlots.length; ts++) {
+      tierSlots[ts].items.sort(function(a, b) {
+        var zoneA = computePrevalenceZone(a, App.prevalenceThreshold);
+        var zoneB = computePrevalenceZone(b, App.prevalenceThreshold);
+
+        var zonePriority = {'below': 0, 'above': 1, 'unanimous': 2, '': 3};
+        var pa = zonePriority[zoneA] !== undefined ? zonePriority[zoneA] : 3;
+        var pb = zonePriority[zoneB] !== undefined ? zonePriority[zoneB] : 3;
+        if (pa !== pb) return pa - pb;
+
+        var ratioA = (a.fleet && a.fleet.total > 0) ? a.fleet.count / a.fleet.total : 1;
+        var ratioB = (b.fleet && b.fleet.total > 0) ? b.fleet.count / b.fleet.total : 1;
+
+        if (zoneA === 'below') return ratioA - ratioB;
+        return ratioB - ratioA;
+      });
+    }
+  }
 
   // ── Containers section: flat subsection rendering (skip tier grouping) ──
   // Containers use subsection ordering, not tier grouping. Rendering per-tier
