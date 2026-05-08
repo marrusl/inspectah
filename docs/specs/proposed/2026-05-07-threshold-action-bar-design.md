@@ -2,7 +2,7 @@
 
 ## Summary
 
-- **Status:** Proposed (revision 3)
+- **Status:** Proposed (revision 4)
 - **Scope:** Add a threshold action bar that offers bulk include/exclude when the prevalence threshold classification disagrees with toggle state. No scope expansion — applies to the existing 4 applicable sections (packages, runtime, identity, system).
 - **Depends on:** Fleet Prevalence Visibility Phase 1 (implemented)
 - **Deferred:** Config prevalence (needs variant-stable identity, Phase 2 dependency), container prevalence (needs per-subtype specification and subsection renderer work), non-RPM prevalence (different card pattern)
@@ -23,6 +23,12 @@
 - Complete screen-reader announcement contract for appearance/replacement/dismiss/apply (Fern #2)
 - Added pre-dirtied row E2E test case (Thorn proof note)
 - Demoted static-mode E2E test to manual (no harness seam) (Thorn proof note)
+
+**Revision 4 changes from round 3 review:**
+- Harmonize `makeDecision()` to first-touch `priorValues` semantics — implementation must add `if (App.priorValues[key] === undefined)` guard (Kit finding, Thorn #1)
+- Updated "Individual toggles after bulk action" to remove contradictory overwrite language
+- Pre-dirtied-row E2E test now requires coverage of BOTH toggle-card and triage-card mutation paths (Thorn should-fix #1)
+- Added non-blocking dwell-state note: buttons disabled during post-action confirmation pause (Fern note)
 
 ## 1. Threshold Action Bar
 
@@ -110,7 +116,7 @@ A new function that performs the bulk flip. It does not reuse `makeDecision()` i
 
 **State bookkeeping rules:**
 
-- `App.priorValues[key]`: Only seeded when undefined. If the item was already manually toggled, the manual toggle's prior value is preserved as the restore point. This matches `makeDecision()` behavior, which also only seeds `priorValues` on first touch. Per-item undo (via the decided-card undo affordance) always returns to the first-touch state, whether the first touch was manual or bulk.
+- `App.priorValues[key]`: Only seeded when undefined. If the item was already manually toggled (via either toggle-card or triage-card path), the existing prior value is preserved as the restore point. This is consistent across all mutation paths after the required `makeDecision()` harmonization (see above). Per-item undo always returns to the first-touch state, whether the first touch was a manual toggle, a triage-card decision, or a bulk action.
 - `App.decisions[key]`: Set to `true` for all flipped items, regardless of prior state. This marks every affected item as "user has acted" for decided-state rendering.
 - `App.groupPriorState`: Not modified. Accordion group restore is unaffected — group toggles and threshold bulk actions are independent operations. If a user later toggles an accordion group that contains bulk-flipped items, the accordion's own prior-state snapshot captures the current (post-bulk) state.
 - **Change counter:** Incremented once by `newDecisionCount` — the number of items that were NOT already in `App.decisions`. Items already decided were already counted by their original toggle, so re-flipping them does not add to the counter. This keeps `#changes-badge` honest relative to the actual number of user actions.
@@ -118,9 +124,27 @@ A new function that performs the bulk flip. It does not reuse `makeDecision()` i
 - **Autosave:** Scheduled once after all flips, not per item.
 - **Section re-render:** Affected sections (not all applicable sections) are invalidated. They re-render on next navigation with the new toggle states.
 
+### Required implementation fix: harmonize `makeDecision()` priorValues
+
+The current `makeDecision()` in `report.html` overwrites `App.priorValues[key]` unconditionally. Toggle-card inline handlers only seed it when undefined. This creates a split contract where first-touch semantics hold on one path but not the other.
+
+**This spec requires harmonizing `makeDecision()` to first-touch semantics** by adding an `if (App.priorValues[key] === undefined)` guard before seeding. This is a one-line change that makes the restore contract consistent across all per-item mutation paths:
+
+```js
+// Current (overwrites):
+App.priorValues[key] = getSnapshotInclude(key);
+
+// Required (first-touch):
+if (App.priorValues[key] === undefined) {
+    App.priorValues[key] = getSnapshotInclude(key);
+}
+```
+
+After this change, per-item undo always returns to the original pre-first-touch state, whether the first touch was a manual toggle, a triage-card decision, or a bulk action. This is a prerequisite for the action bar, not an optional cleanup.
+
 ### Interaction with existing controls
 
-**Individual toggles after bulk action:** Work normally. The user can toggle any item back. `makeDecision()` overwrites `App.priorValues[key]` and `App.decisions[key]` for that item.
+**Individual toggles after bulk action:** Work normally. The user can toggle any item back. Both toggle-card and triage-card paths now use first-touch `priorValues` semantics (see above). Undo returns to the original state before any user action on that item.
 
 **Accordion group toggles after bulk action:** Work normally. `toggleAccordionGroup()` captures current state (post-bulk) as its restore point.
 
@@ -154,8 +178,8 @@ The action bar contains a **message-only text node** inside an `aria-live="polit
 |-------|-------------|
 | Bar appears (threshold change with mismatch) | Live region text updates → SR announces: "15 items above threshold but excluded: Packages (9), Runtime (4), Identity (2)" |
 | Bar replaces (threshold re-change before action) | Live region text updates with new content → SR announces the new message |
-| User clicks Include/Exclude | Live region text updates to: "Included 15 items" or "Excluded 8 items". Bar then disappears after a brief pause (~1s) to allow the announcement to complete. |
-| User clicks Dismiss | Live region text updates to: "Suggestion dismissed". Bar then disappears after a brief pause. |
+| User clicks Include/Exclude | Live region text updates to: "Included 15 items" or "Excluded 8 items". Buttons are disabled during confirmation. Bar disappears after a brief pause (~1s) to allow the announcement to complete. |
+| User clicks Dismiss | Live region text updates to: "Suggestion dismissed". Buttons are disabled during confirmation. Bar disappears after a brief pause. |
 | Threshold change with zero mismatch | If bar was visible, live region text clears → bar disappears. If bar was not visible, no announcement. |
 | Threshold dropdown value change | Native `<select>` announces its new value via standard browser behavior. The action bar announcement is additive — it follows the select announcement. |
 
@@ -214,7 +238,8 @@ Create `tests/e2e-go/tests/fleet-threshold-action-bar.spec.ts`:
 | `action-bar-zero-mismatch-no-bar` | Set threshold where all items match classification. No bar appears. |
 | `action-bar-navigation-dismisses` | Bar appears on Overview. Navigate to Packages. Return to Overview. Bar is gone (does not reappear without new threshold change). |
 | `action-bar-focus-stays-on-select` | Change threshold. Verify `document.activeElement` is `#threshold-select`, not the action button. |
-| `action-bar-pre-dirtied-row` | Manually toggle an item (creating `priorValues[key]` and `decisions[key]`). Then change threshold so the action bar includes that item. Click Include/Exclude. Verify: (1) `priorValues[key]` still holds the original pre-manual-toggle value (not overwritten by bulk), (2) `#changes-badge` count only increments by newly-decided items (not the pre-dirtied one), (3) manually toggling the item back uses the original prior value. |
+| `action-bar-pre-dirtied-toggle-card` | Dirty a toggle-card item (inline toggle click). Change threshold so action bar includes that item. Apply. Verify: (1) `priorValues[key]` holds original pre-toggle value (not overwritten), (2) `#changes-badge` count increments only by newly-decided items, (3) undo returns to original state. |
+| `action-bar-pre-dirtied-triage-card` | Dirty a triage-card item (via `makeDecision()` — e.g., a tier-3 flagged item's decision button). Change threshold so action bar includes that item. Apply. Verify same three assertions as above. This test exercises the `makeDecision()` path specifically, which is the path that required harmonization to first-touch semantics. |
 | `action-bar-sections-reopen` | Mark a section as reviewed (sidebar dot green). Change threshold and apply the action bar so it flips items in that section. Verify the section's review state resets to unreviewed (dot reverts, progress bar decrements). |
 
 All tests follow the existing harness conventions: `resetServer()` in `beforeAll`/`afterAll`, `waitForBoot()` + `isRefineMode()` in `beforeEach`.
