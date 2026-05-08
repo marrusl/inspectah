@@ -6060,8 +6060,11 @@ function renderTriageSection(sectionId) {
   var tier2All = groups[2] || [];
   var tier2Included = [];
   var tier2NeedsReview = [];
+  var fleetApplicable = isFleetSnapshot() && isApplicableForPrevalence(sectionId);
   for (var s = 0; s < tier2All.length; s++) {
     if (tier2All[s].default_include === false) {
+      tier2NeedsReview.push(tier2All[s]);
+    } else if (fleetApplicable && computePrevalenceZone(tier2All[s], App.prevalenceThreshold) === 'below') {
       tier2NeedsReview.push(tier2All[s]);
     } else {
       tier2Included.push(tier2All[s]);
