@@ -106,7 +106,8 @@ test.describe('fleet threshold action bar', () => {
     // computeThresholdMismatch is callable and returns a valid result
     const mismatch = await page.evaluate(() => {
       return (window as any).computeThresholdMismatch(
-        (window as any).App.prevalenceThreshold
+        (window as any).App.prevalenceThreshold,
+        'include'
       );
     });
     expect(typeof mismatch.count).toBe('number');
@@ -308,7 +309,7 @@ test.describe('fleet threshold action bar', () => {
   test('action-bar-pre-dirtied-toggle-card', async ({ page }) => {
     await navigateToSection(page, 'packages');
 
-    // Find a toggle-card and its key
+    // Find a toggle-card and its switch
     const card = page.locator('#section-packages .toggle-card').first();
     await expect(card).toBeVisible();
     const key = await card.getAttribute('data-key');
@@ -320,13 +321,11 @@ test.describe('fleet threshold action bar', () => {
       key
     );
 
-    // Dirty the item via makeDecision (simulates inline toggle click)
-    await page.evaluate(
-      ({k, s}) => (window as any).makeDecision(k, s, !((window as any).getSnapshotInclude(k))),
-      {k: key, s: 'packages'}
-    );
+    // Dirty via the REAL toggle-card switch (not makeDecision)
+    const toggle = card.locator('button[role="switch"]');
+    await toggle.click();
 
-    // Verify priorValues captured the original
+    // Verify priorValues captured the original via the toggle-card's inline handler
     const priorVal = await page.evaluate(
       (k) => (window as any).App.priorValues[k],
       key
@@ -347,7 +346,7 @@ test.describe('fleet threshold action bar', () => {
     await page.locator('#threshold-action-btn').click();
     await expect(bar).toBeHidden({ timeout: 3000 });
 
-    // priorValues for the pre-dirtied key must still hold the ORIGINAL value
+    // priorValues must still hold the ORIGINAL value (first-touch preserved)
     const priorAfterBulk = await page.evaluate(
       (k) => (window as any).App.priorValues[k],
       key
@@ -356,28 +355,43 @@ test.describe('fleet threshold action bar', () => {
   });
 
   test('action-bar-pre-dirtied-triage-card', async ({ page }) => {
-    await navigateToSection(page, 'packages');
+    // Search applicable sections for a triage card with action buttons
+    const sections = ['packages', 'runtime', 'identity', 'system'];
+    let foundKey: string | null = null;
+    let foundSection = '';
 
-    // Find a tier-3 flagged item with decision buttons (calls makeDecision)
-    const keepBtn = page.locator('#section-packages .card-actions button:has-text("Keep")').first();
-    if (await keepBtn.count() === 0) {
-      // Try runtime section
-      await navigateToSection(page, 'runtime');
-      const keepBtnRuntime = page.locator('#section-runtime .card-actions button:has-text("Keep")').first();
-      if (await keepBtnRuntime.count() === 0) {
-        test.skip();
-        return;
+    for (const sectionId of sections) {
+      await navigateToSection(page, sectionId);
+      // Look for triage-card action buttons that call makeDecision()
+      // Actual labels: "Keep included" or "Leave out"
+      const actionBtn = page.locator(
+        `#section-${sectionId} .triage-card .card-actions button:has-text("Keep included")`
+      ).first();
+      if (await actionBtn.count() > 0) {
+        const cardEl = actionBtn.locator('xpath=ancestor::*[@data-key]').first();
+        const key = await cardEl.getAttribute('data-key');
+        if (key) {
+          foundKey = key;
+          foundSection = sectionId;
+          break;
+        }
+      }
+      // Also check "Leave out" buttons
+      const leaveBtn = page.locator(
+        `#section-${sectionId} .triage-card .card-actions button:has-text("Leave out")`
+      ).first();
+      if (await leaveBtn.count() > 0) {
+        const cardEl = leaveBtn.locator('xpath=ancestor::*[@data-key]').first();
+        const key = await cardEl.getAttribute('data-key');
+        if (key) {
+          foundKey = key;
+          foundSection = sectionId;
+          break;
+        }
       }
     }
 
-    // Re-locate the button in whichever section we're in
-    const activeSection = await page.evaluate(() => (window as any).App.activeSection);
-    const btn = page.locator(`#section-${activeSection} .card-actions button:has-text("Keep")`).first();
-
-    // Get the card's key
-    const cardEl = btn.locator('xpath=ancestor::*[@data-key]').first();
-    const key = await cardEl.getAttribute('data-key');
-    if (!key) {
+    if (!foundKey) {
       test.skip();
       return;
     }
@@ -385,16 +399,19 @@ test.describe('fleet threshold action bar', () => {
     // Capture original include state
     const originalInclude = await page.evaluate(
       (k) => (window as any).getSnapshotInclude(k),
-      key
+      foundKey
     );
 
-    // Click Keep — calls makeDecision(key, section, true)
+    // Click the triage-card action button (calls makeDecision)
+    const btn = page.locator(
+      `#section-${foundSection} [data-key="${foundKey}"] .card-actions button`
+    ).first();
     await btn.click();
 
-    // Verify priorValues captured the original
+    // Verify priorValues captured the original via makeDecision()
     const priorVal = await page.evaluate(
       (k) => (window as any).App.priorValues[k],
-      key
+      foundKey
     );
     expect(priorVal).toBe(originalInclude);
 
@@ -415,7 +432,7 @@ test.describe('fleet threshold action bar', () => {
     // priorValues must still hold the ORIGINAL value
     const priorAfterBulk = await page.evaluate(
       (k) => (window as any).App.priorValues[k],
-      key
+      foundKey
     );
     expect(priorAfterBulk).toBe(originalInclude);
   });

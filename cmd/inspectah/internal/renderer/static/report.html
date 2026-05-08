@@ -2143,6 +2143,7 @@ var App = {
   groupPriorState: {},  // groupName -> {key: priorInclude} for toggle restore
   expandedDep: null,
   prevalenceThreshold: 1.0,
+  prevPrevalenceThreshold: 1.0,
   prevalenceFormat: 'count'
 };
 
@@ -2753,10 +2754,8 @@ function getSectionLabel(sectionId) {
   return sectionId;
 }
 
-function computeThresholdMismatch(threshold) {
-  var result = {count: 0, direction: '', perSection: {}};
-  var includeCount = 0;
-  var excludeCount = 0;
+function computeThresholdMismatch(threshold, direction) {
+  var result = {count: 0, direction: direction, perSection: {}};
   var applicableSections = ['packages', 'runtime', 'identity', 'system'];
 
   for (var i = 0; i < App.triageManifest.length; i++) {
@@ -2766,32 +2765,23 @@ function computeThresholdMismatch(threshold) {
 
     var zone = computePrevalenceZone(item, threshold);
     var included = getSnapshotInclude(item.key);
+    var isMismatch = false;
 
-    if ((zone === 'above' || zone === 'unanimous') && !included) {
-      includeCount++;
-      if (!result.perSection[item.section]) result.perSection[item.section] = 0;
-      result.perSection[item.section]++;
-    } else if (zone === 'below' && included) {
-      excludeCount++;
+    if (direction === 'include' && (zone === 'above' || zone === 'unanimous') && !included) {
+      isMismatch = true;
+    } else if (direction === 'exclude' && zone === 'below' && included) {
+      isMismatch = true;
+    }
+
+    if (isMismatch) {
+      result.count++;
       if (!result.perSection[item.section]) result.perSection[item.section] = 0;
       result.perSection[item.section]++;
     }
   }
 
-  if (includeCount > 0 && excludeCount === 0) {
-    result.count = includeCount;
-    result.direction = 'include';
-  } else if (excludeCount > 0 && includeCount === 0) {
-    result.count = excludeCount;
-    result.direction = 'exclude';
-  } else if (includeCount > 0 && excludeCount > 0) {
-    if (includeCount >= excludeCount) {
-      result.count = includeCount;
-      result.direction = 'include';
-    } else {
-      result.count = excludeCount;
-      result.direction = 'exclude';
-    }
+  if (result.count === 0) {
+    result.direction = '';
   }
 
   return result;
@@ -2816,6 +2806,9 @@ function renderThresholdActionBar(container, mismatch) {
   var existing = document.getElementById('threshold-action-bar');
   if (existing) existing.remove();
 
+  // Do not render action bar in static/read-only mode
+  if (App.mode === 'static') return;
+
   if (mismatch.count === 0) {
     var liveRegion = document.getElementById('threshold-suggestion-text');
     if (liveRegion) liveRegion.textContent = '';
@@ -2836,6 +2829,7 @@ function renderThresholdActionBar(container, mismatch) {
   var actionBtn = document.createElement('button');
   actionBtn.type = 'button';
   actionBtn.textContent = actionLabel;
+  actionBtn.setAttribute('aria-label', formatMismatchMessage(mismatch) + '. ' + actionLabel);
   actionBtn.id = 'threshold-action-btn';
   actionBtn.onclick = function() {
     applyThresholdSuggestion(mismatch.direction, App.prevalenceThreshold);
@@ -2846,6 +2840,7 @@ function renderThresholdActionBar(container, mismatch) {
   var dismissBtn = document.createElement('button');
   dismissBtn.type = 'button';
   dismissBtn.textContent = 'Dismiss';
+  dismissBtn.setAttribute('aria-label', 'Dismiss threshold suggestion');
   dismissBtn.className = 'dismiss-btn';
   dismissBtn.id = 'threshold-dismiss-btn';
   dismissBtn.onclick = function() {
@@ -2866,21 +2861,26 @@ function dismissThresholdActionBar(announcement) {
   var bar = document.getElementById('threshold-action-bar');
   if (!bar) return;
 
+  // Return focus to select immediately (before dwell)
+  var select = document.getElementById('threshold-select');
+  if (select) select.focus();
+
+  // Disable buttons during dwell
   var buttons = bar.querySelectorAll('button');
   for (var i = 0; i < buttons.length; i++) {
     buttons[i].disabled = true;
   }
 
+  // Update announcement
   var msgSpan = document.getElementById('threshold-suggestion-text');
   if (msgSpan) {
     msgSpan.textContent = announcement;
   }
 
+  // Remove bar after dwell (gives SR time to read)
   setTimeout(function() {
     var barEl = document.getElementById('threshold-action-bar');
     if (barEl) barEl.remove();
-    var select = document.getElementById('threshold-select');
-    if (select) select.focus();
   }, 1000);
 }
 
@@ -2976,11 +2976,14 @@ function renderOverview() {
       thresholdSelect.appendChild(opt);
     }
     thresholdSelect.onchange = function() {
+      var oldThreshold = App.prevalenceThreshold;
       App.prevalenceThreshold = parseFloat(this.value);
+      var direction = App.prevalenceThreshold < oldThreshold ? 'include' : 'exclude';
+      App.prevPrevalenceThreshold = oldThreshold;
       invalidateApplicableSections();
       updateAllBadges();
       updateSidebarThreshold();
-      var mismatch = computeThresholdMismatch(App.prevalenceThreshold);
+      var mismatch = computeThresholdMismatch(App.prevalenceThreshold, direction);
       renderThresholdActionBar(container, mismatch);
     };
     thresholdDiv.appendChild(thresholdSelect);
