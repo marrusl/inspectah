@@ -357,6 +357,24 @@ test.describe('fleet threshold action bar', () => {
 
     const countBefore = await page.evaluate(() => (window as any).changeCount);
 
+    // Count how many mismatch items are NOT already decided (expected counter delta)
+    const expectedNewlyDecided = await page.evaluate((threshold: number) => {
+      var App = (window as any).App;
+      var applicable = ['packages', 'runtime', 'identity', 'system'];
+      var count = 0;
+      for (var i = 0; i < App.triageManifest.length; i++) {
+        var item = App.triageManifest[i];
+        if (applicable.indexOf(item.section) === -1) continue;
+        if (!item.fleet) continue;
+        var zone = (window as any).computePrevalenceZone(item, threshold);
+        var included = (window as any).getSnapshotInclude(item.key);
+        if ((zone === 'above' || zone === 'unanimous') && !included) {
+          if (!App.decisions[item.key]) count++;
+        }
+      }
+      return count;
+    }, 0.8);
+
     // Lower threshold to 0.8 → row is above-threshold + excluded → include mismatch
     await navigateToSection(page, 'overview');
     const select = page.locator('#threshold-select');
@@ -385,15 +403,21 @@ test.describe('fleet threshold action bar', () => {
     );
     expect(priorAfterBulk).toBe(true);
 
-    // (c) Row was already decided before bulk, so changeCount should NOT have
-    // incremented for THIS row (only newly-decided rows increment).
-    // Total count may have gone up from other newly-decided rows, but it must
-    // not have double-counted this already-decided row.
+    // (d) Counter delta equals only newly-decided items (our row was already decided — zero increment for it)
     const countAfter = await page.evaluate(() => (window as any).changeCount);
-    // Since this row was already decided, if it's the ONLY mismatch row,
-    // countAfter === countBefore. If other rows were newly decided, countAfter > countBefore.
-    // Either way, countAfter >= countBefore (never double-counts).
-    expect(countAfter).toBeGreaterThanOrEqual(countBefore);
+    expect(countAfter - countBefore).toBe(expectedNewlyDecided);
+
+    // (e) Undo restores the original pre-first-touch state
+    await page.evaluate((k: string) => {
+      var App = (window as any).App;
+      (window as any).updateSnapshotInclude(k, App.priorValues[k]);
+      delete App.priorValues[k];
+      delete App.decisions[k];
+    }, key);
+    const afterUndo = await page.evaluate(
+      (k: string) => (window as any).getSnapshotInclude(k), key
+    );
+    expect(afterUndo).toBe(originalInclude);
   });
 
   test('action-bar-pre-dirtied-triage-card', async ({ page }) => {
@@ -473,6 +497,24 @@ test.describe('fleet threshold action bar', () => {
 
     const countBefore = await page.evaluate(() => (window as any).changeCount);
 
+    // Count how many mismatch items are NOT already decided (expected counter delta)
+    const expectedNewlyDecided = await page.evaluate((threshold: number) => {
+      var App = (window as any).App;
+      var applicable = ['packages', 'runtime', 'identity', 'system'];
+      var count = 0;
+      for (var i = 0; i < App.triageManifest.length; i++) {
+        var item = App.triageManifest[i];
+        if (applicable.indexOf(item.section) === -1) continue;
+        if (!item.fleet) continue;
+        var zone = (window as any).computePrevalenceZone(item, threshold);
+        var included = (window as any).getSnapshotInclude(item.key);
+        if ((zone === 'above' || zone === 'unanimous') && !included) {
+          if (!App.decisions[item.key]) count++;
+        }
+      }
+      return count;
+    }, 0.8);
+
     // Lower threshold to 0.8 → row is above-threshold + excluded → include mismatch
     await navigateToSection(page, 'overview');
     const select = page.locator('#threshold-select');
@@ -500,9 +542,21 @@ test.describe('fleet threshold action bar', () => {
     );
     expect(priorAfterBulk).toBe(true);
 
-    // (c) Counter: row was already decided, so no double-count
+    // (d) Counter delta equals only newly-decided items (our row was already decided — zero increment for it)
     const countAfter = await page.evaluate(() => (window as any).changeCount);
-    expect(countAfter).toBeGreaterThanOrEqual(countBefore);
+    expect(countAfter - countBefore).toBe(expectedNewlyDecided);
+
+    // (e) Undo restores the original pre-first-touch state
+    await page.evaluate((k: string) => {
+      var App = (window as any).App;
+      (window as any).updateSnapshotInclude(k, App.priorValues[k]);
+      delete App.priorValues[k];
+      delete App.decisions[k];
+    }, foundKey);
+    const afterUndo = await page.evaluate(
+      (k: string) => (window as any).getSnapshotInclude(k), foundKey
+    );
+    expect(afterUndo).toBe(originalInclude);
   });
 
   test('action-bar-sections-reopen', async ({ page }) => {
