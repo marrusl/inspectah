@@ -1,8 +1,8 @@
-# Threshold Action Bar (revision 2)
+# Threshold Action Bar (revision 3)
 
 ## Summary
 
-- **Status:** Proposed (revision 2)
+- **Status:** Proposed (revision 3)
 - **Scope:** Add a threshold action bar that offers bulk include/exclude when the prevalence threshold classification disagrees with toggle state. No scope expansion — applies to the existing 4 applicable sections (packages, runtime, identity, system).
 - **Depends on:** Fleet Prevalence Visibility Phase 1 (implemented)
 - **Deferred:** Config prevalence (needs variant-stable identity, Phase 2 dependency), container prevalence (needs per-subtype specification and subsection renderer work), non-RPM prevalence (different card pattern)
@@ -14,6 +14,15 @@
 - Added complete focus contract for all scenarios (Fern #1)
 - Added section-level disclosure in action bar message (Fern #2)
 - Replaced manual verification with required automated tests (Thorn should-fix #2, Kit medium)
+
+**Revision 3 changes from round 2 review:**
+- Fixed `priorValues` overwrite: preserve first-touch restore point, do not overwrite (Kit blocker, Thorn #1)
+- Added reviewed-section reopening after bulk apply (Kit blocker, Thorn #1)
+- Fixed dirty-count: only increment for items not already in `App.decisions` (Thorn #1)
+- Named affected sections in bar message, not just count (Fern #1)
+- Complete screen-reader announcement contract for appearance/replacement/dismiss/apply (Fern #2)
+- Added pre-dirtied row E2E test case (Thorn proof note)
+- Demoted static-mode E2E test to manual (no harness seam) (Thorn proof note)
 
 ## 1. Threshold Action Bar
 
@@ -33,10 +42,10 @@ Below the threshold dropdown, above the stat cards grid, on the Overview section
 
 | Scenario | Trigger | Message | Action |
 |----------|---------|---------|--------|
-| User lowers threshold | Items are above the new threshold but toggled off | "15 items across 3 sections are above your threshold but excluded." | [Include them] [Dismiss] |
-| User raises threshold | Items are below the new threshold but toggled on | "8 items across 2 sections are below your threshold but included." | [Exclude them] [Dismiss] |
+| User lowers threshold | Items are above the new threshold but toggled off | "15 items above threshold but excluded: Packages (9), Runtime (4), Identity (2)" | [Include them] [Dismiss] |
+| User raises threshold | Items are below the new threshold but toggled on | "8 items below threshold but included: Packages (5), System (3)" | [Exclude them] [Dismiss] |
 
-The message includes a section count ("across N sections") so the operator understands the cross-section scope of the mutation before clicking.
+The message names every affected section with its per-section count so the operator knows exactly what the bulk action will touch before clicking. Sections with zero mismatched items are omitted from the list.
 
 ### Counting rules
 
@@ -76,28 +85,38 @@ A new function that performs the bulk flip. It does not reuse `makeDecision()` i
 
 ```
 1. Collect all triage manifest items in applicable sections
-2. For each item with fleet data:
+2. Track affected sections: affectedSections = new Set()
+3. Track newly-decided count: newDecisionCount = 0
+4. For each item with fleet data:
    a. Compute zone from fleet.count/fleet.total against threshold
-   b. Read current include state from snapshot
+   b. Read current include state from snapshot via getSnapshotInclude(key)
    c. If mismatch (zone says include but toggle is off, or vice versa):
-      - Record App.priorValues[key] = current include state
-      - Record App.decisions[key] = true
-      - Flip the include state in the snapshot
-      - Add key to flipped-keys list
-3. Increment change counter ONCE by flipped-keys.length
-4. Invalidate all applicable sections (clear containers for re-render)
-5. Update sidebar badges
-6. Schedule autosave
+      - If App.priorValues[key] is undefined, seed it: App.priorValues[key] = current include
+        (Do NOT overwrite existing priorValues — the first touch is the real restore point)
+      - If App.decisions[key] is not already true, increment newDecisionCount
+      - Set App.decisions[key] = true
+      - Flip the include state in the snapshot via updateSnapshotInclude(key, newValue)
+      - Add item.section to affectedSections
+5. Increment change counter ONCE by newDecisionCount
+   (Items already in App.decisions were already counted — do not double-count)
+6. For each section in affectedSections:
+   a. Clear section container (invalidate for re-render)
+   b. Reset App.reviewStates[sectionId] = 'unreviewed'
+   c. Update sidebar dot via updateSidebarDot(sectionId)
+7. Update sidebar badges via updateAllBadges()
+8. Update progress bar via updateProgressBar()
+9. Schedule autosave
 ```
 
 **State bookkeeping rules:**
 
-- `App.priorValues[key]`: Set for each flipped item to its pre-flip include state. This enables per-item undo via the existing toggle mechanism. If a prior value already exists (from an earlier manual toggle or previous bulk action), it is overwritten — the bulk action becomes the new restore point.
-- `App.decisions[key]`: Set to `true` for each flipped item. This marks the item as "user has acted on this" for the decided-state logic (sidebar dots, review progress).
-- `App.groupPriorState`: Not modified. Accordion group restore is unaffected — group toggles and threshold bulk actions are independent operations. If a user later toggles an accordion group that contains bulk-flipped items, the accordion's own prior-state snapshot captures the current (post-bulk) state, not the pre-bulk state.
-- **Change counter:** Incremented once by the total count of flipped items, not once per item. This matches the user's mental model — one action, one count update. The `#changes-badge` shows "15 changes pending."
+- `App.priorValues[key]`: Only seeded when undefined. If the item was already manually toggled, the manual toggle's prior value is preserved as the restore point. This matches `makeDecision()` behavior, which also only seeds `priorValues` on first touch. Per-item undo (via the decided-card undo affordance) always returns to the first-touch state, whether the first touch was manual or bulk.
+- `App.decisions[key]`: Set to `true` for all flipped items, regardless of prior state. This marks every affected item as "user has acted" for decided-state rendering.
+- `App.groupPriorState`: Not modified. Accordion group restore is unaffected — group toggles and threshold bulk actions are independent operations. If a user later toggles an accordion group that contains bulk-flipped items, the accordion's own prior-state snapshot captures the current (post-bulk) state.
+- **Change counter:** Incremented once by `newDecisionCount` — the number of items that were NOT already in `App.decisions`. Items already decided were already counted by their original toggle, so re-flipping them does not add to the counter. This keeps `#changes-badge` honest relative to the actual number of user actions.
+- **Reviewed-section reopening:** Every affected section has its `App.reviewStates` reset to `'unreviewed'` and its sidebar dot updated. This ensures review progress and sidebar dots stay honest after a cross-section bulk mutation. The progress bar updates to reflect the reopened sections.
 - **Autosave:** Scheduled once after all flips, not per item.
-- **Section re-render:** All applicable sections are invalidated (containers cleared). They re-render on next navigation with the new toggle states.
+- **Section re-render:** Affected sections (not all applicable sections) are invalidated. They re-render on next navigation with the new toggle states.
 
 ### Interaction with existing controls
 
@@ -115,25 +134,46 @@ A new function that performs the bulk flip. It does not reuse `makeDecision()` i
 
 The threshold dropdown retains focus after a threshold change. The action bar appears without stealing focus. This preserves the approved Phase 1 behavior and allows keyboard users to iterate through presets without interruption.
 
-### Announcement strategy
+### Announcement architecture
 
-The action bar uses `aria-live="polite"` on its container. When it appears, screen readers announce the message text (e.g., "15 items across 3 sections are above your threshold but excluded"). The user can then Tab to the action button.
+The action bar contains a **message-only text node** inside an `aria-live="polite"` container. The interactive buttons are siblings of the live region, not children of it. This ensures screen readers announce the message text without reading button labels as part of the live-region update.
+
+```
+<div class="threshold-action-bar">
+  <span aria-live="polite" id="threshold-suggestion-text">
+    15 items above threshold but excluded: Packages (9), Runtime (4), Identity (2)
+  </span>
+  <button>[Include them]</button>
+  <button>[Dismiss]</button>
+</div>
+```
+
+### Screen-reader announcement contract
+
+| Event | Announcement |
+|-------|-------------|
+| Bar appears (threshold change with mismatch) | Live region text updates → SR announces: "15 items above threshold but excluded: Packages (9), Runtime (4), Identity (2)" |
+| Bar replaces (threshold re-change before action) | Live region text updates with new content → SR announces the new message |
+| User clicks Include/Exclude | Live region text updates to: "Included 15 items" or "Excluded 8 items". Bar then disappears after a brief pause (~1s) to allow the announcement to complete. |
+| User clicks Dismiss | Live region text updates to: "Suggestion dismissed". Bar then disappears after a brief pause. |
+| Threshold change with zero mismatch | If bar was visible, live region text clears → bar disappears. If bar was not visible, no announcement. |
+| Threshold dropdown value change | Native `<select>` announces its new value via standard browser behavior. The action bar announcement is additive — it follows the select announcement. |
 
 ### Complete focus contract
 
 | Event | Focus behavior |
 |-------|---------------|
-| Threshold change with mismatch | Focus stays on `<select>`. Bar appears and is announced via `aria-live`. |
+| Threshold change with mismatch | Focus stays on `<select>`. Bar appears, message announced via `aria-live`. |
 | Threshold change with zero mismatch | Focus stays on `<select>`. No bar appears. |
 | User Tabs from `<select>` | Focus moves to action button (if bar visible), then Dismiss, then next control. |
-| User clicks Include/Exclude | Focus moves to `<select>` (bar disappears, return focus to the control that spawned it). |
-| User clicks Dismiss | Focus moves to `<select>`. |
-| Bar replaces on threshold re-change | Focus stays on `<select>` (bar content updates in place). |
+| User clicks Include/Exclude | Focus moves to `<select>` (bar disappears after confirmation announcement). |
+| User clicks Dismiss | Focus moves to `<select>` (bar disappears after dismissal announcement). |
+| Bar replaces on threshold re-change | Focus stays on `<select>` (bar content updates in place, new message announced). |
 | User navigates away from Overview | Bar removed from DOM. Focus moves to new section heading (existing `navigateTo` behavior). |
 
 ### Button accessibility
 
-- Action button: `aria-label` includes count, sections, and threshold name. Example: `"Include 15 items across 3 sections above Strong consensus threshold"`.
+- Action button: `aria-label` includes count, section breakdown, and threshold name. Example: `"Include 15 items: Packages 9, Runtime 4, Identity 2, above Strong consensus threshold"`.
 - Dismiss button: `aria-label="Dismiss threshold suggestion"`.
 - Both buttons: keyboard operable (Enter/Space), visible focus ring.
 
@@ -172,11 +212,18 @@ Create `tests/e2e-go/tests/fleet-threshold-action-bar.spec.ts`:
 | `action-bar-dismiss-no-state-change` | Bar appears, click Dismiss. `#changes-badge` stays hidden. Snapshot unchanged. Focus returns to `<select>`. |
 | `action-bar-replaces-on-rechange` | Lower to 80% (bar appears). Lower to 50% (bar replaces with new count). Focus stays on `<select>`. No state change. |
 | `action-bar-zero-mismatch-no-bar` | Set threshold where all items match classification. No bar appears. |
-| `action-bar-absent-static-mode` | In static mode, changing threshold shows no action bar. |
 | `action-bar-navigation-dismisses` | Bar appears on Overview. Navigate to Packages. Return to Overview. Bar is gone (does not reappear without new threshold change). |
 | `action-bar-focus-stays-on-select` | Change threshold. Verify `document.activeElement` is `#threshold-select`, not the action button. |
+| `action-bar-pre-dirtied-row` | Manually toggle an item (creating `priorValues[key]` and `decisions[key]`). Then change threshold so the action bar includes that item. Click Include/Exclude. Verify: (1) `priorValues[key]` still holds the original pre-manual-toggle value (not overwritten by bulk), (2) `#changes-badge` count only increments by newly-decided items (not the pre-dirtied one), (3) manually toggling the item back uses the original prior value. |
+| `action-bar-sections-reopen` | Mark a section as reviewed (sidebar dot green). Change threshold and apply the action bar so it flips items in that section. Verify the section's review state resets to unreviewed (dot reverts, progress bar decrements). |
 
 All tests follow the existing harness conventions: `resetServer()` in `beforeAll`/`afterAll`, `waitForBoot()` + `isRefineMode()` in `beforeEach`.
+
+### Manual verification (no automated harness seam)
+
+| Check | Assertion |
+|-------|-----------|
+| Static mode: no bar | Open a fleet report as a static file (`file://` protocol). Change threshold. Verify no action bar appears. (No Playwright harness for static-mode refine in the current test infrastructure.) |
 
 ### Preserved Phase 1 invariants
 
