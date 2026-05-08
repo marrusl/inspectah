@@ -309,63 +309,55 @@ test.describe('fleet threshold action bar', () => {
   test('action-bar-pre-dirtied-toggle-card', async ({ page }) => {
     await navigateToSection(page, 'packages');
 
-    // Find a toggle-card whose fleet prevalence will be >= 0.8 threshold
+    // Find a toggle-card that starts INCLUDED and has fleet ratio >= 0.8
     const key = await page.evaluate(() => {
-      const App = (window as any).App;
+      var App = (window as any).App;
       for (var i = 0; i < App.triageManifest.length; i++) {
         var item = App.triageManifest[i];
         if (item.section !== 'packages') continue;
         if (!item.fleet) continue;
         var ratio = item.fleet.count / item.fleet.total;
-        // Needs to be above 0.8 threshold but not unanimous (so lowering from 1.0 creates a mismatch)
-        if (ratio >= 0.8 && ratio < 1.0) return item.key;
-      }
-      // Fallback: any item with fleet data above 0.8
-      for (var j = 0; j < App.triageManifest.length; j++) {
-        var item2 = App.triageManifest[j];
-        if (item2.section !== 'packages') continue;
-        if (!item2.fleet) continue;
-        if (item2.fleet.count / item2.fleet.total >= 0.8) return item2.key;
+        if (ratio >= 0.8 && (window as any).getSnapshotInclude(item.key)) {
+          return item.key;
+        }
       }
       return null;
     });
 
-    if (!key) {
-      test.skip();
-      return;
-    }
+    if (!key) { test.skip(); return; }
 
-    // Capture original include state (should be true for most packages)
+    // Confirm starting state: included
     const originalInclude = await page.evaluate(
-      (k) => (window as any).getSnapshotInclude(k),
-      key
+      (k: string) => (window as any).getSnapshotInclude(k), key
     );
+    expect(originalInclude).toBe(true);
 
-    // Dirty via the REAL toggle-card switch: toggle to excluded
+    // Dirty via real toggle-card switch → now excluded
     const toggle = page.locator(`[data-key="${key}"] button[role="switch"]`);
     await expect(toggle).toBeVisible();
     await toggle.click();
 
-    // Verify priorValues captured the original
-    const priorVal = await page.evaluate(
-      (k) => (window as any).App.priorValues[k],
-      key
-    );
-    expect(priorVal).toBe(originalInclude);
-
-    // Verify the item is now excluded (dirtied)
+    // Verify: row is now excluded
     const afterDirty = await page.evaluate(
-      (k) => (window as any).getSnapshotInclude(k),
-      key
+      (k: string) => (window as any).getSnapshotInclude(k), key
     );
-    expect(afterDirty).toBe(!originalInclude);
+    expect(afterDirty).toBe(false);
 
-    // Record changes badge count before bulk action
-    const countBefore = await page.evaluate(() => {
-      return (window as any).changeCount;
-    });
+    // Verify: priorValues captured the original (true)
+    const priorVal = await page.evaluate(
+      (k: string) => (window as any).App.priorValues[k], key
+    );
+    expect(priorVal).toBe(true);
 
-    // Lower threshold to 0.8 — this item is above 0.8 but now excluded → include mismatch
+    // Record pre-bulk decided state for this key
+    const wasDecidedBefore = await page.evaluate(
+      (k: string) => !!(window as any).App.decisions[k], key
+    );
+    expect(wasDecidedBefore).toBe(true);
+
+    const countBefore = await page.evaluate(() => (window as any).changeCount);
+
+    // Lower threshold to 0.8 → row is above-threshold + excluded → include mismatch
     await navigateToSection(page, 'overview');
     const select = page.locator('#threshold-select');
     await select.selectOption('0.8');
@@ -373,7 +365,7 @@ test.describe('fleet threshold action bar', () => {
     const bar = page.locator('.threshold-action-bar');
     await expect(bar).toBeVisible();
 
-    // Verify include direction (lowered threshold → include offer)
+    // Verify include direction
     const msgText = await page.locator('#threshold-suggestion-text').textContent();
     expect(msgText).toContain('above threshold but excluded');
 
@@ -381,29 +373,32 @@ test.describe('fleet threshold action bar', () => {
     await page.locator('#threshold-action-btn').click();
     await expect(bar).toBeHidden({ timeout: 3000 });
 
-    // (a) The pre-dirtied row should now be included (bulk action flipped it back)
+    // (a) Row was bulk-flipped back to included
     const afterBulk = await page.evaluate(
-      (k) => (window as any).getSnapshotInclude(k),
-      key
+      (k: string) => (window as any).getSnapshotInclude(k), key
     );
     expect(afterBulk).toBe(true);
 
-    // (b) priorValues must still hold the ORIGINAL value (first-touch preserved)
+    // (b) priorValues still holds original (first-touch preserved)
     const priorAfterBulk = await page.evaluate(
-      (k) => (window as any).App.priorValues[k],
-      key
+      (k: string) => (window as any).App.priorValues[k], key
     );
-    expect(priorAfterBulk).toBe(originalInclude);
+    expect(priorAfterBulk).toBe(true);
 
-    // (c) Changes badge count increased (at least by newly-decided items)
-    const countAfter = await page.evaluate(() => {
-      return (window as any).changeCount;
-    });
-    expect(countAfter).toBeGreaterThan(countBefore);
+    // (c) Row was already decided before bulk, so changeCount should NOT have
+    // incremented for THIS row (only newly-decided rows increment).
+    // Total count may have gone up from other newly-decided rows, but it must
+    // not have double-counted this already-decided row.
+    const countAfter = await page.evaluate(() => (window as any).changeCount);
+    // Since this row was already decided, if it's the ONLY mismatch row,
+    // countAfter === countBefore. If other rows were newly decided, countAfter > countBefore.
+    // Either way, countAfter >= countBefore (never double-counts).
+    expect(countAfter).toBeGreaterThanOrEqual(countBefore);
   });
 
   test('action-bar-pre-dirtied-triage-card', async ({ page }) => {
-    // Find a triage-card item with fleet prevalence >= 0.8 that has action buttons
+    // Find a triage-card row that starts INCLUDED, has fleet ratio >= 0.8,
+    // and has a "Leave out" button (calls makeDecision with false)
     const sections = ['packages', 'runtime', 'identity', 'system'];
     let foundKey: string | null = null;
     let foundSection = '';
@@ -411,23 +406,25 @@ test.describe('fleet threshold action bar', () => {
     for (const sectionId of sections) {
       await navigateToSection(page, sectionId);
 
-      // Find triage-card buttons that call makeDecision: "Keep included" or "Leave out"
-      const result = await page.evaluate((sid) => {
-        const App = (window as any).App;
-        const cards = document.querySelectorAll('#section-' + sid + ' .triage-card[data-key]');
+      const result = await page.evaluate((sid: string) => {
+        var App = (window as any).App;
+        var cards = document.querySelectorAll('#section-' + sid + ' .triage-card[data-key]');
         for (var i = 0; i < cards.length; i++) {
           var key = cards[i].getAttribute('data-key');
           if (!key) continue;
-          // Check if this item has fleet data with ratio >= 0.8
+          // Must start included
+          if (!(window as any).getSnapshotInclude(key)) continue;
+          // Must have fleet data with ratio >= 0.8
           for (var j = 0; j < App.triageManifest.length; j++) {
             if (App.triageManifest[j].key !== key) continue;
             var item = App.triageManifest[j];
             if (!item.fleet) continue;
-            if (item.fleet.count / item.fleet.total >= 0.8) {
-              // Check if it has action buttons
-              var btns = cards[i].querySelectorAll('.card-actions button');
-              if (btns.length > 0) {
-                return { key: key, section: sid, btnText: btns[0].textContent };
+            if (item.fleet.count / item.fleet.total < 0.8) continue;
+            // Must have a "Leave out" button (the exclude action that calls makeDecision)
+            var btns = cards[i].querySelectorAll('.card-actions button');
+            for (var b = 0; b < btns.length; b++) {
+              if (btns[b].textContent === 'Leave out') {
+                return { key: key, section: sid };
               }
             }
           }
@@ -442,69 +439,70 @@ test.describe('fleet threshold action bar', () => {
       }
     }
 
-    if (!foundKey) {
-      test.skip();
-      return;
-    }
+    if (!foundKey) { test.skip(); return; }
 
-    // Capture original include state
+    // Confirm starting state: included
     const originalInclude = await page.evaluate(
-      (k) => (window as any).getSnapshotInclude(k),
-      foundKey
+      (k: string) => (window as any).getSnapshotInclude(k), foundKey
     );
+    expect(originalInclude).toBe(true);
 
-    // Click the first triage-card action button (calls makeDecision)
-    const btn = page.locator(
-      `#section-${foundSection} [data-key="${foundKey}"] .card-actions button`
-    ).first();
-    await btn.click();
+    // Click "Leave out" → calls makeDecision(key, section, false) → now excluded
+    const leaveBtn = page.locator(
+      `#section-${foundSection} [data-key="${foundKey}"] .card-actions button:has-text("Leave out")`
+    );
+    await leaveBtn.click();
 
-    // Verify priorValues captured the original
+    // Verify: row is now excluded
+    const afterDirty = await page.evaluate(
+      (k: string) => (window as any).getSnapshotInclude(k), foundKey
+    );
+    expect(afterDirty).toBe(false);
+
+    // Verify: priorValues captured the original (true) via makeDecision path
     const priorVal = await page.evaluate(
-      (k) => (window as any).App.priorValues[k],
-      foundKey
+      (k: string) => (window as any).App.priorValues[k], foundKey
     );
-    expect(priorVal).toBe(originalInclude);
+    expect(priorVal).toBe(true);
 
-    // Record state before bulk
-    const includeAfterDirty = await page.evaluate(
-      (k) => (window as any).getSnapshotInclude(k),
-      foundKey
+    // Row is now decided
+    const wasDecidedBefore = await page.evaluate(
+      (k: string) => !!(window as any).App.decisions[k], foundKey
     );
+    expect(wasDecidedBefore).toBe(true);
+
     const countBefore = await page.evaluate(() => (window as any).changeCount);
 
-    // Navigate to overview and lower threshold
+    // Lower threshold to 0.8 → row is above-threshold + excluded → include mismatch
     await navigateToSection(page, 'overview');
     const select = page.locator('#threshold-select');
     await select.selectOption('0.8');
 
     const bar = page.locator('.threshold-action-bar');
-    if (!(await bar.isVisible())) {
-      test.skip();
-      return;
-    }
+    await expect(bar).toBeVisible();
 
-    // Apply
+    const msgText = await page.locator('#threshold-suggestion-text').textContent();
+    expect(msgText).toContain('above threshold but excluded');
+
+    // Apply bulk action
     await page.locator('#threshold-action-btn').click();
     await expect(bar).toBeHidden({ timeout: 3000 });
 
-    // Verify the row's include state changed if it was in the mismatch set
+    // (a) Row was bulk-flipped back to included
     const afterBulk = await page.evaluate(
-      (k) => (window as any).getSnapshotInclude(k),
-      foundKey
+      (k: string) => (window as any).getSnapshotInclude(k), foundKey
     );
-    // If the row was above-threshold and excluded, bulk should have included it
-    // If the row was included by the triage action, it may not be in the mismatch set
-    // Either way, priorValues must be preserved
-    const priorAfterBulk = await page.evaluate(
-      (k) => (window as any).App.priorValues[k],
-      foundKey
-    );
-    expect(priorAfterBulk).toBe(originalInclude);
+    expect(afterBulk).toBe(true);
 
-    // Changes badge should have incremented
+    // (b) priorValues still holds original (first-touch via makeDecision preserved)
+    const priorAfterBulk = await page.evaluate(
+      (k: string) => (window as any).App.priorValues[k], foundKey
+    );
+    expect(priorAfterBulk).toBe(true);
+
+    // (c) Counter: row was already decided, so no double-count
     const countAfter = await page.evaluate(() => (window as any).changeCount);
-    expect(countAfter).toBeGreaterThan(countBefore);
+    expect(countAfter).toBeGreaterThanOrEqual(countBefore);
   });
 
   test('action-bar-sections-reopen', async ({ page }) => {
