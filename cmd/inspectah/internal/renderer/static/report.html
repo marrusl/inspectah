@@ -2829,7 +2829,7 @@ function renderThresholdActionBar(container, mismatch) {
   var actionBtn = document.createElement('button');
   actionBtn.type = 'button';
   actionBtn.textContent = actionLabel;
-  actionBtn.setAttribute('aria-label', formatMismatchMessage(mismatch) + '. ' + actionLabel);
+  actionBtn.setAttribute('aria-label', formatMismatchMessage(mismatch) + ' at ' + getThresholdPresetLabel(App.prevalenceThreshold) + '. ' + actionLabel);
   actionBtn.id = 'threshold-action-btn';
   actionBtn.onclick = function() {
     applyThresholdSuggestion(mismatch.direction, App.prevalenceThreshold);
