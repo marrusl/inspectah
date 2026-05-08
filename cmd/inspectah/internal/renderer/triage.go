@@ -27,6 +27,7 @@ type TriageItem struct {
 	AlwaysIncluded bool     `json:"always_included,omitempty"`
 	UserPrivate    bool     `json:"user_private,omitempty"`
 	ParentUser     string   `json:"parent_user,omitempty"`
+	Fleet          *schema.FleetPrevalence `json:"fleet,omitempty"`
 }
 
 // ClassifySnapshot classifies all triageable items in the snapshot.
@@ -95,6 +96,35 @@ func mapInclude(m map[string]interface{}) bool {
 		return true
 	}
 	return b
+}
+
+func extractFleetFromMap(m map[string]interface{}) *schema.FleetPrevalence {
+	raw, ok := m["fleet"]
+	if !ok || raw == nil {
+		return nil
+	}
+	fleetMap, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	count, _ := fleetMap["count"].(float64)
+	total, _ := fleetMap["total"].(float64)
+	if total == 0 {
+		return nil
+	}
+	var hosts []string
+	if rawHosts, ok := fleetMap["hosts"].([]interface{}); ok {
+		for _, h := range rawHosts {
+			if s, ok := h.(string); ok {
+				hosts = append(hosts, s)
+			}
+		}
+	}
+	return &schema.FleetPrevalence{
+		Count: int(count),
+		Total: int(total),
+		Hosts: hosts,
+	}
 }
 
 // extractDeps extracts dependency list from LeafDepTree for a given package.
@@ -321,6 +351,7 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 			Name:           pkg.Name,
 			Meta:           joinNonEmpty(" | ", pkg.Version+"-"+pkg.Release, pkg.Arch, pkg.SourceRepo),
 			DefaultInclude: pkg.Include,
+			Fleet:          pkg.Fleet,
 		}
 
 		if leafOnly {
@@ -358,6 +389,7 @@ func classifyPackages(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 			Name:           ms.ModuleName + ":" + ms.Stream,
 			Meta:           strings.Join(ms.Profiles, ", "),
 			DefaultInclude: ms.Include,
+			Fleet:          ms.Fleet,
 		})
 	}
 	return items
@@ -532,6 +564,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, i
 					Tier: 3, Reason: "This service assumes package management at runtime, which is unavailable in image mode. Consider disabling or removing it from the image.",
 					Name: svc.Unit, Meta: svc.CurrentState,
 					DefaultInclude: svc.Include,
+					Fleet:          svc.Fleet,
 				})
 				continue
 			}
@@ -558,6 +591,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, i
 				Tier: tier, Reason: reason, Name: svc.Unit, Meta: meta,
 				Group:          group,
 				DefaultInclude: svc.Include,
+				Fleet:          svc.Fleet,
 			})
 		}
 	}
@@ -573,6 +607,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, i
 				Name: job.Path, Meta: job.Source,
 				Group:          group,
 				DefaultInclude: job.Include,
+				Fleet:          job.Fleet,
 			})
 		}
 		for _, timer := range snap.ScheduledTasks.SystemdTimers {
@@ -586,6 +621,7 @@ func classifyRuntime(snap *schema.InspectionSnapshot, secrets map[string]bool, i
 				Name: timer.Name, Meta: timer.OnCalendar,
 				Group:          group,
 				DefaultInclude: isIncluded(timer.Include),
+				Fleet:          timer.Fleet,
 			})
 		}
 	}
@@ -725,6 +761,7 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 				Tier: tier, Reason: reason, Name: name,
 				Meta:           fmt.Sprintf("UID %.0f", uid),
 				DefaultInclude: mapInclude(u),
+				Fleet:          extractFleetFromMap(u),
 			})
 		}
 		for _, g := range snap.UsersGroups.Groups {
@@ -740,6 +777,7 @@ func classifyIdentity(snap *schema.InspectionSnapshot, secrets map[string]bool, 
 				Tier: tier, Reason: reason, Name: name,
 				Meta:           fmt.Sprintf("GID %.0f", gid),
 				DefaultInclude: mapInclude(g),
+				Fleet:          extractFleetFromMap(g),
 			}
 			if !isFleet {
 				item.DisplayOnly = true
@@ -814,6 +852,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Tier: 2, Reason: "Network connection configuration.",
 				Name: conn.Name, Meta: conn.Type,
 				DefaultInclude: isIncluded(conn.Include),
+				Fleet:          conn.Fleet,
 			}
 
 			// DHCP connections are display-only in both modes — they are
@@ -873,6 +912,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Name:           zone.Name,
 				Group:          group,
 				DefaultInclude: zone.Include,
+				Fleet:          zone.Fleet,
 			})
 		}
 	}
@@ -883,6 +923,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Tier: 2, Reason: "Non-default mount point.",
 				Name: entry.MountPoint, Meta: entry.Fstype,
 				DefaultInclude: isIncluded(entry.Include),
+				Fleet:          entry.Fleet,
 			}
 			// All fstab entries are display-only
 			if !isFleet {
@@ -913,6 +954,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Name: name, Meta: val,
 				DefaultInclude: mapInclude(b),
 				Group:          group,
+				Fleet:          extractFleetFromMap(b),
 			})
 		}
 		for _, m := range snap.Selinux.CustomModules {
@@ -937,6 +979,7 @@ func classifySystemItems(snap *schema.InspectionSnapshot, secrets map[string]boo
 				Name:           fmt.Sprintf("%s/%s -> %s", p.Protocol, p.Port, p.Type),
 				DefaultInclude: p.Include,
 				Group:          group,
+				Fleet:          p.Fleet,
 			})
 		}
 	}
