@@ -2881,7 +2881,54 @@ function dismissThresholdActionBar(announcement) {
 }
 
 function applyThresholdSuggestion(direction, threshold) {
-  // Stub — full implementation in Task 3
+  if (App.mode === 'static') return;
+
+  var affectedSections = {};
+  var newDecisionCount = 0;
+  var applicableSections = ['packages', 'runtime', 'identity', 'system'];
+
+  for (var i = 0; i < App.triageManifest.length; i++) {
+    var item = App.triageManifest[i];
+    if (applicableSections.indexOf(item.section) === -1) continue;
+    if (!item.fleet) continue;
+
+    var zone = computePrevalenceZone(item, threshold);
+    var included = getSnapshotInclude(item.key);
+    var shouldFlip = false;
+
+    if (direction === 'include' && (zone === 'above' || zone === 'unanimous') && !included) {
+      shouldFlip = true;
+    } else if (direction === 'exclude' && zone === 'below' && included) {
+      shouldFlip = true;
+    }
+
+    if (shouldFlip) {
+      if (App.priorValues[item.key] === undefined) {
+        App.priorValues[item.key] = included;
+      }
+      if (!App.decisions[item.key]) {
+        newDecisionCount++;
+      }
+      App.decisions[item.key] = true;
+      updateSnapshotInclude(item.key, direction === 'include');
+      affectedSections[item.section] = true;
+    }
+  }
+
+  for (var n = 0; n < newDecisionCount; n++) {
+    incrementChangeCounter();
+  }
+
+  for (var sectionId in affectedSections) {
+    var container = document.getElementById('section-' + sectionId);
+    if (container) container.innerHTML = '';
+    reopenReviewedSection(sectionId);
+    updateSidebarDot(sectionId);
+  }
+
+  updateAllBadges();
+  updateProgressBar();
+  scheduleAutosave();
 }
 
 // ── Overview Section ──
