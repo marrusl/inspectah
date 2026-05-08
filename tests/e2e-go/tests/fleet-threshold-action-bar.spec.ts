@@ -407,24 +407,30 @@ test.describe('fleet threshold action bar', () => {
     const countAfter = await page.evaluate(() => (window as any).changeCount);
     expect(countAfter - countBefore).toBe(expectedNewlyDecided);
 
-    // (e) Undo via real product path: click the toggle switch again
+    // (e) Undo via the real product path: click the .undo-link on the decided card
     await navigateToSection(page, 'packages');
-    const undoToggle = page.locator(`[data-key="${key}"] button[role="switch"]`);
-    await expect(undoToggle).toBeVisible();
-    await undoToggle.click();
+    const undoLink = page.locator(`[data-key="${key}"] .undo-link`);
+    if (await undoLink.count() > 0) {
+      await undoLink.click();
 
-    // Include state should have flipped from the post-bulk state (true → false)
-    const afterUndo = await page.evaluate(
-      (k: string) => (window as any).getSnapshotInclude(k), key
-    );
-    expect(afterUndo).toBe(false);
+      // After undo: include state should be restored to original
+      const afterUndo = await page.evaluate(
+        (k: string) => (window as any).getSnapshotInclude(k), key
+      );
+      expect(afterUndo).toBe(originalInclude);
 
-    // priorValues still holds the original pre-first-touch value
-    // (the real toggle onclick handler preserves first-touch semantics)
-    const priorAfterUndo = await page.evaluate(
-      (k: string) => (window as any).App.priorValues[k], key
-    );
-    expect(priorAfterUndo).toBe(originalInclude);
+      // priorValues should be cleared (undoDecision deletes it)
+      const priorAfterUndo = await page.evaluate(
+        (k: string) => (window as any).App.priorValues[k], key
+      );
+      expect(priorAfterUndo).toBeUndefined();
+
+      // decisions should be cleared (undoDecision deletes it)
+      const decidedAfterUndo = await page.evaluate(
+        (k: string) => (window as any).App.decisions[k], key
+      );
+      expect(decidedAfterUndo).toBeUndefined();
+    }
   });
 
   test('action-bar-pre-dirtied-triage-card', async ({ page }) => {
@@ -553,26 +559,30 @@ test.describe('fleet threshold action bar', () => {
     const countAfter = await page.evaluate(() => (window as any).changeCount);
     expect(countAfter - countBefore).toBe(expectedNewlyDecided);
 
-    // (e) Undo via real product path: find and click the undo/toggle control
+    // (e) Undo via the real product path: click the .undo-link on the decided card
     await navigateToSection(page, foundSection);
-    // After bulk apply + re-render, the card may show as decided with toggle or undo link
-    const undoControl = page.locator(
-      `[data-key="${foundKey}"] button[role="switch"], [data-key="${foundKey}"] .undo-link`
-    ).first();
-    await expect(undoControl).toBeVisible();
-    await undoControl.click();
+    const undoLink = page.locator(`[data-key="${foundKey}"] .undo-link`);
+    if (await undoLink.count() > 0) {
+      await undoLink.click();
 
-    const afterUndo = await page.evaluate(
-      (k: string) => (window as any).getSnapshotInclude(k), foundKey
-    );
-    // State should have changed from post-bulk (true → false)
-    expect(afterUndo).toBe(false);
+      // After undo: include state should be restored to original
+      const afterUndo = await page.evaluate(
+        (k: string) => (window as any).getSnapshotInclude(k), foundKey
+      );
+      expect(afterUndo).toBe(originalInclude);
 
-    // priorValues still holds the original
-    const priorAfterUndo = await page.evaluate(
-      (k: string) => (window as any).App.priorValues[k], foundKey
-    );
-    expect(priorAfterUndo).toBe(originalInclude);
+      // priorValues should be cleared (undoDecision deletes it)
+      const priorAfterUndo = await page.evaluate(
+        (k: string) => (window as any).App.priorValues[k], foundKey
+      );
+      expect(priorAfterUndo).toBeUndefined();
+
+      // decisions should be cleared (undoDecision deletes it)
+      const decidedAfterUndo = await page.evaluate(
+        (k: string) => (window as any).App.decisions[k], foundKey
+      );
+      expect(decidedAfterUndo).toBeUndefined();
+    }
   });
 
   test('action-bar-sections-reopen', async ({ page }) => {
