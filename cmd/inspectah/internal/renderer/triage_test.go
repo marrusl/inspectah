@@ -1725,6 +1725,151 @@ func TestNormalizeIncludeDefaults_PreservesGeneratedQuadletInclude(t *testing.T)
 	}
 }
 
+func TestClassifySnapshot_FleetPropagation(t *testing.T) {
+	fleet := &schema.FleetPrevalence{Count: 2, Total: 3, Hosts: []string{"h1", "h2"}}
+	snap := &schema.InspectionSnapshot{
+		SchemaVersion: schema.SchemaVersion,
+		Meta: map[string]interface{}{
+			"hostname": "fleet-merged",
+			"fleet":    map[string]interface{}{"total_hosts": float64(3)},
+		},
+		Rpm: &schema.RpmSection{
+			PackagesAdded: []schema.PackageEntry{
+				{Name: "httpd", Arch: "x86_64", Version: "2.4", Release: "1.el9",
+					State: schema.PackageStateAdded, Include: true, Fleet: fleet},
+			},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+	var found *TriageItem
+	for i := range items {
+		if items[i].Key == "pkg-httpd-x86_64" {
+			found = &items[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected to find pkg-httpd-x86_64 in triage items")
+	}
+	if found.Fleet == nil {
+		t.Fatal("expected Fleet to be propagated to TriageItem")
+	}
+	if found.Fleet.Count != 2 || found.Fleet.Total != 3 {
+		t.Errorf("Fleet = {%d, %d}, want {2, 3}", found.Fleet.Count, found.Fleet.Total)
+	}
+}
+
+func TestClassifySnapshot_SingleMachineNilFleet(t *testing.T) {
+	snap := &schema.InspectionSnapshot{
+		SchemaVersion: schema.SchemaVersion,
+		Meta:          map[string]interface{}{"hostname": "single-host"},
+		Rpm: &schema.RpmSection{
+			PackagesAdded: []schema.PackageEntry{
+				{Name: "httpd", Arch: "x86_64", Version: "2.4", Release: "1.el9",
+					State: schema.PackageStateAdded, Include: true},
+			},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+	for _, item := range items {
+		if item.Fleet != nil {
+			t.Errorf("single-machine item %s has non-nil Fleet", item.Key)
+		}
+	}
+}
+
+func TestClassifySnapshot_FleetIdentityFromMap(t *testing.T) {
+	snap := &schema.InspectionSnapshot{
+		SchemaVersion: schema.SchemaVersion,
+		Meta: map[string]interface{}{
+			"hostname": "fleet-merged",
+			"fleet":    map[string]interface{}{"total_hosts": float64(2)},
+		},
+		UsersGroups: &schema.UserGroupSection{
+			Users: []map[string]interface{}{
+				{
+					"name": "testuser", "uid": float64(1001),
+					"include": true,
+					"fleet":   map[string]interface{}{"count": float64(2), "total": float64(2), "hosts": []interface{}{"h1", "h2"}},
+				},
+			},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+	var found *TriageItem
+	for i := range items {
+		if items[i].Key == "user-testuser" {
+			found = &items[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("expected to find user-testuser in triage items")
+	}
+	if found.Fleet == nil {
+		t.Fatal("expected Fleet to be extracted from map for identity item")
+	}
+	if found.Fleet.Count != 2 || found.Fleet.Total != 2 {
+		t.Errorf("Fleet = {%d, %d}, want {2, 2}", found.Fleet.Count, found.Fleet.Total)
+	}
+}
+
+func TestClassifySnapshot_NonzeroMergeThreshold(t *testing.T) {
+	snap := &schema.InspectionSnapshot{
+		SchemaVersion: schema.SchemaVersion,
+		Meta: map[string]interface{}{
+			"hostname": "fleet-merged",
+			"fleet": map[string]interface{}{
+				"total_hosts":    float64(3),
+				"min_prevalence": float64(50),
+			},
+		},
+		Rpm: &schema.RpmSection{
+			PackagesAdded: []schema.PackageEntry{
+				{Name: "httpd", Arch: "x86_64", Version: "2.4", Release: "1.el9",
+					State: schema.PackageStateAdded, Include: true,
+					Fleet: &schema.FleetPrevalence{Count: 3, Total: 3, Hosts: []string{"h1", "h2", "h3"}}},
+				{Name: "rare-tool", Arch: "x86_64", Version: "1.0", Release: "1.el9",
+					State: schema.PackageStateAdded, Include: false,
+					Fleet: &schema.FleetPrevalence{Count: 1, Total: 3, Hosts: []string{"h1"}}},
+			},
+		},
+	}
+
+	items := ClassifySnapshot(snap, nil)
+
+	var httpd, rare *TriageItem
+	for i := range items {
+		switch items[i].Key {
+		case "pkg-httpd-x86_64":
+			httpd = &items[i]
+		case "pkg-rare-tool-x86_64":
+			rare = &items[i]
+		}
+	}
+
+	if httpd == nil || rare == nil {
+		t.Fatal("expected both packages in triage items")
+	}
+
+	if !httpd.DefaultInclude {
+		t.Error("httpd: expected DefaultInclude=true (above merge threshold)")
+	}
+	if httpd.Fleet == nil || httpd.Fleet.Count != 3 {
+		t.Error("httpd: expected Fleet with Count=3")
+	}
+
+	if rare.DefaultInclude {
+		t.Error("rare-tool: expected DefaultInclude=false (merge-excluded)")
+	}
+	if rare.Fleet == nil || rare.Fleet.Count != 1 {
+		t.Error("rare-tool: expected Fleet with Count=1 even though merge-excluded")
+	}
+}
+
 func TestClassifyContainerItems_BackingDetectionNormalized(t *testing.T) {
 	snap := schema.NewSnapshot()
 	snap.Containers = &schema.ContainerSection{
@@ -1741,4 +1886,84 @@ func TestClassifyContainerItems_BackingDetectionNormalized(t *testing.T) {
 			t.Error("webapp should be detected as backed (tier 2), got tier 3")
 		}
 	}
+}
+
+func TestExtractFleetFromMap(t *testing.T) {
+	t.Run("nil fleet key", func(t *testing.T) {
+		m := map[string]interface{}{"other": "value"}
+		assert.Nil(t, extractFleetFromMap(m))
+	})
+
+	t.Run("fleet value is nil", func(t *testing.T) {
+		m := map[string]interface{}{"fleet": nil}
+		assert.Nil(t, extractFleetFromMap(m))
+	})
+
+	t.Run("fleet wrong type", func(t *testing.T) {
+		m := map[string]interface{}{"fleet": "not-a-map"}
+		assert.Nil(t, extractFleetFromMap(m))
+	})
+
+	t.Run("count and total missing", func(t *testing.T) {
+		m := map[string]interface{}{
+			"fleet": map[string]interface{}{},
+		}
+		result := extractFleetFromMap(m)
+		assert.Nil(t, result, "zero total should return nil")
+	})
+
+	t.Run("total is zero", func(t *testing.T) {
+		m := map[string]interface{}{
+			"fleet": map[string]interface{}{
+				"count": float64(2),
+				"total": float64(0),
+			},
+		}
+		assert.Nil(t, extractFleetFromMap(m), "zero total should return nil")
+	})
+
+	t.Run("happy path", func(t *testing.T) {
+		m := map[string]interface{}{
+			"fleet": map[string]interface{}{
+				"count": float64(2),
+				"total": float64(3),
+				"hosts": []interface{}{"h1", "h2"},
+			},
+		}
+		result := extractFleetFromMap(m)
+		require.NotNil(t, result)
+		assert.Equal(t, 2, result.Count)
+		assert.Equal(t, 3, result.Total)
+		assert.Equal(t, []string{"h1", "h2"}, result.Hosts)
+	})
+
+	t.Run("empty hosts array", func(t *testing.T) {
+		m := map[string]interface{}{
+			"fleet": map[string]interface{}{
+				"count": float64(1),
+				"total": float64(1),
+				"hosts": []interface{}{},
+			},
+		}
+		result := extractFleetFromMap(m)
+		require.NotNil(t, result)
+		assert.Equal(t, 1, result.Count)
+		assert.Equal(t, 1, result.Total)
+		assert.Nil(t, result.Hosts, "empty hosts array should result in nil slice")
+	})
+
+	t.Run("hosts with mixed types", func(t *testing.T) {
+		m := map[string]interface{}{
+			"fleet": map[string]interface{}{
+				"count": float64(3),
+				"total": float64(5),
+				"hosts": []interface{}{"h1", 42, "h2", nil, "h3"},
+			},
+		}
+		result := extractFleetFromMap(m)
+		require.NotNil(t, result)
+		assert.Equal(t, 3, result.Count)
+		assert.Equal(t, 5, result.Total)
+		assert.Equal(t, []string{"h1", "h2", "h3"}, result.Hosts, "non-string elements should be skipped")
+	})
 }
