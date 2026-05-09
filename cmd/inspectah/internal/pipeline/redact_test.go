@@ -162,6 +162,117 @@ func TestRedactSnapshotConfigFiles(t *testing.T) {
 	}
 }
 
+func TestRedactShadowEntry(t *testing.T) {
+	tests := []struct {
+		name       string
+		input      string
+		wantHash   bool   // true if hash material should remain
+		wantToken  string // substring expected in output
+	}{
+		{
+			name:      "yescrypt hash fully redacted",
+			input:     "root:$y$j9T$F5Jx5fExrKuPp53xLKQ..1$X3lBarEnM8yhXe5kJCFR.6z9MD3UpqawYg7jqsD7qiD:19735:0:99999:7:::",
+			wantHash:  false,
+			wantToken: "REDACTED_SHADOW_HASH_1",
+		},
+		{
+			name:      "sha-512 hash fully redacted",
+			input:     "user:$6$randomsalt$hashedvalue123ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij:19000:0:99999:7:::",
+			wantHash:  false,
+			wantToken: "REDACTED_SHADOW_HASH_",
+		},
+		{
+			name:      "locked account preserved",
+			input:     "nobody:*:19735:0:99999:7:::",
+			wantHash:  true,
+			wantToken: "*",
+		},
+		{
+			name:      "disabled account preserved",
+			input:     "disabled:!!:19735:0:99999:7:::",
+			wantHash:  true,
+			wantToken: "!!",
+		},
+		{
+			name:      "locked hash with excl prefix redacted",
+			input:     "locked:!$y$j9T$salt$hash:19735:0:99999:7:::",
+			wantHash:  false,
+			wantToken: "REDACTED_SHADOW_HASH_",
+		},
+		{
+			name:      "empty hash preserved",
+			input:     "nopass::19735:0:99999:7:::",
+			wantHash:  true,
+			wantToken: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := newCounterRegistry()
+			result, finding := redactShadowEntry(tt.input, registry)
+
+			fields := strings.Split(result, ":")
+			if len(fields) < 2 {
+				t.Fatal("output has fewer than 2 colon-delimited fields")
+			}
+			hashField := fields[1]
+
+			if tt.wantHash {
+				// Should be unchanged
+				if finding != nil {
+					t.Error("expected no finding for non-secret entry")
+				}
+			} else {
+				// Hash material must be completely replaced
+				if strings.Contains(hashField, "$") {
+					t.Errorf("hash material leaked: field 1 = %q", hashField)
+				}
+				if !strings.Contains(hashField, "REDACTED_SHADOW_HASH_") {
+					t.Errorf("expected REDACTED_SHADOW_HASH_ token, got %q", hashField)
+				}
+				if finding == nil {
+					t.Error("expected a redaction finding")
+				} else if finding.Pattern != "SHADOW_HASH" {
+					t.Errorf("expected pattern SHADOW_HASH, got %s", finding.Pattern)
+				}
+				// Remaining colon-delimited fields must be preserved
+				origFields := strings.Split(tt.input, ":")
+				for idx := 2; idx < len(origFields) && idx < len(fields); idx++ {
+					if fields[idx] != origFields[idx] {
+						t.Errorf("field %d changed: got %q, want %q", idx, fields[idx], origFields[idx])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRedactSnapshotShadowEntries(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.UsersGroups = &schema.UserGroupSection{
+		ShadowEntries: []string{
+			"root:$y$j9T$F5Jx5fExrKuPp53xLKQ..1$X3lBarEnM8yhXe5kJCFR.6z9MD3UpqawYg7jqsD7qiD:19735:0:99999:7:::",
+			"nobody:*:19735:0:99999:7:::",
+			"user:$6$randomsalt$hashedvalue:19000:0:99999:7:::",
+		},
+	}
+
+	result := RedactSnapshot(snap)
+
+	for _, entry := range result.UsersGroups.ShadowEntries {
+		fields := strings.Split(entry, ":")
+		if fields[0] == "root" || fields[0] == "user" {
+			if strings.Contains(fields[1], "$") {
+				t.Errorf("hash material leaked for %s: %s", fields[0], fields[1])
+			}
+		}
+		if fields[0] == "nobody" && fields[1] != "*" {
+			t.Error("locked account marker should be preserved")
+		}
+	}
+}
+
 func TestRedactSnapshotQuadletContent(t *testing.T) {
 	snap := schema.NewSnapshot()
 	snap.Containers = &schema.ContainerSection{
