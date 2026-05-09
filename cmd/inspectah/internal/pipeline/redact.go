@@ -278,6 +278,16 @@ func RedactSnapshot(snap *schema.InspectionSnapshot) *schema.InspectionSnapshot 
 				allFindings = append(allFindings, findings...)
 			}
 		}
+
+		// Quadlet unit content
+		for i, u := range snap.Containers.QuadletUnits {
+			if u.Content == "" {
+				continue
+			}
+			redacted, findings := redactText(u.Content, fmt.Sprintf("containers:quadlet/%s", u.Name), registry, "file")
+			snap.Containers.QuadletUnits[i].Content = redacted
+			allFindings = append(allFindings, findings...)
+		}
 	}
 
 	// Non-RPM env files

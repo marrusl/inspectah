@@ -162,6 +162,56 @@ func TestRedactSnapshotConfigFiles(t *testing.T) {
 	}
 }
 
+func TestRedactSnapshotQuadletContent(t *testing.T) {
+	snap := schema.NewSnapshot()
+	snap.Containers = &schema.ContainerSection{
+		QuadletUnits: []schema.QuadletUnit{
+			{
+				Name: "redis.container",
+				Content: `[Container]
+Image=docker.io/redis:7
+Environment=REDIS_PASSWORD=supersecret123
+`,
+			},
+			{
+				Name: "db.container",
+				Content: `[Container]
+Image=docker.io/postgres:16
+Environment=DATABASE_URL=postgres://admin:s3cretP4ss@db:5432/myapp
+`,
+			},
+			{
+				Name:    "empty.container",
+				Content: "",
+			},
+		},
+	}
+
+	result := RedactSnapshot(snap)
+
+	// Secrets in quadlet content should be redacted
+	for _, u := range result.Containers.QuadletUnits {
+		if u.Name == "redis.container" {
+			if strings.Contains(u.Content, "supersecret123") {
+				t.Error("REDIS_PASSWORD value not redacted in quadlet content")
+			}
+			if !strings.Contains(u.Content, "REDACTED_") {
+				t.Error("expected redaction token in redis quadlet content")
+			}
+		}
+		if u.Name == "db.container" {
+			if strings.Contains(u.Content, "s3cretP4ss") {
+				t.Error("postgres password not redacted in quadlet content")
+			}
+		}
+	}
+
+	// Should have redaction findings
+	if len(result.Redactions) == 0 {
+		t.Error("expected redaction findings for quadlet content secrets")
+	}
+}
+
 func TestCounterRegistryDeterministic(t *testing.T) {
 	r := newCounterRegistry()
 
