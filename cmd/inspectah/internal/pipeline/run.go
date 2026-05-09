@@ -118,7 +118,12 @@ func Run(opts RunOptions) (*schema.InspectionSnapshot, error) {
 
 	// Step 4: Inspect-only mode — save snapshot and return
 	if opts.InspectOnly {
-		outPath := filepath.Join(".", "inspection-snapshot.json")
+		dir := opts.OutputDir
+		if dir == "" {
+			dir = "."
+		}
+		os.MkdirAll(dir, 0755)
+		outPath := filepath.Join(dir, "inspection-snapshot.json")
 		if err := schema.SaveSnapshot(snap, outPath); err != nil {
 			return nil, err
 		}
