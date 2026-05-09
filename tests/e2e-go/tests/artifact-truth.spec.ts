@@ -149,6 +149,118 @@ test.describe('Artifact truth: toggle-to-tarball proof', () => {
     expect(staleResp.status()).toBe(409);
   });
 
+  test('three-way artifact equality: UI preview === API response === tarball contents', async ({ page, request }) => {
+    const { gunzipSync } = await import('zlib');
+
+    // Step 1: Toggle an item to create a known change
+    const sectionIds = ['config', 'runtime', 'packages', 'containers',
+                        'nonrpm', 'identity', 'system', 'secrets'];
+    let toggleFound = false;
+    for (const sectionId of sectionIds) {
+      const navLink = page.locator(`[data-section="${sectionId}"]`);
+      if ((await navLink.count()) === 0) continue;
+
+      await navigateToSection(page, sectionId);
+      const toggle = await findToggleInSection(page, sectionId);
+      if (toggle) {
+        await toggle.scrollIntoViewIfNeeded();
+        await toggle.click();
+        toggleFound = true;
+        break;
+      }
+    }
+
+    if (!toggleFound) {
+      test.skip(true, 'No toggleable items in fixture — cannot prove three-way equality');
+      return;
+    }
+
+    // Step 2: Rebuild and capture the API response
+    const rebuildBtn = page.locator('#rebuild-btn');
+    const renderPromise = page.waitForResponse(
+      (resp) => resp.url().includes('/api/render'),
+      { timeout: 15_000 }
+    );
+
+    await rebuildBtn.click();
+    const renderResp = await renderPromise;
+    const renderBody = await renderResp.json();
+
+    if (!renderResp.ok()) {
+      // Fixture fails validation — verify error contract and skip equality proof
+      expect(renderBody.error).toBeDefined();
+      expect(typeof renderBody.error).toBe('string');
+      test.skip(true, `Fixture fails validation: ${renderBody.error} — cannot prove three-way equality`);
+      return;
+    }
+
+    // Step 3a: Read the API response containerfile
+    const apiContainerfile = renderBody.containerfile;
+    expect(apiContainerfile).toBeDefined();
+    expect(typeof apiContainerfile).toBe('string');
+    expect(apiContainerfile).toContain('FROM');
+
+    // Step 3b: Read the updated UI preview text
+    await expect(rebuildBtn).toHaveText('Rebuild', { timeout: 10_000 });
+    const uiPreview = await page.locator('#containerfile-preview code').textContent();
+    expect(uiPreview).toBeTruthy();
+
+    // Step 3c: Download the tarball and extract the Containerfile
+    const tarballResp = await request.get(
+      `/api/tarball?render_id=${renderBody.render_id}`
+    );
+    expect(tarballResp.ok()).toBeTruthy();
+
+    const tarballBuffer = await tarballResp.body();
+    const decompressed = gunzipSync(tarballBuffer);
+
+    // Parse the tar archive to extract the Containerfile.
+    // tar format: 512-byte headers followed by file content rounded up to 512-byte blocks.
+    // Header bytes 0-99: filename (null-terminated), bytes 124-135: file size in octal.
+    let tarContainerfile: string | null = null;
+    let offset = 0;
+    while (offset + 512 <= decompressed.length) {
+      const header = decompressed.subarray(offset, offset + 512);
+
+      // Two consecutive zero blocks mark end of archive
+      if (header.every((b) => b === 0)) break;
+
+      // Extract filename (null-terminated string in bytes 0-99)
+      const nameEnd = header.indexOf(0, 0);
+      const rawName = header.subarray(0, Math.min(nameEnd >= 0 ? nameEnd : 100, 100)).toString('utf-8');
+      const fileName = rawName.replace(/^\.\//, ''); // strip leading ./
+
+      // Extract file size from octal field at bytes 124-135
+      const sizeStr = header.subarray(124, 136).toString('utf-8').trim().replace(/\0/g, '');
+      const fileSize = parseInt(sizeStr, 8) || 0;
+
+      offset += 512; // move past header
+
+      if (fileName === 'Containerfile' || fileName.endsWith('/Containerfile')) {
+        tarContainerfile = decompressed.subarray(offset, offset + fileSize).toString('utf-8');
+        break;
+      }
+
+      // Skip to next header (file content is padded to 512-byte boundary)
+      offset += Math.ceil(fileSize / 512) * 512;
+    }
+
+    expect(tarContainerfile).not.toBeNull();
+
+    // Step 4: Three-way equality assertions (normalize whitespace for comparison)
+    const normalize = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+    const uiNorm = normalize(uiPreview!);
+    const apiNorm = normalize(apiContainerfile);
+    const tarNorm = normalize(tarContainerfile!);
+
+    // Proof 1: UI preview === API response
+    expect(uiNorm).toBe(apiNorm);
+
+    // Proof 2: API response === Tarball Containerfile
+    expect(apiNorm).toBe(tarNorm);
+  });
+
   test('tarball is downloadable without render_id guard', async ({ request }) => {
     // The tarball endpoint serves the current output without requiring
     // a render_id when none is provided. This tests the baseline.
