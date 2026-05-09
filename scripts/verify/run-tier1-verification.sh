@@ -81,7 +81,7 @@ record_result() {
 if [ "$SKIP_BUILD" = false ]; then
   header "Building Go binary"
   if command -v go &>/dev/null; then
-    if go build -o inspectah ./cmd/inspectah 2>&1; then
+    if (cd cmd/inspectah && go build -o ../../inspectah .) 2>&1; then
       pass "Go binary built: ./inspectah"
     else
       fail "Go build failed"
