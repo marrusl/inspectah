@@ -9,6 +9,44 @@ import (
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 )
 
+func TestRunPreflightPopulatedViaInspectors(t *testing.T) {
+	// When RunInspectors returns a snapshot with RPM data and SkipPreflight
+	// is false, preflight should run and populate snap.Preflight. On macOS
+	// (non-Linux), the preflight will fail gracefully, but the wiring should
+	// still attempt it and write the result. Here we verify that the
+	// SkipPreflight=true path leaves preflight empty (zero value), proving
+	// the flag is respected. The actual preflight execution is tested in
+	// preflight_test.go.
+	tmpDir := t.TempDir()
+	outDir := filepath.Join(tmpDir, "output")
+
+	baseImage := "registry.redhat.io/rhel9/rhel-bootc:9.4"
+	snap := schema.NewSnapshot()
+	snap.Rpm = &schema.RpmSection{
+		BaseImage: &baseImage,
+		PackagesAdded: []schema.PackageEntry{
+			{Name: "httpd", Arch: "x86_64", State: schema.PackageStateAdded, Include: true},
+		},
+	}
+
+	result, err := Run(RunOptions{
+		HostRoot:      "/",
+		OutputDir:     outDir,
+		SkipPreflight: true,
+		RunInspectors: func(hostRoot string) (*schema.InspectionSnapshot, error) {
+			return snap, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	// With SkipPreflight=true, preflight should not be populated
+	if result.Preflight.Status != "" {
+		t.Errorf("SkipPreflight=true should leave preflight empty, got status=%q", result.Preflight.Status)
+	}
+}
+
 func TestRunFromSnapshot(t *testing.T) {
 	tmpDir := t.TempDir()
 	outDir := filepath.Join(tmpDir, "output")

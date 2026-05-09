@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/marrusl/inspectah/cmd/inspectah/internal/inspector"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/renderer"
 	"github.com/marrusl/inspectah/cmd/inspectah/internal/schema"
 )
@@ -60,6 +61,19 @@ func Run(opts RunOptions) (*schema.InspectionSnapshot, error) {
 		snap = s
 	} else {
 		return nil, fmt.Errorf("either --from-snapshot or inspectors required")
+	}
+
+	// Step 1.5: Preflight check (live scan only)
+	if !opts.SkipPreflight && opts.FromSnapshotPath == "" {
+		exec := inspector.NewRealExecutor(opts.HostRoot)
+		result, err := RunPreflight(exec, PreflightOptions{
+			Snapshot: snap,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "WARNING: preflight check failed: %v\n", err)
+		} else if result != nil {
+			snap.Preflight = *result
+		}
 	}
 
 	// Step 2: Redaction
