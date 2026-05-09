@@ -231,6 +231,49 @@ func redactText(text, path string, registry *counterRegistry, source string) (st
 	return out, findings
 }
 
+// shadowNoopHashes are hash values that represent locked, disabled, or
+// empty accounts — not actual secrets. These match Python's
+// _SHADOW_NOOP_HASHES.
+var shadowNoopHashes = map[string]bool{
+	"*":  true,
+	"!":  true,
+	"!!": true,
+	"":   true,
+}
+
+// redactShadowEntry redacts the password hash (field index 1) of a
+// shadow-format line. Locked/disabled markers (*, !, !!, empty) are left
+// intact. Mirrors Python's _redact_shadow_entry().
+func redactShadowEntry(line string, registry *counterRegistry) (string, *schema.RedactionFinding) {
+	fields := strings.Split(line, ":")
+	if len(fields) < 2 {
+		return line, nil
+	}
+	rawHash := fields[1]
+	if strings.HasPrefix(rawHash, "REDACTED_") {
+		return line, nil
+	}
+	// Strip locked prefixes ("!" prepended to a real hash, e.g., "!$y$...")
+	stripped := strings.TrimLeft(rawHash, "!")
+	if shadowNoopHashes[stripped] || stripped == "" {
+		return line, nil
+	}
+	token := registry.getToken("SHADOW_HASH", rawHash)
+	fields[1] = token
+	replacement := token
+	username := fields[0]
+	finding := &schema.RedactionFinding{
+		Path:            fmt.Sprintf("users:shadow/%s", username),
+		Source:          "shadow",
+		Kind:            "inline",
+		Pattern:         "SHADOW_HASH",
+		Remediation:     "value-removed",
+		Replacement:     &replacement,
+		DetectionMethod: "pattern",
+	}
+	return strings.Join(fields, ":"), finding
+}
+
 // RedactSnapshot applies pattern-based redaction to the snapshot.
 func RedactSnapshot(snap *schema.InspectionSnapshot) *schema.InspectionSnapshot {
 	registry := newCounterRegistry()
@@ -260,12 +303,14 @@ func RedactSnapshot(snap *schema.InspectionSnapshot) *schema.InspectionSnapshot 
 		}
 	}
 
-	// Shadow entries
+	// Shadow entries — use dedicated handler that replaces field 1 entirely
 	if snap.UsersGroups != nil {
 		for i, entry := range snap.UsersGroups.ShadowEntries {
-			redacted, findings := redactText(entry, "/etc/shadow", registry, "shadow")
+			redacted, finding := redactShadowEntry(entry, registry)
 			snap.UsersGroups.ShadowEntries[i] = redacted
-			allFindings = append(allFindings, findings...)
+			if finding != nil {
+				allFindings = append(allFindings, *finding)
+			}
 		}
 	}
 
