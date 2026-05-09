@@ -1,11 +1,6 @@
-__pycache__/
-*.pyc
-.venv/
-*.egg-info/
-dist/
+# Build artifacts
 build/
 !cmd/inspectah/internal/build/
-.pytest_cache/
 node_modules/
 .DS_Store
 .obsidian/
@@ -28,9 +23,11 @@ fleet-aggregate.*.tar.gz
 
 # Go CLI wrapper
 cmd/inspectah/inspectah
+cmd/inspectah/inspectah-mac
 cmd/inspectah/inspectah-linux-*
 cmd/inspectah/inspectah-darwin-*
 cmd/inspectah/inspectah-*.tar.gz
+cmd/inspectah/inspector.test
 
 # Root-level build outputs
 /inspectah
