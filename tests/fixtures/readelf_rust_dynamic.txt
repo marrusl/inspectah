@@ -1,8 +1,0 @@
-
-Dynamic section at offset 0x2d8 contains 26 entries:
-  Tag        Type                         Name/Value
- 0x0000000000000001 (NEEDED)             Shared library: [libgcc_s.so.1]
- 0x0000000000000001 (NEEDED)             Shared library: [libpthread.so.0]
- 0x0000000000000001 (NEEDED)             Shared library: [libm.so.6]
- 0x0000000000000001 (NEEDED)             Shared library: [libdl.so.2]
- 0x0000000000000001 (NEEDED)             Shared library: [libc.so.6]

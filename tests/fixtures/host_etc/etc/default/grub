@@ -1,2 +1,0 @@
-# Fixture for kernel_boot inspector
-GRUB_CMDLINE_LINUX="rhgb quiet"

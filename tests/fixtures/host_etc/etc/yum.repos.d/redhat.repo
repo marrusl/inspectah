@@ -1,5 +1,0 @@
-[rhel-9-for-x86_64-baseos-rpms]
-name = Red Hat Enterprise Linux 9 for x86_64 - BaseOS (RPMs)
-baseurl = https://cdn.redhat.com/content/dist/rhel9/9.6/x86_64/baseos/os
-enabled = 1
-gpgcheck = 1

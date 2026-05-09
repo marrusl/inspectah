@@ -1,2 +1,0 @@
-# Fixture for selinux inspector
--w /etc/foo -p wa -k foo
