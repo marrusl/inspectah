@@ -126,7 +126,7 @@ case "$_mode" in
       -e INSPECTAH_HOST_CWD="$(pwd)" \
       -e INSPECTAH_HOSTNAME="${INSPECTAH_HOSTNAME:-$(hostnamectl hostname 2>/dev/null || hostname -f)}" \
       -v /:/host:ro \
-      -v "$(pwd):/output" \
+      -v "$OUTPUT_DIR:/output" \
       "$IMAGE" "$@"
     echo "=== Done ==="
     ;;

@@ -8,7 +8,7 @@
 #   sudo ./scripts/verify/run-tier1-verification.sh [options]
 #
 # Options:
-#   --python-cmd CMD     Python inspectah command (default: inspectah)
+#   --python-cmd CMD     Python inspectah command (default: ./run-inspectah.sh)
 #   --go-cmd CMD         Go binary path (default: ./inspectah)
 #   --python-dir DIR     Use existing Python output (skip Python scan)
 #   --go-dir DIR         Use existing Go output (skip Go scan)
@@ -29,7 +29,7 @@ source "$SCRIPT_DIR/common.sh"
 require_jq
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-PY_CMD="inspectah"
+PY_CMD="./run-inspectah.sh"
 GO_CMD="./inspectah"
 PY_DIR=""
 GO_DIR=""
@@ -66,7 +66,7 @@ echo -e "${BOLD}================================================================
 echo ""
 echo "  Date:       $(date '+%Y-%m-%d %H:%M:%S')"
 echo "  Hostname:   $(hostname)"
-echo "  Python cmd: $PY_CMD"
+echo "  Python cmd: $PY_CMD (container-based)"
 echo "  Go cmd:     $GO_CMD"
 echo ""
 
@@ -102,13 +102,14 @@ if [ -z "$PY_DIR" ]; then
   header "Running Python scan"
   info "Output: $PY_DIR"
 
-  if ! command -v "$PY_CMD" &>/dev/null && [ ! -f "$PY_CMD" ]; then
-    fail "Python inspectah not found: $PY_CMD"
-    echo "Install with: pip install inspectah  (or use --python-dir to skip)"
+  if [ ! -f "$PY_CMD" ] && ! command -v "$PY_CMD" &>/dev/null; then
+    fail "Python inspectah wrapper not found: $PY_CMD"
+    echo "Expected ./run-inspectah.sh at repo root (or use --python-dir to skip)"
     exit 1
   fi
 
-  if $PY_CMD scan --inspect-only --output-dir "$PY_DIR" 2>&1; then
+  mkdir -p "$PY_DIR"
+  if INSPECTAH_OUTPUT_DIR="$PY_DIR" $PY_CMD scan --inspect-only --output-dir /output 2>&1; then
     pass "Python scan completed"
   else
     fail "Python scan failed"
