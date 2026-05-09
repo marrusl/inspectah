@@ -1,2 +1,0 @@
-# Fixture for scheduled_tasks inspector: cron -> generated timer
-42 3 * * * root /usr/local/bin/hourly-backup

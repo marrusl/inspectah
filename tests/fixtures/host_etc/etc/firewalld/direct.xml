@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<direct>
-  <rule priority="0" table="filter" ipv="ipv4" chain="INPUT">-p tcp --dport 9090 -j ACCEPT</rule>
-  <rule priority="0" table="filter" ipv="ipv4" chain="INPUT">-s 10.0.0.0/8 -p udp --dport 514 -j ACCEPT</rule>
-</direct>

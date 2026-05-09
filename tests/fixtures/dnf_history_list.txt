@@ -1,5 +1,0 @@
-ID     | Command line             | Date and time    | Action(s)      | Altered
--------------------------------------------------------------------------------
-     5 | install httpd            | 2024-01-15 10:00 | Install         |    2
-     4 | remove old-daemon        | 2024-01-10 09:00 | Removed         |    1
-     3 | install rsync vim-minimal| 2024-01-05 08:00 | Install         |    2

@@ -1,5 +1,0 @@
-S.5....T.  c /etc/httpd/conf/httpd.conf
-.......T.  c /etc/ssh/sshd_config
-..5....T.  c /etc/pam.d/system-auth
-S.5....T.  c /etc/chrony.conf
-....L....  c /etc/passwd
