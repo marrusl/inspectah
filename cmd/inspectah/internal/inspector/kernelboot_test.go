@@ -324,9 +324,11 @@ func TestDetectAlternatives(t *testing.T) {
 		WithDirs(map[string][]string{
 			"/etc/alternatives": {"java", "python3"},
 		}).
+		WithLinks(map[string]string{
+			"/etc/alternatives/java":    "/usr/lib/jvm/java-17/bin/java",
+			"/etc/alternatives/python3": "/usr/bin/python3.11",
+		}).
 		WithFiles(map[string]string{
-			"/etc/alternatives/java":        "/usr/lib/jvm/java-17/bin/java",
-			"/etc/alternatives/python3":     "/usr/bin/python3.11",
 			"/var/lib/alternatives/java":    "manual\n",
 			"/var/lib/alternatives/python3": "auto\n",
 		})
@@ -472,8 +474,10 @@ func TestRunKernelBootIntegration(t *testing.T) {
 			"/etc/tuned/db-custom/tuned.conf":  tunedConf,
 			"/etc/locale.conf":                 locale,
 			"/etc/timezone":                    "America/Chicago",
-			"/etc/alternatives/java":           "/usr/lib/jvm/java-17/bin/java",
 			"/var/lib/alternatives/java":       "manual\n",
+		}).
+		WithLinks(map[string]string{
+			"/etc/alternatives/java": "/usr/lib/jvm/java-17/bin/java",
 		}).
 		WithDirs(map[string][]string{
 			"/etc/modules-load.d": {"custom.conf"},

@@ -33,6 +33,9 @@ type Executor interface {
 	// FileExists checks whether a path exists on the host filesystem.
 	FileExists(path string) bool
 
+	// ReadLink returns the target of a symlink at the given host path.
+	ReadLink(path string) (string, error)
+
 	// ReadDir lists directory entries at the given host path.
 	ReadDir(path string) ([]os.DirEntry, error)
 
@@ -115,6 +118,11 @@ func (r *RealExecutor) ReadFile(path string) (string, error) {
 	return string(data), nil
 }
 
+// ReadLink returns the symlink target at the given host path.
+func (r *RealExecutor) ReadLink(path string) (string, error) {
+	return os.Readlink(r.hostPath(path))
+}
+
 // FileExists checks if a path exists on the host.
 func (r *RealExecutor) FileExists(path string) bool {
 	_, err := os.Stat(r.hostPath(path))
@@ -136,6 +144,7 @@ type FakeExecutor struct {
 	commands map[string]ExecResult
 	files    map[string]string
 	dirs     map[string][]string
+	links    map[string]string
 }
 
 // NewFakeExecutor creates a FakeExecutor with canned command results.
@@ -148,6 +157,7 @@ func NewFakeExecutor(commands map[string]ExecResult) *FakeExecutor {
 		commands: commands,
 		files:    make(map[string]string),
 		dirs:     make(map[string][]string),
+		links:    make(map[string]string),
 	}
 }
 
@@ -165,6 +175,15 @@ func (f *FakeExecutor) WithFiles(files map[string]string) *FakeExecutor {
 func (f *FakeExecutor) WithDirs(dirs map[string][]string) *FakeExecutor {
 	for k, v := range dirs {
 		f.dirs[k] = v
+	}
+	return f
+}
+
+// WithLinks adds virtual symlink targets. Returns the receiver for
+// chaining.
+func (f *FakeExecutor) WithLinks(links map[string]string) *FakeExecutor {
+	for k, v := range links {
+		f.links[k] = v
 	}
 	return f
 }
@@ -200,6 +219,20 @@ func (f *FakeExecutor) ReadFile(path string) (string, error) {
 		return content, nil
 	}
 	return "", fmt.Errorf("fake: file not found: %s", path)
+}
+
+// ReadLink returns the target of a virtual symlink. Falls back to ReadFile
+// for backward compatibility with tests that store link targets as file
+// content.
+func (f *FakeExecutor) ReadLink(path string) (string, error) {
+	if target, ok := f.links[path]; ok {
+		return target, nil
+	}
+	// Fallback: some existing tests store link targets as file content
+	if content, ok := f.files[path]; ok {
+		return content, nil
+	}
+	return "", fmt.Errorf("fake: link not found: %s", path)
 }
 
 // FileExists checks if a virtual file or directory exists.

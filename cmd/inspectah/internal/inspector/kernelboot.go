@@ -540,9 +540,9 @@ func detectAlternatives(exec Executor) []schema.AlternativeEntry {
 
 	var results []schema.AlternativeEntry
 	for _, name := range names {
-		// Read the symlink target (stored as file content in FakeExecutor).
+		// Read the symlink target path (not the file content at the target).
 		linkPath := filepath.Join("/etc/alternatives", name)
-		target, err := exec.ReadFile(linkPath)
+		target, err := exec.ReadLink(linkPath)
 		if err != nil {
 			continue
 		}
