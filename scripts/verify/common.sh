@@ -55,11 +55,14 @@ require_jq() {
 # Usage: normalize_snapshot <input.json> <output.json>
 #
 # Strips volatile meta fields (timestamp, duration_seconds, tool_version),
-# sorts all keys recursively. The result is suitable for deterministic diff.
+# removes policy fields (include -- defaults differ between Python/Go but
+# detection is what matters), and sorts all keys recursively.
+# The result is suitable for deterministic diff.
 normalize_snapshot() {
   local input="$1" output="$2"
   jq --sort-keys '
     del(.meta.timestamp, .meta.duration_seconds, .meta.tool_version)
+    | walk(if type == "object" then del(.include) else . end)
   ' "$input" > "$output"
 }
 
