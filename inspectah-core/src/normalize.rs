@@ -185,8 +185,8 @@ mod tests {
     }
 
     #[test]
-    fn test_go_v13_golden_loads() {
-        let json = include_str!("../../testdata/golden/go-v13-minimal.json");
+    fn test_go_v12_golden_loads() {
+        let json = include_str!("../../testdata/golden/go-v12-minimal.json");
         let snap = crate::snapshot::InspectionSnapshot::load(json).unwrap();
         assert!(snap.schema_version >= 12);
     }
