@@ -23,7 +23,7 @@ pub struct OsRelease {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SystemType {
     #[default]
-    #[serde(rename = "unknown")]
+    #[serde(rename = "unknown", alias = "")]
     Unknown,
     #[serde(rename = "package-mode")]
     PackageMode,
@@ -82,6 +82,12 @@ mod tests {
         let os: OsRelease = serde_json::from_str(json).unwrap();
         assert_eq!(os.name, "Fedora");
         assert_eq!(os.version_id, ""); // missing → default empty string
+    }
+
+    #[test]
+    fn test_empty_system_type_normalizes_to_unknown() {
+        let parsed: SystemType = serde_json::from_str(r#""""#).unwrap();
+        assert_eq!(parsed, SystemType::Unknown);
     }
 
     #[test]
