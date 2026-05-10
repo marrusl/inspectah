@@ -1,5 +1,6 @@
 use inspectah_core::normalize::{diff_snapshots, load_divergence_allowlist};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::os::SystemType;
 
 #[test]
 fn test_parity_gate_exercises_full_path() {
@@ -14,8 +15,13 @@ fn test_parity_gate_exercises_full_path() {
     // Load a real Go fixture
     let go_json = include_str!("../../testdata/golden/go-v12-minimal.json");
 
-    // Produce a Rust snapshot with the same minimal shape
-    let rust_snap = InspectionSnapshot::new(); // v14, all sections None
+    // Build a Rust snapshot that mirrors the Go fixture's structure —
+    // NOT InspectionSnapshot::new() which has wrong defaults.
+    // This prevents synthetic mismatches from polluting the allowlist.
+    let mut rust_snap = InspectionSnapshot::new();
+    rust_snap.system_type = SystemType::PackageMode;
+    rust_snap.preflight.status = "ok".into();
+
     let rust_json = serde_json::to_string(&rust_snap).unwrap();
 
     // Run the full diff pipeline

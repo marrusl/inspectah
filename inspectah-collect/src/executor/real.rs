@@ -40,6 +40,10 @@ impl Executor for RealExecutor {
         path.exists()
     }
 
+    /// Returns successfully-read entries. Individual entry errors (e.g.,
+    /// permission denied on one file in a readable directory) are silently
+    /// skipped — the caller gets a partial list. This matches the Go
+    /// behavior where os.ReadDir errors are filtered, not fatal.
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
         let entries = std::fs::read_dir(path)?;
         entries
@@ -80,7 +84,48 @@ mod tests {
     fn test_real_executor_read_dir_returns_entries() {
         let exec = RealExecutor::new();
         let entries = exec.read_dir(std::path::Path::new("/tmp")).unwrap();
-        // /tmp always exists, may be empty but should not error
-        assert!(entries.len() >= 0); // the point is it doesn't error
+        // /tmp always exists — the point is it doesn't error
+        let _ = entries; // may be empty, that's fine
+    }
+
+    #[test]
+    fn test_real_executor_read_dir_nonexistent_errors() {
+        let exec = RealExecutor::new();
+        let result = exec.read_dir(std::path::Path::new("/nonexistent_dir_abc123"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_real_executor_run_echo() {
+        let exec = RealExecutor::new();
+        let result = exec.run("echo", &["hello"]);
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.trim() == "hello");
+    }
+
+    #[test]
+    fn test_real_executor_run_nonexistent_command() {
+        let exec = RealExecutor::new();
+        let result = exec.run("nonexistent_command_xyz789", &[]);
+        assert_ne!(result.exit_code, 0);
+    }
+
+    #[test]
+    fn test_real_executor_read_link() {
+        use std::fs;
+        let dir = std::env::temp_dir().join("inspectah_test_link");
+        let target = dir.join("target.txt");
+        let link = dir.join("link.txt");
+        let _ = fs::create_dir_all(&dir);
+        let _ = fs::write(&target, "content");
+        let _ = std::os::unix::fs::symlink(&target, &link);
+
+        let exec = RealExecutor::new();
+        if link.exists() {
+            let result = exec.read_link(&link).unwrap();
+            assert!(result.contains("target.txt"));
+        }
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }
