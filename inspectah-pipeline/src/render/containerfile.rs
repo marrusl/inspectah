@@ -22,7 +22,13 @@ use inspectah_core::types::redaction::RedactionKind;
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 
 /// Render the Containerfile content from a snapshot.
-pub fn render_containerfile(snap: &InspectionSnapshot) -> String {
+///
+/// When `materialized_roots` is provided, COPY lines are derived from the
+/// directories the config tree actually wrote — guaranteeing the
+/// Containerfile and config tree describe the same system. When `None`,
+/// roots are computed from the snapshot (standalone rendering without
+/// prior materialization).
+pub fn render_containerfile(snap: &InspectionSnapshot, materialized_roots: Option<&[String]>) -> String {
     let base = base_image_from_snapshot(snap);
     let mut lines: Vec<String> = Vec::new();
 
@@ -48,7 +54,7 @@ pub fn render_containerfile(snap: &InspectionSnapshot) -> String {
     lines.extend(scheduled_tasks_section_lines(snap));
 
     // 5. Config files
-    lines.extend(config_section_lines(snap));
+    lines.extend(config_section_lines(snap, materialized_roots));
 
     // 6. Non-RPM software
     lines.extend(non_rpm_section_lines(snap));
@@ -531,7 +537,7 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Config section ---
 
-fn config_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
+fn config_section_lines(snap: &InspectionSnapshot, materialized_roots: Option<&[String]>) -> Vec<String> {
     let mut lines = Vec::new();
 
     lines.push("# === Configuration Files ===".into());
@@ -553,9 +559,13 @@ fn config_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
     lines.push(String::new());
 
-    // COPY per top-level dir from config — we emit standard roots
-    // rather than scanning the filesystem (config tree writing is Task 24)
-    let config_roots = config_copy_roots(snap);
+    // COPY per top-level dir — use materialized roots when available
+    // (single source of truth from write_config_tree), fall back to
+    // snapshot-derived roots for standalone rendering.
+    let config_roots: Vec<String> = match materialized_roots {
+        Some(roots) => roots.to_vec(),
+        None => config_copy_roots_from_snapshot(snap),
+    };
     if config_roots.is_empty() {
         lines.push("# (no config files captured)".into());
     } else {
@@ -589,8 +599,9 @@ fn config_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
-/// Compute top-level directory roots from included config files.
-fn config_copy_roots(snap: &InspectionSnapshot) -> Vec<String> {
+/// Compute top-level directory roots from included config files in the snapshot.
+/// Used as a fallback when materialized roots aren't available (standalone rendering).
+fn config_copy_roots_from_snapshot(snap: &InspectionSnapshot) -> Vec<String> {
     let config = match &snap.config {
         Some(c) => c,
         None => return Vec::new(),
@@ -1153,7 +1164,7 @@ mod tests {
     #[test]
     fn test_containerfile_package_based() {
         let snap = snapshot_with_packages(&["httpd", "vim-enhanced"]);
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(output.contains("FROM"), "must contain FROM line");
         assert!(
             output.contains("RUN dnf install -y"),
@@ -1176,7 +1187,7 @@ mod tests {
             ..Default::default()
         });
 
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
 
         // Verify section order: packages before services before selinux before epilogue
         let packages_pos = output.find("dnf install").unwrap();
@@ -1201,7 +1212,7 @@ mod tests {
     #[test]
     fn test_containerfile_empty_snapshot() {
         let snap = InspectionSnapshot::new();
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(output.contains("FROM"), "must contain FROM even if empty");
         assert!(
             output.contains("RUN bootc container lint"),
@@ -1216,7 +1227,7 @@ mod tests {
             base_image: Some("quay.io/custom/image:latest".into()),
             ..Default::default()
         });
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(output.contains("FROM quay.io/custom/image:latest"));
     }
 
@@ -1228,7 +1239,7 @@ mod tests {
             disabled_units: vec!["cups.service".into()],
             ..Default::default()
         });
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(output.contains("systemctl enable httpd.service sshd.service"));
         assert!(output.contains("systemctl disable cups.service"));
     }
@@ -1236,7 +1247,7 @@ mod tests {
     #[test]
     fn test_containerfile_unsafe_package_skipped() {
         let snap = snapshot_with_packages(&["safe-pkg", "bad;pkg"]);
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(output.contains("safe-pkg"));
         // The unsafe package should not appear in a RUN command
         assert!(!output.contains("RUN dnf install -y bad;pkg"));
@@ -1246,7 +1257,7 @@ mod tests {
     fn test_containerfile_shell_metachar_package_rejected() {
         // Package name with shell command injection
         let snap = snapshot_with_packages(&["legit-pkg", "pkg$(whoami)", "pkg`id`"]);
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(output.contains("legit-pkg"), "safe package must be included");
         // Unsafe packages must not appear in any RUN line
         for line in output.lines() {
@@ -1288,7 +1299,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(
             output.contains("RUN dnf module enable -y safe-module:1.0"),
             "safe module must be rendered"
@@ -1327,7 +1338,7 @@ mod tests {
             ],
             ..Default::default()
         });
-        let output = render_containerfile(&snap);
+        let output = render_containerfile(&snap, None);
         assert!(
             output.contains("dnf versionlock add httpd"),
             "safe version lock must be rendered"

@@ -130,10 +130,15 @@ fn safe_write_file(dest: &Path, content: &str) {
 
 /// Write all config files from snapshot to output_dir/config/ preserving
 /// paths. This implements the full Go `writeConfigTree()` contract.
+///
+/// Returns the sorted list of top-level directory names materialized under
+/// `config/` so the Containerfile renderer can emit matching COPY lines.
+/// This is the single source of truth — the Containerfile must not
+/// compute its own directory list independently.
 pub fn write_config_tree(
     snap: &InspectionSnapshot,
     output_dir: &Path,
-) -> Result<(), RenderError> {
+) -> Result<Vec<String>, RenderError> {
     let config_dir = output_dir.join("config");
     std::fs::create_dir_all(&config_dir)?;
     let dhcp_paths = dhcp_connection_paths(snap);
@@ -448,7 +453,8 @@ pub fn write_config_tree(
         }
     }
 
-    Ok(())
+    // Return the actual top-level directories materialized under config/
+    Ok(config_copy_roots(&config_dir))
 }
 
 /// Returns the sorted list of top-level directory names under config_dir
