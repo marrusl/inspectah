@@ -57,3 +57,30 @@ impl Executor for RealExecutor {
         Path::new("/")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::traits::executor::Executor;
+
+    #[test]
+    fn test_real_executor_host_root() {
+        let exec = RealExecutor::new();
+        assert_eq!(exec.host_root(), std::path::Path::new("/"));
+    }
+
+    #[test]
+    fn test_real_executor_file_exists() {
+        let exec = RealExecutor::new();
+        // /etc/os-release exists on all Linux and macOS
+        assert!(exec.file_exists(std::path::Path::new("/etc")));
+    }
+
+    #[test]
+    fn test_real_executor_read_dir_returns_entries() {
+        let exec = RealExecutor::new();
+        let entries = exec.read_dir(std::path::Path::new("/tmp")).unwrap();
+        // /tmp always exists, may be empty but should not error
+        assert!(entries.len() >= 0); // the point is it doesn't error
+    }
+}

@@ -125,4 +125,33 @@ mod tests {
         assert!(mock.read_file(Path::new("/nonexistent")).is_err());
         assert!(!mock.file_exists(Path::new("/nonexistent")));
     }
+
+    #[test]
+    fn test_mock_read_dir() {
+        let mock = MockExecutor::new()
+            .with_dir("/etc/yum.repos.d", vec!["redhat.repo", "epel.repo"]);
+        let entries = mock.read_dir(Path::new("/etc/yum.repos.d")).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.contains(&"redhat.repo".to_string()));
+    }
+
+    #[test]
+    fn test_mock_read_dir_not_found() {
+        let mock = MockExecutor::new();
+        assert!(mock.read_dir(Path::new("/nonexistent")).is_err());
+    }
+
+    #[test]
+    fn test_mock_read_link() {
+        let mock = MockExecutor::new()
+            .with_link("/etc/resolv.conf", "../run/systemd/resolve/stub-resolv.conf");
+        let target = mock.read_link(Path::new("/etc/resolv.conf")).unwrap();
+        assert_eq!(target, "../run/systemd/resolve/stub-resolv.conf");
+    }
+
+    #[test]
+    fn test_mock_host_root() {
+        let mock = MockExecutor::new();
+        assert_eq!(mock.host_root(), Path::new("/"));
+    }
 }
