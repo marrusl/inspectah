@@ -62,7 +62,8 @@ impl InspectionSnapshot {
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
         let snap: Self = serde_json::from_str(json)?;
-        if snap.schema_version < 12 {
+        let min = SCHEMA_VERSION - 1; // accept current and prior only
+        if snap.schema_version < min || snap.schema_version > SCHEMA_VERSION {
             return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
         }
         Ok(snap)
@@ -84,7 +85,7 @@ pub fn migrate(snap: &mut InspectionSnapshot) {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotError {
-    #[error("unsupported schema version: {0} (minimum: 12)")]
+    #[error("unsupported schema version: {0} (accepted: {min}-{max})", min = crate::snapshot::SCHEMA_VERSION - 1, max = crate::snapshot::SCHEMA_VERSION)]
     UnsupportedVersion(u32),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
@@ -180,9 +181,9 @@ mod tests {
     }
 
     #[test]
-    fn test_v12_snapshot_loads() {
+    fn test_v13_snapshot_loads() {
         let json = r#"{
-            "schema_version": 12,
+            "schema_version": 13,
             "meta": {},
             "system_type": "package-mode",
             "rpm": {"packages_added": []},
@@ -191,11 +192,14 @@ mod tests {
             "redactions": []
         }"#;
         let snap = InspectionSnapshot::load(json).unwrap();
-        assert_eq!(snap.schema_version, 12);
-        // v12 didn't have flatpak_apps -- should default to empty
-        if let Some(containers) = &snap.containers {
-            assert!(containers.flatpak_apps.is_empty());
-        }
+        assert_eq!(snap.schema_version, 13);
+    }
+
+    #[test]
+    fn test_v12_snapshot_rejected() {
+        let json = r#"{"schema_version": 12, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let result = InspectionSnapshot::load(json);
+        assert!(result.is_err(), "v12 is below the accepted range (13-14)");
     }
 
     #[test]
@@ -203,6 +207,13 @@ mod tests {
         let json = r#"{"schema_version": 11}"#;
         let result = InspectionSnapshot::load(json);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_future_version_rejected() {
+        let json = r#"{"schema_version": 20, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
+        let result = InspectionSnapshot::load(json);
+        assert!(result.is_err(), "future versions must be rejected, not silently partially-deserialized");
     }
 
     #[test]
