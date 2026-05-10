@@ -9,15 +9,17 @@
 //! 5. README.md — summary with build commands
 //! 6. kickstart-suggestion.ks — deploy-time settings
 //! 7. inspection-snapshot.json — the snapshot itself (written by caller)
-//! 8. config/ tree — config files to COPY (Task 24)
+//! 8. config/ tree — config files to COPY into the image
 
 pub mod audit;
+pub mod configtree;
 pub mod containerfile;
 pub mod kickstart;
 pub mod readme;
 pub mod report;
 pub mod safety;
 pub mod secrets;
+pub mod tarball;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::{RenderContext, RenderError};
@@ -63,11 +65,8 @@ pub fn render_all(
         .map_err(|e| RenderError::Failed(format!("serialize snapshot: {e}")))?;
     std::fs::write(output_dir.join("inspection-snapshot.json"), json)?;
 
-    // 8. config/ tree — deferred to Task 24
-    // config tree writing requires filesystem traversal from the snapshot's
-    // config section. For now, create the empty directory.
-    let config_dir = output_dir.join("config");
-    std::fs::create_dir_all(&config_dir)?;
+    // 8. config/ tree — full materialization
+    configtree::write_config_tree(snap, output_dir)?;
 
     Ok(())
 }

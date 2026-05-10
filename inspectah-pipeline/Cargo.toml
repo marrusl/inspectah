@@ -11,6 +11,10 @@ regex = "1"
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tar = "0.4"
+flate2 = "1"
+walkdir = "2"
+chrono = "0.4"
 
 [dev-dependencies]
 insta.workspace = true
