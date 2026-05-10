@@ -117,9 +117,7 @@ pub fn list_tarball_entries(tarball_path: &Path) -> Vec<String> {
         Ok(f) => f,
         Err(_) => return Vec::new(),
     };
-    let gz = match flate2::read::GzDecoder::new(f) {
-        gz => gz,
-    };
+    let gz = flate2::read::GzDecoder::new(f);
     let mut ar = tar::Archive::new(gz);
     let mut entries = Vec::new();
     if let Ok(iter) = ar.entries() {

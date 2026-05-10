@@ -50,8 +50,10 @@ mod tests {
     use inspectah_core::snapshot::InspectionSnapshot;
 
     fn collected(schema: u32) -> Pipeline<Collected> {
-        let mut snap = InspectionSnapshot::default();
-        snap.schema_version = schema;
+        let snap = InspectionSnapshot {
+            schema_version: schema,
+            ..Default::default()
+        };
         Pipeline {
             state: Collected { snapshot: snap },
         }

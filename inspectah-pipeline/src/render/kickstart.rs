@@ -4,13 +4,13 @@ use inspectah_core::snapshot::InspectionSnapshot;
 
 /// Render a kickstart suggestion file from the snapshot.
 pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
-    let mut lines = Vec::new();
-
-    lines.push("#version=RHEL9".into());
-    lines.push(String::new());
-    lines.push("# Kickstart suggestion -- review and adapt for your environment".into());
-    lines.push("# These settings belong at deploy time, not baked into the image.".into());
-    lines.push(String::new());
+    let mut lines = vec![
+        "#version=RHEL9".into(),
+        String::new(),
+        "# Kickstart suggestion -- review and adapt for your environment".into(),
+        "# These settings belong at deploy time, not baked into the image.".into(),
+        String::new(),
+    ];
 
     // Network
     if let Some(network) = &snap.network {

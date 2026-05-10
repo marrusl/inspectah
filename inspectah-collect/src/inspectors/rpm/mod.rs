@@ -16,6 +16,14 @@ use std::collections::HashMap;
 /// RPM query format string — matches Go's `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
 
+struct SupplementaryData {
+    repo_files: Vec<inspectah_core::types::rpm::RepoFile>,
+    gpg_keys: Vec<inspectah_core::types::rpm::RepoFile>,
+    module_streams: Vec<inspectah_core::types::rpm::EnabledModuleStream>,
+    version_locks: Vec<inspectah_core::types::rpm::VersionLockEntry>,
+    rpm_va: Vec<inspectah_core::types::rpm::RpmVaEntry>,
+}
+
 pub struct RpmInspector;
 
 impl RpmInspector {
@@ -45,39 +53,25 @@ impl RpmInspector {
         HashMap::new()
     }
 
-    /// Collect repo data, GPG keys, module streams, version locks, and
-    /// optionally rpm -Va output (package-mode only).
-    fn collect_supplementary(
-        &self,
-        exec: &dyn Executor,
-        source: &SourceSystem,
-        repo_files: &mut Vec<inspectah_core::types::rpm::RepoFile>,
-        gpg_keys: &mut Vec<inspectah_core::types::rpm::RepoFile>,
-        module_streams: &mut Vec<inspectah_core::types::rpm::EnabledModuleStream>,
-        version_locks: &mut Vec<inspectah_core::types::rpm::VersionLockEntry>,
-        rpm_va: &mut Vec<inspectah_core::types::rpm::RpmVaEntry>,
-    ) {
-        // Repo files
-        *repo_files = repos::collect_repo_files(exec);
+    fn collect_supplementary(&self, exec: &dyn Executor, source: &SourceSystem) -> SupplementaryData {
+        let repo_files = repos::collect_repo_files(exec);
 
-        // GPG keys from repo content
-        for repo in repo_files.iter() {
-            let keys = repos::extract_gpg_keys(&repo.content, exec);
-            gpg_keys.extend(keys);
+        let mut gpg_keys = Vec::new();
+        for repo in &repo_files {
+            gpg_keys.extend(repos::extract_gpg_keys(&repo.content, exec));
         }
 
-        // Module streams + version locks
-        *module_streams = modules::parse_module_streams(exec);
-        *version_locks = modules::parse_version_locks(exec);
+        let module_streams = modules::parse_module_streams(exec);
+        let version_locks = modules::parse_version_locks(exec);
 
-        // rpm -Va (package-mode only — verifies file integrity against RPM db)
-        if matches!(source, SourceSystem::PackageBased { .. }) {
+        let rpm_va = if matches!(source, SourceSystem::PackageBased { .. }) {
             let va_result = exec.run("rpm", &["-Va"]);
-            // rpm -Va returns exit code > 0 when differences found — that's expected
-            if !va_result.stdout.is_empty() {
-                *rpm_va = modules::parse_rpm_va(&va_result.stdout);
-            }
-        }
+            if va_result.stdout.is_empty() { Vec::new() } else { modules::parse_rpm_va(&va_result.stdout) }
+        } else {
+            Vec::new()
+        };
+
+        SupplementaryData { repo_files, gpg_keys, module_streams, version_locks, rpm_va }
     }
 }
 
@@ -121,21 +115,7 @@ impl Inspector for RpmInspector {
             .partition(|p| p.state != PackageState::BaseImageOnly);
 
         // 4. Collect supplementary data
-        let mut repo_files = Vec::new();
-        let mut gpg_keys = Vec::new();
-        let mut module_streams = Vec::new();
-        let mut version_locks = Vec::new();
-        let mut rpm_va = Vec::new();
-
-        self.collect_supplementary(
-            exec,
-            &ctx.source,
-            &mut repo_files,
-            &mut gpg_keys,
-            &mut module_streams,
-            &mut version_locks,
-            &mut rpm_va,
-        );
+        let supp = self.collect_supplementary(exec, &ctx.source);
 
         // 5. Build warnings
         let mut warnings = Vec::new();
@@ -152,11 +132,11 @@ impl Inspector for RpmInspector {
         let section = RpmSection {
             packages_added,
             base_image_only,
-            rpm_va,
-            repo_files,
-            gpg_keys,
-            module_streams,
-            version_locks,
+            rpm_va: supp.rpm_va,
+            repo_files: supp.repo_files,
+            gpg_keys: supp.gpg_keys,
+            module_streams: supp.module_streams,
+            version_locks: supp.version_locks,
             no_baseline,
             ..Default::default()
         };

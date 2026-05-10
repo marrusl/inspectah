@@ -128,11 +128,11 @@ fn parse_versionlock_line(line: &str) -> Option<VersionLockEntry> {
 
     // Parse name-version-release.arch
     let nvra_parts: Vec<&str> = rest.rsplitn(2, '.').collect();
-    let arch = nvra_parts.get(0).map(|s| s.to_string()).unwrap_or_default();
+    let arch = nvra_parts.first().map(|s| s.to_string()).unwrap_or_default();
     let nvr = nvra_parts.get(1).unwrap_or(&rest);
 
     let nvr_parts: Vec<&str> = nvr.rsplitn(3, '-').collect();
-    let release = nvr_parts.get(0).map(|s| s.to_string()).unwrap_or_default();
+    let release = nvr_parts.first().map(|s| s.to_string()).unwrap_or_default();
     let version = nvr_parts.get(1).map(|s| s.to_string()).unwrap_or_default();
     let name = nvr_parts.get(2).map(|s| s.to_string()).unwrap_or_default();
 
@@ -168,8 +168,8 @@ pub fn parse_rpm_va(output: &str) -> Vec<RpmVaEntry> {
         let rest = &line[9..].trim();
 
         // Check for optional 'c' marker
-        let path = if rest.starts_with("c ") {
-            rest[2..].trim()
+        let path = if let Some(stripped) = rest.strip_prefix("c ") {
+            stripped.trim()
         } else {
             rest
         };

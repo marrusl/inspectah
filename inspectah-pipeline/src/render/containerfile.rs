@@ -30,12 +30,12 @@ pub fn render_containerfile(snap: &InspectionSnapshot) -> String {
     lines.extend(packages_section_lines(snap, &base));
 
     // bootc label for ostree-desktops base images
-    if matches!(snap.system_type, SystemType::RpmOstree | SystemType::Bootc) {
-        if base.contains("fedora-ostree-desktops") {
-            lines.push("# ostree-desktops images may need bootc label for compatibility".into());
-            lines.push("LABEL containers.bootc 1".into());
-            lines.push(String::new());
-        }
+    if matches!(snap.system_type, SystemType::RpmOstree | SystemType::Bootc)
+        && base.contains("fedora-ostree-desktops")
+    {
+        lines.push("# ostree-desktops images may need bootc label for compatibility".into());
+        lines.push("LABEL containers.bootc 1".into());
+        lines.push(String::new());
     }
 
     // 2. Services
@@ -196,7 +196,7 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
                     inspectah_core::types::rpm::PackageState::LocalInstall
                         | inspectah_core::types::rpm::PackageState::NoRepo
                 ) {
-                    let state = format!("{}", serde_json::to_string(&pkg.state).unwrap_or_default().trim_matches('"'));
+                    let state = serde_json::to_string(&pkg.state).unwrap_or_default().trim_matches('"').to_string();
                     todo_lines.push(format!(
                         "# TODO: '{}' was installed locally (state: {}) \
                          — no repository source. Provide a .rpm or custom repo.",
