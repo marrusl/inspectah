@@ -2,22 +2,27 @@ use crate::snapshot::InspectionSnapshot;
 
 pub type RawSnapshot = InspectionSnapshot;
 
+#[derive(Debug)]
 pub struct Pipeline<S> {
     pub state: S,
 }
 
+#[derive(Debug)]
 pub struct Collected {
     pub snapshot: RawSnapshot,
 }
 
+#[derive(Debug)]
 pub struct Validated {
     pub snapshot: InspectionSnapshot,
 }
 
+#[derive(Debug)]
 pub struct Redacted {
     pub snapshot: InspectionSnapshot,
 }
 
+#[derive(Debug)]
 pub struct Artifacts {
     pub output_dir: std::path::PathBuf,
 }
