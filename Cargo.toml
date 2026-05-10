@@ -1,0 +1,21 @@
+[workspace]
+members = [
+    "inspectah-core",
+    "inspectah-collect",
+    "inspectah-pipeline",
+    "inspectah-cli",
+    "inspectah-web",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.8.0-alpha.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/marrusl/inspectah"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+insta = { version = "1", features = ["json"] }
