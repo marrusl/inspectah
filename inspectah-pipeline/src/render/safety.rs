@@ -8,7 +8,7 @@ use std::sync::LazyLock;
 /// operator-controlled host, so this is a safety net against corrupted
 /// snapshots, not a security boundary.
 static SHELL_UNSAFE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"[;&|$`"'\\<>(){}\n\r]"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"[;&|$`"'\\<>(){}\n\r\s]"#).unwrap());
 
 /// Regex matching valid tuned profile names: alphanumeric, hyphens,
 /// underscores only. Stricter than `sanitize_shell_value` because the
