@@ -145,18 +145,32 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
         // COPY each unique parent directory containing GPG keys
         let mut gpg_dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for key in &included_gpg {
+            // Host paths are absolute — check for traversal and NUL, not absolute prefix
+            if key.path.contains("..") || key.path.contains('\0') {
+                lines.push(format!("# FIXME: GPG key path contains unsafe characters: {}", super::safety::html_escape(&key.path)));
+                continue;
+            }
             let rel = key.path.trim_start_matches('/');
             if let Some((dir, _)) = rel.rsplit_once('/') {
                 gpg_dirs.insert(dir.to_string());
             }
         }
         for dir in &gpg_dirs {
-            lines.push(format!("COPY config/{dir}/ /{dir}/"));
+            match super::safety::sanitize_shell_value(dir) {
+                Some(safe) => lines.push(format!("COPY config/{safe}/ /{safe}/")),
+                None => lines.push(format!("# FIXME: GPG directory path contains unsafe characters: {}", super::safety::html_escape(dir))),
+            }
         }
 
-        // Per-key rpm --import for each actual path
+        // Per-key rpm --import for each actual path (sanitized)
         for key in &included_gpg {
-            lines.push(format!("RUN rpm --import {}", key.path));
+            if key.path.contains("..") || key.path.contains('\0') {
+                continue; // already emitted FIXME above
+            }
+            match super::safety::sanitize_shell_value(&key.path) {
+                Some(safe) => lines.push(format!("RUN rpm --import {safe}")),
+                None => lines.push(format!("# FIXME: GPG key path unsafe for shell: {}", super::safety::html_escape(&key.path))),
+            }
         }
         lines.push(String::new());
     }
@@ -1499,5 +1513,31 @@ mod tests {
             output.contains("rpm --import /opt/custom/keys/signing-key.asc"),
             "must have rpm --import for non-standard path key"
         );
+    }
+
+    #[test]
+    fn test_containerfile_gpg_unsafe_path_fixme() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            gpg_keys: vec![
+                inspectah_core::types::rpm::RepoFile {
+                    path: "/etc/pki/rpm-gpg/GOOD-KEY".into(),
+                    content: "key-data".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                inspectah_core::types::rpm::RepoFile {
+                    path: "../../etc/shadow".into(),
+                    content: "bad".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(output.contains("FIXME: GPG key path contains unsafe characters"), "unsafe path must produce FIXME");
+        assert!(!output.contains("rpm --import ../../etc/shadow"), "unsafe path must NOT reach rpm --import");
+        assert!(output.contains("rpm --import /etc/pki/rpm-gpg/GOOD-KEY"), "safe path must still work");
     }
 }
