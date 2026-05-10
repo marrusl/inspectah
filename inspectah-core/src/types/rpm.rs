@@ -1,0 +1,254 @@
+use serde::{Deserialize, Serialize};
+use super::fleet::FleetPrevalence;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PackageState {
+    #[default]
+    Added,
+    BaseImageOnly,
+    Modified,
+    LocalInstall,
+    NoRepo,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VersionChangeDirection {
+    #[default]
+    Upgrade,
+    Downgrade,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PackageEntry {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub epoch: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub release: String,
+    #[serde(default)]
+    pub arch: String,
+    pub state: PackageState,
+    #[serde(default)]
+    pub include: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub acknowledged: bool,
+    #[serde(default)]
+    pub source_repo: String,
+    pub fleet: Option<FleetPrevalence>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VersionChange {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub arch: String,
+    #[serde(default)]
+    pub host_version: String,
+    #[serde(default)]
+    pub base_version: String,
+    #[serde(default)]
+    pub host_epoch: String,
+    #[serde(default)]
+    pub base_epoch: String,
+    pub direction: VersionChangeDirection,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnabledModuleStream {
+    #[serde(default)]
+    pub module_name: String,
+    #[serde(default)]
+    pub stream: String,
+    #[serde(default)]
+    pub profiles: Vec<String>,
+    #[serde(default)]
+    pub include: bool,
+    #[serde(default)]
+    pub baseline_match: bool,
+    pub fleet: Option<FleetPrevalence>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct VersionLockEntry {
+    #[serde(default)]
+    pub raw_pattern: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub epoch: i32,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub release: String,
+    #[serde(default)]
+    pub arch: String,
+    #[serde(default)]
+    pub include: bool,
+    pub fleet: Option<FleetPrevalence>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RpmVaEntry {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub flags: String,
+    pub package: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnverifiablePackage {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepoStatus {
+    #[serde(default)]
+    pub repo_id: String,
+    #[serde(default)]
+    pub repo_name: String,
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub affected_packages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OstreePackageOverride {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub from_nevra: String,
+    #[serde(default)]
+    pub to_nevra: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RepoFile {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub content: String,
+    #[serde(default)]
+    pub is_default_repo: bool,
+    #[serde(default)]
+    pub include: bool,
+    pub fleet: Option<FleetPrevalence>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RpmSection {
+    #[serde(default)]
+    pub packages_added: Vec<PackageEntry>,
+    #[serde(default)]
+    pub base_image_only: Vec<PackageEntry>,
+    #[serde(default)]
+    pub rpm_va: Vec<RpmVaEntry>,
+    #[serde(default)]
+    pub repo_files: Vec<RepoFile>,
+    #[serde(default)]
+    pub gpg_keys: Vec<RepoFile>,
+    #[serde(default)]
+    pub dnf_history_removed: Vec<String>,
+    #[serde(default)]
+    pub version_changes: Vec<VersionChange>,
+    pub leaf_packages: Option<Vec<String>>,
+    pub auto_packages: Option<Vec<String>>,
+    #[serde(default)]
+    pub leaf_dep_tree: serde_json::Value,
+    #[serde(default)]
+    pub module_streams: Vec<EnabledModuleStream>,
+    #[serde(default)]
+    pub version_locks: Vec<VersionLockEntry>,
+    #[serde(default)]
+    pub module_stream_conflicts: Vec<String>,
+    pub baseline_module_streams: Option<std::collections::HashMap<String, String>>,
+    pub versionlock_command_output: Option<String>,
+    #[serde(default)]
+    pub multiarch_packages: Vec<String>,
+    #[serde(default)]
+    pub duplicate_packages: Vec<String>,
+    #[serde(default)]
+    pub repo_providing_packages: Vec<String>,
+    #[serde(default)]
+    pub ostree_overrides: Vec<OstreePackageOverride>,
+    #[serde(default)]
+    pub ostree_removals: Vec<String>,
+    pub base_image: Option<String>,
+    pub baseline_package_names: Option<Vec<String>>,
+    #[serde(default)]
+    pub no_baseline: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_package_entry_roundtrip() {
+        let entry = PackageEntry {
+            name: "httpd".into(),
+            epoch: "0".into(),
+            version: "2.4.57".into(),
+            release: "5.el9".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            include: true,
+            source_repo: "appstream".into(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: PackageEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(entry, parsed);
+    }
+
+    #[test]
+    fn test_package_state_json_values() {
+        assert_eq!(serde_json::to_string(&PackageState::Added).unwrap(), r#""added""#);
+        assert_eq!(serde_json::to_string(&PackageState::BaseImageOnly).unwrap(), r#""base_image_only""#);
+        assert_eq!(serde_json::to_string(&PackageState::LocalInstall).unwrap(), r#""local_install""#);
+        assert_eq!(serde_json::to_string(&PackageState::NoRepo).unwrap(), r#""no_repo""#);
+    }
+
+    #[test]
+    fn test_rpm_section_default_roundtrip() {
+        let section = RpmSection::default();
+        let json = serde_json::to_string(&section).unwrap();
+        let parsed: RpmSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn test_rpm_section_with_data() {
+        let section = RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "vim-enhanced".into(),
+                state: PackageState::Added,
+                include: true,
+                ..Default::default()
+            }],
+            version_changes: vec![VersionChange {
+                name: "bash".into(),
+                arch: "x86_64".into(),
+                host_version: "5.2.26".into(),
+                base_version: "5.2.15".into(),
+                direction: VersionChangeDirection::Upgrade,
+                ..Default::default()
+            }],
+            base_image: Some("registry.redhat.io/rhel9/rhel-bootc:9.4".into()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string_pretty(&section).unwrap();
+        let parsed: RpmSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(section, parsed);
+    }
+}
