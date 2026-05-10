@@ -2,25 +2,25 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserGroupSection {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub users: Vec<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub groups: Vec<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub sudoers_rules: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub ssh_authorized_keys_refs: Vec<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub passwd_entries: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub shadow_entries: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub group_entries: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub gshadow_entries: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub subuid_entries: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub subgid_entries: Vec<String>,
 }
 

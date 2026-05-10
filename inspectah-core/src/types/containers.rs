@@ -3,13 +3,13 @@ use super::fleet::FleetPrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerMount {
-    #[serde(default, rename = "type")]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string", rename = "type")]
     pub mount_type: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub source: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub destination: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub mode: String,
     #[serde(default)]
     pub rw: bool,
@@ -17,13 +17,13 @@ pub struct ContainerMount {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct QuadletUnit {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub content: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub image: String,
     #[serde(default)]
     pub include: bool,
@@ -32,9 +32,9 @@ pub struct QuadletUnit {
     #[serde(default)]
     pub tie_winner: bool,
     pub fleet: Option<FleetPrevalence>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec", skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec", skip_serializing_if = "Vec::is_empty")]
     pub volumes: Vec<String>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub generated: bool,
@@ -42,17 +42,17 @@ pub struct QuadletUnit {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComposeService {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub service: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub image: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ComposeFile {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub images: Vec<ComposeService>,
     #[serde(default)]
     pub include: bool,
@@ -65,25 +65,25 @@ pub struct ComposeFile {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RunningContainer {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub image: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub image_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub status: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string", skip_serializing_if = "String::is_empty")]
     pub restart_policy: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub mounts: Vec<ContainerMount>,
     #[serde(default)]
     pub networks: serde_json::Value,
     #[serde(default)]
     pub ports: serde_json::Value,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub env: Vec<String>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub inspect_data: bool,
@@ -97,29 +97,29 @@ pub struct RunningContainer {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FlatpakApp {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub app_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub origin: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub branch: String,
     #[serde(default)]
     pub include: bool,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string", skip_serializing_if = "String::is_empty")]
     pub remote: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string", skip_serializing_if = "String::is_empty")]
     pub remote_url: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContainerSection {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub quadlet_units: Vec<QuadletUnit>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub compose_files: Vec<ComposeFile>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub running_containers: Vec<RunningContainer>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub flatpak_apps: Vec<FlatpakApp>,
 }
 

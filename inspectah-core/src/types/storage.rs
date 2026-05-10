@@ -3,13 +3,13 @@ use super::fleet::FleetPrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FstabEntry {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub device: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub mount_point: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub fstype: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub options: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
@@ -21,57 +21,57 @@ pub struct FstabEntry {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialRef {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub mount_point: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub credential_path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub source: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MountPoint {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub target: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub source: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub fstype: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub options: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LvmVolume {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub lv_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub vg_name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub lv_size: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VarDirectory {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub size_estimate: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub recommendation: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StorageSection {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub fstab_entries: Vec<FstabEntry>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub mount_points: Vec<MountPoint>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub lvm_info: Vec<LvmVolume>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub var_directories: Vec<VarDirectory>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub credential_refs: Vec<CredentialRef>,
 }
 

@@ -3,11 +3,11 @@ use super::fleet::FleetPrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelinuxPortLabel {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub protocol: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub port: String,
-    #[serde(default, rename = "type")]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string", rename = "type")]
     pub label_type: String,
     #[serde(default)]
     pub include: bool,
@@ -16,21 +16,21 @@ pub struct SelinuxPortLabel {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelinuxSection {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub mode: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub custom_modules: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub boolean_overrides: Vec<serde_json::Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub fcontext_rules: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub audit_rules: Vec<String>,
     #[serde(default)]
     pub fips_mode: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub pam_configs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
     pub port_labels: Vec<SelinuxPortLabel>,
 }
 
