@@ -8,3 +8,7 @@ pub mod network;
 pub mod storage;
 pub mod scheduled;
 pub mod containers;
+pub mod nonrpm;
+pub mod kernelboot;
+pub mod selinux;
+pub mod users;
