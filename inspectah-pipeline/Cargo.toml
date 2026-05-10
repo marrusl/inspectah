@@ -7,8 +7,10 @@ license.workspace = true
 [dependencies]
 inspectah-core = { path = "../inspectah-core" }
 inspectah-collect = { path = "../inspectah-collect" }
+regex = "1"
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
