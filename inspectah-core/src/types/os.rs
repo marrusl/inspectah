@@ -91,6 +91,12 @@ mod tests {
     }
 
     #[test]
+    fn test_bogus_system_type_rejected() {
+        let result = serde_json::from_str::<SystemType>(r#""not-a-real-type""#);
+        assert!(result.is_err(), "unrecognized system_type must fail deserialization");
+    }
+
+    #[test]
     fn test_system_type_serde() {
         assert_eq!(
             serde_json::to_string(&SystemType::PackageMode).unwrap(),
