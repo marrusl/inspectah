@@ -10,6 +10,8 @@ use super::safety::html_escape;
 
 /// Render a minimal PatternFly HTML report from the snapshot.
 pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> String {
+    use inspectah_core::types::completeness::Completeness;
+
     let os_name = snap
         .os_release
         .as_ref()
@@ -66,6 +68,23 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         }
     }
 
+    // Build completeness banner (if partial)
+    let completeness_banner = match &snap.completeness {
+        Completeness::Partial { incomplete_sections, reason } => {
+            let sections: Vec<String> = incomplete_sections.iter().map(|id| format!("{id:?}")).collect();
+            format!(
+                r#"  <div style="background: #faecd5; border: 1px solid #f0ab00; padding: 1rem; margin: 1rem 0; border-radius: 4px;">
+    <strong>Warning:</strong> This report was generated from an incomplete inspection.
+    Sections with missing or degraded data: {}.
+    Reason: {}
+  </div>"#,
+                html_escape(&sections.join(", ")),
+                html_escape(reason),
+            )
+        }
+        _ => String::new(),
+    };
+
     // Build warning list
     let mut warning_items = String::new();
     for w in &snap.warnings {
@@ -96,6 +115,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 </head>
 <body>
   <h1>inspectah Migration Report</h1>
+{completeness_banner}
   <p>Source: <strong>{os_escaped}</strong> ({hostname_escaped})</p>
 
   <div class="summary-grid">
@@ -183,5 +203,25 @@ mod tests {
         assert!(html.contains("Config Files"));
         assert!(html.contains("Service Changes"));
         assert!(html.contains("Warnings"));
+    }
+
+    #[test]
+    fn test_report_partial_completeness_warning() {
+        use inspectah_core::types::completeness::{Completeness, InspectorId};
+        let mut snap = test_snapshot();
+        snap.completeness = Completeness::Partial {
+            incomplete_sections: vec![InspectorId::Config],
+            reason: "config inspector failed".into(),
+        };
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(html.contains("incomplete inspection"), "must warn about incomplete inspection");
+        assert!(html.contains("Config"), "must name the incomplete section");
+    }
+
+    #[test]
+    fn test_report_full_completeness_no_warning() {
+        let snap = test_snapshot();
+        let html = render_report(&snap, &RenderContext { target: None });
+        assert!(!html.contains("incomplete inspection"), "full snapshot must not show warning");
     }
 }
