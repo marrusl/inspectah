@@ -7,6 +7,12 @@ use std::process::Command;
 /// file reads target /. Containerized/offline inspection is deferred.
 pub struct RealExecutor;
 
+impl Default for RealExecutor {
+    fn default() -> Self {
+        Self
+    }
+}
+
 impl RealExecutor {
     pub fn new() -> Self {
         Self

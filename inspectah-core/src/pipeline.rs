@@ -40,6 +40,6 @@ mod tests {
             state: Redacted { snapshot: p.state.snapshot },
         };
         // Redacted can produce artifacts
-        assert!(p.state.snapshot.schema_version == 0 || true);
+        let _ = &p.state.snapshot; // prove Redacted state is reachable
     }
 }
