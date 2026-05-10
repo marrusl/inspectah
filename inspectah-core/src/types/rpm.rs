@@ -22,50 +22,50 @@ pub enum VersionChangeDirection {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PackageEntry {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub epoch: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub version: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub release: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub arch: String,
     pub state: PackageState,
     #[serde(default)]
     pub include: bool,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub acknowledged: bool,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub source_repo: String,
     pub fleet: Option<FleetPrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct VersionChange {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub arch: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub host_version: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub base_version: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub host_epoch: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub base_epoch: String,
     pub direction: VersionChangeDirection,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EnabledModuleStream {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub module_name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub stream: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub profiles: Vec<String>,
     #[serde(default)]
     pub include: bool,
@@ -76,17 +76,17 @@ pub struct EnabledModuleStream {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct VersionLockEntry {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub raw_pattern: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub epoch: i32,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub version: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub release: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub arch: String,
     #[serde(default)]
     pub include: bool,
@@ -95,48 +95,48 @@ pub struct VersionLockEntry {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RpmVaEntry {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub flags: String,
     pub package: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnverifiablePackage {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepoStatus {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub repo_id: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub repo_name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub error: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub affected_packages: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OstreePackageOverride {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub from_nevra: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub to_nevra: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RepoFile {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub content: String,
     #[serde(default)]
     pub is_default_repo: bool,
@@ -147,41 +147,41 @@ pub struct RepoFile {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RpmSection {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub packages_added: Vec<PackageEntry>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub base_image_only: Vec<PackageEntry>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub rpm_va: Vec<RpmVaEntry>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub repo_files: Vec<RepoFile>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub gpg_keys: Vec<RepoFile>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub dnf_history_removed: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub version_changes: Vec<VersionChange>,
     pub leaf_packages: Option<Vec<String>>,
     pub auto_packages: Option<Vec<String>>,
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub module_streams: Vec<EnabledModuleStream>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub version_locks: Vec<VersionLockEntry>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub module_stream_conflicts: Vec<String>,
     pub baseline_module_streams: Option<std::collections::HashMap<String, String>>,
     pub versionlock_command_output: Option<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub multiarch_packages: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub duplicate_packages: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub repo_providing_packages: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub ostree_overrides: Vec<OstreePackageOverride>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub ostree_removals: Vec<String>,
     pub base_image: Option<String>,
     pub baseline_package_names: Option<Vec<String>>,

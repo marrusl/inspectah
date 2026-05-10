@@ -3,13 +3,13 @@ use super::fleet::FleetPrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServiceStateChange {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub unit: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub current_state: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub default_state: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub action: String,
     #[serde(default)]
     pub include: bool,
@@ -19,11 +19,11 @@ pub struct ServiceStateChange {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SystemdDropIn {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub unit: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub content: String,
     #[serde(default)]
     pub include: bool,
@@ -36,13 +36,13 @@ pub struct SystemdDropIn {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServiceSection {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub state_changes: Vec<ServiceStateChange>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub enabled_units: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub disabled_units: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub drop_ins: Vec<SystemdDropIn>,
 }
 

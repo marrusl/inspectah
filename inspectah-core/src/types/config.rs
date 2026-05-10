@@ -31,11 +31,11 @@ pub enum ConfigCategory {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConfigFileEntry {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
     pub kind: ConfigFileKind,
     pub category: ConfigCategory,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub content: String,
     pub rpm_va_flags: Option<String>,
     pub package: Option<String>,
@@ -51,7 +51,7 @@ pub struct ConfigFileEntry {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConfigSection {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub files: Vec<ConfigFileEntry>,
 }
 

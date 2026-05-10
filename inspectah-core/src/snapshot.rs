@@ -40,9 +40,9 @@ pub struct InspectionSnapshot {
     pub users_groups: Option<UserGroupSection>,
     #[serde(default)]
     pub preflight: PreflightResult,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub warnings: Vec<Warning>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub redactions: Vec<RedactionFinding>,
     /// Trust state for snapshot re-rendering. Only FullyRedacted skips redaction on import.
     #[serde(default, skip_serializing_if = "Option::is_none")]

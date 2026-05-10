@@ -13,10 +13,6 @@ const VOLATILE_META_KEYS: &[&str] = &[
 
 /// Normalize a snapshot for comparison. Only strips explicitly volatile
 /// subfields, NOT the entire meta object.
-///
-/// Also normalizes Go's `null` for nil slices/strings to `[]` / `""` so
-/// that the semantic equivalence (null == empty) doesn't produce false
-/// divergences in the parity gate.
 pub fn normalize(value: &mut Value) {
     if let Value::Object(map) = value {
         // Strip only volatile meta subfields, not the whole meta
@@ -85,12 +81,6 @@ pub fn diff_snapshots(
 }
 
 fn diff_values(path: &str, go: &Value, rust: &Value, diffs: &mut Vec<Difference>) {
-    // Go's encoding/json emits `null` for nil slices and nil string pointers.
-    // Rust deserializes these as empty (`[]` / `""`). Treat as equivalent.
-    if is_null_vs_empty(go, rust) || is_null_vs_empty(rust, go) {
-        return;
-    }
-
     match (go, rust) {
         (Value::Object(g), Value::Object(r)) => {
             let keys: BTreeSet<_> = g.keys().chain(r.keys()).collect();
@@ -139,19 +129,6 @@ fn diff_values(path: &str, go: &Value, rust: &Value, diffs: &mut Vec<Difference>
             });
         }
         _ => {}
-    }
-}
-
-/// Returns true when one side is `null` and the other is an empty array or
-/// empty string — the Go nil-slice / nil-string convention.
-fn is_null_vs_empty(a: &Value, b: &Value) -> bool {
-    if !a.is_null() {
-        return false;
-    }
-    match b {
-        Value::Array(arr) => arr.is_empty(),
-        Value::String(s) => s.is_empty(),
-        _ => false,
     }
 }
 

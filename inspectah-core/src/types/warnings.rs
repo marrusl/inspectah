@@ -15,9 +15,9 @@ pub enum WarningSeverity {
 /// Go uses []map[string]interface{} — the flatten catches unknown keys.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Warning {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub inspector: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub message: String,
     pub severity: Option<WarningSeverity>,
     #[serde(flatten)]
