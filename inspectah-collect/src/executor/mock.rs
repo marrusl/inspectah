@@ -1,0 +1,128 @@
+use inspectah_core::traits::executor::{ExecResult, Executor};
+use std::collections::HashMap;
+use std::io;
+use std::path::Path;
+
+pub struct MockExecutor {
+    commands: HashMap<String, ExecResult>,
+    files: HashMap<String, String>,
+    dirs: HashMap<String, Vec<String>>,
+    links: HashMap<String, String>,
+}
+
+impl MockExecutor {
+    pub fn new() -> Self {
+        Self {
+            commands: HashMap::new(),
+            files: HashMap::new(),
+            dirs: HashMap::new(),
+            links: HashMap::new(),
+        }
+    }
+
+    pub fn with_command(mut self, key: &str, result: ExecResult) -> Self {
+        self.commands.insert(key.to_string(), result);
+        self
+    }
+
+    pub fn with_file(mut self, path: &str, content: &str) -> Self {
+        self.files.insert(path.to_string(), content.to_string());
+        self
+    }
+
+    pub fn with_dir(mut self, path: &str, entries: Vec<&str>) -> Self {
+        self.dirs.insert(path.to_string(), entries.iter().map(|s| s.to_string()).collect());
+        self
+    }
+
+    pub fn with_link(mut self, path: &str, target: &str) -> Self {
+        self.links.insert(path.to_string(), target.to_string());
+        self
+    }
+}
+
+impl Executor for MockExecutor {
+    fn run(&self, cmd: &str, args: &[&str]) -> ExecResult {
+        let key = if args.is_empty() {
+            cmd.to_string()
+        } else {
+            format!("{} {}", cmd, args.join(" "))
+        };
+        self.commands.get(&key).cloned().unwrap_or_else(|| ExecResult {
+            stderr: format!("command not found: {key}"),
+            exit_code: 127,
+            ..Default::default()
+        })
+    }
+
+    fn read_file(&self, path: &Path) -> io::Result<String> {
+        self.files
+            .get(path.to_str().unwrap_or(""))
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
+    }
+
+    fn file_exists(&self, path: &Path) -> bool {
+        self.files.contains_key(path.to_str().unwrap_or(""))
+    }
+
+    fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
+        self.dirs
+            .get(path.to_str().unwrap_or(""))
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
+    }
+
+    fn read_link(&self, path: &Path) -> io::Result<String> {
+        self.links
+            .get(path.to_str().unwrap_or(""))
+            .cloned()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
+    }
+
+    fn host_root(&self) -> &Path {
+        Path::new("/")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::traits::executor::Executor;
+    use std::path::Path;
+
+    #[test]
+    fn test_mock_command_lookup() {
+        let mock = MockExecutor::new()
+            .with_command("rpm -qa", ExecResult {
+                stdout: "bash-5.2.26-3.el9.x86_64\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            });
+        let result = mock.run("rpm", &["-qa"]);
+        assert_eq!(result.exit_code, 0);
+        assert!(result.stdout.contains("bash"));
+    }
+
+    #[test]
+    fn test_mock_unknown_command() {
+        let mock = MockExecutor::new();
+        let result = mock.run("nonexistent", &[]);
+        assert_eq!(result.exit_code, 127);
+    }
+
+    #[test]
+    fn test_mock_file_read() {
+        let mock = MockExecutor::new()
+            .with_file("/etc/os-release", "ID=rhel\nVERSION_ID=9.4\n");
+        let content = mock.read_file(Path::new("/etc/os-release")).unwrap();
+        assert!(content.contains("ID=rhel"));
+    }
+
+    #[test]
+    fn test_mock_file_not_found() {
+        let mock = MockExecutor::new();
+        assert!(mock.read_file(Path::new("/nonexistent")).is_err());
+        assert!(!mock.file_exists(Path::new("/nonexistent")));
+    }
+}
