@@ -25,10 +25,3 @@ Any difference NOT listed here fails CI.
 - Path: `$.completeness`
 - Reason: New Rust-era field, not present in Go output.
 
-## system_type default
-- Path: `$.system_type`
-- Reason: Rust `InspectionSnapshot::new()` defaults to `"unknown"` (no host scanned). Go fixture contains `"package-mode"` (a scanned host). This diverges only in synthetic/empty snapshots, not real scans.
-
-## preflight.status default
-- Path: `$.preflight.status`
-- Reason: Rust `PreflightResult::default()` uses empty string. Go fixture contains `"ok"`. Real scans populate this from actual preflight results.
