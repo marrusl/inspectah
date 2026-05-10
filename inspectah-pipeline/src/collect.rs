@@ -1,7 +1,7 @@
 use inspectah_core::pipeline::{Collected, Pipeline};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
-use inspectah_core::types::completeness::SectionData;
+use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
@@ -15,6 +15,7 @@ pub fn collect(
     inspectors: &[Box<dyn Inspector>],
 ) -> Pipeline<Collected> {
     let mut snapshot = InspectionSnapshot::new();
+    let mut incomplete: Vec<InspectorId> = Vec::new();
 
     for inspector in inspectors {
         match inspector.inspect(ctx) {
@@ -23,6 +24,7 @@ pub fn collect(
                 snapshot.warnings.extend(output.warnings);
             }
             Err(InspectorError::Skipped { reason }) => {
+                // Skipped is intentional (inapplicable) — not incomplete
                 snapshot.warnings.push(Warning {
                     inspector: format!("{:?}", inspector.id()),
                     message: format!("skipped: {reason}"),
@@ -33,7 +35,7 @@ pub fn collect(
             Err(InspectorError::Degraded {
                 partial, reason, ..
             }) => {
-                // Route partial data and add a warning
+                // Route partial data, but record as incomplete
                 route_section(&mut snapshot, partial.section);
                 snapshot.warnings.extend(partial.warnings);
                 snapshot.warnings.push(Warning {
@@ -42,6 +44,7 @@ pub fn collect(
                     severity: Some(WarningSeverity::Warning),
                     ..Default::default()
                 });
+                incomplete.push(inspector.id());
             }
             Err(InspectorError::Failed { reason }) => {
                 snapshot.warnings.push(Warning {
@@ -50,9 +53,20 @@ pub fn collect(
                     severity: Some(WarningSeverity::Error),
                     ..Default::default()
                 });
+                incomplete.push(inspector.id());
             }
         }
     }
+
+    // Set completeness based on inspector outcomes
+    snapshot.completeness = if incomplete.is_empty() {
+        Completeness::Full
+    } else {
+        Completeness::Partial {
+            incomplete_sections: incomplete,
+            reason: "one or more inspectors failed or returned degraded results".into(),
+        }
+    };
 
     // Populate source identity so exported snapshots identify the host
     snapshot.os_release = Some(ctx.source.os_release().clone());
@@ -116,8 +130,51 @@ mod tests {
     use inspectah_collect::executor::mock::MockExecutor;
     use inspectah_collect::inspectors::rpm::RpmInspector;
     use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::traits::inspector::InspectorOutput;
+    use inspectah_core::types::completeness::SourceSystemKind;
     use inspectah_core::types::os::OsRelease;
     use inspectah_core::types::system::SourceSystem;
+
+    /// Mock inspector that always returns Failed.
+    struct FailingInspector;
+    impl Inspector for FailingInspector {
+        fn id(&self) -> InspectorId { InspectorId::Config }
+        fn applicable_to(&self) -> &[SourceSystemKind] { &[SourceSystemKind::PackageBased] }
+        fn inspect(&self, _ctx: &InspectionContext) -> Result<InspectorOutput, InspectorError> {
+            Err(InspectorError::Failed {
+                reason: "test failure".into(),
+            })
+        }
+    }
+
+    /// Mock inspector that returns Degraded with partial data.
+    struct DegradedInspector;
+    impl Inspector for DegradedInspector {
+        fn id(&self) -> InspectorId { InspectorId::Network }
+        fn applicable_to(&self) -> &[SourceSystemKind] { &[SourceSystemKind::PackageBased] }
+        fn inspect(&self, _ctx: &InspectionContext) -> Result<InspectorOutput, InspectorError> {
+            Err(InspectorError::Degraded {
+                partial: Box::new(InspectorOutput {
+                    section: SectionData::Network(Default::default()),
+                    warnings: vec![],
+                    redaction_hints: vec![],
+                }),
+                reason: "partial data only".into(),
+            })
+        }
+    }
+
+    /// Mock inspector that always returns Skipped.
+    struct SkippedInspector;
+    impl Inspector for SkippedInspector {
+        fn id(&self) -> InspectorId { InspectorId::Storage }
+        fn applicable_to(&self) -> &[SourceSystemKind] { &[SourceSystemKind::PackageBased] }
+        fn inspect(&self, _ctx: &InspectionContext) -> Result<InspectorOutput, InspectorError> {
+            Err(InspectorError::Skipped {
+                reason: "not applicable".into(),
+            })
+        }
+    }
 
     fn test_os_release() -> OsRelease {
         OsRelease {
@@ -301,5 +358,147 @@ mod tests {
         // version and timestamp still present
         assert!(snap.meta.contains_key("inspectah_version"));
         assert!(snap.meta.contains_key("timestamp"));
+    }
+
+    // --- Completeness tracking tests ---
+
+    #[test]
+    fn test_completeness_full_when_all_succeed() {
+        let mock = build_test_mock();
+        let ctx = InspectionContext {
+            executor: Box::new(mock),
+            source: SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            },
+            rpm_state: None,
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
+        let pipeline = collect(&ctx, &inspectors);
+
+        assert_eq!(
+            pipeline.state.snapshot.completeness,
+            Completeness::Full,
+            "all inspectors succeeded -> completeness must be Full"
+        );
+    }
+
+    #[test]
+    fn test_completeness_partial_when_inspector_fails() {
+        let mock = build_test_mock();
+        let ctx = InspectionContext {
+            executor: Box::new(mock),
+            source: SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            },
+            rpm_state: None,
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(FailingInspector),
+        ];
+        let pipeline = collect(&ctx, &inspectors);
+
+        match &pipeline.state.snapshot.completeness {
+            Completeness::Partial { incomplete_sections, reason } => {
+                assert!(
+                    incomplete_sections.contains(&InspectorId::Config),
+                    "Config inspector failed, must appear in incomplete_sections"
+                );
+                assert!(
+                    !reason.is_empty(),
+                    "reason must explain the incompleteness"
+                );
+            }
+            other => panic!("expected Partial, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_completeness_partial_when_inspector_degraded() {
+        let mock = build_test_mock();
+        let ctx = InspectionContext {
+            executor: Box::new(mock),
+            source: SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            },
+            rpm_state: None,
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(DegradedInspector),
+        ];
+        let pipeline = collect(&ctx, &inspectors);
+
+        // Partial data should be routed
+        assert!(
+            pipeline.state.snapshot.network.is_some(),
+            "degraded inspector's partial data must be routed"
+        );
+
+        // Completeness must reflect the degradation
+        match &pipeline.state.snapshot.completeness {
+            Completeness::Partial { incomplete_sections, .. } => {
+                assert!(
+                    incomplete_sections.contains(&InspectorId::Network),
+                    "Network inspector degraded, must appear in incomplete_sections"
+                );
+            }
+            other => panic!("expected Partial, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_completeness_full_when_inspector_skipped() {
+        // Skipped is intentional (inapplicable) — should NOT affect completeness
+        let mock = build_test_mock();
+        let ctx = InspectionContext {
+            executor: Box::new(mock),
+            source: SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            },
+            rpm_state: None,
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(SkippedInspector),
+        ];
+        let pipeline = collect(&ctx, &inspectors);
+
+        assert_eq!(
+            pipeline.state.snapshot.completeness,
+            Completeness::Full,
+            "skipped inspectors are intentional, completeness must still be Full"
+        );
+    }
+
+    #[test]
+    fn test_completeness_partial_multiple_failures() {
+        let mock = build_test_mock();
+        let ctx = InspectionContext {
+            executor: Box::new(mock),
+            source: SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            },
+            rpm_state: None,
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(FailingInspector),
+            Box::new(DegradedInspector),
+            Box::new(SkippedInspector),
+        ];
+        let pipeline = collect(&ctx, &inspectors);
+
+        match &pipeline.state.snapshot.completeness {
+            Completeness::Partial { incomplete_sections, .. } => {
+                assert_eq!(
+                    incomplete_sections.len(), 2,
+                    "failed + degraded = 2 incomplete (skipped is not incomplete)"
+                );
+                assert!(incomplete_sections.contains(&InspectorId::Config));
+                assert!(incomplete_sections.contains(&InspectorId::Network));
+            }
+            other => panic!("expected Partial, got {other:?}"),
+        }
     }
 }

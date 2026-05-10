@@ -36,8 +36,12 @@ pub fn render_all(
 ) -> Result<(), RenderError> {
     std::fs::create_dir_all(output_dir)?;
 
-    // 1. Containerfile
-    let containerfile = containerfile::render_containerfile(snap);
+    // 8. config/ tree — materialize FIRST so the Containerfile can use
+    //    the actual directory list for its COPY lines (single source of truth).
+    let materialized_roots = configtree::write_config_tree(snap, output_dir)?;
+
+    // 1. Containerfile — COPY lines derived from materialized config tree roots
+    let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots));
     std::fs::write(output_dir.join("Containerfile"), containerfile)?;
 
     // 2. report.html
@@ -65,15 +69,13 @@ pub fn render_all(
         .map_err(|e| RenderError::Failed(format!("serialize snapshot: {e}")))?;
     std::fs::write(output_dir.join("inspection-snapshot.json"), json)?;
 
-    // 8. config/ tree — full materialization
-    configtree::write_config_tree(snap, output_dir)?;
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
     use tempfile::TempDir;
 
@@ -136,5 +138,106 @@ mod tests {
             let content = std::fs::read_to_string(dir.path().join(name)).unwrap();
             assert!(!content.is_empty(), "{} must be non-empty", name);
         }
+    }
+
+    /// Verify that every directory under config/ has a matching COPY line
+    /// in the Containerfile, and vice versa: no COPY line references a
+    /// directory that doesn't exist in config/. This is the core desync
+    /// invariant — the Containerfile and config tree describe the same system.
+    #[test]
+    fn test_containerfile_copy_lines_match_config_tree() {
+        let mut snap = test_snapshot();
+        snap.config = Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/httpd/conf/httpd.conf".into(),
+                    content: "ServerRoot /etc/httpd".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: "/usr/lib/sysctl.d/99-custom.conf".into(),
+                    content: "net.ipv4.ip_forward = 1".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+        });
+
+        let context = RenderContext { target: None };
+        let dir = TempDir::new().unwrap();
+        render_all(&snap, &context, dir.path()).unwrap();
+
+        // Collect actual top-level dirs under config/
+        let config_dir = dir.path().join("config");
+        let mut actual_dirs: Vec<String> = std::fs::read_dir(&config_dir)
+            .unwrap()
+            .filter_map(|e| {
+                let e = e.ok()?;
+                if e.path().is_dir() {
+                    Some(e.file_name().to_string_lossy().to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        actual_dirs.sort();
+
+        // Parse COPY lines from Containerfile for config/ entries
+        let containerfile = std::fs::read_to_string(dir.path().join("Containerfile")).unwrap();
+        let mut copy_roots: Vec<String> = Vec::new();
+        for line in containerfile.lines() {
+            // Match "COPY config/XYZ/ /XYZ/" pattern
+            if let Some(rest) = line.strip_prefix("COPY config/") {
+                if let Some(root) = rest.split('/').next() {
+                    if !root.is_empty() && !copy_roots.contains(&root.to_string()) {
+                        copy_roots.push(root.to_string());
+                    }
+                }
+            }
+        }
+        copy_roots.sort();
+
+        // Every config dir must have a COPY line
+        for dir_name in &actual_dirs {
+            assert!(
+                copy_roots.contains(dir_name),
+                "config/{dir_name}/ exists but has no COPY line in Containerfile"
+            );
+        }
+
+        // Every COPY line must reference a directory that exists
+        for root in &copy_roots {
+            assert!(
+                actual_dirs.contains(root),
+                "Containerfile has COPY config/{root}/ but no such directory exists"
+            );
+        }
+
+        // Sanity: both should contain etc and usr
+        assert!(actual_dirs.contains(&"etc".to_string()), "etc must be materialized");
+        assert!(actual_dirs.contains(&"usr".to_string()), "usr must be materialized");
+    }
+
+    /// Verify that a snapshot with no config files produces no COPY
+    /// lines for config/ directories — both the tree and Containerfile
+    /// should agree on "nothing to copy".
+    #[test]
+    fn test_empty_config_no_copy_lines() {
+        let snap = test_snapshot(); // has RPM but no config
+        let context = RenderContext { target: None };
+        let dir = TempDir::new().unwrap();
+        render_all(&snap, &context, dir.path()).unwrap();
+
+        let containerfile = std::fs::read_to_string(dir.path().join("Containerfile")).unwrap();
+        let config_copy_lines: Vec<&str> = containerfile
+            .lines()
+            .filter(|l| l.starts_with("COPY config/") && !l.contains("yum.repos.d") && !l.contains("pki/rpm-gpg"))
+            .collect();
+        assert!(
+            config_copy_lines.is_empty(),
+            "no config files -> no COPY config/ lines, got: {:?}",
+            config_copy_lines
+        );
     }
 }
