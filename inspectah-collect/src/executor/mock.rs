@@ -20,6 +20,15 @@ impl MockExecutor {
         }
     }
 
+}
+
+impl Default for MockExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MockExecutor {
     pub fn with_command(mut self, key: &str, result: ExecResult) -> Self {
         self.commands.insert(key.to_string(), result);
         self
