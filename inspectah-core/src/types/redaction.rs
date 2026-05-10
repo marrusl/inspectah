@@ -42,7 +42,7 @@ pub enum RedactionState {
         redacted_by: String,
         config_hash: String,
         unresolved_count: u32,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
         unresolved_hints: Vec<RedactionHint>,
     },
     #[serde(rename = "unknown")]
@@ -102,9 +102,9 @@ pub enum Confidence {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RedactionHint {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub reason: String,
     pub confidence: Option<Confidence>,
 }
@@ -113,14 +113,14 @@ pub struct RedactionHint {
 /// Go-compatible via serde rename_all — strings at the export edge only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RedactionFinding {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub path: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub source: String,
     pub kind: RedactionKind,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub pattern: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
     pub remediation: String,
     pub line: Option<i32>,
     pub replacement: Option<String>,

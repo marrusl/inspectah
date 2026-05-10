@@ -3,6 +3,12 @@
 Divergences listed here are expected and excluded from the parity gate.
 Any difference NOT listed here fails CI.
 
+## null-vs-empty convention (handled automatically)
+Go's `encoding/json` emits `null` for nil slices and nil string pointers.
+Rust deserializes these as `[]` / `""` and re-serializes accordingly.
+The diff engine treats `null == []` and `null == ""` as equivalent
+automatically — no per-field allowlist entry needed.
+
 ## schema_version
 - Go: 13
 - Rust: 14
