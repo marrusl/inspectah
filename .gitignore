@@ -1,3 +1,6 @@
+# Rust build artifacts
+/target/
+
 # Build artifacts
 build/
 !cmd/inspectah/internal/build/
@@ -32,6 +35,12 @@ cmd/inspectah/inspector.test
 # Root-level build outputs
 /inspectah
 /inspectah-*
+# Rust workspace crates (not build outputs)
+!/inspectah-core/
+!/inspectah-collect/
+!/inspectah-pipeline/
+!/inspectah-cli/
+!/inspectah-web/
 
 # Test artifacts
 *.actual.json
