@@ -90,31 +90,39 @@ pub fn rpmvercmp(a: &str, b: &str) -> std::cmp::Ordering {
             return Ordering::Greater;
         }
 
-        // Collect contiguous segments of the same type (digit or alpha)
-        let is_digit = ai.peek().unwrap().is_ascii_digit();
-        let seg_a: String = if is_digit {
+        // Determine segment types independently for each side
+        let a_is_digit = ai.peek().unwrap().is_ascii_digit();
+        let b_is_digit = bi.peek().unwrap().is_ascii_digit();
+
+        let seg_a: String = if a_is_digit {
             collect_while(&mut ai, |c| c.is_ascii_digit())
         } else {
             collect_while(&mut ai, |c| c.is_alphabetic())
         };
-        let seg_b: String = if is_digit {
+
+        let seg_b: String = if b_is_digit {
             collect_while(&mut bi, |c| c.is_ascii_digit())
         } else {
             collect_while(&mut bi, |c| c.is_alphabetic())
         };
 
-        // Numeric segments sort numerically
-        if is_digit {
-            let na: u64 = seg_a.parse().unwrap_or(0);
-            let nb: u64 = seg_b.parse().unwrap_or(0);
-            let cmp = na.cmp(&nb);
-            if cmp != Ordering::Equal {
-                return cmp;
+        // If segment types differ, digits always win (per librpm C algorithm)
+        match (a_is_digit, b_is_digit) {
+            (true, false) => return Ordering::Greater,
+            (false, true) => return Ordering::Less,
+            (true, true) => {
+                let na: u64 = seg_a.parse().unwrap_or(0);
+                let nb: u64 = seg_b.parse().unwrap_or(0);
+                let cmp = na.cmp(&nb);
+                if cmp != Ordering::Equal {
+                    return cmp;
+                }
             }
-        } else {
-            let cmp = seg_a.cmp(&seg_b);
-            if cmp != Ordering::Equal {
-                return cmp;
+            (false, false) => {
+                let cmp = seg_a.cmp(&seg_b);
+                if cmp != Ordering::Equal {
+                    return cmp;
+                }
             }
         }
     }
@@ -189,5 +197,23 @@ mod tests {
         // Caret sorts after empty but before any other character
         assert_eq!(rpmvercmp("1.0^git1", "1.0"), std::cmp::Ordering::Greater);
         assert_eq!(rpmvercmp("1.0^git1", "1.0.1"), std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_rpmvercmp_mixed_alpha_numeric_antisymmetry() {
+        // Digits always win over alpha — must be anti-symmetric
+        assert_eq!(rpmvercmp("1", "a"), std::cmp::Ordering::Greater);
+        assert_eq!(rpmvercmp("a", "1"), std::cmp::Ordering::Less);
+    }
+
+    #[test]
+    fn test_rpmvercmp_leading_zeros() {
+        assert_eq!(rpmvercmp("001", "1"), std::cmp::Ordering::Equal);
+        assert_eq!(rpmvercmp("01.0", "1.0"), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_rpmvercmp_large_numeric() {
+        assert_eq!(rpmvercmp("99999999999", "99999999998"), std::cmp::Ordering::Greater);
     }
 }

@@ -11,9 +11,10 @@ pub fn classify_packages(
         let state = match baseline.get(&key) {
             None => PackageState::Added,
             Some(base) => {
+                let epoch_cmp = rpmvercmp(&pkg.epoch, &base.epoch);
                 let ver_cmp = rpmvercmp(&pkg.version, &base.version);
                 let rel_cmp = rpmvercmp(&pkg.release, &base.release);
-                if ver_cmp == std::cmp::Ordering::Equal && rel_cmp == std::cmp::Ordering::Equal {
+                if epoch_cmp == std::cmp::Ordering::Equal && ver_cmp == std::cmp::Ordering::Equal && rel_cmp == std::cmp::Ordering::Equal {
                     PackageState::BaseImageOnly
                 } else {
                     PackageState::Modified
@@ -36,6 +37,7 @@ mod tests {
     fn pkg(name: &str, version: &str, release: &str) -> PackageEntry {
         PackageEntry {
             name: name.to_string(),
+            epoch: "0".to_string(),
             version: version.to_string(),
             release: release.to_string(),
             arch: "x86_64".to_string(),
@@ -96,5 +98,16 @@ mod tests {
         ];
         let result = classify_packages(&host, &HashMap::new());
         assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_classify_epoch_change_is_modified() {
+        let mut host_pkg = pkg("openssl", "3.0.7", "1.el9");
+        host_pkg.epoch = "2".to_string();
+        let host = vec![host_pkg];
+        let baseline = baseline_with(&[("openssl", "3.0.7", "1.el9")]);
+        // baseline has epoch "0" via pkg() helper
+        let result = classify_packages(&host, &baseline);
+        assert_eq!(result[0].state, PackageState::Modified, "epoch change must be Modified");
     }
 }

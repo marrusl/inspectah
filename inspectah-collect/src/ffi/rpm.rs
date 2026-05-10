@@ -122,11 +122,7 @@ pub fn query_all_packages() -> Result<Vec<PackageEntry>, RpmFfiError> {
         let arch = unsafe { header_get_string(header, sys::RPMTAG_ARCH) };
         let epoch_num = unsafe { sys::headerGetNumber(header, sys::RPMTAG_EPOCH) };
 
-        let epoch = if epoch_num == 0 {
-            "(none)".to_string()
-        } else {
-            epoch_num.to_string()
-        };
+        let epoch = epoch_num.to_string();
 
         // Skip gpg-pubkey pseudo-packages — they have no arch.
         if name == "gpg-pubkey" {
