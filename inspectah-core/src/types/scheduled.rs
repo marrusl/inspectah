@@ -3,9 +3,9 @@ use super::fleet::FleetPrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CronJob {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub source: String,
     #[serde(default)]
     pub rpm_owned: bool,
@@ -16,21 +16,21 @@ pub struct CronJob {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SystemdTimer {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub on_calendar: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub exec_start: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub description: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub source: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub timer_content: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub service_content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
@@ -40,13 +40,13 @@ pub struct SystemdTimer {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AtJob {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub file: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub command: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub user: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub working_dir: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
@@ -56,17 +56,17 @@ pub struct AtJob {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GeneratedTimerUnit {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub timer_content: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub service_content: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub cron_expr: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub source_path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub include: bool,
@@ -75,13 +75,13 @@ pub struct GeneratedTimerUnit {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ScheduledTaskSection {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub cron_jobs: Vec<CronJob>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub systemd_timers: Vec<SystemdTimer>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub at_jobs: Vec<AtJob>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub generated_timer_units: Vec<GeneratedTimerUnit>,
 }
 

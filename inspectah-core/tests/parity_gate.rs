@@ -3,37 +3,28 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::os::SystemType;
 
 #[test]
-fn test_parity_gate_exercises_full_path() {
-    // Load the real allowlist
+fn test_parity_gate_self_roundtrip() {
+    // Parity gate: Rust snapshot round-trips through JSON faithfully.
+    // Go tarball ingestion is not a goal — if you need the data, re-scan.
     let divergences_md = include_str!("../../testdata/divergences.md");
     let allowlist = load_divergence_allowlist(divergences_md);
-    assert!(
-        !allowlist.is_empty(),
-        "allowlist must have documented divergences"
-    );
 
-    // Load a real Go fixture
-    let go_json = include_str!("../../testdata/golden/go-v12-minimal.json");
+    let mut snap = InspectionSnapshot::new();
+    snap.system_type = SystemType::PackageMode;
+    snap.preflight.status = "ok".into();
 
-    // Build a Rust snapshot that mirrors the Go fixture's structure —
-    // NOT InspectionSnapshot::new() which has wrong defaults.
-    // This prevents synthetic mismatches from polluting the allowlist.
-    let mut rust_snap = InspectionSnapshot::new();
-    rust_snap.system_type = SystemType::PackageMode;
-    rust_snap.preflight.status = "ok".into();
+    let json = serde_json::to_string(&snap).unwrap();
+    let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+    let json2 = serde_json::to_string(&parsed).unwrap();
 
-    let rust_json = serde_json::to_string(&rust_snap).unwrap();
+    let undocumented = diff_snapshots(&json, &json2, &allowlist).unwrap();
 
-    // Run the full diff pipeline
-    let undocumented = diff_snapshots(go_json, &rust_json, &allowlist).unwrap();
-
-    // This is the mandatory gate: undocumented diffs fail CI
     assert!(
         undocumented.is_empty(),
-        "undocumented Go-vs-Rust divergences found:\n{}",
+        "Rust snapshot does not round-trip faithfully:\n{}",
         undocumented
             .iter()
-            .map(|d| format!("  {}: go={}, rust={}", d.path, d.go_value, d.rust_value))
+            .map(|d| format!("  {}: a={}, b={}", d.path, d.go_value, d.rust_value))
             .collect::<Vec<_>>()
             .join("\n")
     );

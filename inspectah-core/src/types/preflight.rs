@@ -5,24 +5,24 @@ use std::path::PathBuf;
 /// Go-compatible preflight result (stored in snapshot JSON).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct PreflightResult {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub status: String,
     pub status_reason: Option<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub available: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub unavailable: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub unverifiable: Vec<UnverifiablePackage>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub direct_install: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub repo_unreachable: Vec<RepoStatus>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub base_image: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub repos_queried: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub timestamp: String,
 }
 

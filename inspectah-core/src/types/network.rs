@@ -3,13 +3,13 @@ use super::fleet::FleetPrevalence;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct NMConnection {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub method: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string", rename = "type")]
+    #[serde(default, rename = "type")]
     pub conn_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<bool>,
@@ -21,17 +21,17 @@ pub struct NMConnection {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FirewallZone {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub content: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub services: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub ports: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub rich_rules: Vec<String>,
     #[serde(default)]
     pub include: bool,
@@ -40,15 +40,15 @@ pub struct FirewallZone {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FirewallDirectRule {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub ipv: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub table: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub chain: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub priority: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub args: String,
     #[serde(default)]
     pub include: bool,
@@ -56,39 +56,39 @@ pub struct FirewallDirectRule {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StaticRouteFile {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub path: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub name: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyEntry {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub source: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub line: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct NetworkSection {
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub connections: Vec<NMConnection>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub firewall_zones: Vec<FirewallZone>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub firewall_direct_rules: Vec<FirewallDirectRule>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub static_routes: Vec<StaticRouteFile>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub ip_routes: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub ip_rules: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_string")]
+    #[serde(default)]
     pub resolv_provenance: String,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub hosts_additions: Vec<String>,
-    #[serde(default, deserialize_with = "crate::deserialize_null_as_empty_vec")]
+    #[serde(default)]
     pub proxy: Vec<ProxyEntry>,
 }
 
