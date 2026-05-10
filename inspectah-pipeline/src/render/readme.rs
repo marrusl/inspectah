@@ -1,6 +1,7 @@
 //! README renderer — produces README.md with build commands and findings summary.
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::completeness::Completeness;
 
 use super::containerfile::base_image_from_snapshot;
 
@@ -10,6 +11,26 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
 
     lines.push("# inspectah output".into());
     lines.push(String::new());
+
+    // Completeness warning
+    if let Completeness::Partial { ref incomplete_sections, ref reason } = snap.completeness {
+        let section_names: Vec<String> = incomplete_sections
+            .iter()
+            .map(|id| format!("{:?}", id).to_lowercase())
+            .collect();
+        lines.push("> **WARNING: Incomplete inspection**".into());
+        lines.push(">".into());
+        lines.push(format!(
+            "> The following inspector sections may be missing or degraded: {}",
+            section_names.join(", ")
+        ));
+        if !reason.is_empty() {
+            lines.push(format!("> Reason: {reason}"));
+        }
+        lines.push(">".into());
+        lines.push("> Review the audit report for details before building.".into());
+        lines.push(String::new());
+    }
 
     // Summary of findings
     if let Some(os) = &snap.os_release {
@@ -205,6 +226,7 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::completeness::InspectorId;
 
     #[test]
     fn test_readme_renders() {
@@ -229,5 +251,36 @@ mod tests {
         let snap = InspectionSnapshot::new();
         let md = render_readme(&snap);
         assert!(md.contains("## Findings summary"));
+    }
+
+    #[test]
+    fn test_readme_partial_completeness_warning() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Partial {
+            incomplete_sections: vec![InspectorId::Config, InspectorId::Rpm],
+            reason: "inspectors timed out".into(),
+        };
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("WARNING: Incomplete inspection"),
+            "must contain incompleteness warning"
+        );
+        assert!(md.contains("config"), "must list config section");
+        assert!(md.contains("rpm"), "must list rpm section");
+        assert!(
+            md.contains("inspectors timed out"),
+            "must include the reason"
+        );
+    }
+
+    #[test]
+    fn test_readme_full_completeness_no_warning() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Full;
+        let md = render_readme(&snap);
+        assert!(
+            !md.contains("WARNING: Incomplete inspection"),
+            "full completeness must not produce warning"
+        );
     }
 }
