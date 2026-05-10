@@ -12,3 +12,7 @@ pub mod nonrpm;
 pub mod kernelboot;
 pub mod selinux;
 pub mod users;
+pub mod redaction;
+pub mod warnings;
+pub mod completeness;
+pub mod preflight;
