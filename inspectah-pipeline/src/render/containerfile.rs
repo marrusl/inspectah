@@ -132,10 +132,33 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
     if !enabled_modules.is_empty() {
         lines.push("# === Module Streams ===".into());
         for ms in &enabled_modules {
+            // Sanitize all host-derived values before shell interpolation
+            if sanitize_shell_value(&ms.module_name).is_none()
+                || sanitize_shell_value(&ms.stream).is_none()
+            {
+                lines.push(format!(
+                    "# FIXME: module stream contains unsafe characters, skipped: {:?}:{:?}",
+                    ms.module_name, ms.stream
+                ));
+                continue;
+            }
             let profiles = if ms.profiles.is_empty() {
                 String::new()
             } else {
-                format!("/{}", ms.profiles.join(","))
+                // Sanitize each profile name
+                let safe_profiles: Vec<&str> = ms
+                    .profiles
+                    .iter()
+                    .filter_map(|p| sanitize_shell_value(p))
+                    .collect();
+                if safe_profiles.len() != ms.profiles.len() {
+                    lines.push(format!(
+                        "# FIXME: module profile contains unsafe characters, skipped: {:?}",
+                        ms.profiles
+                    ));
+                    continue;
+                }
+                format!("/{}", safe_profiles.join(","))
             };
             lines.push(format!(
                 "RUN dnf module enable -y {}:{}{}",
@@ -240,13 +263,33 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
     // Version locks
     let included_locks: Vec<_> = rpm.version_locks.iter().filter(|vl| vl.include).collect();
     if !included_locks.is_empty() {
-        lines.push("# === Version Locks ===".into());
-        lines.push("RUN dnf install -y python3-dnf-plugin-versionlock && \\".into());
+        let mut safe_locks = Vec::new();
+        let mut unsafe_locks = Vec::new();
         for vl in &included_locks {
-            lines.push(format!("    dnf versionlock add {} && \\", vl.raw_pattern));
+            if sanitize_shell_value(&vl.raw_pattern).is_some() {
+                safe_locks.push(vl);
+            } else {
+                unsafe_locks.push(vl);
+            }
         }
-        lines.push("    dnf clean all".into());
-        lines.push(String::new());
+        if !safe_locks.is_empty() {
+            lines.push("# === Version Locks ===".into());
+            lines.push("RUN dnf install -y python3-dnf-plugin-versionlock && \\".into());
+            for vl in &safe_locks {
+                lines.push(format!("    dnf versionlock add {} && \\", vl.raw_pattern));
+            }
+            lines.push("    dnf clean all".into());
+            lines.push(String::new());
+        }
+        for vl in &unsafe_locks {
+            lines.push(format!(
+                "# FIXME: version lock pattern contains unsafe characters, skipped: {:?}",
+                vl.raw_pattern
+            ));
+        }
+        if !unsafe_locks.is_empty() {
+            lines.push(String::new());
+        }
     }
 
     lines
@@ -452,14 +495,20 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         ));
     }
 
-    // Consolidate timer enables
+    // Consolidate timer enables — sanitize names before shell interpolation
     let mut timer_names = Vec::new();
     for t in &local_timers {
-        timer_names.push(format!("{}.timer", t.name));
+        let unit = format!("{}.timer", t.name);
+        if sanitize_shell_value(&unit).is_some() {
+            timer_names.push(unit);
+        }
     }
     for u in &included_timers {
         if !u.name.is_empty() {
-            timer_names.push(format!("{}.timer", u.name));
+            let unit = format!("{}.timer", u.name);
+            if sanitize_shell_value(&unit).is_some() {
+                timer_names.push(unit);
+            }
         }
     }
     if !timer_names.is_empty() {
@@ -1191,5 +1240,110 @@ mod tests {
         assert!(output.contains("safe-pkg"));
         // The unsafe package should not appear in a RUN command
         assert!(!output.contains("RUN dnf install -y bad;pkg"));
+    }
+
+    #[test]
+    fn test_containerfile_shell_metachar_package_rejected() {
+        // Package name with shell command injection
+        let snap = snapshot_with_packages(&["legit-pkg", "pkg$(whoami)", "pkg`id`"]);
+        let output = render_containerfile(&snap);
+        assert!(output.contains("legit-pkg"), "safe package must be included");
+        // Unsafe packages must not appear in any RUN line
+        for line in output.lines() {
+            if line.starts_with("RUN ") {
+                assert!(
+                    !line.contains("$(whoami)"),
+                    "RUN line must not contain shell substitution: {line}"
+                );
+                assert!(
+                    !line.contains("`id`"),
+                    "RUN line must not contain backtick substitution: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_containerfile_unsafe_module_stream_skipped() {
+        use inspectah_core::types::rpm::EnabledModuleStream;
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            module_streams: vec![
+                EnabledModuleStream {
+                    module_name: "safe-module".into(),
+                    stream: "1.0".into(),
+                    profiles: vec![],
+                    include: true,
+                    baseline_match: false,
+                    ..Default::default()
+                },
+                EnabledModuleStream {
+                    module_name: "evil$(whoami)".into(),
+                    stream: "2.0".into(),
+                    profiles: vec![],
+                    include: true,
+                    baseline_match: false,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap);
+        assert!(
+            output.contains("RUN dnf module enable -y safe-module:1.0"),
+            "safe module must be rendered"
+        );
+        // The unsafe module must not appear in any RUN line
+        for line in output.lines() {
+            if line.starts_with("RUN ") {
+                assert!(
+                    !line.contains("$(whoami)"),
+                    "RUN line must not contain shell metacharacters: {line}"
+                );
+            }
+        }
+        assert!(
+            output.contains("FIXME: module stream contains unsafe characters"),
+            "unsafe module must produce a FIXME comment"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_unsafe_version_lock_skipped() {
+        use inspectah_core::types::rpm::VersionLockEntry;
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            version_locks: vec![
+                VersionLockEntry {
+                    raw_pattern: "httpd-0:2.4.57-5.el9.*".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                VersionLockEntry {
+                    raw_pattern: "pkg;rm -rf /".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap);
+        assert!(
+            output.contains("dnf versionlock add httpd"),
+            "safe version lock must be rendered"
+        );
+        // The unsafe pattern must not appear in any RUN line
+        for line in output.lines() {
+            if line.starts_with("RUN ") || line.starts_with("    dnf ") {
+                assert!(
+                    !line.contains("rm -rf"),
+                    "RUN line must not contain unsafe version lock: {line}"
+                );
+            }
+        }
+        assert!(
+            output.contains("FIXME: version lock pattern contains unsafe characters"),
+            "unsafe version lock must produce a FIXME comment"
+        );
     }
 }

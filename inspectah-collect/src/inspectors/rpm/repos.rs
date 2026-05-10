@@ -43,7 +43,20 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
     repo_files
 }
 
-/// Extract GPG key files referenced in repo content
+/// PGP public key block header — content starting with this is a valid GPG key.
+const PGP_HEADER: &str = "-----BEGIN PGP PUBLIC KEY BLOCK-----";
+
+/// Validate that file content looks like a GPG public key.
+/// Non-PGP content is rejected to prevent arbitrary file ingestion.
+fn validate_gpg_content(content: &str) -> bool {
+    content.trim_start().starts_with(PGP_HEADER)
+}
+
+/// Extract GPG key files referenced in repo content.
+///
+/// Files referenced via `gpgkey=file:///...` are read and validated.
+/// Content that does not start with a PGP public key header is replaced
+/// with a placeholder to prevent arbitrary host file ingestion.
 pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile> {
     let mut keys = Vec::new();
 
@@ -72,13 +85,32 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
                 Err(_) => continue,
             };
 
-            keys.push(RepoFile {
-                path: key_path.to_string(),
-                content,
-                is_default_repo: false,
-                include: true,
-                fleet: None,
-            });
+            if validate_gpg_content(&content) {
+                keys.push(RepoFile {
+                    path: key_path.to_string(),
+                    content,
+                    is_default_repo: false,
+                    include: true,
+                    fleet: None,
+                });
+            } else {
+                // Non-PGP content: include with placeholder to avoid
+                // leaking arbitrary host file content into the snapshot.
+                eprintln!(
+                    "WARNING: gpgkey file {} does not contain a PGP public key block, content redacted",
+                    key_path
+                );
+                keys.push(RepoFile {
+                    path: key_path.to_string(),
+                    content: format!(
+                        "# REDACTED: file did not contain a PGP public key block (source: {})",
+                        key_path
+                    ),
+                    is_default_repo: false,
+                    include: false,
+                    fleet: None,
+                });
+            }
         }
     }
 
@@ -162,5 +194,70 @@ mod tests {
 
         let keys = extract_gpg_keys(repo_content, &mock);
         assert_eq!(keys.len(), 0);
+    }
+
+    #[test]
+    fn test_gpg_key_non_pgp_content_redacted() {
+        // Simulate gpgkey=file:///etc/shadow — arbitrary host file
+        let repo_content = "[malicious]\ngpgkey=file:///etc/shadow\n";
+        let mock = MockExecutor::new()
+            .with_file("/etc/shadow", "root:$6$salt$hash:19000:0:99999:7:::\n");
+
+        let keys = extract_gpg_keys(repo_content, &mock);
+        assert_eq!(keys.len(), 1);
+        // Content must NOT contain the shadow hash
+        assert!(
+            !keys[0].content.contains("$6$salt$hash"),
+            "shadow file content must not be included verbatim"
+        );
+        // Should contain the redaction placeholder
+        assert!(
+            keys[0].content.contains("REDACTED"),
+            "non-PGP content must be replaced with placeholder"
+        );
+        // Should be excluded from inclusion
+        assert!(
+            !keys[0].include,
+            "non-PGP key file must not be included in output"
+        );
+    }
+
+    #[test]
+    fn test_gpg_key_valid_pgp_content_included() {
+        let pgp_content = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: GnuPG v2\n\nmQENB...\n-----END PGP PUBLIC KEY BLOCK-----\n";
+        let repo_content = "[repo]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-test\n";
+        let mock = MockExecutor::new()
+            .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-test", pgp_content);
+
+        let keys = extract_gpg_keys(repo_content, &mock);
+        assert_eq!(keys.len(), 1);
+        assert!(keys[0].content.starts_with("-----BEGIN PGP"));
+        assert!(keys[0].include, "valid PGP key must be included");
+    }
+
+    #[test]
+    fn test_gpg_key_mixed_valid_and_invalid() {
+        let repo_content = "gpgkey=file:///good-key file:///bad-file\n";
+        let mock = MockExecutor::new()
+            .with_file("/good-key", "-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata\n")
+            .with_file("/bad-file", "this is not a GPG key at all");
+
+        let keys = extract_gpg_keys(repo_content, &mock);
+        assert_eq!(keys.len(), 2);
+        // First key is valid
+        assert!(keys[0].include);
+        assert!(keys[0].content.contains("BEGIN PGP"));
+        // Second key is redacted
+        assert!(!keys[1].include);
+        assert!(keys[1].content.contains("REDACTED"));
+    }
+
+    #[test]
+    fn test_validate_gpg_content() {
+        assert!(validate_gpg_content("-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata"));
+        assert!(validate_gpg_content("  \n-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata"));
+        assert!(!validate_gpg_content("root:$6$salt$hash:19000:0:99999:7:::"));
+        assert!(!validate_gpg_content("not a key"));
+        assert!(!validate_gpg_content(""));
     }
 }

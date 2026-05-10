@@ -2,6 +2,8 @@ use inspectah_core::pipeline::{Collected, Pipeline};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
 use inspectah_core::types::completeness::SectionData;
+use inspectah_core::types::os::SystemType;
+use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 
 /// Run all inspectors against the given context, routing each inspector's
@@ -52,8 +54,42 @@ pub fn collect(
         }
     }
 
+    // Populate source identity so exported snapshots identify the host
+    snapshot.os_release = Some(ctx.source.os_release().clone());
+    snapshot.system_type = source_system_type(&ctx.source);
+
+    // Populate meta with provenance information
+    let hostname = ctx
+        .executor
+        .read_file(std::path::Path::new("/etc/hostname"))
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !hostname.is_empty() {
+        snapshot
+            .meta
+            .insert("hostname".into(), serde_json::Value::String(hostname));
+    }
+    snapshot.meta.insert(
+        "timestamp".into(),
+        serde_json::Value::String(chrono::Utc::now().to_rfc3339()),
+    );
+    snapshot.meta.insert(
+        "inspectah_version".into(),
+        serde_json::Value::String(env!("CARGO_PKG_VERSION").into()),
+    );
+
     Pipeline {
         state: Collected { snapshot },
+    }
+}
+
+/// Map a SourceSystem variant to the corresponding SystemType for the snapshot.
+fn source_system_type(source: &SourceSystem) -> SystemType {
+    match source {
+        SourceSystem::PackageBased { .. } => SystemType::PackageMode,
+        SourceSystem::RpmOstree { .. } => SystemType::RpmOstree,
+        SourceSystem::Bootc { .. } => SystemType::Bootc,
     }
 }
 
@@ -187,5 +223,83 @@ mod tests {
         assert!(pipeline.state.snapshot.services.is_none());
         assert!(pipeline.state.snapshot.network.is_none());
         assert!(pipeline.state.snapshot.storage.is_none());
+    }
+
+    #[test]
+    fn test_collect_sets_source_identity() {
+        let mock = build_test_mock()
+            .with_file("/etc/hostname", "testhost.example.com\n");
+        let ctx = InspectionContext {
+            executor: Box::new(mock),
+            source: SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            },
+            rpm_state: None,
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
+        let pipeline = collect(&ctx, &inspectors);
+        let snap = &pipeline.state.snapshot;
+
+        // os_release must be populated from the source system
+        assert!(snap.os_release.is_some(), "os_release must be set");
+        let os = snap.os_release.as_ref().unwrap();
+        assert_eq!(os.id, "rhel");
+        assert_eq!(os.version_id, "9.4");
+
+        // system_type must reflect the source
+        assert_eq!(
+            snap.system_type,
+            inspectah_core::types::os::SystemType::PackageMode
+        );
+
+        // meta must contain hostname and inspectah_version
+        assert!(
+            snap.meta.contains_key("hostname"),
+            "meta must contain hostname"
+        );
+        assert_eq!(
+            snap.meta["hostname"].as_str().unwrap(),
+            "testhost.example.com"
+        );
+        assert!(
+            snap.meta.contains_key("inspectah_version"),
+            "meta must contain inspectah_version"
+        );
+        assert!(
+            snap.meta.contains_key("timestamp"),
+            "meta must contain timestamp"
+        );
+    }
+
+    #[test]
+    fn test_collect_source_identity_without_hostname() {
+        // No /etc/hostname file — hostname should be absent from meta
+        let mock = build_test_mock();
+        let ctx = InspectionContext {
+            executor: Box::new(mock),
+            source: SourceSystem::PackageBased {
+                os_release: test_os_release(),
+            },
+            rpm_state: None,
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
+        let pipeline = collect(&ctx, &inspectors);
+        let snap = &pipeline.state.snapshot;
+
+        // os_release and system_type still set
+        assert!(snap.os_release.is_some());
+        assert_eq!(
+            snap.system_type,
+            inspectah_core::types::os::SystemType::PackageMode
+        );
+
+        // hostname absent when file doesn't exist
+        assert!(
+            !snap.meta.contains_key("hostname"),
+            "hostname should be absent when /etc/hostname is missing"
+        );
+        // version and timestamp still present
+        assert!(snap.meta.contains_key("inspectah_version"));
+        assert!(snap.meta.contains_key("timestamp"));
     }
 }
