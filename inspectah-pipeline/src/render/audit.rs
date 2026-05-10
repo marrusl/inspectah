@@ -2,6 +2,7 @@
 //! risks, and recommendations.
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 
 /// Render the audit report markdown from a snapshot.
@@ -10,6 +11,28 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 
     lines.push("# Audit Report".into());
     lines.push(String::new());
+
+    // Incomplete sections warning
+    if let Completeness::Partial { ref incomplete_sections, ref reason } = snap.completeness {
+        lines.push("## Incomplete Sections".into());
+        lines.push(String::new());
+        lines.push(
+            "The following inspector sections failed or were degraded during inspection:".into(),
+        );
+        lines.push(String::new());
+        for id in incomplete_sections {
+            lines.push(format!("- `{:?}`", id).to_lowercase());
+        }
+        if !reason.is_empty() {
+            lines.push(String::new());
+            lines.push(format!("**Reason:** {reason}"));
+        }
+        lines.push(String::new());
+        lines.push(
+            "Artifacts generated from this snapshot may be missing data from these sections.".into(),
+        );
+        lines.push(String::new());
+    }
 
     // OS info
     if let Some(os) = &snap.os_release {
@@ -220,5 +243,37 @@ mod tests {
         let snap = InspectionSnapshot::new();
         let md = render_audit(&snap);
         assert!(md.contains("# Audit Report"));
+    }
+
+    #[test]
+    fn test_audit_report_partial_completeness() {
+        use inspectah_core::types::completeness::{Completeness, InspectorId};
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Partial {
+            incomplete_sections: vec![InspectorId::Config, InspectorId::Services],
+            reason: "timeout during inspection".into(),
+        };
+        let md = render_audit(&snap);
+        assert!(
+            md.contains("## Incomplete Sections"),
+            "must contain Incomplete Sections heading"
+        );
+        assert!(md.contains("config"), "must list config section");
+        assert!(md.contains("services"), "must list services section");
+        assert!(
+            md.contains("timeout during inspection"),
+            "must include the reason"
+        );
+    }
+
+    #[test]
+    fn test_audit_report_full_completeness_no_section() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Full;
+        let md = render_audit(&snap);
+        assert!(
+            !md.contains("Incomplete Sections"),
+            "full completeness must not produce Incomplete Sections"
+        );
     }
 }

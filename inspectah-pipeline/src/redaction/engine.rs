@@ -178,6 +178,74 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
+    // Scan repo file contents for embedded credentials
+    if let Some(ref mut rpm) = snapshot.rpm {
+        for repo_file in &mut rpm.repo_files {
+            let findings = scan_content(&repo_file.content, &repo_file.path);
+            if !findings.is_empty() {
+                let mut content = repo_file.content.clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High) {
+                        let kind_label = finding
+                            .finding_kind
+                            .as_ref()
+                            .map(|k| format!("{:?}", k).to_lowercase())
+                            .unwrap_or_else(|| "secret".to_string());
+                        if let Some(pat) = PATTERNS
+                            .iter()
+                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                        {
+                            let matches: Vec<(usize, usize, String)> = pat
+                                .regex
+                                .find_iter(&content)
+                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                .collect();
+                            for (start, end, matched) in matches.into_iter().rev() {
+                                let token = registry.token_for(&kind_label, &matched);
+                                content.replace_range(start..end, &token);
+                            }
+                        }
+                    }
+                }
+                repo_file.content = content;
+                all_findings.extend(findings);
+            }
+        }
+
+        // Scan GPG key contents
+        for gpg_key in &mut rpm.gpg_keys {
+            let findings = scan_content(&gpg_key.content, &gpg_key.path);
+            if !findings.is_empty() {
+                let mut content = gpg_key.content.clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High) {
+                        let kind_label = finding
+                            .finding_kind
+                            .as_ref()
+                            .map(|k| format!("{:?}", k).to_lowercase())
+                            .unwrap_or_else(|| "secret".to_string());
+                        if let Some(pat) = PATTERNS
+                            .iter()
+                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                        {
+                            let matches: Vec<(usize, usize, String)> = pat
+                                .regex
+                                .find_iter(&content)
+                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                .collect();
+                            for (start, end, matched) in matches.into_iter().rev() {
+                                let token = registry.token_for(&kind_label, &matched);
+                                content.replace_range(start..end, &token);
+                            }
+                        }
+                    }
+                }
+                gpg_key.content = content;
+                all_findings.extend(findings);
+            }
+        }
+    }
+
     // Scan shadow entries in users_groups section
     if let Some(ref mut users) = snapshot.users_groups {
         // Collect scan results first, then mutate (avoids borrow conflict).
@@ -444,6 +512,60 @@ mod tests {
         assert!(
             config.files[0].content.contains("REDACTED_"),
             "redacted content must contain token"
+        );
+    }
+
+    #[test]
+    fn test_redact_scans_repo_file_content() {
+        use inspectah_core::types::rpm::{RepoFile, RpmSection};
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.rpm = Some(RpmSection {
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/custom.repo".into(),
+                content: "password = s3cretP@ss\nbaseurl=https://repo.example.com/\n".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        redact(&mut snapshot, &RedactOptions::default());
+        let rpm = snapshot.rpm.as_ref().unwrap();
+        assert!(
+            !rpm.repo_files[0].content.contains("s3cretP@ss"),
+            "password in repo file must be redacted"
+        );
+        assert!(
+            rpm.repo_files[0].content.contains("REDACTED_"),
+            "repo file content must contain redaction token"
+        );
+        assert!(
+            !snapshot.redactions.is_empty(),
+            "redactions must contain findings from repo file"
+        );
+    }
+
+    #[test]
+    fn test_redact_scans_gpg_key_content() {
+        use inspectah_core::types::rpm::{RepoFile, RpmSection};
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.rpm = Some(RpmSection {
+            gpg_keys: vec![RepoFile {
+                path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom".into(),
+                content: "password = hunter2\n".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        redact(&mut snapshot, &RedactOptions::default());
+        let rpm = snapshot.rpm.as_ref().unwrap();
+        assert!(
+            !rpm.gpg_keys[0].content.contains("hunter2"),
+            "password in gpg key content must be redacted"
+        );
+        assert!(
+            rpm.gpg_keys[0].content.contains("REDACTED_"),
+            "gpg key content must contain redaction token"
         );
     }
 }

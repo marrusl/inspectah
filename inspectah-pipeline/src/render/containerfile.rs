@@ -16,6 +16,7 @@
 //! 13. Epilogue (tmpfiles, RUN bootc container lint)
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 
@@ -31,6 +32,21 @@ use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value
 pub fn render_containerfile(snap: &InspectionSnapshot, materialized_roots: Option<&[String]>) -> String {
     let base = base_image_from_snapshot(snap);
     let mut lines: Vec<String> = Vec::new();
+
+    // Completeness warning — surface before any build instructions
+    if let Completeness::Partial { ref incomplete_sections, .. } = snap.completeness {
+        let section_names: Vec<String> = incomplete_sections
+            .iter()
+            .map(|id| format!("{:?}", id).to_lowercase())
+            .collect();
+        lines.push("# WARNING: This Containerfile was generated from an incomplete inspection.".into());
+        lines.push(format!(
+            "# The following inspector sections may be missing or degraded: {}",
+            section_names.join(", ")
+        ));
+        lines.push("# Review the audit report for details before building.".into());
+        lines.push(String::new());
+    }
 
     // 1. Packages section (FROM + repos + GPG + modules + packages)
     lines.extend(packages_section_lines(snap, &base));
@@ -121,11 +137,27 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
         lines.push(String::new());
     }
 
-    // GPG keys
-    let included_gpg: usize = rpm.gpg_keys.iter().filter(|k| k.include).count();
-    if included_gpg > 0 {
-        lines.push(format!("# === GPG Keys ({included_gpg}) ==="));
-        lines.push("COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/".into());
+    // GPG keys — generate per-key rpm --import using actual paths
+    let included_gpg: Vec<_> = rpm.gpg_keys.iter().filter(|k| k.include).collect();
+    if !included_gpg.is_empty() {
+        lines.push(format!("# === GPG Keys ({}) ===", included_gpg.len()));
+
+        // COPY each unique parent directory containing GPG keys
+        let mut gpg_dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for key in &included_gpg {
+            let rel = key.path.trim_start_matches('/');
+            if let Some((dir, _)) = rel.rsplit_once('/') {
+                gpg_dirs.insert(dir.to_string());
+            }
+        }
+        for dir in &gpg_dirs {
+            lines.push(format!("COPY config/{dir}/ /{dir}/"));
+        }
+
+        // Per-key rpm --import for each actual path
+        for key in &included_gpg {
+            lines.push(format!("RUN rpm --import {}", key.path));
+        }
         lines.push(String::new());
     }
 
@@ -507,6 +539,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         let unit = format!("{}.timer", t.name);
         if sanitize_shell_value(&unit).is_some() {
             timer_names.push(unit);
+        } else {
+            lines.push(format!(
+                "# FIXME: Timer unit name contains unsafe characters: {}",
+                t.name
+            ));
         }
     }
     for u in &included_timers {
@@ -514,6 +551,11 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             let unit = format!("{}.timer", u.name);
             if sanitize_shell_value(&unit).is_some() {
                 timer_names.push(unit);
+            } else {
+                lines.push(format!(
+                    "# FIXME: Timer unit name contains unsafe characters: {}",
+                    u.name
+                ));
             }
         }
     }
@@ -1142,6 +1184,7 @@ fn validate_lines() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::types::completeness::{Completeness, InspectorId};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 
     fn snapshot_with_packages(names: &[&str]) -> InspectionSnapshot {
@@ -1355,6 +1398,106 @@ mod tests {
         assert!(
             output.contains("FIXME: version lock pattern contains unsafe characters"),
             "unsafe version lock must produce a FIXME comment"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_partial_completeness_warning() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Partial {
+            incomplete_sections: vec![InspectorId::Config],
+            reason: "config inspector timed out".into(),
+        };
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("WARNING: This Containerfile was generated from an incomplete inspection"),
+            "must contain completeness warning"
+        );
+        assert!(
+            output.contains("config"),
+            "must list the incomplete section"
+        );
+        // Warning must appear before the FROM line
+        let warning_pos = output.find("WARNING").unwrap();
+        let from_pos = output.find("FROM").unwrap();
+        assert!(
+            warning_pos < from_pos,
+            "completeness warning must appear before FROM line"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_full_completeness_no_warning() {
+        let mut snap = InspectionSnapshot::new();
+        snap.completeness = Completeness::Full;
+        let output = render_containerfile(&snap, None);
+        assert!(
+            !output.contains("WARNING: This Containerfile was generated from an incomplete inspection"),
+            "full completeness must not produce warning"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_unsafe_timer_fixme() {
+        use inspectah_core::types::scheduled::{ScheduledTaskSection, SystemdTimer};
+        let mut snap = InspectionSnapshot::new();
+        snap.scheduled_tasks = Some(ScheduledTaskSection {
+            systemd_timers: vec![SystemdTimer {
+                name: "evil$(whoami)".into(),
+                source: "local".into(),
+                include: Some(true),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("FIXME: Timer unit name contains unsafe characters"),
+            "unsafe timer must produce FIXME comment, got:\n{output}"
+        );
+        assert!(
+            output.contains("evil$(whoami)"),
+            "FIXME must include original unsafe name"
+        );
+        // Must NOT appear in any RUN line
+        for line in output.lines() {
+            if line.starts_with("RUN ") {
+                assert!(
+                    !line.contains("$(whoami)"),
+                    "RUN line must not contain unsafe timer name: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_containerfile_gpg_keys_actual_paths() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            gpg_keys: vec![
+                inspectah_core::types::rpm::RepoFile {
+                    path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
+                    content: "key-data".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                inspectah_core::types::rpm::RepoFile {
+                    path: "/opt/custom/keys/signing-key.asc".into(),
+                    content: "key-data".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9"),
+            "must have rpm --import for standard path key"
+        );
+        assert!(
+            output.contains("rpm --import /opt/custom/keys/signing-key.asc"),
+            "must have rpm --import for non-standard path key"
         );
     }
 }
