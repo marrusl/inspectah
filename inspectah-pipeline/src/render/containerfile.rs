@@ -145,6 +145,7 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
         // COPY each unique parent directory containing GPG keys
         let mut gpg_dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         let mut safe_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
+        let mut root_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
         for key in &included_gpg {
             // Host paths are absolute — check for traversal, NUL, and whitespace
             if key.path.contains("..") || key.path.contains('\0') {
@@ -159,13 +160,13 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
             match rel.rsplit_once('/') {
                 Some((dir, _)) if !dir.is_empty() => {
                     gpg_dirs.insert(dir.to_string());
-                    safe_keys.push(key);
                 }
                 _ => {
-                    // Root-level key (e.g., /good-key) — no parent dir to COPY
-                    lines.push(format!("# FIXME: GPG key at root path has no parent directory to stage: {}", super::safety::html_escape(&key.path)));
+                    // Root-level key (e.g., /good-key) — stage the file directly
+                    root_keys.push(key);
                 }
             }
+            safe_keys.push(key);
         }
         for dir in &gpg_dirs {
             match super::safety::sanitize_shell_value(dir) {
@@ -174,7 +175,13 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
             }
         }
 
-        // Per-key rpm --import only for keys that passed validation AND have a staging COPY
+        // COPY root-level keys directly (no parent directory)
+        for key in &root_keys {
+            let rel = key.path.trim_start_matches('/');
+            lines.push(format!("COPY config/{rel} {}", key.path));
+        }
+
+        // Per-key rpm --import only for keys that passed validation AND have staging
         for key in &safe_keys {
             lines.push(format!("RUN rpm --import {}", key.path));
         }
@@ -1565,7 +1572,7 @@ mod tests {
     }
 
     #[test]
-    fn test_containerfile_gpg_root_path_fixme() {
+    fn test_containerfile_gpg_root_path_staged() {
         let mut snap = InspectionSnapshot::new();
         snap.rpm = Some(RpmSection {
             gpg_keys: vec![inspectah_core::types::rpm::RepoFile {
@@ -1577,7 +1584,7 @@ mod tests {
             ..Default::default()
         });
         let output = render_containerfile(&snap, None);
-        assert!(output.contains("FIXME: GPG key at root path"), "root-level key must produce FIXME about missing parent");
-        assert!(!output.contains("rpm --import /good-key"), "root-level key must NOT reach rpm --import without staging");
+        assert!(output.contains("COPY config/good-key /good-key"), "root-level key must have direct COPY");
+        assert!(output.contains("rpm --import /good-key"), "root-level key must have rpm --import after staging");
     }
 }
