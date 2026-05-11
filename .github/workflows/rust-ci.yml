@@ -1,0 +1,44 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [rust]
+    paths:
+      - 'inspectah-*/src/**'
+      - 'inspectah-*/tests/**'
+      - 'inspectah-*/Cargo.toml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'testdata/**'
+      - '.github/workflows/rust-ci.yml'
+  pull_request:
+    branches: [rust]
+
+jobs:
+  tier1:
+    name: Format, Lint, Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace -- -W clippy::all
+      - name: Test (no ffi-rpm)
+        run: cargo test --workspace
+
+  tier2:
+    name: Test with librpm FFI
+    runs-on: ubuntu-latest
+    container:
+      image: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: dnf install -y gcc rpm-devel pkg-config rust cargo clippy
+      - name: Test with ffi-rpm
+        run: cargo test --workspace --features ffi-rpm
