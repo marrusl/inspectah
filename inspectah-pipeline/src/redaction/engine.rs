@@ -1,6 +1,8 @@
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::kernelboot::ConfigSnippet;
 use inspectah_core::types::redaction::{
-    Confidence, FindingKind, RedactionFinding, RedactionHint, RedactionKind, RedactionState,
+    Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
+    RedactionState,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -245,6 +247,158 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 }
                 gpg_key.content = content;
                 all_findings.extend(findings);
+            }
+        }
+    }
+
+    // Scan systemd drop-in contents in services section
+    if let Some(ref mut services) = snapshot.services {
+        for drop_in in &mut services.drop_ins {
+            let findings = scan_content(&drop_in.content, &drop_in.path);
+            if !findings.is_empty() {
+                let mut content = drop_in.content.clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High) {
+                        let kind_label = finding
+                            .finding_kind
+                            .as_ref()
+                            .map(|k| format!("{:?}", k).to_lowercase())
+                            .unwrap_or_else(|| "secret".to_string());
+                        if let Some(pat) = PATTERNS
+                            .iter()
+                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                        {
+                            let matches: Vec<(usize, usize, String)> = pat
+                                .regex
+                                .find_iter(&content)
+                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                .collect();
+                            for (start, end, matched) in matches.into_iter().rev() {
+                                let token = registry.token_for(&kind_label, &matched);
+                                content.replace_range(start..end, &token);
+                            }
+                        }
+                    }
+                }
+                drop_in.content = content;
+                all_findings.extend(findings);
+            }
+        }
+    }
+
+    // Scan fstab mount options and credential refs in storage section
+    if let Some(ref storage) = snapshot.storage {
+        for entry in &storage.fstab_entries {
+            if entry.options.contains("credentials=") || entry.options.contains("password=") {
+                all_findings.push(RedactionFinding {
+                    path: "/etc/fstab".to_string(),
+                    source: "mount_options".into(),
+                    kind: RedactionKind::Flagged,
+                    pattern: "credential_mount_option".into(),
+                    remediation: format!(
+                        "Mount point '{}': credential reference in mount options — use systemd credentials or a mount helper",
+                        entry.mount_point
+                    ),
+                    line: None,
+                    replacement: None,
+                    detection_method: DetectionMethod::Heuristic,
+                    confidence: Some(Confidence::High),
+                    finding_kind: Some(FindingKind::GenericCredential),
+                });
+            }
+        }
+        for cred in &storage.credential_refs {
+            all_findings.push(RedactionFinding {
+                path: "/etc/fstab".to_string(),
+                source: "credential_ref".into(),
+                kind: RedactionKind::Flagged,
+                pattern: "credential_file_ref".into(),
+                remediation: format!(
+                    "Mount point '{}': references credential file '{}' — ensure it is not included in snapshot",
+                    cred.mount_point, cred.credential_path
+                ),
+                line: None,
+                replacement: None,
+                detection_method: DetectionMethod::PathBased,
+                confidence: Some(Confidence::Medium),
+                finding_kind: Some(FindingKind::GenericCredential),
+            });
+        }
+    }
+
+    // Scan kernel cmdline and config snippets in kernelboot section
+    if let Some(ref mut kernelboot) = snapshot.kernel_boot {
+        // Scan cmdline for password=, key=, secret= etc.
+        let cmdline_findings = scan_content(&kernelboot.cmdline, "/proc/cmdline");
+        if !cmdline_findings.is_empty() {
+            let mut content = kernelboot.cmdline.clone();
+            for finding in &cmdline_findings {
+                if finding.confidence == Some(Confidence::High) {
+                    let kind_label = finding
+                        .finding_kind
+                        .as_ref()
+                        .map(|k| format!("{:?}", k).to_lowercase())
+                        .unwrap_or_else(|| "secret".to_string());
+                    if let Some(pat) = PATTERNS
+                        .iter()
+                        .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                    {
+                        let matches: Vec<(usize, usize, String)> = pat
+                            .regex
+                            .find_iter(&content)
+                            .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                            .collect();
+                        for (start, end, matched) in matches.into_iter().rev() {
+                            let token = registry.token_for(&kind_label, &matched);
+                            content.replace_range(start..end, &token);
+                        }
+                    }
+                }
+            }
+            kernelboot.cmdline = content;
+            all_findings.extend(cmdline_findings);
+        }
+
+        // Scan dracut, modprobe, modules-load, and tuned config snippets
+        let snippet_chains: Vec<&mut Vec<ConfigSnippet>> = vec![
+            &mut kernelboot.dracut_conf,
+            &mut kernelboot.modprobe_d,
+            &mut kernelboot.modules_load_d,
+            &mut kernelboot.tuned_custom_profiles,
+        ];
+        for snippets in snippet_chains {
+            for snippet in snippets.iter_mut() {
+                let findings = scan_content(&snippet.content, &snippet.path);
+                if !findings.is_empty() {
+                    let mut content = snippet.content.clone();
+                    for finding in &findings {
+                        if finding.confidence == Some(Confidence::High) {
+                            let kind_label = finding
+                                .finding_kind
+                                .as_ref()
+                                .map(|k| format!("{:?}", k).to_lowercase())
+                                .unwrap_or_else(|| "secret".to_string());
+                            if let Some(pat) = PATTERNS
+                                .iter()
+                                .find(|p| {
+                                    format!("{:?}", p.finding_kind).to_lowercase() == kind_label
+                                })
+                            {
+                                let matches: Vec<(usize, usize, String)> = pat
+                                    .regex
+                                    .find_iter(&content)
+                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                    .collect();
+                                for (start, end, matched) in matches.into_iter().rev() {
+                                    let token = registry.token_for(&kind_label, &matched);
+                                    content.replace_range(start..end, &token);
+                                }
+                            }
+                        }
+                    }
+                    snippet.content = content;
+                    all_findings.extend(findings);
+                }
             }
         }
     }
