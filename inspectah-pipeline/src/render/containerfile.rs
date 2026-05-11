@@ -16,7 +16,7 @@
 //! 13. Epilogue (tmpfiles, RUN bootc container lint)
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::completeness::Completeness;
+use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 
@@ -81,30 +81,63 @@ pub fn render_containerfile(
     }
 
     // 2. Services
+    if is_degraded(&snap.completeness, InspectorId::Services) {
+        lines.push("# FIXME: services data may be incomplete (inspector returned degraded)".into());
+    }
     lines.extend(services_section_lines(snap));
 
     // 3. Firewall zones
+    if is_degraded(&snap.completeness, InspectorId::Network) {
+        lines.push(
+            "# FIXME: network data may be incomplete (inspector returned degraded)".into(),
+        );
+    }
     lines.extend(network_section_lines(snap, true));
 
     // 4. Scheduled tasks
+    if is_degraded(&snap.completeness, InspectorId::ScheduledTasks) {
+        lines.push("# FIXME: scheduled_tasks data may be incomplete (inspector returned degraded)".into());
+    }
     lines.extend(scheduled_tasks_section_lines(snap));
 
     // 5. Config files
+    if is_degraded(&snap.completeness, InspectorId::Config) {
+        lines.push(
+            "# FIXME: config data may be incomplete (inspector returned degraded)".into(),
+        );
+    }
     lines.extend(config_section_lines(snap, materialized_roots));
 
     // 6. Non-RPM software
+    if is_degraded(&snap.completeness, InspectorId::NonRpmSoftware) {
+        lines.push("# FIXME: non_rpm_software data may be incomplete (inspector returned degraded)".into());
+    }
     lines.extend(non_rpm_section_lines(snap));
 
     // 7. Containers
+    if is_degraded(&snap.completeness, InspectorId::Containers) {
+        lines.push("# FIXME: containers data may be incomplete (inspector returned degraded)".into());
+    }
     lines.extend(containers_section_lines(snap));
 
     // 8. Users
+    if is_degraded(&snap.completeness, InspectorId::UsersGroups) {
+        lines.push("# FIXME: users_groups data may be incomplete (inspector returned degraded)".into());
+    }
     lines.extend(users_section_lines(snap));
 
     // 9. Kernel/boot
+    if is_degraded(&snap.completeness, InspectorId::KernelBoot) {
+        lines.push("# FIXME: kernel_boot data may be incomplete (inspector returned degraded)".into());
+    }
     lines.extend(kernel_boot_section_lines(snap));
 
     // 10. SELinux
+    if is_degraded(&snap.completeness, InspectorId::Selinux) {
+        lines.push(
+            "# FIXME: selinux data may be incomplete (inspector returned degraded)".into(),
+        );
+    }
     lines.extend(selinux_section_lines(snap));
 
     // 11. Network (non-firewall)
@@ -118,6 +151,19 @@ pub fn render_containerfile(
     lines.extend(validate_lines());
 
     lines.join("\n")
+}
+
+/// Check whether a specific inspector section is degraded (not failed).
+fn is_degraded(completeness: &Completeness, id: InspectorId) -> bool {
+    match completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => degraded_sections.contains(&id),
+        Completeness::Incomplete {
+            degraded_sections, ..
+        } => degraded_sections.contains(&id),
+        Completeness::Complete => false,
+    }
 }
 
 /// Returns the base image reference from the snapshot.
