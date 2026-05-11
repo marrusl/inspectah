@@ -25,10 +25,13 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             confidence: Confidence::High,
             remediation: "Remove private key or exclude file from snapshot",
         },
-        // Generic password in key=value config (password=, passwd=, db_password=, etc.)
+        // Generic password/credential in key=value config.
+        // Covers password=, passwd=, db_password=, secret=, api_key=, token=,
+        // credential=, private_key=, access_key=, secret_key=, *_key= (compound
+        // forms only — bare "key=" is too broad for config files).
         SecretPattern {
             regex: Regex::new(
-                r"(?i)(?:password|passwd|db_password|secret|api_key|token)\s*[=:]\s*\S+",
+                r"(?i)(?:password|passwd|db_password|secret|api_key|api_secret|token|credential|private_key|access_key|secret_key|auth_key|encryption_key|signing_key|master_key|service_key)\s*[=:]\s*\S+",
             )
             .unwrap(),
             finding_kind: FindingKind::Password,
@@ -237,5 +240,93 @@ mod tests {
     fn test_pattern_count() {
         // Ensure all patterns compile and we have the expected count.
         assert!(PATTERNS.len() >= 9, "expected at least 9 secret patterns");
+    }
+
+    // --- Expanded pattern coverage for KEY/CREDENTIAL surfaces ---
+
+    #[test]
+    fn test_credential_pattern_matches() {
+        let pat = &PATTERNS[1]; // Generic password/credential pattern
+        assert!(
+            pat.regex.is_match("credential = s3cretValue"),
+            "bare 'credential' must match"
+        );
+        assert!(
+            pat.regex.is_match("CREDENTIAL=foobar"),
+            "uppercase CREDENTIAL must match"
+        );
+    }
+
+    #[test]
+    fn test_compound_key_patterns_match() {
+        let pat = &PATTERNS[1];
+        assert!(
+            pat.regex.is_match("private_key = abc123"),
+            "private_key must match"
+        );
+        assert!(
+            pat.regex.is_match("access_key=AKIA1234567890"),
+            "access_key must match"
+        );
+        assert!(
+            pat.regex.is_match("secret_key = wJalrXUtnFEMI"),
+            "secret_key must match"
+        );
+        assert!(
+            pat.regex.is_match("auth_key=myauthkey"),
+            "auth_key must match"
+        );
+        assert!(
+            pat.regex.is_match("encryption_key = aes256key"),
+            "encryption_key must match"
+        );
+        assert!(
+            pat.regex.is_match("signing_key = rsasigningkey"),
+            "signing_key must match"
+        );
+        assert!(
+            pat.regex.is_match("master_key=masterpass"),
+            "master_key must match"
+        );
+        assert!(
+            pat.regex.is_match("service_key = svckey123"),
+            "service_key must match"
+        );
+        assert!(
+            pat.regex.is_match("api_secret = secretval"),
+            "api_secret must match"
+        );
+    }
+
+    #[test]
+    fn test_bare_key_does_not_match() {
+        let pat = &PATTERNS[1];
+        // Bare "key=value" must NOT match — too broad for config files
+        assert!(
+            !pat.regex.is_match("key = value"),
+            "bare 'key' must NOT match (too broad)"
+        );
+        assert!(
+            !pat.regex.is_match("cache_key = abc"),
+            "cache_key should not match (not security-related)"
+        );
+    }
+
+    #[test]
+    fn test_environment_credential_patterns() {
+        // Simulates systemd drop-in: Environment=DB_KEY=value
+        let content = "Environment=CREDENTIAL_FILE=/etc/secrets/db.key";
+        let findings = scan_shadow(content, "/dev/null"); // scan_shadow won't match
+        assert!(findings.is_empty(), "not a shadow file");
+
+        // But the generic pattern should match credential references
+        let pat = &PATTERNS[1];
+        // The full line won't match directly because Environment= prefix
+        // pushes the credential= out. But the pattern WILL catch:
+        let env_content = "credential = /etc/secrets/db.key";
+        assert!(
+            pat.regex.is_match(env_content),
+            "credential=... must match the expanded pattern"
+        );
     }
 }

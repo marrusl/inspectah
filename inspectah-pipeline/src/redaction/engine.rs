@@ -434,6 +434,24 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
+    // Convert inspector-emitted redaction hints into findings.
+    // Hints represent inspector-detected content that may need redaction
+    // but wasn't caught by pattern scanning (e.g., Environment=DB_KEY=value).
+    for hint in &snapshot.redaction_hints {
+        all_findings.push(RedactionFinding {
+            path: hint.path.clone(),
+            source: "inspector_hint".into(),
+            kind: RedactionKind::Flagged,
+            pattern: "inspector_hint".into(),
+            remediation: hint.reason.clone(),
+            line: None,
+            replacement: None,
+            detection_method: DetectionMethod::Heuristic,
+            confidence: hint.confidence,
+            finding_kind: Some(FindingKind::GenericCredential),
+        });
+    }
+
     // Determine redaction state
     let unresolved: Vec<&RedactionFinding> = all_findings
         .iter()
@@ -711,5 +729,83 @@ mod tests {
             rpm.gpg_keys[0].content.contains("REDACTED_"),
             "gpg key content must contain redaction token"
         );
+    }
+
+    // --- Inspector hint consumption tests ---
+
+    #[test]
+    fn test_hints_converted_to_findings() {
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/etc/systemd/system/app.service.d/env.conf".into(),
+            reason: "environment variable DB_PASSWORD may contain a secret".into(),
+            confidence: Some(Confidence::Medium),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        // The hint must appear as a finding
+        let hint_findings: Vec<&RedactionFinding> = snapshot
+            .redactions
+            .iter()
+            .filter(|f| f.source == "inspector_hint")
+            .collect();
+        assert_eq!(
+            hint_findings.len(),
+            1,
+            "inspector hint must be converted to a finding"
+        );
+        assert_eq!(
+            hint_findings[0].confidence,
+            Some(Confidence::Medium),
+            "hint confidence must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_hints_cause_partially_redacted() {
+        let mut snapshot = InspectionSnapshot::new();
+        // Medium-confidence hint = unresolvable by auto-redaction
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/etc/systemd/system/app.service.d/env.conf".into(),
+            reason: "environment variable DB_KEY may contain a secret".into(),
+            confidence: Some(Confidence::Medium),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        match &snapshot.redaction_state {
+            Some(RedactionState::PartiallyRedacted {
+                unresolved_count, ..
+            }) => {
+                assert!(
+                    *unresolved_count > 0,
+                    "medium-confidence hint must produce unresolved finding"
+                );
+            }
+            other => {
+                panic!("expected PartiallyRedacted due to medium-confidence hint, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_high_confidence_hints_fully_redacted() {
+        let mut snapshot = InspectionSnapshot::new();
+        // High-confidence hint = auto-resolved
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/proc/cmdline".into(),
+            reason: "kernel cmdline contains password=".into(),
+            confidence: Some(Confidence::High),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        match &snapshot.redaction_state {
+            Some(RedactionState::FullyRedacted { .. }) => {
+                // High-confidence findings are auto-resolved — no unresolved items
+            }
+            other => panic!("expected FullyRedacted for high-confidence-only hints, got {other:?}"),
+        }
     }
 }

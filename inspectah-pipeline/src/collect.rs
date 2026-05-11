@@ -180,7 +180,8 @@ pub fn collect(
 }
 
 /// Process a single inspector's join result: route section data, record
-/// warnings/failures, and extract RpmState when the RPM inspector succeeds.
+/// warnings/failures, collect redaction hints, and extract RpmState when
+/// the RPM inspector succeeds.
 fn handle_result(
     inspector: &dyn Inspector,
     handle: std::thread::ScopedJoinHandle<'_, Result<InspectorOutput, InspectorError>>,
@@ -201,6 +202,7 @@ fn handle_result(
             }
             route_section(snapshot, output.section);
             snapshot.warnings.extend(output.warnings);
+            snapshot.redaction_hints.extend(output.redaction_hints);
         }
         Ok(Err(InspectorError::Skipped { reason })) => {
             snapshot.warnings.push(Warning {
@@ -215,6 +217,7 @@ fn handle_result(
         })) => {
             route_section(snapshot, partial.section);
             snapshot.warnings.extend(partial.warnings);
+            snapshot.redaction_hints.extend(partial.redaction_hints);
             snapshot.warnings.push(Warning {
                 inspector: format!("{:?}", inspector.id()),
                 message: format!("degraded: {reason}"),
@@ -280,6 +283,7 @@ mod tests {
     use inspectah_core::traits::inspector::InspectorOutput;
     use inspectah_core::types::completeness::SourceSystemKind;
     use inspectah_core::types::os::OsRelease;
+    use inspectah_core::types::redaction::{Confidence, RedactionHint};
     use inspectah_core::types::system::SourceSystem;
 
     /// Mock inspector that always returns Failed.
@@ -621,5 +625,102 @@ mod tests {
             }
             other => panic!("expected Incomplete, got {other:?}"),
         }
+    }
+
+    // --- Redaction hints wiring tests ---
+
+    /// Mock inspector that returns Ok with redaction hints.
+    struct HintingInspector;
+    impl Inspector for HintingInspector {
+        fn id(&self) -> InspectorId {
+            InspectorId::Services
+        }
+        fn applicable_to(&self) -> &[SourceSystemKind] {
+            &[SourceSystemKind::PackageBased]
+        }
+        fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+            Ok(InspectorOutput {
+                section: SectionData::Services(Default::default()),
+                warnings: vec![],
+                redaction_hints: vec![RedactionHint {
+                    path: "/etc/systemd/system/app.service.d/env.conf".into(),
+                    reason: "Environment variable DB_PASSWORD may contain a secret".into(),
+                    confidence: Some(Confidence::Medium),
+                }],
+            })
+        }
+    }
+
+    /// Mock inspector that returns Degraded with redaction hints in partial output.
+    struct DegradedWithHintsInspector;
+    impl Inspector for DegradedWithHintsInspector {
+        fn id(&self) -> InspectorId {
+            InspectorId::KernelBoot
+        }
+        fn applicable_to(&self) -> &[SourceSystemKind] {
+            &[SourceSystemKind::PackageBased]
+        }
+        fn inspect(&self, _ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+            Err(InspectorError::Degraded {
+                partial: Box::new(InspectorOutput {
+                    section: SectionData::KernelBoot(Default::default()),
+                    warnings: vec![],
+                    redaction_hints: vec![RedactionHint {
+                        path: "/proc/cmdline".into(),
+                        reason: "kernel cmdline contains password=".into(),
+                        confidence: Some(Confidence::High),
+                    }],
+                }),
+                reason: "partial data".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn test_hints_wired_from_ok_inspector() {
+        let exec = build_test_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let inspectors: Vec<Box<dyn Inspector>> =
+            vec![Box::new(RpmInspector::new()), Box::new(HintingInspector)];
+        let pipeline = collect(&source, &exec, &inspectors);
+
+        assert_eq!(
+            pipeline.state.snapshot.redaction_hints.len(),
+            1,
+            "redaction hints from Ok inspector must be wired to snapshot"
+        );
+        assert!(
+            pipeline.state.snapshot.redaction_hints[0]
+                .reason
+                .contains("DB_PASSWORD"),
+            "hint content must be preserved"
+        );
+    }
+
+    #[test]
+    fn test_hints_wired_from_degraded_inspector() {
+        let exec = build_test_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(DegradedWithHintsInspector),
+        ];
+        let pipeline = collect(&source, &exec, &inspectors);
+
+        assert_eq!(
+            pipeline.state.snapshot.redaction_hints.len(),
+            1,
+            "redaction hints from Degraded inspector's partial output must be wired to snapshot"
+        );
+        assert!(
+            pipeline.state.snapshot.redaction_hints[0]
+                .reason
+                .contains("password="),
+            "hint content must be preserved from degraded output"
+        );
     }
 }

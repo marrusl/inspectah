@@ -104,13 +104,21 @@ impl Inspector for KernelbootInspector {
         let tuned_active = collect_tuned(exec);
 
         // 7. Config snippets from /etc/modprobe.d/, /etc/modules-load.d/, /etc/dracut.conf.d/
-        let modprobe_d = collect_config_snippets(exec, "/etc/modprobe.d", &mut redaction_hints);
-        let modules_load_d =
+        let (modprobe_d, modprobe_failures) =
+            collect_config_snippets(exec, "/etc/modprobe.d", &mut redaction_hints);
+        let (modules_load_d, modules_load_failures) =
             collect_config_snippets(exec, "/etc/modules-load.d", &mut redaction_hints);
 
         // dracut.conf.d — failure is a degraded condition
         let dracut_result =
             collect_config_snippets_strict(exec, "/etc/dracut.conf.d", &mut redaction_hints);
+
+        // Collect read failures from correctness-bearing config directories.
+        // Individual file read failures (e.g., size cap) mean the snapshot
+        // looks complete when collection was actually incomplete.
+        let mut snippet_failures: Vec<String> = Vec::new();
+        snippet_failures.extend(modprobe_failures);
+        snippet_failures.extend(modules_load_failures);
 
         // Build section with what we have
         let section = KernelBootSection {
@@ -145,6 +153,23 @@ impl Inspector for KernelbootInspector {
 
         // Check for dracut failure → Degraded (materially reduces section correctness)
         if let Err(reason) = dracut_result {
+            return Err(InspectorError::Degraded {
+                partial: Box::new(InspectorOutput {
+                    section: SectionData::KernelBoot(section),
+                    warnings: Vec::new(),
+                    redaction_hints,
+                }),
+                reason,
+            });
+        }
+
+        // Config snippet read failures → Degraded (missing data would
+        // make emitted artifacts look complete when collection was incomplete)
+        if !snippet_failures.is_empty() {
+            let reason = format!(
+                "config snippet read failures (possible size cap): {}",
+                snippet_failures.join("; ")
+            );
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::KernelBoot(section),
@@ -216,7 +241,16 @@ fn parse_lsmod(stdout: &str) -> Vec<KernelModule> {
 /// - Where file-defined != runtime → record as override
 fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, String> {
     // Read config files
-    let file_values = read_sysctl_files(exec);
+    let (file_values, sysctl_read_failures) = read_sysctl_files(exec);
+
+    // Sysctl config file read failures are correctness-bearing — missing
+    // overrides make the snapshot look like defaults when they're not.
+    if !sysctl_read_failures.is_empty() {
+        return Err(format!(
+            "sysctl config read failures: {}",
+            sysctl_read_failures.join("; ")
+        ));
+    }
 
     if file_values.is_empty() {
         return Ok(Vec::new());
@@ -256,9 +290,11 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
 }
 
 /// Read sysctl config files from standard directories.
-/// Returns map of key → (file_value, source_path).
-fn read_sysctl_files(exec: &dyn Executor) -> HashMap<String, (String, String)> {
+/// Returns (map of key → (file_value, source_path), read_failures).
+/// Read failures on individual sysctl config files are correctness-bearing.
+fn read_sysctl_files(exec: &dyn Executor) -> (HashMap<String, (String, String)>, Vec<String>) {
     let mut values = HashMap::new();
+    let mut read_failures = Vec::new();
 
     for dir_path in &["/etc/sysctl.d", "/usr/lib/sysctl.d"] {
         let dir = Path::new(dir_path);
@@ -271,17 +307,22 @@ fn read_sysctl_files(exec: &dyn Executor) -> HashMap<String, (String, String)> {
                     continue;
                 }
                 let file_path = dir.join(entry);
-                if let Ok(content) = exec.read_file(&file_path) {
-                    let source = file_path.to_string_lossy().to_string();
-                    for (key, val) in parse_sysctl_conf(&content) {
-                        values.insert(key, (val, source.clone()));
+                match exec.read_file(&file_path) {
+                    Ok(content) => {
+                        let source = file_path.to_string_lossy().to_string();
+                        for (key, val) in parse_sysctl_conf(&content) {
+                            values.insert(key, (val, source.clone()));
+                        }
+                    }
+                    Err(e) => {
+                        read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
                     }
                 }
             }
         }
     }
 
-    values
+    (values, read_failures)
 }
 
 /// Parse a sysctl.d config file into key-value pairs.
@@ -352,33 +393,41 @@ fn collect_tuned(exec: &dyn Executor) -> String {
 }
 
 /// Collect config snippets from a directory. Tolerates unreadable dirs.
+/// Returns (snippets, read_failures) — the caller decides whether failures
+/// are correctness-bearing.
 fn collect_config_snippets(
     exec: &dyn Executor,
     dir_path: &str,
     hints: &mut Vec<RedactionHint>,
-) -> Vec<ConfigSnippet> {
+) -> (Vec<ConfigSnippet>, Vec<String>) {
     let dir = Path::new(dir_path);
     let entries = match exec.read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return Vec::new(),
+        Err(_) => return (Vec::new(), Vec::new()),
     };
 
     let mut snippets = Vec::new();
+    let mut read_failures = Vec::new();
     for entry in &entries {
         let file_path = dir.join(entry);
-        if let Ok(content) = exec.read_file(&file_path) {
-            let path_str = file_path.to_string_lossy().to_string();
+        match exec.read_file(&file_path) {
+            Ok(content) => {
+                let path_str = file_path.to_string_lossy().to_string();
 
-            // Check for secret-like content
-            check_snippet_secrets(&path_str, &content, hints);
+                // Check for secret-like content
+                check_snippet_secrets(&path_str, &content, hints);
 
-            snippets.push(ConfigSnippet {
-                path: path_str,
-                content,
-            });
+                snippets.push(ConfigSnippet {
+                    path: path_str,
+                    content,
+                });
+            }
+            Err(e) => {
+                read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
+            }
         }
     }
-    snippets
+    (snippets, read_failures)
 }
 
 /// Strict variant: returns Err if the directory is unreadable.
@@ -466,5 +515,152 @@ mod tests {
             Some("en_US.UTF-8".to_string())
         );
         assert_eq!(parse_locale("# comment\n"), None);
+    }
+
+    // --- Size-cap / read-failure → Degraded tests ---
+
+    use crate::executor::mock::MockExecutor;
+    use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::types::os::OsRelease;
+    use inspectah_core::types::system::SourceSystem;
+
+    fn kb_test_os_release() -> OsRelease {
+        OsRelease {
+            name: "Red Hat Enterprise Linux".into(),
+            version_id: "9.4".into(),
+            id: "rhel".into(),
+            ..Default::default()
+        }
+    }
+
+    fn kb_base_mock() -> MockExecutor {
+        MockExecutor::new()
+            .with_file("/proc/cmdline", "root=/dev/sda1 ro quiet\n")
+            .with_command(
+                "lsmod",
+                ExecResult {
+                    stdout:
+                        "Module                  Size  Used by\nbridge                307200  0\n"
+                            .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "sysctl -a",
+                ExecResult {
+                    stdout: "kernel.sysrq = 0\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "timedatectl show --property=Timezone --value",
+                ExecResult {
+                    stdout: "America/New_York\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "tuned-adm active",
+                ExecResult {
+                    exit_code: 127,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/etc/dracut.conf.d", vec![])
+    }
+
+    #[test]
+    fn test_sysctl_config_read_failure_triggers_degraded() {
+        // Directory is readable but individual file fails to read (simulates size cap)
+        let exec = kb_base_mock()
+            .with_dir("/etc/sysctl.d", vec!["99-custom.conf"])
+            // NOTE: no .with_file for the .conf → read_file will return NotFound
+            .with_dir("/usr/lib/sysctl.d", vec![])
+            .with_dir("/etc/modprobe.d", vec![])
+            .with_dir("/etc/modules-load.d", vec![]);
+
+        let source = SourceSystem::PackageBased {
+            os_release: kb_test_os_release(),
+        };
+        let inspector = KernelbootInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, .. }) => {
+                assert!(
+                    reason.contains("sysctl") || reason.contains("99-custom.conf"),
+                    "degraded reason must mention the failed sysctl config: {reason}"
+                );
+            }
+            other => panic!("expected Degraded for unreadable sysctl config, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_modprobe_snippet_read_failure_triggers_degraded() {
+        // modprobe.d directory readable but a file in it fails to read
+        let exec = kb_base_mock()
+            .with_dir("/etc/sysctl.d", vec![])
+            .with_dir("/usr/lib/sysctl.d", vec![])
+            .with_dir("/etc/modprobe.d", vec!["blacklist-custom.conf"])
+            // no .with_file → read fails
+            .with_dir("/etc/modules-load.d", vec![]);
+
+        let source = SourceSystem::PackageBased {
+            os_release: kb_test_os_release(),
+        };
+        let inspector = KernelbootInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, .. }) => {
+                assert!(
+                    reason.contains("blacklist-custom.conf"),
+                    "degraded reason must mention the failed snippet: {reason}"
+                );
+            }
+            other => panic!("expected Degraded for unreadable modprobe snippet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_kernelboot_ok_when_all_readable() {
+        // All files present and readable — should succeed
+        let exec = kb_base_mock()
+            .with_dir("/etc/sysctl.d", vec!["99-custom.conf"])
+            .with_file("/etc/sysctl.d/99-custom.conf", "kernel.sysrq = 1\n")
+            .with_dir("/usr/lib/sysctl.d", vec![])
+            .with_dir("/etc/modprobe.d", vec!["blacklist.conf"])
+            .with_file("/etc/modprobe.d/blacklist.conf", "blacklist nouveau\n")
+            .with_dir("/etc/modules-load.d", vec![]);
+
+        let source = SourceSystem::PackageBased {
+            os_release: kb_test_os_release(),
+        };
+        let inspector = KernelbootInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        assert!(
+            result.is_ok(),
+            "all files readable → must succeed, got: {result:?}"
+        );
     }
 }
