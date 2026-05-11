@@ -1,0 +1,10 @@
+{
+  "filesystems": [
+    {"target": "/", "source": "/dev/sda2", "fstype": "xfs", "options": "rw,relatime"},
+    {"target": "/boot", "source": "/dev/sda1", "fstype": "xfs", "options": "rw,relatime"},
+    {"target": "/boot/efi", "source": "/dev/sda15", "fstype": "vfat", "options": "rw,relatime"},
+    {"target": "/tmp", "source": "tmpfs", "fstype": "tmpfs", "options": "rw"},
+    {"target": "/mnt/nfs", "source": "server:/export", "fstype": "nfs", "options": "rw,vers=4"},
+    {"target": "/data", "source": "/dev/mapper/vg0-data", "fstype": "xfs", "options": "rw,relatime"}
+  ]
+}

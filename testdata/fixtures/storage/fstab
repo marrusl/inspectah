@@ -1,0 +1,8 @@
+# /etc/fstab
+UUID=abc-123 /              xfs     defaults        0 0
+UUID=def-456 /boot          xfs     defaults        0 0
+UUID=ghi-789 /boot/efi      vfat    umask=0077,shortname=winnt 0 2
+tmpfs        /tmp           tmpfs   defaults        0 0
+//server/share /mnt/cifs     cifs    credentials=/etc/cifs-creds,uid=1000 0 0
+server:/export /mnt/nfs     nfs     defaults        0 0
+/dev/mapper/vg0-data /data  xfs     defaults        0 0
