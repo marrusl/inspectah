@@ -1,0 +1,15 @@
+UNIT FILE                                  STATE           PRESET
+auditd.service                             enabled         enabled
+bluetooth.service                          enabled         disabled
+chronyd.service                            enabled         enabled
+cups.service                               disabled        disabled
+firewalld.service                          enabled         enabled
+gdm.service                               disabled        enabled
+httpd.service                              enabled         disabled
+kdump.service                              enabled         enabled
+libvirtd.service                           enabled         disabled
+NetworkManager.service                     enabled         enabled
+sshd.service                               enabled         enabled
+tuned.service                              enabled         enabled
+
+12 unit files listed.
