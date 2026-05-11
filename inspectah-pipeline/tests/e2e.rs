@@ -7,7 +7,7 @@ use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
-use inspectah_core::traits::inspector::{InspectionContext, Inspector};
+use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
@@ -53,7 +53,7 @@ fn build_full_rpm_mock_executor() -> MockExecutor {
     )
 }
 
-/// Build source and executor as owned locals; caller borrows into InspectionContext.
+/// Build source as owned local; callers pass source + executor separately.
 fn build_source() -> SourceSystem {
     SourceSystem::PackageBased {
         os_release: test_os_release(),
@@ -87,15 +87,10 @@ fn run_full_pipeline_from_mock(
     config_overlay: Option<ConfigSection>,
 ) -> (InspectionSnapshot, std::path::PathBuf, TempDir) {
     let source = build_source();
-    let ctx = InspectionContext {
-        source: &source,
-        executor: &mock,
-        rpm_state: None,
-    };
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
     // Collect
-    let collected = collect(&ctx, &inspectors);
+    let collected = collect(&source, &mock, &inspectors);
 
     // Validate
     let validated = validate(collected).expect("validation should pass");
@@ -183,16 +178,12 @@ fn extract_text_files(tarball_path: &std::path::Path) -> Vec<(String, String)> {
 fn test_full_pipeline_produces_valid_tarball() {
     let exec = build_full_rpm_mock_executor();
     let source = build_source();
-    let ctx = InspectionContext {
-        source: &source,
-        executor: &exec,
-        rpm_state: None,
-    };
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
     let output_dir = TempDir::new().unwrap();
     let (_, tarball_path) = run_pipeline(
-        &ctx,
+        &source,
+        &exec,
         &inspectors,
         &output_dir.path().join("artifacts"),
         "testhost",
@@ -274,13 +265,8 @@ fn test_rpm_section_self_roundtrip() {
 
     let exec = build_full_rpm_mock_executor();
     let source = build_source();
-    let ctx = InspectionContext {
-        source: &source,
-        executor: &exec,
-        rpm_state: None,
-    };
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-    let collected = collect(&ctx, &inspectors);
+    let collected = collect(&source, &exec, &inspectors);
     let validated = validate(collected).expect("validation");
 
     let rpm = validated

@@ -1,63 +1,118 @@
 use inspectah_core::pipeline::{Collected, Pipeline};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
 use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::{Warning, WarningSeverity};
 
-/// Run all inspectors against the given context, routing each inspector's
-/// typed SectionData to the corresponding snapshot field.
+/// Run all inspectors in parallel via `std::thread::scope`, routing each
+/// inspector's typed SectionData to the corresponding snapshot field.
+///
+/// Inspectors are filtered by applicability before spawning. Each inspector
+/// runs in its own scoped thread; results are joined and routed serially
+/// by the main thread.
+///
+/// Panics inside any inspector are contained — the panicking inspector is
+/// recorded as Failed without tearing down other threads.
 ///
 /// Returns a `Pipeline<Collected>` containing the populated snapshot.
 pub fn collect(
-    ctx: &InspectionContext<'_>,
+    source: &SourceSystem,
+    executor: &dyn Executor,
     inspectors: &[Box<dyn Inspector>],
 ) -> Pipeline<Collected> {
     let mut snapshot = InspectionSnapshot::new();
     let mut failed: Vec<InspectorId> = Vec::new();
     let mut degraded: Vec<InspectorId> = Vec::new();
 
+    // Applicability gate: filter inspectors by source system kind.
+    // Inapplicable inspectors are recorded as Skipped without spawning.
+    let source_kind = source.kind();
+    let mut applicable: Vec<&Box<dyn Inspector>> = Vec::new();
+
     for inspector in inspectors {
-        match inspector.inspect(ctx) {
-            Ok(output) => {
-                route_section(&mut snapshot, output.section);
-                snapshot.warnings.extend(output.warnings);
-            }
-            Err(InspectorError::Skipped { reason }) => {
-                // Skipped is intentional (inapplicable) — not incomplete
-                snapshot.warnings.push(Warning {
-                    inspector: format!("{:?}", inspector.id()),
-                    message: format!("skipped: {reason}"),
-                    severity: Some(WarningSeverity::Info),
-                    ..Default::default()
-                });
-            }
-            Err(InspectorError::Degraded {
-                partial, reason, ..
-            }) => {
-                // Route partial data, but record as degraded
-                route_section(&mut snapshot, partial.section);
-                snapshot.warnings.extend(partial.warnings);
-                snapshot.warnings.push(Warning {
-                    inspector: format!("{:?}", inspector.id()),
-                    message: format!("degraded: {reason}"),
-                    severity: Some(WarningSeverity::Warning),
-                    ..Default::default()
-                });
-                degraded.push(inspector.id());
-            }
-            Err(InspectorError::Failed { reason }) => {
-                snapshot.warnings.push(Warning {
-                    inspector: format!("{:?}", inspector.id()),
-                    message: format!("failed: {reason}"),
-                    severity: Some(WarningSeverity::Error),
-                    ..Default::default()
-                });
-                failed.push(inspector.id());
-            }
+        if inspector.applicable_to().contains(&source_kind) {
+            applicable.push(inspector);
+        } else {
+            snapshot.warnings.push(Warning {
+                inspector: format!("{:?}", inspector.id()),
+                message: format!("skipped: not applicable to {source_kind:?}"),
+                severity: Some(WarningSeverity::Info),
+                ..Default::default()
+            });
         }
     }
+
+    // Build context from source + executor. For Slice 2a all inspectors
+    // are independent (no rpm_state dependency), so one context suffices.
+    // Slice 2c will add a two-wave model: Wave 1 runs RPM inspector
+    // (rpm_state: None), Wave 2 passes enriched context (rpm_state: Some).
+    let base_ctx = InspectionContext {
+        source,
+        executor,
+        rpm_state: None,
+    };
+
+    // Parallel execution via std::thread::scope — all borrows are valid
+    // for the scope's lifetime. Each thread returns its result; the main
+    // thread routes results serially after joining.
+    std::thread::scope(|s| {
+        let handles: Vec<_> = applicable
+            .iter()
+            .map(|inspector| s.spawn(|| inspector.inspect(&base_ctx)))
+            .collect();
+
+        for (inspector, handle) in applicable.iter().zip(handles) {
+            match handle.join() {
+                Ok(Ok(output)) => {
+                    route_section(&mut snapshot, output.section);
+                    snapshot.warnings.extend(output.warnings);
+                }
+                Ok(Err(InspectorError::Skipped { reason })) => {
+                    snapshot.warnings.push(Warning {
+                        inspector: format!("{:?}", inspector.id()),
+                        message: format!("skipped: {reason}"),
+                        severity: Some(WarningSeverity::Info),
+                        ..Default::default()
+                    });
+                }
+                Ok(Err(InspectorError::Degraded {
+                    partial, reason, ..
+                })) => {
+                    route_section(&mut snapshot, partial.section);
+                    snapshot.warnings.extend(partial.warnings);
+                    snapshot.warnings.push(Warning {
+                        inspector: format!("{:?}", inspector.id()),
+                        message: format!("degraded: {reason}"),
+                        severity: Some(WarningSeverity::Warning),
+                        ..Default::default()
+                    });
+                    degraded.push(inspector.id());
+                }
+                Ok(Err(InspectorError::Failed { reason })) => {
+                    snapshot.warnings.push(Warning {
+                        inspector: format!("{:?}", inspector.id()),
+                        message: format!("failed: {reason}"),
+                        severity: Some(WarningSeverity::Error),
+                        ..Default::default()
+                    });
+                    failed.push(inspector.id());
+                }
+                Err(_panic) => {
+                    // Panic contained — record as Failed
+                    failed.push(inspector.id());
+                    snapshot.warnings.push(Warning {
+                        inspector: format!("{:?}", inspector.id()),
+                        message: "inspector panicked".into(),
+                        severity: Some(WarningSeverity::Error),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    });
 
     // Set completeness based on inspector outcomes
     snapshot.completeness = if failed.is_empty() && degraded.is_empty() {
@@ -77,12 +132,11 @@ pub fn collect(
     };
 
     // Populate source identity so exported snapshots identify the host
-    snapshot.os_release = Some(ctx.source.os_release().clone());
-    snapshot.system_type = source_system_type(ctx.source);
+    snapshot.os_release = Some(source.os_release().clone());
+    snapshot.system_type = source_system_type(source);
 
     // Populate meta with provenance information
-    let hostname = ctx
-        .executor
+    let hostname = executor
         .read_file(std::path::Path::new("/etc/hostname"))
         .unwrap_or_default()
         .trim()
@@ -226,13 +280,8 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         // Pipeline produced a Collected state with rpm data
         assert!(pipeline.state.snapshot.rpm.is_some());
@@ -262,13 +311,8 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         // rpm section should be None (failed)
         assert!(pipeline.state.snapshot.rpm.is_none());
@@ -288,13 +332,8 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         // RPM routed correctly
         assert!(pipeline.state.snapshot.rpm.is_some());
@@ -311,13 +350,8 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
         let snap = &pipeline.state.snapshot;
 
         // os_release must be populated from the source system
@@ -358,13 +392,8 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
         let snap = &pipeline.state.snapshot;
 
         // os_release and system_type still set
@@ -392,13 +421,8 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         assert_eq!(
             pipeline.state.snapshot.completeness,
@@ -413,14 +437,9 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(FailingInspector)];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         match &pipeline.state.snapshot.completeness {
             Completeness::Incomplete {
@@ -444,14 +463,9 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(DegradedInspector)];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         // Partial data should be routed
         assert!(
@@ -480,14 +494,9 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(SkippedInspector)];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         assert_eq!(
             pipeline.state.snapshot.completeness,
@@ -502,18 +511,13 @@ mod tests {
         let source = SourceSystem::PackageBased {
             os_release: test_os_release(),
         };
-        let ctx = InspectionContext {
-            source: &source,
-            executor: &exec,
-            rpm_state: None,
-        };
         let inspectors: Vec<Box<dyn Inspector>> = vec![
             Box::new(RpmInspector::new()),
             Box::new(FailingInspector),
             Box::new(DegradedInspector),
             Box::new(SkippedInspector),
         ];
-        let pipeline = collect(&ctx, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors);
 
         match &pipeline.state.snapshot.completeness {
             Completeness::Incomplete {
