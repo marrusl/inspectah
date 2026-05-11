@@ -57,7 +57,7 @@ fn happy_path() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -112,7 +112,7 @@ fn credential_detection() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -158,7 +158,7 @@ fn findmnt_failure_returns_degraded() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -202,7 +202,7 @@ fn malformed_findmnt_json() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -235,7 +235,7 @@ fn fstab_unreadable_returns_failed() {
     let exec = MockExecutor::new();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -270,7 +270,7 @@ fn lvm_not_available() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -305,7 +305,7 @@ fn empty_fstab() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -337,7 +337,7 @@ fn storage_snapshot() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };

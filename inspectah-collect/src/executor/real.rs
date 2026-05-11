@@ -31,11 +31,33 @@ impl RealExecutor {
     }
 }
 
+/// Resolve a command name to an absolute path by probing standard
+/// system directories. Falls back to the bare command name for
+/// macOS test environments or non-standard locations.
+fn resolve_command(cmd: &str) -> std::path::PathBuf {
+    // Skip resolution for commands that are already absolute paths
+    if cmd.starts_with('/') {
+        return std::path::PathBuf::from(cmd);
+    }
+    for prefix in &["/usr/bin", "/usr/sbin"] {
+        let path = Path::new(prefix).join(cmd);
+        if path.exists() {
+            return path;
+        }
+    }
+    // Fallback to bare command (needed for macOS test environment)
+    std::path::PathBuf::from(cmd)
+}
+
 impl Executor for RealExecutor {
     fn run(&self, cmd: &str, args: &[&str]) -> ExecResult {
+        // Resolve command against /usr/bin, /usr/sbin before falling
+        // back to bare name. This ensures deterministic resolution
+        // regardless of the ambient PATH.
+        let resolved = resolve_command(cmd);
         // Fixed argv via Command::new + args — never shell strings.
         // LC_ALL=C ensures deterministic, locale-independent output.
-        let child = Command::new(cmd)
+        let child = Command::new(&resolved)
             .args(args)
             .env("LC_ALL", "C")
             .env("LANG", "C")
@@ -57,13 +79,17 @@ impl Executor for RealExecutor {
         // Wait with timeout. On timeout, kill and report.
         match child.wait_timeout(COMMAND_TIMEOUT) {
             Ok(Some(status)) => {
-                // Child exited within timeout. Read output.
+                // Child exited within timeout. Read output with streamed cap.
+                // Use io::Read::take() to prevent reading more than
+                // STDOUT_SIZE_CAP + 1 bytes into memory. The extra byte
+                // detects whether truncation occurred.
                 let stdout_raw = child
                     .stdout
                     .take()
-                    .map(|mut r| {
+                    .map(|r| {
                         let mut buf = Vec::new();
-                        let _ = io::Read::read_to_end(&mut r, &mut buf);
+                        let mut limited = io::Read::take(r, STDOUT_SIZE_CAP as u64 + 1);
+                        let _ = io::Read::read_to_end(&mut limited, &mut buf);
                         buf
                     })
                     .unwrap_or_default();
@@ -79,10 +105,8 @@ impl Executor for RealExecutor {
                     .unwrap_or_default();
 
                 let stdout = if stdout_raw.len() > STDOUT_SIZE_CAP {
-                    let mut s =
-                        String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
-                    s.push_str("\n[output truncated at 64 MB]");
-                    s
+                    let s = String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
+                    format!("{s}\n[output truncated at 64 MB]")
                 } else {
                     String::from_utf8_lossy(&stdout_raw).into_owned()
                 };

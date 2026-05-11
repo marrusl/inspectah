@@ -14,7 +14,7 @@ pub trait Inspector: Send + Sync {
 /// Enables scoped-thread execution where multiple InspectionContext
 /// values share one executor.
 pub struct InspectionContext<'a> {
-    pub source: &'a SourceSystem,
+    pub source_system: &'a SourceSystem,
     pub executor: &'a dyn crate::traits::executor::Executor,
     pub rpm_state: Option<&'a RpmState>,
 }

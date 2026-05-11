@@ -1,7 +1,9 @@
 use inspectah_core::pipeline::{Collected, Pipeline};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::Executor;
-use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
+use inspectah_core::traits::inspector::{
+    InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
+};
 use inspectah_core::types::completeness::{Completeness, InspectorId, SectionData};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::system::SourceSystem;
@@ -45,74 +47,91 @@ pub fn collect(
         }
     }
 
-    // Build context from source + executor. For Slice 2a all inspectors
-    // are independent (no rpm_state dependency), so one context suffices.
-    // Slice 2c will add a two-wave model: Wave 1 runs RPM inspector
-    // (rpm_state: None), Wave 2 passes enriched context (rpm_state: Some).
+    // ── Three-wave execution model ──────────────────────────────────
+    //
+    // Wave 1: RPM inspector + independent inspectors run in parallel
+    //         with rpm_state: None.
+    // Join:   Extract RpmState from RPM inspector output (if it ran).
+    // Wave 2: Dependent inspectors run in parallel with enriched
+    //         context containing rpm_state: Some(&rpm_state).
+    //
+    // For Slice 2a all non-RPM inspectors are independent (none need
+    // rpm_state), so Wave 2 is empty. The partition and enrichment
+    // path is exercised regardless — when Slice 2c adds dependent
+    // inspectors, they will land in Wave 2 automatically.
+
+    // Partition: RPM goes into Wave 1. Inspectors that need rpm_state
+    // would go into Wave 2 (none yet in Slice 2a).
+    // Partition applicable inspectors into Wave 1 (all for Slice 2a)
+    // and Wave 2 (rpm_state-dependent, empty for Slice 2a).
+    let mut wave1: Vec<&Box<dyn Inspector>> = Vec::new();
+    let wave2: Vec<&Box<dyn Inspector>> = Vec::new();
+    for insp in &applicable {
+        // All inspectors are Wave 1 for Slice 2a. When an inspector
+        // gains an rpm_state dependency, it moves to wave2.
+        wave1.push(insp);
+    }
+
+    // Wave 1 base context — no rpm_state available yet.
     let base_ctx = InspectionContext {
-        source,
+        source_system: source,
         executor,
         rpm_state: None,
     };
 
-    // Parallel execution via std::thread::scope — all borrows are valid
-    // for the scope's lifetime. Each thread returns its result; the main
-    // thread routes results serially after joining.
+    // Wave 1: parallel execution via std::thread::scope.
+    let mut rpm_state = RpmState::default();
+
     std::thread::scope(|s| {
-        let handles: Vec<_> = applicable
+        let handles: Vec<_> = wave1
             .iter()
             .map(|inspector| s.spawn(|| inspector.inspect(&base_ctx)))
             .collect();
 
-        for (inspector, handle) in applicable.iter().zip(handles) {
-            match handle.join() {
-                Ok(Ok(output)) => {
-                    route_section(&mut snapshot, output.section);
-                    snapshot.warnings.extend(output.warnings);
-                }
-                Ok(Err(InspectorError::Skipped { reason })) => {
-                    snapshot.warnings.push(Warning {
-                        inspector: format!("{:?}", inspector.id()),
-                        message: format!("skipped: {reason}"),
-                        severity: Some(WarningSeverity::Info),
-                        ..Default::default()
-                    });
-                }
-                Ok(Err(InspectorError::Degraded {
-                    partial, reason, ..
-                })) => {
-                    route_section(&mut snapshot, partial.section);
-                    snapshot.warnings.extend(partial.warnings);
-                    snapshot.warnings.push(Warning {
-                        inspector: format!("{:?}", inspector.id()),
-                        message: format!("degraded: {reason}"),
-                        severity: Some(WarningSeverity::Warning),
-                        ..Default::default()
-                    });
-                    degraded.push(inspector.id());
-                }
-                Ok(Err(InspectorError::Failed { reason })) => {
-                    snapshot.warnings.push(Warning {
-                        inspector: format!("{:?}", inspector.id()),
-                        message: format!("failed: {reason}"),
-                        severity: Some(WarningSeverity::Error),
-                        ..Default::default()
-                    });
-                    failed.push(inspector.id());
-                }
-                Err(_panic) => {
-                    // Panic contained — record as Failed
-                    failed.push(inspector.id());
-                    snapshot.warnings.push(Warning {
-                        inspector: format!("{:?}", inspector.id()),
-                        message: "inspector panicked".into(),
-                        severity: Some(WarningSeverity::Error),
-                        ..Default::default()
-                    });
-                }
-            }
+        for (inspector, handle) in wave1.iter().zip(handles) {
+            handle_result(
+                inspector.as_ref(),
+                handle,
+                &mut snapshot,
+                &mut failed,
+                &mut degraded,
+                &mut rpm_state,
+            );
         }
     });
+
+    // Wave 2: dependent inspectors get enriched context with rpm_state.
+    // Empty for Slice 2a — the API path is exercised, no inspectors run.
+    if !wave2.is_empty() {
+        let enriched_ctx = InspectionContext {
+            source_system: source,
+            executor,
+            rpm_state: Some(&rpm_state),
+        };
+
+        // Wave 2 does not mutate rpm_state — it only reads it.
+        // A separate mutable tracker is used for completeness bookkeeping.
+        std::thread::scope(|s| {
+            let handles: Vec<_> = wave2
+                .iter()
+                .map(|inspector| s.spawn(|| inspector.inspect(&enriched_ctx)))
+                .collect();
+
+            // Wave 2 inspectors don't produce RpmState, so pass a
+            // throwaway — the real rpm_state is already finalized.
+            let mut wave2_rpm = RpmState::default();
+            for (inspector, handle) in wave2.iter().zip(handles) {
+                handle_result(
+                    inspector.as_ref(),
+                    handle,
+                    &mut snapshot,
+                    &mut failed,
+                    &mut degraded,
+                    &mut wave2_rpm,
+                );
+            }
+        });
+    }
 
     // Set completeness based on inspector outcomes
     snapshot.completeness = if failed.is_empty() && degraded.is_empty() {
@@ -157,6 +176,72 @@ pub fn collect(
 
     Pipeline {
         state: Collected { snapshot },
+    }
+}
+
+/// Process a single inspector's join result: route section data, record
+/// warnings/failures, and extract RpmState when the RPM inspector succeeds.
+fn handle_result(
+    inspector: &dyn Inspector,
+    handle: std::thread::ScopedJoinHandle<'_, Result<InspectorOutput, InspectorError>>,
+    snapshot: &mut InspectionSnapshot,
+    failed: &mut Vec<InspectorId>,
+    degraded: &mut Vec<InspectorId>,
+    rpm_state: &mut RpmState,
+) {
+    match handle.join() {
+        Ok(Ok(output)) => {
+            // Extract RpmState from RPM inspector output before routing
+            if inspector.id() == InspectorId::Rpm {
+                if let SectionData::Rpm(ref rpm) = output.section {
+                    rpm_state.installed_packages =
+                        rpm.packages_added.iter().map(|p| p.name.clone()).collect();
+                    // owned_paths populated in later slices
+                }
+            }
+            route_section(snapshot, output.section);
+            snapshot.warnings.extend(output.warnings);
+        }
+        Ok(Err(InspectorError::Skipped { reason })) => {
+            snapshot.warnings.push(Warning {
+                inspector: format!("{:?}", inspector.id()),
+                message: format!("skipped: {reason}"),
+                severity: Some(WarningSeverity::Info),
+                ..Default::default()
+            });
+        }
+        Ok(Err(InspectorError::Degraded {
+            partial, reason, ..
+        })) => {
+            route_section(snapshot, partial.section);
+            snapshot.warnings.extend(partial.warnings);
+            snapshot.warnings.push(Warning {
+                inspector: format!("{:?}", inspector.id()),
+                message: format!("degraded: {reason}"),
+                severity: Some(WarningSeverity::Warning),
+                ..Default::default()
+            });
+            degraded.push(inspector.id());
+        }
+        Ok(Err(InspectorError::Failed { reason })) => {
+            snapshot.warnings.push(Warning {
+                inspector: format!("{:?}", inspector.id()),
+                message: format!("failed: {reason}"),
+                severity: Some(WarningSeverity::Error),
+                ..Default::default()
+            });
+            failed.push(inspector.id());
+        }
+        Err(_panic) => {
+            // Panic contained — record as Failed
+            failed.push(inspector.id());
+            snapshot.warnings.push(Warning {
+                inspector: format!("{:?}", inspector.id()),
+                message: "inspector panicked".into(),
+                severity: Some(WarningSeverity::Error),
+                ..Default::default()
+            });
+        }
     }
 }
 

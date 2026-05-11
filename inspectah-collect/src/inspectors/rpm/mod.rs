@@ -120,7 +120,7 @@ impl Inspector for RpmInspector {
         }
 
         // 2. Build baseline and classify
-        let baseline = self.build_baseline(ctx.source, ctx.rpm_state);
+        let baseline = self.build_baseline(ctx.source_system, ctx.rpm_state);
         let classified = classifier::classify_packages(&host_packages, &baseline);
 
         // 3. Split classified packages into added / base_image_only
@@ -129,7 +129,7 @@ impl Inspector for RpmInspector {
             .partition(|p| p.state != PackageState::BaseImageOnly);
 
         // 4. Collect supplementary data
-        let supp = self.collect_supplementary(exec, ctx.source);
+        let supp = self.collect_supplementary(exec, ctx.source_system);
 
         // 5. Build warnings
         let mut warnings = Vec::new();
@@ -246,7 +246,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let ctx = InspectionContext {
-            source: &source,
+            source_system: &source,
             executor: &exec,
             rpm_state: None,
         };
@@ -308,7 +308,7 @@ mod tests {
             staged_image: None,
         };
         let ctx = InspectionContext {
-            source: &source,
+            source_system: &source,
             executor: &exec,
             rpm_state: None,
         };
@@ -334,7 +334,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let ctx = InspectionContext {
-            source: &source,
+            source_system: &source,
             executor: &exec,
             rpm_state: None,
         };
