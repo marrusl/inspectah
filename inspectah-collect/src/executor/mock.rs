@@ -8,6 +8,11 @@ pub struct MockExecutor {
     files: HashMap<String, String>,
     dirs: HashMap<String, Vec<String>>,
     links: HashMap<String, String>,
+    /// Commands that simulate a timeout. When `run()` matches one of
+    /// these keys, it returns a timeout error result instead of the
+    /// normal command lookup. The Duration is recorded for diagnostics
+    /// but does not actually sleep.
+    timeout_commands: HashMap<String, std::time::Duration>,
 }
 
 impl MockExecutor {
@@ -17,6 +22,7 @@ impl MockExecutor {
             files: HashMap::new(),
             dirs: HashMap::new(),
             links: HashMap::new(),
+            timeout_commands: HashMap::new(),
         }
     }
 }
@@ -50,6 +56,16 @@ impl MockExecutor {
         self.links.insert(path.to_string(), target.to_string());
         self
     }
+
+    /// Register a command key that should simulate a timeout. When
+    /// `run()` matches this key, it returns a timeout error result
+    /// (exit_code=-1, descriptive stderr) without any actual delay.
+    /// The `duration` is included in the error message for realism.
+    pub fn with_timeout_simulation(mut self, cmd_key: &str, duration: std::time::Duration) -> Self {
+        self.timeout_commands
+            .insert(cmd_key.to_string(), duration);
+        self
+    }
 }
 
 impl Executor for MockExecutor {
@@ -59,6 +75,20 @@ impl Executor for MockExecutor {
         } else {
             format!("{} {}", cmd, args.join(" "))
         };
+
+        // Check for simulated timeout before normal command lookup.
+        if let Some(duration) = self.timeout_commands.get(&key) {
+            return ExecResult {
+                stderr: format!(
+                    "command timed out after {}s: {}",
+                    duration.as_secs(),
+                    key
+                ),
+                exit_code: -1,
+                ..Default::default()
+            };
+        }
+
         self.commands
             .get(&key)
             .cloned()

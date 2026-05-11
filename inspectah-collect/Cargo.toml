@@ -13,9 +13,11 @@ inspectah-core = { path = "../inspectah-core" }
 serde.workspace = true
 serde_json.workspace = true
 libc = { version = "0.2", optional = true }
+wait-timeout = "0.2"
 
 [build-dependencies]
 pkg-config = "0.3"
 
 [dev-dependencies]
 insta.workspace = true
+tempfile.workspace = true
