@@ -1,0 +1,54 @@
+---
+source: inspectah-collect/tests/services_test.rs
+assertion_line: 477
+expression: section
+---
+{
+  "state_changes": [
+    {
+      "unit": "bluetooth.service",
+      "current_state": "enabled",
+      "default_state": "disabled",
+      "action": "enable",
+      "include": true,
+      "owning_package": null,
+      "fleet": null
+    },
+    {
+      "unit": "gdm.service",
+      "current_state": "disabled",
+      "default_state": "enabled",
+      "action": "disable",
+      "include": true,
+      "owning_package": null,
+      "fleet": null
+    }
+  ],
+  "enabled_units": [
+    "auditd.service",
+    "bluetooth.service",
+    "chronyd.service",
+    "firewalld.service",
+    "httpd.service",
+    "kdump.service",
+    "libvirtd.service",
+    "NetworkManager.service",
+    "sshd.service",
+    "tuned.service"
+  ],
+  "disabled_units": [
+    "cups.service",
+    "gdm.service"
+  ],
+  "drop_ins": [
+    {
+      "unit": "httpd.service",
+      "path": "/etc/systemd/system/httpd.service.d/override.conf",
+      "content": "[Service]\nEnvironment=LANG=C\nLimitNOFILE=65535\n",
+      "include": true,
+      "tie": false,
+      "tie_winner": false,
+      "fleet": null
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+enable auditd.service
+enable chronyd.service
+enable firewalld.service
+enable gdm.service
+disable bluetooth.service
+enable kdump.service
+enable NetworkManager.service
+enable sshd.service
+enable tuned.service
