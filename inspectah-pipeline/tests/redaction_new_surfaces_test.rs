@@ -81,8 +81,11 @@ fn test_mount_credential_option_flagged() {
         "credential mount option must produce a finding"
     );
     assert!(
-        snapshot.redactions.iter().any(|f| f.path == "/etc/fstab"
-            && f.finding_kind == Some(FindingKind::GenericCredential)),
+        snapshot
+            .redactions
+            .iter()
+            .any(|f| f.path == "/etc/fstab"
+                && f.finding_kind == Some(FindingKind::GenericCredential)),
         "finding must be GenericCredential for credential mount option"
     );
 }
@@ -136,9 +139,10 @@ fn test_credential_ref_flagged() {
         "credential ref must produce a finding"
     );
     assert!(
-        snapshot.redactions.iter().any(|f| f
-            .remediation
-            .contains("/etc/backup-creds")),
+        snapshot
+            .redactions
+            .iter()
+            .any(|f| f.remediation.contains("/etc/backup-creds")),
         "finding remediation must reference the credential path"
     );
 }

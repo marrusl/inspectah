@@ -378,12 +378,9 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                                 .as_ref()
                                 .map(|k| format!("{:?}", k).to_lowercase())
                                 .unwrap_or_else(|| "secret".to_string());
-                            if let Some(pat) = PATTERNS
-                                .iter()
-                                .find(|p| {
-                                    format!("{:?}", p.finding_kind).to_lowercase() == kind_label
-                                })
-                            {
+                            if let Some(pat) = PATTERNS.iter().find(|p| {
+                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
+                            }) {
                                 let matches: Vec<(usize, usize, String)> = pat
                                     .regex
                                     .find_iter(&content)

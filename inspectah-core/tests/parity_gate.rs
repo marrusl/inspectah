@@ -81,16 +81,19 @@ fn test_parity_services_section_field_coverage() {
         !section.disabled_units.is_empty(),
         "golden must contain disabled_units"
     );
-    assert!(
-        !section.drop_ins.is_empty(),
-        "golden must contain drop_ins"
-    );
+    assert!(!section.drop_ins.is_empty(), "golden must contain drop_ins");
 
     // Verify state_change entries have all expected fields populated
     let sc = &section.state_changes[0];
     assert!(!sc.unit.is_empty(), "unit must be populated");
-    assert!(!sc.current_state.is_empty(), "current_state must be populated");
-    assert!(!sc.default_state.is_empty(), "default_state must be populated");
+    assert!(
+        !sc.current_state.is_empty(),
+        "current_state must be populated"
+    );
+    assert!(
+        !sc.default_state.is_empty(),
+        "default_state must be populated"
+    );
     assert!(!sc.action.is_empty(), "action must be populated");
 }
 
@@ -126,10 +129,7 @@ fn test_parity_storage_section_field_coverage() {
         !section.mount_points.is_empty(),
         "golden must contain mount_points"
     );
-    assert!(
-        !section.lvm_info.is_empty(),
-        "golden must contain lvm_info"
-    );
+    assert!(!section.lvm_info.is_empty(), "golden must contain lvm_info");
     assert!(
         !section.credential_refs.is_empty(),
         "golden must contain credential_refs"
@@ -138,7 +138,10 @@ fn test_parity_storage_section_field_coverage() {
     // Verify fstab entry has all expected fields
     let entry = &section.fstab_entries[0];
     assert!(!entry.device.is_empty(), "device must be populated");
-    assert!(!entry.mount_point.is_empty(), "mount_point must be populated");
+    assert!(
+        !entry.mount_point.is_empty(),
+        "mount_point must be populated"
+    );
     assert!(!entry.fstype.is_empty(), "fstype must be populated");
 }
 

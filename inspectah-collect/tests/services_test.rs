@@ -9,13 +9,16 @@ use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 
 /// Standard fixture: `systemctl list-unit-files` output.
-const SYSTEMCTL_FIXTURE: &str = include_str!("../../testdata/fixtures/services/systemctl-list-unit-files.txt");
+const SYSTEMCTL_FIXTURE: &str =
+    include_str!("../../testdata/fixtures/services/systemctl-list-unit-files.txt");
 
 /// Standard fixture: preset file.
-const PRESET_FIXTURE: &str = include_str!("../../testdata/fixtures/services/preset-90-default.preset");
+const PRESET_FIXTURE: &str =
+    include_str!("../../testdata/fixtures/services/preset-90-default.preset");
 
 /// Standard fixture: drop-in override.
-const DROPIN_FIXTURE: &str = include_str!("../../testdata/fixtures/services/dropin-httpd-override.conf");
+const DROPIN_FIXTURE: &str =
+    include_str!("../../testdata/fixtures/services/dropin-httpd-override.conf");
 
 fn pkg_source() -> SourceSystem {
     SourceSystem::PackageBased {
@@ -41,20 +44,14 @@ fn full_mock() -> MockExecutor {
             },
         )
         // Preset directory: /usr/lib/systemd/system-preset with one file
-        .with_dir(
-            "/usr/lib/systemd/system-preset",
-            vec!["90-default.preset"],
-        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file(
             "/usr/lib/systemd/system-preset/90-default.preset",
             PRESET_FIXTURE,
         )
         // Drop-in directory
         .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
-        .with_dir(
-            "/etc/systemd/system/httpd.service.d",
-            vec!["override.conf"],
-        )
+        .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
         .with_file(
             "/etc/systemd/system/httpd.service.d/override.conf",
             DROPIN_FIXTURE,
@@ -146,7 +143,9 @@ fn happy_path_state_changes() {
 
     // Verify enabled/disabled lists are populated
     assert!(section.enabled_units.contains(&"sshd.service".to_string()));
-    assert!(section.enabled_units.contains(&"auditd.service".to_string()));
+    assert!(section
+        .enabled_units
+        .contains(&"auditd.service".to_string()));
     assert!(section.disabled_units.contains(&"cups.service".to_string()));
     assert!(section.disabled_units.contains(&"gdm.service".to_string()));
 }
@@ -223,10 +222,7 @@ fn preset_glob_matching() {
                 ..Default::default()
             },
         )
-        .with_dir(
-            "/usr/lib/systemd/system-preset",
-            vec!["99-catchall.preset"],
-        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["99-catchall.preset"])
         .with_file(
             "/usr/lib/systemd/system-preset/99-catchall.preset",
             "enable *\n",
@@ -372,14 +368,8 @@ fn empty_system_returns_empty_section() {
                 ..Default::default()
             },
         )
-        .with_dir(
-            "/usr/lib/systemd/system-preset",
-            vec!["90-default.preset"],
-        )
-        .with_file(
-            "/usr/lib/systemd/system-preset/90-default.preset",
-            "",
-        );
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file("/usr/lib/systemd/system-preset/90-default.preset", "");
 
     let source = pkg_source();
     let ctx = InspectionContext {
@@ -417,19 +407,13 @@ fn dropin_with_secret_produces_redaction_hint() {
                 ..Default::default()
             },
         )
-        .with_dir(
-            "/usr/lib/systemd/system-preset",
-            vec!["90-default.preset"],
-        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
         .with_file(
             "/usr/lib/systemd/system-preset/90-default.preset",
             "enable myapp.service\n",
         )
         .with_dir("/etc/systemd/system", vec!["myapp.service.d"])
-        .with_dir(
-            "/etc/systemd/system/myapp.service.d",
-            vec!["env.conf"],
-        )
+        .with_dir("/etc/systemd/system/myapp.service.d", vec!["env.conf"])
         .with_file(
             "/etc/systemd/system/myapp.service.d/env.conf",
             "[Service]\nEnvironment=DB_PASSWORD=secret123\nEnvironment=APP_PORT=8080\n",

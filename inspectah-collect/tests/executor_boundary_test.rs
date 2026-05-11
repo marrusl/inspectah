@@ -83,8 +83,8 @@ fn test_read_file_exceeding_cap_is_rejected() {
 
 #[test]
 fn test_mock_timeout_returns_error_result() {
-    let mock = MockExecutor::new()
-        .with_timeout_simulation("slow-cmd --scan", Duration::from_secs(30));
+    let mock =
+        MockExecutor::new().with_timeout_simulation("slow-cmd --scan", Duration::from_secs(30));
 
     let result = mock.run("slow-cmd", &["--scan"]);
     assert_eq!(result.exit_code, -1);

@@ -79,7 +79,8 @@ impl Executor for RealExecutor {
                     .unwrap_or_default();
 
                 let stdout = if stdout_raw.len() > STDOUT_SIZE_CAP {
-                    let mut s = String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
+                    let mut s =
+                        String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
                     s.push_str("\n[output truncated at 64 MB]");
                     s
                 } else {

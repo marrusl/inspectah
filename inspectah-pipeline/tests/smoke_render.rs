@@ -236,8 +236,7 @@ fn kernelboot_sysctl_in_containerfile() {
     let output = containerfile::render_containerfile(&snap, None);
 
     assert!(
-        output.contains("Kernel and Boot Configuration")
-            || output.contains("Kernel Arguments"),
+        output.contains("Kernel and Boot Configuration") || output.contains("Kernel Arguments"),
         "Containerfile must contain a kernel/boot section heading"
     );
     // sysctl overrides produce a comment reference

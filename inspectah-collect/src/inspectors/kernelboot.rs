@@ -3,7 +3,9 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride};
+use inspectah_core::types::kernelboot::{
+    ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
+};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
 use std::collections::HashMap;
 use std::path::Path;
@@ -103,10 +105,12 @@ impl Inspector for KernelbootInspector {
 
         // 7. Config snippets from /etc/modprobe.d/, /etc/modules-load.d/, /etc/dracut.conf.d/
         let modprobe_d = collect_config_snippets(exec, "/etc/modprobe.d", &mut redaction_hints);
-        let modules_load_d = collect_config_snippets(exec, "/etc/modules-load.d", &mut redaction_hints);
+        let modules_load_d =
+            collect_config_snippets(exec, "/etc/modules-load.d", &mut redaction_hints);
 
         // dracut.conf.d — failure is a degraded condition
-        let dracut_result = collect_config_snippets_strict(exec, "/etc/dracut.conf.d", &mut redaction_hints);
+        let dracut_result =
+            collect_config_snippets_strict(exec, "/etc/dracut.conf.d", &mut redaction_hints);
 
         // Build section with what we have
         let section = KernelBootSection {
@@ -115,7 +119,9 @@ impl Inspector for KernelbootInspector {
             sysctl_overrides,
             modules_load_d,
             modprobe_d,
-            dracut_conf: dracut_result.as_ref().map_or_else(|_| Vec::new(), |v| v.clone()),
+            dracut_conf: dracut_result
+                .as_ref()
+                .map_or_else(|_| Vec::new(), |v| v.clone()),
             loaded_modules,
             non_default_modules: Vec::new(),
             tuned_active,
