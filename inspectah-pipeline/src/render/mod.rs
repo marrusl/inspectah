@@ -106,14 +106,35 @@ mod tests {
         render_all(&snap, &context, dir.path()).unwrap();
 
         // Verify all 8 artifacts exist
-        assert!(dir.path().join("Containerfile").exists(), "Containerfile missing");
-        assert!(dir.path().join("report.html").exists(), "report.html missing");
-        assert!(dir.path().join("audit-report.md").exists(), "audit-report.md missing");
-        assert!(dir.path().join("secrets-review.md").exists(), "secrets-review.md missing");
+        assert!(
+            dir.path().join("Containerfile").exists(),
+            "Containerfile missing"
+        );
+        assert!(
+            dir.path().join("report.html").exists(),
+            "report.html missing"
+        );
+        assert!(
+            dir.path().join("audit-report.md").exists(),
+            "audit-report.md missing"
+        );
+        assert!(
+            dir.path().join("secrets-review.md").exists(),
+            "secrets-review.md missing"
+        );
         assert!(dir.path().join("README.md").exists(), "README.md missing");
-        assert!(dir.path().join("kickstart-suggestion.ks").exists(), "kickstart-suggestion.ks missing");
-        assert!(dir.path().join("inspection-snapshot.json").exists(), "inspection-snapshot.json missing");
-        assert!(dir.path().join("config").exists(), "config/ directory missing");
+        assert!(
+            dir.path().join("kickstart-suggestion.ks").exists(),
+            "kickstart-suggestion.ks missing"
+        );
+        assert!(
+            dir.path().join("inspection-snapshot.json").exists(),
+            "inspection-snapshot.json missing"
+        );
+        assert!(
+            dir.path().join("config").exists(),
+            "config/ directory missing"
+        );
     }
 
     #[test]
@@ -215,8 +236,14 @@ mod tests {
         }
 
         // Sanity: both should contain etc and usr
-        assert!(actual_dirs.contains(&"etc".to_string()), "etc must be materialized");
-        assert!(actual_dirs.contains(&"usr".to_string()), "usr must be materialized");
+        assert!(
+            actual_dirs.contains(&"etc".to_string()),
+            "etc must be materialized"
+        );
+        assert!(
+            actual_dirs.contains(&"usr".to_string()),
+            "usr must be materialized"
+        );
     }
 
     /// Verify that a snapshot with no config files produces no COPY
@@ -232,7 +259,11 @@ mod tests {
         let containerfile = std::fs::read_to_string(dir.path().join("Containerfile")).unwrap();
         let config_copy_lines: Vec<&str> = containerfile
             .lines()
-            .filter(|l| l.starts_with("COPY config/") && !l.contains("yum.repos.d") && !l.contains("pki/rpm-gpg"))
+            .filter(|l| {
+                l.starts_with("COPY config/")
+                    && !l.contains("yum.repos.d")
+                    && !l.contains("pki/rpm-gpg")
+            })
             .collect();
         assert!(
             config_copy_lines.is_empty(),

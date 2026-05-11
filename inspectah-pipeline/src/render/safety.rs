@@ -48,9 +48,8 @@ pub fn html_escape(input: &str) -> String {
 }
 
 /// Exact bare-word kernel parameters managed by bootloader/base image.
-const KARGS_BOOTLOADER_EXACT: &[&str] = &[
-    "ro", "rhgb", "quiet", "splash", "nosplash", "noplymouth",
-];
+const KARGS_BOOTLOADER_EXACT: &[&str] =
+    &["ro", "rhgb", "quiet", "splash", "nosplash", "noplymouth"];
 
 /// Prefixes whose matching kargs are bootloader/installer-owned.
 const KARGS_BOOTLOADER_PREFIXES: &[&str] = &[
@@ -111,7 +110,10 @@ mod tests {
     #[test]
     fn test_html_escape() {
         assert_eq!(html_escape("normal text"), "normal text");
-        assert_eq!(html_escape("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;");
+        assert_eq!(
+            html_escape("<script>alert(1)</script>"),
+            "&lt;script&gt;alert(1)&lt;/script&gt;"
+        );
         assert_eq!(html_escape("a & b"), "a &amp; b");
         assert_eq!(html_escape("\"quoted\""), "&quot;quoted&quot;");
         assert_eq!(html_escape("it's"), "it&#x27;s");

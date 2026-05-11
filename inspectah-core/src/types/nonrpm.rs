@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
-use super::fleet::FleetPrevalence;
 use super::config::ConfigFileEntry;
+use super::fleet::FleetPrevalence;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PipPackage {

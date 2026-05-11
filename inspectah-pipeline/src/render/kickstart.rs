@@ -38,9 +38,7 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
 
         if !static_conns.is_empty() {
             lines.push("# --- Static connections ---".into());
-            lines.push(
-                "# FIXME: fill in IP, netmask, gateway for each static connection".into(),
-            );
+            lines.push("# FIXME: fill in IP, netmask, gateway for each static connection".into());
             for c in &static_conns {
                 lines.push(format!(
                     "# network --bootproto=static --device={} --ip=FIXME --netmask=FIXME --gateway=FIXME",

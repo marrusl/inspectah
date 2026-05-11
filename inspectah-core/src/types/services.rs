@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::fleet::FleetPrevalence;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServiceStateChange {

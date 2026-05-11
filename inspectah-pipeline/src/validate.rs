@@ -64,7 +64,10 @@ mod tests {
         let p = collected(SCHEMA_VERSION);
         let result = validate(p);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().state.snapshot.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            result.unwrap().state.snapshot.schema_version,
+            SCHEMA_VERSION
+        );
     }
 
     #[test]
@@ -73,7 +76,10 @@ mod tests {
         let result = validate(p);
         assert!(result.is_ok());
         // After migration, version should be bumped to current
-        assert_eq!(result.unwrap().state.snapshot.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            result.unwrap().state.snapshot.schema_version,
+            SCHEMA_VERSION
+        );
     }
 
     #[test]
@@ -81,7 +87,10 @@ mod tests {
         let p = collected(13);
         let result = validate(p);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap().state.snapshot.schema_version, SCHEMA_VERSION);
+        assert_eq!(
+            result.unwrap().state.snapshot.schema_version,
+            SCHEMA_VERSION
+        );
     }
 
     #[test]

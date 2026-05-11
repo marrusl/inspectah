@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::fleet::FleetPrevalence;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelinuxPortLabel {
@@ -44,7 +44,7 @@ mod tests {
             mode: "enforcing".to_string(),
             custom_modules: vec!["myapp".to_string()],
             boolean_overrides: vec![
-                serde_json::json!({"name": "httpd_can_network_connect", "state": true})
+                serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
             ],
             fcontext_rules: vec!["/opt/app(/.*)?".to_string()],
             audit_rules: vec![],

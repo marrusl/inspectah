@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::fleet::FleetPrevalence;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -213,10 +213,22 @@ mod tests {
 
     #[test]
     fn test_package_state_json_values() {
-        assert_eq!(serde_json::to_string(&PackageState::Added).unwrap(), r#""added""#);
-        assert_eq!(serde_json::to_string(&PackageState::BaseImageOnly).unwrap(), r#""base_image_only""#);
-        assert_eq!(serde_json::to_string(&PackageState::LocalInstall).unwrap(), r#""local_install""#);
-        assert_eq!(serde_json::to_string(&PackageState::NoRepo).unwrap(), r#""no_repo""#);
+        assert_eq!(
+            serde_json::to_string(&PackageState::Added).unwrap(),
+            r#""added""#
+        );
+        assert_eq!(
+            serde_json::to_string(&PackageState::BaseImageOnly).unwrap(),
+            r#""base_image_only""#
+        );
+        assert_eq!(
+            serde_json::to_string(&PackageState::LocalInstall).unwrap(),
+            r#""local_install""#
+        );
+        assert_eq!(
+            serde_json::to_string(&PackageState::NoRepo).unwrap(),
+            r#""no_repo""#
+        );
     }
 
     #[test]

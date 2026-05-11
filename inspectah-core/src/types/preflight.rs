@@ -1,5 +1,5 @@
+use super::rpm::{RepoStatus, UnverifiablePackage};
 use serde::{Deserialize, Serialize};
-use super::rpm::{UnverifiablePackage, RepoStatus};
 use std::path::PathBuf;
 
 /// Go-compatible preflight result (stored in snapshot JSON).

@@ -12,8 +12,7 @@ use tar::Header;
 use super::configtree::validate_tarball_entry;
 
 /// Regex for unsafe filename characters — replaced during hostname sanitization.
-static UNSAFE_FILENAME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[^\w.-]").unwrap());
+static UNSAFE_FILENAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^\w.-]").unwrap());
 
 /// Remove characters unsafe for filenames from a hostname.
 pub fn sanitize_hostname(hostname: &str) -> String {
@@ -204,34 +203,17 @@ mod tests {
         std::fs::create_dir_all(source.join("schema")).unwrap();
 
         // Write the 8 always-written artifacts
-        std::fs::write(
-            source.join("inspection-snapshot.json"),
-            "{}",
-        )
-        .unwrap();
+        std::fs::write(source.join("inspection-snapshot.json"), "{}").unwrap();
         std::fs::write(source.join("Containerfile"), "FROM ...").unwrap();
         std::fs::write(source.join("README.md"), "# Output").unwrap();
         std::fs::write(source.join("report.html"), "<html>").unwrap();
         std::fs::write(source.join("audit-report.md"), "# Audit").unwrap();
-        std::fs::write(
-            source.join("secrets-review.md"),
-            "# Secrets",
-        )
-        .unwrap();
-        std::fs::write(
-            source.join("kickstart-suggestion.ks"),
-            "# KS",
-        )
-        .unwrap();
-        std::fs::write(
-            source.join("schema/snapshot.schema.json"),
-            "{}",
-        )
-        .unwrap();
+        std::fs::write(source.join("secrets-review.md"), "# Secrets").unwrap();
+        std::fs::write(source.join("kickstart-suggestion.ks"), "# KS").unwrap();
+        std::fs::write(source.join("schema/snapshot.schema.json"), "{}").unwrap();
 
         let tarball_path = dir.path().join("output.tar.gz");
-        create_tarball(&source, &tarball_path, "inspectah-testhost-20260510-120000")
-            .unwrap();
+        create_tarball(&source, &tarball_path, "inspectah-testhost-20260510-120000").unwrap();
 
         let expected = [
             "inspection-snapshot.json",

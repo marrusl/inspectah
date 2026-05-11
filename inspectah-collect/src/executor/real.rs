@@ -21,9 +21,7 @@ impl RealExecutor {
 
 impl Executor for RealExecutor {
     fn run(&self, cmd: &str, args: &[&str]) -> ExecResult {
-        let result = Command::new(cmd)
-            .args(args)
-            .output();
+        let result = Command::new(cmd).args(args).output();
         match result {
             Ok(output) => ExecResult {
                 stdout: String::from_utf8_lossy(&output.stdout).into_owned(),

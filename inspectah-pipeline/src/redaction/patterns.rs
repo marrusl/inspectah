@@ -34,7 +34,8 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
             finding_kind: FindingKind::Password,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
-            remediation: "Use environment variables or a secrets manager instead of inline passwords",
+            remediation:
+                "Use environment variables or a secrets manager instead of inline passwords",
         },
         // AWS access key ID (AKIA...)
         SecretPattern {
@@ -78,8 +79,7 @@ pub(crate) static PATTERNS: LazyLock<Vec<SecretPattern>> = LazyLock::new(|| {
         },
         // WireGuard private key (base64, 44 chars including trailing =)
         SecretPattern {
-            regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)\s*=\s*[A-Za-z0-9+/]{43}=")
-                .unwrap(),
+            regex: Regex::new(r"(?i)(?:PrivateKey|PreSharedKey)\s*=\s*[A-Za-z0-9+/]{43}=").unwrap(),
             finding_kind: FindingKind::WireguardKey,
             detection_method: DetectionMethod::Pattern,
             confidence: Confidence::High,
@@ -216,7 +216,10 @@ mod tests {
             ShadowClassification::EmptyPassword { username } => {
                 assert_eq!(username, "nobody");
             }
-            other => panic!("expected EmptyPassword, got {:?}", std::mem::discriminant(&other)),
+            other => panic!(
+                "expected EmptyPassword, got {:?}",
+                std::mem::discriminant(&other)
+            ),
         }
     }
 
