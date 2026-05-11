@@ -1,3 +1,4 @@
+use crate::types::completeness::SourceSystemKind;
 use crate::types::os::{OsRelease, OstreeVariant};
 
 pub type ImageRef = String;
@@ -46,6 +47,14 @@ pub enum MigrationKind {
 }
 
 impl SourceSystem {
+    pub fn kind(&self) -> SourceSystemKind {
+        match self {
+            SourceSystem::PackageBased { .. } => SourceSystemKind::PackageBased,
+            SourceSystem::RpmOstree { .. } => SourceSystemKind::RpmOstree,
+            SourceSystem::Bootc { .. } => SourceSystemKind::Bootc,
+        }
+    }
+
     pub fn os_release(&self) -> &OsRelease {
         match self {
             Self::PackageBased { os_release, .. }
@@ -108,7 +117,30 @@ impl MigrationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::completeness::SourceSystemKind;
     use crate::types::os::OsRelease;
+
+    #[test]
+    fn test_source_system_kind_derivation() {
+        let pkg = SourceSystem::PackageBased {
+            os_release: OsRelease::default(),
+        };
+        assert_eq!(pkg.kind(), SourceSystemKind::PackageBased);
+
+        let ostree = SourceSystem::RpmOstree {
+            os_release: OsRelease::default(),
+            variant: crate::types::os::OstreeVariant::Silverblue,
+            base_image: None,
+        };
+        assert_eq!(ostree.kind(), SourceSystemKind::RpmOstree);
+
+        let bootc = SourceSystem::Bootc {
+            os_release: OsRelease::default(),
+            booted_image: "registry.example.com/rhel:9".into(),
+            staged_image: None,
+        };
+        assert_eq!(bootc.kind(), SourceSystemKind::Bootc);
+    }
 
     #[test]
     fn test_same_stream_migration() {
@@ -154,7 +186,12 @@ mod tests {
             booted_image: "registry.redhat.io/rhel9/rhel-bootc:9.4".into(),
             staged_image: Some("registry.redhat.io/rhel9/rhel-bootc:9.5".into()),
         };
-        if let SourceSystem::Bootc { booted_image, staged_image, .. } = &source {
+        if let SourceSystem::Bootc {
+            booted_image,
+            staged_image,
+            ..
+        } = &source
+        {
             assert!(!booted_image.is_empty());
             assert!(staged_image.is_some());
         }

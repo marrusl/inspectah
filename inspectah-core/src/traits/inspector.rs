@@ -7,15 +7,16 @@ use std::fmt;
 pub trait Inspector: Send + Sync {
     fn id(&self) -> InspectorId;
     fn applicable_to(&self) -> &[SourceSystemKind];
-    fn inspect(&self, ctx: &InspectionContext) -> Result<InspectorOutput, InspectorError>;
+    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError>;
 }
 
-/// Carries the full SourceSystem — bootc needs booted_image,
-/// rpm-ostree needs variant + base_image.
-pub struct InspectionContext {
-    pub executor: Box<dyn crate::traits::executor::Executor>,
-    pub source: SourceSystem,
-    pub rpm_state: Option<RpmState>,
+/// Borrowed references into executor + source system state.
+/// Enables scoped-thread execution where multiple InspectionContext
+/// values share one executor.
+pub struct InspectionContext<'a> {
+    pub source: &'a SourceSystem,
+    pub executor: &'a dyn crate::traits::executor::Executor,
+    pub rpm_state: Option<&'a RpmState>,
 }
 
 /// Read-only RPM state provided to non-RPM inspectors during two-phase collection.
@@ -35,9 +36,16 @@ pub struct InspectorOutput {
 
 #[derive(Debug, Clone)]
 pub enum InspectorError {
-    Skipped { reason: String },
-    Degraded { partial: Box<InspectorOutput>, reason: String },
-    Failed { reason: String },
+    Skipped {
+        reason: String,
+    },
+    Degraded {
+        partial: Box<InspectorOutput>,
+        reason: String,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 impl fmt::Display for InspectorError {
@@ -58,10 +66,14 @@ mod tests {
 
     #[test]
     fn test_inspector_error_display() {
-        let err = InspectorError::Skipped { reason: "not applicable".into() };
+        let err = InspectorError::Skipped {
+            reason: "not applicable".into(),
+        };
         assert!(format!("{err}").contains("not applicable"));
 
-        let err = InspectorError::Failed { reason: "rpm db corrupt".into() };
+        let err = InspectorError::Failed {
+            reason: "rpm db corrupt".into(),
+        };
         assert!(format!("{err}").contains("rpm db corrupt"));
     }
 

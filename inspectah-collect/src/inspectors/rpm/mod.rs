@@ -47,13 +47,17 @@ impl RpmInspector {
     fn build_baseline(
         &self,
         _source: &SourceSystem,
-        _rpm_state: &Option<inspectah_core::traits::inspector::RpmState>,
+        _rpm_state: Option<&inspectah_core::traits::inspector::RpmState>,
     ) -> HashMap<String, PackageEntry> {
         // Phase 1: no baseline subtraction
         HashMap::new()
     }
 
-    fn collect_supplementary(&self, exec: &dyn Executor, source: &SourceSystem) -> SupplementaryData {
+    fn collect_supplementary(
+        &self,
+        exec: &dyn Executor,
+        source: &SourceSystem,
+    ) -> SupplementaryData {
         let repo_files = repos::collect_repo_files(exec);
 
         let mut gpg_keys = Vec::new();
@@ -66,12 +70,22 @@ impl RpmInspector {
 
         let rpm_va = if matches!(source, SourceSystem::PackageBased { .. }) {
             let va_result = exec.run("rpm", &["-Va"]);
-            if va_result.stdout.is_empty() { Vec::new() } else { modules::parse_rpm_va(&va_result.stdout) }
+            if va_result.stdout.is_empty() {
+                Vec::new()
+            } else {
+                modules::parse_rpm_va(&va_result.stdout)
+            }
         } else {
             Vec::new()
         };
 
-        SupplementaryData { repo_files, gpg_keys, module_streams, version_locks, rpm_va }
+        SupplementaryData {
+            repo_files,
+            gpg_keys,
+            module_streams,
+            version_locks,
+            rpm_va,
+        }
     }
 }
 
@@ -94,8 +108,8 @@ impl Inspector for RpmInspector {
         ]
     }
 
-    fn inspect(&self, ctx: &InspectionContext) -> Result<InspectorOutput, InspectorError> {
-        let exec = ctx.executor.as_ref();
+    fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+        let exec = ctx.executor;
 
         // 1. Query packages
         let host_packages = self.query_packages(exec);
@@ -106,7 +120,7 @@ impl Inspector for RpmInspector {
         }
 
         // 2. Build baseline and classify
-        let baseline = self.build_baseline(&ctx.source, &ctx.rpm_state);
+        let baseline = self.build_baseline(ctx.source, ctx.rpm_state);
         let classified = classifier::classify_packages(&host_packages, &baseline);
 
         // 3. Split classified packages into added / base_image_only
@@ -115,7 +129,7 @@ impl Inspector for RpmInspector {
             .partition(|p| p.state != PackageState::BaseImageOnly);
 
         // 4. Collect supplementary data
-        let supp = self.collect_supplementary(exec, &ctx.source);
+        let supp = self.collect_supplementary(exec, ctx.source);
 
         // 5. Build warnings
         let mut warnings = Vec::new();
@@ -222,19 +236,18 @@ mod tests {
         assert!(inspector
             .applicable_to()
             .contains(&SourceSystemKind::RpmOstree));
-        assert!(inspector
-            .applicable_to()
-            .contains(&SourceSystemKind::Bootc));
+        assert!(inspector.applicable_to().contains(&SourceSystemKind::Bootc));
     }
 
     #[test]
     fn test_rpm_inspector_produces_section_data() {
-        let mock = build_rpm_mock_executor();
+        let exec = build_rpm_mock_executor();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
         let ctx = InspectionContext {
-            executor: Box::new(mock),
-            source: SourceSystem::PackageBased {
-                os_release: test_os_release(),
-            },
+            source: &source,
+            executor: &exec,
             rpm_state: None,
         };
         let output = RpmInspector::new().inspect(&ctx).unwrap();
@@ -281,7 +294,7 @@ mod tests {
     #[test]
     fn test_rpm_inspector_bootc_skips_rpm_va() {
         let rpm_qa_output = "0:bash-5.2.26-3.el9.x86_64\n";
-        let mock = MockExecutor::new().with_command(
+        let exec = MockExecutor::new().with_command(
             &format!("rpm -qa --queryformat {}\n", RPM_QA_FORMAT),
             ExecResult {
                 stdout: rpm_qa_output.into(),
@@ -289,13 +302,14 @@ mod tests {
                 ..Default::default()
             },
         );
+        let source = SourceSystem::Bootc {
+            os_release: test_os_release(),
+            booted_image: "registry.redhat.io/rhel9/rhel-bootc:9.4".into(),
+            staged_image: None,
+        };
         let ctx = InspectionContext {
-            executor: Box::new(mock),
-            source: SourceSystem::Bootc {
-                os_release: test_os_release(),
-                booted_image: "registry.redhat.io/rhel9/rhel-bootc:9.4".into(),
-                staged_image: None,
-            },
+            source: &source,
+            executor: &exec,
             rpm_state: None,
         };
         let output = RpmInspector::new().inspect(&ctx).unwrap();
@@ -308,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_rpm_inspector_fails_on_empty_packages() {
-        let mock = MockExecutor::new().with_command(
+        let exec = MockExecutor::new().with_command(
             &format!("rpm -qa --queryformat {}\n", RPM_QA_FORMAT),
             ExecResult {
                 stdout: "".into(),
@@ -316,11 +330,12 @@ mod tests {
                 ..Default::default()
             },
         );
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
         let ctx = InspectionContext {
-            executor: Box::new(mock),
-            source: SourceSystem::PackageBased {
-                os_release: test_os_release(),
-            },
+            source: &source,
+            executor: &exec,
             rpm_state: None,
         };
         let result = RpmInspector::new().inspect(&ctx);

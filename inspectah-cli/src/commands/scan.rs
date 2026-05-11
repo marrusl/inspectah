@@ -34,7 +34,9 @@ pub struct ScanArgs {
 }
 
 /// Detect the source system by reading /etc/os-release.
-fn detect_source_system(executor: &dyn inspectah_core::traits::executor::Executor) -> Result<SourceSystem> {
+fn detect_source_system(
+    executor: &dyn inspectah_core::traits::executor::Executor,
+) -> Result<SourceSystem> {
     let os_release_content = executor
         .read_file(std::path::Path::new("/etc/os-release"))
         .context("failed to read /etc/os-release")?;
@@ -81,13 +83,12 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     let executor = RealExecutor::new();
 
     // Step 1: Detect source system
-    let source = detect_source_system(&executor)
-        .context("source system detection failed")?;
+    let source = detect_source_system(&executor).context("source system detection failed")?;
 
-    // Step 2: Build inspection context
+    // Step 2: Build inspection context (borrowed references)
     let ctx = InspectionContext {
-        executor: Box::new(executor),
-        source,
+        source: &source,
+        executor: &executor,
         rpm_state: None,
     };
 
@@ -96,8 +97,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     let collected = collect(&ctx, &inspectors);
 
     // Step 4: Validate
-    let validated = validate(collected)
-        .context("snapshot validation failed")?;
+    let validated = validate(collected).context("snapshot validation failed")?;
 
     // Step 5: Redact
     let mut snapshot = validated.state.snapshot;
@@ -105,14 +105,13 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
 
     // If --inspect-only, write JSON and exit
     if args.inspect_only {
-        let json = serde_json::to_string_pretty(&snapshot)
-            .context("failed to serialize snapshot")?;
+        let json =
+            serde_json::to_string_pretty(&snapshot).context("failed to serialize snapshot")?;
 
         match &args.output {
             Some(path) => {
                 if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .context("failed to create output directory")?;
+                    std::fs::create_dir_all(parent).context("failed to create output directory")?;
                 }
                 std::fs::write(path, &json)
                     .with_context(|| format!("failed to write {}", path.display()))?;
@@ -126,12 +125,10 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     }
 
     // Step 6: Render all artifacts to a temp directory
-    let render_dir = tempfile::tempdir()
-        .context("failed to create temp directory")?;
+    let render_dir = tempfile::tempdir().context("failed to create temp directory")?;
 
     let render_context = RenderContext { target: None };
-    render::render_all(&snapshot, &render_context, render_dir.path())
-        .context("render failed")?;
+    render::render_all(&snapshot, &render_context, render_dir.path()).context("render failed")?;
 
     // Write a minimal schema placeholder (real JSON Schema is Phase 7)
     let schema_dir = render_dir.path().join("schema");
@@ -142,7 +139,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     )?;
 
     // Step 7: Create tarball
-    let hostname = get_hostname(ctx.executor.as_ref());
+    let hostname = get_hostname(ctx.executor);
     let stamp = get_output_stamp(&hostname);
     let tarball_name = format!("{stamp}.tar.gz");
 
@@ -153,8 +150,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
 
     if let Some(parent) = tarball_path.parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .context("failed to create output directory")?;
+            std::fs::create_dir_all(parent).context("failed to create output directory")?;
         }
     }
 

@@ -13,8 +13,24 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push(String::new());
 
     // Completeness warning
-    if let Completeness::Partial { ref incomplete_sections, ref reason } = snap.completeness {
-        let section_names: Vec<String> = incomplete_sections
+    let (affected_ids, reason) = match &snap.completeness {
+        Completeness::Partial {
+            degraded_sections,
+            reason,
+        } => (degraded_sections.clone(), reason.clone()),
+        Completeness::Incomplete {
+            failed_sections,
+            degraded_sections,
+            reason,
+        } => {
+            let mut ids = failed_sections.clone();
+            ids.extend(degraded_sections.iter().copied());
+            (ids, reason.clone())
+        }
+        Completeness::Complete => (vec![], String::new()),
+    };
+    if !affected_ids.is_empty() {
+        let section_names: Vec<String> = affected_ids
             .iter()
             .map(|id| format!("{:?}", id).to_lowercase())
             .collect();
@@ -80,15 +96,9 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("| Category | Count |".into());
     lines.push("|---|---|".into());
 
-    let no_baseline = snap
-        .rpm
-        .as_ref()
-        .map(|r| r.no_baseline)
-        .unwrap_or(false);
+    let no_baseline = snap.rpm.as_ref().map(|r| r.no_baseline).unwrap_or(false);
     if no_baseline {
-        lines.push(format!(
-            "| Packages (all -- no baseline) | {pkg_added} |"
-        ));
+        lines.push(format!("| Packages (all -- no baseline) | {pkg_added} |"));
     } else {
         lines.push(format!(
             "| Packages added (beyond base image) | {pkg_added} |"
@@ -102,10 +112,7 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
 
     if let Some(nrs) = &snap.non_rpm_software {
         if !nrs.items.is_empty() {
-            lines.push(format!(
-                "| Non-RPM software items | {} |",
-                nrs.items.len()
-            ));
+            lines.push(format!("| Non-RPM software items | {} |", nrs.items.len()));
         }
     }
 
@@ -140,12 +147,8 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
         .map(|kb| !kb.cmdline.is_empty())
         .unwrap_or(false);
     if has_kargs {
-        lines.push(
-            "# Custom kernel args detected -- verify they are baked into the image".into(),
-        );
-        lines.push(
-            "# or pass them via the bootloader configuration at deploy time.".into(),
-        );
+        lines.push("# Custom kernel args detected -- verify they are baked into the image".into());
+        lines.push("# or pass them via the bootloader configuration at deploy time.".into());
     }
     lines.push("# Switch an existing system to the new image:".into());
     lines.push("bootc switch my-bootc-image:latest".into());
@@ -193,7 +196,9 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     lines.push("| `report.html` | Interactive report (open in browser) |".into());
     lines.push("| `secrets-review.md` | Redacted items requiring manual handling |".into());
     lines.push("| `kickstart-suggestion.ks` | Suggested deploy-time settings |".into());
-    lines.push("| `inspection-snapshot.json` | Raw data for re-rendering (`--from-snapshot`) |".into());
+    lines.push(
+        "| `inspection-snapshot.json` | Raw data for re-rendering (`--from-snapshot`) |".into(),
+    );
     lines.push(String::new());
 
     // Warnings
@@ -232,7 +237,10 @@ mod tests {
     fn test_readme_renders() {
         let snap = InspectionSnapshot::new();
         let md = render_readme(&snap);
-        assert!(md.contains("podman build"), "must contain podman build command");
+        assert!(
+            md.contains("podman build"),
+            "must contain podman build command"
+        );
     }
 
     #[test]
@@ -256,8 +264,9 @@ mod tests {
     #[test]
     fn test_readme_partial_completeness_warning() {
         let mut snap = InspectionSnapshot::new();
-        snap.completeness = Completeness::Partial {
-            incomplete_sections: vec![InspectorId::Config, InspectorId::Rpm],
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Config, InspectorId::Rpm],
+            degraded_sections: vec![],
             reason: "inspectors timed out".into(),
         };
         let md = render_readme(&snap);
@@ -276,7 +285,7 @@ mod tests {
     #[test]
     fn test_readme_full_completeness_no_warning() {
         let mut snap = InspectionSnapshot::new();
-        snap.completeness = Completeness::Full;
+        snap.completeness = Completeness::Complete;
         let md = render_readme(&snap);
         assert!(
             !md.contains("WARNING: Incomplete inspection"),

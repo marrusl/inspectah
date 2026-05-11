@@ -67,12 +67,14 @@ pub enum SectionData {
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum Completeness {
     #[default]
-    Full,
+    Complete,
     Partial {
-        incomplete_sections: Vec<InspectorId>,
+        degraded_sections: Vec<InspectorId>,
         reason: String,
     },
-    Unverified {
-        missing: Vec<InspectorId>,
+    Incomplete {
+        failed_sections: Vec<InspectorId>,
+        degraded_sections: Vec<InspectorId>,
+        reason: String,
     },
 }
