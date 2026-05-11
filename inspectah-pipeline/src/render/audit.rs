@@ -12,21 +12,17 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
     lines.push("# Audit Report".into());
     lines.push(String::new());
 
-    // Incomplete sections warning
-    let affected_ids: Vec<_> = match &snap.completeness {
+    // Incomplete sections warning — distinguish failed (no data) from degraded (partial data)
+    let (failed_ids, degraded_ids) = match &snap.completeness {
+        Completeness::Complete => (vec![], vec![]),
         Completeness::Partial {
             degraded_sections, ..
-        } => degraded_sections.clone(),
+        } => (vec![], degraded_sections.clone()),
         Completeness::Incomplete {
             failed_sections,
             degraded_sections,
             ..
-        } => {
-            let mut ids = failed_sections.clone();
-            ids.extend(degraded_sections.iter().copied());
-            ids
-        }
-        Completeness::Complete => vec![],
+        } => (failed_sections.clone(), degraded_sections.clone()),
     };
     let completeness_reason = match &snap.completeness {
         Completeness::Partial { reason, .. } | Completeness::Incomplete { reason, .. } => {
@@ -34,22 +30,34 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         }
         Completeness::Complete => "",
     };
-    if !affected_ids.is_empty() {
+    if !failed_ids.is_empty() || !degraded_ids.is_empty() {
         lines.push("## Incomplete Sections".into());
         lines.push(String::new());
-        lines.push(
-            "The following inspector sections failed or were degraded during inspection:".into(),
-        );
-        lines.push(String::new());
-        for id in &affected_ids {
-            lines.push(format!("- `{:?}`", id).to_lowercase());
+
+        if !failed_ids.is_empty() {
+            lines.push("### Failed (no data collected)".into());
+            lines.push(String::new());
+            for id in &failed_ids {
+                lines.push(format!("- `{:?}`", id).to_lowercase());
+            }
+            lines.push(String::new());
         }
+
+        if !degraded_ids.is_empty() {
+            lines.push("### Degraded (partial data collected)".into());
+            lines.push(String::new());
+            for id in &degraded_ids {
+                lines.push(format!("- `{:?}`", id).to_lowercase());
+            }
+            lines.push(String::new());
+        }
+
         let reason = completeness_reason;
         if !reason.is_empty() {
-            lines.push(String::new());
             lines.push(format!("**Reason:** {reason}"));
+            lines.push(String::new());
         }
-        lines.push(String::new());
+
         lines.push(
             "Artifacts generated from this snapshot may be missing data from these sections."
                 .into(),
