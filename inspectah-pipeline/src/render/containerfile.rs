@@ -29,17 +29,37 @@ use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value
 /// Containerfile and config tree describe the same system. When `None`,
 /// roots are computed from the snapshot (standalone rendering without
 /// prior materialization).
-pub fn render_containerfile(snap: &InspectionSnapshot, materialized_roots: Option<&[String]>) -> String {
+pub fn render_containerfile(
+    snap: &InspectionSnapshot,
+    materialized_roots: Option<&[String]>,
+) -> String {
     let base = base_image_from_snapshot(snap);
     let mut lines: Vec<String> = Vec::new();
 
     // Completeness warning — surface before any build instructions
-    if let Completeness::Partial { ref incomplete_sections, .. } = snap.completeness {
-        let section_names: Vec<String> = incomplete_sections
+    let affected_ids: Vec<_> = match &snap.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => degraded_sections.clone(),
+        Completeness::Incomplete {
+            failed_sections,
+            degraded_sections,
+            ..
+        } => {
+            let mut ids = failed_sections.clone();
+            ids.extend(degraded_sections.iter().copied());
+            ids
+        }
+        Completeness::Complete => vec![],
+    };
+    if !affected_ids.is_empty() {
+        let section_names: Vec<String> = affected_ids
             .iter()
             .map(|id| format!("{:?}", id).to_lowercase())
             .collect();
-        lines.push("# WARNING: This Containerfile was generated from an incomplete inspection.".into());
+        lines.push(
+            "# WARNING: This Containerfile was generated from an incomplete inspection.".into(),
+        );
         lines.push(format!(
             "# The following inspector sections may be missing or degraded: {}",
             section_names.join(", ")
@@ -149,11 +169,17 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
         for key in &included_gpg {
             // Host paths are absolute — check for traversal, NUL, and whitespace
             if key.path.contains("..") || key.path.contains('\0') {
-                lines.push(format!("# FIXME: GPG key path contains unsafe characters: {}", super::safety::html_escape(&key.path)));
+                lines.push(format!(
+                    "# FIXME: GPG key path contains unsafe characters: {}",
+                    super::safety::html_escape(&key.path)
+                ));
                 continue;
             }
             if super::safety::sanitize_shell_value(&key.path).is_none() {
-                lines.push(format!("# FIXME: GPG key path unsafe for shell: {}", super::safety::html_escape(&key.path)));
+                lines.push(format!(
+                    "# FIXME: GPG key path unsafe for shell: {}",
+                    super::safety::html_escape(&key.path)
+                ));
                 continue;
             }
             let rel = key.path.trim_start_matches('/');
@@ -171,7 +197,10 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
         for dir in &gpg_dirs {
             match super::safety::sanitize_shell_value(dir) {
                 Some(safe) => lines.push(format!("COPY config/{safe}/ /{safe}/")),
-                None => lines.push(format!("# FIXME: GPG directory path contains unsafe characters: {}", super::safety::html_escape(dir))),
+                None => lines.push(format!(
+                    "# FIXME: GPG directory path contains unsafe characters: {}",
+                    super::safety::html_escape(dir)
+                )),
             }
         }
 
@@ -284,7 +313,10 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
                     inspectah_core::types::rpm::PackageState::LocalInstall
                         | inspectah_core::types::rpm::PackageState::NoRepo
                 ) {
-                    let state = serde_json::to_string(&pkg.state).unwrap_or_default().trim_matches('"').to_string();
+                    let state = serde_json::to_string(&pkg.state)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string();
                     todo_lines.push(format!(
                         "# TODO: '{}' was installed locally (state: {}) \
                          — no repository source. Provide a .rpm or custom repo.",
@@ -313,7 +345,10 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
             for name in &install_names {
                 lines.push(format!("    {} \\", name));
             }
-            lines.push(format!("    {}", dnf_suffix.trim_start_matches(" && ").replace("&& ", "")));
+            lines.push(format!(
+                "    {}",
+                dnf_suffix.trim_start_matches(" && ").replace("&& ", "")
+            ));
         }
         lines.push(String::new());
     }
@@ -606,7 +641,10 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
 // --- Config section ---
 
-fn config_section_lines(snap: &InspectionSnapshot, materialized_roots: Option<&[String]>) -> Vec<String> {
+fn config_section_lines(
+    snap: &InspectionSnapshot,
+    materialized_roots: Option<&[String]>,
+) -> Vec<String> {
     let mut lines = Vec::new();
 
     lines.push("# === Configuration Files ===".into());
@@ -740,7 +778,11 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         None => return lines,
     };
 
-    let included_quadlets: usize = containers.quadlet_units.iter().filter(|u| u.include).count();
+    let included_quadlets: usize = containers
+        .quadlet_units
+        .iter()
+        .filter(|u| u.include)
+        .count();
     let included_flatpaks: usize = containers.flatpak_apps.iter().filter(|a| a.include).count();
 
     if included_quadlets == 0 && included_flatpaks == 0 {
@@ -755,7 +797,10 @@ fn containers_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         lines.push("# Flatpak applications — installed on first boot via oneshot service".into());
         lines.push("# Manifest: flatpak/flatpak-install.json".into());
         lines.push("COPY flatpak/ /usr/share/inspectah/flatpak/".into());
-        lines.push("COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service".into());
+        lines.push(
+            "COPY flatpak/flatpak-provision.service /etc/systemd/system/flatpak-provision.service"
+                .into(),
+        );
         lines.push("RUN systemctl enable flatpak-provision.service".into());
     }
     lines.push(String::new());
@@ -782,7 +827,9 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     lines.push("# === Non-RPM Software (migration planned) ===".into());
-    lines.push("# WARNING: These stubs are advisory — source files are NOT in the build context.".into());
+    lines.push(
+        "# WARNING: These stubs are advisory — source files are NOT in the build context.".into(),
+    );
     lines.push("# You must manually stage each referenced file/package before building.".into());
     lines.push("#".into());
 
@@ -862,11 +909,7 @@ fn users_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let included_users: Vec<_> = ug
         .users
         .iter()
-        .filter(|u| {
-            u.get("include")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true)
-        })
+        .filter(|u| u.get("include").and_then(|v| v.as_bool()).unwrap_or(true))
         .collect();
 
     if included_users.is_empty() {
@@ -894,9 +937,7 @@ fn users_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     if sysusers_count > 0 {
-        lines.push(format!(
-            "# systemd-sysusers entries ({sysusers_count}):"
-        ));
+        lines.push(format!("# systemd-sysusers entries ({sysusers_count}):"));
         lines.push("# These are system users created via sysusers.d drop-ins in config/.".into());
     }
 
@@ -965,11 +1006,12 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             "# These are applied at install and honored across image upgrades. See bootc documentation:"
                 .into(),
         );
-        lines.push(
-            "# https://containers.github.io/bootc/building/kernel-arguments.html".into(),
-        );
+        lines.push("# https://containers.github.io/bootc/building/kernel-arguments.html".into());
         lines.push("RUN mkdir -p /usr/lib/bootc/kargs.d".into());
-        lines.push("COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/".into());
+        lines.push(
+            "COPY config/usr/lib/bootc/kargs.d/inspectah-migrated.toml /usr/lib/bootc/kargs.d/"
+                .into(),
+        );
     }
 
     // Non-default modules
@@ -1328,7 +1370,10 @@ mod tests {
         // Package name with shell command injection
         let snap = snapshot_with_packages(&["legit-pkg", "pkg$(whoami)", "pkg`id`"]);
         let output = render_containerfile(&snap, None);
-        assert!(output.contains("legit-pkg"), "safe package must be included");
+        assert!(
+            output.contains("legit-pkg"),
+            "safe package must be included"
+        );
         // Unsafe packages must not appear in any RUN line
         for line in output.lines() {
             if line.starts_with("RUN ") {
@@ -1431,13 +1476,16 @@ mod tests {
     #[test]
     fn test_containerfile_partial_completeness_warning() {
         let mut snap = InspectionSnapshot::new();
-        snap.completeness = Completeness::Partial {
-            incomplete_sections: vec![InspectorId::Config],
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Config],
+            degraded_sections: vec![],
             reason: "config inspector timed out".into(),
         };
         let output = render_containerfile(&snap, None);
         assert!(
-            output.contains("WARNING: This Containerfile was generated from an incomplete inspection"),
+            output.contains(
+                "WARNING: This Containerfile was generated from an incomplete inspection"
+            ),
             "must contain completeness warning"
         );
         assert!(
@@ -1456,11 +1504,13 @@ mod tests {
     #[test]
     fn test_containerfile_full_completeness_no_warning() {
         let mut snap = InspectionSnapshot::new();
-        snap.completeness = Completeness::Full;
+        snap.completeness = Completeness::Complete;
         let output = render_containerfile(&snap, None);
         assert!(
-            !output.contains("WARNING: This Containerfile was generated from an incomplete inspection"),
-            "full completeness must not produce warning"
+            !output.contains(
+                "WARNING: This Containerfile was generated from an incomplete inspection"
+            ),
+            "complete status must not produce warning"
         );
     }
 
@@ -1550,8 +1600,14 @@ mod tests {
         });
         let output = render_containerfile(&snap, None);
         assert!(output.contains("FIXME"), "unsafe path must produce FIXME");
-        assert!(!output.contains("rpm --import ../../etc/shadow"), "traversal path must NOT reach rpm --import");
-        assert!(output.contains("rpm --import /etc/pki/rpm-gpg/GOOD-KEY"), "safe path must still work");
+        assert!(
+            !output.contains("rpm --import ../../etc/shadow"),
+            "traversal path must NOT reach rpm --import"
+        );
+        assert!(
+            output.contains("rpm --import /etc/pki/rpm-gpg/GOOD-KEY"),
+            "safe path must still work"
+        );
     }
 
     #[test]
@@ -1567,8 +1623,14 @@ mod tests {
             ..Default::default()
         });
         let output = render_containerfile(&snap, None);
-        assert!(output.contains("FIXME"), "whitespace path must produce FIXME");
-        assert!(!output.contains("rpm --import /opt/custom keys"), "whitespace path must NOT reach rpm --import");
+        assert!(
+            output.contains("FIXME"),
+            "whitespace path must produce FIXME"
+        );
+        assert!(
+            !output.contains("rpm --import /opt/custom keys"),
+            "whitespace path must NOT reach rpm --import"
+        );
     }
 
     #[test]
@@ -1584,7 +1646,13 @@ mod tests {
             ..Default::default()
         });
         let output = render_containerfile(&snap, None);
-        assert!(output.contains("COPY config/good-key /good-key"), "root-level key must have direct COPY");
-        assert!(output.contains("rpm --import /good-key"), "root-level key must have rpm --import after staging");
+        assert!(
+            output.contains("COPY config/good-key /good-key"),
+            "root-level key must have direct COPY"
+        );
+        assert!(
+            output.contains("rpm --import /good-key"),
+            "root-level key must have rpm --import after staging"
+        );
     }
 }

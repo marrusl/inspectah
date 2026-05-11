@@ -31,7 +31,7 @@ pub enum PipelineError {
 ///
 /// Returns the final snapshot (post-redaction) and the path to the tarball.
 pub fn run_pipeline(
-    ctx: &InspectionContext,
+    ctx: &InspectionContext<'_>,
     inspectors: &[Box<dyn Inspector>],
     output_dir: &Path,
     hostname: &str,

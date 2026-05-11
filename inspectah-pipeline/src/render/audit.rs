@@ -13,23 +13,46 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
     lines.push(String::new());
 
     // Incomplete sections warning
-    if let Completeness::Partial { ref incomplete_sections, ref reason } = snap.completeness {
+    let affected_ids: Vec<_> = match &snap.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => degraded_sections.clone(),
+        Completeness::Incomplete {
+            failed_sections,
+            degraded_sections,
+            ..
+        } => {
+            let mut ids = failed_sections.clone();
+            ids.extend(degraded_sections.iter().copied());
+            ids
+        }
+        Completeness::Complete => vec![],
+    };
+    let completeness_reason = match &snap.completeness {
+        Completeness::Partial { reason, .. } | Completeness::Incomplete { reason, .. } => {
+            reason.as_str()
+        }
+        Completeness::Complete => "",
+    };
+    if !affected_ids.is_empty() {
         lines.push("## Incomplete Sections".into());
         lines.push(String::new());
         lines.push(
             "The following inspector sections failed or were degraded during inspection:".into(),
         );
         lines.push(String::new());
-        for id in incomplete_sections {
+        for id in &affected_ids {
             lines.push(format!("- `{:?}`", id).to_lowercase());
         }
+        let reason = completeness_reason;
         if !reason.is_empty() {
             lines.push(String::new());
             lines.push(format!("**Reason:** {reason}"));
         }
         lines.push(String::new());
         lines.push(
-            "Artifacts generated from this snapshot may be missing data from these sections.".into(),
+            "Artifacts generated from this snapshot may be missing data from these sections."
+                .into(),
         );
         lines.push(String::new());
     }
@@ -249,8 +272,9 @@ mod tests {
     fn test_audit_report_partial_completeness() {
         use inspectah_core::types::completeness::{Completeness, InspectorId};
         let mut snap = InspectionSnapshot::new();
-        snap.completeness = Completeness::Partial {
-            incomplete_sections: vec![InspectorId::Config, InspectorId::Services],
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Config, InspectorId::Services],
+            degraded_sections: vec![],
             reason: "timeout during inspection".into(),
         };
         let md = render_audit(&snap);
@@ -269,11 +293,11 @@ mod tests {
     #[test]
     fn test_audit_report_full_completeness_no_section() {
         let mut snap = InspectionSnapshot::new();
-        snap.completeness = Completeness::Full;
+        snap.completeness = Completeness::Complete;
         let md = render_audit(&snap);
         assert!(
             !md.contains("Incomplete Sections"),
-            "full completeness must not produce Incomplete Sections"
+            "complete status must not produce Incomplete Sections"
         );
     }
 }

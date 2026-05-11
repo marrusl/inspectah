@@ -175,11 +175,11 @@ mod tests {
             redacted_by: "inspectah 0.8.0".into(),
             config_hash: "abc123".into(),
         });
-        snap.completeness = Completeness::Full;
+        snap.completeness = Completeness::Complete;
         let json = serde_json::to_string(&snap).unwrap();
         let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
         assert!(parsed.redaction_state.is_some());
-        assert_eq!(parsed.completeness, Completeness::Full);
+        assert_eq!(parsed.completeness, Completeness::Complete);
     }
 
     #[test]
@@ -215,7 +215,10 @@ mod tests {
     fn test_future_version_rejected() {
         let json = r#"{"schema_version": 20, "meta": {}, "system_type": "package-mode", "preflight": {"status": "ok"}, "warnings": [], "redactions": []}"#;
         let result = InspectionSnapshot::load(json);
-        assert!(result.is_err(), "future versions must be rejected, not silently partially-deserialized");
+        assert!(
+            result.is_err(),
+            "future versions must be rejected, not silently partially-deserialized"
+        );
     }
 
     #[test]

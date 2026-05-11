@@ -68,10 +68,16 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         }
     }
 
-    // Build completeness banner (if partial)
+    // Build completeness banner (if not complete)
     let completeness_banner = match &snap.completeness {
-        Completeness::Partial { incomplete_sections, reason } => {
-            let sections: Vec<String> = incomplete_sections.iter().map(|id| format!("{id:?}")).collect();
+        Completeness::Partial {
+            degraded_sections,
+            reason,
+        } => {
+            let sections: Vec<String> = degraded_sections
+                .iter()
+                .map(|id| format!("{id:?}"))
+                .collect();
             format!(
                 r#"  <div style="background: #faecd5; border: 1px solid #f0ab00; padding: 1rem; margin: 1rem 0; border-radius: 4px;">
     <strong>Warning:</strong> This report was generated from an incomplete inspection.
@@ -82,16 +88,30 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 html_escape(reason),
             )
         }
-        _ => String::new(),
+        Completeness::Incomplete {
+            failed_sections,
+            degraded_sections,
+            reason,
+        } => {
+            let mut all: Vec<String> = failed_sections.iter().map(|id| format!("{id:?}")).collect();
+            all.extend(degraded_sections.iter().map(|id| format!("{id:?}")));
+            format!(
+                r#"  <div style="background: #faecd5; border: 1px solid #f0ab00; padding: 1rem; margin: 1rem 0; border-radius: 4px;">
+    <strong>Warning:</strong> This report was generated from an incomplete inspection.
+    Sections with missing or degraded data: {}.
+    Reason: {}
+  </div>"#,
+                html_escape(&all.join(", ")),
+                html_escape(reason),
+            )
+        }
+        Completeness::Complete => String::new(),
     };
 
     // Build warning list
     let mut warning_items = String::new();
     for w in &snap.warnings {
-        warning_items.push_str(&format!(
-            "        <li>{}</li>\n",
-            html_escape(&w.message)
-        ));
+        warning_items.push_str(&format!("        <li>{}</li>\n", html_escape(&w.message)));
     }
 
     format!(
@@ -180,7 +200,10 @@ mod tests {
         let snap = test_snapshot();
         let html = render_report(&snap, &RenderContext { target: None });
         assert!(html.contains("<!DOCTYPE html>"));
-        assert!(html.to_lowercase().contains("patternfly"), "must reference PatternFly CSS");
+        assert!(
+            html.to_lowercase().contains("patternfly"),
+            "must reference PatternFly CSS"
+        );
     }
 
     #[test]
@@ -209,12 +232,16 @@ mod tests {
     fn test_report_partial_completeness_warning() {
         use inspectah_core::types::completeness::{Completeness, InspectorId};
         let mut snap = test_snapshot();
-        snap.completeness = Completeness::Partial {
-            incomplete_sections: vec![InspectorId::Config],
+        snap.completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Config],
+            degraded_sections: vec![],
             reason: "config inspector failed".into(),
         };
         let html = render_report(&snap, &RenderContext { target: None });
-        assert!(html.contains("incomplete inspection"), "must warn about incomplete inspection");
+        assert!(
+            html.contains("incomplete inspection"),
+            "must warn about incomplete inspection"
+        );
         assert!(html.contains("Config"), "must name the incomplete section");
     }
 
@@ -222,6 +249,9 @@ mod tests {
     fn test_report_full_completeness_no_warning() {
         let snap = test_snapshot();
         let html = render_report(&snap, &RenderContext { target: None });
-        assert!(!html.contains("incomplete inspection"), "full snapshot must not show warning");
+        assert!(
+            !html.contains("incomplete inspection"),
+            "full snapshot must not show warning"
+        );
     }
 }

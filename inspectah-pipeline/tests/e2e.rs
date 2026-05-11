@@ -53,14 +53,10 @@ fn build_full_rpm_mock_executor() -> MockExecutor {
     )
 }
 
-/// Build an InspectionContext from a MockExecutor with package-based source.
-fn build_inspection_context(mock: MockExecutor) -> InspectionContext {
-    InspectionContext {
-        executor: Box::new(mock),
-        source: SourceSystem::PackageBased {
-            os_release: test_os_release(),
-        },
-        rpm_state: None,
+/// Build source and executor as owned locals; caller borrows into InspectionContext.
+fn build_source() -> SourceSystem {
+    SourceSystem::PackageBased {
+        os_release: test_os_release(),
     }
 }
 
@@ -90,7 +86,12 @@ fn run_full_pipeline_from_mock(
     mock: MockExecutor,
     config_overlay: Option<ConfigSection>,
 ) -> (InspectionSnapshot, std::path::PathBuf, TempDir) {
-    let ctx = build_inspection_context(mock);
+    let source = build_source();
+    let ctx = InspectionContext {
+        source: &source,
+        executor: &mock,
+        rpm_state: None,
+    };
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
     // Collect
@@ -125,7 +126,8 @@ fn run_full_pipeline_from_mock(
 
     // Create tarball
     let tarball_path = output_dir.path().join("test-output.tar.gz");
-    create_tarball(&render_dir, &tarball_path, "inspectah-test").expect("tarball should be created");
+    create_tarball(&render_dir, &tarball_path, "inspectah-test")
+        .expect("tarball should be created");
 
     (snapshot, tarball_path, output_dir)
 }
@@ -150,8 +152,15 @@ fn extract_text_files(tarball_path: &std::path::Path) -> Vec<(String, String)> {
 
         // Only read text-like files
         let text_exts = [
-            ".json", ".md", ".html", ".ks", ".toml", ".conf", ".repo",
-            "Containerfile", "README.md",
+            ".json",
+            ".md",
+            ".html",
+            ".ks",
+            ".toml",
+            ".conf",
+            ".repo",
+            "Containerfile",
+            "README.md",
         ];
         let is_text = text_exts.iter().any(|ext| path.ends_with(ext))
             || path.contains("Containerfile")
@@ -172,8 +181,13 @@ fn extract_text_files(tarball_path: &std::path::Path) -> Vec<(String, String)> {
 
 #[test]
 fn test_full_pipeline_produces_valid_tarball() {
-    let mock = build_full_rpm_mock_executor();
-    let ctx = build_inspection_context(mock);
+    let exec = build_full_rpm_mock_executor();
+    let source = build_source();
+    let ctx = InspectionContext {
+        source: &source,
+        executor: &exec,
+        rpm_state: None,
+    };
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
     let output_dir = TempDir::new().unwrap();
@@ -207,10 +221,7 @@ fn test_full_pipeline_produces_valid_tarball() {
     // Verify non-empty
     for artifact in &required {
         let matching: Vec<_> = entries.iter().filter(|e| e.ends_with(artifact)).collect();
-        assert!(
-            !matching.is_empty(),
-            "no entry matching {artifact}"
-        );
+        assert!(!matching.is_empty(), "no entry matching {artifact}");
     }
 }
 
@@ -261,13 +272,22 @@ fn test_rpm_section_self_roundtrip() {
     // Go tarball ingestion is not a goal — if you need the data, re-scan.
     use inspectah_core::types::rpm::RpmSection;
 
-    let mock = build_full_rpm_mock_executor();
-    let ctx = build_inspection_context(mock);
+    let exec = build_full_rpm_mock_executor();
+    let source = build_source();
+    let ctx = InspectionContext {
+        source: &source,
+        executor: &exec,
+        rpm_state: None,
+    };
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
     let collected = collect(&ctx, &inspectors);
     let validated = validate(collected).expect("validation");
 
-    let rpm = validated.state.snapshot.rpm.expect("RPM section must exist");
+    let rpm = validated
+        .state
+        .snapshot
+        .rpm
+        .expect("RPM section must exist");
     let json = serde_json::to_string_pretty(&rpm).expect("serialize");
     let parsed: RpmSection = serde_json::from_str(&json).expect("deserialize");
 
@@ -297,7 +317,7 @@ fn test_exported_snapshot_carries_trust_state() {
     );
     assert_eq!(
         snapshot.completeness,
-        Completeness::Full,
+        Completeness::Complete,
         "pipeline snapshot must have Full completeness"
     );
 
@@ -308,8 +328,8 @@ fn test_exported_snapshot_carries_trust_state() {
         .find(|(name, _)| name.ends_with("inspection-snapshot.json"))
         .expect("tarball must contain inspection-snapshot.json");
 
-    let exported: InspectionSnapshot = serde_json::from_str(&snapshot_entry.1)
-        .expect("exported snapshot must be valid JSON");
+    let exported: InspectionSnapshot =
+        serde_json::from_str(&snapshot_entry.1).expect("exported snapshot must be valid JSON");
 
     assert!(
         exported.redaction_state.is_some(),
@@ -317,7 +337,7 @@ fn test_exported_snapshot_carries_trust_state() {
     );
     assert_eq!(
         exported.completeness,
-        Completeness::Full,
+        Completeness::Complete,
         "exported snapshot must have Full completeness"
     );
 }
