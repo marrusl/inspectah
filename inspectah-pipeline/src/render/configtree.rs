@@ -377,14 +377,10 @@ pub fn write_config_tree(
 
             let mut svc = String::new();
             svc.push_str("[Unit]\n");
-            svc.push_str(
-                "Description=Provision Flatpak applications from inspectah manifest\n",
-            );
+            svc.push_str("Description=Provision Flatpak applications from inspectah manifest\n");
             svc.push_str("After=network-online.target\n");
             svc.push_str("Wants=network-online.target\n");
-            svc.push_str(
-                "ConditionPathExists=!/var/lib/inspectah/.flatpak-provisioned\n",
-            );
+            svc.push_str("ConditionPathExists=!/var/lib/inspectah/.flatpak-provisioned\n");
             svc.push_str("\n[Service]\n");
             svc.push_str("Type=oneshot\n");
             svc.push_str("RemainAfterExit=yes\n");
@@ -395,9 +391,7 @@ pub fn write_config_tree(
                 svc.push_str(
                     "# WARNING: The following remote(s) could not be fully reconstructed\n",
                 );
-                svc.push_str(
-                    "# because no URL was captured. You must configure them manually.\n",
-                );
+                svc.push_str("# because no URL was captured. You must configure them manually.\n");
                 svc.push_str("# See: flatpak remote-modify --help\n");
                 for name in &unreconstructable {
                     svc.push_str(&format!("# Remote '{name}': URL unknown\n"));
@@ -416,22 +410,15 @@ pub fn write_config_tree(
                     app.remote, app.app_id, app.branch
                 ));
             }
-            svc.push_str(
-                "ExecStartPost=/usr/bin/mkdir -p /var/lib/inspectah\n",
-            );
-            svc.push_str(
-                "ExecStartPost=/usr/bin/touch /var/lib/inspectah/.flatpak-provisioned\n",
-            );
+            svc.push_str("ExecStartPost=/usr/bin/mkdir -p /var/lib/inspectah\n");
+            svc.push_str("ExecStartPost=/usr/bin/touch /var/lib/inspectah/.flatpak-provisioned\n");
             svc.push_str("\n[Install]\n");
             svc.push_str("WantedBy=multi-user.target\n");
             svc.push_str("\n[Unit]\n");
             svc.push_str("StartLimitBurst=3\n");
             svc.push_str("StartLimitIntervalSec=300s\n");
 
-            let _ = std::fs::write(
-                flatpak_dir.join("flatpak-provision.service"),
-                &svc,
-            );
+            let _ = std::fs::write(flatpak_dir.join("flatpak-provision.service"), &svc);
         }
     }
 
@@ -530,20 +517,12 @@ mod tests {
 
     #[test]
     fn test_config_tree_materializes_etc() {
-        let snap = snapshot_with_config(
-            "/etc/httpd/conf/httpd.conf",
-            "ServerRoot /etc/httpd",
-        );
+        let snap = snapshot_with_config("/etc/httpd/conf/httpd.conf", "ServerRoot /etc/httpd");
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(dir
-            .path()
-            .join("config/etc/httpd/conf/httpd.conf")
-            .exists());
-        let content = std::fs::read_to_string(
-            dir.path().join("config/etc/httpd/conf/httpd.conf"),
-        )
-        .unwrap();
+        assert!(dir.path().join("config/etc/httpd/conf/httpd.conf").exists());
+        let content =
+            std::fs::read_to_string(dir.path().join("config/etc/httpd/conf/httpd.conf")).unwrap();
         assert_eq!(content, "ServerRoot /etc/httpd");
     }
 
@@ -555,10 +534,7 @@ mod tests {
         );
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(dir
-            .path()
-            .join("config/etc/yum.repos.d/epel.repo")
-            .exists());
+        assert!(dir.path().join("config/etc/yum.repos.d/epel.repo").exists());
     }
 
     #[test]
@@ -644,8 +620,7 @@ mod tests {
         snap.services = Some(ServiceSection {
             drop_ins: vec![SystemdDropIn {
                 unit: "httpd.service".to_string(),
-                path: "etc/systemd/system/httpd.service.d/override.conf"
-                    .to_string(),
+                path: "etc/systemd/system/httpd.service.d/override.conf".to_string(),
                 content: "[Service]\nLimitNOFILE=65535".to_string(),
                 include: true,
                 ..Default::default()
@@ -658,15 +633,11 @@ mod tests {
         // Must exist in both config/ and drop-ins/
         assert!(dir
             .path()
-            .join(
-                "config/etc/systemd/system/httpd.service.d/override.conf"
-            )
+            .join("config/etc/systemd/system/httpd.service.d/override.conf")
             .exists());
         assert!(dir
             .path()
-            .join(
-                "drop-ins/etc/systemd/system/httpd.service.d/override.conf"
-            )
+            .join("drop-ins/etc/systemd/system/httpd.service.d/override.conf")
             .exists());
 
         // Content must match
@@ -689,10 +660,8 @@ mod tests {
         snap.scheduled_tasks = Some(ScheduledTaskSection {
             generated_timer_units: vec![GeneratedTimerUnit {
                 name: "backup".to_string(),
-                timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00"
-                    .to_string(),
-                service_content: "[Service]\nExecStart=/usr/bin/backup"
-                    .to_string(),
+                timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".to_string(),
+                service_content: "[Service]\nExecStart=/usr/bin/backup".to_string(),
                 include: true,
                 ..Default::default()
             }],
@@ -718,8 +687,7 @@ mod tests {
                 name: "myjob".to_string(),
                 source: "local".to_string(),
                 timer_content: "[Timer]\nOnCalendar=daily".to_string(),
-                service_content: "[Service]\nExecStart=/usr/local/bin/myjob"
-                    .to_string(),
+                service_content: "[Service]\nExecStart=/usr/local/bin/myjob".to_string(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -797,13 +765,11 @@ mod tests {
     fn test_dhcp_connections_excluded() {
         let mut snap = InspectionSnapshot::new();
         snap.network = Some(NetworkSection {
-            connections: vec![
-                inspectah_core::types::network::NMConnection {
-                    path: "/etc/NetworkManager/system-connections/eth0.nmconnection".to_string(),
-                    method: "auto".to_string(),
-                    ..Default::default()
-                },
-            ],
+            connections: vec![inspectah_core::types::network::NMConnection {
+                path: "/etc/NetworkManager/system-connections/eth0.nmconnection".to_string(),
+                method: "auto".to_string(),
+                ..Default::default()
+            }],
             ..Default::default()
         });
         snap.config = Some(ConfigSection {
@@ -860,8 +826,7 @@ mod tests {
 
     #[test]
     fn test_reject_symlink_escape() {
-        assert!(validate_symlink_target("../../../etc/shadow", "config/")
-            .is_err());
+        assert!(validate_symlink_target("../../../etc/shadow", "config/").is_err());
     }
 
     #[test]
@@ -869,8 +834,7 @@ mod tests {
         assert!(validate_path("etc/httpd/conf/httpd.conf").is_ok());
         assert!(validate_tarball_entry("prefix/etc/httpd.conf").is_ok());
         // A symlink that goes up then back down within root is valid
-        assert!(validate_symlink_target("sibling/file", "config/sub/")
-            .is_ok());
+        assert!(validate_symlink_target("sibling/file", "config/sub/").is_ok());
         // Relative within same level
         assert!(validate_symlink_target("./other", "config/").is_ok());
     }

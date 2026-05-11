@@ -174,9 +174,18 @@ mod tests {
 
     #[test]
     fn test_finding_kind_serde_roundtrip() {
-        assert_eq!(serde_json::to_string(&FindingKind::PrivateKey).unwrap(), r#""private_key""#);
-        assert_eq!(serde_json::to_string(&FindingKind::ShadowHash).unwrap(), r#""shadow_hash""#);
-        assert_eq!(serde_json::to_string(&RedactionKind::Excluded).unwrap(), r#""excluded""#);
+        assert_eq!(
+            serde_json::to_string(&FindingKind::PrivateKey).unwrap(),
+            r#""private_key""#
+        );
+        assert_eq!(
+            serde_json::to_string(&FindingKind::ShadowHash).unwrap(),
+            r#""shadow_hash""#
+        );
+        assert_eq!(
+            serde_json::to_string(&RedactionKind::Excluded).unwrap(),
+            r#""excluded""#
+        );
         let parsed: FindingKind = serde_json::from_str(r#""no_password""#).unwrap();
         assert_eq!(parsed, FindingKind::NoPassword);
     }

@@ -10,7 +10,11 @@ pub fn parse_nevra(line: &str) -> Option<PackageEntry> {
 
     // Split epoch:rest
     let (epoch_str, rest) = line.split_once(':')?;
-    let epoch = if epoch_str == "(none)" { "0" } else { epoch_str };
+    let epoch = if epoch_str == "(none)" {
+        "0"
+    } else {
+        epoch_str
+    };
 
     // Split rest into name-version-release.arch
     // Find the last '.' → arch separator
@@ -52,16 +56,26 @@ pub fn rpmvercmp(a: &str, b: &str) -> std::cmp::Ordering {
 
     loop {
         // Skip non-alphanumeric, non-tilde, non-caret characters
-        while ai.peek().is_some_and(|c| !c.is_alphanumeric() && *c != '~' && *c != '^') {
+        while ai
+            .peek()
+            .is_some_and(|c| !c.is_alphanumeric() && *c != '~' && *c != '^')
+        {
             ai.next();
         }
-        while bi.peek().is_some_and(|c| !c.is_alphanumeric() && *c != '~' && *c != '^') {
+        while bi
+            .peek()
+            .is_some_and(|c| !c.is_alphanumeric() && *c != '~' && *c != '^')
+        {
             bi.next();
         }
 
         // Handle tilde (sorts before everything)
         match (ai.peek(), bi.peek()) {
-            (Some('~'), Some('~')) => { ai.next(); bi.next(); continue; }
+            (Some('~'), Some('~')) => {
+                ai.next();
+                bi.next();
+                continue;
+            }
             (Some('~'), _) => return Ordering::Less,
             (_, Some('~')) => return Ordering::Greater,
             _ => {}
@@ -69,7 +83,11 @@ pub fn rpmvercmp(a: &str, b: &str) -> std::cmp::Ordering {
 
         // Handle caret (sorts after empty, before other characters)
         match (ai.peek(), bi.peek()) {
-            (Some('^'), Some('^')) => { ai.next(); bi.next(); continue; }
+            (Some('^'), Some('^')) => {
+                ai.next();
+                bi.next();
+                continue;
+            }
             (Some('^'), None) => return Ordering::Greater,
             (None, Some('^')) => return Ordering::Less,
             (Some('^'), _) => return Ordering::Less,
@@ -128,7 +146,10 @@ pub fn rpmvercmp(a: &str, b: &str) -> std::cmp::Ordering {
     }
 }
 
-fn collect_while(iter: &mut std::iter::Peekable<std::str::Chars>, pred: impl Fn(char) -> bool) -> String {
+fn collect_while(
+    iter: &mut std::iter::Peekable<std::str::Chars>,
+    pred: impl Fn(char) -> bool,
+) -> String {
     let mut s = String::new();
     while iter.peek().is_some_and(|c| pred(*c)) {
         s.push(iter.next().unwrap());
@@ -214,6 +235,9 @@ mod tests {
 
     #[test]
     fn test_rpmvercmp_large_numeric() {
-        assert_eq!(rpmvercmp("99999999999", "99999999998"), std::cmp::Ordering::Greater);
+        assert_eq!(
+            rpmvercmp("99999999999", "99999999998"),
+            std::cmp::Ordering::Greater
+        );
     }
 }

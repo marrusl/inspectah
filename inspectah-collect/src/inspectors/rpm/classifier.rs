@@ -1,33 +1,38 @@
-use inspectah_core::types::rpm::{PackageEntry, PackageState};
 use super::parser::rpmvercmp;
+use inspectah_core::types::rpm::{PackageEntry, PackageState};
 use std::collections::HashMap;
 
 pub fn classify_packages(
     host: &[PackageEntry],
     baseline: &HashMap<String, PackageEntry>,
 ) -> Vec<PackageEntry> {
-    host.iter().map(|pkg| {
-        let key = format!("{}.{}", pkg.name, pkg.arch);
-        let state = match baseline.get(&key) {
-            None => PackageState::Added,
-            Some(base) => {
-                let epoch_cmp = rpmvercmp(&pkg.epoch, &base.epoch);
-                let ver_cmp = rpmvercmp(&pkg.version, &base.version);
-                let rel_cmp = rpmvercmp(&pkg.release, &base.release);
-                if epoch_cmp == std::cmp::Ordering::Equal && ver_cmp == std::cmp::Ordering::Equal && rel_cmp == std::cmp::Ordering::Equal {
-                    PackageState::BaseImageOnly
-                } else {
-                    PackageState::Modified
+    host.iter()
+        .map(|pkg| {
+            let key = format!("{}.{}", pkg.name, pkg.arch);
+            let state = match baseline.get(&key) {
+                None => PackageState::Added,
+                Some(base) => {
+                    let epoch_cmp = rpmvercmp(&pkg.epoch, &base.epoch);
+                    let ver_cmp = rpmvercmp(&pkg.version, &base.version);
+                    let rel_cmp = rpmvercmp(&pkg.release, &base.release);
+                    if epoch_cmp == std::cmp::Ordering::Equal
+                        && ver_cmp == std::cmp::Ordering::Equal
+                        && rel_cmp == std::cmp::Ordering::Equal
+                    {
+                        PackageState::BaseImageOnly
+                    } else {
+                        PackageState::Modified
+                    }
                 }
+            };
+            let include = state != PackageState::BaseImageOnly;
+            PackageEntry {
+                state,
+                include,
+                ..pkg.clone()
             }
-        };
-        let include = state != PackageState::BaseImageOnly;
-        PackageEntry {
-            state,
-            include,
-            ..pkg.clone()
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -48,11 +53,14 @@ mod tests {
     }
 
     fn baseline_with(packages: &[(&str, &str, &str)]) -> HashMap<String, PackageEntry> {
-        packages.iter().map(|(name, version, release)| {
-            let pkg = pkg(name, version, release);
-            let key = format!("{}.x86_64", name);
-            (key, pkg)
-        }).collect()
+        packages
+            .iter()
+            .map(|(name, version, release)| {
+                let pkg = pkg(name, version, release);
+                let key = format!("{}.x86_64", name);
+                (key, pkg)
+            })
+            .collect()
     }
 
     #[test]
@@ -108,6 +116,10 @@ mod tests {
         let baseline = baseline_with(&[("openssl", "3.0.7", "1.el9")]);
         // baseline has epoch "0" via pkg() helper
         let result = classify_packages(&host, &baseline);
-        assert_eq!(result[0].state, PackageState::Modified, "epoch change must be Modified");
+        assert_eq!(
+            result[0].state,
+            PackageState::Modified,
+            "epoch change must be Modified"
+        );
     }
 }

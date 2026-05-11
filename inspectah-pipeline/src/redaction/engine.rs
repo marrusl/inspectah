@@ -47,7 +47,10 @@ impl CounterRegistry {
         if let Some(&n) = self.seen.get(&key) {
             format!("REDACTED_{}_{}", kind_label.to_uppercase(), n)
         } else {
-            let counter = self.type_counters.entry(kind_label.to_string()).or_insert(0);
+            let counter = self
+                .type_counters
+                .entry(kind_label.to_string())
+                .or_insert(0);
             *counter += 1;
             let n = *counter;
             self.seen.insert(key, n);
@@ -333,14 +336,10 @@ mod tests {
 
     #[test]
     fn test_detect_private_key() {
-        let content =
-            "-----BEGIN RSA PRIVATE KEY-----\nMIIEpA...\n-----END RSA PRIVATE KEY-----\n";
+        let content = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpA...\n-----END RSA PRIVATE KEY-----\n";
         let findings = scan_content(content, "/etc/ssl/private/key.pem");
         assert_eq!(findings.len(), 1);
-        assert_eq!(
-            findings[0].finding_kind,
-            Some(FindingKind::PrivateKey)
-        );
+        assert_eq!(findings[0].finding_kind, Some(FindingKind::PrivateKey));
     }
 
     #[test]
@@ -366,10 +365,7 @@ mod tests {
         let content = "admin:$6$rounds=65536$salt$hash...:19000:0:99999:7:::\n";
         let findings = scan_content(content, "/etc/shadow");
         assert_eq!(findings.len(), 1);
-        assert_eq!(
-            findings[0].finding_kind,
-            Some(FindingKind::ShadowHash)
-        );
+        assert_eq!(findings[0].finding_kind, Some(FindingKind::ShadowHash));
     }
 
     #[test]
@@ -382,10 +378,7 @@ mod tests {
             1,
             "empty shadow must produce exactly one finding"
         );
-        assert_eq!(
-            findings[0].finding_kind,
-            Some(FindingKind::NoPassword)
-        );
+        assert_eq!(findings[0].finding_kind, Some(FindingKind::NoPassword));
         assert_eq!(findings[0].confidence, Some(Confidence::Low));
     }
 

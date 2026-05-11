@@ -36,7 +36,6 @@ pub fn normalize(value: &mut Value) {
     }
 }
 
-
 #[derive(Debug, PartialEq)]
 pub struct Difference {
     pub path: String,
@@ -50,7 +49,10 @@ pub fn load_divergence_allowlist(md: &str) -> BTreeSet<String> {
     let mut paths = BTreeSet::new();
     for line in md.lines() {
         let line = line.trim();
-        if let Some(path) = line.strip_prefix("- Path: `").and_then(|s| s.strip_suffix('`')) {
+        if let Some(path) = line
+            .strip_prefix("- Path: `")
+            .and_then(|s| s.strip_suffix('`'))
+        {
             paths.insert(path.to_string());
         }
     }

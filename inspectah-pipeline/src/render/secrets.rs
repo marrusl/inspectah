@@ -61,9 +61,7 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
     ));
     lines.push(String::new());
 
-    lines.push(
-        "The following items were redacted or excluded. Handle them according to".into(),
-    );
+    lines.push("The following items were redacted or excluded. Handle them according to".into());
     lines.push("the action specified for each item.".into());
     lines.push(String::new());
 
@@ -93,10 +91,7 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
         lines.push("| Path | Line | Pattern | Detection |".into());
         lines.push("|------|------|---------|-----------|".into());
         for f in &inline_redacted {
-            let line_str = f
-                .line
-                .map(|l| l.to_string())
-                .unwrap_or_else(|| "--".into());
+            let line_str = f.line.map(|l| l.to_string()).unwrap_or_else(|| "--".into());
             let detection = detection_label(f);
             lines.push(format!(
                 "| {} | {} | {} | {} |",
@@ -113,10 +108,7 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
         lines.push("| Path | Line | Confidence | Why Flagged |".into());
         lines.push("|------|------|------------|-------------|".into());
         for f in &flagged {
-            let line_str = f
-                .line
-                .map(|l| l.to_string())
-                .unwrap_or_else(|| "--".into());
+            let line_str = f.line.map(|l| l.to_string()).unwrap_or_else(|| "--".into());
             let conf = f
                 .confidence
                 .as_ref()
@@ -127,7 +119,10 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
             } else {
                 &f.pattern
             };
-            lines.push(format!("| {} | {} | {} | {} |", f.path, line_str, conf, why));
+            lines.push(format!(
+                "| {} | {} | {} | {} |",
+                f.path, line_str, conf, why
+            ));
         }
         lines.push(String::new());
     }
@@ -136,9 +131,7 @@ pub fn render_secrets_review(snap: &InspectionSnapshot) -> String {
     if !overridden.is_empty() {
         lines.push("## Overridden Exclusions".into());
         lines.push(String::new());
-        lines.push(
-            "These files were originally excluded by the scanner but deliberately".into(),
-        );
+        lines.push("These files were originally excluded by the scanner but deliberately".into());
         lines.push("re-included by the operator during triage.".into());
         lines.push(String::new());
         for f in &overridden {

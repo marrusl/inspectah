@@ -71,11 +71,15 @@ pub fn extract_gpg_keys(repo_content: &str, exec: &dyn Executor) -> Vec<RepoFile
 
         // Handle multiple keys separated by space or comma
         for key_part in key_value.split(&[' ', ','][..]) {
-            let key_path = key_part.trim()
+            let key_path = key_part
+                .trim()
                 .strip_prefix("file://")
                 .unwrap_or(key_part.trim());
 
-            if key_path.is_empty() || key_path.starts_with("http://") || key_path.starts_with("https://") {
+            if key_path.is_empty()
+                || key_path.starts_with("http://")
+                || key_path.starts_with("https://")
+            {
                 continue;
             }
 
@@ -138,8 +142,14 @@ mod tests {
     fn test_parse_repo_files() {
         let mock = MockExecutor::new()
             .with_dir("/etc/yum.repos.d", vec!["redhat.repo", "epel.repo"])
-            .with_file("/etc/yum.repos.d/redhat.repo", "[rhel-9-baseos]\nname=RHEL 9 BaseOS\n")
-            .with_file("/etc/yum.repos.d/epel.repo", "[epel]\nname=EPEL 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n");
+            .with_file(
+                "/etc/yum.repos.d/redhat.repo",
+                "[rhel-9-baseos]\nname=RHEL 9 BaseOS\n",
+            )
+            .with_file(
+                "/etc/yum.repos.d/epel.repo",
+                "[epel]\nname=EPEL 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n",
+            );
 
         let repos = collect_repo_files(&mock);
         assert_eq!(repos.len(), 2);
@@ -157,7 +167,10 @@ mod tests {
     fn test_malformed_repo_file_skipped() {
         let mock = MockExecutor::new()
             .with_dir("/etc/yum.repos.d", vec!["broken.repo"])
-            .with_file("/etc/yum.repos.d/broken.repo", "not a valid repo file\n\0\0\0");
+            .with_file(
+                "/etc/yum.repos.d/broken.repo",
+                "not a valid repo file\n\0\0\0",
+            );
 
         let repos = collect_repo_files(&mock);
         // Should not panic, malformed file should be skipped
@@ -167,8 +180,10 @@ mod tests {
     #[test]
     fn test_gpg_key_extraction() {
         let repo_content = "[epel]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n";
-        let mock = MockExecutor::new()
-            .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9", "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...");
+        let mock = MockExecutor::new().with_file(
+            "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9",
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...",
+        );
 
         let keys = extract_gpg_keys(repo_content, &mock);
         assert_eq!(keys.len(), 1);
@@ -200,8 +215,8 @@ mod tests {
     fn test_gpg_key_non_pgp_content_redacted() {
         // Simulate gpgkey=file:///etc/shadow — arbitrary host file
         let repo_content = "[malicious]\ngpgkey=file:///etc/shadow\n";
-        let mock = MockExecutor::new()
-            .with_file("/etc/shadow", "root:$6$salt$hash:19000:0:99999:7:::\n");
+        let mock =
+            MockExecutor::new().with_file("/etc/shadow", "root:$6$salt$hash:19000:0:99999:7:::\n");
 
         let keys = extract_gpg_keys(repo_content, &mock);
         assert_eq!(keys.len(), 1);
@@ -226,8 +241,7 @@ mod tests {
     fn test_gpg_key_valid_pgp_content_included() {
         let pgp_content = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nVersion: GnuPG v2\n\nmQENB...\n-----END PGP PUBLIC KEY BLOCK-----\n";
         let repo_content = "[repo]\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-test\n";
-        let mock = MockExecutor::new()
-            .with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-test", pgp_content);
+        let mock = MockExecutor::new().with_file("/etc/pki/rpm-gpg/RPM-GPG-KEY-test", pgp_content);
 
         let keys = extract_gpg_keys(repo_content, &mock);
         assert_eq!(keys.len(), 1);
@@ -254,9 +268,15 @@ mod tests {
 
     #[test]
     fn test_validate_gpg_content() {
-        assert!(validate_gpg_content("-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata"));
-        assert!(validate_gpg_content("  \n-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata"));
-        assert!(!validate_gpg_content("root:$6$salt$hash:19000:0:99999:7:::"));
+        assert!(validate_gpg_content(
+            "-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata"
+        ));
+        assert!(validate_gpg_content(
+            "  \n-----BEGIN PGP PUBLIC KEY BLOCK-----\ndata"
+        ));
+        assert!(!validate_gpg_content(
+            "root:$6$salt$hash:19000:0:99999:7:::"
+        ));
         assert!(!validate_gpg_content("not a key"));
         assert!(!validate_gpg_content(""));
     }

@@ -50,7 +50,8 @@ fn parse_module_file_content(content: &str) -> Option<EnabledModuleStream> {
                 "name" => module_name = value.to_string(),
                 "stream" => stream = value.to_string(),
                 "profiles" => {
-                    profiles = value.split(',')
+                    profiles = value
+                        .split(',')
                         .map(|s| s.trim().to_string())
                         .filter(|s| !s.is_empty())
                         .collect();
@@ -128,7 +129,10 @@ fn parse_versionlock_line(line: &str) -> Option<VersionLockEntry> {
 
     // Parse name-version-release.arch
     let nvra_parts: Vec<&str> = rest.rsplitn(2, '.').collect();
-    let arch = nvra_parts.first().map(|s| s.to_string()).unwrap_or_default();
+    let arch = nvra_parts
+        .first()
+        .map(|s| s.to_string())
+        .unwrap_or_default();
     let nvr = nvra_parts.get(1).unwrap_or(&rest);
 
     let nvr_parts: Vec<&str> = nvr.rsplitn(3, '-').collect();
@@ -214,8 +218,8 @@ mod tests {
     #[test]
     fn test_parse_version_locks() {
         let lock_content = "0:vim-enhanced-9.0.1592-1.el9.x86_64\n0:kernel-5.14.0-362.el9.x86_64\n";
-        let mock = MockExecutor::new()
-            .with_file("/etc/yum/pluginconf.d/versionlock.list", lock_content);
+        let mock =
+            MockExecutor::new().with_file("/etc/yum/pluginconf.d/versionlock.list", lock_content);
 
         let locks = parse_version_locks(&mock);
         assert_eq!(locks.len(), 2);

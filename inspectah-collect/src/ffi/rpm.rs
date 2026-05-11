@@ -92,15 +92,11 @@ pub fn query_all_packages() -> Result<Vec<PackageEntry>, RpmFfiError> {
     // Create a transaction set.
     let ts = unsafe { sys::rpmtsCreate() };
     if ts.is_null() {
-        return Err(RpmFfiError::QueryFailed(
-            "rpmtsCreate returned null".into(),
-        ));
+        return Err(RpmFfiError::QueryFailed("rpmtsCreate returned null".into()));
     }
 
     // Open an iterator over all installed packages.
-    let mi = unsafe {
-        sys::rpmtsInitIterator(ts, sys::RPMDBI_PACKAGES, ptr::null(), 0)
-    };
+    let mi = unsafe { sys::rpmtsInitIterator(ts, sys::RPMDBI_PACKAGES, ptr::null(), 0) };
     if mi.is_null() {
         unsafe { sys::rpmtsFree(ts) };
         return Err(RpmFfiError::QueryFailed(
@@ -158,7 +154,5 @@ unsafe fn header_get_string(header: *mut sys::Header, tag: libc::c_int) -> Strin
     if ptr.is_null() {
         return String::new();
     }
-    CStr::from_ptr(ptr)
-        .to_string_lossy()
-        .into_owned()
+    CStr::from_ptr(ptr).to_string_lossy().into_owned()
 }

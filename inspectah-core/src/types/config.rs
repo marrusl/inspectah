@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use super::fleet::FleetPrevalence;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -78,7 +78,13 @@ mod tests {
 
     #[test]
     fn test_config_file_kind_values() {
-        assert_eq!(serde_json::to_string(&ConfigFileKind::RpmOwnedDefault).unwrap(), r#""rpm_owned_default""#);
-        assert_eq!(serde_json::to_string(&ConfigFileKind::RpmOwnedModified).unwrap(), r#""rpm_owned_modified""#);
+        assert_eq!(
+            serde_json::to_string(&ConfigFileKind::RpmOwnedDefault).unwrap(),
+            r#""rpm_owned_default""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ConfigFileKind::RpmOwnedModified).unwrap(),
+            r#""rpm_owned_modified""#
+        );
     }
 }

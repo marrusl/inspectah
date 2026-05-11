@@ -19,7 +19,6 @@ impl MockExecutor {
             links: HashMap::new(),
         }
     }
-
 }
 
 impl Default for MockExecutor {
@@ -40,7 +39,10 @@ impl MockExecutor {
     }
 
     pub fn with_dir(mut self, path: &str, entries: Vec<&str>) -> Self {
-        self.dirs.insert(path.to_string(), entries.iter().map(|s| s.to_string()).collect());
+        self.dirs.insert(
+            path.to_string(),
+            entries.iter().map(|s| s.to_string()).collect(),
+        );
         self
     }
 
@@ -57,11 +59,14 @@ impl Executor for MockExecutor {
         } else {
             format!("{} {}", cmd, args.join(" "))
         };
-        self.commands.get(&key).cloned().unwrap_or_else(|| ExecResult {
-            stderr: format!("command not found: {key}"),
-            exit_code: 127,
-            ..Default::default()
-        })
+        self.commands
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| ExecResult {
+                stderr: format!("command not found: {key}"),
+                exit_code: 127,
+                ..Default::default()
+            })
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
@@ -102,12 +107,14 @@ mod tests {
 
     #[test]
     fn test_mock_command_lookup() {
-        let mock = MockExecutor::new()
-            .with_command("rpm -qa", ExecResult {
+        let mock = MockExecutor::new().with_command(
+            "rpm -qa",
+            ExecResult {
                 stdout: "bash-5.2.26-3.el9.x86_64\n".into(),
                 exit_code: 0,
                 ..Default::default()
-            });
+            },
+        );
         let result = mock.run("rpm", &["-qa"]);
         assert_eq!(result.exit_code, 0);
         assert!(result.stdout.contains("bash"));
@@ -122,8 +129,7 @@ mod tests {
 
     #[test]
     fn test_mock_file_read() {
-        let mock = MockExecutor::new()
-            .with_file("/etc/os-release", "ID=rhel\nVERSION_ID=9.4\n");
+        let mock = MockExecutor::new().with_file("/etc/os-release", "ID=rhel\nVERSION_ID=9.4\n");
         let content = mock.read_file(Path::new("/etc/os-release")).unwrap();
         assert!(content.contains("ID=rhel"));
     }
@@ -137,8 +143,8 @@ mod tests {
 
     #[test]
     fn test_mock_read_dir() {
-        let mock = MockExecutor::new()
-            .with_dir("/etc/yum.repos.d", vec!["redhat.repo", "epel.repo"]);
+        let mock =
+            MockExecutor::new().with_dir("/etc/yum.repos.d", vec!["redhat.repo", "epel.repo"]);
         let entries = mock.read_dir(Path::new("/etc/yum.repos.d")).unwrap();
         assert_eq!(entries.len(), 2);
         assert!(entries.contains(&"redhat.repo".to_string()));
@@ -152,8 +158,10 @@ mod tests {
 
     #[test]
     fn test_mock_read_link() {
-        let mock = MockExecutor::new()
-            .with_link("/etc/resolv.conf", "../run/systemd/resolve/stub-resolv.conf");
+        let mock = MockExecutor::new().with_link(
+            "/etc/resolv.conf",
+            "../run/systemd/resolve/stub-resolv.conf",
+        );
         let target = mock.read_link(Path::new("/etc/resolv.conf")).unwrap();
         assert_eq!(target, "../run/systemd/resolve/stub-resolv.conf");
     }
