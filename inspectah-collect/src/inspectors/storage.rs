@@ -72,9 +72,11 @@ impl Inspector for StorageInspector {
 
         // 1. Read /etc/fstab — primary source, failure is fatal.
         let fstab_path = Path::new("/etc/fstab");
-        let fstab_content = exec.read_file(fstab_path).map_err(|e| InspectorError::Failed {
-            reason: format!("cannot read /etc/fstab: {e}"),
-        })?;
+        let fstab_content = exec
+            .read_file(fstab_path)
+            .map_err(|e| InspectorError::Failed {
+                reason: format!("cannot read /etc/fstab: {e}"),
+            })?;
 
         let (fstab_entries, credential_refs, redaction_hints) = parse_fstab(&fstab_content);
 
@@ -158,9 +160,7 @@ fn parse_fstab(content: &str) -> (Vec<FstabEntry>, Vec<CredentialRef>, Vec<Redac
             if opt.starts_with("password=") {
                 hints.push(RedactionHint {
                     path: "/etc/fstab".into(),
-                    reason: format!(
-                        "inline password in mount options for {mount_point}"
-                    ),
+                    reason: format!("inline password in mount options for {mount_point}"),
                     confidence: Some(Confidence::High),
                 });
             }

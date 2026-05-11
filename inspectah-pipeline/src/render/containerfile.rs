@@ -88,55 +88,59 @@ pub fn render_containerfile(
 
     // 3. Firewall zones
     if is_degraded(&snap.completeness, InspectorId::Network) {
-        lines.push(
-            "# FIXME: network data may be incomplete (inspector returned degraded)".into(),
-        );
+        lines.push("# FIXME: network data may be incomplete (inspector returned degraded)".into());
     }
     lines.extend(network_section_lines(snap, true));
 
     // 4. Scheduled tasks
     if is_degraded(&snap.completeness, InspectorId::ScheduledTasks) {
-        lines.push("# FIXME: scheduled_tasks data may be incomplete (inspector returned degraded)".into());
+        lines.push(
+            "# FIXME: scheduled_tasks data may be incomplete (inspector returned degraded)".into(),
+        );
     }
     lines.extend(scheduled_tasks_section_lines(snap));
 
     // 5. Config files
     if is_degraded(&snap.completeness, InspectorId::Config) {
-        lines.push(
-            "# FIXME: config data may be incomplete (inspector returned degraded)".into(),
-        );
+        lines.push("# FIXME: config data may be incomplete (inspector returned degraded)".into());
     }
     lines.extend(config_section_lines(snap, materialized_roots));
 
     // 6. Non-RPM software
     if is_degraded(&snap.completeness, InspectorId::NonRpmSoftware) {
-        lines.push("# FIXME: non_rpm_software data may be incomplete (inspector returned degraded)".into());
+        lines.push(
+            "# FIXME: non_rpm_software data may be incomplete (inspector returned degraded)".into(),
+        );
     }
     lines.extend(non_rpm_section_lines(snap));
 
     // 7. Containers
     if is_degraded(&snap.completeness, InspectorId::Containers) {
-        lines.push("# FIXME: containers data may be incomplete (inspector returned degraded)".into());
+        lines.push(
+            "# FIXME: containers data may be incomplete (inspector returned degraded)".into(),
+        );
     }
     lines.extend(containers_section_lines(snap));
 
     // 8. Users
     if is_degraded(&snap.completeness, InspectorId::UsersGroups) {
-        lines.push("# FIXME: users_groups data may be incomplete (inspector returned degraded)".into());
+        lines.push(
+            "# FIXME: users_groups data may be incomplete (inspector returned degraded)".into(),
+        );
     }
     lines.extend(users_section_lines(snap));
 
     // 9. Kernel/boot
     if is_degraded(&snap.completeness, InspectorId::KernelBoot) {
-        lines.push("# FIXME: kernel_boot data may be incomplete (inspector returned degraded)".into());
+        lines.push(
+            "# FIXME: kernel_boot data may be incomplete (inspector returned degraded)".into(),
+        );
     }
     lines.extend(kernel_boot_section_lines(snap));
 
     // 10. SELinux
     if is_degraded(&snap.completeness, InspectorId::Selinux) {
-        lines.push(
-            "# FIXME: selinux data may be incomplete (inspector returned degraded)".into(),
-        );
+        lines.push("# FIXME: selinux data may be incomplete (inspector returned degraded)".into());
     }
     lines.extend(selinux_section_lines(snap));
 

@@ -62,8 +62,7 @@ impl MockExecutor {
     /// (exit_code=-1, descriptive stderr) without any actual delay.
     /// The `duration` is included in the error message for realism.
     pub fn with_timeout_simulation(mut self, cmd_key: &str, duration: std::time::Duration) -> Self {
-        self.timeout_commands
-            .insert(cmd_key.to_string(), duration);
+        self.timeout_commands.insert(cmd_key.to_string(), duration);
         self
     }
 }
@@ -79,11 +78,7 @@ impl Executor for MockExecutor {
         // Check for simulated timeout before normal command lookup.
         if let Some(duration) = self.timeout_commands.get(&key) {
             return ExecResult {
-                stderr: format!(
-                    "command timed out after {}s: {}",
-                    duration.as_secs(),
-                    key
-                ),
+                stderr: format!("command timed out after {}s: {}", duration.as_secs(), key),
                 exit_code: -1,
                 ..Default::default()
             };

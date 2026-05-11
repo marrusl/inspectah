@@ -9,32 +9,26 @@ use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 
 /// Fixture: /proc/cmdline
-const CMDLINE_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/kernelboot/proc-cmdline.txt");
+const CMDLINE_FIXTURE: &str = include_str!("../../testdata/fixtures/kernelboot/proc-cmdline.txt");
 
 /// Fixture: lsmod output
-const LSMOD_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/kernelboot/lsmod.txt");
+const LSMOD_FIXTURE: &str = include_str!("../../testdata/fixtures/kernelboot/lsmod.txt");
 
 /// Fixture: sysctl.d config file
 const SYSCTL_CONF_FIXTURE: &str =
     include_str!("../../testdata/fixtures/kernelboot/sysctl-system.conf");
 
 /// Fixture: sysctl -a output
-const SYSCTL_A_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/kernelboot/sysctl-a.txt");
+const SYSCTL_A_FIXTURE: &str = include_str!("../../testdata/fixtures/kernelboot/sysctl-a.txt");
 
 /// Fixture: dracut.conf.d snippet
-const DRACUT_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/kernelboot/dracut-conf");
+const DRACUT_FIXTURE: &str = include_str!("../../testdata/fixtures/kernelboot/dracut-conf");
 
 /// Fixture: locale.conf
-const LOCALE_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/kernelboot/locale.conf");
+const LOCALE_FIXTURE: &str = include_str!("../../testdata/fixtures/kernelboot/locale.conf");
 
 /// Fixture: tuned-adm active output
-const TUNED_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/kernelboot/tuned-active.txt");
+const TUNED_FIXTURE: &str = include_str!("../../testdata/fixtures/kernelboot/tuned-active.txt");
 
 fn pkg_source() -> SourceSystem {
     SourceSystem::PackageBased {
@@ -244,10 +238,7 @@ fn lsmod_failure_returns_degraded() {
             );
             // Partial should still have cmdline
             if let SectionData::KernelBoot(s) = &partial.section {
-                assert!(
-                    !s.cmdline.is_empty(),
-                    "partial should contain cmdline"
-                );
+                assert!(!s.cmdline.is_empty(), "partial should contain cmdline");
             } else {
                 panic!("partial should be KernelBoot section");
             }

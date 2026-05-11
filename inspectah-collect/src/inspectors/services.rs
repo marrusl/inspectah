@@ -56,8 +56,10 @@ impl Inspector for ServicesInspector {
         let exec = ctx.executor;
 
         // 1. Run systemctl list-unit-files
-        let systemctl_result =
-            exec.run("systemctl", &["list-unit-files", "--type=service", "--no-pager"]);
+        let systemctl_result = exec.run(
+            "systemctl",
+            &["list-unit-files", "--type=service", "--no-pager"],
+        );
 
         if systemctl_result.exit_code == 127 {
             return Err(InspectorError::Degraded {
@@ -185,9 +187,7 @@ fn parse_unit_files(stdout: &str) -> Vec<UnitFileEntry> {
     for line in stdout.lines() {
         let line = line.trim();
         // Skip header, empty lines, and summary line
-        if line.is_empty()
-            || line.starts_with("UNIT FILE")
-            || line.ends_with("unit files listed.")
+        if line.is_empty() || line.starts_with("UNIT FILE") || line.ends_with("unit files listed.")
         {
             continue;
         }
@@ -248,8 +248,9 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<Vec<PresetRule>, String> {
     };
 
     if !usr_ok && !etc_ok {
-        return Err("neither /usr/lib/systemd/system-preset nor /etc/systemd/system-preset readable"
-            .into());
+        return Err(
+            "neither /usr/lib/systemd/system-preset nor /etc/systemd/system-preset readable".into(),
+        );
     }
 
     // Sort by filename — numeric prefix ordering (e.g., 85-xxx before 90-xxx)
