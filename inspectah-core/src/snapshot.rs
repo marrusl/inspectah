@@ -6,7 +6,7 @@ use crate::types::network::NetworkSection;
 use crate::types::nonrpm::NonRpmSoftwareSection;
 use crate::types::os::{OsRelease, SystemType};
 use crate::types::preflight::PreflightResult;
-use crate::types::redaction::{RedactionFinding, RedactionState};
+use crate::types::redaction::{RedactionFinding, RedactionHint, RedactionState};
 use crate::types::rpm::RpmSection;
 use crate::types::scheduled::ScheduledTaskSection;
 use crate::types::selinux::SelinuxSection;
@@ -44,6 +44,10 @@ pub struct InspectionSnapshot {
     pub warnings: Vec<Warning>,
     #[serde(default)]
     pub redactions: Vec<RedactionFinding>,
+    /// Inspector-emitted hints about content that may need redaction.
+    /// Consumed by the redaction engine to supplement pattern-based scanning.
+    #[serde(default)]
+    pub redaction_hints: Vec<RedactionHint>,
     /// Trust state for snapshot re-rendering. Only FullyRedacted skips redaction on import.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redaction_state: Option<RedactionState>,

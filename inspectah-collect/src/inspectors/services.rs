@@ -161,7 +161,7 @@ impl Inspector for ServicesInspector {
         }
 
         // 5. Scan drop-in directories
-        let (drop_ins, redaction_hints) = collect_drop_ins(exec);
+        let (drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
 
         // 6. Build result
         let section = ServiceSection {
@@ -170,6 +170,23 @@ impl Inspector for ServicesInspector {
             disabled_units,
             drop_ins,
         };
+
+        // Drop-in read failures are correctness-bearing — a missed override
+        // makes the snapshot look like defaults when there are customizations.
+        if !dropin_read_failures.is_empty() {
+            let reason = format!(
+                "drop-in conf read failures (possible size cap): {}",
+                dropin_read_failures.join("; ")
+            );
+            return Err(InspectorError::Degraded {
+                partial: Box::new(InspectorOutput {
+                    section: SectionData::Services(section),
+                    warnings: Vec::new(),
+                    redaction_hints,
+                }),
+                reason,
+            });
+        }
 
         Ok(InspectorOutput {
             section: SectionData::Services(section),
@@ -333,15 +350,18 @@ fn partition_units(units: &[UnitFileEntry]) -> (Vec<String>, Vec<String>) {
 }
 
 /// Collect drop-in `.conf` files from `/etc/systemd/system/*.service.d/`.
-/// Returns (drop_ins, redaction_hints).
-fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHint>) {
+/// Returns (drop_ins, redaction_hints, read_failures).
+/// Read failures on listed `.conf` files are correctness-bearing — the
+/// snapshot would look complete when a service override was actually missed.
+fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHint>, Vec<String>) {
     let dropin_base = Path::new("/etc/systemd/system");
     let mut drop_ins = Vec::new();
     let mut hints = Vec::new();
+    let mut read_failures = Vec::new();
 
     let entries = match exec.read_dir(dropin_base) {
         Ok(e) => e,
-        Err(_) => return (drop_ins, hints),
+        Err(_) => return (drop_ins, hints, read_failures),
     };
 
     for entry in &entries {
@@ -364,7 +384,10 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
             let file_path = dir_path.join(conf);
             let content = match exec.read_file(&file_path) {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(e) => {
+                    read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
+                    continue;
+                }
             };
 
             let path_str = file_path.to_string_lossy().to_string();
@@ -402,7 +425,7 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
         }
     }
 
-    (drop_ins, hints)
+    (drop_ins, hints, read_failures)
 }
 
 #[cfg(test)]
@@ -449,5 +472,107 @@ mod tests {
                      0 unit files listed.\n";
         let entries = parse_unit_files(input);
         assert!(entries.is_empty());
+    }
+
+    // --- Size-cap / read-failure → Degraded tests ---
+
+    use crate::executor::mock::MockExecutor;
+    use inspectah_core::traits::executor::ExecResult;
+    use inspectah_core::types::os::OsRelease;
+    use inspectah_core::types::system::SourceSystem;
+
+    fn svc_test_os_release() -> OsRelease {
+        OsRelease {
+            name: "Red Hat Enterprise Linux".into(),
+            version_id: "9.4".into(),
+            id: "rhel".into(),
+            ..Default::default()
+        }
+    }
+
+    fn svc_base_mock() -> MockExecutor {
+        MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             sshd.service                               enabled         enabled\n\
+                             httpd.service                              enabled         disabled\n\
+                             \n\
+                             2 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable sshd.service\ndisable *\n",
+            )
+    }
+
+    #[test]
+    fn test_dropin_read_failure_triggers_degraded() {
+        // Drop-in directory listed, .conf file listed, but file read fails (size cap)
+        let exec = svc_base_mock()
+            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"]);
+        // NOTE: no .with_file for override.conf → read_file will return NotFound
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, partial }) => {
+                assert!(
+                    reason.contains("drop-in") || reason.contains("override.conf"),
+                    "degraded reason must mention the failed drop-in: {reason}"
+                );
+                // Partial data should still contain state_changes from systemctl
+                if let SectionData::Services(ref svc) = partial.section {
+                    assert!(
+                        !svc.state_changes.is_empty() || !svc.enabled_units.is_empty(),
+                        "partial data must contain systemctl results"
+                    );
+                }
+            }
+            other => panic!("expected Degraded for unreadable drop-in, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_services_ok_when_dropins_readable() {
+        let exec = svc_base_mock()
+            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir("/etc/systemd/system/httpd.service.d", vec!["override.conf"])
+            .with_file(
+                "/etc/systemd/system/httpd.service.d/override.conf",
+                "[Service]\nRestart=always\n",
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        assert!(
+            result.is_ok(),
+            "all drop-ins readable → must succeed, got: {result:?}"
+        );
     }
 }
