@@ -1,0 +1,109 @@
+---
+source: inspectah-collect/tests/storage_test.rs
+assertion_line: 351
+expression: section
+---
+{
+  "fstab_entries": [
+    {
+      "device": "UUID=abc-123",
+      "mount_point": "/",
+      "fstype": "xfs",
+      "options": "defaults"
+    },
+    {
+      "device": "UUID=def-456",
+      "mount_point": "/boot",
+      "fstype": "xfs",
+      "options": "defaults"
+    },
+    {
+      "device": "UUID=ghi-789",
+      "mount_point": "/boot/efi",
+      "fstype": "vfat",
+      "options": "umask=0077,shortname=winnt"
+    },
+    {
+      "device": "tmpfs",
+      "mount_point": "/tmp",
+      "fstype": "tmpfs",
+      "options": "defaults"
+    },
+    {
+      "device": "//server/share",
+      "mount_point": "/mnt/cifs",
+      "fstype": "cifs",
+      "options": "credentials=/etc/cifs-creds,uid=1000"
+    },
+    {
+      "device": "server:/export",
+      "mount_point": "/mnt/nfs",
+      "fstype": "nfs",
+      "options": "defaults"
+    },
+    {
+      "device": "/dev/mapper/vg0-data",
+      "mount_point": "/data",
+      "fstype": "xfs",
+      "options": "defaults"
+    }
+  ],
+  "mount_points": [
+    {
+      "target": "/",
+      "source": "/dev/sda2",
+      "fstype": "xfs",
+      "options": "rw,relatime"
+    },
+    {
+      "target": "/boot",
+      "source": "/dev/sda1",
+      "fstype": "xfs",
+      "options": "rw,relatime"
+    },
+    {
+      "target": "/boot/efi",
+      "source": "/dev/sda15",
+      "fstype": "vfat",
+      "options": "rw,relatime"
+    },
+    {
+      "target": "/tmp",
+      "source": "tmpfs",
+      "fstype": "tmpfs",
+      "options": "rw"
+    },
+    {
+      "target": "/mnt/nfs",
+      "source": "server:/export",
+      "fstype": "nfs",
+      "options": "rw,vers=4"
+    },
+    {
+      "target": "/data",
+      "source": "/dev/mapper/vg0-data",
+      "fstype": "xfs",
+      "options": "rw,relatime"
+    }
+  ],
+  "lvm_info": [
+    {
+      "lv_name": "data",
+      "vg_name": "vg0",
+      "lv_size": "50.00g"
+    },
+    {
+      "lv_name": "swap",
+      "vg_name": "vg0",
+      "lv_size": "4.00g"
+    }
+  ],
+  "var_directories": [],
+  "credential_refs": [
+    {
+      "mount_point": "/mnt/cifs",
+      "credential_path": "/etc/cifs-creds",
+      "source": "fstab"
+    }
+  ]
+}

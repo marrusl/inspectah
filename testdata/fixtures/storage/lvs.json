@@ -1,0 +1,10 @@
+{
+  "report": [
+    {
+      "lv": [
+        {"lv_name": "data", "vg_name": "vg0", "lv_size": "50.00g"},
+        {"lv_name": "swap", "vg_name": "vg0", "lv_size": "4.00g"}
+      ]
+    }
+  ]
+}
