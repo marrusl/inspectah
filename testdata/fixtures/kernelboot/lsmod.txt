@@ -1,0 +1,9 @@
+Module                  Size  Used by
+bridge                307200  0
+stp                    16384  1 bridge
+llc                    16384  2 stp,bridge
+vfat                   20480  1
+fat                    86016  1 vfat
+nf_conntrack          172032  0
+ip_tables              28672  0
+xfs                   196608  2
