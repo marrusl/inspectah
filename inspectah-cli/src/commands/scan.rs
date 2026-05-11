@@ -11,7 +11,10 @@ use clap::Args;
 use std::path::PathBuf;
 
 use inspectah_collect::executor::real::RealExecutor;
+use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::services::ServicesInspector;
+use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::os::OsRelease;
@@ -85,8 +88,13 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     // Step 1: Detect source system
     let source = detect_source_system(&executor).context("source system detection failed")?;
 
-    // Step 2: Collect — Phase 1 runs only the RPM inspector
-    let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
+    // Step 2: Collect — run all inspectors
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(ServicesInspector::new()),
+        Box::new(StorageInspector::new()),
+        Box::new(KernelbootInspector::new()),
+    ];
     let collected = collect(&source, &executor, &inspectors);
 
     // Step 4: Validate
