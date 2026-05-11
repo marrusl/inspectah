@@ -104,7 +104,7 @@ fn happy_path() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -153,7 +153,7 @@ fn sysctl_three_way_diff() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -224,7 +224,7 @@ fn lsmod_failure_returns_degraded() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -279,7 +279,7 @@ fn partial_failure_dracut_unreadable() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -334,7 +334,7 @@ fn tuned_not_installed() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -382,7 +382,7 @@ fn config_snippet_with_secret() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -434,7 +434,7 @@ fn cmdline_with_password() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -479,7 +479,7 @@ fn empty_system() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -514,7 +514,7 @@ fn kernelboot_snapshot() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };

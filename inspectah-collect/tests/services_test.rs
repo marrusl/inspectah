@@ -73,7 +73,7 @@ fn happy_path_state_changes() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -184,7 +184,7 @@ fn preset_first_match_wins() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -230,7 +230,7 @@ fn preset_glob_matching() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -258,7 +258,7 @@ fn dropin_files_collected() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -285,7 +285,7 @@ fn systemctl_missing_returns_degraded() {
     let exec = MockExecutor::new();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -326,7 +326,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -373,7 +373,7 @@ fn empty_system_returns_empty_section() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -421,7 +421,7 @@ fn dropin_with_secret_produces_redaction_hint() {
 
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
@@ -446,7 +446,7 @@ fn services_snapshot() {
     let exec = full_mock();
     let source = pkg_source();
     let ctx = InspectionContext {
-        source: &source,
+        source_system: &source,
         executor: &exec,
         rpm_state: None,
     };
