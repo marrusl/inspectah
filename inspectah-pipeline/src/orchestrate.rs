@@ -5,8 +5,10 @@
 use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::traits::inspector::{InspectionContext, Inspector};
+use inspectah_core::traits::executor::Executor;
+use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::renderer::RenderContext;
+use inspectah_core::types::system::SourceSystem;
 
 use crate::collect::collect;
 use crate::redaction::engine::{redact, RedactOptions};
@@ -31,13 +33,14 @@ pub enum PipelineError {
 ///
 /// Returns the final snapshot (post-redaction) and the path to the tarball.
 pub fn run_pipeline(
-    ctx: &InspectionContext<'_>,
+    source: &SourceSystem,
+    executor: &dyn Executor,
     inspectors: &[Box<dyn Inspector>],
     output_dir: &Path,
     hostname: &str,
 ) -> Result<(InspectionSnapshot, std::path::PathBuf), PipelineError> {
     // Collect
-    let collected = collect(ctx, inspectors);
+    let collected = collect(source, executor, inspectors);
 
     // Validate
     let validated = validate(collected)?;

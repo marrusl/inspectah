@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 use inspectah_collect::executor::real::RealExecutor;
 use inspectah_collect::inspectors::rpm::RpmInspector;
-use inspectah_core::traits::inspector::{InspectionContext, Inspector};
+use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
@@ -85,16 +85,9 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     // Step 1: Detect source system
     let source = detect_source_system(&executor).context("source system detection failed")?;
 
-    // Step 2: Build inspection context (borrowed references)
-    let ctx = InspectionContext {
-        source: &source,
-        executor: &executor,
-        rpm_state: None,
-    };
-
-    // Step 3: Collect — Phase 1 runs only the RPM inspector
+    // Step 2: Collect — Phase 1 runs only the RPM inspector
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-    let collected = collect(&ctx, &inspectors);
+    let collected = collect(&source, &executor, &inspectors);
 
     // Step 4: Validate
     let validated = validate(collected).context("snapshot validation failed")?;
@@ -139,7 +132,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     )?;
 
     // Step 7: Create tarball
-    let hostname = get_hostname(ctx.executor);
+    let hostname = get_hostname(&executor);
     let stamp = get_output_stamp(&hostname);
     let tarball_name = format!("{stamp}.tar.gz");
 
