@@ -136,6 +136,36 @@ pub fn scan_content(content: &str, path: &str) -> Vec<RedactionFinding> {
     findings
 }
 
+/// Redact inline secrets from fstab mount options.
+///
+/// Replaces `password=<value>` with `password=REDACTED_MOUNT_PASSWORD_N`
+/// and `credentials=<value>` containing inline passwords similarly.
+/// Other options are preserved verbatim.
+fn redact_mount_options(options: &str, registry: &mut CounterRegistry) -> String {
+    options
+        .split(',')
+        .map(|opt| {
+            if let Some(value) = opt.strip_prefix("password=") {
+                let token = registry.token_for("mount_password", value);
+                format!("password={token}")
+            } else if let Some(value) = opt.strip_prefix("credentials=") {
+                // Credential path references are flagged but the path itself
+                // is not a secret — only redact if it looks like an inline
+                // password rather than a file path (no leading /).
+                if !value.starts_with('/') {
+                    let token = registry.token_for("mount_credential", value);
+                    format!("credentials={token}")
+                } else {
+                    opt.to_string()
+                }
+            } else {
+                opt.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Redact a snapshot in place, setting its `redaction_state` and populating `redactions`.
 ///
 /// - Scans config file contents and shadow entries for secrets.
@@ -286,14 +316,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
-    // Scan fstab mount options and credential refs in storage section
-    if let Some(ref storage) = snapshot.storage {
-        for entry in &storage.fstab_entries {
+    // Scan fstab mount options and credential refs in storage section.
+    // CRITICAL: Actually redact inline secrets from entry.options so they
+    // don't survive into exported artifacts (snapshot JSON, audit report, HTML).
+    if let Some(ref mut storage) = snapshot.storage {
+        for entry in &mut storage.fstab_entries {
             if entry.options.contains("credentials=") || entry.options.contains("password=") {
+                // Redact inline password= values from mount options
+                let redacted_options = redact_mount_options(&entry.options, &mut registry);
                 all_findings.push(RedactionFinding {
                     path: "/etc/fstab".to_string(),
                     source: "mount_options".into(),
-                    kind: RedactionKind::Flagged,
+                    kind: RedactionKind::Inline,
                     pattern: "credential_mount_option".into(),
                     remediation: format!(
                         "Mount point '{}': credential reference in mount options — use systemd credentials or a mount helper",
@@ -305,6 +339,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     confidence: Some(Confidence::High),
                     finding_kind: Some(FindingKind::GenericCredential),
                 });
+                entry.options = redacted_options;
             }
         }
         for cred in &storage.credential_refs {
@@ -787,6 +822,81 @@ mod tests {
                 panic!("expected PartiallyRedacted due to medium-confidence hint, got {other:?}")
             }
         }
+    }
+
+    // --- Storage inline secret redaction tests (Fix A) ---
+
+    #[test]
+    fn test_fstab_password_redacted_from_options() {
+        use inspectah_core::types::storage::{FstabEntry, StorageSection};
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.storage = Some(StorageSection {
+            fstab_entries: vec![FstabEntry {
+                device: "//server/share".into(),
+                mount_point: "/mnt/smb".into(),
+                fstype: "cifs".into(),
+                options: "password=hunter2,uid=1000".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        // The secret value must be removed from the options string
+        let storage = snapshot.storage.as_ref().unwrap();
+        assert!(
+            !storage.fstab_entries[0].options.contains("hunter2"),
+            "password value must be redacted from fstab options, got: {}",
+            storage.fstab_entries[0].options
+        );
+        assert!(
+            storage.fstab_entries[0]
+                .options
+                .contains("REDACTED_MOUNT_PASSWORD_"),
+            "options must contain redaction token"
+        );
+        // Other options must survive
+        assert!(
+            storage.fstab_entries[0].options.contains("uid=1000"),
+            "non-secret options must be preserved"
+        );
+
+        // Verify the secret doesn't survive in JSON serialization
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(
+            !json.contains("hunter2"),
+            "secret must not appear anywhere in snapshot JSON"
+        );
+    }
+
+    #[test]
+    fn test_fstab_credentials_path_preserved() {
+        use inspectah_core::types::storage::{FstabEntry, StorageSection};
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.storage = Some(StorageSection {
+            fstab_entries: vec![FstabEntry {
+                device: "//server/share".into(),
+                mount_point: "/mnt/cifs".into(),
+                fstype: "cifs".into(),
+                options: "credentials=/etc/cifs-creds,uid=1000".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        // Credential file paths (starting with /) are not inline secrets
+        // — they reference an external file, not an embedded password.
+        let storage = snapshot.storage.as_ref().unwrap();
+        assert!(
+            storage.fstab_entries[0]
+                .options
+                .contains("credentials=/etc/cifs-creds"),
+            "credential file path should be preserved, got: {}",
+            storage.fstab_entries[0].options
+        );
     }
 
     #[test]
