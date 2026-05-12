@@ -431,6 +431,9 @@ fn collect_config_snippets(
 }
 
 /// Strict variant: returns Err if the directory is unreadable.
+/// Individual file read failures within the directory also return Err
+/// because dracut config is correctness-bearing — a missing file makes
+/// the snapshot look complete when collection was actually incomplete.
 fn collect_config_snippets_strict(
     exec: &dyn Executor,
     dir_path: &str,
@@ -442,18 +445,30 @@ fn collect_config_snippets_strict(
         .map_err(|_| format!("{dir_path} unreadable — dracut config missing"))?;
 
     let mut snippets = Vec::new();
+    let mut read_failures = Vec::new();
     for entry in &entries {
         let file_path = dir.join(entry);
-        if let Ok(content) = exec.read_file(&file_path) {
-            let path_str = file_path.to_string_lossy().to_string();
+        match exec.read_file(&file_path) {
+            Ok(content) => {
+                let path_str = file_path.to_string_lossy().to_string();
 
-            check_snippet_secrets(&path_str, &content, hints);
+                check_snippet_secrets(&path_str, &content, hints);
 
-            snippets.push(ConfigSnippet {
-                path: path_str,
-                content,
-            });
+                snippets.push(ConfigSnippet {
+                    path: path_str,
+                    content,
+                });
+            }
+            Err(e) => {
+                read_failures.push(format!("{}: {e}", file_path.to_string_lossy()));
+            }
         }
+    }
+    if !read_failures.is_empty() {
+        return Err(format!(
+            "dracut config file read failures: {}",
+            read_failures.join("; ")
+        ));
     }
     Ok(snippets)
 }
@@ -633,6 +648,39 @@ mod tests {
                 );
             }
             other => panic!("expected Degraded for unreadable modprobe snippet, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dracut_file_read_failure_triggers_degraded() {
+        // dracut.conf.d directory is readable, lists a file, but file read fails
+        let exec = kb_base_mock()
+            .with_dir("/etc/sysctl.d", vec![])
+            .with_dir("/usr/lib/sysctl.d", vec![])
+            .with_dir("/etc/modprobe.d", vec![])
+            .with_dir("/etc/modules-load.d", vec![])
+            .with_dir("/etc/dracut.conf.d", vec!["50-custom.conf"]);
+        // NOTE: no .with_file for 50-custom.conf → read_file returns NotFound
+
+        let source = SourceSystem::PackageBased {
+            os_release: kb_test_os_release(),
+        };
+        let inspector = KernelbootInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, .. }) => {
+                assert!(
+                    reason.contains("dracut") || reason.contains("50-custom.conf"),
+                    "degraded reason must mention the failed dracut config: {reason}"
+                );
+            }
+            other => panic!("expected Degraded for unreadable dracut config file, got {other:?}"),
         }
     }
 
