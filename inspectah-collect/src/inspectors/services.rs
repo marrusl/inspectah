@@ -97,8 +97,8 @@ impl Inspector for ServicesInspector {
         }
 
         // 3. Read preset files — try both dirs; if neither readable, degrade
-        let preset_rules = match read_preset_rules(exec) {
-            Ok(rules) => rules,
+        let (preset_rules, preset_read_failures) = match read_preset_rules(exec) {
+            Ok(pair) => pair,
             Err(reason) => {
                 // Degrade: include systemctl data as partial
                 let (enabled_units, disabled_units) = partition_units(&units);
@@ -171,6 +171,24 @@ impl Inspector for ServicesInspector {
             drop_ins,
         };
 
+        // Preset file read failures are correctness-bearing — a missing
+        // preset file means we cannot determine the default state for
+        // services whose rules were in that file.
+        if !preset_read_failures.is_empty() {
+            let reason = format!(
+                "preset file read failures: {}",
+                preset_read_failures.join("; ")
+            );
+            return Err(InspectorError::Degraded {
+                partial: Box::new(InspectorOutput {
+                    section: SectionData::Services(section),
+                    warnings: Vec::new(),
+                    redaction_hints,
+                }),
+                reason,
+            });
+        }
+
         // Drop-in read failures are correctness-bearing — a missed override
         // makes the snapshot look like defaults when there are customizations.
         if !dropin_read_failures.is_empty() {
@@ -229,19 +247,25 @@ fn parse_unit_files(stdout: &str) -> Vec<UnitFileEntry> {
 }
 
 /// Read and merge preset rules from standard preset directories.
-/// Returns Err if neither directory is readable.
-fn read_preset_rules(exec: &dyn Executor) -> Result<Vec<PresetRule>, String> {
+/// Returns `(rules, read_failures)`. Returns Err if neither directory is readable.
+/// Individual file-level read failures are tracked but do not prevent other
+/// files from being read — the caller decides whether failures are fatal.
+fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String>), String> {
     let usr_dir = Path::new("/usr/lib/systemd/system-preset");
     let etc_dir = Path::new("/etc/systemd/system-preset");
 
     let mut preset_files: Vec<(String, String)> = Vec::new(); // (filename, content)
+    let mut read_failures: Vec<String> = Vec::new();
 
     let usr_ok = if let Ok(entries) = exec.read_dir(usr_dir) {
         for entry in &entries {
             if entry.ends_with(".preset") {
                 let path = usr_dir.join(entry);
-                if let Ok(content) = exec.read_file(&path) {
-                    preset_files.push((entry.clone(), content));
+                match exec.read_file(&path) {
+                    Ok(content) => preset_files.push((entry.clone(), content)),
+                    Err(e) => {
+                        read_failures.push(format!("{}: {e}", path.to_string_lossy()));
+                    }
                 }
             }
         }
@@ -254,8 +278,11 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<Vec<PresetRule>, String> {
         for entry in &entries {
             if entry.ends_with(".preset") {
                 let path = etc_dir.join(entry);
-                if let Ok(content) = exec.read_file(&path) {
-                    preset_files.push((entry.clone(), content));
+                match exec.read_file(&path) {
+                    Ok(content) => preset_files.push((entry.clone(), content)),
+                    Err(e) => {
+                        read_failures.push(format!("{}: {e}", path.to_string_lossy()));
+                    }
                 }
             }
         }
@@ -290,7 +317,7 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<Vec<PresetRule>, String> {
         }
     }
 
-    Ok(rules)
+    Ok((rules, read_failures))
 }
 
 /// Resolve a unit name against preset rules with first-match-wins semantics.
@@ -374,7 +401,10 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
 
         let conf_files = match exec.read_dir(&dir_path) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                read_failures.push(format!("{}: {e}", dir_path.to_string_lossy()));
+                continue;
+            }
         };
 
         for conf in &conf_files {
@@ -546,6 +576,83 @@ mod tests {
                 }
             }
             other => panic!("expected Degraded for unreadable drop-in, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_preset_file_read_failure_triggers_degraded() {
+        // Directory is readable and lists a preset file, but file read fails
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             sshd.service                               enabled         enabled\n\
+                             \n\
+                             1 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            // NOTE: no .with_file for the preset → read_file returns NotFound
+            .with_dir("/etc/systemd/system", vec![]);
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, partial }) => {
+                assert!(
+                    reason.contains("preset") || reason.contains("90-default.preset"),
+                    "degraded reason must mention the failed preset file: {reason}"
+                );
+                // Partial data should still contain systemctl results
+                if let SectionData::Services(ref svc) = partial.section {
+                    assert!(
+                        !svc.enabled_units.is_empty(),
+                        "partial data must contain systemctl results"
+                    );
+                }
+            }
+            other => panic!("expected Degraded for unreadable preset file, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_dropin_dir_unreadable_triggers_degraded() {
+        // Per-unit drop-in directory listed but unreadable
+        let exec = svc_base_mock().with_dir("/etc/systemd/system", vec!["httpd.service.d"]);
+        // NOTE: no .with_dir for httpd.service.d → read_dir returns Err
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, .. }) => {
+                assert!(
+                    reason.contains("drop-in") || reason.contains("httpd.service.d"),
+                    "degraded reason must mention the unreadable drop-in dir: {reason}"
+                );
+            }
+            other => panic!("expected Degraded for unreadable drop-in directory, got {other:?}"),
         }
     }
 
