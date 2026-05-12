@@ -1,3 +1,14 @@
+//! Provisional serde roundtrip tests for golden-file compatibility.
+//!
+//! These tests prove that Rust types can deserialize golden JSON and
+//! re-serialize it without loss. They do NOT exercise actual Rust inspector
+//! code — the real inspector-vs-golden parity gate lives in
+//! `inspectah-collect/tests/parity_test.rs`, which runs inspectors on
+//! fixture data and diffs the output against these same golden files.
+//!
+//! When real Go-captured goldens replace the current provisional ones,
+//! serde roundtrip failures here will surface any type-level incompatibility.
+
 use inspectah_core::normalize::{diff_snapshots, load_divergence_allowlist};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::kernelboot::KernelBootSection;
@@ -12,12 +23,12 @@ fn allowlist() -> BTreeSet<String> {
     load_divergence_allowlist(md)
 }
 
-// ── Existing test: full snapshot self-roundtrip ───────────────────────
+// ── Snapshot self-roundtrip ──────────────────────────────────────────
 
+/// Provisional: proves Rust snapshot serde roundtrip fidelity.
+/// Does NOT compare against Go output.
 #[test]
-fn test_parity_gate_self_roundtrip() {
-    // Parity gate: Rust snapshot round-trips through JSON faithfully.
-    // Go tarball ingestion is not a goal — if you need the data, re-scan.
+fn test_provisional_snapshot_serde_roundtrip() {
     let divergences_md = include_str!("../../testdata/divergences.md");
     let allowlist = load_divergence_allowlist(divergences_md);
 
@@ -42,17 +53,18 @@ fn test_parity_gate_self_roundtrip() {
     );
 }
 
-// ── Services section parity ──────────────────────────────────────────
+// ── Services section serde roundtrip ─────────────────────────────────
 
+/// Provisional: proves golden JSON deserializes into ServiceSection and
+/// re-serializes without field loss. Real Go-vs-Rust parity gate requires
+/// inspector execution (see inspectah-collect/tests/parity_test.rs).
 #[test]
-fn test_parity_services_section_roundtrip() {
+fn test_provisional_services_serde_roundtrip() {
     let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
 
-    // Verify the golden deserializes into the Rust type without loss
     let section: ServiceSection =
         serde_json::from_str(golden).expect("golden must deserialize into ServiceSection");
 
-    // Re-serialize and compare
     let rust_json = serde_json::to_string_pretty(&section).unwrap();
     let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
 
@@ -63,12 +75,13 @@ fn test_parity_services_section_roundtrip() {
     );
 }
 
+/// Provisional: validates golden file structural completeness — all key
+/// fields are populated so the roundtrip test exercises the full type.
 #[test]
-fn test_parity_services_section_field_coverage() {
+fn test_provisional_services_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
     let section: ServiceSection = serde_json::from_str(golden).unwrap();
 
-    // Validate structural expectations: the golden covers all key fields
     assert!(
         !section.state_changes.is_empty(),
         "golden must contain state_changes"
@@ -83,7 +96,6 @@ fn test_parity_services_section_field_coverage() {
     );
     assert!(!section.drop_ins.is_empty(), "golden must contain drop_ins");
 
-    // Verify state_change entries have all expected fields populated
     let sc = &section.state_changes[0];
     assert!(!sc.unit.is_empty(), "unit must be populated");
     assert!(
@@ -97,10 +109,13 @@ fn test_parity_services_section_field_coverage() {
     assert!(!sc.action.is_empty(), "action must be populated");
 }
 
-// ── Storage section parity ───────────────────────────────────────────
+// ── Storage section serde roundtrip ──────────────────────────────────
 
+/// Provisional: proves golden JSON deserializes into StorageSection and
+/// re-serializes without field loss. Real parity gate is in
+/// inspectah-collect/tests/parity_test.rs.
 #[test]
-fn test_parity_storage_section_roundtrip() {
+fn test_provisional_storage_serde_roundtrip() {
     let golden = include_str!("../../testdata/golden/go-v13-storage-section.json");
 
     let section: StorageSection =
@@ -116,8 +131,9 @@ fn test_parity_storage_section_roundtrip() {
     );
 }
 
+/// Provisional: validates storage golden file structural completeness.
 #[test]
-fn test_parity_storage_section_field_coverage() {
+fn test_provisional_storage_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-storage-section.json");
     let section: StorageSection = serde_json::from_str(golden).unwrap();
 
@@ -135,7 +151,6 @@ fn test_parity_storage_section_field_coverage() {
         "golden must contain credential_refs"
     );
 
-    // Verify fstab entry has all expected fields
     let entry = &section.fstab_entries[0];
     assert!(!entry.device.is_empty(), "device must be populated");
     assert!(
@@ -145,10 +160,13 @@ fn test_parity_storage_section_field_coverage() {
     assert!(!entry.fstype.is_empty(), "fstype must be populated");
 }
 
-// ── Kernel boot section parity ───────────────────────────────────────
+// ── Kernel boot section serde roundtrip ──────────────────────────────
 
+/// Provisional: proves golden JSON deserializes into KernelBootSection and
+/// re-serializes without field loss. Real parity gate is in
+/// inspectah-collect/tests/parity_test.rs.
 #[test]
-fn test_parity_kernelboot_section_roundtrip() {
+fn test_provisional_kernelboot_serde_roundtrip() {
     let golden = include_str!("../../testdata/golden/go-v13-kernelboot-section.json");
 
     let section: KernelBootSection =
@@ -164,8 +182,9 @@ fn test_parity_kernelboot_section_roundtrip() {
     );
 }
 
+/// Provisional: validates kernelboot golden file structural completeness.
 #[test]
-fn test_parity_kernelboot_section_field_coverage() {
+fn test_provisional_kernelboot_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-kernelboot-section.json");
     let section: KernelBootSection = serde_json::from_str(golden).unwrap();
 
@@ -189,7 +208,6 @@ fn test_parity_kernelboot_section_field_coverage() {
         "golden must contain tuned_active"
     );
 
-    // Verify sysctl override structure
     let so = &section.sysctl_overrides[0];
     assert!(!so.key.is_empty(), "sysctl key must be populated");
     assert!(!so.runtime.is_empty(), "sysctl runtime must be populated");
