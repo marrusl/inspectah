@@ -48,6 +48,22 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         .map(|s| s.enabled_units.len() + s.disabled_units.len())
         .unwrap_or(0);
 
+    let storage_count = snap
+        .storage
+        .as_ref()
+        .map(|s| s.fstab_entries.len())
+        .unwrap_or(0);
+
+    let kernelboot_count = snap
+        .kernel_boot
+        .as_ref()
+        .map(|k| {
+            let sysctl = k.sysctl_overrides.iter().filter(|o| o.include).count();
+            let modules = k.modules_load_d.len() + k.modprobe_d.len();
+            sysctl + modules
+        })
+        .unwrap_or(0);
+
     let warning_count = snap.warnings.len();
 
     // Build package table rows
@@ -64,6 +80,57 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
                 html_escape(&p.release),
                 html_escape(&p.arch),
                 html_escape(&p.source_repo),
+            ));
+        }
+    }
+
+    // Build storage table rows
+    let mut storage_rows = String::new();
+    if let Some(storage) = &snap.storage {
+        for entry in &storage.fstab_entries {
+            storage_rows.push_str(&format!(
+                "        <tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                html_escape(&entry.device),
+                html_escape(&entry.mount_point),
+                html_escape(&entry.fstype),
+                html_escape(&entry.options),
+            ));
+        }
+    }
+
+    // Build kernelboot table rows
+    let mut sysctl_rows = String::new();
+    let mut module_items = String::new();
+    let mut kernelboot_cmdline = String::new();
+    if let Some(kb) = &snap.kernel_boot {
+        if !kb.cmdline.is_empty() {
+            kernelboot_cmdline = format!(
+                "  <p><strong>Command line:</strong> <code>{}</code></p>\n",
+                html_escape(&kb.cmdline)
+            );
+        }
+        for o in &kb.sysctl_overrides {
+            if !o.include {
+                continue;
+            }
+            sysctl_rows.push_str(&format!(
+                "        <tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>\n",
+                html_escape(&o.key),
+                html_escape(&o.runtime),
+                html_escape(&o.default),
+                html_escape(&o.source),
+            ));
+        }
+        for m in &kb.modules_load_d {
+            module_items.push_str(&format!(
+                "        <li>{} (modules-load.d)</li>\n",
+                html_escape(&m.path),
+            ));
+        }
+        for m in &kb.modprobe_d {
+            module_items.push_str(&format!(
+                "        <li>{} (modprobe.d)</li>\n",
+                html_escape(&m.path),
             ));
         }
     }
@@ -142,6 +209,8 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     <div class="summary-card"><h3>Packages Added</h3><div class="value">{pkg_count}</div></div>
     <div class="summary-card"><h3>Config Files</h3><div class="value">{config_count}</div></div>
     <div class="summary-card"><h3>Service Changes</h3><div class="value">{svc_count}</div></div>
+    <div class="summary-card"><h3>Storage Entries</h3><div class="value">{storage_count}</div></div>
+    <div class="summary-card"><h3>Kernel/Boot Items</h3><div class="value">{kernelboot_count}</div></div>
     <div class="summary-card"><h3>Warnings</h3><div class="value">{warning_count}</div></div>
   </div>
 
@@ -151,6 +220,24 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     <tbody>
 {pkg_rows}    </tbody>
   </table>
+
+  <h2>Storage</h2>
+  <table>
+    <thead><tr><th>Device</th><th>Mount Point</th><th>Type</th><th>Options</th></tr></thead>
+    <tbody>
+{storage_rows}    </tbody>
+  </table>
+
+  <h2>Kernel &amp; Boot</h2>
+{kernelboot_cmdline}  <h3>Sysctl Overrides</h3>
+  <table>
+    <thead><tr><th>Key</th><th>Runtime</th><th>Default</th><th>Source</th></tr></thead>
+    <tbody>
+{sysctl_rows}    </tbody>
+  </table>
+  <h3>Module Configurations</h3>
+  <ul>
+{module_items}  </ul>
 
   <h2>Warnings</h2>
   <ul>
@@ -166,8 +253,14 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         pkg_count = pkg_count,
         config_count = config_count,
         svc_count = svc_count,
+        storage_count = storage_count,
+        kernelboot_count = kernelboot_count,
         warning_count = warning_count,
         pkg_rows = pkg_rows,
+        storage_rows = storage_rows,
+        kernelboot_cmdline = kernelboot_cmdline,
+        sysctl_rows = sysctl_rows,
+        module_items = module_items,
         warning_items = warning_items,
     )
 }
