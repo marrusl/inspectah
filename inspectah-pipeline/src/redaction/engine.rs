@@ -166,6 +166,59 @@ fn redact_mount_options(options: &str, registry: &mut CounterRegistry) -> String
         .join(",")
 }
 
+/// Extract a searchable keyword from a hint's reason string.
+///
+/// Hint reasons follow common patterns:
+/// - "kernel cmdline contains sensitive parameter: rd.luks.key"
+///   → extracts "rd.luks.key"
+/// - "environment variable 'DB_PASSWORD' may contain a secret"
+///   → extracts "DB_PASSWORD"
+/// - "kernel cmdline contains key=" → extracts "key="
+/// - "password detected" → extracts "password"
+///
+/// Returns `None` if no keyword can be extracted.
+fn extract_hint_keyword(reason: &str) -> Option<String> {
+    // Pattern 1: "sensitive parameter: <keyword>"
+    if let Some(rest) = reason.strip_suffix('"').or(Some(reason)) {
+        if let Some(idx) = rest.find("parameter: ") {
+            let kw = rest[idx + "parameter: ".len()..].trim().trim_matches('"');
+            if !kw.is_empty() {
+                return Some(kw.to_string());
+            }
+        }
+    }
+
+    // Pattern 2: "contains key=" or "contains <word>="
+    if let Some(idx) = reason.find("contains ") {
+        let rest = reason[idx + "contains ".len()..].trim();
+        // Take the first token (up to whitespace or end)
+        let token = rest.split_whitespace().next().unwrap_or(rest);
+        let token = token.trim_matches('"').trim_matches('\'');
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+
+    // Pattern 3: "variable 'NAME'" or "variable NAME"
+    if let Some(idx) = reason.find("variable ") {
+        let rest = reason[idx + "variable ".len()..].trim();
+        let token = rest.split_whitespace().next().unwrap_or(rest);
+        let token = token.trim_matches('\'').trim_matches('"');
+        if !token.is_empty() {
+            return Some(token.to_string());
+        }
+    }
+
+    // Pattern 4: first recognized sensitive keyword in the reason
+    for kw in ["password", "secret", "token", "credential", "key="] {
+        if reason.to_lowercase().contains(kw) {
+            return Some(kw.to_string());
+        }
+    }
+
+    None
+}
+
 /// Redact a snapshot in place, setting its `redaction_state` and populating `redactions`.
 ///
 /// - Scans config file contents and shadow entries for secrets.
@@ -469,26 +522,76 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
+    // Build a map of path → post-redaction content so that hint resolution
+    // can check whether flagged sensitive content survived the regex pass.
+    let mut post_redaction_content: HashMap<String, String> = HashMap::new();
+    if let Some(ref config) = snapshot.config {
+        for file in &config.files {
+            post_redaction_content.insert(file.path.clone(), file.content.clone());
+        }
+    }
+    if let Some(ref rpm) = snapshot.rpm {
+        for repo_file in &rpm.repo_files {
+            post_redaction_content.insert(repo_file.path.clone(), repo_file.content.clone());
+        }
+        for gpg_key in &rpm.gpg_keys {
+            post_redaction_content.insert(gpg_key.path.clone(), gpg_key.content.clone());
+        }
+    }
+    if let Some(ref services) = snapshot.services {
+        for drop_in in &services.drop_ins {
+            post_redaction_content.insert(drop_in.path.clone(), drop_in.content.clone());
+        }
+    }
+    if let Some(ref kernelboot) = snapshot.kernel_boot {
+        post_redaction_content.insert("/proc/cmdline".to_string(), kernelboot.cmdline.clone());
+    }
+
     // Convert inspector-emitted redaction hints into findings.
     // Hints represent inspector-detected content that may need redaction
     // but wasn't caught by pattern scanning (e.g., Environment=DB_KEY=value).
     //
-    // HONESTY RULE: A high-confidence hint is only "resolved" if the
-    // regex pass actually redacted the matching content. If the hint
-    // flagged something (e.g., `key=` in cmdline) but the regex pattern
-    // set intentionally excludes bare `key=`, the secret is still present.
-    // In that case, downgrade the finding to Medium so it appears as
-    // unresolved → PartiallyRedacted, not FullyRedacted.
+    // HONESTY RULE (per-hint, not per-path): A high-confidence hint is
+    // only "resolved" if the regex pass actually redacted THIS hint's
+    // specific sensitive content. We verify by re-scanning the
+    // post-redaction content at the hint's path: if scan_content still
+    // finds zero regex matches AND the hint's path has no regex-sourced
+    // findings, the hint is unresolved. If regex findings exist at the
+    // path, we additionally check whether the hint's sensitive keyword
+    // still survives in the post-redaction content — if it does, this
+    // specific hint was not addressed by the regex pass.
     for hint in &snapshot.redaction_hints {
         let effective_confidence = if hint.confidence == Some(Confidence::High) {
-            // Check: was the content at this path actually modified by
-            // the regex redaction pass? We detect this by checking whether
-            // any regex-sourced finding (source != "inspector_hint") was
-            // recorded for the same path.
-            let regex_modified = all_findings
-                .iter()
-                .any(|f| f.source != "inspector_hint" && f.path == hint.path);
-            if regex_modified {
+            // Per-hint resolution: check if the hint's specific flagged
+            // content still survives in the post-redaction content.
+            let hint_resolved = if let Some(content) = post_redaction_content.get(&hint.path) {
+                // Re-scan the redacted content. If it produces ANY regex
+                // findings, the content still has secrets the regex covers.
+                // But this hint is only resolved if the HINT's specific
+                // sensitive content was part of what got redacted.
+                //
+                // Strategy: extract a keyword from the hint reason and
+                // check if it still appears in the post-redaction content.
+                // If the keyword survives → hint unresolved.
+                let keyword = extract_hint_keyword(&hint.reason);
+                if let Some(ref kw) = keyword {
+                    // The hint's keyword is gone from post-redaction content
+                    // → the regex pass handled it.
+                    !content.contains(kw)
+                } else {
+                    // No extractable keyword — fall back to checking if
+                    // ANY regex finding exists at this path.
+                    all_findings
+                        .iter()
+                        .any(|f| f.source != "inspector_hint" && f.path == hint.path)
+                }
+            } else {
+                // No post-redaction content available at this path →
+                // the hint's path was never scanned → unresolved.
+                false
+            };
+
+            if hint_resolved {
                 Some(Confidence::High)
             } else {
                 // The hint's secret was NOT regex-redacted → unresolved.
@@ -995,6 +1098,145 @@ mod tests {
                 );
             }
             other => panic!("expected PartiallyRedacted for key= cmdline hint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cmdline_password_and_key_hint_partially_redacted() {
+        // Cmdline has BOTH password=hunter2 (regex-handled) AND
+        // rd.luks.key=/path (hint-only, NOT regex-handled).
+        // Per-hint resolution: password hint resolved, key hint NOT resolved.
+        // Result: PartiallyRedacted (the key= secret survives).
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.kernel_boot = Some(KernelBootSection {
+            cmdline: "quiet password=hunter2 rd.luks.key=/path/to/key rd.lvm.lv=vg/root".into(),
+            ..Default::default()
+        });
+        snapshot.redaction_hints = vec![
+            RedactionHint {
+                path: "/proc/cmdline".into(),
+                reason: "kernel cmdline contains sensitive parameter: password".into(),
+                confidence: Some(Confidence::High),
+            },
+            RedactionHint {
+                path: "/proc/cmdline".into(),
+                reason: "kernel cmdline contains sensitive parameter: rd.luks.key".into(),
+                confidence: Some(Confidence::High),
+            },
+        ];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        // password=hunter2 should be regex-redacted
+        assert!(
+            !snapshot
+                .kernel_boot
+                .as_ref()
+                .unwrap()
+                .cmdline
+                .contains("hunter2"),
+            "password value must be redacted"
+        );
+
+        match &snapshot.redaction_state {
+            Some(RedactionState::PartiallyRedacted {
+                unresolved_count,
+                unresolved_hints,
+                ..
+            }) => {
+                assert!(
+                    *unresolved_count > 0,
+                    "rd.luks.key hint must remain unresolved"
+                );
+                assert!(
+                    unresolved_hints
+                        .iter()
+                        .any(|h| h.reason.contains("rd.luks.key")),
+                    "unresolved hints must include the key hint, got: {:?}",
+                    unresolved_hints
+                );
+            }
+            other => panic!(
+                "expected PartiallyRedacted (password redacted but key survives), got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn test_cmdline_password_only_hint_fully_redacted() {
+        // Cmdline with only password=hunter2, hint for password.
+        // Regex handles password= → password hint resolved → FullyRedacted.
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.kernel_boot = Some(KernelBootSection {
+            cmdline: "quiet password=hunter2 rd.lvm.lv=vg/root".into(),
+            ..Default::default()
+        });
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/proc/cmdline".into(),
+            reason: "kernel cmdline contains sensitive parameter: password".into(),
+            confidence: Some(Confidence::High),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        assert!(
+            !snapshot
+                .kernel_boot
+                .as_ref()
+                .unwrap()
+                .cmdline
+                .contains("hunter2"),
+            "password value must be redacted"
+        );
+
+        match &snapshot.redaction_state {
+            Some(RedactionState::FullyRedacted { .. }) => {
+                // password= hint resolved because regex handled it
+            }
+            other => {
+                panic!("expected FullyRedacted when password= is regex-handled, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_cmdline_key_only_hint_partially_redacted() {
+        // Cmdline with only rd.luks.key=/path, hint for key.
+        // No regex matches key= → hint unresolved → PartiallyRedacted.
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.kernel_boot = Some(KernelBootSection {
+            cmdline: "quiet rd.luks.key=/path/to/key rd.lvm.lv=vg/root".into(),
+            ..Default::default()
+        });
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/proc/cmdline".into(),
+            reason: "kernel cmdline contains sensitive parameter: rd.luks.key".into(),
+            confidence: Some(Confidence::High),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        match &snapshot.redaction_state {
+            Some(RedactionState::PartiallyRedacted {
+                unresolved_count,
+                unresolved_hints,
+                ..
+            }) => {
+                assert!(
+                    *unresolved_count > 0,
+                    "key-only hint must remain unresolved"
+                );
+                assert!(
+                    unresolved_hints
+                        .iter()
+                        .any(|h| h.reason.contains("rd.luks.key")),
+                    "unresolved hints must include the key hint"
+                );
+            }
+            other => panic!("expected PartiallyRedacted for key-only cmdline hint, got {other:?}"),
         }
     }
 
