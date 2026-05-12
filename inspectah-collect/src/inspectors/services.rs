@@ -257,41 +257,61 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
     let mut preset_files: Vec<(String, String)> = Vec::new(); // (filename, content)
     let mut read_failures: Vec<String> = Vec::new();
 
-    let usr_ok = if let Ok(entries) = exec.read_dir(usr_dir) {
-        for entry in &entries {
-            if entry.ends_with(".preset") {
-                let path = usr_dir.join(entry);
-                match exec.read_file(&path) {
-                    Ok(content) => preset_files.push((entry.clone(), content)),
-                    Err(e) => {
-                        read_failures.push(format!("{}: {e}", path.to_string_lossy()));
+    let usr_ok = match exec.read_dir(usr_dir) {
+        Ok(entries) => {
+            for entry in &entries {
+                if entry.ends_with(".preset") {
+                    let path = usr_dir.join(entry);
+                    match exec.read_file(&path) {
+                        Ok(content) => preset_files.push((entry.clone(), content)),
+                        Err(e) => {
+                            read_failures.push(format!("{}: {e}", path.to_string_lossy()));
+                        }
                     }
                 }
             }
+            true
         }
-        true
-    } else {
-        false
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Directory doesn't exist — normal on systems without vendor presets.
+            false
+        }
+        Err(e) => {
+            // Directory exists but is unreadable (PermissionDenied, etc.) —
+            // this is a trust gap: vendor presets may be hidden.
+            read_failures.push(format!("{}: {e}", usr_dir.display()));
+            false
+        }
     };
 
-    let etc_ok = if let Ok(entries) = exec.read_dir(etc_dir) {
-        for entry in &entries {
-            if entry.ends_with(".preset") {
-                let path = etc_dir.join(entry);
-                match exec.read_file(&path) {
-                    Ok(content) => preset_files.push((entry.clone(), content)),
-                    Err(e) => {
-                        read_failures.push(format!("{}: {e}", path.to_string_lossy()));
+    let etc_ok = match exec.read_dir(etc_dir) {
+        Ok(entries) => {
+            for entry in &entries {
+                if entry.ends_with(".preset") {
+                    let path = etc_dir.join(entry);
+                    match exec.read_file(&path) {
+                        Ok(content) => preset_files.push((entry.clone(), content)),
+                        Err(e) => {
+                            read_failures.push(format!("{}: {e}", path.to_string_lossy()));
+                        }
                     }
                 }
             }
+            true
         }
-        true
-    } else {
-        false
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Directory doesn't exist — normal on systems without admin presets.
+            false
+        }
+        Err(e) => {
+            // Directory exists but is unreadable (PermissionDenied, etc.) —
+            // admin preset overrides may be hidden.
+            read_failures.push(format!("{}: {e}", etc_dir.display()));
+            false
+        }
     };
 
-    if !usr_ok && !etc_ok {
+    if !usr_ok && !etc_ok && read_failures.is_empty() {
         return Err(
             "neither /usr/lib/systemd/system-preset nor /etc/systemd/system-preset readable".into(),
         );
@@ -388,7 +408,16 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
 
     let entries = match exec.read_dir(dropin_base) {
         Ok(e) => e,
-        Err(_) => return (drop_ins, hints, read_failures),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Directory doesn't exist — no drop-ins to collect.
+            return (drop_ins, hints, read_failures);
+        }
+        Err(e) => {
+            // Directory exists but is unreadable (PermissionDenied, etc.) —
+            // all drop-in configurations are hidden.
+            read_failures.push(format!("{}: {e}", dropin_base.display()));
+            return (drop_ins, hints, read_failures);
+        }
     };
 
     for entry in &entries {
@@ -653,6 +682,129 @@ mod tests {
                 );
             }
             other => panic!("expected Degraded for unreadable drop-in directory, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_etc_preset_dir_permission_denied_triggers_degraded() {
+        // /etc/systemd/system-preset exists but read_dir returns PermissionDenied.
+        // Admin-priority presets may be hidden — must degrade.
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             sshd.service                               enabled         enabled\n\
+                             \n\
+                             1 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable sshd.service\ndisable *\n",
+            )
+            .with_dir_error(
+                "/etc/systemd/system-preset",
+                std::io::ErrorKind::PermissionDenied,
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, .. }) => {
+                assert!(
+                    reason.contains("preset") && reason.contains("/etc/systemd/system-preset"),
+                    "degraded reason must mention the unreadable preset dir: {reason}"
+                );
+            }
+            other => panic!(
+                "expected Degraded for PermissionDenied on /etc/systemd/system-preset, got {other:?}"
+            ),
+        }
+    }
+
+    #[test]
+    fn test_etc_preset_dir_not_found_not_degraded() {
+        // /etc/systemd/system-preset doesn't exist (NotFound) — this is
+        // normal on systems without admin presets. NOT degraded.
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             sshd.service                               enabled         enabled\n\
+                             \n\
+                             1 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable sshd.service\ndisable *\n",
+            );
+        // NOTE: no /etc/systemd/system-preset registered → read_dir returns NotFound
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        assert!(
+            result.is_ok(),
+            "/etc/systemd/system-preset NotFound must NOT degrade, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_etc_systemd_system_permission_denied_triggers_degraded() {
+        // /etc/systemd/system (base drop-in directory) exists but read_dir
+        // returns PermissionDenied. All drop-in configurations are hidden.
+        let exec = svc_base_mock()
+            .with_dir_error("/etc/systemd/system", std::io::ErrorKind::PermissionDenied);
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Degraded { reason, .. }) => {
+                assert!(
+                    reason.contains("drop-in") && reason.contains("/etc/systemd/system"),
+                    "degraded reason must mention the unreadable drop-in base dir: {reason}"
+                );
+            }
+            other => panic!(
+                "expected Degraded for PermissionDenied on /etc/systemd/system, got {other:?}"
+            ),
         }
     }
 
