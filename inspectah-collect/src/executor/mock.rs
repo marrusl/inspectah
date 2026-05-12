@@ -13,6 +13,10 @@ pub struct MockExecutor {
     /// normal command lookup. The Duration is recorded for diagnostics
     /// but does not actually sleep.
     timeout_commands: HashMap<String, std::time::Duration>,
+    /// Directories that should return a specific error kind when
+    /// `read_dir` is called. Lets tests distinguish PermissionDenied
+    /// from NotFound without registering actual directory entries.
+    dir_errors: HashMap<String, io::ErrorKind>,
 }
 
 impl MockExecutor {
@@ -23,6 +27,7 @@ impl MockExecutor {
             dirs: HashMap::new(),
             links: HashMap::new(),
             timeout_commands: HashMap::new(),
+            dir_errors: HashMap::new(),
         }
     }
 }
@@ -63,6 +68,15 @@ impl MockExecutor {
     /// The `duration` is included in the error message for realism.
     pub fn with_timeout_simulation(mut self, cmd_key: &str, duration: std::time::Duration) -> Self {
         self.timeout_commands.insert(cmd_key.to_string(), duration);
+        self
+    }
+
+    /// Register a directory path that should return a specific error
+    /// when `read_dir` is called. This takes priority over both the
+    /// `dirs` map and the default NotFound fallback, letting tests
+    /// simulate PermissionDenied on directories that exist on disk.
+    pub fn with_dir_error(mut self, path: &str, error_kind: io::ErrorKind) -> Self {
+        self.dir_errors.insert(path.to_string(), error_kind);
         self
     }
 }
@@ -106,8 +120,13 @@ impl Executor for MockExecutor {
     }
 
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>> {
+        let key = path.to_str().unwrap_or("");
+        // Explicit error injection takes priority over registered dirs.
+        if let Some(&error_kind) = self.dir_errors.get(key) {
+            return Err(io::Error::new(error_kind, path.display().to_string()));
+        }
         self.dirs
-            .get(path.to_str().unwrap_or(""))
+            .get(key)
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
     }
