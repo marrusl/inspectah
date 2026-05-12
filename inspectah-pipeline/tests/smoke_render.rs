@@ -11,7 +11,7 @@ use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, Sysctl
 // redaction types used indirectly via the redaction engine in test 8
 use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
-use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, secrets};
+use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, report, secrets};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -329,15 +329,120 @@ fn all_sections_in_audit_report() {
         "audit report must list the httpd.service state change"
     );
 
-    // The audit renderer currently produces sections for services (state_changes).
-    // Storage and kernelboot do not yet have dedicated audit sections —
-    // they surface through redaction findings and the Containerfile.
-    // When these sections are added to the audit renderer, expand these assertions.
+    // Storage section appears with fstab and credential data
+    assert!(
+        md.contains("## Storage"),
+        "audit report must contain Storage heading"
+    );
+    assert!(
+        md.contains("Fstab Entries"),
+        "audit report must contain Fstab Entries sub-heading"
+    );
+    assert!(
+        md.contains("/dev/sda1"),
+        "audit report must list fstab device /dev/sda1"
+    );
+    assert!(
+        md.contains("//server/share"),
+        "audit report must list CIFS device"
+    );
+    assert!(
+        md.contains("Credential References"),
+        "audit report must contain Credential References sub-heading"
+    );
+    assert!(
+        md.contains("/etc/backup-creds"),
+        "audit report must list credential path"
+    );
+
+    // Kernel & Boot section appears with sysctl, modules, dracut
+    assert!(
+        md.contains("## Kernel & Boot"),
+        "audit report must contain Kernel & Boot heading"
+    );
+    assert!(
+        md.contains("Sysctl Overrides"),
+        "audit report must contain Sysctl Overrides sub-heading"
+    );
+    assert!(
+        md.contains("net.ipv4.ip_forward"),
+        "audit report must list the sysctl override key"
+    );
+    assert!(
+        md.contains("Loaded Module Configs"),
+        "audit report must contain Loaded Module Configs sub-heading"
+    );
+    assert!(
+        md.contains("br_netfilter"),
+        "audit report must list modules-load.d snippet"
+    );
+    assert!(
+        md.contains("Dracut Configs"),
+        "audit report must contain Dracut Configs sub-heading"
+    );
+    assert!(
+        md.contains("Kernel Command Line"),
+        "audit report must contain Kernel Command Line sub-heading"
+    );
 
     // Verify the report renders successfully with all sections populated
     assert!(
         md.contains("# Audit Report"),
         "audit report must contain the top-level heading"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 7b: all_sections_in_html_report
+// HTML report includes storage and kernelboot sections.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn all_sections_in_html_report() {
+    let snap = snapshot_all_sections();
+    let context = inspectah_core::traits::renderer::RenderContext { target: None };
+    let html = report::render_report(&snap, &context);
+
+    // Storage section appears
+    assert!(
+        html.contains("<h2>Storage</h2>"),
+        "HTML report must contain Storage heading"
+    );
+    assert!(
+        html.contains("/dev/sda1"),
+        "HTML report must list fstab device /dev/sda1"
+    );
+    assert!(
+        html.contains("//server/share"),
+        "HTML report must list CIFS device"
+    );
+
+    // Kernel & Boot section appears
+    assert!(
+        html.contains("Kernel &amp; Boot"),
+        "HTML report must contain Kernel & Boot heading"
+    );
+    assert!(
+        html.contains("Sysctl Overrides"),
+        "HTML report must contain Sysctl Overrides sub-heading"
+    );
+    assert!(
+        html.contains("net.ipv4.ip_forward"),
+        "HTML report must list sysctl override key"
+    );
+    assert!(
+        html.contains("br_netfilter"),
+        "HTML report must list modules-load.d config"
+    );
+
+    // Summary cards include storage and kernelboot counts
+    assert!(
+        html.contains("Storage Entries"),
+        "HTML report must have Storage Entries summary card"
+    );
+    assert!(
+        html.contains("Kernel/Boot Items"),
+        "HTML report must have Kernel/Boot Items summary card"
     );
 }
 
@@ -450,10 +555,29 @@ fn render_all_with_all_sections() {
         "render_all Containerfile must contain services data"
     );
 
-    // Cross-check: audit report references services
+    // Cross-check: audit report references services, storage, and kernelboot
     let audit = std::fs::read_to_string(dir.path().join("audit-report.md")).unwrap();
     assert!(
         audit.contains("httpd.service"),
         "render_all audit report must contain services data"
+    );
+    assert!(
+        audit.contains("## Storage"),
+        "render_all audit report must contain Storage section"
+    );
+    assert!(
+        audit.contains("## Kernel & Boot"),
+        "render_all audit report must contain Kernel & Boot section"
+    );
+
+    // Cross-check: HTML report references storage and kernelboot
+    let html_report = std::fs::read_to_string(dir.path().join("report.html")).unwrap();
+    assert!(
+        html_report.contains("<h2>Storage</h2>"),
+        "render_all HTML report must contain Storage section"
+    );
+    assert!(
+        html_report.contains("Kernel &amp; Boot"),
+        "render_all HTML report must contain Kernel & Boot section"
     );
 }
