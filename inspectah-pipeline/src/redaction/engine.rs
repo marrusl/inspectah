@@ -472,7 +472,32 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Convert inspector-emitted redaction hints into findings.
     // Hints represent inspector-detected content that may need redaction
     // but wasn't caught by pattern scanning (e.g., Environment=DB_KEY=value).
+    //
+    // HONESTY RULE: A high-confidence hint is only "resolved" if the
+    // regex pass actually redacted the matching content. If the hint
+    // flagged something (e.g., `key=` in cmdline) but the regex pattern
+    // set intentionally excludes bare `key=`, the secret is still present.
+    // In that case, downgrade the finding to Medium so it appears as
+    // unresolved → PartiallyRedacted, not FullyRedacted.
     for hint in &snapshot.redaction_hints {
+        let effective_confidence = if hint.confidence == Some(Confidence::High) {
+            // Check: was the content at this path actually modified by
+            // the regex redaction pass? We detect this by checking whether
+            // any regex-sourced finding (source != "inspector_hint") was
+            // recorded for the same path.
+            let regex_modified = all_findings
+                .iter()
+                .any(|f| f.source != "inspector_hint" && f.path == hint.path);
+            if regex_modified {
+                Some(Confidence::High)
+            } else {
+                // The hint's secret was NOT regex-redacted → unresolved.
+                Some(Confidence::Medium)
+            }
+        } else {
+            hint.confidence
+        };
+
         all_findings.push(RedactionFinding {
             path: hint.path.clone(),
             source: "inspector_hint".into(),
@@ -482,7 +507,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             line: None,
             replacement: None,
             detection_method: DetectionMethod::Heuristic,
-            confidence: hint.confidence,
+            confidence: effective_confidence,
             finding_kind: Some(FindingKind::GenericCredential),
         });
     }
@@ -900,12 +925,95 @@ mod tests {
     }
 
     #[test]
-    fn test_high_confidence_hints_fully_redacted() {
+    fn test_high_confidence_hint_without_regex_match_is_partially_redacted() {
         let mut snapshot = InspectionSnapshot::new();
-        // High-confidence hint = auto-resolved
+        // High-confidence hint at a path where no regex pass ran —
+        // the hint's secret was never actually removed from content.
+        // Honest behavior: PartiallyRedacted, not FullyRedacted.
         snapshot.redaction_hints = vec![RedactionHint {
             path: "/proc/cmdline".into(),
-            reason: "kernel cmdline contains password=".into(),
+            reason: "kernel cmdline contains key=".into(),
+            confidence: Some(Confidence::High),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        match &snapshot.redaction_state {
+            Some(RedactionState::PartiallyRedacted {
+                unresolved_count,
+                unresolved_hints,
+                ..
+            }) => {
+                assert!(
+                    *unresolved_count > 0,
+                    "hint without regex match must remain unresolved"
+                );
+                assert!(
+                    unresolved_hints.iter().any(|h| h.path == "/proc/cmdline"),
+                    "unresolved hints must include the cmdline hint"
+                );
+            }
+            other => {
+                panic!("expected PartiallyRedacted for hint without regex match, got {other:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn test_cmdline_key_hint_produces_partially_redacted() {
+        use inspectah_core::types::kernelboot::KernelBootSection;
+        let mut snapshot = InspectionSnapshot::new();
+        // Kernel cmdline with rd.luks.key= — the inspector emits a
+        // high-confidence hint for key=, but the regex pattern set
+        // intentionally excludes bare key= (too broad). So the secret
+        // value is NOT regex-redacted → PartiallyRedacted.
+        snapshot.kernel_boot = Some(KernelBootSection {
+            cmdline: "quiet rd.luks.key=/path/to/key rd.lvm.lv=vg/root".into(),
+            ..Default::default()
+        });
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/proc/cmdline".into(),
+            reason: "kernel cmdline contains sensitive parameter: rd.luks.key".into(),
+            confidence: Some(Confidence::High),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        match &snapshot.redaction_state {
+            Some(RedactionState::PartiallyRedacted {
+                unresolved_count,
+                unresolved_hints,
+                ..
+            }) => {
+                assert!(
+                    *unresolved_count > 0,
+                    "key= hint without regex redaction must remain unresolved"
+                );
+                assert!(
+                    unresolved_hints.iter().any(|h| h.path == "/proc/cmdline"),
+                    "unresolved hints must include the key= cmdline hint"
+                );
+            }
+            other => panic!("expected PartiallyRedacted for key= cmdline hint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_high_confidence_hint_with_regex_match_is_fully_redacted() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        let mut snapshot = InspectionSnapshot::new();
+        // Put a real password in the config file so the regex pass fires
+        snapshot.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/myapp/config".to_string(),
+                content: "password = s3cretP@ss\n".to_string(),
+                ..Default::default()
+            }],
+        });
+        // High-confidence hint at the same path where the regex DID match
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/etc/myapp/config".into(),
+            reason: "password detected".into(),
             confidence: Some(Confidence::High),
         }];
 
@@ -913,9 +1021,11 @@ mod tests {
 
         match &snapshot.redaction_state {
             Some(RedactionState::FullyRedacted { .. }) => {
-                // High-confidence findings are auto-resolved — no unresolved items
+                // Hint path had regex-sourced findings → hint is honestly resolved
             }
-            other => panic!("expected FullyRedacted for high-confidence-only hints, got {other:?}"),
+            other => {
+                panic!("expected FullyRedacted when hint path was regex-redacted, got {other:?}")
+            }
         }
     }
 }
