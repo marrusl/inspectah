@@ -76,68 +76,84 @@ impl Executor for RealExecutor {
             }
         };
 
-        // Wait with timeout. On timeout, kill and report.
-        match child.wait_timeout(COMMAND_TIMEOUT) {
-            Ok(Some(status)) => {
-                // Child exited within timeout. Read output with streamed cap.
-                // Use io::Read::take() to prevent reading more than
-                // STDOUT_SIZE_CAP + 1 bytes into memory. The extra byte
-                // detects whether truncation occurred.
-                let stdout_raw = child
-                    .stdout
-                    .take()
-                    .map(|r| {
-                        let mut buf = Vec::new();
-                        let mut limited = io::Read::take(r, STDOUT_SIZE_CAP as u64 + 1);
-                        let _ = io::Read::read_to_end(&mut limited, &mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
+        // Take stdout/stderr handles BEFORE waiting so we can drain
+        // them concurrently with the child process. If we wait first,
+        // a command that fills the OS pipe buffer blocks on write,
+        // never exits, and we get a false timeout.
+        let stdout_handle = child.stdout.take();
+        let stderr_handle = child.stderr.take();
 
-                let stderr_raw = child
-                    .stderr
-                    .take()
-                    .map(|mut r| {
-                        let mut buf = Vec::new();
-                        let _ = io::Read::read_to_end(&mut r, &mut buf);
-                        buf
-                    })
-                    .unwrap_or_default();
+        std::thread::scope(|s| {
+            // Drain stdout in a scoped thread (bounded by STDOUT_SIZE_CAP).
+            let stdout_thread = s.spawn(|| {
+                let mut buf = Vec::new();
+                if let Some(r) = stdout_handle {
+                    let mut limited = io::Read::take(r, STDOUT_SIZE_CAP as u64 + 1);
+                    let _ = io::Read::read_to_end(&mut limited, &mut buf);
+                }
+                buf
+            });
 
-                let stdout = if stdout_raw.len() > STDOUT_SIZE_CAP {
-                    let s = String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
-                    format!("{s}\n[output truncated at 64 MB]")
-                } else {
-                    String::from_utf8_lossy(&stdout_raw).into_owned()
-                };
+            // Drain stderr in a scoped thread (unbounded — stderr is small).
+            let stderr_thread = s.spawn(|| {
+                let mut buf = Vec::new();
+                if let Some(mut r) = stderr_handle {
+                    let _ = io::Read::read_to_end(&mut r, &mut buf);
+                }
+                buf
+            });
 
-                ExecResult {
-                    stdout,
-                    stderr: String::from_utf8_lossy(&stderr_raw).into_owned(),
-                    exit_code: status.code().unwrap_or(-1),
+            // Wait for child with timeout on the main thread.
+            match child.wait_timeout(COMMAND_TIMEOUT) {
+                Ok(Some(status)) => {
+                    let stdout_raw = stdout_thread.join().unwrap();
+                    let stderr_raw = stderr_thread.join().unwrap();
+
+                    let stdout = if stdout_raw.len() > STDOUT_SIZE_CAP {
+                        let s =
+                            String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
+                        format!("{s}\n[output truncated at 64 MB]")
+                    } else {
+                        String::from_utf8_lossy(&stdout_raw).into_owned()
+                    };
+
+                    ExecResult {
+                        stdout,
+                        stderr: String::from_utf8_lossy(&stderr_raw).into_owned(),
+                        exit_code: status.code().unwrap_or(-1),
+                    }
+                }
+                Ok(None) => {
+                    // Timeout — kill the child, then join drain threads.
+                    let _ = child.kill();
+                    let _ = child.wait(); // reap
+                                          // Join threads so they don't leak (scoped threads
+                                          // require all spawned threads to finish before the
+                                          // scope exits).
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    ExecResult {
+                        stderr: format!(
+                            "command timed out after {}s: {} {}",
+                            COMMAND_TIMEOUT.as_secs(),
+                            cmd,
+                            args.join(" ")
+                        ),
+                        exit_code: -1,
+                        ..Default::default()
+                    }
+                }
+                Err(e) => {
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+                    ExecResult {
+                        stderr: format!("failed to wait on child process: {e}"),
+                        exit_code: -1,
+                        ..Default::default()
+                    }
                 }
             }
-            Ok(None) => {
-                // Timeout — kill the child.
-                let _ = child.kill();
-                let _ = child.wait(); // reap
-                ExecResult {
-                    stderr: format!(
-                        "command timed out after {}s: {} {}",
-                        COMMAND_TIMEOUT.as_secs(),
-                        cmd,
-                        args.join(" ")
-                    ),
-                    exit_code: -1,
-                    ..Default::default()
-                }
-            }
-            Err(e) => ExecResult {
-                stderr: format!("failed to wait on child process: {e}"),
-                exit_code: -1,
-                ..Default::default()
-            },
-        }
+        })
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
@@ -227,6 +243,27 @@ mod tests {
         let exec = RealExecutor::new();
         let result = exec.run("nonexistent_command_xyz789", &[]);
         assert_ne!(result.exit_code, 0);
+    }
+
+    /// A command that produces more output than a single pipe buffer
+    /// (typically 64 KB on macOS/Linux) must complete without timeout.
+    /// Before the streamed-drain fix, the child would block on write,
+    /// never exit, and RealExecutor would report a false timeout.
+    #[test]
+    fn test_large_stdout_completes_without_timeout() {
+        let exec = RealExecutor::new();
+        // Generate 128 KB of output — well above the pipe buffer size.
+        let result = exec.run("dd", &["if=/dev/zero", "bs=1024", "count=128"]);
+        assert_eq!(
+            result.exit_code, 0,
+            "large-output command must complete successfully, stderr: {}",
+            result.stderr
+        );
+        assert!(
+            result.stdout.len() >= 128 * 1024,
+            "stdout must contain at least 128 KB, got {} bytes",
+            result.stdout.len()
+        );
     }
 
     #[test]
