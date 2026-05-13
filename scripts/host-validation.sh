@@ -29,6 +29,8 @@ set -euo pipefail
 RUST_BIN="${1:-./inspectah-rust}"
 GO_BIN="${2:-inspectah}"
 WORKDIR="/tmp/inspectah-host-validation-$(date +%Y%m%d-%H%M%S)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # If no pre-built binary provided, build from source
 if [ ! -f "$RUST_BIN" ]; then
@@ -38,9 +40,9 @@ if [ ! -f "$RUST_BIN" ]; then
         sudo dnf install -y rust cargo gcc 2>/dev/null || sudo yum install -y rust cargo gcc
     fi
     echo "Building inspectah-cli (release)..."
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    cargo build --release -p inspectah-cli --manifest-path "$SCRIPT_DIR/../Cargo.toml"
-    RUST_BIN="$SCRIPT_DIR/../target/release/inspectah"
+    export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
+    cargo build --release -p inspectah-cli --manifest-path "$REPO_ROOT/Cargo.toml"
+    RUST_BIN="$REPO_ROOT/target/release/inspectah"
 fi
 
 echo "=== inspectah Host Validation ==="
@@ -213,15 +215,20 @@ echo "  - slice-2a-host-validation.md  (summary report)"
 echo "  - diff-*.txt                   (section diffs)"
 echo "  - go-scan.log / rust-scan.log  (scan output)"
 echo ""
-echo "Golden files for repo: $WORKDIR/golden/"
+echo "Golden files generated: $WORKDIR/golden/"
 echo "  - go-v13-services-section.json"
 echo "  - go-v13-storage-section.json"
 echo "  - go-v13-kernelboot-section.json"
 echo ""
+echo ">>> Copying golden files and evidence to repo..."
+mkdir -p "$REPO_ROOT/testdata/evidence"
+cp "$WORKDIR/golden/"* "$REPO_ROOT/testdata/golden/"
+cp "$WORKDIR/evidence/slice-2a-host-validation.md" "$REPO_ROOT/testdata/evidence/"
+echo "Files copied to:"
+echo "  - $REPO_ROOT/testdata/golden/"
+echo "  - $REPO_ROOT/testdata/evidence/"
+echo ""
 echo "Next steps:"
 echo "  1. Review diffs in $WORKDIR/evidence/diff-*.txt"
-echo "  2. Copy golden files to repo:"
-echo "       cp $WORKDIR/golden/* /path/to/inspectah/testdata/golden/"
-echo "  3. Copy evidence:"
-echo "       cp $WORKDIR/evidence/slice-2a-host-validation.md /path/to/inspectah/testdata/evidence/"
-echo "  4. Commit and push"
+echo "  2. Review and commit the updated golden files and evidence"
+echo ""
