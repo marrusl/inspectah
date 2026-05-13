@@ -1,84 +1,799 @@
 {
-  "cmdline": "BOOT_IMAGE=(hd0,gpt2)/vmlinuz-5.14.0-362.el9.x86_64 root=UUID=abc-123 ro crashkernel=1G-4G:192M,4G-64G:256M,64G-:512M resume=UUID=def-456 rhgb quiet",
-  "grub_defaults": "",
-  "sysctl_overrides": [
-    {
-      "key": "kernel.sysrq",
-      "runtime": "16",
-      "default": "1",
-      "source": "/etc/sysctl.d/99-custom.conf",
-      "include": true
-    },
-    {
-      "key": "vm.swappiness",
-      "runtime": "30",
-      "default": "10",
-      "source": "/etc/sysctl.d/99-custom.conf",
-      "include": true
-    }
-  ],
+  "cmdline": "BOOT_IMAGE=(hd0,gpt2)/vmlinuz-5.14.0-686.el9.aarch64 root=/dev/mapper/cs-root ro crashkernel=1G-4G:256M,4G-64G:320M,64G-:576M rd.lvm.lv=cs/root rd.lvm.lv=cs/swap",
+  "grub_defaults": "GRUB_TIMEOUT=5\nGRUB_DISTRIBUTOR=\"$(sed 's, release .*$,,g' /etc/system-release)\"\nGRUB_DEFAULT=saved\nGRUB_DISABLE_SUBMENU=true\nGRUB_TERMINAL_OUTPUT=\"console\"\nGRUB_CMDLINE_LINUX=\"crashkernel=1G-4G:256M,4G-64G:320M,64G-:576M rd.lvm.lv=cs/root rd.lvm.lv=cs/swap\"\nGRUB_DISABLE_RECOVERY=\"true\"\nGRUB_ENABLE_BLSCFG=true",
+  "sysctl_overrides": [],
   "modules_load_d": [],
-  "modprobe_d": [],
-  "dracut_conf": [
+  "modprobe_d": [
     {
-      "path": "/etc/dracut.conf.d/50-custom.conf",
-      "content": "add_dracutmodules+=\" lvm \"\nhostonly=\"yes\"\n"
+      "path": "etc/modprobe.d/firewalld-sysctls.conf",
+      "content": "install nf_conntrack /sbin/modprobe --ignore-install nf_conntrack $CMDLINE_OPTS && /sbin/sysctl --quiet --pattern 'net[.]netfilter[.]nf_conntrack.*' --system\n"
     }
   ],
+  "dracut_conf": [],
   "loaded_modules": [
     {
+      "name": "binfmt_misc",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_addrtype",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_mark",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_conntrack",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_comment",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_MASQUERADE",
+      "size": "16384",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_compat",
+      "size": "20480",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_counter",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "veth",
+      "size": "36864",
+      "used_by": "",
+      "include": false
+    },
+    {
       "name": "bridge",
-      "size": "307200",
-      "used_by": "0",
-      "include": true
+      "size": "311296",
+      "used_by": "",
+      "include": false
     },
     {
       "name": "stp",
-      "size": "16384",
-      "used_by": "1 bridge",
-      "include": true
+      "size": "12288",
+      "used_by": "bridge",
+      "include": false
     },
     {
       "name": "llc",
       "size": "16384",
-      "used_by": "2 stp,bridge",
-      "include": true
+      "used_by": "bridge,stp",
+      "include": false
+    },
+    {
+      "name": "overlay",
+      "size": "188416",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "rfkill",
+      "size": "32768",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_fib_inet",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_fib_ipv4",
+      "size": "12288",
+      "used_by": "nft_fib_inet",
+      "include": false
+    },
+    {
+      "name": "nft_fib_ipv6",
+      "size": "12288",
+      "used_by": "nft_fib_inet",
+      "include": false
+    },
+    {
+      "name": "nft_fib",
+      "size": "12288",
+      "used_by": "nft_fib_ipv6,nft_fib_ipv4,nft_fib_inet",
+      "include": false
+    },
+    {
+      "name": "nft_reject_inet",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nf_reject_ipv4",
+      "size": "16384",
+      "used_by": "nft_reject_inet",
+      "include": false
+    },
+    {
+      "name": "nf_reject_ipv6",
+      "size": "24576",
+      "used_by": "nft_reject_inet",
+      "include": false
+    },
+    {
+      "name": "nft_reject",
+      "size": "16384",
+      "used_by": "nft_reject_inet",
+      "include": false
+    },
+    {
+      "name": "nft_ct",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_chain_nat",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nf_nat",
+      "size": "57344",
+      "used_by": "nft_chain_nat,xt_MASQUERADE",
+      "include": false
+    },
+    {
+      "name": "nf_conntrack",
+      "size": "200704",
+      "used_by": "xt_conntrack,nf_nat,nft_ct,xt_MASQUERADE",
+      "include": false
+    },
+    {
+      "name": "nf_defrag_ipv6",
+      "size": "24576",
+      "used_by": "nf_conntrack",
+      "include": false
+    },
+    {
+      "name": "nf_defrag_ipv4",
+      "size": "12288",
+      "used_by": "nf_conntrack",
+      "include": false
+    },
+    {
+      "name": "nf_tables",
+      "size": "262144",
+      "used_by": "nft_ct,nft_compat,nft_reject_inet,nft_fib_ipv6,nft_fib_ipv4,nft_counter,nft_chain_nat,nft_reject,nft_fib,nft_fib_inet",
+      "include": false
+    },
+    {
+      "name": "nfnetlink",
+      "size": "20480",
+      "used_by": "nft_compat,nf_tables",
+      "include": false
     },
     {
       "name": "vfat",
       "size": "20480",
-      "used_by": "1",
-      "include": true
+      "used_by": "",
+      "include": false
     },
     {
       "name": "fat",
       "size": "86016",
-      "used_by": "1 vfat",
-      "include": true
+      "used_by": "vfat",
+      "include": false
     },
     {
-      "name": "nf_conntrack",
-      "size": "172032",
-      "used_by": "0",
-      "include": true
+      "name": "snd_hda_codec_generic",
+      "size": "90112",
+      "used_by": "",
+      "include": false
     },
     {
-      "name": "ip_tables",
+      "name": "snd_hda_intel",
+      "size": "57344",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "snd_intel_dspcfg",
+      "size": "24576",
+      "used_by": "snd_hda_intel",
+      "include": false
+    },
+    {
+      "name": "snd_hda_codec",
+      "size": "192512",
+      "used_by": "snd_hda_codec_generic,snd_hda_intel",
+      "include": false
+    },
+    {
+      "name": "snd_hda_core",
+      "size": "135168",
+      "used_by": "snd_hda_codec_generic,snd_hda_intel,snd_hda_codec",
+      "include": false
+    },
+    {
+      "name": "snd_hwdep",
+      "size": "20480",
+      "used_by": "snd_hda_codec",
+      "include": false
+    },
+    {
+      "name": "vmw_vsock_virtio_transport",
+      "size": "20480",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "snd_pcm",
+      "size": "151552",
+      "used_by": "snd_hda_intel,snd_hda_codec,snd_hda_core",
+      "include": false
+    },
+    {
+      "name": "vmw_vsock_virtio_transport_common",
+      "size": "57344",
+      "used_by": "vmw_vsock_virtio_transport",
+      "include": false
+    },
+    {
+      "name": "virtio_balloon",
       "size": "28672",
-      "used_by": "0",
-      "include": true
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "vsock",
+      "size": "61440",
+      "used_by": "vmw_vsock_virtio_transport_common,vmw_vsock_virtio_transport",
+      "include": false
+    },
+    {
+      "name": "snd_timer",
+      "size": "45056",
+      "used_by": "snd_pcm",
+      "include": false
+    },
+    {
+      "name": "snd",
+      "size": "122880",
+      "used_by": "snd_hda_codec_generic,snd_hwdep,snd_hda_intel,snd_hda_codec,snd_timer,snd_pcm",
+      "include": false
+    },
+    {
+      "name": "soundcore",
+      "size": "16384",
+      "used_by": "snd",
+      "include": false
+    },
+    {
+      "name": "fuse",
+      "size": "167936",
+      "used_by": "",
+      "include": false
     },
     {
       "name": "xfs",
+      "size": "2297856",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "libcrc32c",
+      "size": "12288",
+      "used_by": "nf_conntrack,nf_nat,nf_tables,xfs",
+      "include": false
+    },
+    {
+      "name": "virtio_gpu",
+      "size": "77824",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "sr_mod",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "cdrom",
+      "size": "73728",
+      "used_by": "sr_mod",
+      "include": false
+    },
+    {
+      "name": "drm_client_lib",
+      "size": "16384",
+      "used_by": "virtio_gpu",
+      "include": false
+    },
+    {
+      "name": "sg",
+      "size": "40960",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "virtio_dma_buf",
+      "size": "12288",
+      "used_by": "virtio_gpu",
+      "include": false
+    },
+    {
+      "name": "drm_shmem_helper",
+      "size": "32768",
+      "used_by": "virtio_gpu",
+      "include": false
+    },
+    {
+      "name": "drm_kms_helper",
+      "size": "245760",
+      "used_by": "drm_shmem_helper,virtio_gpu,drm_client_lib",
+      "include": false
+    },
+    {
+      "name": "crct10dif_ce",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "ghash_ce",
+      "size": "16384",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "sha2_ce",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "drm",
+      "size": "745472",
+      "used_by": "drm_kms_helper,drm_shmem_helper,virtio_gpu,drm_client_lib",
+      "include": false
+    },
+    {
+      "name": "sha256_arm64",
+      "size": "24576",
+      "used_by": "sha2_ce",
+      "include": false
+    },
+    {
+      "name": "sha1_ce",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "virtio_net",
+      "size": "73728",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "net_failover",
+      "size": "20480",
+      "used_by": "virtio_net",
+      "include": false
+    },
+    {
+      "name": "failover",
+      "size": "12288",
+      "used_by": "net_failover",
+      "include": false
+    },
+    {
+      "name": "ahci_platform",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "libahci_platform",
+      "size": "24576",
+      "used_by": "ahci_platform",
+      "include": false
+    },
+    {
+      "name": "virtio_mmio",
+      "size": "20480",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "dm_mirror",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "dm_region_hash",
+      "size": "24576",
+      "used_by": "dm_mirror",
+      "include": false
+    },
+    {
+      "name": "dm_log",
+      "size": "20480",
+      "used_by": "dm_region_hash,dm_mirror",
+      "include": false
+    },
+    {
+      "name": "dm_mod",
       "size": "196608",
-      "used_by": "2",
-      "include": true
+      "used_by": "dm_log,dm_mirror",
+      "include": false
     }
   ],
-  "non_default_modules": [],
-  "tuned_active": "virtual-guest",
+  "non_default_modules": [
+    {
+      "name": "binfmt_misc",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_addrtype",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_mark",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_conntrack",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_comment",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xt_MASQUERADE",
+      "size": "16384",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_compat",
+      "size": "20480",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_counter",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "veth",
+      "size": "36864",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "bridge",
+      "size": "311296",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "overlay",
+      "size": "188416",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "rfkill",
+      "size": "32768",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_fib_inet",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_reject_inet",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_ct",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "nft_chain_nat",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "vfat",
+      "size": "20480",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "snd_hda_codec_generic",
+      "size": "90112",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "snd_hda_intel",
+      "size": "57344",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "vmw_vsock_virtio_transport",
+      "size": "20480",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "virtio_balloon",
+      "size": "28672",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "xfs",
+      "size": "2297856",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "virtio_gpu",
+      "size": "77824",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "sr_mod",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "sg",
+      "size": "40960",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "crct10dif_ce",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "ghash_ce",
+      "size": "16384",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "sha2_ce",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "sha1_ce",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "virtio_net",
+      "size": "73728",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "ahci_platform",
+      "size": "12288",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "virtio_mmio",
+      "size": "20480",
+      "used_by": "",
+      "include": false
+    },
+    {
+      "name": "dm_mirror",
+      "size": "24576",
+      "used_by": "",
+      "include": false
+    }
+  ],
+  "tuned_active": "",
   "tuned_custom_profiles": [],
   "locale": "en_US.UTF-8",
   "timezone": "America/New_York",
-  "alternatives": []
+  "alternatives": [
+    {
+      "name": "apropos",
+      "path": "/usr/bin/apropos.man-db",
+      "status": "auto"
+    },
+    {
+      "name": "apropos.1.gz",
+      "path": "/usr/share/man/man1/apropos.man-db.1.gz",
+      "status": "auto"
+    },
+    {
+      "name": "arptables",
+      "path": "/usr/sbin/arptables-nft",
+      "status": "auto"
+    },
+    {
+      "name": "arptables-helper",
+      "path": "/usr/libexec/arptables-nft-helper",
+      "status": "auto"
+    },
+    {
+      "name": "arptables-man",
+      "path": "/usr/share/man/man8/arptables-nft.8.gz",
+      "status": "auto"
+    },
+    {
+      "name": "arptables-restore",
+      "path": "/usr/sbin/arptables-nft-restore",
+      "status": "auto"
+    },
+    {
+      "name": "arptables-restore-man",
+      "path": "/usr/share/man/man8/arptables-nft-restore.8.gz",
+      "status": "auto"
+    },
+    {
+      "name": "arptables-save",
+      "path": "/usr/sbin/arptables-nft-save",
+      "status": "auto"
+    },
+    {
+      "name": "arptables-save-man",
+      "path": "/usr/share/man/man8/arptables-nft-save.8.gz",
+      "status": "auto"
+    },
+    {
+      "name": "cifs-idmap-plugin",
+      "path": "/usr/lib64/cifs-utils/cifs_idmap_sss.so",
+      "status": "auto"
+    },
+    {
+      "name": "ebtables",
+      "path": "/usr/sbin/ebtables-nft",
+      "status": "auto"
+    },
+    {
+      "name": "ebtables-man",
+      "path": "/usr/share/man/man8/ebtables-nft.8.gz",
+      "status": "auto"
+    },
+    {
+      "name": "ebtables-restore",
+      "path": "/usr/sbin/ebtables-nft-restore",
+      "status": "auto"
+    },
+    {
+      "name": "ebtables-save",
+      "path": "/usr/sbin/ebtables-nft-save",
+      "status": "auto"
+    },
+    {
+      "name": "ip6tables",
+      "path": "/usr/sbin/ip6tables-nft",
+      "status": "auto"
+    },
+    {
+      "name": "ip6tables-restore",
+      "path": "/usr/sbin/ip6tables-nft-restore",
+      "status": "auto"
+    },
+    {
+      "name": "ip6tables-save",
+      "path": "/usr/sbin/ip6tables-nft-save",
+      "status": "auto"
+    },
+    {
+      "name": "iptables",
+      "path": "/usr/sbin/iptables-nft",
+      "status": "auto"
+    },
+    {
+      "name": "iptables-restore",
+      "path": "/usr/sbin/iptables-nft-restore",
+      "status": "auto"
+    },
+    {
+      "name": "iptables-save",
+      "path": "/usr/sbin/iptables-nft-save",
+      "status": "auto"
+    },
+    {
+      "name": "ld",
+      "path": "/usr/bin/ld.bfd",
+      "status": "auto"
+    },
+    {
+      "name": "libnssckbi.so",
+      "path": "/usr/lib64/pkcs11/p11-kit-trust.so",
+      "status": "auto"
+    },
+    {
+      "name": "man",
+      "path": "/usr/bin/man.man-db",
+      "status": "auto"
+    },
+    {
+      "name": "man.1.gz",
+      "path": "/usr/share/man/man1/man.man-db.1.gz",
+      "status": "auto"
+    },
+    {
+      "name": "soelim",
+      "path": "/usr/bin/soelim.groff",
+      "status": "auto"
+    },
+    {
+      "name": "soelim.1.gz",
+      "path": "/usr/share/man/man1/soelim.groff.1.gz",
+      "status": "auto"
+    },
+    {
+      "name": "whatis",
+      "path": "/usr/bin/whatis.man-db",
+      "status": "auto"
+    },
+    {
+      "name": "whatis.1.gz",
+      "path": "/usr/share/man/man1/whatis.man-db.1.gz",
+      "status": "auto"
+    }
+  ]
 }
