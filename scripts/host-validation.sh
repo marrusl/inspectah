@@ -6,9 +6,14 @@ set -euo pipefail
 # Runs both Go and Rust inspectah on a live package-mode system and
 # compares section-level output to establish parity evidence.
 #
+# If running from the inspectah source tree, the script will build from
+# source using system Rust (dnf install rust cargo) when no pre-built
+# binary is provided.
+#
 # Prerequisites:
 #   - Go inspectah installed and in PATH (inspectah command)
 #   - Rust inspectah binary at ./inspectah-rust (or pass path as $1)
+#   - OR: Rust toolchain installed (dnf install rust cargo) to build from source
 #   - jq installed
 #   - Run as root (inspectah needs access to system state)
 #
@@ -24,6 +29,19 @@ set -euo pipefail
 RUST_BIN="${1:-./inspectah-rust}"
 GO_BIN="${2:-inspectah}"
 WORKDIR="/tmp/inspectah-host-validation-$(date +%Y%m%d-%H%M%S)"
+
+# If no pre-built binary provided, build from source
+if [ ! -f "$RUST_BIN" ]; then
+    echo ">>> No pre-built binary found at $RUST_BIN, building from source..."
+    if ! command -v cargo >/dev/null 2>&1; then
+        echo "Installing Rust toolchain via dnf..."
+        sudo dnf install -y rust cargo gcc 2>/dev/null || sudo yum install -y rust cargo gcc
+    fi
+    echo "Building inspectah-cli (release)..."
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    cargo build --release -p inspectah-cli --manifest-path "$SCRIPT_DIR/../Cargo.toml"
+    RUST_BIN="$SCRIPT_DIR/../target/release/inspectah"
+fi
 
 echo "=== inspectah Host Validation ==="
 echo "Rust binary: $RUST_BIN"
