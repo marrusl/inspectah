@@ -1,13 +1,14 @@
-//! Provisional serde roundtrip tests for golden-file compatibility.
+//! Serde roundtrip tests for golden-file compatibility.
 //!
-//! These tests prove that Rust types can deserialize golden JSON and
-//! re-serialize it without loss. They do NOT exercise actual Rust inspector
-//! code — the real inspector-vs-golden parity gate lives in
+//! These tests prove that Rust types can deserialize Go-captured golden
+//! JSON and re-serialize it without loss. They do NOT exercise actual Rust
+//! inspector code — the real inspector-vs-golden parity gate lives in
 //! `inspectah-collect/tests/parity_test.rs`, which runs inspectors on
-//! fixture data and diffs the output against these same golden files.
+//! fixture data and compares output against fixture-derived goldens.
 //!
-//! When real Go-captured goldens replace the current provisional ones,
-//! serde roundtrip failures here will surface any type-level incompatibility.
+//! The golden files are real Go v13 output captured from a CentOS Stream 9
+//! host during host validation. Serde roundtrip tests here prove type-level
+//! compatibility between Rust structs and actual Go output.
 
 use inspectah_core::normalize::{diff_snapshots, load_divergence_allowlist};
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -25,10 +26,10 @@ fn allowlist() -> BTreeSet<String> {
 
 // ── Snapshot self-roundtrip ──────────────────────────────────────────
 
-/// Provisional: proves Rust snapshot serde roundtrip fidelity.
+/// Proves Rust snapshot serde roundtrip fidelity.
 /// Does NOT compare against Go output.
 #[test]
-fn test_provisional_snapshot_serde_roundtrip() {
+fn test_snapshot_serde_roundtrip() {
     let divergences_md = include_str!("../../testdata/divergences.md");
     let allowlist = load_divergence_allowlist(divergences_md);
 
@@ -55,11 +56,10 @@ fn test_provisional_snapshot_serde_roundtrip() {
 
 // ── Services section serde roundtrip ─────────────────────────────────
 
-/// Provisional: proves golden JSON deserializes into ServiceSection and
-/// re-serializes without field loss. Real Go-vs-Rust parity gate requires
-/// inspector execution (see inspectah-collect/tests/parity_test.rs).
+/// Proves Go golden JSON deserializes into ServiceSection and
+/// re-serializes without undocumented field loss.
 #[test]
-fn test_provisional_services_serde_roundtrip() {
+fn test_services_serde_roundtrip() {
     let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
 
     let section: ServiceSection =
@@ -75,27 +75,43 @@ fn test_provisional_services_serde_roundtrip() {
     );
 }
 
-/// Provisional: validates golden file structural completeness — all key
-/// fields are populated so the roundtrip test exercises the full type.
+/// Validates Go golden services structure matches expected field layout.
+/// On the real CentOS Stream 9 host: 186 state_changes (184 unchanged +
+/// 2 enable), 2 enabled_units, 0 disabled_units, 0 drop_ins.
 #[test]
-fn test_provisional_services_field_coverage() {
+fn test_services_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
     let section: ServiceSection = serde_json::from_str(golden).unwrap();
 
+    // state_changes: Go includes ALL units (unchanged + divergent)
     assert!(
         !section.state_changes.is_empty(),
         "golden must contain state_changes"
     );
     assert!(
+        section.state_changes.len() > 100,
+        "Go golden should have 180+ state_changes (all units), got {}",
+        section.state_changes.len()
+    );
+
+    // enabled_units: 2 units on this host
+    assert!(
         !section.enabled_units.is_empty(),
         "golden must contain enabled_units"
     );
-    assert!(
-        !section.disabled_units.is_empty(),
-        "golden must contain disabled_units"
-    );
-    assert!(!section.drop_ins.is_empty(), "golden must contain drop_ins");
 
+    // disabled_units and drop_ins: empty on this host — just verify they
+    // deserialized (the arrays exist even if empty)
+    assert!(
+        section.disabled_units.is_empty(),
+        "Go golden has no disabled_units on this host"
+    );
+    assert!(
+        section.drop_ins.is_empty(),
+        "Go golden has no drop_ins on this host"
+    );
+
+    // Verify structural fields on individual state_change entries
     let sc = &section.state_changes[0];
     assert!(!sc.unit.is_empty(), "unit must be populated");
     assert!(
@@ -111,11 +127,10 @@ fn test_provisional_services_field_coverage() {
 
 // ── Storage section serde roundtrip ──────────────────────────────────
 
-/// Provisional: proves golden JSON deserializes into StorageSection and
-/// re-serializes without field loss. Real parity gate is in
-/// inspectah-collect/tests/parity_test.rs.
+/// Proves Go golden JSON deserializes into StorageSection and
+/// re-serializes without undocumented field loss.
 #[test]
-fn test_provisional_storage_serde_roundtrip() {
+fn test_storage_serde_roundtrip() {
     let golden = include_str!("../../testdata/golden/go-v13-storage-section.json");
 
     let section: StorageSection =
@@ -131,9 +146,9 @@ fn test_provisional_storage_serde_roundtrip() {
     );
 }
 
-/// Provisional: validates storage golden file structural completeness.
+/// Validates Go golden storage structure.
 #[test]
-fn test_provisional_storage_field_coverage() {
+fn test_storage_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-storage-section.json");
     let section: StorageSection = serde_json::from_str(golden).unwrap();
 
@@ -162,11 +177,10 @@ fn test_provisional_storage_field_coverage() {
 
 // ── Kernel boot section serde roundtrip ──────────────────────────────
 
-/// Provisional: proves golden JSON deserializes into KernelBootSection and
-/// re-serializes without field loss. Real parity gate is in
-/// inspectah-collect/tests/parity_test.rs.
+/// Proves Go golden JSON deserializes into KernelBootSection and
+/// re-serializes without undocumented field loss.
 #[test]
-fn test_provisional_kernelboot_serde_roundtrip() {
+fn test_kernelboot_serde_roundtrip() {
     let golden = include_str!("../../testdata/golden/go-v13-kernelboot-section.json");
 
     let section: KernelBootSection =
@@ -182,36 +196,66 @@ fn test_provisional_kernelboot_serde_roundtrip() {
     );
 }
 
-/// Provisional: validates kernelboot golden file structural completeness.
+/// Validates Go golden kernelboot structure matches expected field layout.
+/// On the real CentOS Stream 9 host: no sysctl overrides, no dracut conf,
+/// tuned not active (empty string), 73 loaded modules, 33 non_default
+/// modules, 28 alternatives, 1 modprobe.d entry.
 #[test]
-fn test_provisional_kernelboot_field_coverage() {
+fn test_kernelboot_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-kernelboot-section.json");
     let section: KernelBootSection = serde_json::from_str(golden).unwrap();
 
     assert!(!section.cmdline.is_empty(), "golden must contain cmdline");
+
+    // sysctl_overrides: empty on this host — verify deserialized
     assert!(
-        !section.sysctl_overrides.is_empty(),
-        "golden must contain sysctl_overrides"
+        section.sysctl_overrides.is_empty(),
+        "Go golden has no sysctl_overrides on this host"
     );
+
+    // loaded_modules: 73 modules on the real host
     assert!(
         !section.loaded_modules.is_empty(),
         "golden must contain loaded_modules"
     );
     assert!(
-        !section.dracut_conf.is_empty(),
-        "golden must contain dracut_conf"
-    );
-    assert!(section.locale.is_some(), "golden must contain locale");
-    assert!(section.timezone.is_some(), "golden must contain timezone");
-    assert!(
-        !section.tuned_active.is_empty(),
-        "golden must contain tuned_active"
+        section.loaded_modules.len() > 50,
+        "Go golden should have 70+ loaded_modules, got {}",
+        section.loaded_modules.len()
     );
 
-    let so = &section.sysctl_overrides[0];
-    assert!(!so.key.is_empty(), "sysctl key must be populated");
-    assert!(!so.runtime.is_empty(), "sysctl runtime must be populated");
-    assert!(!so.source.is_empty(), "sysctl source must be populated");
+    // non_default_modules: 33 on the real host (Go collects these)
+    assert!(
+        !section.non_default_modules.is_empty(),
+        "golden must contain non_default_modules"
+    );
+
+    // alternatives: 28 on the real host (Go collects these)
+    assert!(
+        !section.alternatives.is_empty(),
+        "golden must contain alternatives"
+    );
+
+    // dracut_conf: empty on this host
+    assert!(
+        section.dracut_conf.is_empty(),
+        "Go golden has no dracut_conf on this host"
+    );
+
+    assert!(section.locale.is_some(), "golden must contain locale");
+    assert!(section.timezone.is_some(), "golden must contain timezone");
+
+    // tuned_active: empty string on this host (tuned not running)
+    assert!(
+        section.tuned_active.is_empty(),
+        "Go golden has empty tuned_active on this host"
+    );
+
+    // modprobe_d: 1 entry on this host
+    assert!(
+        !section.modprobe_d.is_empty(),
+        "golden must contain modprobe_d"
+    );
 }
 
 // ── Cross-section golden consistency ─────────────────────────────────
