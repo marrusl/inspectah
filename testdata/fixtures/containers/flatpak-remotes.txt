@@ -1,0 +1,3 @@
+Name	Options
+flathub	system
+fedora	system,oci

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<zone xmlns:custom="http://example.com/custom">
+  <short>Unsupported</short>
+  <description>Zone with features the hand-parser cannot handle</description>
+  <service name="ssh"/>
+  <custom:rule><![CDATA[
+    -A INPUT -p tcp --dport 8443 -j ACCEPT
+  ]]></custom:rule>
+  <port port="443" protocol="tcp"/>
+</zone>
