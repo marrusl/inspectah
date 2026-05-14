@@ -360,6 +360,7 @@ fn parse_group(
             "members": members,
             "include": true,
         }));
+        // Store raw entry — matches how passwd_entries is populated.
         section.group_entries.push(line.to_string());
     }
 }
@@ -474,6 +475,10 @@ fn extract_sudoers_rules(
         let upper = line.to_uppercase();
         for pattern in SECRET_PATTERNS {
             if upper.contains(pattern) {
+                // Skip false positive: NOPASSWD/PASSWD are policy directives, not secrets.
+                if pattern == &"PASSWORD" && (upper.contains("NOPASSWD") || upper.contains("PASSWD:")) {
+                    continue;
+                }
                 hints.push(RedactionHint {
                     path: "sudoers".to_string(),
                     reason: format!(
@@ -1088,7 +1093,7 @@ nobody:x:65534:
         let exec = MockExecutor::new()
             .with_file(
                 "/etc/sudoers",
-                "deploy ALL=(ALL) NOPASSWD: /usr/bin/env DB_PASSWORD=secret /opt/deploy.sh\n",
+                "deploy ALL=(ALL) /usr/bin/env DB_PASSWORD=secret /opt/deploy.sh\n",
             );
 
         let mut section = UserGroupSection::default();
@@ -1097,6 +1102,22 @@ nobody:x:65534:
 
         assert!(!hints.is_empty(), "PASSWORD in sudoers should produce a RedactionHint");
         assert!(hints[0].reason.contains("PASSWORD"));
+    }
+
+    #[test]
+    fn sudoers_nopasswd_no_false_positive() {
+        let exec = MockExecutor::new()
+            .with_file(
+                "/etc/sudoers",
+                "webapp ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart webapp\n%wheel ALL=(ALL) NOPASSWD: ALL\n",
+            );
+
+        let mut section = UserGroupSection::default();
+        let mut hints = Vec::new();
+        parse_sudoers(&exec, &mut section, &mut hints);
+
+        assert!(hints.is_empty(), "NOPASSWD directives should NOT produce false-positive hints");
+        assert_eq!(section.sudoers_rules.len(), 2);
     }
 
     // -----------------------------------------------------------------------
