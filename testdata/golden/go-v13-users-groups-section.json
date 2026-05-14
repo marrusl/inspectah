@@ -1,75 +1,51 @@
 {
   "users": [
     {
-      "name": "admin",
-      "uid": 1000,
-      "gid": 1000,
-      "shell": "/bin/bash",
-      "home": "/home/admin",
-      "include": true,
       "classification": "human",
-      "strategy": "blueprint"
-    },
-    {
-      "name": "deploy",
-      "uid": 1001,
-      "gid": 1001,
-      "shell": "/sbin/nologin",
-      "home": "/home/deploy",
+      "gid": 1000,
+      "home": "/home/mark",
       "include": true,
-      "classification": "service",
-      "strategy": "sysusers"
+      "name": "mark",
+      "shell": "/bin/bash",
+      "strategy": "kickstart",
+      "uid": 1000
     }
   ],
   "groups": [
     {
-      "name": "admin",
       "gid": 1000,
+      "include": true,
       "members": [],
-      "include": true,
-      "strategy": "blueprint"
-    },
-    {
-      "name": "deploy",
-      "gid": 1001,
-      "members": [],
-      "include": true,
-      "strategy": "sysusers"
-    },
-    {
-      "name": "docker",
-      "gid": 1002,
-      "members": ["admin"],
-      "include": true,
-      "strategy": "blueprint"
+      "name": "mark",
+      "strategy": "kickstart"
     }
   ],
   "sudoers_rules": [
-    "admin ALL=(ALL) NOPASSWD:ALL",
-    "#includedir /etc/sudoers.d"
+    "root\tALL=(ALL) \tALL",
+    "%wheel\tALL=(ALL)\tALL"
   ],
   "ssh_authorized_keys_refs": [
     {
-      "user": "admin",
-      "key_count": 2,
-      "path": "/home/admin/.ssh/authorized_keys"
+      "path": "/home/mark/.ssh/authorized_keys",
+      "user": "mark"
     }
   ],
   "passwd_entries": [
-    "admin:x:1000:1000::/home/admin:/bin/bash",
-    "deploy:x:1001:1001::/home/deploy:/sbin/nologin"
+    "mark:x:1000:1000:mark:/home/mark:/bin/bash"
   ],
-  "shadow_entries": [],
+  "shadow_entries": [
+    "mark:REDACTED_SHADOW_HASH_1::0:99999:7:::"
+  ],
   "group_entries": [
-    "admin:x:1000:",
-    "deploy:x:1001:",
-    "docker:x:1002:admin"
+    "mark:x:1000:"
   ],
-  "gshadow_entries": [],
+  "gshadow_entries": [
+    "mark:!::"
+  ],
   "subuid_entries": [
-    "admin:100000:65536"
+    "mark:100000:65536"
   ],
   "subgid_entries": [
-    "admin:100000:65536"
+    "mark:100000:65536"
   ]
 }

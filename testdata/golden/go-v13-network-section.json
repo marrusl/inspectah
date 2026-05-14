@@ -1,47 +1,47 @@
 {
   "connections": [
     {
-      "path": "/etc/NetworkManager/system-connections/ens192.nmconnection",
-      "name": "ens192",
-      "method": "auto",
-      "type": "802-3-ethernet",
-      "include": true
+      "path": "etc/NetworkManager/system-connections/enp0s5.nmconnection",
+      "name": "enp0s5",
+      "method": "dhcp",
+      "type": "ethernet"
     },
     {
-      "path": "/etc/NetworkManager/system-connections/virbr0.nmconnection",
-      "name": "virbr0",
-      "method": "manual",
-      "type": "bridge",
-      "include": false
+      "path": "etc/sysconfig/network-scripts/readme-ifcfg-rh.txt",
+      "name": "readme-ifcfg-rh",
+      "method": "unknown",
+      "type": ""
     }
   ],
   "firewall_zones": [
     {
-      "path": "/etc/firewalld/zones/public.xml",
+      "path": "etc/firewalld/zones/public.xml",
       "name": "public",
-      "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<zone>\n  <short>Public</short>\n  <service name=\"ssh\"/>\n  <service name=\"dhcpv6-client\"/>\n  <service name=\"cockpit\"/>\n</zone>",
-      "services": ["ssh", "dhcpv6-client", "cockpit"],
+      "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<zone>\n  <short>Public</short>\n  <description>For use in public areas. You do not trust the other computers on networks to not harm your computer. Only selected incoming connections are accepted.</description>\n  <service name=\"ssh\"/>\n  <service name=\"dhcpv6-client\"/>\n  <service name=\"cockpit\"/>\n  <forward/>\n</zone>\n",
+      "services": [
+        "ssh",
+        "dhcpv6-client",
+        "cockpit"
+      ],
       "ports": [],
       "rich_rules": [],
-      "include": true,
+      "include": false,
       "fleet": null
     }
   ],
   "firewall_direct_rules": [],
-  "static_routes": [],
-  "ip_routes": [
-    "default via 192.168.1.1 dev ens192 proto dhcp src 192.168.1.50 metric 100",
-    "192.168.1.0/24 dev ens192 proto kernel scope link src 192.168.1.50 metric 100"
-  ],
-  "ip_rules": [],
-  "resolv_provenance": "NetworkManager",
-  "hosts_additions": [
-    "192.168.1.100 db.internal.example.com"
-  ],
-  "proxy": [
+  "static_routes": [
     {
-      "source": "/etc/profile.d/proxy.sh",
-      "line": "export http_proxy=http://proxy.example.com:3128"
+      "path": "etc/iproute2/README",
+      "name": "README"
     }
-  ]
+  ],
+  "ip_routes": [
+    "default via 10.211.55.1 dev enp0s5 proto dhcp src 10.211.55.5 metric 100",
+    "10.211.55.0/24 dev enp0s5 proto kernel scope link src 10.211.55.5 metric 100"
+  ],
+  "ip_rules": null,
+  "resolv_provenance": "networkmanager",
+  "hosts_additions": [],
+  "proxy": []
 }
