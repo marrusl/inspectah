@@ -19,6 +19,14 @@ use crate::redaction::patterns::{scan_shadow, PATTERNS};
 static PROXY_CRED_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(://[^:/@\s]+:)([^@\s]+)(@)").expect("proxy regex"));
 
+/// Compiled regex for bare `proxy_password=VALUE` lines in DNF/Yum configs.
+/// Captures two groups:
+///   1. `proxy_password=` (the key prefix)
+///   2. the password value
+static PROXY_PASSWORD_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(proxy_password\s*=\s*)(\S+)").expect("proxy_password key-value regex")
+});
+
 /// Options controlling redaction sensitivity.
 #[derive(Debug, Clone)]
 pub struct RedactOptions {
@@ -126,6 +134,7 @@ pub fn mask_proxy_credentials<'a>(
     line: &'a str,
     source_path: &str,
 ) -> (Cow<'a, str>, Option<RedactionFinding>) {
+    // First: check for URL-shaped credentials (://user:password@host)
     if let Some(caps) = PROXY_CRED_RE.captures(line) {
         let masked = PROXY_CRED_RE
             .replace(line, "${1}[REDACTED]${3}")
@@ -145,10 +154,33 @@ pub fn mask_proxy_credentials<'a>(
             confidence: Some(Confidence::High),
             finding_kind: Some(FindingKind::Password),
         };
-        (Cow::Owned(masked), Some(finding))
-    } else {
-        (Cow::Borrowed(line), None)
+        return (Cow::Owned(masked), Some(finding));
     }
+
+    // Second: check for bare proxy_password=VALUE lines (DNF/Yum config)
+    if let Some(caps) = PROXY_PASSWORD_KV_RE.captures(line) {
+        let masked = PROXY_PASSWORD_KV_RE
+            .replace(line, "${1}[REDACTED]")
+            .into_owned();
+        let finding = RedactionFinding {
+            path: source_path.to_string(),
+            source: "proxy_credential".into(),
+            kind: RedactionKind::Inline,
+            pattern: "proxy_password".into(),
+            remediation: format!(
+                "DNF/Yum proxy password in plaintext — use environment variables or auth file instead (source: {})",
+                caps.get(0).map_or("", |m| m.as_str())
+            ),
+            line: None,
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Some(Confidence::High),
+            finding_kind: Some(FindingKind::Password),
+        };
+        return (Cow::Owned(masked), Some(finding));
+    }
+
+    (Cow::Borrowed(line), None)
 }
 
 /// Scan content for secrets. Returns findings for all detected patterns.
