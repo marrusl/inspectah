@@ -57,6 +57,45 @@ fn proxy_url_with_password_masked_inline() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 1b: Bare proxy_password=VALUE masked
+// ---------------------------------------------------------------------------
+
+#[test]
+fn proxy_password_value_masked() {
+    let mut snapshot = InspectionSnapshot::new();
+    snapshot.network = Some(NetworkSection {
+        proxy: vec![ProxyEntry {
+            source: "etc/dnf/dnf.conf".into(),
+            line: "proxy_password=secret123".into(),
+        }],
+        ..Default::default()
+    });
+
+    redact(&mut snapshot, &RedactOptions::default());
+
+    let net = snapshot.network.as_ref().unwrap();
+    let masked_line = &net.proxy[0].line;
+
+    // Password value must be replaced with [REDACTED]
+    assert!(
+        !masked_line.contains("secret123"),
+        "proxy_password value must be masked, got: {masked_line}"
+    );
+    assert!(
+        masked_line.contains("proxy_password=[REDACTED]"),
+        "masked line must show proxy_password=[REDACTED], got: {masked_line}"
+    );
+
+    // Finding must be recorded
+    assert!(
+        snapshot.redactions.iter().any(
+            |f| f.finding_kind == Some(FindingKind::Password) && f.source == "proxy_credential"
+        ),
+        "proxy_password finding must be recorded"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Test 2: Podman env with secret redacted
 // ---------------------------------------------------------------------------
 
