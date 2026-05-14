@@ -822,15 +822,25 @@ mod tests {
 
     #[test]
     fn firewall_zone_malformed_xml_degraded() {
-        let xml = fixture("malformed-zone.xml");
-        let _result = parse_zone_xml(&xml);
         // Malformed XML: missing closing quote on <service name="ssh"
-        // The parser should detect this is malformed and return None.
-        // However, our simple scanner may still extract some elements.
-        // The key test is that calling collect_firewall_zones with this
-        // produces a Degraded status, tested below.
+        // The simple string scanner is tolerant of structural XML issues —
+        // it extracts what it can and returns Some(...). This means
+        // collect_firewall_zones treats it as parseable (not degraded).
+        // The key contract: no panic, and extracted data is best-effort.
+        let xml = fixture("malformed-zone.xml");
+        let parse_result = parse_zone_xml(&xml);
 
-        // Use full inspector flow to test Degraded.
+        // The scanner returns Some because it finds <zone> and scans for
+        // <service>/<port> tags by string matching. The broken <service>
+        // tag may or may not extract a valid name depending on the
+        // exact malformation, but the parser does not panic.
+        assert!(
+            parse_result.is_some(),
+            "simple scanner is tolerant of malformed XML"
+        );
+
+        // Verify via full collector flow that no panic occurs and the
+        // zone is added (possibly with incomplete services/ports).
         let exec = MockExecutor::new()
             .with_dir("/etc/firewalld/zones", vec!["malformed.xml"])
             .with_file("/etc/firewalld/zones/malformed.xml", &xml);
@@ -840,12 +850,16 @@ mod tests {
         let mut degraded = Vec::new();
         collect_firewall_zones(&exec, &mut section, &mut warnings, &mut degraded);
 
-        // The malformed XML won't be parseable by our scanner (no closing
-        // tag for the broken service element causes zone check issues).
-        // Either the zone gets skipped with a degraded reason, or the
-        // services/ports extracted are incomplete. Both are acceptable
-        // as long as parsing doesn't panic.
-        // The key invariant: no panic.
+        // The zone is added to the section (parser returned Some), but the
+        // extracted services/ports may be incomplete or incorrect.
+        assert_eq!(
+            section.firewall_zones.len(),
+            1,
+            "malformed zone is added best-effort (parser returned Some)"
+        );
+        // No degraded reason — the scanner succeeded (returned Some).
+        // Degraded only fires when parse_zone_xml returns None
+        // (e.g., unsupported XML features like xmlns: or CDATA).
     }
 
     #[test]
