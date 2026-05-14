@@ -1,0 +1,62 @@
+{
+  "quadlet_units": [
+    {
+      "path": "/etc/containers/systemd/caddy.container",
+      "name": "caddy.container",
+      "content": "[Container]\nImage=docker.io/library/caddy:latest\nPublishPort=80:80\nPublishPort=443:443\nVolume=caddy_data:/data\n\n[Service]\nRestart=always\n\n[Install]\nWantedBy=multi-user.target\n",
+      "image": "docker.io/library/caddy:latest",
+      "include": true,
+      "tie": false,
+      "tie_winner": false,
+      "fleet": null,
+      "ports": ["80:80", "443:443"],
+      "volumes": ["caddy_data:/data"]
+    }
+  ],
+  "compose_files": [
+    {
+      "path": "/opt/monitoring/docker-compose.yml",
+      "images": [
+        {
+          "service": "prometheus",
+          "image": "prom/prometheus:v2.47.0"
+        },
+        {
+          "service": "grafana",
+          "image": "grafana/grafana:10.1.0"
+        }
+      ],
+      "include": true,
+      "tie": false,
+      "tie_winner": false,
+      "fleet": null
+    }
+  ],
+  "running_containers": [
+    {
+      "id": "a1b2c3d4e5f6",
+      "name": "caddy",
+      "image": "docker.io/library/caddy:latest",
+      "image_id": "sha256:abcdef1234567890",
+      "status": "Up 3 days",
+      "restart_policy": "always",
+      "mounts": [
+        {
+          "type": "volume",
+          "source": "caddy_data",
+          "destination": "/data",
+          "mode": "",
+          "rw": true
+        }
+      ],
+      "networks": {},
+      "ports": {},
+      "env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      ],
+      "inspect_data": true,
+      "include": true
+    }
+  ],
+  "flatpak_apps": []
+}
