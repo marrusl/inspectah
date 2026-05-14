@@ -4,10 +4,20 @@ use inspectah_core::types::redaction::{
     Confidence, DetectionMethod, FindingKind, RedactionFinding, RedactionHint, RedactionKind,
     RedactionState,
 };
+use regex::Regex;
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
 use crate::redaction::patterns::{scan_shadow, PATTERNS};
+
+/// Compiled regex for proxy credential masking.
+/// Matches `://user:password@` in proxy URLs, capturing three groups:
+///   1. `://user:` (scheme + username + colon)
+///   2. the password segment
+///   3. `@`
+static PROXY_CRED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(://[^:/@\s]+:)([^@\s]+)(@)").expect("proxy regex"));
 
 /// Options controlling redaction sensitivity.
 #[derive(Debug, Clone)]
@@ -101,6 +111,44 @@ pub fn redact_string(content: &str) -> Cow<'_, str> {
     }
 
     Cow::Owned(result)
+}
+
+/// Mask embedded credentials in a proxy URL line.
+///
+/// Replaces only the password segment in `://user:password@` patterns,
+/// preserving the rest of the URL structure. This is a dedicated function
+/// because the generic `redact_string()` does whole-match replacement and
+/// would destroy the URL.
+///
+/// Returns `(Cow<str>, Option<RedactionFinding>)` — borrowed if no match,
+/// owned with a finding if credentials were masked.
+pub fn mask_proxy_credentials<'a>(
+    line: &'a str,
+    source_path: &str,
+) -> (Cow<'a, str>, Option<RedactionFinding>) {
+    if let Some(caps) = PROXY_CRED_RE.captures(line) {
+        let masked = PROXY_CRED_RE
+            .replace(line, "${1}[REDACTED]${3}")
+            .into_owned();
+        let finding = RedactionFinding {
+            path: source_path.to_string(),
+            source: "proxy_credential".into(),
+            kind: RedactionKind::Inline,
+            pattern: "proxy_password".into(),
+            remediation: format!(
+                "Proxy config contains embedded credentials — use environment variables or auth file instead (source: {})",
+                caps.get(0).map_or("", |m| m.as_str())
+            ),
+            line: None,
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Some(Confidence::High),
+            finding_kind: Some(FindingKind::Password),
+        };
+        (Cow::Owned(masked), Some(finding))
+    } else {
+        (Cow::Borrowed(line), None)
+    }
 }
 
 /// Scan content for secrets. Returns findings for all detected patterns.
@@ -484,6 +532,45 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                     snippet.content = content;
                     all_findings.extend(findings);
                 }
+            }
+        }
+    }
+
+    // Scan proxy lines for embedded credentials (dedicated masker, NOT generic pass).
+    if let Some(ref mut network) = snapshot.network {
+        for entry in &mut network.proxy {
+            let (masked, finding) =
+                mask_proxy_credentials(&entry.line, &entry.source);
+            if let Some(f) = finding {
+                entry.line = masked.into_owned();
+                all_findings.push(f);
+            }
+        }
+    }
+
+    // Scan container env vars for secrets via generic pattern pass.
+    if let Some(ref mut containers) = snapshot.containers {
+        for container in &mut containers.running_containers {
+            for env_entry in &mut container.env {
+                let redacted = redact_string(env_entry);
+                if let Cow::Owned(ref new_val) = redacted {
+                    // Collect findings for each pattern match.
+                    let findings = scan_content(env_entry, &format!("container:{}", container.name));
+                    all_findings.extend(findings);
+                    *env_entry = new_val.clone();
+                }
+            }
+        }
+    }
+
+    // Scan sudoers rules for secrets via generic pattern pass.
+    if let Some(ref mut users) = snapshot.users_groups {
+        for rule in &mut users.sudoers_rules {
+            let redacted = redact_string(rule);
+            if let Cow::Owned(ref new_val) = redacted {
+                let findings = scan_content(rule, "/etc/sudoers");
+                all_findings.extend(findings);
+                *rule = new_val.clone();
             }
         }
     }
