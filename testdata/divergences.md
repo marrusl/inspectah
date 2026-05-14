@@ -148,6 +148,26 @@ Any difference NOT listed here fails CI.
 - Disposition: permanent — inherent fixture/host data difference
 - Approval: approved-by-spec
 
+## Network Section
+
+### null vs empty array for ip_rules (serde default)
+- Go: `"ip_rules": null` (Go `omitempty` on empty slice)
+- Rust: `"ip_rules": []` (Rust `#[serde(default)]` deserializes missing as empty, serializes as `[]`)
+- Path: `$.network.ip_rules`
+- Reason: Rust serde default behavior produces `[]` where Go produces `null` for empty arrays. Semantically identical.
+- Disposition: permanent
+- Approval: approved-by-spec
+
+## Containers Section
+
+### null vs empty array for all container sub-fields (serde default)
+- Go: `"quadlet_units": null`, `"compose_files": null`, `"running_containers": null`, `"flatpak_apps": null`
+- Rust: All four fields serialize as `[]` when empty
+- Path: `$.containers.quadlet_units`, `$.containers.compose_files`, `$.containers.running_containers`, `$.containers.flatpak_apps`
+- Reason: Same `null` vs `[]` serde default pattern as network.ip_rules. Go `omitempty` on empty slices produces `null`. Rust `#[serde(default)]` produces `[]`. Semantically identical.
+- Disposition: permanent
+- Approval: approved-by-spec
+
 ## Users/Groups Section
 
 ### users provisioning strategy model (design choice)
@@ -155,5 +175,29 @@ Any difference NOT listed here fails CI.
 - Rust: Two-way auto-detect based on login shell validity. Users with a valid login shell (e.g., `/bin/bash`) are classified as human and assigned the `blueprint` strategy. Users without a valid login shell (e.g., `/sbin/nologin`) are classified as service and assigned the `sysusers` strategy. `useradd` and `kickstart` are override-only strategies.
 - Path: `$.users[*].classification`, `$.users[*].strategy`
 - Reason: Deliberate product decision. The Go three-way model produces an `ambiguous` bucket that requires manual triage. The Rust two-way model eliminates ambiguity by using login shell as a deterministic signal, reducing friction in migration plans.
+- Disposition: permanent
+- Approval: approved-by-spec
+
+### shadow_entries hash handling (design choice)
+- Go: Redacts shadow hashes to numbered tokens (`REDACTED_SHADOW_HASH_1`, etc.)
+- Rust: Replaces hash field with status string (`password_set`, `locked`, `disabled`, `no_password`)
+- Path: `$.users_groups.shadow_entries[*]`
+- Reason: Rust approach is more informative (tells you the account status) while being equally safe (hash never stored). Both prevent hash export.
+- Disposition: permanent
+- Approval: approved-by-spec
+
+### ssh_authorized_keys_refs key_count field (Rust enhancement)
+- Go: SSH key refs contain `user` and `path` only
+- Rust: Adds `key_count` field with the number of keys found
+- Path: `$.users_groups.ssh_authorized_keys_refs[*].key_count`
+- Reason: Rust inspector counts keys during presence detection. Additional field, no Go data lost.
+- Disposition: permanent
+- Approval: approved-by-spec
+
+### sudoers_rules includedir preservation (Rust enhancement)
+- Go: Filters out `#includedir` directives from sudoers rules
+- Rust: Preserves `#includedir` as a structural rule (useful for understanding sudoers layout)
+- Path: `$.users_groups.sudoers_rules[*]`
+- Reason: Include directives are structural information about how sudoers is organized. Preserving them aids migration planning.
 - Disposition: permanent
 - Approval: approved-by-spec
