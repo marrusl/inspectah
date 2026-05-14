@@ -205,7 +205,9 @@ fn snapshot_with_static_connections() -> InspectionSnapshot {
     snap.network = Some(NetworkSection {
         connections: vec![NMConnection {
             name: "bond0".into(),
-            method: "manual".into(),
+            // Use "static" — this is what classify_connection() actually emits
+            // for NM keyfile method=manual.
+            method: "static".into(),
             ..Default::default()
         }],
         ..Default::default()

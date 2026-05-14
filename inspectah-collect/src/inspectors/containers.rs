@@ -1052,10 +1052,10 @@ networks:
     #[test]
     fn compose_malformed_yaml_degraded() {
         // Malformed YAML from fixture -- indentation errors.
+        // The fixture has structural issues (misaligned keys) but no
+        // anchors/aliases, so the degraded path for anchors does NOT fire.
+        // This test verifies best-effort extraction without panic.
         let content = fixture("compose-malformed.yaml");
-        // The image extraction should still work on whatever it can parse,
-        // but the test verifies the inspector marks it as degraded.
-        // Using the full inspector path to test degraded status.
         let exec = MockExecutor::new()
             .with_dir("/opt", vec!["compose-malformed.yaml"])
             .with_file("/opt/compose-malformed.yaml", &content);
@@ -1064,11 +1064,20 @@ networks:
         let mut degraded = Vec::new();
         let files = find_compose_files(&exec, "/opt", &mut hints, &mut degraded);
 
-        // File should be discovered and parsed (best-effort).
-        assert_eq!(files.len(), 1);
-        // The malformed file from the fixture has structural issues but no
-        // anchors, so it won't trigger the anchor-based degraded reason here.
-        // The images extracted may be empty or partial.
+        // File should be discovered even when malformed.
+        assert_eq!(files.len(), 1, "malformed YAML must still be discovered");
+        // Best-effort image extraction: the "web" service with "image: nginx:latest"
+        // is structurally valid within the malformed file, so the extractor should
+        // find it despite the broken "ports"/"volumes" indentation below.
+        assert!(
+            files[0].images.iter().any(|s| s.image == "nginx:latest"),
+            "best-effort extraction should find nginx:latest, got: {:?}",
+            files[0].images
+        );
+        // Indentation errors without anchors do not produce a degraded reason --
+        // the simple line-scanner is tolerant of structural YAML issues.
+        // This is intentional: degraded_reasons fire only for features the
+        // scanner explicitly cannot handle (anchors/aliases).
     }
 
     #[test]
@@ -1219,6 +1228,11 @@ services:
 
     #[test]
     fn podman_ps_failure() {
+        // Podman failure is warning-only, NOT Degraded. This matches Go
+        // behavior: queryPodmanContainers returns warnings but no error.
+        // The snapshot shows Complete because podman is optional data —
+        // the inspector succeeds with quadlet/compose/flatpak even when
+        // podman is absent.
         let exec = MockExecutor::new().with_command(
             "podman ps --format json",
             ExecResult {
@@ -1235,6 +1249,11 @@ services:
         assert!(containers.is_empty());
         assert_eq!(warnings.len(), 1, "should warn when podman ps fails");
         assert!(warnings[0].message.contains("podman ps failed"));
+        // Intentionally no degraded_reasons push — matches Go parity.
+        assert!(
+            degraded.is_empty(),
+            "podman ps failure is warning-only, not Degraded (Go parity)"
+        );
     }
 
     #[test]

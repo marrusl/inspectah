@@ -22,7 +22,7 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
         let static_conns: Vec<_> = network
             .connections
             .iter()
-            .filter(|c| c.method == "manual")
+            .filter(|c| c.method == "manual" || c.method == "static")
             .collect();
 
         if !dhcp_conns.is_empty() {
