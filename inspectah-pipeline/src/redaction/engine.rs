@@ -135,7 +135,7 @@ pub fn mask_proxy_credentials<'a>(
     source_path: &str,
 ) -> (Cow<'a, str>, Option<RedactionFinding>) {
     // First: check for URL-shaped credentials (://user:password@host)
-    if let Some(caps) = PROXY_CRED_RE.captures(line) {
+    if PROXY_CRED_RE.is_match(line) {
         let masked = PROXY_CRED_RE
             .replace(line, "${1}[REDACTED]${3}")
             .into_owned();
@@ -144,10 +144,7 @@ pub fn mask_proxy_credentials<'a>(
             source: "proxy_credential".into(),
             kind: RedactionKind::Inline,
             pattern: "proxy_password".into(),
-            remediation: format!(
-                "Proxy config contains embedded credentials — use environment variables or auth file instead (source: {})",
-                caps.get(0).map_or("", |m| m.as_str())
-            ),
+            remediation: "Remove embedded credentials from proxy URL; use environment-specific auth configuration".to_string(),
             line: None,
             replacement: None,
             detection_method: DetectionMethod::Pattern,
@@ -158,7 +155,7 @@ pub fn mask_proxy_credentials<'a>(
     }
 
     // Second: check for bare proxy_password=VALUE lines (DNF/Yum config)
-    if let Some(caps) = PROXY_PASSWORD_KV_RE.captures(line) {
+    if PROXY_PASSWORD_KV_RE.is_match(line) {
         let masked = PROXY_PASSWORD_KV_RE
             .replace(line, "${1}[REDACTED]")
             .into_owned();
@@ -167,10 +164,7 @@ pub fn mask_proxy_credentials<'a>(
             source: "proxy_credential".into(),
             kind: RedactionKind::Inline,
             pattern: "proxy_password".into(),
-            remediation: format!(
-                "DNF/Yum proxy password in plaintext — use environment variables or auth file instead (source: {})",
-                caps.get(0).map_or("", |m| m.as_str())
-            ),
+            remediation: "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead".to_string(),
             line: None,
             replacement: None,
             detection_method: DetectionMethod::Pattern,
