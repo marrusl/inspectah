@@ -117,8 +117,7 @@ impl Inspector for ContainersInspector {
         // --- Compose files ---
         for search_dir in COMPOSE_SEARCH_DIRS {
             let root = format!("/{search_dir}");
-            let files =
-                find_compose_files(exec, &root, &mut hints, &mut degraded_reasons);
+            let files = find_compose_files(exec, &root, &mut hints, &mut degraded_reasons);
             section.compose_files.extend(files);
         }
 
@@ -374,9 +373,7 @@ fn filtered_walk(exec: &dyn Executor, dir: &str, cb: &mut dyn FnMut(&str, &str))
 
         // Check if this looks like a directory by trying to read_dir.
         // MockExecutor returns entries for registered dirs, NotFound otherwise.
-        if exec.read_dir(Path::new(&full_path)).is_ok()
-            || SKIP_DIR_NAMES.contains(&name.as_str())
-        {
+        if exec.read_dir(Path::new(&full_path)).is_ok() || SKIP_DIR_NAMES.contains(&name.as_str()) {
             if !SKIP_DIR_NAMES.contains(&name.as_str()) {
                 filtered_walk(exec, &full_path, cb);
             }
@@ -393,7 +390,9 @@ fn match_glob(pattern: &str, name: &str) -> bool {
     if let Some(star_pos) = pattern.find('*') {
         let prefix = &pattern[..star_pos];
         let suffix = &pattern[star_pos + 1..];
-        name.starts_with(prefix) && name.ends_with(suffix) && name.len() >= prefix.len() + suffix.len()
+        name.starts_with(prefix)
+            && name.ends_with(suffix)
+            && name.len() >= prefix.len() + suffix.len()
     } else {
         pattern == name
     }
@@ -448,10 +447,7 @@ fn extract_compose_images(content: &str) -> Vec<ComposeService> {
         }
 
         // Service-level key (e.g. "web:", "db:").
-        if service_indent > 0
-            && indent == service_indent as usize
-            && trimmed.ends_with(':')
-        {
+        if service_indent > 0 && indent == service_indent as usize && trimmed.ends_with(':') {
             current_service = trimmed.trim_end_matches(':').to_string();
             continue;
         }
@@ -460,7 +456,10 @@ fn extract_compose_images(content: &str) -> Vec<ComposeService> {
         if !current_service.is_empty() && indent > service_indent as usize {
             if let Some(caps) = image_re.captures(trimmed) {
                 if let Some(img_match) = caps.get(1) {
-                    let img = img_match.as_str().trim().trim_matches(|c| c == '\'' || c == '"');
+                    let img = img_match
+                        .as_str()
+                        .trim()
+                        .trim_matches(|c| c == '\'' || c == '"');
                     results.push(ComposeService {
                         service: current_service.clone(),
                         image: img.to_string(),
@@ -487,9 +486,7 @@ fn scan_compose_env_secrets(content: &str, path: &str, hints: &mut Vec<Redaction
                 let rel_path = path.strip_prefix('/').unwrap_or(path);
                 hints.push(RedactionHint {
                     path: rel_path.to_string(),
-                    reason: format!(
-                        "compose env var matches secret pattern '{pattern}'"
-                    ),
+                    reason: format!("compose env var matches secret pattern '{pattern}'"),
                     confidence: None,
                 });
                 break;
@@ -560,8 +557,7 @@ fn query_podman_containers(
                     return (containers, warnings);
                 }
                 Err(e) => {
-                    degraded_reasons
-                        .push(format!("podman inspect JSON parse error: {e}"));
+                    degraded_reasons.push(format!("podman inspect JSON parse error: {e}"));
                 }
             }
         }
@@ -711,10 +707,7 @@ fn parse_mounts(val: Option<&serde_json::Value>) -> Vec<ContainerMount> {
 
     let mut mounts = Vec::new();
     for item in arr {
-        let rw = item
-            .get("RW")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let rw = item.get("RW").and_then(|v| v.as_bool()).unwrap_or(true);
 
         mounts.push(ContainerMount {
             mount_type: string_field(item, &["Type"]),
@@ -752,7 +745,12 @@ fn detect_flatpak_apps(exec: &dyn Executor) -> Vec<FlatpakApp> {
 
     let result = exec.run(
         "flatpak",
-        &["list", "--app", "--system", "--columns=application,origin,branch"],
+        &[
+            "list",
+            "--app",
+            "--system",
+            "--columns=application,origin,branch",
+        ],
     );
     if result.exit_code != 0 {
         return Vec::new();
@@ -785,8 +783,14 @@ fn detect_flatpak_apps(exec: &dyn Executor) -> Vec<FlatpakApp> {
         }
 
         let app_id = parts[0].trim().to_string();
-        let origin = parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default();
-        let branch = parts.get(2).map(|s| s.trim().to_string()).unwrap_or_default();
+        let origin = parts
+            .get(1)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        let branch = parts
+            .get(2)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
 
         let remote = origin.clone();
         let remote_url = remote_urls.get(&origin).cloned().unwrap_or_default();
@@ -1321,8 +1325,7 @@ services:
           "HostConfig": {"RestartPolicy": {"Name": ""}}
         }]"#;
 
-        let data: Vec<serde_json::Value> =
-            serde_json::from_str(inspect_json).expect("valid JSON");
+        let data: Vec<serde_json::Value> = serde_json::from_str(inspect_json).expect("valid JSON");
         let mut hints = Vec::new();
         let _containers = parse_podman_inspect(&data, &mut hints);
 
@@ -1465,7 +1468,10 @@ com.visualstudio.code\tflathub\tstable
         };
 
         let result = inspector.inspect(&ctx);
-        assert!(result.is_ok(), "empty system should be Complete, not Degraded");
+        assert!(
+            result.is_ok(),
+            "empty system should be Complete, not Degraded"
+        );
 
         if let Ok(output) = result {
             if let SectionData::Containers(section) = output.section {

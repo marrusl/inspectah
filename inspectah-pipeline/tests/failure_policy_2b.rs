@@ -91,10 +91,7 @@ fn network_permission_denied_degraded() {
                 "Network inspector should be degraded when NM dir is unreadable"
             );
         }
-        other => panic!(
-            "Expected Completeness::Partial, got {:?}",
-            other
-        ),
+        other => panic!("Expected Completeness::Partial, got {:?}", other),
     }
 
     // Verify partial data was still collected (ip route output).
@@ -151,15 +148,14 @@ fn network_not_found_not_degraded() {
 #[test]
 fn containers_podman_json_parse_error_degraded() {
     // podman ps returns invalid JSON → Degraded.
-    let exec = minimal_rpm_mock(MockExecutor::new())
-        .with_command(
-            "podman ps --format json",
-            ExecResult {
-                exit_code: 0,
-                stdout: "not valid json{{{".into(),
-                ..Default::default()
-            },
-        );
+    let exec = minimal_rpm_mock(MockExecutor::new()).with_command(
+        "podman ps --format json",
+        ExecResult {
+            exit_code: 0,
+            stdout: "not valid json{{{".into(),
+            ..Default::default()
+        },
+    );
 
     let source = package_based_source();
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
@@ -177,10 +173,7 @@ fn containers_podman_json_parse_error_degraded() {
                 "Containers inspector should be degraded when podman JSON is invalid"
             );
         }
-        other => panic!(
-            "Expected Completeness::Partial, got {:?}",
-            other
-        ),
+        other => panic!("Expected Completeness::Partial, got {:?}", other),
     }
 
     // Containers section should still be present (with empty containers list).
@@ -256,10 +249,7 @@ fn users_passwd_failure_incomplete() {
                 "UsersGroups inspector should fail when passwd is unreadable"
             );
         }
-        other => panic!(
-            "Expected Completeness::Incomplete, got {:?}",
-            other
-        ),
+        other => panic!("Expected Completeness::Incomplete, got {:?}", other),
     }
 
     // No users section should be present (fatal failure).
@@ -301,10 +291,7 @@ fn users_shadow_permission_denied_degraded() {
                 "UsersGroups inspector should be degraded when shadow is unreadable"
             );
         }
-        other => panic!(
-            "Expected Completeness::Partial, got {:?}",
-            other
-        ),
+        other => panic!("Expected Completeness::Partial, got {:?}", other),
     }
 
     // Users section should be present with partial data (no shadow info).

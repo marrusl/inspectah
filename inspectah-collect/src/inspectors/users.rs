@@ -102,11 +102,11 @@ impl Inspector for UsersGroupsInspector {
         // /etc/passwd — non-system users (UID >= 1000 and < 60000)
         // -------------------------------------------------------------------
         let mut non_system_users: HashMap<String, bool> = HashMap::new();
-        let passwd_text = exec
-            .read_file(Path::new("/etc/passwd"))
-            .map_err(|e| InspectorError::Failed {
-                reason: format!("cannot read /etc/passwd: {e}"),
-            })?;
+        let passwd_text =
+            exec.read_file(Path::new("/etc/passwd"))
+                .map_err(|e| InspectorError::Failed {
+                    reason: format!("cannot read /etc/passwd: {e}"),
+                })?;
         parse_passwd(&passwd_text, &mut section, &mut non_system_users);
 
         // Classify and assign strategies (two-strategy auto-detect).
@@ -124,10 +124,7 @@ impl Inspector for UsersGroupsInspector {
                     "classification".to_string(),
                     serde_json::Value::String(classification),
                 );
-                map.insert(
-                    "strategy".to_string(),
-                    serde_json::Value::String(strategy),
-                );
+                map.insert("strategy".to_string(), serde_json::Value::String(strategy));
             }
         }
 
@@ -145,8 +142,7 @@ impl Inspector for UsersGroupsInspector {
                 // Silent skip — unusual but valid.
             }
             Err(e) => {
-                degraded_reasons
-                    .push(format!("cannot read /etc/shadow: {e}"));
+                degraded_reasons.push(format!("cannot read /etc/shadow: {e}"));
             }
         }
 
@@ -176,8 +172,18 @@ impl Inspector for UsersGroupsInspector {
         // -------------------------------------------------------------------
         // /etc/subuid and /etc/subgid
         // -------------------------------------------------------------------
-        parse_subid_file(exec, "/etc/subuid", &mut section.subuid_entries, &non_system_users);
-        parse_subid_file(exec, "/etc/subgid", &mut section.subgid_entries, &non_system_users);
+        parse_subid_file(
+            exec,
+            "/etc/subuid",
+            &mut section.subuid_entries,
+            &non_system_users,
+        );
+        parse_subid_file(
+            exec,
+            "/etc/subgid",
+            &mut section.subgid_entries,
+            &non_system_users,
+        );
 
         // -------------------------------------------------------------------
         // /etc/sudoers and /etc/sudoers.d/*
@@ -310,12 +316,7 @@ fn parse_shadow(
         } else {
             vec![]
         };
-        let safe_entry = format!(
-            "{}:{}:{}",
-            username,
-            status,
-            remaining_fields.join(":")
-        );
+        let safe_entry = format!("{}:{}:{}", username, status, remaining_fields.join(":"));
         section.shadow_entries.push(safe_entry);
     }
 }
@@ -476,14 +477,14 @@ fn extract_sudoers_rules(
         for pattern in SECRET_PATTERNS {
             if upper.contains(pattern) {
                 // Skip false positive: NOPASSWD/PASSWD are policy directives, not secrets.
-                if pattern == &"PASSWORD" && (upper.contains("NOPASSWD") || upper.contains("PASSWD:")) {
+                if pattern == &"PASSWORD"
+                    && (upper.contains("NOPASSWD") || upper.contains("PASSWD:"))
+                {
                     continue;
                 }
                 hints.push(RedactionHint {
                     path: "sudoers".to_string(),
-                    reason: format!(
-                        "sudoers rule matches secret pattern '{pattern}'"
-                    ),
+                    reason: format!("sudoers rule matches secret pattern '{pattern}'"),
                     confidence: None,
                 });
                 break;
@@ -575,10 +576,7 @@ fn assign_group_strategies(section: &mut UserGroupSection, override_strategy: &O
             }
         };
         if let serde_json::Value::Object(ref mut map) = group {
-            map.insert(
-                "strategy".to_string(),
-                serde_json::Value::String(strategy),
-            );
+            map.insert("strategy".to_string(), serde_json::Value::String(strategy));
         }
     }
 }
@@ -647,11 +645,11 @@ high:x:65534:65534:High:/home/high:/bin/bash
         parse_passwd(text, &mut section, &mut non_system);
 
         assert_eq!(section.users.len(), 2); // 1000 and 30000
-        assert!(!non_system.contains_key("low"));    // 999 excluded
-        assert!(non_system.contains_key("min"));     // 1000 included
-        assert!(non_system.contains_key("mid"));     // 30000 included
+        assert!(!non_system.contains_key("low")); // 999 excluded
+        assert!(non_system.contains_key("min")); // 1000 included
+        assert!(non_system.contains_key("mid")); // 30000 included
         assert!(!non_system.contains_key("max_excl")); // 60000 excluded
-        assert!(!non_system.contains_key("high"));   // 65534 excluded
+        assert!(!non_system.contains_key("high")); // 65534 excluded
     }
 
     // -----------------------------------------------------------------------
@@ -700,8 +698,10 @@ high:x:65534:65534:High:/home/high:/bin/bash
 
     #[test]
     fn strategy_override_useradd() {
-        let exec = MockExecutor::new()
-            .with_file("/etc/passwd", "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n");
+        let exec = MockExecutor::new().with_file(
+            "/etc/passwd",
+            "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
+        );
 
         let source = pkg_source();
         let ctx = InspectionContext {
@@ -729,8 +729,10 @@ high:x:65534:65534:High:/home/high:/bin/bash
 
     #[test]
     fn strategy_override_kickstart() {
-        let exec = MockExecutor::new()
-            .with_file("/etc/passwd", "bob:x:1001:1001:Bob:/home/bob:/sbin/nologin\n");
+        let exec = MockExecutor::new().with_file(
+            "/etc/passwd",
+            "bob:x:1001:1001:Bob:/home/bob:/sbin/nologin\n",
+        );
 
         let source = pkg_source();
         let ctx = InspectionContext {
@@ -768,8 +770,12 @@ high:x:65534:65534:High:/home/high:/bin/bash
         section.users.push(serde_json::json!({
             "name": "bob", "gid": 1001, "strategy": "sysusers"
         }));
-        section.groups.push(serde_json::json!({"name": "alice", "gid": 1000}));
-        section.groups.push(serde_json::json!({"name": "bob", "gid": 1001}));
+        section
+            .groups
+            .push(serde_json::json!({"name": "alice", "gid": 1000}));
+        section
+            .groups
+            .push(serde_json::json!({"name": "bob", "gid": 1001}));
 
         assign_group_strategies(&mut section, &None);
 
@@ -781,7 +787,9 @@ high:x:65534:65534:High:/home/high:/bin/bash
     fn group_strategy_default_sysusers() {
         let mut section = UserGroupSection::default();
         // Group with no matching user.
-        section.groups.push(serde_json::json!({"name": "orphan", "gid": 9999}));
+        section
+            .groups
+            .push(serde_json::json!({"name": "orphan", "gid": 9999}));
 
         assign_group_strategies(&mut section, &None);
 
@@ -794,7 +802,9 @@ high:x:65534:65534:High:/home/high:/bin/bash
         section.users.push(serde_json::json!({
             "name": "alice", "gid": 1000, "strategy": "blueprint"
         }));
-        section.groups.push(serde_json::json!({"name": "alice", "gid": 1000}));
+        section
+            .groups
+            .push(serde_json::json!({"name": "alice", "gid": 1000}));
 
         assign_group_strategies(&mut section, &Some("useradd".to_string()));
 
@@ -853,10 +863,22 @@ high:x:65534:65534:High:/home/high:/bin/bash
         // Must contain status, not the hash.
         assert!(entry.contains(":password_set:"));
         // Must NOT contain any hash prefix.
-        assert!(!entry.contains("$6$"), "shadow entry must not contain hash: {entry}");
-        assert!(!entry.contains("$y$"), "shadow entry must not contain yescrypt hash");
-        assert!(!entry.contains("$5$"), "shadow entry must not contain sha256 hash");
-        assert!(!entry.contains("$2b$"), "shadow entry must not contain bcrypt hash");
+        assert!(
+            !entry.contains("$6$"),
+            "shadow entry must not contain hash: {entry}"
+        );
+        assert!(
+            !entry.contains("$y$"),
+            "shadow entry must not contain yescrypt hash"
+        );
+        assert!(
+            !entry.contains("$5$"),
+            "shadow entry must not contain sha256 hash"
+        );
+        assert!(
+            !entry.contains("$2b$"),
+            "shadow entry must not contain bcrypt hash"
+        );
     }
 
     #[test]
@@ -877,17 +899,35 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
         parse_shadow(text, &mut section, &non_system, &mut hints);
 
         let json = serde_json::to_string(&section).expect("serialize");
-        assert!(!json.contains("$6$"), "JSON must not contain $6$ hash: {json}");
-        assert!(!json.contains("$y$"), "JSON must not contain $y$ hash: {json}");
-        assert!(!json.contains("$5$"), "JSON must not contain $5$ hash: {json}");
-        assert!(!json.contains("$2b$"), "JSON must not contain $2b$ hash: {json}");
-        assert!(!json.contains("longhashabcdef"), "JSON must not contain hash body");
+        assert!(
+            !json.contains("$6$"),
+            "JSON must not contain $6$ hash: {json}"
+        );
+        assert!(
+            !json.contains("$y$"),
+            "JSON must not contain $y$ hash: {json}"
+        );
+        assert!(
+            !json.contains("$5$"),
+            "JSON must not contain $5$ hash: {json}"
+        );
+        assert!(
+            !json.contains("$2b$"),
+            "JSON must not contain $2b$ hash: {json}"
+        );
+        assert!(
+            !json.contains("longhashabcdef"),
+            "JSON must not contain hash body"
+        );
     }
 
     #[test]
     fn shadow_permission_denied_degraded() {
         let exec = MockExecutor::new()
-            .with_file("/etc/passwd", "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n")
+            .with_file(
+                "/etc/passwd",
+                "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
+            )
             .with_file_error("/etc/shadow", std::io::ErrorKind::PermissionDenied);
 
         let source = pkg_source();
@@ -909,7 +949,10 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
     #[test]
     fn shadow_not_found_silent_skip() {
         let exec = MockExecutor::new()
-            .with_file("/etc/passwd", "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n")
+            .with_file(
+                "/etc/passwd",
+                "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
+            )
             .with_file("/etc/group", "alice:x:1000:\n");
         // /etc/shadow not registered → NotFound from MockExecutor.
 
@@ -922,7 +965,10 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
         let result = UsersGroupsInspector::new().inspect(&ctx);
 
         // Should succeed — missing shadow is a silent skip.
-        assert!(result.is_ok(), "missing shadow should not cause failure: {result:?}");
+        assert!(
+            result.is_ok(),
+            "missing shadow should not cause failure: {result:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -948,8 +994,14 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
         parse_gshadow(text, &mut section, &non_system);
 
         let entry = &section.gshadow_entries[0];
-        assert!(!entry.contains("$6$"), "gshadow must not contain hash: {entry}");
-        assert!(entry.contains(":!:"), "gshadow must have ! as password field");
+        assert!(
+            !entry.contains("$6$"),
+            "gshadow must not contain hash: {entry}"
+        );
+        assert!(
+            entry.contains(":!:"),
+            "gshadow must have ! as password field"
+        );
     }
 
     #[test]
@@ -960,15 +1012,18 @@ grp1:$6$salt$hash1:admin1:mem1,mem2
 grp2:$y$salt$hash2:admin2:mem3
 ";
         let mut section = UserGroupSection::default();
-        let non_system = HashMap::from([
-            ("grp1".to_string(), true),
-            ("grp2".to_string(), true),
-        ]);
+        let non_system = HashMap::from([("grp1".to_string(), true), ("grp2".to_string(), true)]);
         parse_gshadow(text, &mut section, &non_system);
 
         let json = serde_json::to_string(&section).expect("serialize");
-        assert!(!json.contains("$6$"), "JSON must not contain $6$ hash: {json}");
-        assert!(!json.contains("$y$"), "JSON must not contain $y$ hash: {json}");
+        assert!(
+            !json.contains("$6$"),
+            "JSON must not contain $6$ hash: {json}"
+        );
+        assert!(
+            !json.contains("$y$"),
+            "JSON must not contain $y$ hash: {json}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1022,7 +1077,10 @@ nobody:x:65534:
     #[test]
     fn subuid_subgid_parsing() {
         let exec = MockExecutor::new()
-            .with_file("/etc/subuid", "alice:100000:65536\nbob:165536:65536\nroot:0:65536\n")
+            .with_file(
+                "/etc/subuid",
+                "alice:100000:65536\nbob:165536:65536\nroot:0:65536\n",
+            )
             .with_file("/etc/subgid", "alice:100000:65536\ncharlie:231072:65536\n");
 
         let non_system = HashMap::from([
@@ -1061,9 +1119,15 @@ nobody:x:65534:
         assert_eq!(section.sudoers_rules.len(), 3);
         assert!(section.sudoers_rules.iter().any(|r| r.contains("root")));
         assert!(section.sudoers_rules.iter().any(|r| r.contains("%wheel")));
-        assert!(section.sudoers_rules.iter().any(|r| r.starts_with("#includedir")));
+        assert!(section
+            .sudoers_rules
+            .iter()
+            .any(|r| r.starts_with("#includedir")));
         // Defaults and comments should be excluded.
-        assert!(!section.sudoers_rules.iter().any(|r| r.starts_with("Defaults")));
+        assert!(!section
+            .sudoers_rules
+            .iter()
+            .any(|r| r.starts_with("Defaults")));
     }
 
     #[test]
@@ -1090,17 +1154,19 @@ nobody:x:65534:
 
     #[test]
     fn sudoers_redaction_hint_for_password() {
-        let exec = MockExecutor::new()
-            .with_file(
-                "/etc/sudoers",
-                "deploy ALL=(ALL) /usr/bin/env DB_PASSWORD=secret /opt/deploy.sh\n",
-            );
+        let exec = MockExecutor::new().with_file(
+            "/etc/sudoers",
+            "deploy ALL=(ALL) /usr/bin/env DB_PASSWORD=secret /opt/deploy.sh\n",
+        );
 
         let mut section = UserGroupSection::default();
         let mut hints = Vec::new();
         parse_sudoers(&exec, &mut section, &mut hints);
 
-        assert!(!hints.is_empty(), "PASSWORD in sudoers should produce a RedactionHint");
+        assert!(
+            !hints.is_empty(),
+            "PASSWORD in sudoers should produce a RedactionHint"
+        );
         assert!(hints[0].reason.contains("PASSWORD"));
     }
 
@@ -1116,7 +1182,10 @@ nobody:x:65534:
         let mut hints = Vec::new();
         parse_sudoers(&exec, &mut section, &mut hints);
 
-        assert!(hints.is_empty(), "NOPASSWD directives should NOT produce false-positive hints");
+        assert!(
+            hints.is_empty(),
+            "NOPASSWD directives should NOT produce false-positive hints"
+        );
         assert_eq!(section.sudoers_rules.len(), 2);
     }
 
@@ -1148,8 +1217,14 @@ nobody:x:65534:
 
         // Must NOT contain any key content.
         let json = serde_json::to_string(ref_entry).expect("serialize");
-        assert!(!json.contains("AAAAB3"), "SSH ref must not contain key content");
-        assert!(!json.contains("ssh-rsa"), "SSH ref must not contain key type");
+        assert!(
+            !json.contains("AAAAB3"),
+            "SSH ref must not contain key content"
+        );
+        assert!(
+            !json.contains("ssh-rsa"),
+            "SSH ref must not contain key type"
+        );
     }
 
     #[test]
@@ -1164,7 +1239,10 @@ nobody:x:65534:
         let exec = MockExecutor::new();
         collect_ssh_keys(&exec, &mut section);
 
-        assert!(section.ssh_authorized_keys_refs.is_empty(), "inaccessible SSH should be skipped");
+        assert!(
+            section.ssh_authorized_keys_refs.is_empty(),
+            "inaccessible SSH should be skipped"
+        );
     }
 
     // -----------------------------------------------------------------------

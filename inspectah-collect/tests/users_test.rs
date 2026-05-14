@@ -32,24 +32,15 @@ fn pkg_source() -> SourceSystem {
 
 // ── Fixtures ────────────────────────────────────────────────────────
 
-const PASSWD_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/passwd");
-const SHADOW_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/shadow");
-const GROUP_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/group");
-const GSHADOW_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/gshadow");
-const SUBUID_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/subuid");
-const SUBGID_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/subgid");
-const SUDOERS_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/sudoers");
-const SUDOERSD_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/sudoers.d-webapp");
-const SSH_KEYS_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/users/authorized_keys");
+const PASSWD_FIXTURE: &str = include_str!("../../testdata/fixtures/users/passwd");
+const SHADOW_FIXTURE: &str = include_str!("../../testdata/fixtures/users/shadow");
+const GROUP_FIXTURE: &str = include_str!("../../testdata/fixtures/users/group");
+const GSHADOW_FIXTURE: &str = include_str!("../../testdata/fixtures/users/gshadow");
+const SUBUID_FIXTURE: &str = include_str!("../../testdata/fixtures/users/subuid");
+const SUBGID_FIXTURE: &str = include_str!("../../testdata/fixtures/users/subgid");
+const SUDOERS_FIXTURE: &str = include_str!("../../testdata/fixtures/users/sudoers");
+const SUDOERSD_FIXTURE: &str = include_str!("../../testdata/fixtures/users/sudoers.d-webapp");
+const SSH_KEYS_FIXTURE: &str = include_str!("../../testdata/fixtures/users/authorized_keys");
 
 // ── Mock builder ────────────────────────────────────────────────────
 
@@ -65,10 +56,7 @@ fn users_happy_mock() -> MockExecutor {
         .with_dir("/etc/sudoers.d", vec!["webapp"])
         .with_file("/etc/sudoers.d/webapp", SUDOERSD_FIXTURE)
         // SSH keys for alice (the only user with a login shell /bin/bash)
-        .with_file(
-            "/home/alice/.ssh/authorized_keys",
-            SSH_KEYS_FIXTURE,
-        )
+        .with_file("/home/alice/.ssh/authorized_keys", SSH_KEYS_FIXTURE)
 }
 
 /// Extract UserGroupSection from an inspector result, handling both Ok and Degraded.
@@ -113,11 +101,7 @@ fn test_users_inspector_happy_path() {
         !section.users.is_empty(),
         "inspector must find users from passwd fixture"
     );
-    assert_eq!(
-        section.users.len(),
-        5,
-        "fixture has 5 non-system users"
-    );
+    assert_eq!(section.users.len(), 5, "fixture has 5 non-system users");
 
     // Groups
     assert!(
@@ -367,10 +351,7 @@ fn test_users_inspector_degraded_shadow() {
             "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
         )
         .with_file_error("/etc/shadow", std::io::ErrorKind::PermissionDenied)
-        .with_file(
-            "/etc/group",
-            "alice:x:1000:\n",
-        );
+        .with_file("/etc/group", "alice:x:1000:\n");
 
     let source = pkg_source();
     let ctx = InspectionContext {

@@ -49,11 +49,9 @@ fn proxy_url_with_password_masked_inline() {
 
     // Finding must be recorded
     assert!(
-        snapshot
-            .redactions
-            .iter()
-            .any(|f| f.finding_kind == Some(FindingKind::Password)
-                && f.source == "proxy_credential"),
+        snapshot.redactions.iter().any(
+            |f| f.finding_kind == Some(FindingKind::Password) && f.source == "proxy_credential"
+        ),
         "proxy credential finding must be recorded"
     );
 }
@@ -87,10 +85,7 @@ fn podman_env_with_secret_redacted() {
 
     // Finding must be recorded
     assert!(
-        snapshot
-            .redactions
-            .iter()
-            .any(|f| f.path.contains("mydb")),
+        snapshot.redactions.iter().any(|f| f.path.contains("mydb")),
         "finding must reference container name"
     );
 }
@@ -126,10 +121,7 @@ fn sudoers_with_embedded_password_redacted() {
 
     // Finding must be recorded
     assert!(
-        snapshot
-            .redactions
-            .iter()
-            .any(|f| f.path == "/etc/sudoers"),
+        snapshot.redactions.iter().any(|f| f.path == "/etc/sudoers"),
         "finding must reference /etc/sudoers"
     );
 }
