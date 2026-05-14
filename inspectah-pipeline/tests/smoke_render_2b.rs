@@ -14,9 +14,7 @@
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
-use inspectah_core::types::containers::{
-    ComposeFile, ContainerSection, FlatpakApp, QuadletUnit,
-};
+use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
 use inspectah_core::types::network::{
     FirewallZone, NMConnection, NetworkSection, ProxyEntry, StaticRouteFile,
 };
@@ -440,9 +438,7 @@ fn configtree_firewall_zones_materialized() {
 
     configtree::write_config_tree(&snap, dir.path()).unwrap();
 
-    let public_path = dir
-        .path()
-        .join("config/etc/firewalld/zones/public.xml");
+    let public_path = dir.path().join("config/etc/firewalld/zones/public.xml");
     assert!(
         public_path.exists(),
         "firewall zone public.xml must be materialized under config/etc/firewalld/zones/"
@@ -453,9 +449,7 @@ fn configtree_firewall_zones_materialized() {
         "firewall zone content must match snapshot data"
     );
 
-    let internal_path = dir
-        .path()
-        .join("config/etc/firewalld/zones/internal.xml");
+    let internal_path = dir.path().join("config/etc/firewalld/zones/internal.xml");
     assert!(
         internal_path.exists(),
         "firewall zone internal.xml must be materialized"

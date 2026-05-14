@@ -539,8 +539,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Scan proxy lines for embedded credentials (dedicated masker, NOT generic pass).
     if let Some(ref mut network) = snapshot.network {
         for entry in &mut network.proxy {
-            let (masked, finding) =
-                mask_proxy_credentials(&entry.line, &entry.source);
+            let (masked, finding) = mask_proxy_credentials(&entry.line, &entry.source);
             if let Some(f) = finding {
                 entry.line = masked.into_owned();
                 all_findings.push(f);
@@ -555,7 +554,8 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 let redacted = redact_string(env_entry);
                 if let Cow::Owned(ref new_val) = redacted {
                     // Collect findings for each pattern match.
-                    let findings = scan_content(env_entry, &format!("container:{}", container.name));
+                    let findings =
+                        scan_content(env_entry, &format!("container:{}", container.name));
                     all_findings.extend(findings);
                     *env_entry = new_val.clone();
                 }

@@ -350,9 +350,7 @@ fn collect_firewall_zones(
             }
             None => {
                 // Malformed or unsupported XML -- degrade but continue.
-                degraded_reasons.push(format!(
-                    "Failed to parse firewall zone {name} -- skipped"
-                ));
+                degraded_reasons.push(format!("Failed to parse firewall zone {name} -- skipped"));
             }
         }
     }
@@ -678,7 +676,12 @@ fn collect_proxy(
 // ---------------------------------------------------------------------------
 
 /// Proxy-related keys in dnf.conf/yum.conf.
-const DNF_PROXY_KEYS: &[&str] = &["proxy", "proxy_username", "proxy_password", "proxy_auth_method"];
+const DNF_PROXY_KEYS: &[&str] = &[
+    "proxy",
+    "proxy_username",
+    "proxy_password",
+    "proxy_auth_method",
+];
 
 /// Scans dnf.conf and yum.conf for proxy settings.
 fn collect_dnf_proxy(
@@ -691,10 +694,7 @@ fn collect_dnf_proxy(
             Ok(c) => c,
             Err(_) => continue,
         };
-        let rel_path = conf_path
-            .strip_prefix('/')
-            .unwrap_or(conf_path)
-            .to_string();
+        let rel_path = conf_path.strip_prefix('/').unwrap_or(conf_path).to_string();
         for line in content.lines() {
             let stripped = line.trim();
             if stripped.starts_with('#') || !stripped.contains('=') {
@@ -735,9 +735,7 @@ mod tests {
         let workspace_root = std::path::Path::new(manifest_dir)
             .parent()
             .unwrap_or(std::path::Path::new(manifest_dir));
-        let path = workspace_root
-            .join("testdata/fixtures/network")
-            .join(name);
+        let path = workspace_root.join("testdata/fixtures/network").join(name);
         std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("failed to read fixture {}: {e}", path.display()))
     }
@@ -756,7 +754,8 @@ mod tests {
 
     #[test]
     fn nm_connection_static() {
-        let text = "[connection]\ntype=bond\n\n[ipv4]\nmethod=manual\naddress1=10.0.0.5/24,10.0.0.1\n";
+        let text =
+            "[connection]\ntype=bond\n\n[ipv4]\nmethod=manual\naddress1=10.0.0.5/24,10.0.0.1\n";
         let (method, conn_type) = classify_connection(text);
         assert_eq!(method, "static", "method=manual should map to static");
         assert_eq!(conn_type, "bond");
@@ -854,7 +853,10 @@ mod tests {
         let xml = fixture("unsupported-zone.xml");
         let result = parse_zone_xml(&xml);
         // Contains xmlns: and CDATA which our scanner doesn't support.
-        assert!(result.is_none(), "unsupported XML features should return None");
+        assert!(
+            result.is_none(),
+            "unsupported XML features should return None"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -864,8 +866,7 @@ mod tests {
     #[test]
     fn firewall_direct_rules() {
         let xml = fixture("direct.xml");
-        let exec =
-            MockExecutor::new().with_file("/etc/firewalld/direct.xml", &xml);
+        let exec = MockExecutor::new().with_file("/etc/firewalld/direct.xml", &xml);
 
         let mut section = NetworkSection::default();
         collect_firewall_direct_rules(&exec, &mut section);
@@ -927,7 +928,11 @@ mod tests {
         collect_ip_routes(&exec, &mut section, &mut warnings);
 
         assert!(section.ip_routes.is_empty());
-        assert_eq!(warnings.len(), 2, "should warn for both ip route and ip rule failures");
+        assert_eq!(
+            warnings.len(),
+            2,
+            "should warn for both ip route and ip rule failures"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1012,7 +1017,11 @@ mod tests {
         assert_eq!(section.proxy.len(), 3); // proxy, proxy_username, proxy_password
         assert_eq!(section.proxy[0].source, "etc/dnf/dnf.conf");
         assert!(section.proxy[0].line.contains("proxy="));
-        assert_eq!(hints.len(), 1, "should emit RedactionHint for proxy_password");
+        assert_eq!(
+            hints.len(),
+            1,
+            "should emit RedactionHint for proxy_password"
+        );
         assert!(hints[0].reason.contains("proxy password"));
     }
 

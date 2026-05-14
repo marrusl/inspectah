@@ -300,7 +300,10 @@ fn test_network_field_coverage() {
     let conn = &section.connections[0];
     assert!(!conn.path.is_empty(), "connection path must be populated");
     assert!(!conn.name.is_empty(), "connection name must be populated");
-    assert!(!conn.method.is_empty(), "connection method must be populated");
+    assert!(
+        !conn.method.is_empty(),
+        "connection method must be populated"
+    );
     assert!(
         !conn.conn_type.is_empty(),
         "connection type must be populated"
@@ -313,10 +316,7 @@ fn test_network_field_coverage() {
     );
     let zone = &section.firewall_zones[0];
     assert!(!zone.name.is_empty(), "zone name must be populated");
-    assert!(
-        !zone.services.is_empty(),
-        "zone services must be populated"
-    );
+    assert!(!zone.services.is_empty(), "zone services must be populated");
 
     // firewall_direct_rules: empty on this host
     assert!(
@@ -405,10 +405,7 @@ fn test_containers_field_coverage() {
     );
     let cf = &section.compose_files[0];
     assert!(!cf.path.is_empty(), "compose path must be populated");
-    assert!(
-        !cf.images.is_empty(),
-        "compose images must be populated"
-    );
+    assert!(!cf.images.is_empty(), "compose images must be populated");
 
     // running_containers: 1 running container
     assert!(

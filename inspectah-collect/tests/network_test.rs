@@ -28,24 +28,15 @@ fn pkg_source() -> SourceSystem {
 
 // ── Fixtures ────────────────────────────────────────────────────────
 
-const NM_CONN_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/eth0.nmconnection");
-const PUBLIC_ZONE_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/public-zone.xml");
-const DIRECT_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/direct.xml");
-const HOSTS_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/hosts");
-const RESOLV_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/resolv-nm.conf");
-const PROXY_ENV_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/proxy-environment");
-const DNF_PROXY_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/dnf-proxy.conf");
-const IP_ROUTE_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/ip-route.txt");
-const IP_RULE_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/network/ip-rule.txt");
+const NM_CONN_FIXTURE: &str = include_str!("../../testdata/fixtures/network/eth0.nmconnection");
+const PUBLIC_ZONE_FIXTURE: &str = include_str!("../../testdata/fixtures/network/public-zone.xml");
+const DIRECT_FIXTURE: &str = include_str!("../../testdata/fixtures/network/direct.xml");
+const HOSTS_FIXTURE: &str = include_str!("../../testdata/fixtures/network/hosts");
+const RESOLV_FIXTURE: &str = include_str!("../../testdata/fixtures/network/resolv-nm.conf");
+const PROXY_ENV_FIXTURE: &str = include_str!("../../testdata/fixtures/network/proxy-environment");
+const DNF_PROXY_FIXTURE: &str = include_str!("../../testdata/fixtures/network/dnf-proxy.conf");
+const IP_ROUTE_FIXTURE: &str = include_str!("../../testdata/fixtures/network/ip-route.txt");
+const IP_RULE_FIXTURE: &str = include_str!("../../testdata/fixtures/network/ip-rule.txt");
 
 // ── Mock builder ────────────────────────────────────────────────────
 
@@ -243,10 +234,7 @@ fn test_network_inspector_degraded_permissions() {
             "/etc/NetworkManager/system-connections",
             std::io::ErrorKind::PermissionDenied,
         )
-        .with_dir_error(
-            "/etc/firewalld/zones",
-            std::io::ErrorKind::PermissionDenied,
-        )
+        .with_dir_error("/etc/firewalld/zones", std::io::ErrorKind::PermissionDenied)
         .with_command(
             "ip route",
             ExecResult {

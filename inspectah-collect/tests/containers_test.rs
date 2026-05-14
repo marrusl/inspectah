@@ -32,10 +32,8 @@ const QUADLET_CONTAINER_FIXTURE: &str =
     include_str!("../../testdata/fixtures/containers/webapp.container");
 const QUADLET_VOLUME_FIXTURE: &str =
     include_str!("../../testdata/fixtures/containers/webapp-data.volume");
-const COMPOSE_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/containers/compose.yaml");
-const PODMAN_PS_FIXTURE: &str =
-    include_str!("../../testdata/fixtures/containers/podman-ps.json");
+const COMPOSE_FIXTURE: &str = include_str!("../../testdata/fixtures/containers/compose.yaml");
+const PODMAN_PS_FIXTURE: &str = include_str!("../../testdata/fixtures/containers/podman-ps.json");
 const PODMAN_INSPECT_FIXTURE: &str =
     include_str!("../../testdata/fixtures/containers/podman-inspect.json");
 // ── Mock builder ────────────────────────────────────────────────────
@@ -242,10 +240,7 @@ fn test_containers_inspector_empty_system() {
         section.running_containers.is_empty(),
         "podman failure means no containers"
     );
-    assert!(
-        section.flatpak_apps.is_empty(),
-        "no flatpak means no apps"
-    );
+    assert!(section.flatpak_apps.is_empty(), "no flatpak means no apps");
 }
 
 /// Podman failure -> Degraded output with warning.
@@ -297,7 +292,9 @@ fn test_containers_inspector_degraded_podman() {
                 "partial output should still contain a ContainerSection"
             );
         }
-        Ok(_) => panic!("expected Degraded error when quadlet dir is PermissionDenied and podman JSON is bad"),
+        Ok(_) => panic!(
+            "expected Degraded error when quadlet dir is PermissionDenied and podman JSON is bad"
+        ),
         Err(e) => panic!("expected Degraded, got: {e}"),
     }
 }
