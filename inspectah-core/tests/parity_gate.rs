@@ -12,10 +12,13 @@
 
 use inspectah_core::normalize::{diff_snapshots, load_divergence_allowlist};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::containers::ContainerSection;
 use inspectah_core::types::kernelboot::KernelBootSection;
+use inspectah_core::types::network::NetworkSection;
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::services::ServiceSection;
 use inspectah_core::types::storage::StorageSection;
+use inspectah_core::types::users::UserGroupSection;
 use std::collections::BTreeSet;
 
 /// Shared divergence allowlist, loaded once per test from the canonical source.
@@ -258,6 +261,262 @@ fn test_kernelboot_field_coverage() {
     );
 }
 
+// ── Network section serde roundtrip ──────────────────────────────────
+
+/// Proves Go golden JSON deserializes into NetworkSection and
+/// re-serializes without undocumented field loss.
+/// NOTE: Golden is provisional — will be replaced with real Go output
+/// during host validation (Task 10).
+#[test]
+fn test_network_serde_roundtrip() {
+    let golden = include_str!("../../testdata/golden/go-v13-network-section.json");
+
+    let section: NetworkSection =
+        serde_json::from_str(golden).expect("golden must deserialize into NetworkSection");
+
+    let rust_json = serde_json::to_string_pretty(&section).unwrap();
+    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
+
+    assert!(
+        undocumented.is_empty(),
+        "Network section has undocumented divergences:\n{}",
+        format_diffs(&undocumented)
+    );
+}
+
+/// Validates provisional golden network structure matches expected field layout.
+/// Provisional data: 2 NM connections, 1 firewall zone, 2 ip_routes,
+/// 1 hosts_addition, 1 proxy entry.
+#[test]
+fn test_network_field_coverage() {
+    let golden = include_str!("../../testdata/golden/go-v13-network-section.json");
+    let section: NetworkSection = serde_json::from_str(golden).unwrap();
+
+    // connections: 2 NM connection profiles
+    assert!(
+        !section.connections.is_empty(),
+        "golden must contain connections"
+    );
+    let conn = &section.connections[0];
+    assert!(!conn.path.is_empty(), "connection path must be populated");
+    assert!(!conn.name.is_empty(), "connection name must be populated");
+    assert!(!conn.method.is_empty(), "connection method must be populated");
+    assert!(
+        !conn.conn_type.is_empty(),
+        "connection type must be populated"
+    );
+
+    // firewall_zones: 1 zone on this provisional host
+    assert!(
+        !section.firewall_zones.is_empty(),
+        "golden must contain firewall_zones"
+    );
+    let zone = &section.firewall_zones[0];
+    assert!(!zone.name.is_empty(), "zone name must be populated");
+    assert!(
+        !zone.services.is_empty(),
+        "zone services must be populated"
+    );
+
+    // firewall_direct_rules: empty on this host
+    assert!(
+        section.firewall_direct_rules.is_empty(),
+        "provisional golden has no firewall_direct_rules"
+    );
+
+    // static_routes: empty on this host
+    assert!(
+        section.static_routes.is_empty(),
+        "provisional golden has no static_routes"
+    );
+
+    // ip_routes: 2 routes
+    assert!(
+        !section.ip_routes.is_empty(),
+        "golden must contain ip_routes"
+    );
+
+    // resolv_provenance: should be populated
+    assert!(
+        !section.resolv_provenance.is_empty(),
+        "resolv_provenance must be populated"
+    );
+
+    // hosts_additions: 1 custom entry
+    assert!(
+        !section.hosts_additions.is_empty(),
+        "golden must contain hosts_additions"
+    );
+
+    // proxy: 1 proxy entry
+    assert!(!section.proxy.is_empty(), "golden must contain proxy");
+    let proxy = &section.proxy[0];
+    assert!(!proxy.source.is_empty(), "proxy source must be populated");
+    assert!(!proxy.line.is_empty(), "proxy line must be populated");
+}
+
+// ── Containers section serde roundtrip ──────────────────────────────
+
+/// Proves Go golden JSON deserializes into ContainerSection and
+/// re-serializes without undocumented field loss.
+/// NOTE: Golden is provisional — will be replaced with real Go output
+/// during host validation (Task 10).
+#[test]
+fn test_containers_serde_roundtrip() {
+    let golden = include_str!("../../testdata/golden/go-v13-containers-section.json");
+
+    let section: ContainerSection =
+        serde_json::from_str(golden).expect("golden must deserialize into ContainerSection");
+
+    let rust_json = serde_json::to_string_pretty(&section).unwrap();
+    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
+
+    assert!(
+        undocumented.is_empty(),
+        "Containers section has undocumented divergences:\n{}",
+        format_diffs(&undocumented)
+    );
+}
+
+/// Validates provisional golden containers structure matches expected field layout.
+/// Provisional data: 1 quadlet unit, 1 compose file, 1 running container,
+/// 0 flatpak apps.
+#[test]
+fn test_containers_field_coverage() {
+    let golden = include_str!("../../testdata/golden/go-v13-containers-section.json");
+    let section: ContainerSection = serde_json::from_str(golden).unwrap();
+
+    // quadlet_units: 1 Quadlet container
+    assert!(
+        !section.quadlet_units.is_empty(),
+        "golden must contain quadlet_units"
+    );
+    let qu = &section.quadlet_units[0];
+    assert!(!qu.name.is_empty(), "quadlet name must be populated");
+    assert!(!qu.image.is_empty(), "quadlet image must be populated");
+    assert!(!qu.content.is_empty(), "quadlet content must be populated");
+    assert!(!qu.ports.is_empty(), "quadlet ports must be populated");
+    assert!(!qu.volumes.is_empty(), "quadlet volumes must be populated");
+
+    // compose_files: 1 compose file with 2 services
+    assert!(
+        !section.compose_files.is_empty(),
+        "golden must contain compose_files"
+    );
+    let cf = &section.compose_files[0];
+    assert!(!cf.path.is_empty(), "compose path must be populated");
+    assert!(
+        !cf.images.is_empty(),
+        "compose images must be populated"
+    );
+
+    // running_containers: 1 running container
+    assert!(
+        !section.running_containers.is_empty(),
+        "golden must contain running_containers"
+    );
+    let rc = &section.running_containers[0];
+    assert!(!rc.id.is_empty(), "container id must be populated");
+    assert!(!rc.name.is_empty(), "container name must be populated");
+    assert!(!rc.image.is_empty(), "container image must be populated");
+    assert!(!rc.status.is_empty(), "container status must be populated");
+
+    // flatpak_apps: empty on this host
+    assert!(
+        section.flatpak_apps.is_empty(),
+        "provisional golden has no flatpak_apps"
+    );
+}
+
+// ── Users/Groups section serde roundtrip ────────────────────────────
+
+/// Proves Go golden JSON deserializes into UserGroupSection and
+/// re-serializes without undocumented field loss.
+/// NOTE: Golden is provisional — will be replaced with real Go output
+/// during host validation (Task 10).
+#[test]
+fn test_users_groups_serde_roundtrip() {
+    let golden = include_str!("../../testdata/golden/go-v13-users-groups-section.json");
+
+    let section: UserGroupSection =
+        serde_json::from_str(golden).expect("golden must deserialize into UserGroupSection");
+
+    let rust_json = serde_json::to_string_pretty(&section).unwrap();
+    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
+
+    assert!(
+        undocumented.is_empty(),
+        "Users/Groups section has undocumented divergences:\n{}",
+        format_diffs(&undocumented)
+    );
+}
+
+/// Validates provisional golden users/groups structure matches expected
+/// field layout.
+/// Provisional data: 2 users (1 human, 1 service), 3 groups, 2 sudoers
+/// rules, 1 SSH key ref, 2 passwd entries, 3 group entries, 1 subuid,
+/// 1 subgid.
+#[test]
+fn test_users_groups_field_coverage() {
+    let golden = include_str!("../../testdata/golden/go-v13-users-groups-section.json");
+    let section: UserGroupSection = serde_json::from_str(golden).unwrap();
+
+    // users: 2 non-system users
+    assert!(!section.users.is_empty(), "golden must contain users");
+    assert_eq!(section.users.len(), 2, "provisional golden has 2 users");
+    let user = &section.users[0];
+    assert!(user.get("name").is_some(), "user must have name");
+    assert!(user.get("uid").is_some(), "user must have uid");
+    assert!(user.get("shell").is_some(), "user must have shell");
+
+    // groups: 3 non-system groups
+    assert!(!section.groups.is_empty(), "golden must contain groups");
+    assert_eq!(section.groups.len(), 3, "provisional golden has 3 groups");
+    let group = &section.groups[0];
+    assert!(group.get("name").is_some(), "group must have name");
+    assert!(group.get("gid").is_some(), "group must have gid");
+
+    // sudoers_rules: 2 rules
+    assert!(
+        !section.sudoers_rules.is_empty(),
+        "golden must contain sudoers_rules"
+    );
+
+    // ssh_authorized_keys_refs: 1 ref
+    assert!(
+        !section.ssh_authorized_keys_refs.is_empty(),
+        "golden must contain ssh_authorized_keys_refs"
+    );
+
+    // passwd_entries: 2 entries
+    assert!(
+        !section.passwd_entries.is_empty(),
+        "golden must contain passwd_entries"
+    );
+
+    // shadow_entries: empty (requires root or redacted)
+    assert!(
+        section.shadow_entries.is_empty(),
+        "provisional golden has no shadow_entries"
+    );
+
+    // group_entries: 3 entries
+    assert!(
+        !section.group_entries.is_empty(),
+        "golden must contain group_entries"
+    );
+
+    // subuid_entries and subgid_entries: 1 each
+    assert!(
+        !section.subuid_entries.is_empty(),
+        "golden must contain subuid_entries"
+    );
+    assert!(
+        !section.subgid_entries.is_empty(),
+        "golden must contain subgid_entries"
+    );
+}
+
 // ── Cross-section golden consistency ─────────────────────────────────
 
 #[test]
@@ -280,6 +539,18 @@ fn test_all_section_goldens_are_valid_json() {
         (
             "kernelboot",
             include_str!("../../testdata/golden/go-v13-kernelboot-section.json"),
+        ),
+        (
+            "network",
+            include_str!("../../testdata/golden/go-v13-network-section.json"),
+        ),
+        (
+            "containers",
+            include_str!("../../testdata/golden/go-v13-containers-section.json"),
+        ),
+        (
+            "users-groups",
+            include_str!("../../testdata/golden/go-v13-users-groups-section.json"),
         ),
     ];
 

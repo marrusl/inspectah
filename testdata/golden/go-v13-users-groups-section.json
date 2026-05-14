@@ -1,0 +1,75 @@
+{
+  "users": [
+    {
+      "name": "admin",
+      "uid": 1000,
+      "gid": 1000,
+      "shell": "/bin/bash",
+      "home": "/home/admin",
+      "include": true,
+      "classification": "human",
+      "strategy": "blueprint"
+    },
+    {
+      "name": "deploy",
+      "uid": 1001,
+      "gid": 1001,
+      "shell": "/sbin/nologin",
+      "home": "/home/deploy",
+      "include": true,
+      "classification": "service",
+      "strategy": "sysusers"
+    }
+  ],
+  "groups": [
+    {
+      "name": "admin",
+      "gid": 1000,
+      "members": [],
+      "include": true,
+      "strategy": "blueprint"
+    },
+    {
+      "name": "deploy",
+      "gid": 1001,
+      "members": [],
+      "include": true,
+      "strategy": "sysusers"
+    },
+    {
+      "name": "docker",
+      "gid": 1002,
+      "members": ["admin"],
+      "include": true,
+      "strategy": "blueprint"
+    }
+  ],
+  "sudoers_rules": [
+    "admin ALL=(ALL) NOPASSWD:ALL",
+    "#includedir /etc/sudoers.d"
+  ],
+  "ssh_authorized_keys_refs": [
+    {
+      "user": "admin",
+      "key_count": 2,
+      "path": "/home/admin/.ssh/authorized_keys"
+    }
+  ],
+  "passwd_entries": [
+    "admin:x:1000:1000::/home/admin:/bin/bash",
+    "deploy:x:1001:1001::/home/deploy:/sbin/nologin"
+  ],
+  "shadow_entries": [],
+  "group_entries": [
+    "admin:x:1000:",
+    "deploy:x:1001:",
+    "docker:x:1002:admin"
+  ],
+  "gshadow_entries": [],
+  "subuid_entries": [
+    "admin:100000:65536"
+  ],
+  "subgid_entries": [
+    "admin:100000:65536"
+  ]
+}

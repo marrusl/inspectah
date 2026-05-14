@@ -147,3 +147,13 @@ Any difference NOT listed here fails CI.
 - Reason: Fixture has synthetic dracut configuration not present on real host.
 - Disposition: permanent — inherent fixture/host data difference
 - Approval: approved-by-spec
+
+## Users/Groups Section
+
+### users provisioning strategy model (design choice)
+- Go: Three-way classification (service/human/ambiguous) mapping to sysusers/kickstart/useradd strategies. Blueprint is used as an override-only strategy.
+- Rust: Two-way auto-detect based on login shell validity. Users with a valid login shell (e.g., `/bin/bash`) are classified as human and assigned the `blueprint` strategy. Users without a valid login shell (e.g., `/sbin/nologin`) are classified as service and assigned the `sysusers` strategy. `useradd` and `kickstart` are override-only strategies.
+- Path: `$.users[*].classification`, `$.users[*].strategy`
+- Reason: Deliberate product decision. The Go three-way model produces an `ambiguous` bucket that requires manual triage. The Rust two-way model eliminates ambiguity by using login shell as a deterministic signal, reducing friction in migration plans.
+- Disposition: permanent
+- Approval: approved-by-spec

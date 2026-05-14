@@ -1,0 +1,47 @@
+{
+  "connections": [
+    {
+      "path": "/etc/NetworkManager/system-connections/ens192.nmconnection",
+      "name": "ens192",
+      "method": "auto",
+      "type": "802-3-ethernet",
+      "include": true
+    },
+    {
+      "path": "/etc/NetworkManager/system-connections/virbr0.nmconnection",
+      "name": "virbr0",
+      "method": "manual",
+      "type": "bridge",
+      "include": false
+    }
+  ],
+  "firewall_zones": [
+    {
+      "path": "/etc/firewalld/zones/public.xml",
+      "name": "public",
+      "content": "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<zone>\n  <short>Public</short>\n  <service name=\"ssh\"/>\n  <service name=\"dhcpv6-client\"/>\n  <service name=\"cockpit\"/>\n</zone>",
+      "services": ["ssh", "dhcpv6-client", "cockpit"],
+      "ports": [],
+      "rich_rules": [],
+      "include": true,
+      "fleet": null
+    }
+  ],
+  "firewall_direct_rules": [],
+  "static_routes": [],
+  "ip_routes": [
+    "default via 192.168.1.1 dev ens192 proto dhcp src 192.168.1.50 metric 100",
+    "192.168.1.0/24 dev ens192 proto kernel scope link src 192.168.1.50 metric 100"
+  ],
+  "ip_rules": [],
+  "resolv_provenance": "NetworkManager",
+  "hosts_additions": [
+    "192.168.1.100 db.internal.example.com"
+  ],
+  "proxy": [
+    {
+      "source": "/etc/profile.d/proxy.sh",
+      "line": "export http_proxy=http://proxy.example.com:3128"
+    }
+  ]
+}
