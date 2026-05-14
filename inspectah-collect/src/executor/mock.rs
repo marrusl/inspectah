@@ -17,6 +17,10 @@ pub struct MockExecutor {
     /// `read_dir` is called. Lets tests distinguish PermissionDenied
     /// from NotFound without registering actual directory entries.
     dir_errors: HashMap<String, io::ErrorKind>,
+    /// Files that should return a specific error kind when
+    /// `read_file` is called. Lets tests distinguish PermissionDenied
+    /// from NotFound without registering actual file content.
+    file_errors: HashMap<String, io::ErrorKind>,
 }
 
 impl MockExecutor {
@@ -28,6 +32,7 @@ impl MockExecutor {
             links: HashMap::new(),
             timeout_commands: HashMap::new(),
             dir_errors: HashMap::new(),
+            file_errors: HashMap::new(),
         }
     }
 }
@@ -79,6 +84,15 @@ impl MockExecutor {
         self.dir_errors.insert(path.to_string(), error_kind);
         self
     }
+
+    /// Register a file path that should return a specific error
+    /// when `read_file` is called. This takes priority over both the
+    /// `files` map and the default NotFound fallback, letting tests
+    /// simulate PermissionDenied on files like /etc/shadow.
+    pub fn with_file_error(mut self, path: &str, error_kind: io::ErrorKind) -> Self {
+        self.file_errors.insert(path.to_string(), error_kind);
+        self
+    }
 }
 
 impl Executor for MockExecutor {
@@ -109,8 +123,13 @@ impl Executor for MockExecutor {
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
+        let key = path.to_str().unwrap_or("");
+        // Explicit error injection takes priority over registered files.
+        if let Some(&error_kind) = self.file_errors.get(key) {
+            return Err(io::Error::new(error_kind, path.display().to_string()));
+        }
         self.files
-            .get(path.to_str().unwrap_or(""))
+            .get(key)
             .cloned()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))
     }
