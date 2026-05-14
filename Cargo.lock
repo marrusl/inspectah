@@ -382,6 +382,7 @@ dependencies = [
  "insta",
  "libc",
  "pkg-config",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
