@@ -196,9 +196,19 @@ fn collect_nm_connections(
 // Firewall zones
 // ---------------------------------------------------------------------------
 
+/// Result of parsing a firewalld zone XML file.
+struct ZoneParseResult {
+    services: Vec<String>,
+    ports: Vec<String>,
+    rich_rules: Vec<String>,
+    /// True if the parser encountered structural issues (unclosed tags,
+    /// missing attributes) but still extracted partial data.
+    had_parse_errors: bool,
+}
+
 /// Parses a firewalld zone XML and extracts services, ports, and rich rules
 /// using simple string scanning (no XML crate).
-fn parse_zone_xml(text: &str) -> Option<(Vec<String>, Vec<String>, Vec<String>)> {
+fn parse_zone_xml(text: &str) -> Option<ZoneParseResult> {
     // Verify this looks like a zone document.
     if !text.contains("<zone") {
         return None;
@@ -211,6 +221,12 @@ fn parse_zone_xml(text: &str) -> Option<(Vec<String>, Vec<String>, Vec<String>)>
 
     let mut services = Vec::new();
     let mut ports = Vec::new();
+    let mut had_parse_errors = false;
+
+    // Structural check: a well-formed zone document has a closing tag.
+    if !text.contains("</zone>") {
+        had_parse_errors = true;
+    }
 
     // Extract services: <service name="..."/>
     let mut remaining = text;
@@ -219,13 +235,19 @@ fn parse_zone_xml(text: &str) -> Option<(Vec<String>, Vec<String>, Vec<String>)>
             Some(e) => start + e + 2,
             None => match remaining[start..].find('>') {
                 Some(e) => start + e + 1,
-                None => break,
+                None => {
+                    had_parse_errors = true;
+                    break;
+                }
             },
         };
         let tag = &remaining[start..tag_end];
-        if let Some(name) = extract_attr(tag, "name") {
-            if !name.is_empty() {
-                services.push(name);
+        match extract_attr(tag, "name") {
+            Some(name) if !name.is_empty() => services.push(name),
+            Some(_) => {} // empty name, skip
+            None => {
+                // <service tag without a parseable name= attribute
+                had_parse_errors = true;
             }
         }
         remaining = &remaining[tag_end..];
@@ -238,7 +260,10 @@ fn parse_zone_xml(text: &str) -> Option<(Vec<String>, Vec<String>, Vec<String>)>
             Some(e) => start + e + 2,
             None => match remaining[start..].find('>') {
                 Some(e) => start + e + 1,
-                None => break,
+                None => {
+                    had_parse_errors = true;
+                    break;
+                }
             },
         };
         let tag = &remaining[start..tag_end];
@@ -257,7 +282,12 @@ fn parse_zone_xml(text: &str) -> Option<(Vec<String>, Vec<String>, Vec<String>)>
 
     let rich_rules = extract_rich_rules(text);
 
-    Some((services, ports, rich_rules))
+    Some(ZoneParseResult {
+        services,
+        ports,
+        rich_rules,
+        had_parse_errors,
+    })
 }
 
 /// Extracts a named XML attribute value from a tag string.
@@ -337,19 +367,25 @@ fn collect_firewall_zones(
         let stem = name.strip_suffix(".xml").unwrap_or(name).to_string();
 
         match parse_zone_xml(&content) {
-            Some((services, ports, rich_rules)) => {
+            Some(result) => {
+                if result.had_parse_errors {
+                    degraded_reasons.push(format!(
+                        "Firewall zone {name} has malformed XML \
+                         -- extracted data may be incomplete"
+                    ));
+                }
                 section.firewall_zones.push(FirewallZone {
                     path: rel_path,
                     name: stem,
                     content: content.clone(),
-                    services,
-                    ports,
-                    rich_rules,
+                    services: result.services,
+                    ports: result.ports,
+                    rich_rules: result.rich_rules,
                     ..Default::default()
                 });
             }
             None => {
-                // Malformed or unsupported XML -- degrade but continue.
+                // Completely unparseable or unsupported XML -- degrade but continue.
                 degraded_reasons.push(format!("Failed to parse firewall zone {name} -- skipped"));
             }
         }
@@ -797,10 +833,14 @@ mod tests {
     #[test]
     fn firewall_zone_services_and_ports() {
         let xml = fixture("public-zone.xml");
-        let (services, ports, rich_rules) = parse_zone_xml(&xml).expect("valid XML");
-        assert_eq!(services, vec!["ssh", "dhcpv6-client"]);
-        assert_eq!(ports, vec!["443/tcp"]);
-        assert!(rich_rules.is_empty());
+        let result = parse_zone_xml(&xml).expect("valid XML");
+        assert_eq!(result.services, vec!["ssh", "dhcpv6-client"]);
+        assert_eq!(result.ports, vec!["443/tcp"]);
+        assert!(result.rich_rules.is_empty());
+        assert!(
+            !result.had_parse_errors,
+            "valid XML should not have parse errors"
+        );
     }
 
     #[test]
@@ -813,34 +853,36 @@ mod tests {
     <accept/>
   </rule>
 </zone>"#;
-        let (_, _, rich_rules) = parse_zone_xml(xml).expect("valid XML");
-        assert_eq!(rich_rules.len(), 1);
-        assert!(rich_rules[0].starts_with("<rule"));
-        assert!(rich_rules[0].ends_with("</rule>"));
-        assert!(rich_rules[0].contains("10.0.0.0/8"));
+        let result = parse_zone_xml(xml).expect("valid XML");
+        assert_eq!(result.rich_rules.len(), 1);
+        assert!(result.rich_rules[0].starts_with("<rule"));
+        assert!(result.rich_rules[0].ends_with("</rule>"));
+        assert!(result.rich_rules[0].contains("10.0.0.0/8"));
+        assert!(!result.had_parse_errors);
     }
 
     #[test]
     fn firewall_zone_malformed_xml_degraded() {
         // Malformed XML: missing closing quote on <service name="ssh"
         // The simple string scanner is tolerant of structural XML issues —
-        // it extracts what it can and returns Some(...). This means
-        // collect_firewall_zones treats it as parseable (not degraded).
-        // The key contract: no panic, and extracted data is best-effort.
+        // it extracts what it can and returns Some(...) with had_parse_errors=true.
+        // The key contract: no panic, best-effort extraction, AND honest
+        // Degraded reporting so the caller knows data may be incomplete.
         let xml = fixture("malformed-zone.xml");
         let parse_result = parse_zone_xml(&xml);
 
         // The scanner returns Some because it finds <zone> and scans for
         // <service>/<port> tags by string matching. The broken <service>
-        // tag may or may not extract a valid name depending on the
-        // exact malformation, but the parser does not panic.
+        // tag triggers had_parse_errors because the name attribute is
+        // unparseable.
+        let result = parse_result.expect("simple scanner is tolerant of malformed XML");
         assert!(
-            parse_result.is_some(),
-            "simple scanner is tolerant of malformed XML"
+            result.had_parse_errors,
+            "malformed XML must set had_parse_errors"
         );
 
-        // Verify via full collector flow that no panic occurs and the
-        // zone is added (possibly with incomplete services/ports).
+        // Verify via full collector flow that the zone is added AND
+        // a degraded reason is produced.
         let exec = MockExecutor::new()
             .with_dir("/etc/firewalld/zones", vec!["malformed.xml"])
             .with_file("/etc/firewalld/zones/malformed.xml", &xml);
@@ -857,9 +899,16 @@ mod tests {
             1,
             "malformed zone is added best-effort (parser returned Some)"
         );
-        // No degraded reason — the scanner succeeded (returned Some).
-        // Degraded only fires when parse_zone_xml returns None
-        // (e.g., unsupported XML features like xmlns: or CDATA).
+        // Degraded reason signals that extracted data may be incomplete.
+        assert!(
+            !degraded.is_empty(),
+            "malformed XML must produce a Degraded reason"
+        );
+        assert!(
+            degraded[0].contains("malformed XML"),
+            "degraded reason should mention malformed XML, got: {}",
+            degraded[0]
+        );
     }
 
     #[test]
