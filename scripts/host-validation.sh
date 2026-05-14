@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Host Validation Script for inspectah Rust Phase 2 Slice 2a
+# Host Validation Script for inspectah Rust Phase 2 (Slice 2a + 2b)
 #
 # Runs both Go and Rust inspectah on a live package-mode system and
 # compares section-level output to establish parity evidence.
+# Covers all 7 inspector sections: RPM + services, storage, kernelboot
+# (2a) + network, containers, users_groups (2b).
+#
+# Produces a tarball in the working directory with all evidence.
 #
 # If running from the inspectah source tree, the script will build from
 # source using system Rust (dnf install rust cargo) when no pre-built
@@ -105,7 +109,10 @@ fi
 jq '.services' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-services-section.json"
 jq '.storage' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-storage-section.json"
 jq '.kernel_boot' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-kernelboot-section.json"
-echo "Golden files extracted."
+jq '.network' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-network-section.json"
+jq '.containers' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-containers-section.json"
+jq '.users_groups' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-users-groups-section.json"
+echo "Golden files extracted (2a + 2b sections)."
 echo ""
 
 # --- Step 4: Extract Rust sections ---
@@ -121,7 +128,10 @@ fi
 jq '.services' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-services.json"
 jq '.storage' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-storage.json"
 jq '.kernel_boot' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-kernelboot.json"
-echo "Rust sections extracted."
+jq '.network' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-network.json"
+jq '.containers' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-containers.json"
+jq '.users_groups' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-users-groups.json"
+echo "Rust sections extracted (2a + 2b)."
 echo ""
 
 # --- Step 5: Section-level diff ---
@@ -130,7 +140,7 @@ echo "=== Section Parity Comparison ==="
 PASS_COUNT=0
 FAIL_COUNT=0
 
-for section in services storage kernelboot; do
+for section in services storage kernelboot network containers users-groups; do
     go_file="$WORKDIR/golden/go-v13-${section}-section.json"
     rust_file="$WORKDIR/evidence/rust-${section}.json"
     diff_file="$WORKDIR/evidence/diff-${section}.txt"
@@ -162,7 +172,7 @@ GO_VERSION=$("$GO_BIN" version 2>/dev/null || echo "unknown")
 RUST_VERSION=$("$RUST_BIN" version 2>/dev/null || echo "0.8.0-alpha.1")
 
 {
-    echo "# Host Validation Evidence - Slice 2a"
+    echo "# Host Validation Evidence - Slice 2a + 2b"
     echo ""
     echo "**Date:** $(date -Iseconds)"
     echo "**Hostname:** $(hostname)"
@@ -205,30 +215,38 @@ RUST_VERSION=$("$RUST_BIN" version 2>/dev/null || echo "0.8.0-alpha.1")
     else
         echo "[Review diffs above and fill in assessment]"
     fi
-} > "$WORKDIR/evidence/slice-2a-host-validation.md"
+} > "$WORKDIR/evidence/host-validation.md"
 
 echo ""
-echo "=== Done ==="
+
+# --- Step 7: Create tarball ---
+
+TARBALL_NAME="host-validation-$(hostname)-$(date +%Y%m%d-%H%M%S).tar.gz"
+TARBALL_PATH="$REPO_ROOT/$TARBALL_NAME"
+
+echo ">>> Step 7: Creating evidence tarball..."
+tar czf "$TARBALL_PATH" -C "$WORKDIR" golden evidence
+echo "Tarball: $TARBALL_PATH"
 echo ""
-echo "Evidence written to: $WORKDIR/evidence/"
-echo "  - slice-2a-host-validation.md  (summary report)"
-echo "  - diff-*.txt                   (section diffs)"
-echo "  - go-scan.log / rust-scan.log  (scan output)"
-echo ""
-echo "Golden files generated: $WORKDIR/golden/"
-echo "  - go-v13-services-section.json"
-echo "  - go-v13-storage-section.json"
-echo "  - go-v13-kernelboot-section.json"
-echo ""
-echo ">>> Copying golden files and evidence to repo..."
+
+# --- Step 8: Copy to repo tree ---
+
+echo ">>> Step 8: Copying golden files and evidence to repo..."
 mkdir -p "$REPO_ROOT/testdata/evidence"
 cp "$WORKDIR/golden/"* "$REPO_ROOT/testdata/golden/"
-cp "$WORKDIR/evidence/slice-2a-host-validation.md" "$REPO_ROOT/testdata/evidence/"
-echo "Files copied to:"
-echo "  - $REPO_ROOT/testdata/golden/"
-echo "  - $REPO_ROOT/testdata/evidence/"
+cp "$WORKDIR/evidence/host-validation.md" "$REPO_ROOT/testdata/evidence/"
+echo ""
+
+echo "=== Done ==="
+echo ""
+echo "Tarball (all evidence + goldens):"
+echo "  $TARBALL_PATH"
+echo ""
+echo "Repo files updated:"
+echo "  testdata/golden/go-v13-*-section.json  (7 sections)"
+echo "  testdata/evidence/host-validation.md"
 echo ""
 echo "Next steps:"
-echo "  1. Review diffs in $WORKDIR/evidence/diff-*.txt"
-echo "  2. Review and commit the updated golden files and evidence"
+echo "  1. Review the evidence: tar tzf $TARBALL_NAME"
+echo "  2. Commit the updated golden files and evidence"
 echo ""
