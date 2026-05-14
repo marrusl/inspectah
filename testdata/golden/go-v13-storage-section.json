@@ -1,104 +1,146 @@
 {
   "fstab_entries": [
     {
-      "device": "UUID=abc-123",
+      "device": "/dev/mapper/cs-root",
       "mount_point": "/",
       "fstype": "xfs",
       "options": "defaults"
     },
     {
-      "device": "UUID=def-456",
+      "device": "UUID=3db302f0-345d-4cd3-bce4-e56e66d05ca7",
       "mount_point": "/boot",
       "fstype": "xfs",
       "options": "defaults"
     },
     {
-      "device": "UUID=ghi-789",
+      "device": "UUID=5440-F2DF",
       "mount_point": "/boot/efi",
       "fstype": "vfat",
       "options": "umask=0077,shortname=winnt"
     },
     {
-      "device": "tmpfs",
-      "mount_point": "/tmp",
-      "fstype": "tmpfs",
-      "options": "defaults"
-    },
-    {
-      "device": "//server/share",
-      "mount_point": "/mnt/cifs",
-      "fstype": "cifs",
-      "options": "credentials=/etc/cifs-creds,uid=1000"
-    },
-    {
-      "device": "server:/export",
-      "mount_point": "/mnt/nfs",
-      "fstype": "nfs",
-      "options": "defaults"
-    },
-    {
-      "device": "/dev/mapper/vg0-data",
-      "mount_point": "/data",
+      "device": "/dev/mapper/cs-home",
+      "mount_point": "/home",
       "fstype": "xfs",
+      "options": "defaults"
+    },
+    {
+      "device": "/dev/mapper/cs-swap",
+      "mount_point": "none",
+      "fstype": "swap",
       "options": "defaults"
     }
   ],
   "mount_points": [
     {
       "target": "/",
-      "source": "/dev/sda2",
+      "source": "/dev/mapper/cs-root",
       "fstype": "xfs",
-      "options": "rw,relatime"
+      "options": "rw,relatime,seclabel,attr2,inode64,logbufs=8,logbsize=32k,noquota"
     },
     {
-      "target": "/boot",
-      "source": "/dev/sda1",
-      "fstype": "xfs",
-      "options": "rw,relatime"
+      "target": "lvm-config",
+      "source": "etc/lvm/lvm.conf",
+      "fstype": "lvm",
+      "options": ""
     },
     {
-      "target": "/boot/efi",
-      "source": "/dev/sda15",
-      "fstype": "vfat",
-      "options": "rw,relatime"
+      "target": "lvm-profile (cache-mq.profile)",
+      "source": "etc/lvm/profile/cache-mq.profile",
+      "fstype": "lvm",
+      "options": ""
     },
     {
-      "target": "/tmp",
-      "source": "tmpfs",
-      "fstype": "tmpfs",
-      "options": "rw"
+      "target": "lvm-profile (cache-smq.profile)",
+      "source": "etc/lvm/profile/cache-smq.profile",
+      "fstype": "lvm",
+      "options": ""
     },
     {
-      "target": "/mnt/nfs",
-      "source": "server:/export",
-      "fstype": "nfs",
-      "options": "rw,vers=4"
+      "target": "lvm-profile (command_profile_template.profile)",
+      "source": "etc/lvm/profile/command_profile_template.profile",
+      "fstype": "lvm",
+      "options": ""
     },
     {
-      "target": "/data",
-      "source": "/dev/mapper/vg0-data",
-      "fstype": "xfs",
-      "options": "rw,relatime"
+      "target": "lvm-profile (lvmdbusd.profile)",
+      "source": "etc/lvm/profile/lvmdbusd.profile",
+      "fstype": "lvm",
+      "options": ""
+    },
+    {
+      "target": "lvm-profile (metadata_profile_template.profile)",
+      "source": "etc/lvm/profile/metadata_profile_template.profile",
+      "fstype": "lvm",
+      "options": ""
+    },
+    {
+      "target": "lvm-profile (thin-generic.profile)",
+      "source": "etc/lvm/profile/thin-generic.profile",
+      "fstype": "lvm",
+      "options": ""
+    },
+    {
+      "target": "lvm-profile (thin-performance.profile)",
+      "source": "etc/lvm/profile/thin-performance.profile",
+      "fstype": "lvm",
+      "options": ""
+    },
+    {
+      "target": "lvm-profile (vdo-small.profile)",
+      "source": "etc/lvm/profile/vdo-small.profile",
+      "fstype": "lvm",
+      "options": ""
     }
   ],
   "lvm_info": [
     {
-      "lv_name": "data",
-      "vg_name": "vg0",
-      "lv_size": "50.00g"
+      "lv_name": "home",
+      "vg_name": "cs",
+      "lv_size": "19.80g"
+    },
+    {
+      "lv_name": "root",
+      "vg_name": "cs",
+      "lv_size": "40.57g"
     },
     {
       "lv_name": "swap",
-      "vg_name": "vg0",
-      "lv_size": "4.00g"
+      "vg_name": "cs",
+      "lv_size": "2.04g"
     }
   ],
-  "var_directories": [],
-  "credential_refs": [
+  "var_directories": [
     {
-      "mount_point": "/mnt/cifs",
-      "credential_path": "/etc/cifs-creds",
-      "source": "fstab"
+      "path": "var/lib/chrony",
+      "size_estimate": "61 bytes",
+      "recommendation": "PVC / volume mount — application data, review application needs"
+    },
+    {
+      "path": "var/lib/cni",
+      "size_estimate": "28 bytes",
+      "recommendation": "PVC / volume mount — application data, review application needs"
+    },
+    {
+      "path": "var/lib/containers",
+      "size_estimate": "~1.7 GB",
+      "recommendation": "PVC / volume mount — container storage"
+    },
+    {
+      "path": "var/lib/rsyslog",
+      "size_estimate": "153 bytes",
+      "recommendation": "PVC / volume mount — application data, review application needs"
+    },
+    {
+      "path": "var/log/anaconda",
+      "size_estimate": "~4 MB",
+      "recommendation": "PVC / volume mount — log retention (or ship to external logging)"
+    },
+    {
+      "path": "var/log/audit",
+      "size_estimate": "~1003 KB",
+      "recommendation": "PVC / volume mount — log retention (or ship to external logging)"
     }
-  ]
+  ],
+  "credential_refs": []
 }
