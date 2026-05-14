@@ -70,6 +70,14 @@ fn containers_happy_mock() -> MockExecutor {
         .with_dir("/srv", vec![])
         // Podman running containers
         .with_command(
+            "which podman",
+            ExecResult {
+                stdout: "/usr/bin/podman\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
             "podman ps --format json",
             ExecResult {
                 stdout: PODMAN_PS_FIXTURE.into(),
@@ -189,12 +197,12 @@ fn test_containers_inspector_happy_path() {
 fn test_containers_inspector_empty_system() {
     // No quadlet dirs, no compose dirs, no podman, no flatpak.
     let exec = MockExecutor::new()
-        // podman ps fails (not installed)
+        // podman not installed
         .with_command(
-            "podman ps --format json",
+            "which podman",
             ExecResult {
-                stderr: "command not found: podman".into(),
-                exit_code: 127,
+                stderr: "podman not found".into(),
+                exit_code: 1,
                 ..Default::default()
             },
         )
@@ -254,7 +262,15 @@ fn test_containers_inspector_degraded_podman() {
         )
         .with_dir("/usr/share/containers/systemd", vec![])
         .with_dir("/etc/systemd/system", vec![])
-        // Podman ps returns bad JSON
+        // Podman is installed but ps returns bad JSON
+        .with_command(
+            "which podman",
+            ExecResult {
+                stdout: "/usr/bin/podman\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
         .with_command(
             "podman ps --format json",
             ExecResult {

@@ -147,15 +147,24 @@ fn network_not_found_not_degraded() {
 
 #[test]
 fn containers_podman_json_parse_error_degraded() {
-    // podman ps returns invalid JSON → Degraded.
-    let exec = minimal_rpm_mock(MockExecutor::new()).with_command(
-        "podman ps --format json",
-        ExecResult {
-            exit_code: 0,
-            stdout: "not valid json{{{".into(),
-            ..Default::default()
-        },
-    );
+    // podman is installed but ps returns invalid JSON → Degraded.
+    let exec = minimal_rpm_mock(MockExecutor::new())
+        .with_command(
+            "which podman",
+            ExecResult {
+                stdout: "/usr/bin/podman\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "podman ps --format json",
+            ExecResult {
+                exit_code: 0,
+                stdout: "not valid json{{{".into(),
+                ..Default::default()
+            },
+        );
 
     let source = package_based_source();
     let inspectors: Vec<Box<dyn inspectah_core::traits::inspector::Inspector>> =
@@ -188,6 +197,14 @@ fn containers_all_dirs_missing_complete() {
     // No quadlet, compose, podman, or flatpak directories → Complete.
     // This is a valid state: system with no containers configured.
     let exec = minimal_rpm_mock(MockExecutor::new())
+        .with_command(
+            "which podman",
+            ExecResult {
+                stdout: "/usr/bin/podman\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
         .with_command(
             "podman ps --format json",
             ExecResult {

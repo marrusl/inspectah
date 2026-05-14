@@ -334,7 +334,13 @@ fn find_compose_files(
         // Scan for secret-like env vars and emit redaction hints.
         scan_compose_env_secrets(&content, path, hints);
 
-        let images = extract_compose_images(&content);
+        let parse_result = extract_compose_images(&content);
+        if parse_result.had_anomalies {
+            degraded_reasons.push(format!(
+                "Compose file {path} has structural YAML issues \
+                 -- image extraction may be incomplete"
+            ));
+        }
 
         let rel_path = path
             .strip_prefix(exec.host_root().to_str().unwrap_or("/"))
@@ -343,7 +349,7 @@ fn find_compose_files(
 
         files.push(ComposeFile {
             path: rel_path,
-            images,
+            images: parse_result.services,
             ..Default::default()
         });
     }
@@ -398,11 +404,44 @@ fn match_glob(pattern: &str, name: &str) -> bool {
     }
 }
 
+/// Known compose service sub-keys that should never appear as service names.
+/// If our parser sees one at service-indent level, the YAML structure is
+/// broken (indentation error) and we flag it as a parse anomaly.
+const COMPOSE_SUB_KEYS: &[&str] = &[
+    "ports",
+    "volumes",
+    "environment",
+    "env_file",
+    "networks",
+    "depends_on",
+    "build",
+    "command",
+    "entrypoint",
+    "restart",
+    "deploy",
+    "labels",
+    "healthcheck",
+    "logging",
+    "secrets",
+    "configs",
+    "expose",
+    "extra_hosts",
+];
+
+/// Result of compose image extraction.
+struct ComposeParseResult {
+    services: Vec<ComposeService>,
+    /// True if the parser encountered structural anomalies (broken
+    /// indentation, sub-keys misaligned to service level).
+    had_anomalies: bool,
+}
+
 /// Parses `image:` fields from a compose YAML without requiring a YAML
 /// library. Detects service-level indent dynamically so 2-space, 4-space,
 /// and tab-indented files all work.
-fn extract_compose_images(content: &str) -> Vec<ComposeService> {
+fn extract_compose_images(content: &str) -> ComposeParseResult {
     let mut results = Vec::new();
+    let mut had_anomalies = false;
 
     let mut current_service = String::new();
     let mut service_indent: i32 = -1;
@@ -410,7 +449,12 @@ fn extract_compose_images(content: &str) -> Vec<ComposeService> {
 
     let image_re = match Regex::new(r"^image:\s*(.+)") {
         Ok(r) => r,
-        Err(_) => return results,
+        Err(_) => {
+            return ComposeParseResult {
+                services: results,
+                had_anomalies: true,
+            }
+        }
     };
 
     for line in content.lines() {
@@ -448,7 +492,14 @@ fn extract_compose_images(content: &str) -> Vec<ComposeService> {
 
         // Service-level key (e.g. "web:", "db:").
         if service_indent > 0 && indent == service_indent as usize && trimmed.ends_with(':') {
-            current_service = trimmed.trim_end_matches(':').to_string();
+            let key_name = trimmed.trim_end_matches(':');
+            // Detect compose sub-keys appearing at service level —
+            // this signals broken indentation in the YAML.
+            if COMPOSE_SUB_KEYS.contains(&key_name.to_lowercase().as_str()) {
+                had_anomalies = true;
+            } else {
+                current_service = key_name.to_string();
+            }
             continue;
         }
 
@@ -468,7 +519,10 @@ fn extract_compose_images(content: &str) -> Vec<ComposeService> {
             }
         }
     }
-    results
+    ComposeParseResult {
+        services: results,
+        had_anomalies,
+    }
 }
 
 /// Scans compose file content for environment blocks with secret-like
@@ -508,8 +562,22 @@ fn query_podman_containers(
 ) -> (Vec<RunningContainer>, Vec<Warning>) {
     let mut warnings = Vec::new();
 
+    // Check if podman is installed before attempting ps.
+    let which = exec.run("which", &["podman"]);
+    if which.exit_code != 0 {
+        // Podman not installed -- skip silently (warning only).
+        warnings.push(Warning {
+            inspector: "containers".into(),
+            message: "podman not installed -- live container data unavailable.".into(),
+            ..Default::default()
+        });
+        return (Vec::new(), warnings);
+    }
+
     let result = exec.run("podman", &["ps", "--format", "json"]);
     if result.exit_code != 0 {
+        // Podman is installed but ps failed -- real failure, Degraded.
+        degraded_reasons.push("podman ps failed -- live container data lost".to_string());
         warnings.push(Warning {
             inspector: "containers".into(),
             message: "podman ps failed -- live container data unavailable.".into(),
@@ -1005,12 +1073,16 @@ services:
   db:
     image: postgres:16
 ";
-        let images = extract_compose_images(yaml);
-        assert_eq!(images.len(), 2);
-        assert_eq!(images[0].service, "web");
-        assert_eq!(images[0].image, "nginx:1.25");
-        assert_eq!(images[1].service, "db");
-        assert_eq!(images[1].image, "postgres:16");
+        let result = extract_compose_images(yaml);
+        assert_eq!(result.services.len(), 2);
+        assert_eq!(result.services[0].service, "web");
+        assert_eq!(result.services[0].image, "nginx:1.25");
+        assert_eq!(result.services[1].service, "db");
+        assert_eq!(result.services[1].image, "postgres:16");
+        assert!(
+            !result.had_anomalies,
+            "valid YAML should not have anomalies"
+        );
     }
 
     #[test]
@@ -1022,19 +1094,21 @@ services:
     api:
         image: node:20
 ";
-        let images = extract_compose_images(yaml);
-        assert_eq!(images.len(), 2);
-        assert_eq!(images[0].image, "nginx:alpine");
-        assert_eq!(images[1].image, "node:20");
+        let result = extract_compose_images(yaml);
+        assert_eq!(result.services.len(), 2);
+        assert_eq!(result.services[0].image, "nginx:alpine");
+        assert_eq!(result.services[1].image, "node:20");
+        assert!(!result.had_anomalies);
     }
 
     #[test]
     fn compose_image_extraction_tab() {
         let yaml = "services:\n\tweb:\n\t\timage: httpd:2.4\n\tdb:\n\t\timage: mariadb:11\n";
-        let images = extract_compose_images(yaml);
-        assert_eq!(images.len(), 2);
-        assert_eq!(images[0].image, "httpd:2.4");
-        assert_eq!(images[1].image, "mariadb:11");
+        let result = extract_compose_images(yaml);
+        assert_eq!(result.services.len(), 2);
+        assert_eq!(result.services[0].image, "httpd:2.4");
+        assert_eq!(result.services[1].image, "mariadb:11");
+        assert!(!result.had_anomalies);
     }
 
     #[test]
@@ -1045,16 +1119,20 @@ networks:
   default:
     driver: bridge
 ";
-        let images = extract_compose_images(yaml);
-        assert!(images.is_empty(), "no services block should yield empty");
+        let result = extract_compose_images(yaml);
+        assert!(
+            result.services.is_empty(),
+            "no services block should yield empty"
+        );
+        assert!(!result.had_anomalies);
     }
 
     #[test]
     fn compose_malformed_yaml_degraded() {
-        // Malformed YAML from fixture -- indentation errors.
-        // The fixture has structural issues (misaligned keys) but no
-        // anchors/aliases, so the degraded path for anchors does NOT fire.
-        // This test verifies best-effort extraction without panic.
+        // Malformed YAML from fixture -- indentation errors cause compose
+        // sub-keys (ports, volumes) to appear at service-indent level.
+        // The parser does best-effort extraction AND signals the anomaly
+        // so the caller can report Degraded status.
         let content = fixture("compose-malformed.yaml");
         let exec = MockExecutor::new()
             .with_dir("/opt", vec!["compose-malformed.yaml"])
@@ -1074,10 +1152,19 @@ networks:
             "best-effort extraction should find nginx:latest, got: {:?}",
             files[0].images
         );
-        // Indentation errors without anchors do not produce a degraded reason --
-        // the simple line-scanner is tolerant of structural YAML issues.
-        // This is intentional: degraded_reasons fire only for features the
-        // scanner explicitly cannot handle (anchors/aliases).
+        // Structural anomalies (sub-keys at service level) produce a
+        // degraded reason so the inspector reports Degraded status.
+        assert!(
+            !degraded.is_empty(),
+            "malformed YAML must produce a Degraded reason"
+        );
+        assert!(
+            degraded
+                .iter()
+                .any(|d| d.contains("structural YAML issues")),
+            "degraded reason should mention structural issues, got: {:?}",
+            degraded
+        );
     }
 
     #[test]
@@ -1164,6 +1251,14 @@ services:
 
         let exec = MockExecutor::new()
             .with_command(
+                "which podman",
+                ExecResult {
+                    stdout: "/usr/bin/podman".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
                 "podman ps --format json",
                 ExecResult {
                     stdout: ps_json,
@@ -1199,6 +1294,14 @@ services:
 
         let exec = MockExecutor::new()
             .with_command(
+                "which podman",
+                ExecResult {
+                    stdout: "/usr/bin/podman".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
                 "podman ps --format json",
                 ExecResult {
                     stdout: ps_json,
@@ -1227,14 +1330,12 @@ services:
     }
 
     #[test]
-    fn podman_ps_failure() {
-        // Podman failure is warning-only, NOT Degraded. This matches Go
-        // behavior: queryPodmanContainers returns warnings but no error.
-        // The snapshot shows Complete because podman is optional data —
-        // the inspector succeeds with quadlet/compose/flatpak even when
-        // podman is absent.
+    fn podman_not_installed_skips_silently() {
+        // Podman not installed (which podman fails) — warning-only, not
+        // Degraded. The inspector succeeds with quadlet/compose/flatpak
+        // data even when podman is absent.
         let exec = MockExecutor::new().with_command(
-            "podman ps --format json",
+            "which podman",
             ExecResult {
                 exit_code: 1,
                 stderr: "podman not found".into(),
@@ -1247,13 +1348,48 @@ services:
         let (containers, warnings) = query_podman_containers(&exec, &mut hints, &mut degraded);
 
         assert!(containers.is_empty());
-        assert_eq!(warnings.len(), 1, "should warn when podman ps fails");
-        assert!(warnings[0].message.contains("podman ps failed"));
-        // Intentionally no degraded_reasons push — matches Go parity.
+        assert_eq!(warnings.len(), 1, "should warn when podman not installed");
+        assert!(warnings[0].message.contains("podman not installed"));
         assert!(
             degraded.is_empty(),
-            "podman ps failure is warning-only, not Degraded (Go parity)"
+            "podman not installed is warning-only, not Degraded"
         );
+    }
+
+    #[test]
+    fn podman_installed_but_ps_fails_is_degraded() {
+        // Podman IS installed (which podman succeeds) but podman ps fails
+        // — this is a real failure and should produce Degraded.
+        let exec = MockExecutor::new()
+            .with_command(
+                "which podman",
+                ExecResult {
+                    stdout: "/usr/bin/podman".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "podman ps --format json",
+                ExecResult {
+                    exit_code: 1,
+                    stderr: "Error: cannot connect to Podman".into(),
+                    ..Default::default()
+                },
+            );
+
+        let mut hints = Vec::new();
+        let mut degraded = Vec::new();
+        let (containers, warnings) = query_podman_containers(&exec, &mut hints, &mut degraded);
+
+        assert!(containers.is_empty());
+        assert_eq!(warnings.len(), 1, "should warn when podman ps fails");
+        assert!(warnings[0].message.contains("podman ps failed"));
+        assert!(
+            !degraded.is_empty(),
+            "podman installed but ps failing must produce Degraded"
+        );
+        assert!(degraded[0].contains("podman ps failed"));
     }
 
     #[test]
@@ -1305,14 +1441,23 @@ services:
 
     #[test]
     fn podman_json_parse_error() {
-        let exec = MockExecutor::new().with_command(
-            "podman ps --format json",
-            ExecResult {
-                stdout: "not valid json{{{".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        );
+        let exec = MockExecutor::new()
+            .with_command(
+                "which podman",
+                ExecResult {
+                    stdout: "/usr/bin/podman".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "podman ps --format json",
+                ExecResult {
+                    stdout: "not valid json{{{".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
 
         let mut hints = Vec::new();
         let mut degraded = Vec::new();
@@ -1462,6 +1607,14 @@ com.visualstudio.code\tflathub\tstable
     fn empty_system_no_containers() {
         // All empty -> Complete, not Degraded.
         let exec = MockExecutor::new()
+            .with_command(
+                "which podman",
+                ExecResult {
+                    stdout: "/usr/bin/podman".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
             .with_command(
                 "podman ps --format json",
                 ExecResult {
