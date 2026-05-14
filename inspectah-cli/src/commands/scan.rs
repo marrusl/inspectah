@@ -11,10 +11,13 @@ use clap::Args;
 use std::path::PathBuf;
 
 use inspectah_collect::executor::real::RealExecutor;
+use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
+use inspectah_collect::inspectors::network::NetworkInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
+use inspectah_collect::inspectors::users::UsersGroupsInspector;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::os::OsRelease;
@@ -94,6 +97,9 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(ServicesInspector::new()),
         Box::new(StorageInspector::new()),
         Box::new(KernelbootInspector::new()),
+        Box::new(NetworkInspector::new()),
+        Box::new(ContainersInspector::new()),
+        Box::new(UsersGroupsInspector::new()),
     ];
     let collected = collect(&source, &executor, &inspectors);
 
