@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  web:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./html:/usr/share/nginx/html:ro
+    depends_on:
+      - db
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_PASSWORD: hunter2
+      POSTGRES_USER: webapp
+      POSTGRES_DB: webapp_db
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  cache:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  db-data:

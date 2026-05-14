@@ -1,0 +1,6 @@
+[Volume]
+Device=webapp-data
+Driver=local
+
+[Install]
+WantedBy=multi-user.target

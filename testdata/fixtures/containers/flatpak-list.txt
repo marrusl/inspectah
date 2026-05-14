@@ -1,0 +1,4 @@
+Name	Application ID	Version	Branch	Origin	Installation
+Firefox	org.mozilla.firefox	122.0	stable	flathub	system
+LibreOffice	org.libreoffice.LibreOffice	24.2.0	stable	flathub	system
+GIMP	org.gimp.GIMP	2.10.36	stable	flathub	user

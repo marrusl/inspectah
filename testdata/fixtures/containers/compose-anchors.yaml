@@ -1,0 +1,24 @@
+version: '3.8'
+
+x-defaults: &defaults
+  restart: always
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+
+x-default-image: &default_image
+  registry.example.com/base:latest
+
+services:
+  web:
+    <<: *defaults
+    image: *default_image
+    ports:
+      - "80:80"
+
+  api:
+    <<: *defaults
+    image: *default_image
+    ports:
+      - "8080:8080"

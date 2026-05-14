@@ -1,0 +1,49 @@
+[
+  {
+    "AutoRemove": false,
+    "Command": [
+      "nginx",
+      "-g",
+      "daemon off;"
+    ],
+    "Created": "2024-01-15T10:30:00Z",
+    "CreatedAt": "2024-01-15 10:30:00 +0000 UTC",
+    "Exited": false,
+    "ExitedAt": -62135596800,
+    "ExitCode": 0,
+    "Id": "abc123def456",
+    "Image": "docker.io/library/nginx:latest",
+    "ImageID": "sha256:789abc",
+    "IsInfra": false,
+    "Labels": {
+      "maintainer": "NGINX Docker Maintainers"
+    },
+    "Mounts": [
+      "/data:/usr/share/nginx/html:ro"
+    ],
+    "Names": [
+      "webapp"
+    ],
+    "Namespaces": {},
+    "Networks": [
+      "podman"
+    ],
+    "Pid": 12345,
+    "Pod": "",
+    "PodName": "",
+    "Ports": [
+      {
+        "host_ip": "0.0.0.0",
+        "container_port": 80,
+        "host_port": 8080,
+        "range": 1,
+        "protocol": "tcp"
+      }
+    ],
+    "Restarts": 0,
+    "Size": null,
+    "StartedAt": 1705316400,
+    "State": "running",
+    "Status": "Up 2 hours"
+  }
+]

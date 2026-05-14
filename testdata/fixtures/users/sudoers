@@ -1,0 +1,11 @@
+## Sudoers allows particular users to run various commands as
+## the root user, without needing the root password.
+
+Defaults    env_reset
+Defaults    secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+root    ALL=(ALL:ALL) ALL
+
+%wheel  ALL=(ALL)       ALL
+
+#includedir /etc/sudoers.d

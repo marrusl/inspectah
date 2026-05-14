@@ -1,0 +1,140 @@
+[
+  {
+    "Id": "abc123def456",
+    "Created": "2024-01-15T10:30:00.123456789Z",
+    "Path": "nginx",
+    "Args": [
+      "-g",
+      "daemon off;"
+    ],
+    "State": {
+      "Status": "running",
+      "Running": true,
+      "Paused": false,
+      "Restarting": false,
+      "OOMKilled": false,
+      "Dead": false,
+      "Pid": 12345,
+      "ExitCode": 0,
+      "Error": "",
+      "StartedAt": "2024-01-15T10:30:05.123456789Z",
+      "FinishedAt": "0001-01-01T00:00:00Z"
+    },
+    "Image": "sha256:789abcdef",
+    "ImageName": "docker.io/library/nginx:latest",
+    "Name": "webapp",
+    "Mounts": [
+      {
+        "Type": "bind",
+        "Source": "/data",
+        "Destination": "/usr/share/nginx/html",
+        "Mode": "ro",
+        "RW": false,
+        "Propagation": "rprivate"
+      }
+    ],
+    "NetworkSettings": {
+      "Bridge": "",
+      "SandboxID": "xyz789",
+      "HairpinMode": false,
+      "LinkLocalIPv6Address": "",
+      "LinkLocalIPv6PrefixLen": 0,
+      "Ports": {
+        "80/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "8080"
+          }
+        ]
+      },
+      "Networks": {
+        "podman": {
+          "IPAMConfig": null,
+          "Links": null,
+          "Aliases": [
+            "abc123def456"
+          ],
+          "NetworkID": "podman",
+          "EndpointID": "",
+          "Gateway": "10.88.0.1",
+          "IPAddress": "10.88.0.2",
+          "IPPrefixLen": 16,
+          "IPv6Gateway": "",
+          "GlobalIPv6Address": "",
+          "GlobalIPv6PrefixLen": 0,
+          "MacAddress": "52:54:00:ab:cd:ef"
+        }
+      }
+    },
+    "Config": {
+      "Hostname": "abc123def456",
+      "Domainname": "",
+      "User": "",
+      "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "NGINX_VERSION=1.25.3",
+        "API_TOKEN=secret123"
+      ],
+      "Cmd": [
+        "nginx",
+        "-g",
+        "daemon off;"
+      ],
+      "Image": "docker.io/library/nginx:latest",
+      "Volumes": null,
+      "WorkingDir": "",
+      "Entrypoint": "/docker-entrypoint.sh",
+      "Labels": {
+        "maintainer": "NGINX Docker Maintainers"
+      }
+    },
+    "HostConfig": {
+      "Binds": [
+        "/data:/usr/share/nginx/html:ro"
+      ],
+      "NetworkMode": "bridge",
+      "PortBindings": {
+        "80/tcp": [
+          {
+            "HostIp": "0.0.0.0",
+            "HostPort": "8080"
+          }
+        ]
+      },
+      "RestartPolicy": {
+        "Name": "always",
+        "MaximumRetryCount": 0
+      },
+      "AutoRemove": false,
+      "VolumeDriver": "",
+      "VolumesFrom": null,
+      "CapAdd": null,
+      "CapDrop": null,
+      "Dns": [],
+      "DnsOptions": [],
+      "DnsSearch": [],
+      "ExtraHosts": null,
+      "IpcMode": "private",
+      "Cgroup": "",
+      "Links": null,
+      "OomScoreAdj": 0,
+      "PidMode": "",
+      "Privileged": false,
+      "PublishAllPorts": false,
+      "ReadonlyRootfs": false,
+      "SecurityOpt": [],
+      "UTSMode": "",
+      "ShmSize": 67108864,
+      "Runtime": "oci",
+      "ConsoleSize": [
+        0,
+        0
+      ],
+      "Isolation": "",
+      "CpuShares": 0,
+      "Memory": 0,
+      "CgroupParent": "",
+      "BlkioWeight": 0
+    }
+  }
+]

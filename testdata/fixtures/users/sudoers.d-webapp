@@ -1,0 +1,3 @@
+## Allow webapp user to restart the webapp service without password
+webapp ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart webapp
+webapp ALL=(ALL) NOPASSWD: /usr/bin/systemctl status webapp

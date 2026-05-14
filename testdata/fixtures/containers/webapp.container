@@ -1,0 +1,12 @@
+[Container]
+Image=registry.example.com/webapp:latest
+PublishPort=8080:80
+Volume=/data:/app/data:Z
+Environment=APP_ENV=production
+Network=webapp-net
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=multi-user.target default.target
