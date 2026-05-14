@@ -61,7 +61,7 @@ impl Inspector for NetworkInspector {
         collect_static_routes(exec, &mut section);
         collect_ip_routes(exec, &mut section, &mut warnings);
         collect_proxy(exec, &mut section, &mut hints);
-        collect_dnf_proxy(exec, &mut section);
+        collect_dnf_proxy(exec, &mut section, &mut hints);
 
         let output = InspectorOutput {
             section: SectionData::Network(section),
@@ -681,7 +681,11 @@ fn collect_proxy(
 const DNF_PROXY_KEYS: &[&str] = &["proxy", "proxy_username", "proxy_password", "proxy_auth_method"];
 
 /// Scans dnf.conf and yum.conf for proxy settings.
-fn collect_dnf_proxy(exec: &dyn Executor, section: &mut NetworkSection) {
+fn collect_dnf_proxy(
+    exec: &dyn Executor,
+    section: &mut NetworkSection,
+    hints: &mut Vec<RedactionHint>,
+) {
     for conf_path in &["/etc/dnf/dnf.conf", "/etc/yum.conf"] {
         let content = match exec.read_file(Path::new(conf_path)) {
             Ok(c) => c,
@@ -699,6 +703,13 @@ fn collect_dnf_proxy(exec: &dyn Executor, section: &mut NetworkSection) {
             if let Some((key, _)) = stripped.split_once('=') {
                 let key_lower = key.trim().to_lowercase();
                 if DNF_PROXY_KEYS.contains(&key_lower.as_str()) {
+                    if key_lower == "proxy_password" {
+                        hints.push(RedactionHint {
+                            path: rel_path.clone(),
+                            reason: "DNF proxy password in plaintext".to_string(),
+                            confidence: None,
+                        });
+                    }
                     section.proxy.push(ProxyEntry {
                         source: rel_path.clone(),
                         line: stripped.to_string(),
@@ -718,18 +729,6 @@ mod tests {
     use super::*;
     use crate::executor::mock::MockExecutor;
     use inspectah_core::traits::executor::ExecResult;
-    use inspectah_core::traits::inspector::InspectionContext;
-    use inspectah_core::types::system::SourceSystem;
-
-    fn test_os_release() -> inspectah_core::types::os::OsRelease {
-        inspectah_core::types::os::OsRelease {
-            id: "rhel".to_string(),
-            version_id: "9.4".to_string(),
-            name: "Red Hat Enterprise Linux".to_string(),
-            pretty_name: "Red Hat Enterprise Linux 9.4".to_string(),
-            ..Default::default()
-        }
-    }
 
     fn fixture(name: &str) -> String {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
@@ -774,19 +773,9 @@ mod tests {
     #[test]
     fn nm_malformed_ini_skip_file() {
         // NM dir exists, but file read fails -> Degraded.
-        let exec = MockExecutor::new()
-            .with_dir(
-                "/etc/NetworkManager/system-connections",
-                vec!["bad.nmconnection"],
-            )
-            .with_dir_error(
-                "/etc/NetworkManager/system-connections/bad.nmconnection",
-                std::io::ErrorKind::PermissionDenied,
-            );
-
         // We can't use with_dir_error for a file read; instead, don't
         // register the file so read_file returns NotFound.
-        let exec2 = MockExecutor::new().with_dir(
+        let exec = MockExecutor::new().with_dir(
             "/etc/NetworkManager/system-connections",
             vec!["bad.nmconnection"],
         );
@@ -794,7 +783,7 @@ mod tests {
 
         let mut section = NetworkSection::default();
         let mut degraded = Vec::new();
-        collect_nm_connections(&exec2, &mut section, &mut degraded);
+        collect_nm_connections(&exec, &mut section, &mut degraded);
         assert!(section.connections.is_empty(), "bad file should be skipped");
         assert!(
             !degraded.is_empty(),
@@ -835,7 +824,7 @@ mod tests {
     #[test]
     fn firewall_zone_malformed_xml_degraded() {
         let xml = fixture("malformed-zone.xml");
-        let result = parse_zone_xml(&xml);
+        let _result = parse_zone_xml(&xml);
         // Malformed XML: missing closing quote on <service name="ssh"
         // The parser should detect this is malformed and return None.
         // However, our simple scanner may still extract some elements.
@@ -1017,11 +1006,14 @@ mod tests {
         let exec = MockExecutor::new().with_file("/etc/dnf/dnf.conf", &content);
 
         let mut section = NetworkSection::default();
-        collect_dnf_proxy(&exec, &mut section);
+        let mut hints = Vec::new();
+        collect_dnf_proxy(&exec, &mut section, &mut hints);
 
         assert_eq!(section.proxy.len(), 3); // proxy, proxy_username, proxy_password
         assert_eq!(section.proxy[0].source, "etc/dnf/dnf.conf");
         assert!(section.proxy[0].line.contains("proxy="));
+        assert_eq!(hints.len(), 1, "should emit RedactionHint for proxy_password");
+        assert!(hints[0].reason.contains("proxy password"));
     }
 
     // -----------------------------------------------------------------------
