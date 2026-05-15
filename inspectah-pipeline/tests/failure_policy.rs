@@ -11,10 +11,15 @@
 //! 4. Redaction state after pipeline execution
 
 use inspectah_collect::executor::mock::MockExecutor;
+use inspectah_collect::inspectors::config::ConfigInspector;
+use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
+use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
+use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{
-    InspectionContext, Inspector, InspectorError, InspectorOutput,
+    InspectionContext, Inspector, InspectorError, InspectorOutput, RpmState,
 };
 use inspectah_core::types::completeness::{
     Completeness, InspectorId, SectionData, SourceSystemKind,
@@ -553,4 +558,522 @@ fn redaction_state_set_after_engine() {
         config.files[0].content.contains("REDACTED_"),
         "redacted content must contain REDACTED_ token"
     );
+}
+
+// ===========================================================================
+// Wave 2 Inspector Failure Policy Tests (Slice 2c)
+// ===========================================================================
+
+/// Helper: build a MockExecutor with minimal RPM data for Wave 2 pipeline
+/// tests. Provides responses for the RPM inspector's `rpm -qa` and `rpm -Va`
+/// commands so Wave 1 completes successfully and populates RpmState.
+fn wave2_rpm_mock(exec: MockExecutor) -> MockExecutor {
+    exec.with_command(
+        "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
+        ExecResult {
+            stdout: "0:bash-5.2.26-3.el9.x86_64\n".into(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    )
+    .with_command(
+        "rpm -Va",
+        ExecResult {
+            stdout: String::new(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// 1. Scheduled: PermissionDenied on cron spool → Degraded
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_scheduled_permission_denied_degraded() {
+    let exec = wave2_rpm_mock(MockExecutor::new())
+        .with_dir_error("/etc/cron.d", std::io::ErrorKind::PermissionDenied);
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(ScheduledTasksInspector::new()),
+    ];
+
+    let pipeline = collect(&source, &exec, &inspectors);
+    let snapshot = &pipeline.state.snapshot;
+
+    match &snapshot.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => {
+            assert!(
+                degraded_sections.contains(&InspectorId::ScheduledTasks),
+                "ScheduledTasks should be degraded when cron dir is unreadable"
+            );
+        }
+        other => panic!(
+            "Expected Completeness::Partial for PermissionDenied cron dir, got {:?}",
+            other
+        ),
+    }
+
+    // Section should still be present (degraded carries partial data).
+    assert!(
+        snapshot.scheduled_tasks.is_some(),
+        "ScheduledTasks section should be present even when degraded"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 2. Scheduled: cron dirs NotFound → no error, empty section
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_scheduled_not_found_silent() {
+    // No cron/timer/at directories registered → all return NotFound.
+    // The inspector should return Ok with an empty section, not error.
+    let exec = wave2_rpm_mock(MockExecutor::new());
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(ScheduledTasksInspector::new()),
+    ];
+
+    let pipeline = collect(&source, &exec, &inspectors);
+    let snapshot = &pipeline.state.snapshot;
+
+    assert!(
+        matches!(snapshot.completeness, Completeness::Complete),
+        "ScheduledTasks with all dirs NotFound should be Complete, got {:?}",
+        snapshot.completeness
+    );
+
+    assert!(
+        snapshot.scheduled_tasks.is_some(),
+        "ScheduledTasks section should be present with empty data"
+    );
+
+    if let Some(ref section) = snapshot.scheduled_tasks {
+        assert!(section.cron_jobs.is_empty(), "no cron jobs expected");
+        assert!(section.systemd_timers.is_empty(), "no timers expected");
+        assert!(section.at_jobs.is_empty(), "no at jobs expected");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Config: rpm -Va empty + file read failure → Degraded
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_config_rpm_va_failure_degraded() {
+    // Config inspector receives RpmState with empty verification_results
+    // (simulating upstream rpm -Va failure). An /etc file that exists but
+    // can't be read pushes to degraded_reasons, making config Degraded.
+    let exec = MockExecutor::new()
+        // Provide an /etc directory with one file
+        .with_dir("/etc", vec!["myapp.conf"])
+        // The file exists (walk finds it) but reading content fails
+        .with_file_error("/etc/myapp.conf", std::io::ErrorKind::PermissionDenied);
+
+    let rpm_state = RpmState::default(); // empty — simulates rpm -Va failure upstream
+    let source = package_based_source();
+    let inspector = ConfigInspector::new();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+    };
+
+    let result = inspector.inspect(&ctx);
+    match result {
+        Err(InspectorError::Degraded { reason, .. }) => {
+            assert!(
+                reason.contains("degraded"),
+                "expected 'degraded' in reason, got: {reason}"
+            );
+        }
+        other => panic!(
+            "expected Degraded for config with file read failure, got: {other:?}"
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Config: PermissionDenied on /etc subdir → Degraded
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_config_etc_permission_denied_degraded() {
+    // /etc exists and is listable, but a subdirectory has PermissionDenied.
+    // walk_etc_recursive encounters the error and pushes to degraded_reasons.
+    // An unowned file that can't be read also contributes to degradation.
+    let exec = wave2_rpm_mock(MockExecutor::new())
+        // /etc is readable at top level (walk starts here)
+        .with_dir("/etc", vec!["httpd", "myapp.conf"])
+        // /etc/httpd is PermissionDenied → walk_recursive_inner skips it
+        .with_dir_error("/etc/httpd", std::io::ErrorKind::PermissionDenied)
+        // /etc/myapp.conf exists but content read fails → degraded_reasons
+        .with_file_error("/etc/myapp.conf", std::io::ErrorKind::PermissionDenied);
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(ConfigInspector::new()),
+    ];
+
+    let pipeline = collect(&source, &exec, &inspectors);
+    let snapshot = &pipeline.state.snapshot;
+
+    match &snapshot.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => {
+            assert!(
+                degraded_sections.contains(&InspectorId::Config),
+                "Config should be degraded when /etc subdirs are unreadable"
+            );
+        }
+        other => panic!(
+            "Expected Completeness::Partial for /etc PermissionDenied, got {:?}",
+            other
+        ),
+    }
+
+    // Config section should still be present (degraded carries partial data).
+    assert!(
+        snapshot.config.is_some(),
+        "Config section should be present even when degraded"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. SELinux: semanage unavailable → Degraded with sysfs fallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_selinux_semanage_unavailable_degraded() {
+    // semanage commands all fail (exit 127). getenforce also fails.
+    // sysfs fallback also unavailable. This triggers degraded because
+    // SELinux mode detection fails (both getenforce and sysfs).
+    let exec = wave2_rpm_mock(MockExecutor::new())
+        // getenforce fails
+        .with_command(
+            "getenforce",
+            ExecResult {
+                exit_code: 127,
+                stderr: "command not found".into(),
+                ..Default::default()
+            },
+        )
+        // sysfs fallback not available (file not registered → NotFound)
+        // semanage boolean -l fails (chroot / semanage boolean -l)
+        .with_command(
+            "chroot / semanage boolean -l",
+            ExecResult {
+                exit_code: 127,
+                stderr: "command not found".into(),
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "chroot / semanage fcontext -l -C",
+            ExecResult {
+                exit_code: 127,
+                stderr: "command not found".into(),
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "chroot / semanage port -l -C",
+            ExecResult {
+                exit_code: 127,
+                stderr: "command not found".into(),
+                ..Default::default()
+            },
+        );
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(SelinuxInspector::new()),
+    ];
+
+    let pipeline = collect(&source, &exec, &inspectors);
+    let snapshot = &pipeline.state.snapshot;
+
+    match &snapshot.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => {
+            assert!(
+                degraded_sections.contains(&InspectorId::Selinux),
+                "Selinux should be degraded when semanage and sysfs are unavailable"
+            );
+        }
+        other => panic!(
+            "Expected Completeness::Partial for semanage unavailable, got {:?}",
+            other
+        ),
+    }
+
+    // Section should still be present with partial data.
+    assert!(
+        snapshot.selinux.is_some(),
+        "Selinux section should be present even when degraded"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 6. SELinux: PermissionDenied on audit rules → Degraded
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_selinux_audit_permission_denied_degraded() {
+    // Audit rules dir exists but is unreadable → Degraded.
+    let exec = wave2_rpm_mock(MockExecutor::new())
+        // getenforce succeeds so mode detection is fine
+        .with_command(
+            "getenforce",
+            ExecResult {
+                stdout: "Enforcing\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_file(
+            "/etc/selinux/config",
+            "SELINUX=enforcing\nSELINUXTYPE=targeted\n",
+        )
+        // semanage boolean works
+        .with_command(
+            "chroot / semanage boolean -l",
+            ExecResult {
+                stdout: String::new(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "chroot / semanage fcontext -l -C",
+            ExecResult {
+                stdout: String::new(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "chroot / semanage port -l -C",
+            ExecResult {
+                stdout: String::new(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        // Audit rules dir: PermissionDenied
+        .with_dir_error(
+            "/etc/audit/rules.d",
+            std::io::ErrorKind::PermissionDenied,
+        )
+        // FIPS mode check
+        .with_file("/proc/sys/crypto/fips_enabled", "0\n");
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(SelinuxInspector::new()),
+    ];
+
+    let pipeline = collect(&source, &exec, &inspectors);
+    let snapshot = &pipeline.state.snapshot;
+
+    match &snapshot.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => {
+            assert!(
+                degraded_sections.contains(&InspectorId::Selinux),
+                "Selinux should be degraded when audit rules dir is unreadable"
+            );
+        }
+        other => panic!(
+            "Expected Completeness::Partial for audit PermissionDenied, got {:?}",
+            other
+        ),
+    }
+
+    assert!(
+        snapshot.selinux.is_some(),
+        "Selinux section should be present even when degraded"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. NonRPM: readelf unavailable → Degraded
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_nonrpm_readelf_unavailable_degraded() {
+    // readelf returns exit code 127 (not found). With partial data from
+    // /opt scan, inspector should return Degraded.
+    let exec = wave2_rpm_mock(MockExecutor::new())
+        .with_command(
+            "readelf --version",
+            ExecResult {
+                exit_code: 127,
+                stderr: "command not found".into(),
+                ..Default::default()
+            },
+        )
+        // Provide a .env file so we get partial data (triggers Degraded, not empty Ok).
+        .with_dir("/opt", vec!["app"])
+        .with_dir("/opt/app", vec![".env"])
+        .with_file("/opt/app/.env", "DATABASE_URL=postgres://localhost/mydb\n");
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(NonRpmInspector::new()),
+    ];
+
+    let pipeline = collect(&source, &exec, &inspectors);
+    let snapshot = &pipeline.state.snapshot;
+
+    match &snapshot.completeness {
+        Completeness::Partial {
+            degraded_sections, ..
+        } => {
+            assert!(
+                degraded_sections.contains(&InspectorId::NonRpmSoftware),
+                "NonRpmSoftware should be degraded when readelf is unavailable"
+            );
+        }
+        other => panic!(
+            "Expected Completeness::Partial for readelf unavailable, got {:?}",
+            other
+        ),
+    }
+
+    // Section should still be present with partial data (env files).
+    assert!(
+        snapshot.non_rpm_software.is_some(),
+        "NonRpmSoftware section should be present even when degraded"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8. NonRPM: /opt not found → no error, no items
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_nonrpm_scan_dir_not_found_silent() {
+    // No /opt, /srv, /usr/local registered → all return NotFound.
+    // readelf is available. Inspector should return Ok with empty section.
+    let exec = wave2_rpm_mock(MockExecutor::new())
+        .with_command(
+            "readelf --version",
+            ExecResult {
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "file --version",
+            ExecResult {
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+
+    let source = package_based_source();
+    let inspectors: Vec<Box<dyn Inspector>> = vec![
+        Box::new(RpmInspector::new()),
+        Box::new(NonRpmInspector::new()),
+    ];
+
+    let pipeline = collect(&source, &exec, &inspectors);
+    let snapshot = &pipeline.state.snapshot;
+
+    assert!(
+        matches!(snapshot.completeness, Completeness::Complete),
+        "NonRpmSoftware with all scan dirs NotFound should be Complete, got {:?}",
+        snapshot.completeness
+    );
+
+    assert!(
+        snapshot.non_rpm_software.is_some(),
+        "NonRpmSoftware section should be present with empty data"
+    );
+
+    if let Some(ref section) = snapshot.non_rpm_software {
+        assert!(section.items.is_empty(), "no items expected");
+        assert!(section.env_files.is_empty(), "no env files expected");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 9. Wave 2 RPM unavailable → all 4 dependents return Failed
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_wave2_rpm_unavailable_fails_all_dependents() {
+    // When ctx.rpm_state is None, all 4 Wave 2 inspectors MUST return
+    // Err(InspectorError::Failed). This proves the None vs Some(empty)
+    // distinction: RPM failure is fatal to all dependents.
+    let exec = MockExecutor::new();
+    let source = package_based_source();
+
+    let inspectors: Vec<(&str, Box<dyn Inspector>)> = vec![
+        ("ScheduledTasks", Box::new(ScheduledTasksInspector::new())),
+        ("Config", Box::new(ConfigInspector::new())),
+        ("Selinux", Box::new(SelinuxInspector::new())),
+        ("NonRpmSoftware", Box::new(NonRpmInspector::new())),
+    ];
+
+    for (name, inspector) in &inspectors {
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+        };
+
+        let result = inspector.inspect(&ctx);
+        match result {
+            Err(InspectorError::Failed { reason }) => {
+                assert!(
+                    reason.to_lowercase().contains("rpm")
+                        || reason.to_lowercase().contains("prerequisite"),
+                    "{name}: expected RPM-related failure reason, got: {reason}"
+                );
+            }
+            other => panic!(
+                "{name}: expected InspectorError::Failed for None rpm_state, got: {other:?}"
+            ),
+        }
+    }
+
+    // Verify that Some(empty) does NOT fail — it produces Ok or Degraded,
+    // but never Failed. This is the critical None vs Some(empty) distinction.
+    let empty_rpm_state = RpmState::default();
+    for (name, inspector) in &inspectors {
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: Some(&empty_rpm_state),
+        };
+
+        let result = inspector.inspect(&ctx);
+        match &result {
+            Err(InspectorError::Failed { reason }) => {
+                panic!(
+                    "{name}: Some(empty) rpm_state should NOT produce Failed, \
+                     but got Failed {{ reason: \"{reason}\" }}"
+                );
+            }
+            // Ok or Degraded are both acceptable — the point is it's not Failed.
+            _ => {}
+        }
+    }
 }
