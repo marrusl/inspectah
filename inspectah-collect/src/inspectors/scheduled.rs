@@ -707,7 +707,7 @@ fn make_timer_service(_name: &str, cron_expr: &str, path: &str, command: &str) -
 /// the entry as requiring manual operator follow-up.
 ///
 /// Returns `(service_content, timer_content)` — note: timer_content is empty.
-fn make_reboot_advisory(name: &str, path: &str, command: &str) -> (String, String) {
+fn make_reboot_advisory(_name: &str, path: &str, command: &str) -> (String, String) {
     let exec_line = if command.is_empty() {
         "ExecStart=/bin/true\n# FIXME: could not extract command from cron entry".to_string()
     } else {

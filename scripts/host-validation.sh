@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Host Validation Script for inspectah Rust Phase 2 (Slice 2a + 2b)
+# Host Validation Script for inspectah Rust Phase 2 (Slice 2c — all 11 sections)
 #
 # Runs both Go and Rust inspectah on a live package-mode system and
 # compares section-level output to establish parity evidence.
-# Covers all 7 inspector sections: RPM + services, storage, kernelboot
-# (2a) + network, containers, users_groups (2b).
+# Covers all 11 inspector sections: RPM, services, storage, kernelboot,
+# network, containers, users_groups, scheduled_tasks, config, selinux,
+# non_rpm_software.
 #
 # Produces a tarball in the working directory with all evidence.
 #
@@ -112,7 +113,11 @@ jq '.kernel_boot' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-kernelboot-section.js
 jq '.network' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-network-section.json"
 jq '.containers' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-containers-section.json"
 jq '.users_groups' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-users-groups-section.json"
-echo "Golden files extracted (2a + 2b sections)."
+jq '.scheduled_tasks' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-scheduled-tasks-section.json"
+jq '.config' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-config-section.json"
+jq '.selinux' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-selinux-section.json"
+jq '.non_rpm_software' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-non-rpm-software-section.json"
+echo "Golden files extracted (all 11 sections)."
 echo ""
 
 # --- Step 4: Extract Rust sections ---
@@ -131,7 +136,11 @@ jq '.kernel_boot' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-kernelboot.json"
 jq '.network' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-network.json"
 jq '.containers' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-containers.json"
 jq '.users_groups' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-users-groups.json"
-echo "Rust sections extracted (2a + 2b)."
+jq '.scheduled_tasks' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-scheduled-tasks.json"
+jq '.config' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-config.json"
+jq '.selinux' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-selinux.json"
+jq '.non_rpm_software' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-non-rpm-software.json"
+echo "Rust sections extracted (all 11)."
 echo ""
 
 # --- Step 5: Section-level diff ---
@@ -140,7 +149,7 @@ echo "=== Section Parity Comparison ==="
 PASS_COUNT=0
 FAIL_COUNT=0
 
-for section in services storage kernelboot network containers users-groups; do
+for section in services storage kernelboot network containers users-groups scheduled-tasks config selinux non-rpm-software; do
     go_file="$WORKDIR/golden/go-v13-${section}-section.json"
     rust_file="$WORKDIR/evidence/rust-${section}.json"
     diff_file="$WORKDIR/evidence/diff-${section}.txt"
@@ -172,7 +181,7 @@ GO_VERSION=$("$GO_BIN" version 2>/dev/null || echo "unknown")
 RUST_VERSION=$("$RUST_BIN" version 2>/dev/null || echo "0.8.0-alpha.1")
 
 {
-    echo "# Host Validation Evidence - Slice 2a + 2b"
+    echo "# Host Validation Evidence - Slice 2c (all 11 sections)"
     echo ""
     echo "**Date:** $(date -Iseconds)"
     echo "**Hostname:** $(hostname)"
@@ -199,7 +208,7 @@ RUST_VERSION=$("$RUST_BIN" version 2>/dev/null || echo "0.8.0-alpha.1")
     echo ""
     echo "## Section Parity"
     echo ""
-    for section in services storage kernelboot; do
+    for section in services storage kernelboot network containers users-groups scheduled-tasks config selinux non-rpm-software; do
         diff_file="$WORKDIR/evidence/diff-${section}.txt"
         if [ ! -s "$diff_file" ]; then
             echo "- **$section:** MATCH"
@@ -243,7 +252,7 @@ echo "Tarball (all evidence + goldens):"
 echo "  $TARBALL_PATH"
 echo ""
 echo "Repo files updated:"
-echo "  testdata/golden/go-v13-*-section.json  (7 sections)"
+echo "  testdata/golden/go-v13-*-section.json  (11 sections)"
 echo "  testdata/evidence/host-validation.md"
 echo ""
 echo "Next steps:"
