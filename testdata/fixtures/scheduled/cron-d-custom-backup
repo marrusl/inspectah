@@ -1,0 +1,2 @@
+# Custom backup job - not RPM-owned
+30 2 * * * root /opt/backup.sh

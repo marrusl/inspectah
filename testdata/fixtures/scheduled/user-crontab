@@ -1,0 +1,4 @@
+# Health check every 15 minutes
+*/15 * * * * /home/app/check-health.sh
+# Run startup script on reboot
+@reboot /home/app/startup.sh

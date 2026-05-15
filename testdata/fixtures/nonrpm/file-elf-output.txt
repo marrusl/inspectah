@@ -1,0 +1,1 @@
+/usr/local/bin/myapp: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2, for GNU/Linux 3.2.0, stripped
