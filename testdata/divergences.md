@@ -201,3 +201,101 @@ Any difference NOT listed here fails CI.
 - Reason: Include directives are structural information about how sudoers is organized. Preserving them aids migration planning.
 - Disposition: permanent
 - Approval: approved-by-spec
+
+## Non-RPM Software Section
+
+### pip_packages/npm_packages/gem_packages vs packages (schema divergence)
+- Go: Uses separate typed arrays `pip_packages`, `npm_packages`, `gem_packages` for language-specific package lists.
+- Rust: Uses a single `packages: Vec<PipPackage>` field. Go-only fields are silently ignored during deserialization (no `deny_unknown_fields`).
+- Path: `$.items[*].pip_packages`
+- Path: `$.items[*].npm_packages`
+- Path: `$.items[*].gem_packages`
+- Reason: Rust consolidates language-specific package lists into a single typed array. The Go fields are provisionally retained in the golden for documentation but are dropped on roundtrip.
+- Disposition: permanent — Rust schema simplification
+- Approval: approved-by-spec
+
+### acknowledged on non_rpm items (Rust serialization difference)
+- Go: field absent
+- Rust: field omitted when false (skip_serializing_if = "is_false")
+- Path: `$.items[*].acknowledged`
+- Reason: Rust-era field with skip_serializing_if. Not present in Go output, not emitted by Rust when false. No roundtrip divergence for Go goldens since both sides omit it.
+- Disposition: permanent — Rust-era enhancement
+
+### fleet on non_rpm items (Rust-only nullable field)
+- Go: field absent
+- Rust: `"fleet": null` or omitted
+- Path: `$.items[*].fleet`
+- Reason: Rust struct includes fleet as Option<FleetPrevalence>. Go inspector did not populate this field.
+- Disposition: permanent — Rust-era enhancement
+
+### review_status and notes on non_rpm items (Rust-only fields)
+- Go: fields absent
+- Rust: omitted when empty (skip_serializing_if = "String::is_empty")
+- Path: `$.items[*].review_status`
+- Path: `$.items[*].notes`
+- Reason: Rust-era enhancement fields for tracking review state. Not present in Go output, not emitted by Rust when empty. No roundtrip divergence for Go goldens.
+- Disposition: permanent — Rust-era enhancement
+
+### packages on non_rpm items (Rust-only field)
+- Go: field absent (uses pip_packages/npm_packages/gem_packages instead)
+- Rust: `"packages": []` (Rust serde default produces empty array)
+- Path: `$.items[*].packages`
+- Reason: Rust field that replaces Go's three separate package arrays. Empty in Go golden roundtrip since Go doesn't populate it.
+- Disposition: permanent — Rust schema simplification
+
+### fleet on env_files (Rust-only nullable field)
+- Go: field absent
+- Rust: `"fleet": null` or omitted
+- Path: `$.env_files[*].fleet`
+- Reason: ConfigFileEntry struct includes fleet as Option<FleetPrevalence>. Go inspector did not populate this field on env_files.
+- Disposition: permanent — Rust-era enhancement
+
+## Scheduled Tasks Section
+
+### fleet on cron_jobs (Rust-only nullable field)
+- Go: field absent
+- Rust: `"fleet": null` or omitted
+- Path: `$.cron_jobs[*].fleet`
+- Reason: CronJob struct includes fleet as Option<FleetPrevalence>. Go inspector did not populate this field.
+- Disposition: permanent — Rust-era enhancement
+
+### include/fleet on systemd_timers (Rust-only nullable fields)
+- Go: fields absent
+- Rust: `"include": null`, `"fleet": null` or omitted (both Option with skip_serializing_if)
+- Path: `$.systemd_timers[*].include`
+- Path: `$.systemd_timers[*].fleet`
+- Reason: Rust uses Option<bool> for include and Option<FleetPrevalence> for fleet on SystemdTimer. Both absent in Go output.
+- Disposition: permanent — Rust-era enhancement
+
+### include/fleet on at_jobs (Rust-only nullable fields)
+- Go: fields absent
+- Rust: `"include": null`, `"fleet": null` or omitted (both Option with skip_serializing_if)
+- Path: `$.at_jobs[*].include`
+- Path: `$.at_jobs[*].fleet`
+- Reason: Rust uses Option<bool> for include and Option<FleetPrevalence> for fleet on AtJob. Both absent in Go output.
+- Disposition: permanent — Rust-era enhancement
+
+### fleet on generated_timer_units (Rust-only nullable field)
+- Go: field absent
+- Rust: `"fleet": null` or omitted
+- Path: `$.generated_timer_units[*].fleet`
+- Reason: GeneratedTimerUnit struct includes fleet as Option<FleetPrevalence>. Go inspector did not populate this field.
+- Disposition: permanent — Rust-era enhancement
+
+## SELinux Section
+
+### fleet on port_labels (Rust-only nullable field)
+- Go: field absent
+- Rust: `"fleet": null` or omitted
+- Path: `$.port_labels[*].fleet`
+- Reason: SelinuxPortLabel struct includes fleet as Option<FleetPrevalence>. Go inspector did not populate this field.
+- Disposition: permanent — Rust-era enhancement
+
+## Config Section
+
+### fleet on config files (Rust-only nullable field)
+- Go: field absent
+- Rust: `"fleet": null` or omitted
+- Path: `$.files[*].fleet`
+- Reason: ConfigFileEntry struct includes fleet as Option<FleetPrevalence>. Go inspector did not populate this field.
+- Disposition: permanent — Rust-era enhancement

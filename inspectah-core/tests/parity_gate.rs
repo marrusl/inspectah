@@ -12,10 +12,14 @@
 
 use inspectah_core::normalize::{diff_snapshots, load_divergence_allowlist};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::config::ConfigSection;
 use inspectah_core::types::containers::ContainerSection;
 use inspectah_core::types::kernelboot::KernelBootSection;
 use inspectah_core::types::network::NetworkSection;
+use inspectah_core::types::nonrpm::NonRpmSoftwareSection;
 use inspectah_core::types::os::SystemType;
+use inspectah_core::types::scheduled::ScheduledTaskSection;
+use inspectah_core::types::selinux::SelinuxSection;
 use inspectah_core::types::services::ServiceSection;
 use inspectah_core::types::storage::StorageSection;
 use inspectah_core::types::users::UserGroupSection;
@@ -514,6 +518,543 @@ fn test_users_groups_field_coverage() {
     );
 }
 
+// ── Scheduled tasks section serde roundtrip ──────────────────────────
+
+/// Proves Go golden JSON deserializes into ScheduledTaskSection and
+/// re-serializes without undocumented field loss.
+/// NOTE: Golden is provisional — will be replaced with real Go output
+/// during host validation (Task 13).
+#[test]
+fn test_serde_roundtrip_scheduled_tasks() {
+    let golden = include_str!("../../testdata/golden/go-v13-scheduled-tasks-section.json");
+
+    let section: ScheduledTaskSection =
+        serde_json::from_str(golden).expect("golden must deserialize into ScheduledTaskSection");
+
+    let rust_json = serde_json::to_string_pretty(&section).unwrap();
+    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
+
+    assert!(
+        undocumented.is_empty(),
+        "Scheduled tasks section has undocumented divergences:\n{}",
+        format_diffs(&undocumented)
+    );
+}
+
+/// Validates provisional golden scheduled tasks structure.
+/// Provisional data: 3 cron_jobs, 2 systemd_timers, 2 at_jobs,
+/// 2 generated_timer_units.
+#[test]
+fn test_scheduled_tasks_field_coverage() {
+    let golden = include_str!("../../testdata/golden/go-v13-scheduled-tasks-section.json");
+    let section: ScheduledTaskSection = serde_json::from_str(golden).unwrap();
+
+    // cron_jobs: 3 cron entries
+    assert!(
+        !section.cron_jobs.is_empty(),
+        "golden must contain cron_jobs"
+    );
+    assert_eq!(
+        section.cron_jobs.len(),
+        3,
+        "provisional golden has 3 cron_jobs"
+    );
+    let cj = &section.cron_jobs[0];
+    assert!(!cj.path.is_empty(), "cron path must be populated");
+    assert!(!cj.source.is_empty(), "cron source must be populated");
+
+    // systemd_timers: 2 timer units
+    assert!(
+        !section.systemd_timers.is_empty(),
+        "golden must contain systemd_timers"
+    );
+    assert_eq!(
+        section.systemd_timers.len(),
+        2,
+        "provisional golden has 2 systemd_timers"
+    );
+    let timer = &section.systemd_timers[0];
+    assert!(!timer.name.is_empty(), "timer name must be populated");
+    assert!(
+        !timer.on_calendar.is_empty(),
+        "timer on_calendar must be populated"
+    );
+    assert!(
+        !timer.exec_start.is_empty(),
+        "timer exec_start must be populated"
+    );
+    assert!(
+        !timer.timer_content.is_empty(),
+        "timer_content must be populated"
+    );
+    assert!(
+        !timer.service_content.is_empty(),
+        "service_content must be populated"
+    );
+
+    // at_jobs: 2 at jobs
+    assert!(!section.at_jobs.is_empty(), "golden must contain at_jobs");
+    assert_eq!(
+        section.at_jobs.len(),
+        2,
+        "provisional golden has 2 at_jobs"
+    );
+    let at = &section.at_jobs[0];
+    assert!(!at.file.is_empty(), "at file must be populated");
+    assert!(!at.command.is_empty(), "at command must be populated");
+    assert!(!at.user.is_empty(), "at user must be populated");
+
+    // generated_timer_units: 2 generated timers
+    assert!(
+        !section.generated_timer_units.is_empty(),
+        "golden must contain generated_timer_units"
+    );
+    assert_eq!(
+        section.generated_timer_units.len(),
+        2,
+        "provisional golden has 2 generated_timer_units"
+    );
+    let gen = &section.generated_timer_units[0];
+    assert!(!gen.name.is_empty(), "generated timer name must be populated");
+    assert!(
+        !gen.cron_expr.is_empty(),
+        "generated timer cron_expr must be populated"
+    );
+    assert!(
+        !gen.source_path.is_empty(),
+        "generated timer source_path must be populated"
+    );
+    assert!(
+        !gen.command.is_empty(),
+        "generated timer command must be populated"
+    );
+}
+
+// ── Config section serde roundtrip ───────────────────────────────────
+
+/// Proves Go golden JSON deserializes into ConfigSection and
+/// re-serializes without undocumented field loss.
+/// NOTE: Golden is provisional — will be replaced with real Go output
+/// during host validation (Task 13).
+#[test]
+fn test_serde_roundtrip_config() {
+    let golden = include_str!("../../testdata/golden/go-v13-config-section.json");
+
+    let section: ConfigSection =
+        serde_json::from_str(golden).expect("golden must deserialize into ConfigSection");
+
+    let rust_json = serde_json::to_string_pretty(&section).unwrap();
+    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
+
+    assert!(
+        undocumented.is_empty(),
+        "Config section has undocumented divergences:\n{}",
+        format_diffs(&undocumented)
+    );
+}
+
+/// Validates provisional golden config structure.
+/// Provisional data: 11 config files across multiple categories and kinds.
+#[test]
+fn test_config_field_coverage() {
+    let golden = include_str!("../../testdata/golden/go-v13-config-section.json");
+    let section: ConfigSection = serde_json::from_str(golden).unwrap();
+
+    assert!(
+        !section.files.is_empty(),
+        "golden must contain config files"
+    );
+    assert!(
+        section.files.len() >= 5,
+        "provisional golden should have 5+ config files, got {}",
+        section.files.len()
+    );
+
+    let file = &section.files[0];
+    assert!(!file.path.is_empty(), "config path must be populated");
+    assert!(
+        !file.content.is_empty(),
+        "first config file content must be populated"
+    );
+
+    // Verify multiple ConfigFileKind variants are exercised
+    let kinds: Vec<String> = section
+        .files
+        .iter()
+        .map(|f| serde_json::to_value(&f.kind).unwrap().as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        kinds.contains(&"unowned".to_string()),
+        "golden must contain unowned files"
+    );
+    assert!(
+        kinds.contains(&"rpm_owned_default".to_string()),
+        "golden must contain rpm_owned_default files"
+    );
+    assert!(
+        kinds.contains(&"rpm_owned_modified".to_string()),
+        "golden must contain rpm_owned_modified files"
+    );
+    assert!(
+        kinds.contains(&"orphaned".to_string()),
+        "golden must contain orphaned files"
+    );
+
+    // Verify multiple ConfigCategory variants are exercised
+    let cats: Vec<String> = section
+        .files
+        .iter()
+        .map(|f| serde_json::to_value(&f.category).unwrap().as_str().unwrap().to_string())
+        .collect();
+    assert!(
+        cats.contains(&"sysctl".to_string()),
+        "golden must contain sysctl category"
+    );
+    assert!(
+        cats.contains(&"limits".to_string()),
+        "golden must contain limits category"
+    );
+    assert!(
+        cats.contains(&"environment".to_string()),
+        "golden must contain environment category"
+    );
+}
+
+// ── SELinux section serde roundtrip ──────────────────────────────────
+
+/// Proves Go golden JSON deserializes into SelinuxSection and
+/// re-serializes without undocumented field loss.
+/// NOTE: Golden is provisional — will be replaced with real Go output
+/// during host validation (Task 13).
+#[test]
+fn test_serde_roundtrip_selinux() {
+    let golden = include_str!("../../testdata/golden/go-v13-selinux-section.json");
+
+    let section: SelinuxSection =
+        serde_json::from_str(golden).expect("golden must deserialize into SelinuxSection");
+
+    let rust_json = serde_json::to_string_pretty(&section).unwrap();
+    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
+
+    assert!(
+        undocumented.is_empty(),
+        "SELinux section has undocumented divergences:\n{}",
+        format_diffs(&undocumented)
+    );
+}
+
+/// Validates provisional golden SELinux structure.
+/// Provisional data: enforcing mode, 2 custom modules, 2 boolean overrides,
+/// 2 fcontext rules, 2 audit rules, 2 pam configs, 3 port labels.
+#[test]
+fn test_selinux_field_coverage() {
+    let golden = include_str!("../../testdata/golden/go-v13-selinux-section.json");
+    let section: SelinuxSection = serde_json::from_str(golden).unwrap();
+
+    assert_eq!(section.mode, "enforcing", "mode must be enforcing");
+
+    assert!(
+        !section.custom_modules.is_empty(),
+        "golden must contain custom_modules"
+    );
+    assert_eq!(
+        section.custom_modules.len(),
+        2,
+        "provisional golden has 2 custom_modules"
+    );
+
+    assert!(
+        !section.boolean_overrides.is_empty(),
+        "golden must contain boolean_overrides"
+    );
+    assert_eq!(
+        section.boolean_overrides.len(),
+        2,
+        "provisional golden has 2 boolean_overrides"
+    );
+
+    assert!(
+        !section.fcontext_rules.is_empty(),
+        "golden must contain fcontext_rules"
+    );
+
+    assert!(
+        !section.audit_rules.is_empty(),
+        "golden must contain audit_rules"
+    );
+
+    assert!(!section.fips_mode, "provisional golden has fips_mode=false");
+
+    assert!(
+        !section.pam_configs.is_empty(),
+        "golden must contain pam_configs"
+    );
+
+    assert!(
+        !section.port_labels.is_empty(),
+        "golden must contain port_labels"
+    );
+    assert_eq!(
+        section.port_labels.len(),
+        3,
+        "provisional golden has 3 port_labels"
+    );
+    let pl = &section.port_labels[0];
+    assert!(!pl.protocol.is_empty(), "port protocol must be populated");
+    assert!(!pl.port.is_empty(), "port number must be populated");
+    assert!(
+        !pl.label_type.is_empty(),
+        "port label_type must be populated"
+    );
+}
+
+// ── Non-RPM software section serde roundtrip ─────────────────────────
+
+/// Proves Go golden JSON deserializes into NonRpmSoftwareSection and
+/// re-serializes without undocumented field loss.
+/// NOTE: Golden is provisional — will be replaced with real Go output
+/// during host validation (Task 13).
+#[test]
+fn test_serde_roundtrip_non_rpm_software() {
+    let golden = include_str!("../../testdata/golden/go-v13-non-rpm-software-section.json");
+
+    let section: NonRpmSoftwareSection =
+        serde_json::from_str(golden).expect("golden must deserialize into NonRpmSoftwareSection");
+
+    let rust_json = serde_json::to_string_pretty(&section).unwrap();
+    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
+
+    assert!(
+        undocumented.is_empty(),
+        "Non-RPM software section has undocumented divergences:\n{}",
+        format_diffs(&undocumented)
+    );
+}
+
+/// Validates provisional golden non-RPM software structure.
+/// Provisional data: 4 items (binary, python venv, npm project, static binary),
+/// 2 env_files.
+#[test]
+fn test_non_rpm_software_field_coverage() {
+    let golden = include_str!("../../testdata/golden/go-v13-non-rpm-software-section.json");
+    let section: NonRpmSoftwareSection = serde_json::from_str(golden).unwrap();
+
+    assert!(
+        !section.items.is_empty(),
+        "golden must contain non-rpm items"
+    );
+    assert_eq!(
+        section.items.len(),
+        4,
+        "provisional golden has 4 non-rpm items"
+    );
+
+    // First item: C binary with shared libs
+    let item = &section.items[0];
+    assert!(!item.path.is_empty(), "item path must be populated");
+    assert!(!item.name.is_empty(), "item name must be populated");
+    assert!(!item.method.is_empty(), "item method must be populated");
+    assert!(
+        !item.confidence.is_empty(),
+        "item confidence must be populated"
+    );
+    assert!(
+        !item.shared_libs.is_empty(),
+        "C binary must have shared_libs"
+    );
+
+    // Second item: Python venv
+    let venv = &section.items[1];
+    assert_eq!(venv.lang, "python", "second item should be python");
+    assert!(
+        venv.system_site_packages,
+        "python venv should have system_site_packages=true"
+    );
+    assert!(
+        venv.has_c_extensions,
+        "python venv should have has_c_extensions=true"
+    );
+
+    // Third item: npm project with git info
+    let npm = &section.items[2];
+    assert!(!npm.git_remote.is_empty(), "npm project should have git_remote");
+    assert!(!npm.git_commit.is_empty(), "npm project should have git_commit");
+    assert!(!npm.git_branch.is_empty(), "npm project should have git_branch");
+    assert!(npm.files.is_some(), "npm project should have files");
+
+    // Fourth item: static Go binary
+    let static_bin = &section.items[3];
+    assert!(static_bin.r#static, "Go binary should be static");
+    assert!(!static_bin.include, "static tool has include=false");
+
+    // env_files
+    assert!(
+        !section.env_files.is_empty(),
+        "golden must contain env_files"
+    );
+    assert_eq!(
+        section.env_files.len(),
+        2,
+        "provisional golden has 2 env_files"
+    );
+}
+
+// ── Env file roundtrip test ──────────────────────────────────────────
+
+/// Proves .env files survive roundtrip in the non_rpm_software section.
+/// This is important because env files are ConfigFileEntry structs reused
+/// across sections — verifies the shared type round-trips within the
+/// non-RPM context.
+#[test]
+fn test_env_file_roundtrip() {
+    let golden = include_str!("../../testdata/golden/go-v13-non-rpm-software-section.json");
+    let section: NonRpmSoftwareSection = serde_json::from_str(golden).unwrap();
+
+    assert!(
+        !section.env_files.is_empty(),
+        "golden must contain env_files for this test"
+    );
+
+    // Round-trip just the env_files through serde
+    let env_json = serde_json::to_string_pretty(&section.env_files).unwrap();
+    let parsed: Vec<inspectah_core::types::config::ConfigFileEntry> =
+        serde_json::from_str(&env_json).unwrap();
+
+    assert_eq!(
+        section.env_files.len(),
+        parsed.len(),
+        "env_files count must survive roundtrip"
+    );
+
+    for (orig, rt) in section.env_files.iter().zip(parsed.iter()) {
+        assert_eq!(orig.path, rt.path, "env_file path must survive roundtrip");
+        assert_eq!(
+            orig.content, rt.content,
+            "env_file content must survive roundtrip"
+        );
+        assert_eq!(
+            orig.include, rt.include,
+            "env_file include must survive roundtrip"
+        );
+    }
+}
+
+// ── Full snapshot all-sections-present test ───────────────────────────
+
+/// Proves a full snapshot with all 11 section keys present round-trips
+/// through serde without losing any section.
+///
+/// Some Go goldens use null for empty arrays (Go `omitempty` behavior).
+/// Rust `#[serde(default)]` handles missing fields but not explicit
+/// nulls, so we normalize null→[] in the Value tree before typed
+/// deserialization.
+#[test]
+fn test_full_snapshot_serde_all_sections_present() {
+    use serde_json::Value;
+
+    // Build the snapshot as a Value tree
+    let mut snap_value = serde_json::json!({
+        "schema_version": 14,
+        "meta": {},
+        "os_release": null,
+        "system_type": "package-mode",
+        "preflight": {"status": "ok"},
+        "warnings": [],
+        "redactions": [],
+        "redaction_hints": []
+    });
+
+    // Known fields that are Vec (not Option) and may have null in Go goldens.
+    // These must be coerced from null → [] for typed deserialization.
+    let vec_null_fields: &[&[&str]] = &[
+        &["rpm", "module_streams"],
+        &["rpm", "version_locks"],
+        &["rpm", "multiarch_packages"],
+        &["rpm", "duplicate_packages"],
+    ];
+
+    let sections: &[(&str, &str)] = &[
+        ("rpm", include_str!("../../testdata/golden/go-v13-rpm-section.json")),
+        ("config", include_str!("../../testdata/golden/go-v13-config-section.json")),
+        ("services", include_str!("../../testdata/golden/go-v13-services-section.json")),
+        ("network", include_str!("../../testdata/golden/go-v13-network-section.json")),
+        ("storage", include_str!("../../testdata/golden/go-v13-storage-section.json")),
+        ("scheduled_tasks", include_str!("../../testdata/golden/go-v13-scheduled-tasks-section.json")),
+        ("containers", include_str!("../../testdata/golden/go-v13-containers-section.json")),
+        ("non_rpm_software", include_str!("../../testdata/golden/go-v13-non-rpm-software-section.json")),
+        ("kernel_boot", include_str!("../../testdata/golden/go-v13-kernelboot-section.json")),
+        ("selinux", include_str!("../../testdata/golden/go-v13-selinux-section.json")),
+        ("users_groups", include_str!("../../testdata/golden/go-v13-users-groups-section.json")),
+    ];
+
+    for (key, json) in sections {
+        let section: Value = serde_json::from_str(json)
+            .unwrap_or_else(|e| panic!("golden for {key} is not valid JSON: {e}"));
+        snap_value[key] = section;
+    }
+
+    // Coerce known Vec-typed null fields to empty arrays
+    for path in vec_null_fields {
+        if path.len() == 2 {
+            if let Some(section) = snap_value.get_mut(path[0]) {
+                if let Some(field) = section.get_mut(path[1]) {
+                    if field.is_null() {
+                        *field = Value::Array(vec![]);
+                    }
+                }
+            }
+        }
+    }
+
+    // Serialize the assembled snapshot, then deserialize into typed struct
+    let full_json = serde_json::to_string_pretty(&snap_value).unwrap();
+    let snap: InspectionSnapshot = serde_json::from_str(&full_json)
+        .expect("full snapshot with all sections must deserialize");
+
+    // All 11 section keys must be present (Some, not None)
+    assert!(snap.rpm.is_some(), "rpm section must survive roundtrip");
+    assert!(
+        snap.config.is_some(),
+        "config section must survive roundtrip"
+    );
+    assert!(
+        snap.services.is_some(),
+        "services section must survive roundtrip"
+    );
+    assert!(
+        snap.network.is_some(),
+        "network section must survive roundtrip"
+    );
+    assert!(
+        snap.storage.is_some(),
+        "storage section must survive roundtrip"
+    );
+    assert!(
+        snap.scheduled_tasks.is_some(),
+        "scheduled_tasks section must survive roundtrip"
+    );
+    assert!(
+        snap.containers.is_some(),
+        "containers section must survive roundtrip"
+    );
+    assert!(
+        snap.non_rpm_software.is_some(),
+        "non_rpm_software section must survive roundtrip"
+    );
+    assert!(
+        snap.kernel_boot.is_some(),
+        "kernel_boot section must survive roundtrip"
+    );
+    assert!(
+        snap.selinux.is_some(),
+        "selinux section must survive roundtrip"
+    );
+    assert!(
+        snap.users_groups.is_some(),
+        "users_groups section must survive roundtrip"
+    );
+}
+
 // ── Cross-section golden consistency ─────────────────────────────────
 
 #[test]
@@ -548,6 +1089,22 @@ fn test_all_section_goldens_are_valid_json() {
         (
             "users-groups",
             include_str!("../../testdata/golden/go-v13-users-groups-section.json"),
+        ),
+        (
+            "scheduled-tasks",
+            include_str!("../../testdata/golden/go-v13-scheduled-tasks-section.json"),
+        ),
+        (
+            "config",
+            include_str!("../../testdata/golden/go-v13-config-section.json"),
+        ),
+        (
+            "selinux",
+            include_str!("../../testdata/golden/go-v13-selinux-section.json"),
+        ),
+        (
+            "non-rpm-software",
+            include_str!("../../testdata/golden/go-v13-non-rpm-software-section.json"),
         ),
     ];
 

@@ -1,0 +1,83 @@
+{
+  "cron_jobs": [
+    {
+      "path": "/etc/cron.d/0hourly",
+      "source": "file",
+      "rpm_owned": true,
+      "include": false,
+      "fleet": null
+    },
+    {
+      "path": "/etc/cron.daily/logrotate",
+      "source": "file",
+      "rpm_owned": true,
+      "include": false,
+      "fleet": null
+    },
+    {
+      "path": "/var/spool/cron/root",
+      "source": "user_crontab",
+      "rpm_owned": false,
+      "include": true,
+      "fleet": null
+    }
+  ],
+  "systemd_timers": [
+    {
+      "name": "dnf-makecache.timer",
+      "on_calendar": "*:00/60",
+      "exec_start": "/usr/bin/dnf makecache --timer",
+      "description": "dnf makecache --timer",
+      "source": "rpm",
+      "path": "/usr/lib/systemd/system/dnf-makecache.timer",
+      "timer_content": "[Unit]\nDescription=dnf makecache --timer\n\n[Timer]\nOnCalendar=*:00/60\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=dnf makecache --timer\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/dnf makecache --timer\n"
+    },
+    {
+      "name": "systemd-tmpfiles-clean.timer",
+      "on_calendar": "daily",
+      "exec_start": "/usr/bin/systemd-tmpfiles --clean",
+      "description": "Daily Cleanup of Temporary Directories",
+      "source": "rpm",
+      "path": "/usr/lib/systemd/system/systemd-tmpfiles-clean.timer",
+      "timer_content": "[Unit]\nDescription=Daily Cleanup of Temporary Directories\n\n[Timer]\nOnCalendar=daily\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=Cleanup of Temporary Directories\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/systemd-tmpfiles --clean\n"
+    }
+  ],
+  "at_jobs": [
+    {
+      "file": "a00001019e3a3c",
+      "command": "/usr/local/bin/batch-report.sh",
+      "user": "root",
+      "working_dir": "/root"
+    },
+    {
+      "file": "a00002019e4b2d",
+      "command": "echo maintenance-complete",
+      "user": "admin",
+      "working_dir": "/home/admin"
+    }
+  ],
+  "generated_timer_units": [
+    {
+      "name": "cron-root-backup.timer",
+      "timer_content": "[Unit]\nDescription=Converted from cron: root backup\n\n[Timer]\nOnCalendar=*-*-* 02:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=Converted from cron: root backup\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/backup.sh\n",
+      "cron_expr": "0 2 * * *",
+      "source_path": "/var/spool/cron/root",
+      "command": "/usr/local/bin/backup.sh",
+      "include": true,
+      "fleet": null
+    },
+    {
+      "name": "cron-root-cleanup.timer",
+      "timer_content": "[Unit]\nDescription=Converted from cron: root cleanup\n\n[Timer]\nOnCalendar=Sun *-*-* 03:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=Converted from cron: root cleanup\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/cleanup.sh\n",
+      "cron_expr": "0 3 * * 0",
+      "source_path": "/var/spool/cron/root",
+      "command": "/usr/local/bin/cleanup.sh",
+      "include": true,
+      "fleet": null
+    }
+  ]
+}
