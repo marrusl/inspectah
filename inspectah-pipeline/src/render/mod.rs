@@ -40,6 +40,9 @@ pub fn render_all(
     //    the actual directory list for its COPY lines (single source of truth).
     let materialized_roots = configtree::write_config_tree(snap, output_dir)?;
 
+    // 8b. env-files/ — .env files go to a separate directory (not config/)
+    configtree::write_env_files(snap, output_dir)?;
+
     // 1. Containerfile — COPY lines derived from materialized config tree roots
     let containerfile = containerfile::render_containerfile(snap, Some(&materialized_roots));
     std::fs::write(output_dir.join("Containerfile"), containerfile)?;

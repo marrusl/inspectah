@@ -352,6 +352,114 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         }
     }
 
+    // Scheduled Tasks
+    if let Some(st) = &snap.scheduled_tasks {
+        let cron_count = st.cron_jobs.len();
+        let timer_count = st.systemd_timers.len() + st.generated_timer_units.len();
+        let at_count = st.at_jobs.len();
+
+        if cron_count > 0 || timer_count > 0 || at_count > 0 {
+            lines.push("## Scheduled Tasks".into());
+            lines.push(String::new());
+            lines.push(format!("- **Cron jobs:** {cron_count}"));
+            lines.push(format!("- **Systemd timers:** {timer_count}"));
+            lines.push(format!("- **At jobs:** {at_count}"));
+
+            let reboot_jobs: Vec<_> = st
+                .cron_jobs
+                .iter()
+                .filter(|c| c.source.contains("@reboot"))
+                .collect();
+            if !reboot_jobs.is_empty() {
+                lines.push(String::new());
+                lines.push(format!(
+                    "**Warning:** {} `@reboot` cron job(s) detected. These cannot be converted \
+                     to systemd timers and require manual handling.",
+                    reboot_jobs.len()
+                ));
+            }
+            lines.push(String::new());
+        }
+    }
+
+    // SELinux
+    if let Some(sel) = &snap.selinux {
+        let has_content = !sel.mode.is_empty()
+            || !sel.custom_modules.is_empty()
+            || !sel.boolean_overrides.is_empty()
+            || !sel.fcontext_rules.is_empty();
+
+        if has_content {
+            lines.push("## SELinux".into());
+            lines.push(String::new());
+            lines.push(format!("- **Mode:** {}", sel.mode));
+            if !sel.custom_modules.is_empty() {
+                lines.push(format!(
+                    "- **Custom modules:** {}",
+                    sel.custom_modules.len()
+                ));
+            }
+            let non_default_booleans = sel.boolean_overrides.len();
+            if non_default_booleans > 0 {
+                lines.push(format!(
+                    "- **Non-default booleans:** {non_default_booleans}"
+                ));
+            }
+            if !sel.fcontext_rules.is_empty() {
+                lines.push(format!(
+                    "- **File context rules:** {}",
+                    sel.fcontext_rules.len()
+                ));
+            }
+            if sel.fips_mode {
+                lines.push("- **FIPS mode:** enabled".into());
+            }
+            lines.push(String::new());
+        }
+    }
+
+    // Non-RPM Software
+    if let Some(nrs) = &snap.non_rpm_software {
+        let item_count = nrs.items.len();
+        let env_count = nrs.env_files.len();
+
+        if item_count > 0 || env_count > 0 {
+            lines.push("## Non-RPM Software".into());
+            lines.push(String::new());
+
+            if item_count > 0 {
+                // Count by method
+                let mut by_method: std::collections::HashMap<String, usize> =
+                    std::collections::HashMap::new();
+                for item in &nrs.items {
+                    *by_method
+                        .entry(if item.method.is_empty() {
+                            "unknown".to_string()
+                        } else {
+                            item.method.clone()
+                        })
+                        .or_insert(0) += 1;
+                }
+                let mut methods: Vec<_> = by_method.into_iter().collect();
+                methods.sort_by_key(|b| std::cmp::Reverse(b.1));
+                lines.push(format!("### Items ({item_count})"));
+                lines.push(String::new());
+                for (method, count) in &methods {
+                    lines.push(format!("- {method}: {count}"));
+                }
+                lines.push(String::new());
+            }
+
+            if env_count > 0 {
+                lines.push(format!(
+                    "**Warning:** {env_count} `.env` file(s) detected. These are high-probability \
+                     secret carriers and require operator review before inclusion."
+                ));
+                lines.push(String::new());
+            }
+        }
+    }
+
     // Redactions
     if !snap.redactions.is_empty() {
         lines.push("## Redactions".into());

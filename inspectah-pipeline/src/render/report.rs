@@ -66,6 +66,35 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
 
     let warning_count = snap.warnings.len();
 
+    let scheduled_count = snap
+        .scheduled_tasks
+        .as_ref()
+        .map(|st| {
+            st.cron_jobs.len()
+                + st.systemd_timers.len()
+                + st.generated_timer_units.len()
+                + st.at_jobs.len()
+        })
+        .unwrap_or(0);
+
+    let selinux_mode = snap
+        .selinux
+        .as_ref()
+        .map(|s| {
+            if s.mode.is_empty() {
+                "unknown".to_string()
+            } else {
+                s.mode.clone()
+            }
+        })
+        .unwrap_or_else(|| "n/a".to_string());
+
+    let nonrpm_count = snap
+        .non_rpm_software
+        .as_ref()
+        .map(|n| n.items.len())
+        .unwrap_or(0);
+
     // Build package table rows
     let mut pkg_rows = String::new();
     if let Some(rpm) = &snap.rpm {
@@ -212,6 +241,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     <div class="summary-card"><h3>Storage Entries</h3><div class="value">{storage_count}</div></div>
     <div class="summary-card"><h3>Kernel/Boot Items</h3><div class="value">{kernelboot_count}</div></div>
     <div class="summary-card"><h3>Warnings</h3><div class="value">{warning_count}</div></div>
+    <div class="summary-card"><h3>Scheduled Tasks</h3><div class="value">{scheduled_count}</div></div>
+    <div class="summary-card"><h3>SELinux</h3><div class="value">{selinux_mode_escaped}</div></div>
+    <div class="summary-card"><h3>Non-RPM Items</h3><div class="value">{nonrpm_count}</div></div>
   </div>
 
   <h2>Packages</h2>
@@ -262,6 +294,9 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
         sysctl_rows = sysctl_rows,
         module_items = module_items,
         warning_items = warning_items,
+        scheduled_count = scheduled_count,
+        selinux_mode_escaped = html_escape(&selinux_mode),
+        nonrpm_count = nonrpm_count,
     )
 }
 

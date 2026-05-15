@@ -422,23 +422,9 @@ pub fn write_config_tree(
         }
     }
 
-    // Non-RPM env files
-    if let Some(ref nrs) = snap.non_rpm_software {
-        for entry in &nrs.env_files {
-            if !entry.include {
-                continue;
-            }
-            let rel = entry.path.trim_start_matches('/');
-            if rel.is_empty() {
-                continue;
-            }
-            if validate_path(rel).is_err() {
-                continue;
-            }
-            let dest = config_dir.join(rel);
-            safe_write_file(&dest, &entry.content);
-        }
-    }
+    // Non-RPM env files are NOT written under config/ — they go to a separate
+    // env-files/ directory via write_env_files(). See design decision: .env files
+    // are high-probability secret carriers requiring operator review.
 
     // Return the actual top-level directories materialized under config/
     Ok(config_copy_roots(&config_dir))
@@ -472,6 +458,47 @@ pub fn config_copy_roots(config_dir: &Path) -> Vec<String> {
     }
     roots.sort();
     roots
+}
+
+/// Write .env files to a separate `env-files/` directory under output_dir.
+///
+/// These are NOT written under `config/` because .env files are
+/// high-probability secret carriers requiring operator review before
+/// inclusion in a container image.
+pub fn write_env_files(
+    snap: &InspectionSnapshot,
+    output_dir: &Path,
+) -> Result<(), RenderError> {
+    let nrs = match &snap.non_rpm_software {
+        Some(n) => n,
+        None => return Ok(()),
+    };
+
+    let included: Vec<_> = nrs
+        .env_files
+        .iter()
+        .filter(|e| e.include && !e.path.is_empty())
+        .collect();
+
+    if included.is_empty() {
+        return Ok(());
+    }
+
+    let env_dir = output_dir.join("env-files");
+    std::fs::create_dir_all(&env_dir)?;
+
+    for entry in &included {
+        let rel = entry.path.trim_start_matches('/');
+        if rel.is_empty() {
+            continue;
+        }
+        if validate_path(rel).is_err() {
+            continue;
+        }
+        safe_write_file(&env_dir.join(rel), &entry.content);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -705,7 +732,9 @@ mod tests {
     }
 
     #[test]
-    fn test_config_tree_nonrpm_env_files() {
+    fn test_config_tree_nonrpm_env_files_not_in_config() {
+        // .env files are no longer written under config/ — they go to env-files/
+        // via write_env_files(). Verify write_config_tree does NOT produce them.
         let mut snap = InspectionSnapshot::new();
         snap.non_rpm_software = Some(NonRpmSoftwareSection {
             env_files: vec![ConfigFileEntry {
@@ -718,10 +747,39 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
+        assert!(
+            !dir.path()
+                .join("config/etc/environment.d/99-custom.conf")
+                .exists(),
+            ".env files must NOT be written under config/"
+        );
+    }
+
+    #[test]
+    fn test_write_env_files_to_separate_dir() {
+        // .env files now go to env-files/ via write_env_files()
+        let mut snap = InspectionSnapshot::new();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            env_files: vec![ConfigFileEntry {
+                path: "/etc/environment.d/99-custom.conf".to_string(),
+                content: "MY_VAR=value".to_string(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_env_files(&snap, dir.path()).unwrap();
         assert!(dir
             .path()
-            .join("config/etc/environment.d/99-custom.conf")
+            .join("env-files/etc/environment.d/99-custom.conf")
             .exists());
+        let content = std::fs::read_to_string(
+            dir.path()
+                .join("env-files/etc/environment.d/99-custom.conf"),
+        )
+        .unwrap();
+        assert_eq!(content, "MY_VAR=value");
     }
 
     #[test]
