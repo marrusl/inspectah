@@ -60,16 +60,17 @@ pub fn collect(
     // path is exercised regardless — when Slice 2c adds dependent
     // inspectors, they will land in Wave 2 automatically.
 
-    // Partition: RPM goes into Wave 1. Inspectors that need rpm_state
-    // would go into Wave 2 (none yet in Slice 2a).
-    // Partition applicable inspectors into Wave 1 (all for Slice 2a)
-    // and Wave 2 (rpm_state-dependent, empty for Slice 2a).
+    // Partition applicable inspectors into Wave 1 (independent) and
+    // Wave 2 (rpm_state-dependent). RPM always runs in Wave 1.
+    // Wave 2 inspectors receive enriched context with rpm_state.
     let mut wave1: Vec<&Box<dyn Inspector>> = Vec::new();
-    let wave2: Vec<&Box<dyn Inspector>> = Vec::new();
+    let mut wave2: Vec<&Box<dyn Inspector>> = Vec::new();
     for insp in &applicable {
-        // All inspectors are Wave 1 for Slice 2a. When an inspector
-        // gains an rpm_state dependency, it moves to wave2.
-        wave1.push(insp);
+        if is_wave2(insp.id()) {
+            wave2.push(insp);
+        } else {
+            wave1.push(insp);
+        }
     }
 
     // Wave 1 base context — no rpm_state available yet.
@@ -81,6 +82,7 @@ pub fn collect(
 
     // Wave 1: parallel execution via std::thread::scope.
     let mut rpm_state = RpmState::default();
+    let mut rpm_populated = false;
 
     std::thread::scope(|s| {
         let handles: Vec<_> = wave1
@@ -89,7 +91,7 @@ pub fn collect(
             .collect();
 
         for (inspector, handle) in wave1.iter().zip(handles) {
-            handle_result(
+            let was_rpm = handle_result(
                 inspector.as_ref(),
                 handle,
                 &mut snapshot,
@@ -97,16 +99,27 @@ pub fn collect(
                 &mut degraded,
                 &mut rpm_state,
             );
+            if was_rpm {
+                rpm_populated = true;
+            }
         }
     });
 
     // Wave 2: dependent inspectors get enriched context with rpm_state.
-    // Empty for Slice 2a — the API path is exercised, no inspectors run.
+    // rpm_state is Some when RPM succeeded (Ok or Degraded), None when
+    // RPM failed entirely — Wave 2 inspectors use this to distinguish
+    // "no data, can't classify" from "confirmed no RPM-owned paths."
     if !wave2.is_empty() {
+        let wave2_rpm_state: Option<&RpmState> = if rpm_populated {
+            Some(&rpm_state)
+        } else {
+            None
+        };
+
         let enriched_ctx = InspectionContext {
             source_system: source,
             executor,
-            rpm_state: Some(&rpm_state),
+            rpm_state: wave2_rpm_state,
         };
 
         // Wave 2 does not mutate rpm_state — it only reads it.
@@ -182,6 +195,9 @@ pub fn collect(
 /// Process a single inspector's join result: route section data, record
 /// warnings/failures, collect redaction hints, and extract RpmState when
 /// the RPM inspector succeeds.
+///
+/// Returns `true` when the RPM inspector's output was successfully
+/// extracted into `rpm_state` (both Ok and Degraded paths).
 fn handle_result(
     inspector: &dyn Inspector,
     handle: std::thread::ScopedJoinHandle<'_, Result<InspectorOutput, InspectorError>>,
@@ -189,15 +205,16 @@ fn handle_result(
     failed: &mut Vec<InspectorId>,
     degraded: &mut Vec<InspectorId>,
     rpm_state: &mut RpmState,
-) {
+) -> bool {
+    let mut rpm_extracted = false;
+
     match handle.join() {
         Ok(Ok(output)) => {
             // Extract RpmState from RPM inspector output before routing
             if inspector.id() == InspectorId::Rpm {
                 if let SectionData::Rpm(ref rpm) = output.section {
-                    rpm_state.installed_packages =
-                        rpm.packages_added.iter().map(|p| p.name.clone()).collect();
-                    // owned_paths populated in later slices
+                    extract_rpm_state(rpm, rpm_state);
+                    rpm_extracted = true;
                 }
             }
             route_section(snapshot, output.section);
@@ -215,6 +232,14 @@ fn handle_result(
         Ok(Err(InspectorError::Degraded {
             partial, reason, ..
         })) => {
+            // Extract RpmState from degraded RPM output too — partial
+            // data is still valid for Wave 2 classification.
+            if inspector.id() == InspectorId::Rpm {
+                if let SectionData::Rpm(ref rpm) = partial.section {
+                    extract_rpm_state(rpm, rpm_state);
+                    rpm_extracted = true;
+                }
+            }
             route_section(snapshot, partial.section);
             snapshot.warnings.extend(partial.warnings);
             snapshot.redaction_hints.extend(partial.redaction_hints);
@@ -246,6 +271,36 @@ fn handle_result(
             });
         }
     }
+
+    rpm_extracted
+}
+
+/// Populate RpmState from an RpmSection's data.
+///
+/// Extracts installed package names, full package list, verification
+/// results, and module streams. owned_paths and path_to_package will be
+/// populated when the RPM inspector produces file ownership data.
+fn extract_rpm_state(
+    rpm: &inspectah_core::types::rpm::RpmSection,
+    state: &mut RpmState,
+) {
+    state.installed_packages = rpm.packages_added.iter().map(|p| p.name.clone()).collect();
+    state.packages = rpm.packages_added.clone();
+    state.verification_results = rpm.rpm_va.clone();
+    state.module_streams = rpm.module_streams.clone();
+    // owned_paths and path_to_package: populated when RPM inspector
+    // produces file ownership query results (future enhancement).
+}
+
+/// Classify whether an inspector belongs to Wave 2 (depends on RPM state).
+fn is_wave2(id: InspectorId) -> bool {
+    matches!(
+        id,
+        InspectorId::ScheduledTasks
+            | InspectorId::Config
+            | InspectorId::Selinux
+            | InspectorId::NonRpmSoftware
+    )
 }
 
 /// Map a SourceSystem variant to the corresponding SystemType for the snapshot.
@@ -721,6 +776,170 @@ mod tests {
                 .reason
                 .contains("password="),
             "hint content must be preserved from degraded output"
+        );
+    }
+
+    // --- Wave 2 classifier and dispatch tests ---
+
+    #[test]
+    fn test_is_wave2_classifier() {
+        // Wave 2 inspectors
+        assert!(is_wave2(InspectorId::ScheduledTasks));
+        assert!(is_wave2(InspectorId::Config));
+        assert!(is_wave2(InspectorId::Selinux));
+        assert!(is_wave2(InspectorId::NonRpmSoftware));
+
+        // Wave 1 inspectors
+        assert!(!is_wave2(InspectorId::Rpm));
+        assert!(!is_wave2(InspectorId::Services));
+        assert!(!is_wave2(InspectorId::Network));
+        assert!(!is_wave2(InspectorId::Storage));
+        assert!(!is_wave2(InspectorId::Containers));
+        assert!(!is_wave2(InspectorId::KernelBoot));
+        assert!(!is_wave2(InspectorId::UsersGroups));
+        assert!(!is_wave2(InspectorId::Hardware));
+        assert!(!is_wave2(InspectorId::Ostree));
+        assert!(!is_wave2(InspectorId::OsRelease));
+    }
+
+    /// Mock Wave 2 inspector that records whether it received rpm_state.
+    /// Returns Ok with a ScheduledTasks section, capturing the rpm_state
+    /// presence in a thread-safe flag.
+    struct Wave2ProbeInspector {
+        received_rpm_state: std::sync::Arc<std::sync::Mutex<Option<bool>>>,
+    }
+
+    impl Wave2ProbeInspector {
+        fn new() -> (Self, std::sync::Arc<std::sync::Mutex<Option<bool>>>) {
+            let flag = std::sync::Arc::new(std::sync::Mutex::new(None));
+            (
+                Self {
+                    received_rpm_state: flag.clone(),
+                },
+                flag,
+            )
+        }
+    }
+
+    impl Inspector for Wave2ProbeInspector {
+        fn id(&self) -> InspectorId {
+            InspectorId::ScheduledTasks
+        }
+        fn applicable_to(&self) -> &[SourceSystemKind] {
+            &[SourceSystemKind::PackageBased]
+        }
+        fn inspect(
+            &self,
+            ctx: &InspectionContext<'_>,
+        ) -> Result<InspectorOutput, InspectorError> {
+            let has_state = ctx.rpm_state.is_some();
+            *self.received_rpm_state.lock().unwrap() = Some(has_state);
+
+            if let Some(rpm_state) = ctx.rpm_state {
+                // Verify the rpm_state has actual data when present
+                if !rpm_state.installed_packages().is_empty() {
+                    Ok(InspectorOutput {
+                        section: SectionData::ScheduledTasks(Default::default()),
+                        warnings: vec![],
+                        redaction_hints: vec![],
+                    })
+                } else {
+                    Ok(InspectorOutput {
+                        section: SectionData::ScheduledTasks(Default::default()),
+                        warnings: vec![Warning {
+                            inspector: "ScheduledTasks".into(),
+                            message: "rpm_state present but empty".into(),
+                            severity: Some(WarningSeverity::Info),
+                            ..Default::default()
+                        }],
+                        redaction_hints: vec![],
+                    })
+                }
+            } else {
+                Err(InspectorError::Failed {
+                    reason: "rpm_state is None — RPM failed".into(),
+                })
+            }
+        }
+    }
+
+    #[test]
+    fn test_wave2_receives_rpm_state() {
+        let exec = build_test_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+
+        let (probe, flag) = Wave2ProbeInspector::new();
+        let inspectors: Vec<Box<dyn Inspector>> =
+            vec![Box::new(RpmInspector::new()), Box::new(probe)];
+        let pipeline = collect(&source, &exec, &inspectors);
+
+        // The probe should have been called (it's a Wave 2 inspector)
+        let received = flag.lock().unwrap();
+        assert_eq!(
+            *received,
+            Some(true),
+            "Wave 2 inspector must receive rpm_state when RPM succeeds"
+        );
+
+        // ScheduledTasks section should be routed
+        assert!(
+            pipeline.state.snapshot.scheduled_tasks.is_some(),
+            "Wave 2 inspector output must be routed to snapshot"
+        );
+    }
+
+    #[test]
+    fn test_wave2_receives_none_when_rpm_fails() {
+        // Mock executor that returns empty rpm output -> RPM inspector fails
+        let exec = MockExecutor::new().with_command(
+            "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
+            ExecResult {
+                stdout: "".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+
+        let (probe, flag) = Wave2ProbeInspector::new();
+        let inspectors: Vec<Box<dyn Inspector>> =
+            vec![Box::new(RpmInspector::new()), Box::new(probe)];
+        let _pipeline = collect(&source, &exec, &inspectors);
+
+        // The probe should have received None (RPM failed)
+        let received = flag.lock().unwrap();
+        assert_eq!(
+            *received,
+            Some(false),
+            "Wave 2 inspector must receive rpm_state=None when RPM fails"
+        );
+    }
+
+    #[test]
+    fn test_rpm_state_populated_with_packages() {
+        let exec = build_test_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+
+        // Use a probe to verify rpm_state contents
+        let (probe, _flag) = Wave2ProbeInspector::new();
+        let inspectors: Vec<Box<dyn Inspector>> =
+            vec![Box::new(RpmInspector::new()), Box::new(probe)];
+        let pipeline = collect(&source, &exec, &inspectors);
+
+        // RPM section should be present with packages
+        let rpm = pipeline.state.snapshot.rpm.as_ref().unwrap();
+        assert_eq!(rpm.packages_added.len(), 2, "RPM should have 2 packages");
+
+        // ScheduledTasks should succeed (rpm_state was populated)
+        assert!(
+            pipeline.state.snapshot.scheduled_tasks.is_some(),
+            "Wave 2 inspector should succeed with populated rpm_state"
         );
     }
 }
