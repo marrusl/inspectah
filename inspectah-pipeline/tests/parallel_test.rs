@@ -236,7 +236,10 @@ fn rpm_state_flows_to_dependent_inspectors() {
     // Build an enriched context manually to prove the type structure works
     let rpm_state = RpmState {
         installed_packages: ["bash".to_string()].into_iter().collect(),
-        owned_paths: ["/usr/bin/bash".to_string()].into_iter().collect(),
+        owned_paths: [std::path::PathBuf::from("/usr/bin/bash")]
+            .into_iter()
+            .collect(),
+        ..Default::default()
     };
 
     let enriched_ctx = InspectionContext {
@@ -249,7 +252,7 @@ fn rpm_state_flows_to_dependent_inspectors() {
     assert!(enriched_ctx.rpm_state.is_some());
     let state = enriched_ctx.rpm_state.unwrap();
     assert!(state.installed_packages.contains("bash"));
-    assert!(state.owned_paths.contains("/usr/bin/bash"));
+    assert!(state.is_rpm_owned(std::path::Path::new("/usr/bin/bash")));
 }
 
 /// RPM inspector returning Failed propagates to Incomplete completeness.
@@ -509,7 +512,7 @@ fn three_wave_model_enriched_context_api_path() {
     let rpm = pipeline.state.snapshot.rpm.as_ref().unwrap();
     let extracted_state = RpmState {
         installed_packages: rpm.packages_added.iter().map(|p| p.name.clone()).collect(),
-        owned_paths: std::collections::HashSet::new(),
+        ..Default::default()
     };
 
     // This proves the API shape: a Wave 2 inspector would receive
