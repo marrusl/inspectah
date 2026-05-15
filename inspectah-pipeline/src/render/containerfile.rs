@@ -475,8 +475,14 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         }
         for u in &st.generated_timer_units {
             if u.include && !u.name.is_empty() {
-                config_tree_units.insert(format!("{}.timer", u.name));
-                config_tree_units.insert(format!("{}.service", u.name));
+                // @reboot entries have empty timer_content — only the service
+                // file is materialized in the config tree.
+                if !u.timer_content.is_empty() {
+                    config_tree_units.insert(format!("{}.timer", u.name));
+                }
+                if !u.service_content.is_empty() {
+                    config_tree_units.insert(format!("{}.service", u.name));
+                }
             }
         }
     }
@@ -658,21 +664,37 @@ fn scheduled_tasks_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             ));
         }
     }
+    let mut reboot_service_names = Vec::new();
     for u in &included_timers {
         if !u.name.is_empty() {
-            let unit = format!("{}.timer", u.name);
-            if sanitize_shell_value(&unit).is_some() {
-                timer_names.push(unit);
+            // @reboot entries have no timer — enable the service instead
+            if u.cron_expr == "@reboot" {
+                let unit = format!("{}.service", u.name);
+                if sanitize_shell_value(&unit).is_some() {
+                    reboot_service_names.push(unit);
+                }
             } else {
-                lines.push(format!(
-                    "# FIXME: Timer unit name contains unsafe characters: {}",
-                    u.name
-                ));
+                let unit = format!("{}.timer", u.name);
+                if sanitize_shell_value(&unit).is_some() {
+                    timer_names.push(unit);
+                } else {
+                    lines.push(format!(
+                        "# FIXME: Timer unit name contains unsafe characters: {}",
+                        u.name
+                    ));
+                }
             }
         }
     }
     if !timer_names.is_empty() {
         lines.push(format!("RUN systemctl enable {}", timer_names.join(" ")));
+    }
+    if !reboot_service_names.is_empty() {
+        lines.push("# @reboot cron job(s) — boot-triggered oneshot service(s):".to_string());
+        lines.push(format!(
+            "RUN systemctl enable {}",
+            reboot_service_names.join(" ")
+        ));
     }
 
     if !st.at_jobs.is_empty() {

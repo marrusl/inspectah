@@ -246,6 +246,76 @@ fn test_scheduled_inspector_degraded_permissions() {
     }
 }
 
+/// Regression: @reboot cron entries must NOT produce a GeneratedTimerUnit
+/// with a fake OnCalendar value. They must produce an advisory oneshot
+/// service with WantedBy=multi-user.target.
+#[test]
+fn test_reboot_entry_no_fake_timer() {
+    let exec = full_mock();
+    let source = pkg_source();
+    let rpm_state = mock_rpm_state();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: Some(&rpm_state),
+    };
+
+    let output = ScheduledTasksInspector::new()
+        .inspect(&ctx)
+        .expect("inspector should succeed");
+
+    let section = match &output.section {
+        SectionData::ScheduledTasks(s) => s,
+        other => panic!("expected SectionData::ScheduledTasks, got {:?}", other),
+    };
+
+    let reboot_units: Vec<_> = section
+        .generated_timer_units
+        .iter()
+        .filter(|g| g.cron_expr == "@reboot")
+        .collect();
+
+    assert!(
+        !reboot_units.is_empty(),
+        "user-crontab fixture has @reboot; inspector must produce a generated unit for it"
+    );
+
+    for unit in &reboot_units {
+        assert!(
+            unit.timer_content.is_empty(),
+            "@reboot must NOT generate a timer unit (got non-empty timer_content: {})",
+            unit.timer_content
+        );
+        assert!(
+            !unit.timer_content.contains("OnCalendar"),
+            "@reboot must never contain OnCalendar in timer_content"
+        );
+        assert!(
+            unit.service_content.contains("WantedBy=multi-user.target"),
+            "@reboot service must use WantedBy=multi-user.target for boot activation"
+        );
+        assert!(
+            !unit.service_content.is_empty(),
+            "@reboot must still produce a service unit"
+        );
+    }
+
+    // All non-@reboot generated timers must have real OnCalendar values
+    let calendar_units: Vec<_> = section
+        .generated_timer_units
+        .iter()
+        .filter(|g| g.cron_expr != "@reboot")
+        .collect();
+    for unit in &calendar_units {
+        assert!(
+            unit.timer_content.contains("OnCalendar"),
+            "non-@reboot timer '{}' (cron: {}) must have OnCalendar in timer_content",
+            unit.name,
+            unit.cron_expr
+        );
+    }
+}
+
 /// Output serializes and deserializes cleanly.
 #[test]
 fn test_scheduled_inspector_json_roundtrip() {

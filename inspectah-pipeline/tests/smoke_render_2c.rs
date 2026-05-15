@@ -34,14 +34,17 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
     snap.scheduled_tasks = Some(ScheduledTaskSection {
         cron_jobs: vec![
             CronJob {
-                path: "/etc/cron.d/backup".into(),
-                source: "file".into(),
+                path: "etc/cron.d/backup".into(),
+                source: "cron.d".into(),
                 include: true,
                 ..Default::default()
             },
             CronJob {
-                path: "/etc/cron.d/reboot-task".into(),
-                source: "@reboot /usr/local/bin/startup.sh".into(),
+                // CronJob.source holds the collector source label (e.g. "cron.d"),
+                // NOT the cron expression. The @reboot expression lives on
+                // GeneratedTimerUnit.cron_expr.
+                path: "etc/cron.d/reboot-task".into(),
+                source: "cron.d".into(),
                 include: true,
                 ..Default::default()
             },
@@ -54,14 +57,30 @@ fn snapshot_with_scheduled_tasks() -> InspectionSnapshot {
             include: Some(true),
             ..Default::default()
         }],
-        generated_timer_units: vec![GeneratedTimerUnit {
-            name: "backup-cron".into(),
-            timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".into(),
-            service_content: "[Service]\nExecStart=/usr/bin/backup".into(),
-            cron_expr: "0 2 * * *".into(),
-            include: true,
-            ..Default::default()
-        }],
+        generated_timer_units: vec![
+            GeneratedTimerUnit {
+                name: "backup-cron".into(),
+                timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".into(),
+                service_content: "[Service]\nExecStart=/usr/bin/backup".into(),
+                cron_expr: "0 2 * * *".into(),
+                include: true,
+                ..Default::default()
+            },
+            // @reboot advisory: empty timer_content, boot-triggered service
+            GeneratedTimerUnit {
+                name: "cron-reboot-task".into(),
+                timer_content: String::new(),
+                service_content: "[Unit]\nDescription=Boot-triggered task\n\n\
+                    [Service]\nType=oneshot\nExecStart=/usr/local/bin/startup.sh\n\n\
+                    [Install]\nWantedBy=multi-user.target\n"
+                    .into(),
+                cron_expr: "@reboot".into(),
+                source_path: "etc/cron.d/reboot-task".into(),
+                command: "/usr/local/bin/startup.sh".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
         at_jobs: vec![AtJob {
             file: "a00001".into(),
             command: "/tmp/scheduled-task.sh".into(),
@@ -312,7 +331,7 @@ fn smoke_configtree_timers() {
     let snap = snapshot_with_scheduled_tasks();
     let dir = TempDir::new().unwrap();
     configtree::write_config_tree(&snap, dir.path()).unwrap();
-    // Timer units under config/etc/systemd/system/
+    // Normal timer units under config/etc/systemd/system/
     assert!(
         dir.path()
             .join("config/etc/systemd/system/backup-cron.timer")
@@ -324,6 +343,19 @@ fn smoke_configtree_timers() {
             .join("config/etc/systemd/system/backup-cron.service")
             .exists(),
         "must materialize generated service unit"
+    );
+    // @reboot advisory: service materialized, NO timer file
+    assert!(
+        dir.path()
+            .join("config/etc/systemd/system/cron-reboot-task.service")
+            .exists(),
+        "@reboot must materialize boot-triggered service unit"
+    );
+    assert!(
+        !dir.path()
+            .join("config/etc/systemd/system/cron-reboot-task.timer")
+            .exists(),
+        "@reboot must NOT materialize a timer file (empty timer_content)"
     );
 }
 
@@ -499,8 +531,8 @@ fn report_scheduled_section() {
         html.contains("Scheduled Tasks"),
         "must contain Scheduled Tasks summary card"
     );
-    // Total: 2 cron + 1 timer + 1 generated + 1 at = 5
-    assert!(html.contains(">5<"), "scheduled count must be 5");
+    // Total: 2 cron + 1 timer + 2 generated + 1 at = 6
+    assert!(html.contains(">6<"), "scheduled count must be 6");
 }
 
 #[test]
@@ -535,6 +567,77 @@ fn report_nonrpm_section() {
         "must contain Non-RPM Items summary card"
     );
     assert!(html.contains(">3<"), "non-RPM count must be 3");
+}
+
+// ---------------------------------------------------------------------------
+// Test: @reboot audit detection from GeneratedTimerUnit.cron_expr
+// ---------------------------------------------------------------------------
+
+/// Regression: @reboot detection comes from GeneratedTimerUnit.cron_expr,
+/// NOT from CronJob.source. CronJob.source holds collector labels like
+/// "cron.d" or "crontab" — never the cron expression.
+#[test]
+fn audit_reboot_detected_from_generated_units() {
+    // Build a snapshot with collector-shaped CronJob (source="cron.d")
+    // and a GeneratedTimerUnit with cron_expr="@reboot"
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: "etc/cron.d/startup".into(),
+            source: "cron.d".into(), // collector-shaped, never contains @reboot
+            include: true,
+            ..Default::default()
+        }],
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-startup".into(),
+            timer_content: String::new(), // no fake timer
+            service_content: "[Service]\nType=oneshot\nExecStart=/opt/init.sh".into(),
+            cron_expr: "@reboot".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let md = audit::render_audit(&snap);
+    assert!(
+        md.contains("@reboot"),
+        "audit must detect @reboot from GeneratedTimerUnit.cron_expr"
+    );
+    assert!(
+        md.contains("manual handling"),
+        "audit must warn about manual handling for @reboot"
+    );
+}
+
+/// Negative regression: CronJob.source="cron.d" must NOT trigger
+/// the @reboot warning on its own.
+#[test]
+fn audit_no_false_reboot_from_cronjob_source() {
+    let mut snap = InspectionSnapshot::new();
+    snap.scheduled_tasks = Some(ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: "etc/cron.d/backup".into(),
+            source: "cron.d".into(),
+            include: true,
+            ..Default::default()
+        }],
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "backup-cron".into(),
+            timer_content: "[Timer]\nOnCalendar=*-*-* 02:00:00".into(),
+            service_content: "[Service]\nExecStart=/usr/bin/backup".into(),
+            cron_expr: "0 2 * * *".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let md = audit::render_audit(&snap);
+    assert!(
+        !md.contains("@reboot"),
+        "audit must NOT warn about @reboot when no generated unit has cron_expr=@reboot"
+    );
 }
 
 // ---------------------------------------------------------------------------

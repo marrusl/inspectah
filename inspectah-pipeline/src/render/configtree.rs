@@ -288,14 +288,20 @@ pub fn write_config_tree(
                 if !u.include {
                     continue;
                 }
-                let _ = std::fs::write(
-                    systemd_dir.join(format!("{}.timer", u.name)),
-                    &u.timer_content,
-                );
-                let _ = std::fs::write(
-                    systemd_dir.join(format!("{}.service", u.name)),
-                    &u.service_content,
-                );
+                // @reboot entries have empty timer_content — only write a
+                // .timer file when there is actual timer content to emit.
+                if !u.timer_content.is_empty() {
+                    let _ = std::fs::write(
+                        systemd_dir.join(format!("{}.timer", u.name)),
+                        &u.timer_content,
+                    );
+                }
+                if !u.service_content.is_empty() {
+                    let _ = std::fs::write(
+                        systemd_dir.join(format!("{}.service", u.name)),
+                        &u.service_content,
+                    );
+                }
             }
             for t in &st.systemd_timers {
                 if t.source == "local" {
