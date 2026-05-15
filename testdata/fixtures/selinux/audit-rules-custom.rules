@@ -1,0 +1,5 @@
+# Custom audit rules for compliance
+-w /etc/passwd -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/sudoers -p wa -k actions
+-a always,exit -F arch=b64 -S execve -k exec_log

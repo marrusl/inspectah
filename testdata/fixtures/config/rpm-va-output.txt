@@ -1,0 +1,7 @@
+S.5....T.  c /etc/httpd/conf/httpd.conf
+..5....T.  c /etc/ssh/sshd_config
+.......T.  c /etc/pam.d/sshd
+S.5....T.    /etc/logrotate.d/custom-app
+missing    c /etc/deleted.conf
+..?......  c /etc/chrony.conf
+SM5....T.  c /etc/sysconfig/network-scripts/ifcfg-eth0

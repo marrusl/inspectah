@@ -1,0 +1,7 @@
+version=1.2.3
+myapp version 1.2.3 (built 2024-01-15)
+Go build ID: "abc123/def456/ghi789/jkl012"
+Copyright 2024 Example Corp
+https://github.com/example/myapp
+commit=a1b2c3d4
+buildDate=2024-01-15T10:30:00Z
