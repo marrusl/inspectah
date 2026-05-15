@@ -216,6 +216,195 @@ fn test_redaction_git_url_credentials() {
 }
 
 // ===================================================================
+// Leak regression tests — service_content blobs and username-only tokens
+// ===================================================================
+
+// ---------------------------------------------------------------------------
+// Test: service_content blob in GeneratedTimerUnit leaks secrets into snapshot
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_redaction_service_content_leak() {
+    let mut snapshot = InspectionSnapshot::new();
+    snapshot.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-backup".into(),
+            service_content: "[Unit]\nDescription=Backup job\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/app --token=svc_secret_42\n".into(),
+            command: "/usr/bin/app --token=svc_secret_42".into(),
+            source_path: "/etc/cron.d/backup".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    redact(&mut snapshot, &RedactOptions::default());
+
+    // The raw service_content must not contain the secret
+    let sched = snapshot.scheduled_tasks.as_ref().unwrap();
+    assert!(
+        !sched.generated_timer_units[0]
+            .service_content
+            .contains("svc_secret_42"),
+        "secret in service_content must be redacted, got: {}",
+        sched.generated_timer_units[0].service_content
+    );
+    assert!(
+        sched.generated_timer_units[0]
+            .service_content
+            .contains("REDACTED_"),
+        "service_content must contain redaction token"
+    );
+
+    // Secret must not survive in snapshot JSON
+    let json = serde_json::to_string(&snapshot).unwrap();
+    assert!(
+        !json.contains("svc_secret_42"),
+        "secret must not appear anywhere in snapshot JSON"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: service_content blob leaks secrets into materialized .service files
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_redaction_service_content_materialized() {
+    use inspectah_pipeline::render::configtree::write_config_tree;
+    use std::fs;
+
+    let mut snapshot = InspectionSnapshot::new();
+    snapshot.scheduled_tasks = Some(ScheduledTaskSection {
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-deploy".into(),
+            service_content: "[Unit]\nDescription=Deploy\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/deploy --password=mat_secret_73\n".into(),
+            timer_content: "[Unit]\nDescription=Deploy timer\n\n[Timer]\nOnCalendar=daily\n".into(),
+            command: "/usr/bin/deploy --password=mat_secret_73".into(),
+            source_path: "/etc/cron.d/deploy".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    redact(&mut snapshot, &RedactOptions::default());
+
+    let dir = tempfile::TempDir::new().unwrap();
+    write_config_tree(&snapshot, dir.path()).unwrap();
+
+    // Walk ALL files and assert the secret doesn't survive
+    fn check_dir_recursive(path: &std::path::Path, secret: &str) {
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    check_dir_recursive(&p, secret);
+                } else if p.is_file() {
+                    let content = fs::read_to_string(&p).unwrap_or_default();
+                    assert!(
+                        !content.contains(secret),
+                        "secret '{}' must not appear in materialized file {:?}",
+                        secret,
+                        p
+                    );
+                }
+            }
+        }
+    }
+
+    check_dir_recursive(dir.path(), "mat_secret_73");
+}
+
+// ---------------------------------------------------------------------------
+// Test: username-only GitHub token in git remote URL
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_redaction_username_only_git_token() {
+    let mut snapshot = InspectionSnapshot::new();
+    snapshot.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/myapp".into(),
+            name: "myapp".into(),
+            method: "git repo".into(),
+            git_remote:
+                "https://ghp_tokenABC123456789012345678901234567890@github.com/corp/myapp.git"
+                    .into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    redact(&mut snapshot, &RedactOptions::default());
+
+    let nrs = snapshot.non_rpm_software.as_ref().unwrap();
+    assert!(
+        !nrs.items[0]
+            .git_remote
+            .contains("ghp_tokenABC123456789012345678901234567890"),
+        "GitHub PAT must be masked in git remote URL, got: {}",
+        nrs.items[0].git_remote
+    );
+    assert!(
+        nrs.items[0].git_remote.contains("[REDACTED]"),
+        "masked URL must contain [REDACTED], got: {}",
+        nrs.items[0].git_remote
+    );
+
+    // Secret must not survive in snapshot JSON
+    let json = serde_json::to_string(&snapshot).unwrap();
+    assert!(
+        !json.contains("ghp_tokenABC123456789012345678901234567890"),
+        "GitHub PAT must not appear in snapshot JSON"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test: username-only generic long token in git remote URL
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_redaction_username_only_generic_token() {
+    let mut snapshot = InspectionSnapshot::new();
+    snapshot.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            path: "/opt/internal-tool".into(),
+            name: "internal-tool".into(),
+            method: "git repo".into(),
+            git_remote:
+                "https://a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6@gitlab.com/corp/internal-tool.git".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    redact(&mut snapshot, &RedactOptions::default());
+
+    let nrs = snapshot.non_rpm_software.as_ref().unwrap();
+    assert!(
+        !nrs.items[0]
+            .git_remote
+            .contains("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"),
+        "long alphanumeric token must be masked in git remote URL, got: {}",
+        nrs.items[0].git_remote
+    );
+    assert!(
+        nrs.items[0].git_remote.contains("[REDACTED]"),
+        "masked URL must contain [REDACTED], got: {}",
+        nrs.items[0].git_remote
+    );
+
+    // Secret must not survive in snapshot JSON
+    let json = serde_json::to_string(&snapshot).unwrap();
+    assert!(
+        !json.contains("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"),
+        "generic token must not appear in snapshot JSON"
+    );
+}
+
+// ===================================================================
 // Absence proofs — planted secrets must not survive into ANY artifact
 // ===================================================================
 
@@ -241,21 +430,32 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
             include: true,
             ..Default::default()
         }],
-        items: vec![NonRpmItem {
-            path: "/opt/myapp".into(),
-            name: "myapp".into(),
-            method: "git repo".into(),
-            git_remote: "https://deploy:git_secret_66@github.com/corp/myapp.git".into(),
-            include: true,
-            ..Default::default()
-        }],
+        items: vec![
+            NonRpmItem {
+                path: "/opt/myapp".into(),
+                name: "myapp".into(),
+                method: "git repo".into(),
+                git_remote: "https://deploy:git_secret_66@github.com/corp/myapp.git".into(),
+                include: true,
+                ..Default::default()
+            },
+            NonRpmItem {
+                path: "/opt/tokenapp".into(),
+                name: "tokenapp".into(),
+                method: "git repo".into(),
+                git_remote: "https://ghp_tokenOnlySecret990123456789012345678901@github.com/corp/tokenapp.git".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
     });
 
-    // Scheduled tasks: cron, at, timer
+    // Scheduled tasks: cron, at, timer — including service_content blobs
     snap.scheduled_tasks = Some(ScheduledTaskSection {
         generated_timer_units: vec![GeneratedTimerUnit {
             name: "backup.timer".into(),
             command: "/usr/bin/backup --password=cron_secret_88".into(),
+            service_content: "[Service]\nType=oneshot\nExecStart=/usr/bin/backup --password=svc_content_secret_44\n".into(),
             source_path: "/etc/cron.d/backup".into(),
             include: true,
             ..Default::default()
@@ -269,6 +469,7 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
         systemd_timers: vec![SystemdTimer {
             name: "deploy.timer".into(),
             exec_start: "/usr/local/bin/deploy --token=timer_secret_77".into(),
+            service_content: "[Service]\nType=oneshot\nExecStart=/usr/local/bin/deploy --token=timer_svc_secret_22\n".into(),
             source: "local".into(),
             path: "/etc/systemd/system/deploy.timer".into(),
             ..Default::default()
@@ -302,6 +503,9 @@ const PLANTED_SECRETS: &[&str] = &[
     "audit_secret_33",
     "pam_secret_11",
     "git_secret_66",
+    "svc_content_secret_44",
+    "timer_svc_secret_22",
+    "ghp_tokenOnlySecret990123456789012345678901",
 ];
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,20 @@ static PROXY_PASSWORD_KV_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(proxy_password\s*=\s*)(\S+)").expect("proxy_password key-value regex")
 });
 
+/// Compiled regex for username-only token remotes: `://token@host`.
+/// Matches URLs where the username looks like a token (known prefixes or
+/// long alphanumeric strings) with no colon/password separator.
+/// Captures three groups:
+///   1. `://` (scheme separator)
+///   2. the token value (username portion)
+///   3. `@` (delimiter before host)
+static TOKEN_USERNAME_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(://)(?:(ghp_[A-Za-z0-9_]{36,}|gho_[A-Za-z0-9_]{36,}|glpat-[A-Za-z0-9_\-]{20,}|github_pat_[A-Za-z0-9_]{22,}|[A-Za-z0-9_\-]{20,}))(@)",
+    )
+    .expect("token username regex")
+});
+
 /// Options controlling redaction sensitivity.
 #[derive(Debug, Clone)]
 pub struct RedactOptions {
@@ -165,6 +179,41 @@ pub fn mask_proxy_credentials<'a>(
             kind: RedactionKind::Inline,
             pattern: "proxy_password".into(),
             remediation: "Remove plaintext proxy_password from DNF/Yum configuration; use repository-level auth instead".to_string(),
+            line: None,
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: Some(Confidence::High),
+            finding_kind: Some(FindingKind::Password),
+        };
+        return (Cow::Owned(masked), Some(finding));
+    }
+
+    (Cow::Borrowed(line), None)
+}
+
+/// Mask username-only token credentials in URLs.
+///
+/// Catches `://ghp_xxx@github.com`, `://glpat-xxx@gitlab.com`, and generic
+/// long alphanumeric usernames (>= 20 chars) used as tokens without a
+/// colon/password separator. These slip past `mask_proxy_credentials()`
+/// which requires the `://user:password@` shape.
+///
+/// Returns `(Cow<str>, Option<RedactionFinding>)` — borrowed if no match.
+pub fn mask_token_username<'a>(
+    line: &'a str,
+    source_path: &str,
+) -> (Cow<'a, str>, Option<RedactionFinding>) {
+    if TOKEN_USERNAME_RE.is_match(line) {
+        let masked = TOKEN_USERNAME_RE
+            .replace(line, "${1}[REDACTED]${3}")
+            .into_owned();
+        let finding = RedactionFinding {
+            path: source_path.to_string(),
+            source: "token_credential".into(),
+            kind: RedactionKind::Inline,
+            pattern: "token_username".into(),
+            remediation: "Remove embedded token from URL; use credential helpers or SSH keys"
+                .to_string(),
             line: None,
             replacement: None,
             detection_method: DetectionMethod::Pattern,
@@ -589,7 +638,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
-    // Scan scheduled task commands for secrets.
+    // Scan scheduled task commands and service-unit content blobs for secrets.
     if let Some(ref mut sched) = snapshot.scheduled_tasks {
         // GeneratedTimerUnit.command fields (cron commands converted to timers)
         for unit in &mut sched.generated_timer_units {
@@ -621,6 +670,40 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 }
                 unit.command = content;
                 all_findings.extend(findings);
+            }
+
+            // GeneratedTimerUnit.service_content — raw unit file text that
+            // may contain secrets in ExecStart= or Environment= lines.
+            if !unit.service_content.is_empty() {
+                let svc_path = format!("generated:{}.service", unit.name);
+                let findings = scan_content(&unit.service_content, &svc_path);
+                if !findings.is_empty() {
+                    let mut content = unit.service_content.clone();
+                    for finding in &findings {
+                        if finding.confidence == Some(Confidence::High) {
+                            let kind_label = finding
+                                .finding_kind
+                                .as_ref()
+                                .map(|k| format!("{:?}", k).to_lowercase())
+                                .unwrap_or_else(|| "secret".to_string());
+                            if let Some(pat) = PATTERNS.iter().find(|p| {
+                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
+                            }) {
+                                let matches: Vec<(usize, usize, String)> = pat
+                                    .regex
+                                    .find_iter(&content)
+                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                    .collect();
+                                for (start, end, matched) in matches.into_iter().rev() {
+                                    let token = registry.token_for(&kind_label, &matched);
+                                    content.replace_range(start..end, &token);
+                                }
+                            }
+                        }
+                    }
+                    unit.service_content = content;
+                    all_findings.extend(findings);
+                }
             }
         }
 
@@ -693,6 +776,48 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 timer.exec_start = content;
                 all_findings.extend(findings);
             }
+
+            // SystemdTimer.service_content — raw service unit text that
+            // may contain secrets the exec_start parse didn't capture.
+            if !timer.service_content.is_empty() {
+                let svc_path = format!(
+                    "{}:{}.service",
+                    if timer.path.is_empty() {
+                        "timer"
+                    } else {
+                        &timer.path
+                    },
+                    timer.name
+                );
+                let findings = scan_content(&timer.service_content, &svc_path);
+                if !findings.is_empty() {
+                    let mut content = timer.service_content.clone();
+                    for finding in &findings {
+                        if finding.confidence == Some(Confidence::High) {
+                            let kind_label = finding
+                                .finding_kind
+                                .as_ref()
+                                .map(|k| format!("{:?}", k).to_lowercase())
+                                .unwrap_or_else(|| "secret".to_string());
+                            if let Some(pat) = PATTERNS.iter().find(|p| {
+                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
+                            }) {
+                                let matches: Vec<(usize, usize, String)> = pat
+                                    .regex
+                                    .find_iter(&content)
+                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                    .collect();
+                                for (start, end, matched) in matches.into_iter().rev() {
+                                    let token = registry.token_for(&kind_label, &matched);
+                                    content.replace_range(start..end, &token);
+                                }
+                            }
+                        }
+                    }
+                    timer.service_content = content;
+                    all_findings.extend(findings);
+                }
+            }
         }
     }
 
@@ -751,10 +876,17 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             }
         }
 
-        // Git remote URLs — scan for embedded credentials (user:pass@host)
+        // Git remote URLs — scan for embedded credentials (user:pass@host
+        // and token-as-username ://token@host patterns)
         for item in &mut nrs.items {
             if !item.git_remote.is_empty() {
                 let (masked, finding) = mask_proxy_credentials(&item.git_remote, &item.path);
+                if let Some(f) = finding {
+                    item.git_remote = masked.into_owned();
+                    all_findings.push(f);
+                }
+                // Username-only token remotes: ://ghp_xxx@host, ://glpat-xxx@host
+                let (masked, finding) = mask_token_username(&item.git_remote, &item.path);
                 if let Some(f) = finding {
                     item.git_remote = masked.into_owned();
                     all_findings.push(f);
@@ -865,6 +997,10 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     if let Some(ref sched) = snapshot.scheduled_tasks {
         for unit in &sched.generated_timer_units {
             post_redaction_content.insert(unit.source_path.clone(), unit.command.clone());
+            if !unit.service_content.is_empty() {
+                let svc_path = format!("generated:{}.service", unit.name);
+                post_redaction_content.insert(svc_path, unit.service_content.clone());
+            }
         }
         for at_job in &sched.at_jobs {
             post_redaction_content.insert(at_job.file.clone(), at_job.command.clone());
@@ -876,6 +1012,18 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                 timer.path.clone()
             };
             post_redaction_content.insert(source_path, timer.exec_start.clone());
+            if !timer.service_content.is_empty() {
+                let svc_path = format!(
+                    "{}:{}.service",
+                    if timer.path.is_empty() {
+                        "timer"
+                    } else {
+                        &timer.path
+                    },
+                    timer.name
+                );
+                post_redaction_content.insert(svc_path, timer.service_content.clone());
+            }
         }
     }
     if let Some(ref nrs) = snapshot.non_rpm_software {
