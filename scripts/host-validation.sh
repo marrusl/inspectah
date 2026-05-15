@@ -107,6 +107,7 @@ if [ ! -f "$GO_SNAPSHOT" ]; then
     exit 1
 fi
 
+jq '.rpm' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-rpm-section.json"
 jq '.services' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-services-section.json"
 jq '.storage' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-storage-section.json"
 jq '.kernel_boot' "$GO_SNAPSHOT" > "$WORKDIR/golden/go-v13-kernelboot-section.json"
@@ -130,6 +131,7 @@ if [ ! -f "$RUST_SNAPSHOT" ]; then
     exit 1
 fi
 
+jq '.rpm' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-rpm.json"
 jq '.services' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-services.json"
 jq '.storage' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-storage.json"
 jq '.kernel_boot' "$RUST_SNAPSHOT" > "$WORKDIR/evidence/rust-kernelboot.json"
@@ -149,7 +151,7 @@ echo "=== Section Parity Comparison ==="
 PASS_COUNT=0
 FAIL_COUNT=0
 
-for section in services storage kernelboot network containers users-groups scheduled-tasks config selinux non-rpm-software; do
+for section in rpm services storage kernelboot network containers users-groups scheduled-tasks config selinux non-rpm-software; do
     go_file="$WORKDIR/golden/go-v13-${section}-section.json"
     rust_file="$WORKDIR/evidence/rust-${section}.json"
     diff_file="$WORKDIR/evidence/diff-${section}.txt"
@@ -208,7 +210,7 @@ RUST_VERSION=$("$RUST_BIN" version 2>/dev/null || echo "0.8.0-alpha.1")
     echo ""
     echo "## Section Parity"
     echo ""
-    for section in services storage kernelboot network containers users-groups scheduled-tasks config selinux non-rpm-software; do
+    for section in rpm services storage kernelboot network containers users-groups scheduled-tasks config selinux non-rpm-software; do
         diff_file="$WORKDIR/evidence/diff-${section}.txt"
         if [ ! -s "$diff_file" ]; then
             echo "- **$section:** MATCH"
