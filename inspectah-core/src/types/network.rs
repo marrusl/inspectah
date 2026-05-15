@@ -82,7 +82,7 @@ pub struct NetworkSection {
     pub static_routes: Vec<StaticRouteFile>,
     #[serde(default)]
     pub ip_routes: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
     pub ip_rules: Vec<String>,
     #[serde(default)]
     pub resolv_provenance: String,

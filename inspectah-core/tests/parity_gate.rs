@@ -153,7 +153,9 @@ fn test_storage_serde_roundtrip() {
     );
 }
 
-/// Validates Go golden storage structure.
+/// Validates golden storage structure.
+/// Real host data: 3 fstab entries, 3 mount points, 2 LVM volumes,
+/// 9 var directories, no credential refs on this host.
 #[test]
 fn test_storage_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-storage-section.json");
@@ -168,9 +170,11 @@ fn test_storage_field_coverage() {
         "golden must contain mount_points"
     );
     assert!(!section.lvm_info.is_empty(), "golden must contain lvm_info");
+
+    // credential_refs: empty on this host (no credential mounts)
     assert!(
-        !section.credential_refs.is_empty(),
-        "golden must contain credential_refs"
+        section.credential_refs.is_empty(),
+        "golden has no credential_refs on this host"
     );
 
     let entry = &section.fstab_entries[0];
@@ -288,9 +292,10 @@ fn test_network_serde_roundtrip() {
     );
 }
 
-/// Validates provisional golden network structure matches expected field layout.
-/// Provisional data: 2 NM connections, 1 firewall zone, 2 ip_routes,
-/// 1 hosts_addition, 1 proxy entry.
+/// Validates golden network structure matches expected field layout.
+/// Real host data: 2 NM connections, 1 firewall zone, 2 ip_routes,
+/// 1 static route file, no hosts_additions, no proxy entries.
+/// ip_rules is null in Go output (Go omitempty on nil slice).
 #[test]
 fn test_network_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-network-section.json");
@@ -313,7 +318,7 @@ fn test_network_field_coverage() {
         "connection type must be populated"
     );
 
-    // firewall_zones: 1 zone on this provisional host
+    // firewall_zones: 1 zone on this host
     assert!(
         !section.firewall_zones.is_empty(),
         "golden must contain firewall_zones"
@@ -325,13 +330,13 @@ fn test_network_field_coverage() {
     // firewall_direct_rules: empty on this host
     assert!(
         section.firewall_direct_rules.is_empty(),
-        "provisional golden has no firewall_direct_rules"
+        "golden has no firewall_direct_rules on this host"
     );
 
-    // static_routes: empty on this host
+    // static_routes: 1 route file on this host
     assert!(
-        section.static_routes.is_empty(),
-        "provisional golden has no static_routes"
+        !section.static_routes.is_empty(),
+        "golden must contain static_routes"
     );
 
     // ip_routes: 2 routes
@@ -340,23 +345,29 @@ fn test_network_field_coverage() {
         "golden must contain ip_routes"
     );
 
+    // ip_rules: null in Go output → deserialized as empty Vec
+    assert!(
+        section.ip_rules.is_empty(),
+        "ip_rules is null in Go golden (no iptables rules on this host)"
+    );
+
     // resolv_provenance: should be populated
     assert!(
         !section.resolv_provenance.is_empty(),
         "resolv_provenance must be populated"
     );
 
-    // hosts_additions: 1 custom entry
+    // hosts_additions: empty on this host
     assert!(
-        !section.hosts_additions.is_empty(),
-        "golden must contain hosts_additions"
+        section.hosts_additions.is_empty(),
+        "golden has no hosts_additions on this host"
     );
 
-    // proxy: 1 proxy entry
-    assert!(!section.proxy.is_empty(), "golden must contain proxy");
-    let proxy = &section.proxy[0];
-    assert!(!proxy.source.is_empty(), "proxy source must be populated");
-    assert!(!proxy.line.is_empty(), "proxy line must be populated");
+    // proxy: empty on this host
+    assert!(
+        section.proxy.is_empty(),
+        "golden has no proxy entries on this host"
+    );
 }
 
 // ── Containers section serde roundtrip ──────────────────────────────
@@ -382,50 +393,32 @@ fn test_containers_serde_roundtrip() {
     );
 }
 
-/// Validates provisional golden containers structure matches expected field layout.
-/// Provisional data: 1 quadlet unit, 1 compose file, 1 running container,
-/// 0 flatpak apps.
+/// Validates golden containers structure matches expected field layout.
+/// Real host data: no containers running, no quadlets, no compose files,
+/// no flatpak apps. All fields are null in Go output (nil slices).
+/// The deserialize_null_default helper coerces null → empty Vec.
 #[test]
 fn test_containers_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-containers-section.json");
     let section: ContainerSection = serde_json::from_str(golden).unwrap();
 
-    // quadlet_units: 1 Quadlet container
+    // All fields are null in Go golden (no containers on this host).
+    // Verify they deserialized to empty Vecs via deserialize_null_default.
     assert!(
-        !section.quadlet_units.is_empty(),
-        "golden must contain quadlet_units"
+        section.quadlet_units.is_empty(),
+        "golden has no quadlet_units (null in Go)"
     );
-    let qu = &section.quadlet_units[0];
-    assert!(!qu.name.is_empty(), "quadlet name must be populated");
-    assert!(!qu.image.is_empty(), "quadlet image must be populated");
-    assert!(!qu.content.is_empty(), "quadlet content must be populated");
-    assert!(!qu.ports.is_empty(), "quadlet ports must be populated");
-    assert!(!qu.volumes.is_empty(), "quadlet volumes must be populated");
-
-    // compose_files: 1 compose file with 2 services
     assert!(
-        !section.compose_files.is_empty(),
-        "golden must contain compose_files"
+        section.compose_files.is_empty(),
+        "golden has no compose_files (null in Go)"
     );
-    let cf = &section.compose_files[0];
-    assert!(!cf.path.is_empty(), "compose path must be populated");
-    assert!(!cf.images.is_empty(), "compose images must be populated");
-
-    // running_containers: 1 running container
     assert!(
-        !section.running_containers.is_empty(),
-        "golden must contain running_containers"
+        section.running_containers.is_empty(),
+        "golden has no running_containers (null in Go)"
     );
-    let rc = &section.running_containers[0];
-    assert!(!rc.id.is_empty(), "container id must be populated");
-    assert!(!rc.name.is_empty(), "container name must be populated");
-    assert!(!rc.image.is_empty(), "container image must be populated");
-    assert!(!rc.status.is_empty(), "container status must be populated");
-
-    // flatpak_apps: empty on this host
     assert!(
         section.flatpak_apps.is_empty(),
-        "provisional golden has no flatpak_apps"
+        "golden has no flatpak_apps (null in Go)"
     );
 }
 
@@ -452,27 +445,26 @@ fn test_users_groups_serde_roundtrip() {
     );
 }
 
-/// Validates provisional golden users/groups structure matches expected
-/// field layout.
-/// Provisional data: 2 users (1 human, 1 service), 3 groups, 2 sudoers
-/// rules, 1 SSH key ref, 2 passwd entries, 3 group entries, 1 subuid,
-/// 1 subgid.
+/// Validates golden users/groups structure matches expected field layout.
+/// Real host data: 1 human user (mark), 1 group, 2 sudoers rules,
+/// 1 SSH key ref, 1 passwd entry, 1 shadow entry (redacted hash),
+/// 1 group entry, 1 gshadow entry, 1 subuid, 1 subgid.
 #[test]
 fn test_users_groups_field_coverage() {
     let golden = include_str!("../../testdata/golden/go-v13-users-groups-section.json");
     let section: UserGroupSection = serde_json::from_str(golden).unwrap();
 
-    // users: 2 non-system users
+    // users: 1 human user on this host
     assert!(!section.users.is_empty(), "golden must contain users");
-    assert_eq!(section.users.len(), 2, "provisional golden has 2 users");
+    assert_eq!(section.users.len(), 1, "golden has 1 user");
     let user = &section.users[0];
     assert!(user.get("name").is_some(), "user must have name");
     assert!(user.get("uid").is_some(), "user must have uid");
     assert!(user.get("shell").is_some(), "user must have shell");
 
-    // groups: 3 non-system groups
+    // groups: 1 group on this host
     assert!(!section.groups.is_empty(), "golden must contain groups");
-    assert_eq!(section.groups.len(), 3, "provisional golden has 3 groups");
+    assert_eq!(section.groups.len(), 1, "golden has 1 group");
     let group = &section.groups[0];
     assert!(group.get("name").is_some(), "group must have name");
     assert!(group.get("gid").is_some(), "group must have gid");
@@ -489,19 +481,19 @@ fn test_users_groups_field_coverage() {
         "golden must contain ssh_authorized_keys_refs"
     );
 
-    // passwd_entries: 2 entries
+    // passwd_entries: 1 entry
     assert!(
         !section.passwd_entries.is_empty(),
         "golden must contain passwd_entries"
     );
 
-    // shadow_entries: empty (requires root or redacted)
+    // shadow_entries: 1 entry (redacted hash)
     assert!(
-        section.shadow_entries.is_empty(),
-        "provisional golden has no shadow_entries"
+        !section.shadow_entries.is_empty(),
+        "golden must contain shadow_entries (redacted hash)"
     );
 
-    // group_entries: 3 entries
+    // group_entries: 1 entry
     assert!(
         !section.group_entries.is_empty(),
         "golden must contain group_entries"
@@ -964,10 +956,9 @@ fn test_env_file_roundtrip() {
 /// Proves a full snapshot with all 11 section keys present round-trips
 /// through serde without losing any section.
 ///
-/// Some Go goldens use null for empty arrays (Go `omitempty` behavior).
-/// Rust `#[serde(default)]` handles missing fields but not explicit
-/// nulls, so we normalize null→[] in the Value tree before typed
-/// deserialization.
+/// Go goldens may contain null for empty arrays (Go nil-slice behavior).
+/// The `deserialize_null_default` helper on Vec fields handles this
+/// natively — no manual null→[] coercion needed.
 #[test]
 fn test_full_snapshot_serde_all_sections_present() {
     use serde_json::Value;
@@ -983,15 +974,6 @@ fn test_full_snapshot_serde_all_sections_present() {
         "redactions": [],
         "redaction_hints": []
     });
-
-    // Known fields that are Vec (not Option) and may have null in Go goldens.
-    // These must be coerced from null → [] for typed deserialization.
-    let vec_null_fields: &[&[&str]] = &[
-        &["rpm", "module_streams"],
-        &["rpm", "version_locks"],
-        &["rpm", "multiarch_packages"],
-        &["rpm", "duplicate_packages"],
-    ];
 
     let sections: &[(&str, &str)] = &[
         (
@@ -1046,20 +1028,9 @@ fn test_full_snapshot_serde_all_sections_present() {
         snap_value[key] = section;
     }
 
-    // Coerce known Vec-typed null fields to empty arrays
-    for path in vec_null_fields {
-        if path.len() == 2 {
-            if let Some(section) = snap_value.get_mut(path[0]) {
-                if let Some(field) = section.get_mut(path[1]) {
-                    if field.is_null() {
-                        *field = Value::Array(vec![]);
-                    }
-                }
-            }
-        }
-    }
-
-    // Serialize the assembled snapshot, then deserialize into typed struct
+    // Serialize the assembled snapshot, then deserialize into typed struct.
+    // No manual null→[] coercion needed — deserialize_null_default on Vec
+    // fields handles Go's null arrays natively.
     let full_json = serde_json::to_string_pretty(&snap_value).unwrap();
     let snap: InspectionSnapshot =
         serde_json::from_str(&full_json).expect("full snapshot with all sections must deserialize");

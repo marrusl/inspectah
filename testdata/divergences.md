@@ -148,23 +148,41 @@ Any difference NOT listed here fails CI.
 - Disposition: permanent — inherent fixture/host data difference
 - Approval: approved-by-spec
 
+## RPM Section
+
+### null vs empty array for module_streams, version_locks, multiarch_packages, duplicate_packages (serde null-as-default)
+- Go: `null` (Go nil slice for unpopulated optional arrays)
+- Rust: `[]` (deserialize_null_default coerces null → empty Vec, serializes as `[]`)
+- Path: `$.rpm.module_streams`, `$.rpm.version_locks`, `$.rpm.multiarch_packages`, `$.rpm.duplicate_packages`
+- Reason: Go serializes nil slices as `null`. Rust uses `deserialize_null_default` to handle this, then serializes as `[]`. Semantically identical.
+- Disposition: permanent
+- Approval: approved-by-spec
+
 ## Network Section
 
-### null vs empty array for ip_rules (serde default)
-- Go: `"ip_rules": null` (Go `omitempty` on empty slice)
-- Rust: `"ip_rules": []` (Rust `#[serde(default)]` deserializes missing as empty, serializes as `[]`)
+### null vs empty array for ip_rules (serde null-as-default)
+- Go: `"ip_rules": null` (Go nil slice)
+- Rust: `"ip_rules": []` (deserialize_null_default coerces null → empty Vec, serializes as `[]`)
 - Path: `$.network.ip_rules`
-- Reason: Rust serde default behavior produces `[]` where Go produces `null` for empty arrays. Semantically identical.
+- Path: `$.ip_rules`
+- Reason: Same null-vs-empty pattern. Go nil slice → Rust empty Vec. Semantically identical.
 - Disposition: permanent
 - Approval: approved-by-spec
 
 ## Containers Section
 
-### null vs empty array for all container sub-fields (serde default)
+### null vs empty array for all container sub-fields (serde null-as-default)
 - Go: `"quadlet_units": null`, `"compose_files": null`, `"running_containers": null`, `"flatpak_apps": null`
-- Rust: All four fields serialize as `[]` when empty
-- Path: `$.containers.quadlet_units`, `$.containers.compose_files`, `$.containers.running_containers`, `$.containers.flatpak_apps`
-- Reason: Same `null` vs `[]` serde default pattern as network.ip_rules. Go `omitempty` on empty slices produces `null`. Rust `#[serde(default)]` produces `[]`. Semantically identical.
+- Rust: All four fields serialize as `[]` when empty (deserialize_null_default coerces null → empty Vec)
+- Path: `$.containers.quadlet_units`
+- Path: `$.containers.compose_files`
+- Path: `$.containers.running_containers`
+- Path: `$.containers.flatpak_apps`
+- Path: `$.quadlet_units`
+- Path: `$.compose_files`
+- Path: `$.running_containers`
+- Path: `$.flatpak_apps`
+- Reason: Same null-vs-empty pattern. Go nil slices → Rust empty Vecs. Semantically identical.
 - Disposition: permanent
 - Approval: approved-by-spec
 
