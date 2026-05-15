@@ -145,6 +145,15 @@ pub struct RepoFile {
     pub fleet: Option<FleetPrevalence>,
 }
 
+/// A single package's file ownership entry: package name and owned paths.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileOwnershipEntry {
+    #[serde(default)]
+    pub package_name: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RpmSection {
     #[serde(default)]
@@ -187,6 +196,10 @@ pub struct RpmSection {
     pub baseline_package_names: Option<Vec<String>>,
     #[serde(default)]
     pub no_baseline: bool,
+    /// File ownership data from `rpm -qa --queryformat '%{NAME}\t[%{FILENAMES}\n]'`.
+    /// Each entry maps a package name to the filesystem paths it owns.
+    #[serde(default)]
+    pub file_ownership: Vec<FileOwnershipEntry>,
 }
 
 #[cfg(test)]
