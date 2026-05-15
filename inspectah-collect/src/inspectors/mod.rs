@@ -4,6 +4,7 @@ pub mod kernelboot;
 pub mod network;
 pub mod rpm;
 pub mod scheduled;
+pub mod selinux;
 pub mod services;
 pub mod storage;
 pub mod users;
