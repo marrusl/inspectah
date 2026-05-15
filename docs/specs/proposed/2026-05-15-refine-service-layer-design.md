@@ -26,7 +26,7 @@ computation, undo/redo, and view projection. The web layer owns transport.
 
 **In scope:**
 
-- Package operations: include/exclude individual packages by name
+- Package operations: include/exclude individual packages by name+arch
 - Config file operations: include/exclude individual config files by path
 - Attention routing: server-computed triage tags (`NeedsReview` / `Informational` / `Routine`) with typed reasons shipped on every item
 - Live Containerfile preview after each operation (cheap, immediate)
@@ -44,6 +44,31 @@ computation, undo/redo, and view projection. The web layer owns transport.
 - Fleet baseline as attention heuristic input
 - Collaborative multi-operator review
 - Persistent sessions (session dies with the process)
+
+## Go Refine Cutover Contract
+
+This design is a **clean replacement** of the current Go refine seam, not a
+compatibility shim or incremental extension. The current Go endpoints and
+their behavioral contracts do not carry forward:
+
+| Go endpoint | Disposition |
+|-------------|-------------|
+| `GET /api/snapshot` | **Dropped.** Replaced by `GET /api/view` which returns a `RefinedView` with attention tags, stats, and generation counter. |
+| `PUT /api/snapshot` (with `revision`) | **Dropped.** State mutation is expressed as discrete operations via `POST /api/op`, not bulk snapshot replacement. There is no autosave. |
+| `POST /api/render` | **Dropped.** Containerfile preview is computed on every view projection. Full re-render happens only at export time via `POST /api/tarball`. |
+| `GET /api/tarball?render_id=...` | **Replaced** by `POST /api/tarball` with `generation` in the request body. The generation counter replaces `render_id` for binding export to reviewed state. |
+| `POST /api/reset` | **Dropped.** Undo-all achieves the same result. A dedicated reset endpoint may return in a future version. |
+| `GET /api/health` (`re_render` flag) | **Simplified.** `GET /api/health` returns `{"status":"ok"}`. The `re_render` browser detection flag is not needed -- the new UI always knows it is in refine mode. |
+
+**The browser UI is also a clean replacement.** The current PatternFly
+report with autosave, `revision` tracking, and `render_id`-gated download
+is replaced by a new UI that consumes the `RefinedView` API. The new UI
+tracks `generation` for stale-state detection and generation-bound export.
+
+**What this means for `inspectah build`:** The exported tarball from
+`POST /api/tarball` is consumable by `inspectah build` -- the artifact
+contract is defined in "Tarball Artifact Contract" below. Build does not
+need to know whether the tarball came from scan or refine.
 
 ## Crate Architecture
 
@@ -90,6 +115,55 @@ tempfile.workspace = true
 
 ## Data Model
 
+### Package Target Identity
+
+Package operations use a composite key, not a bare name. The snapshot
+model carries `name`, `arch`, `epoch`, `version`, `release` per
+`PackageEntry` (see `inspectah-core/src/types/rpm.rs`), and the data
+includes `multiarch_packages` and `duplicate_packages` lists where a
+single name can appear more than once. A name-only key cannot guarantee
+that each operation targets exactly one package.
+
+```rust
+use serde::{Deserialize, Serialize};
+
+/// Composite key that uniquely identifies a package in a snapshot.
+///
+/// `name + arch` is the minimum stable identity. The current Go refine
+/// seam already uses this granularity (`pkg-<name>-<arch>` in triage.go).
+/// Full NEVRA is not required for target identity because a single
+/// snapshot never contains two packages with the same name+arch and
+/// different versions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PackageTarget {
+    pub name: String,
+    pub arch: String,
+}
+
+impl PackageTarget {
+    /// Matches a PackageEntry by name and arch.
+    pub fn matches(&self, entry: &PackageEntry) -> bool {
+        self.name == entry.name && self.arch == entry.arch
+    }
+}
+
+impl std::fmt::Display for PackageTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}", self.name, self.arch)
+    }
+}
+```
+
+**Why name+arch, not full NEVRA:** A single snapshot is a point-in-time
+capture of one host. It never contains two packages with the same
+name+arch but different epoch:version-release. `name+arch` is the
+natural unique key within a snapshot. Full NEVRA would make the wire
+protocol heavier without adding disambiguation power.
+
+**Multiarch example:** A snapshot with `glibc.x86_64` and `glibc.i686`
+requires two separate operations to exclude both. The UI must surface
+arch alongside name so the operator can target precisely.
+
 ### Operations
 
 ```rust
@@ -103,8 +177,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", content = "target")]
 pub enum RefinementOp {
-    ExcludePackage { name: String },
-    IncludePackage { name: String },
+    ExcludePackage(PackageTarget),
+    IncludePackage(PackageTarget),
     ExcludeConfig { path: PathBuf },
     IncludeConfig { path: PathBuf },
 }
@@ -112,15 +186,20 @@ pub enum RefinementOp {
 
 Constraints:
 
-- **Validated on apply.** `ExcludePackage { name: "nonexistent" }` returns
-  `Err(RefineError::UnknownTarget)`. The snapshot is the source of truth for
-  what exists.
+- **Validated on apply.** `ExcludePackage(PackageTarget { name: "nonexistent", arch: "x86_64" })`
+  returns `Err(RefineError::UnknownTarget)`. The snapshot is the source
+  of truth for what exists. Validation matches on both name and arch.
 - **Idempotent.** Excluding an already-excluded package is a no-op -- it
   succeeds but does not push onto the ops stack or invalidate the cache.
 - **Cheap to clone.** All variants are small owned data. `Clone` is derived.
 - **Serde-tagged.** The `#[serde(tag = "op", content = "target")]` layout
-  produces JSON like `{"op": "ExcludePackage", "target": {"name": "httpd"}}`,
+  produces JSON like `{"op": "ExcludePackage", "target": {"name": "httpd", "arch": "x86_64"}}`,
   which the web layer sends/receives directly.
+- **Unambiguous.** Each op variant targets exactly one item. For package
+  ops, `PackageTarget.matches()` must match exactly one `PackageEntry`
+  in the snapshot. Zero matches is `UnknownTarget`. Multiple matches
+  (which should not happen with name+arch in a single snapshot) is a
+  bug in the snapshot, not in the op.
 
 ### Session State
 
@@ -131,7 +210,9 @@ Constraints:
 /// Never mutates `original`. All state is expressed as a sequence of
 /// operations replayed over the original to produce a RefinedView.
 pub struct RefineSession {
-    /// The unmodified inspection snapshot loaded from the scan tarball.
+    /// The normalized inspection snapshot loaded from the scan tarball.
+    /// This is the post-normalization baseline, not the raw deserialized
+    /// bytes. See "Snapshot Normalization" below.
     original: InspectionSnapshot,
 
     /// Linear operation history. Only ops[0..cursor] are "active."
@@ -144,6 +225,13 @@ pub struct RefineSession {
     /// Cached projection. Set to None on any mutation (apply/undo/redo).
     /// Lazily recomputed on next view() call.
     cached_view: Option<RefinedView>,
+
+    /// Monotonically increasing generation counter. Incremented on every
+    /// state-changing operation (apply, undo, redo). Included in every
+    /// response so the UI can detect stale state. Export requires the
+    /// caller to supply the generation they reviewed -- stale exports
+    /// are rejected.
+    generation: u64,
 }
 ```
 
@@ -270,16 +358,24 @@ pub struct RefinedView {
     pub containerfile_preview: String,
     /// Aggregate statistics.
     pub stats: RefineStats,
+    /// Monotonic generation counter. Incremented on every mutation.
+    /// The UI uses this to detect stale state and to bind export requests
+    /// to the exact state the operator reviewed.
+    pub generation: u64,
 }
 
-/// Summary of changes relative to the original snapshot.
+/// Summary of changes relative to the normalized original snapshot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangesSummary {
-    pub packages_included: Vec<String>,
-    pub packages_excluded: Vec<String>,
+    pub packages_included: Vec<PackageTarget>,
+    pub packages_excluded: Vec<PackageTarget>,
     pub configs_included: Vec<String>,
     pub configs_excluded: Vec<String>,
-    /// True when the current state differs from the original snapshot.
+    /// True when the current projected state differs from the normalized
+    /// original. Computed by comparing projected include/exclude state
+    /// against the normalized baseline, not by checking whether the ops
+    /// stack is empty (an exclude followed by an include of the same
+    /// target yields a non-empty stack but is_dirty: false).
     pub is_dirty: bool,
 }
 ```
@@ -297,6 +393,9 @@ pub enum RefineError {
 
     #[error("nothing to redo")]
     NothingToRedo,
+
+    #[error("stale generation: expected {expected}, got {actual}")]
+    StaleGeneration { expected: u64, actual: u64 },
 
     #[error("render failed: {0}")]
     RenderFailed(String),
@@ -377,8 +476,19 @@ impl RefineSession {
 
     /// Render all artifacts + pack into a .tar.gz at the given path.
     /// Calls render_all() to a tempdir, then tarball::create_tarball().
-    /// The output format matches scan output exactly -- build can consume it.
-    pub fn export_tarball(&mut self, path: &Path) -> Result<(), RefineError>;
+    /// The output matches the tarball artifact contract defined below.
+    ///
+    /// `expected_generation` must match `self.generation` or the call
+    /// returns `Err(RefineError::StaleGeneration)`. This guarantees the
+    /// export reflects the exact state the caller reviewed.
+    pub fn export_tarball(
+        &mut self,
+        path: &Path,
+        expected_generation: u64,
+    ) -> Result<(), RefineError>;
+
+    /// Return the current generation counter.
+    pub fn generation(&self) -> u64;
 }
 ```
 
@@ -387,13 +497,169 @@ impl RefineSession {
 ```rust
 /// Load a RefineSession from a scan output tarball.
 ///
-/// Extracts the tarball to a tempdir, reads inspection-snapshot.json,
-/// deserializes + migrates the snapshot, and creates a RefineSession.
+/// 1. Extract the tarball to a tempdir.
+/// 2. Flatten prefixed archives: if extraction yields a single
+///    subdirectory at root (e.g., `hostname-20260515-1430/`), move
+///    its contents up to the extraction root. This matches Go refine's
+///    `validateOutputDir()` behavior and handles the prefix that
+///    `create_tarball(..., &stamp)` adds in scan.
+/// 3. Read `inspection-snapshot.json` from the (flattened) root.
+/// 4. Deserialize + schema-migrate the snapshot.
+/// 5. Normalize the snapshot (see "Snapshot Normalization" below).
+/// 6. Validate import provenance (see "Import Provenance" below).
+/// 7. Create a RefineSession with the normalized snapshot as `original`.
 ///
 /// This is a standalone function, not an inherent method on RefineSession,
 /// because tarball I/O is not a concern of the session itself.
 pub fn from_tarball(path: &Path) -> Result<RefineSession, RefineError>;
 ```
+
+### Tarball Artifact Contract
+
+The exported tarball from `export_tarball()` and the imported tarball
+consumed by `from_tarball()` share a common artifact format. This
+section defines that format precisely so `inspectah build` compatibility
+is verifiable.
+
+#### Exported file set
+
+The tarball contains the following files at its root (no prefix
+subdirectory in the export):
+
+| File / Directory | Required | Description |
+|-----------------|----------|-------------|
+| `inspection-snapshot.json` | yes | The projected snapshot reflecting all applied refinement operations. |
+| `Containerfile` | yes | Generated by `render_containerfile()` on the projected snapshot. |
+| `audit-report.md` | yes | Human-readable report rendered from the projected snapshot. |
+| `config/` | conditional | Config file tree materialized by `render_all()`. Present when the snapshot contains config files with `include: true`. |
+| `env-files/` | conditional | Environment files materialized by `render_all()`. Present when the snapshot contains env-file data. |
+| `schema/snapshot.schema.json` | yes | JSON schema for the snapshot format. |
+
+**Not exported (server-private sidecars):**
+
+| File | Why excluded |
+|------|-------------|
+| `original-inspection-snapshot.json` | Server-internal sidecar used by Go refine to track the pre-refinement baseline. In the Rust design, the normalized original is held in memory, not persisted to the tarball. |
+
+#### Load behavior for prefixed archives
+
+Scan tarballs are created with a `hostname-timestamp/` prefix directory
+(see `inspectah-cli/src/commands/scan.rs` and
+`inspectah-pipeline/src/render/tarball.rs`). `from_tarball()` handles
+this by flattening: if the extraction root contains exactly one
+subdirectory and no files, the loader moves the subdirectory contents
+up to root before looking for `inspection-snapshot.json`.
+
+This matches the Go refine behavior in
+`cmd/inspectah/internal/refine/server.go` (`validateOutputDir()`).
+
+#### Build compatibility
+
+`inspectah build` consumes a tarball and expects to find at minimum:
+`inspection-snapshot.json`, `Containerfile`, and the `config/` tree.
+The export artifact set is a superset of what build requires. A tarball
+exported from refine is indistinguishable from a tarball produced by
+scan+render from build's perspective.
+
+#### Preview/export fidelity
+
+The Containerfile in the exported tarball must be byte-identical to what
+`view().containerfile_preview` returned for the same generation. Both
+paths call `render_containerfile()` on the same projected snapshot. The
+full export goes through `render_all()`, which materializes the config
+tree first and then renders the Containerfile from the materialized
+roots -- the test plan must prove that preview and export Containerfiles
+match for the same projected state.
+
+### Snapshot Normalization
+
+When `from_tarball()` loads a snapshot, it normalizes the deserialized
+data before freezing it as the session's `original`. This normalization
+step is what makes `is_dirty()`, `pending_changes()`, and "undo back
+to clean" deterministic -- without it, different importers could
+disagree about what the baseline state actually is.
+
+**Normalization rules (applied in order):**
+
+1. **Include field defaults.** Any `PackageEntry` or `ConfigFileEntry`
+   where `include` is missing, null, or was not present in older schema
+   versions gets `include: true` (the default-include convention).
+
+2. **Leaf package classification.** If `leaf_packages` or
+   `auto_packages` are present, packages not in `leaf_packages` that
+   are in `auto_packages` retain their include state. Packages that
+   appear as leaf packages but have `include: false` keep that state.
+   This preserves the scanner's classification without altering
+   operator intent.
+
+3. **Empty string canonicalization.** Fields like `epoch`, `source_repo`,
+   and `arch` that are empty strings are left as empty strings (not
+   converted to `None` or `"0"`). This matches the current
+   `PackageEntry` serde defaults.
+
+4. **Schema migration.** Any older snapshot schema versions are migrated
+   to the current version before normalization. The migration +
+   normalization pipeline is: `deserialize -> migrate -> normalize`.
+
+**The "original" is the post-normalization snapshot.** All of
+`is_dirty()`, `pending_changes()`, `ChangesSummary`, and undo-to-clean
+compare projected state against this normalized baseline.
+
+**`is_dirty()` semantics:** Compares the projected include/exclude state
+of every package and config item against the normalized original. An
+exclude-then-include of the same target yields `is_dirty: false` even
+though the ops stack is non-empty. Dirty tracking is state-based, not
+history-based.
+
+**"Reset to clean"** means reverting to the normalized original state.
+In v1 this is achieved by undoing all operations (`cursor = 0`). A
+dedicated reset endpoint may be added later.
+
+### Import Provenance
+
+`from_tarball()` checks the snapshot's `redaction_state` field (if
+present) during import:
+
+| `redaction_state` value | Behavior |
+|------------------------|----------|
+| `FullyRedacted` | Accept. Normal import path. |
+| `PartiallyRedacted` | Accept with warning logged to stderr. The `RefinedView` carries `import_warnings` (future field, not in v1 -- for v1, log only). |
+| `Unknown` or absent | Accept with warning. Treat as unverified provenance. |
+| `Raw` | **Reject.** Return `Err(RefineError::UntrustedSnapshot)`. A raw snapshot has not been through redaction and should not be refined or re-exported as trusted inspectah output. |
+
+Add to the error enum:
+
+```rust
+    #[error("untrusted snapshot: redaction_state is Raw")]
+    UntrustedSnapshot,
+
+    #[error("archive safety violation: {0}")]
+    ArchiveSafety(String),
+```
+
+This is intentionally conservative. The common path is `FullyRedacted`
+(the default for scan output). The reject-on-raw rule prevents
+accidentally refining and exporting a hand-crafted or pre-redaction
+snapshot as canonical inspectah output.
+
+### Archive Safety Rules
+
+`from_tarball()` accepts operator-provided archives. Even though this is
+a local tool, a malicious or malformed tarball should not escape the
+tempdir or exhaust resources. The following rules apply during extraction:
+
+| Rule | Limit | Behavior on violation |
+|------|-------|---------------------|
+| **Path traversal** | Reject entries with `..` components or absolute paths | `Err(RefineError::ArchiveSafety("path traversal: ..."))` |
+| **Symlinks / hardlinks / device nodes** | Reject all non-regular-file, non-directory entries | `Err(RefineError::ArchiveSafety("unsupported entry type: ..."))` |
+| **Total unpacked size** | 512 MiB | `Err(RefineError::ArchiveSafety("archive exceeds 512 MiB unpacked limit"))` |
+| **Maximum file count** | 10,000 entries | `Err(RefineError::ArchiveSafety("archive exceeds 10,000 entry limit"))` |
+| **Single file size** | 256 MiB | `Err(RefineError::ArchiveSafety("single file exceeds 256 MiB"))` |
+| **Expected root layout** | Must contain `inspection-snapshot.json` at root (post-flattening) | `Err(RefineError::SnapshotLoad("missing inspection-snapshot.json"))` |
+
+These limits are generous for legitimate inspectah tarballs (typically
+< 10 MiB with < 100 files). They exist to bound resource consumption,
+not to restrict normal use.
 
 ### View projection internals
 
@@ -408,11 +674,14 @@ fn project(&self) -> RefinedView {
     // Apply operations
     for op in &self.ops[..self.cursor] {
         match op {
-            RefinementOp::ExcludePackage { name } => {
-                // Find package in snap.rpm.packages_added, set include = false
+            RefinementOp::ExcludePackage(target) => {
+                // Find package in snap.rpm.packages_added where
+                // target.matches(entry), set include = false.
+                // Also check base_image_only for completeness.
             }
-            RefinementOp::IncludePackage { name } => {
-                // Find package in snap.rpm.packages_added, set include = true
+            RefinementOp::IncludePackage(target) => {
+                // Find package in snap.rpm.packages_added where
+                // target.matches(entry), set include = true.
             }
             RefinementOp::ExcludeConfig { path } => {
                 // Find config in snap.config.files, set include = false
@@ -434,7 +703,10 @@ fn project(&self) -> RefinedView {
     let stats = compute_stats(&packages, &config_files, self.cursor,
                                self.can_undo(), self.can_redo());
 
-    RefinedView { packages, config_files, containerfile_preview, stats }
+    RefinedView {
+        packages, config_files, containerfile_preview, stats,
+        generation: self.generation,
+    }
 }
 ```
 
@@ -458,7 +730,7 @@ Nine endpoints. The server is a single-threaded axum router holding
 | POST | `/api/op` | Apply operation | `RefinedView` JSON (200) or error (400/422) |
 | POST | `/api/undo` | Undo last op | `RefinedView` JSON (200) or error (409) |
 | POST | `/api/redo` | Redo last undone op | `RefinedView` JSON (200) or error (409) |
-| GET | `/api/ops` | Operation history | `Vec<RefinementOp>` JSON (200) |
+| GET | `/api/ops` | Operation history | `Vec<AnnotatedOp>` JSON (200) |
 | GET | `/api/changes` | Pending changes | `ChangesSummary` JSON (200) |
 | POST | `/api/tarball` | Full render + download | `application/gzip` stream (200) |
 
@@ -469,15 +741,15 @@ Nine endpoints. The server is a single-threaded axum router holding
 Request body is a serde-tagged `RefinementOp`:
 
 ```json
-{"op": "ExcludePackage", "target": {"name": "httpd"}}
+{"op": "ExcludePackage", "target": {"name": "httpd", "arch": "x86_64"}}
 ```
 
-Returns the full `RefinedView` on success (the UI replaces its entire state
-from the response). Error responses:
+Returns the full `RefinedView` on success, including the current `generation`
+counter. The UI replaces its entire state from the response. Error responses:
 
 - `400 Bad Request` -- malformed JSON or unknown `op` variant
 - `422 Unprocessable Entity` -- valid op but unknown target (package/config
-  not in snapshot). Body: `{"error": "unknown target: httpd-nonexistent"}`
+  not in snapshot). Body: `{"error": "unknown target: httpd.x86_64"}`
 
 **POST /api/undo, POST /api/redo**
 
@@ -487,20 +759,49 @@ Body: `{"error": "nothing to undo"}` or `{"error": "nothing to redo"}`.
 
 **POST /api/tarball**
 
-No request body. Triggers `export_tarball()` to a tempfile, then streams
-the file as `application/gzip` with `Content-Disposition: attachment;
+Request body (required):
+
+```json
+{"generation": 7}
+```
+
+The `generation` field must match the session's current generation counter.
+If it does not match, the server returns `409 Conflict` with body
+`{"error": "stale generation: expected 7, got 5"}`. This guarantees the
+exported tarball reflects exactly the state the operator reviewed in
+the UI -- not a later or earlier mutation.
+
+On match, triggers `export_tarball()` to a tempfile, then streams the file
+as `application/gzip` with `Content-Disposition: attachment;
 filename="inspectah-refine-output.tar.gz"`. This is the expensive path --
-the response may take seconds. The HTTP layer uses `tokio::task::spawn_blocking`
-for the render + tar work.
+the response may take seconds.
+
+The HTTP layer snapshots session state under the mutex, then releases the
+lock before doing the expensive render + tar work via
+`tokio::task::spawn_blocking`. This prevents export from monopolizing
+the session lock.
 
 **GET /api/ops**
 
-Returns the full ops history as a JSON array. Includes ops beyond the cursor
-(redo-able ops). Each entry is annotated:
+Returns the full ops history as a JSON array of `AnnotatedOp`. Includes ops
+beyond the cursor (redo-able ops). The response type is:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnnotatedOp {
+    /// The operation, flattened via serde tag.
+    #[serde(flatten)]
+    pub op: RefinementOp,
+    /// True for ops below the cursor (applied), false for redo-able ops.
+    pub active: bool,
+}
+```
+
+Example response:
 
 ```json
 [
-  {"op": "ExcludePackage", "target": {"name": "httpd"}, "active": true},
+  {"op": "ExcludePackage", "target": {"name": "httpd", "arch": "x86_64"}, "active": true},
   {"op": "IncludeConfig", "target": {"path": "/etc/hosts"}, "active": false}
 ]
 ```
@@ -510,15 +811,26 @@ above it.
 
 ### Transport Concerns
 
-- **CORS:** Enabled for all origins. The server is localhost-only and
-  single-operator. No auth.
+- **CORS:** Origin-restricted. The server sets
+  `Access-Control-Allow-Origin` to the exact origin it serves (e.g.,
+  `http://localhost:8642`), not `*`. This prevents malicious web pages
+  in other browser tabs from reading refine state or triggering mutations
+  via cross-origin requests to the loopback API. The served origin is
+  known at bind time and configured as a tower-http CORS layer.
 - **Content-Type:** All JSON endpoints use `application/json`.
   Tarball uses `application/gzip`.
+- **Request body limits:** All JSON endpoints enforce a 1 MiB body limit.
+  `POST /api/op` payloads are small (< 1 KiB). The limit prevents abuse
+  without restricting legitimate use.
 - **Concurrency:** `Arc<Mutex<RefineSession>>` serializes all mutations.
   No concurrent writes. Reads also take the lock (view() may recompute
   the cache). This is fine for single-operator localhost use.
+  `POST /api/tarball` snapshots state under the lock and releases it
+  before doing expensive render/tar work (see tarball endpoint above).
 - **Error shape:** All error responses use `{"error": "<message>"}`.
-  The message is the `Display` impl of `RefineError`.
+  HTTP-safe error messages only -- internal details (file paths, stack
+  traces) are logged server-side, not returned in the response body.
+  `RefineError` variants map to transport-safe strings.
 
 ### Axum Handler Sketch
 
@@ -590,8 +902,9 @@ Starting refine server on http://localhost:8642
 Press Ctrl-C to stop.
 ```
 
-1. `from_tarball()` loads and migrates the snapshot.
-2. `RefineSession::new()` computes the initial view.
+1. `from_tarball()` loads, migrates, normalizes, and validates the snapshot.
+2. `RefineSession::new()` stores the normalized snapshot as `original` and
+   computes the initial view (generation 0).
 3. Axum server binds to `localhost:{port}`. Port 0 picks an ephemeral port
    (the actual port is printed).
 4. If `--open` is true, `open::that(url)` launches the default browser.
@@ -613,13 +926,17 @@ Pure domain logic, no I/O, fast.
 **Operation mechanics:**
 - Each `RefinementOp` variant: apply on a known snapshot, verify the
   targeted item's `include` field toggled.
-- Reject unknown target: apply `ExcludePackage { name: "nonexistent" }`,
+- Reject unknown target: apply `ExcludePackage(PackageTarget { name: "nonexistent", arch: "x86_64" })`,
   assert `Err(RefineError::UnknownTarget)`.
+- Reject wrong arch: apply `ExcludePackage(PackageTarget { name: "glibc", arch: "s390x" })`
+  on a snapshot that has `glibc.x86_64` only, assert `Err(RefineError::UnknownTarget)`.
 - Idempotency: exclude an already-excluded package, verify no-op (ops
   stack length unchanged, cache not invalidated).
 - Apply then undo: verify state matches original.
 - Apply-apply-undo-redo: verify cursor walks correctly.
 - Apply after undo (mid-stack): verify redo history is truncated.
+- **Multiarch targeting:** snapshot with `glibc.x86_64` and `glibc.i686`,
+  exclude only `glibc.i686`, verify `glibc.x86_64` remains included.
 
 **Undo/redo edge cases:**
 - Undo on empty stack: `Err(RefineError::NothingToUndo)`.
@@ -644,8 +961,14 @@ Pure domain logic, no I/O, fast.
 
 **Changes and dirty state:**
 - `pending_changes()` on fresh session: empty, `is_dirty: false`.
-- After one exclude: `packages_excluded` contains the name, `is_dirty: true`.
+- After one exclude: `packages_excluded` contains the `PackageTarget`, `is_dirty: true`.
 - After undo: back to empty and clean.
+- **Exclude then re-include same target:** ops stack is non-empty but
+  `is_dirty: false` (state-based, not history-based).
+- **Normalized-clean load:** load a snapshot with missing `include` fields,
+  verify `is_dirty: false` after normalization (not dirty due to defaults).
+- **Undo all to clean:** apply 3 ops, undo 3, verify `is_dirty: false`
+  and state matches normalized original.
 
 **Containerfile preview fidelity:**
 - Preview matches what `render_containerfile()` produces on the projected
@@ -654,7 +977,30 @@ Pure domain logic, no I/O, fast.
 **Tarball export:**
 - `export_tarball()` to a tempdir, read back the tarball, verify it
   contains `Containerfile`, `inspection-snapshot.json`, `audit-report.md`,
-  etc. Verify the Containerfile inside the tarball reflects exclusions.
+  `schema/snapshot.schema.json`. Verify the Containerfile inside the
+  tarball reflects exclusions.
+- Exported tarball does NOT contain `original-inspection-snapshot.json`.
+- **Stale generation rejection:** apply an op (generation becomes 1),
+  call `export_tarball(path, 0)`, assert `Err(RefineError::StaleGeneration)`.
+- **Preview/export fidelity:** for a given generation, the Containerfile
+  from `view().containerfile_preview` is byte-identical to the
+  Containerfile inside the exported tarball.
+
+**Tarball import:**
+- Load a prefixed archive (`hostname-timestamp/inspection-snapshot.json`),
+  verify flattening works and session starts.
+- Load a flat archive (`inspection-snapshot.json` at root), verify session starts.
+- **Archive safety:** tarball with `../escape.txt` entry, assert
+  `Err(RefineError::ArchiveSafety)`.
+- **Provenance rejection:** tarball with `redaction_state: "raw"` in
+  snapshot, assert `Err(RefineError::UntrustedSnapshot)`.
+
+**Normalization:**
+- Load snapshot with missing `include` field on a PackageEntry, verify
+  it defaults to `true` and `is_dirty()` returns `false`.
+- Load snapshot with `include: false` explicitly set, verify it is
+  preserved and `is_dirty()` returns `false` (the normalized original
+  respects explicit scanner intent).
 
 ### inspectah-web (integration tests)
 
@@ -671,14 +1017,30 @@ testing with `tower::ServiceExt`).
 - `POST /api/undo` on fresh session -> 409.
 - `POST /api/redo` on fresh session -> 409.
 - `POST /api/undo` after an op -> 200, view matches original.
-- `GET /api/ops` -> 200, body is array of annotated ops.
-- `GET /api/changes` -> 200, body is `ChangesSummary`.
-- `POST /api/tarball` -> 200, content-type is `application/gzip`, body
-  is a valid tar.gz.
+- `GET /api/ops` -> 200, body is array of `AnnotatedOp`.
+- `GET /api/changes` -> 200, body is `ChangesSummary`. Package entries
+  use `PackageTarget` (name+arch), not bare strings.
+- `POST /api/tarball` with matching generation -> 200, content-type is
+  `application/gzip`, body is a valid tar.gz.
+- `POST /api/tarball` with stale generation -> 409, body has `error` field.
+- `POST /api/tarball` with no body -> 400.
 
 **State persistence across requests:**
 - Apply op, then GET /api/view: view reflects the op.
 - Apply op, undo, GET /api/view: view matches original.
+
+**Generation tracking:**
+- Apply op, verify response includes `generation: 1`.
+- Apply second op, verify `generation: 2`.
+- Undo, verify `generation: 3` (undo increments generation too).
+- `GET /api/view` returns current generation in every response.
+
+**CORS:**
+- Request with `Origin: http://localhost:8642` -> response includes
+  `Access-Control-Allow-Origin: http://localhost:8642`.
+- Request with `Origin: http://evil.example.com` -> response does NOT
+  include `Access-Control-Allow-Origin` or returns the served origin
+  only (never the requesting origin).
 
 **Concurrency:**
 - Parallel POST /api/op requests serialize correctly (no panics, no
@@ -725,3 +1087,46 @@ multiple Containerfiles. Different crate, calls into `inspectah-refine`.
 **Collaborative review.** Multiple operators, shared session state,
 conflict resolution. Requires replacing `Arc<Mutex<>>` with a more
 sophisticated state manager (CRDT or OT). Well beyond v1.
+
+## Revision History
+
+### Round 2 (2026-05-15)
+
+Revised to address five review blockers identified by Tang, Thorn, Kit,
+and Slate.
+
+1. **Package target identity (name -> name+arch).** Added `PackageTarget`
+   composite type with `name + arch` fields. `RefinementOp::ExcludePackage`
+   and `IncludePackage` now take `PackageTarget` instead of bare `String`.
+   `ChangesSummary` uses `Vec<PackageTarget>` instead of `Vec<String>`.
+   Validation, idempotency, undo/redo, and view projection all match on
+   name+arch. Added multiarch test case.
+
+2. **Browser/session cutover contract.** Added "Go Refine Cutover Contract"
+   section explicitly stating this is a clean replacement, not a compat shim.
+   Tabulated every Go endpoint with its disposition. Stated the browser UI is
+   also a clean replacement.
+
+3. **Tarball import/export artifact contract.** Added "Tarball Artifact
+   Contract" section naming the exact exported file set, excluded sidecars,
+   prefixed-archive load behavior, build compatibility, and preview/export
+   fidelity requirement.
+
+4. **Normalized original-state and dirty-state semantics.** Added "Snapshot
+   Normalization" section defining normalization rules, the meaning of
+   "original," state-based dirty tracking, and reset-to-clean semantics.
+   Added "Import Provenance" section with redaction_state gating.
+
+5. **Local API trust boundary.** Replaced `CORS: *` with origin-restricted
+   CORS. Added request body limits. Specified error-message safety (no
+   internal details in HTTP responses). Added "Archive Safety Rules" section
+   with path traversal prevention, symlink rejection, and resource limits.
+   Added `UntrustedSnapshot` and `ArchiveSafety` error variants.
+
+Additional changes: added `generation` counter to `RefineSession` and
+`RefinedView` for stale-state detection. `export_tarball()` now requires
+`expected_generation` parameter. `POST /api/tarball` requires generation
+in the request body and returns 409 on mismatch. Fixed `/api/ops` response
+type from `Vec<RefinementOp>` to `Vec<AnnotatedOp>` with defined struct.
+Added `StaleGeneration` error variant. Expanded test plan to cover all
+new contracts.
