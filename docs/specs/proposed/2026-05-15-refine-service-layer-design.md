@@ -475,12 +475,35 @@ impl RefineSession {
     pub fn render_all(&mut self, output_dir: &Path) -> Result<(), RefineError>;
 
     /// Render all artifacts + pack into a .tar.gz at the given path.
-    /// Calls render_all() to a tempdir, then tarball::create_tarball().
     /// The output matches the tarball artifact contract defined below.
     ///
     /// `expected_generation` must match `self.generation` or the call
     /// returns `Err(RefineError::StaleGeneration)`. This guarantees the
     /// export reflects the exact state the caller reviewed.
+    ///
+    /// **Implementation pipeline (executed in order):**
+    ///
+    /// 1. Validate `expected_generation == self.generation`. If not,
+    ///    return `Err(RefineError::StaleGeneration)`.
+    /// 2. Create a tempdir (`tempfile::tempdir()`).
+    /// 3. Call `self.render_all(&tempdir_path)` — this runs all 8
+    ///    renderers against the current projected snapshot, writing
+    ///    `Containerfile`, `audit-report.md`, `config/`, `env-files/`,
+    ///    and `schema/snapshot.schema.json` into the tempdir.
+    /// 4. Serialize the projected `InspectionSnapshot` to
+    ///    `inspection-snapshot.json` in the tempdir. This is the
+    ///    post-refinement snapshot reflecting all applied operations.
+    /// 5. Create a `.tar.gz` from the tempdir contents **flat** — the
+    ///    tarball entries are rooted at the archive root with no
+    ///    hostname prefix subdirectory. This differs from scan output,
+    ///    which uses a `hostname-timestamp/` prefix. The export tarball
+    ///    is prefix-free by design.
+    /// 6. Write (or stream) the `.tar.gz` to `path`.
+    /// 7. Drop the tempdir (automatic cleanup).
+    ///
+    /// The flat layout means `tar tf output.tar.gz` yields paths like
+    /// `inspection-snapshot.json`, `Containerfile`, etc. — never
+    /// `some-prefix/inspection-snapshot.json`.
     pub fn export_tarball(
         &mut self,
         path: &Path,
@@ -617,30 +640,33 @@ dedicated reset endpoint may be added later.
 
 ### Import Provenance
 
-`from_tarball()` checks the snapshot's `redaction_state` field (if
-present) during import:
+`from_tarball()` checks the snapshot's `redaction_state` field during
+import and **rejects anything that is not `FullyRedacted`**:
 
 | `redaction_state` value | Behavior |
 |------------------------|----------|
 | `FullyRedacted` | Accept. Normal import path. |
-| `PartiallyRedacted` | Accept with warning logged to stderr. The `RefinedView` carries `import_warnings` (future field, not in v1 -- for v1, log only). |
-| `Unknown` or absent | Accept with warning. Treat as unverified provenance. |
-| `Raw` | **Reject.** Return `Err(RefineError::UntrustedSnapshot)`. A raw snapshot has not been through redaction and should not be refined or re-exported as trusted inspectah output. |
+| `PartiallyRedacted` | **Reject.** Return `Err(RefineError::UntrustedSnapshot)` with message: "Snapshot has not been fully redacted. Run inspectah scan to produce a redacted snapshot." |
+| `Unknown` or absent | **Reject.** Return `Err(RefineError::UntrustedSnapshot)` with message: "Snapshot has not been fully redacted. Run inspectah scan to produce a redacted snapshot." |
+| `Raw` | **Reject.** Return `Err(RefineError::UntrustedSnapshot)` with message: "Snapshot has not been fully redacted. Run inspectah scan to produce a redacted snapshot." |
 
 Add to the error enum:
 
 ```rust
-    #[error("untrusted snapshot: redaction_state is Raw")]
-    UntrustedSnapshot,
+    #[error("untrusted snapshot: {0}")]
+    UntrustedSnapshot(String),
 
     #[error("archive safety violation: {0}")]
     ArchiveSafety(String),
 ```
 
-This is intentionally conservative. The common path is `FullyRedacted`
-(the default for scan output). The reject-on-raw rule prevents
-accidentally refining and exporting a hand-crafted or pre-redaction
-snapshot as canonical inspectah output.
+This is the simplest correct policy. A migration tool should not let
+unredacted data into the review flow. The scan pipeline produces
+`FullyRedacted` snapshots by default — any other state means the
+snapshot was hand-crafted, partially processed, or from an older
+pipeline version that did not complete redaction. Loosening this gate
+(e.g., accepting `PartiallyRedacted` with warnings) is a future option
+if demand exists — see "Deferred / Future Expansion" below.
 
 ### Archive Safety Rules
 
@@ -986,14 +1012,27 @@ Pure domain logic, no I/O, fast.
   from `view().containerfile_preview` is byte-identical to the
   Containerfile inside the exported tarball.
 
+**Tarball export round-trip:**
+- `export_tarball()` to a tempfile, extract the tarball, verify the
+  exact file set matches the documented contract: `inspection-snapshot.json`,
+  `Containerfile`, `audit-report.md`, `schema/snapshot.schema.json`, and
+  conditionally `config/` and `env-files/`. No extra files, no missing
+  files, no prefix subdirectory. This is the contract-enforcement test.
+- Verify the tarball is flat: all entries are at the archive root (no
+  `hostname-timestamp/` or any other prefix directory).
+
 **Tarball import:**
 - Load a prefixed archive (`hostname-timestamp/inspection-snapshot.json`),
   verify flattening works and session starts.
 - Load a flat archive (`inspection-snapshot.json` at root), verify session starts.
 - **Archive safety:** tarball with `../escape.txt` entry, assert
   `Err(RefineError::ArchiveSafety)`.
-- **Provenance rejection:** tarball with `redaction_state: "raw"` in
-  snapshot, assert `Err(RefineError::UntrustedSnapshot)`.
+- **Provenance rejection (FullyRedacted only):**
+  - Tarball with `redaction_state: "Raw"` -> `Err(RefineError::UntrustedSnapshot)`.
+  - Tarball with `redaction_state: "PartiallyRedacted"` -> `Err(RefineError::UntrustedSnapshot)`.
+  - Tarball with `redaction_state: "Unknown"` -> `Err(RefineError::UntrustedSnapshot)`.
+  - Tarball with `redaction_state` absent -> `Err(RefineError::UntrustedSnapshot)`.
+  - Tarball with `redaction_state: "FullyRedacted"` -> accepted, session starts.
 
 **Normalization:**
 - Load snapshot with missing `include` field on a PackageEntry, verify
@@ -1088,7 +1127,35 @@ multiple Containerfiles. Different crate, calls into `inspectah-refine`.
 conflict resolution. Requires replacing `Arc<Mutex<>>` with a more
 sophisticated state manager (CRDT or OT). Well beyond v1.
 
+**Loosened import provenance gate.** V1 rejects any snapshot that is not
+`FullyRedacted`. If demand exists, a future version could accept
+`PartiallyRedacted` snapshots with warnings (e.g., log to stderr, carry
+`import_warnings` in `RefinedView`). The gate logic is a single match
+arm in `from_tarball()`, so loosening is a small change.
+
 ## Revision History
+
+### Round 3 (2026-05-15)
+
+Revised to address two remaining blockers from round 2 review.
+
+1. **Pinned export tarball pipeline path.** Added explicit 7-step
+   implementation pipeline to `export_tarball()` documenting the exact
+   sequence: validate generation, create tempdir, call `render_all()`,
+   serialize projected snapshot, tar contents flat (no prefix), write
+   to output path, cleanup. Added round-trip test requirement: export a
+   tarball, extract it, verify the exact file set matches the documented
+   contract with no extra files, no missing files, and no prefix
+   subdirectory.
+
+2. **Narrowed v1 import to FullyRedacted only.** Replaced the "accept
+   with warnings" behavior for `PartiallyRedacted`, `Unknown`, and
+   absent `redaction_state` with hard rejection via
+   `RefineError::UntrustedSnapshot`. V1 now rejects any snapshot where
+   `redaction_state` is not `FullyRedacted`. Updated `UntrustedSnapshot`
+   error variant to carry a message string. Added explicit provenance
+   test cases for each rejected state. Moved loosened import gate to
+   "Deferred / Future Expansion."
 
 ### Round 2 (2026-05-15)
 
