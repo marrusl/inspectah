@@ -365,17 +365,21 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             lines.push(format!("- **Systemd timers:** {timer_count}"));
             lines.push(format!("- **At jobs:** {at_count}"));
 
-            let reboot_jobs: Vec<_> = st
-                .cron_jobs
+            // Detect @reboot entries from generated timer units where the
+            // real cron expression is stored, not from CronJob.source (which
+            // holds the collector source label like "cron.d" or "crontab").
+            let reboot_count = st
+                .generated_timer_units
                 .iter()
-                .filter(|c| c.source.contains("@reboot"))
-                .collect();
-            if !reboot_jobs.is_empty() {
+                .filter(|g| g.cron_expr == "@reboot")
+                .count();
+            if reboot_count > 0 {
                 lines.push(String::new());
                 lines.push(format!(
                     "**Warning:** {} `@reboot` cron job(s) detected. These cannot be converted \
-                     to systemd timers and require manual handling.",
-                    reboot_jobs.len()
+                     to systemd timers and require manual handling \
+                     (boot-triggered oneshot service).",
+                    reboot_count
                 ));
             }
             lines.push(String::new());

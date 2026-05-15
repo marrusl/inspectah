@@ -293,20 +293,35 @@ fn parse_cron_entries(
                 let safe_name = format!("cron-{}", file_name.replace('.', "-"));
                 let rel_path = strip_leading_slash(file_path);
 
-                let (timer_content, service_content) =
-                    make_timer_service(&safe_name, shortcut, &rel_path, &command);
-
                 check_command_redaction(&command, file_path, hints);
 
-                section.generated_timer_units.push(GeneratedTimerUnit {
-                    name: safe_name,
-                    timer_content,
-                    service_content,
-                    cron_expr: shortcut.into(),
-                    source_path: rel_path,
-                    command,
-                    ..Default::default()
-                });
+                // @reboot has no calendar equivalent — generate an advisory
+                // oneshot service for manual follow-up, not a fake timer.
+                if shortcut.eq_ignore_ascii_case("@reboot") {
+                    let (service_content, timer_content) =
+                        make_reboot_advisory(&safe_name, &rel_path, &command);
+                    section.generated_timer_units.push(GeneratedTimerUnit {
+                        name: safe_name,
+                        timer_content,
+                        service_content,
+                        cron_expr: "@reboot".into(),
+                        source_path: rel_path,
+                        command,
+                        ..Default::default()
+                    });
+                } else {
+                    let (timer_content, service_content) =
+                        make_timer_service(&safe_name, shortcut, &rel_path, &command);
+                    section.generated_timer_units.push(GeneratedTimerUnit {
+                        name: safe_name,
+                        timer_content,
+                        service_content,
+                        cron_expr: shortcut.into(),
+                        source_path: rel_path,
+                        command,
+                        ..Default::default()
+                    });
+                }
             }
             continue;
         }
@@ -682,6 +697,38 @@ fn make_timer_service(_name: &str, cron_expr: &str, path: &str, command: &str) -
     );
 
     (timer_content, service_content)
+}
+
+/// Generates advisory content for `@reboot` cron entries.
+///
+/// Unlike `make_timer_service`, this does NOT produce a timer unit with a
+/// fake OnCalendar value. Instead it produces a oneshot service activated
+/// by `WantedBy=multi-user.target` and an empty timer_content, flagging
+/// the entry as requiring manual operator follow-up.
+///
+/// Returns `(service_content, timer_content)` — note: timer_content is empty.
+fn make_reboot_advisory(name: &str, path: &str, command: &str) -> (String, String) {
+    let exec_line = if command.is_empty() {
+        "ExecStart=/bin/true\n# FIXME: could not extract command from cron entry".to_string()
+    } else {
+        format!("ExecStart={command}")
+    };
+
+    let service_content = format!(
+        "[Unit]\n\
+         Description=Boot-triggered task from cron: {path}\n\
+         # Original: @reboot {command}\n\
+         # FIXME: @reboot has no OnCalendar equivalent.\n\
+         # This service runs once at boot via WantedBy=multi-user.target.\n\
+         # Review whether this behavior is still needed in image mode.\n\n\
+         [Service]\nType=oneshot\n{exec_line}\n\n\
+         [Install]\nWantedBy=multi-user.target\n"
+    );
+
+    // No timer unit — @reboot is not a calendar schedule
+    let timer_content = String::new();
+
+    (service_content, timer_content)
 }
 
 // ---------------------------------------------------------------------------
@@ -1084,13 +1131,35 @@ mod tests {
             assert_eq!(user_jobs.len(), 1);
             assert!(user_jobs[0].source.contains("appuser"));
 
-            // Two generated timers: one for */15 and one for @reboot
+            // Two generated units: one timer for */15 and one advisory for @reboot
             assert_eq!(section.generated_timer_units.len(), 2);
             assert_eq!(section.generated_timer_units[0].cron_expr, "*/15 * * * *");
             assert_eq!(section.generated_timer_units[1].cron_expr, "@reboot");
             assert!(section.generated_timer_units[0]
                 .command
                 .contains("check-health.sh"));
+
+            // @reboot entry must NOT have a timer with a fake OnCalendar
+            let reboot_unit = &section.generated_timer_units[1];
+            assert!(
+                reboot_unit.timer_content.is_empty(),
+                "@reboot must not generate a timer unit, got: {}",
+                reboot_unit.timer_content
+            );
+            assert!(
+                reboot_unit
+                    .service_content
+                    .contains("WantedBy=multi-user.target"),
+                "@reboot service must use WantedBy=multi-user.target"
+            );
+            assert!(
+                !reboot_unit.service_content.contains("OnCalendar="),
+                "@reboot service must not contain an OnCalendar= directive"
+            );
+            assert!(
+                reboot_unit.command.contains("startup.sh"),
+                "@reboot must preserve the original command"
+            );
         } else {
             panic!("expected ScheduledTasks section");
         }
@@ -1235,6 +1304,38 @@ mod tests {
         assert!(service.contains("[Service]"));
         assert!(service.contains("Type=oneshot"));
         assert!(service.contains("ExecStart=/opt/backup.sh"));
+    }
+
+    // ---- Test 9b: @reboot never produces a timer with OnCalendar ----
+
+    #[test]
+    fn test_reboot_advisory_no_fake_timer() {
+        let (service, timer) =
+            make_reboot_advisory("cron-startup", "var/spool/cron/appuser", "/opt/init.sh");
+
+        // Timer content must be empty — @reboot is not a calendar schedule
+        assert!(
+            timer.is_empty(),
+            "@reboot must produce empty timer_content, got: {timer}"
+        );
+
+        // Service must use WantedBy=multi-user.target for boot activation
+        assert!(
+            service.contains("WantedBy=multi-user.target"),
+            "service must use WantedBy=multi-user.target, got: {service}"
+        );
+        assert!(
+            service.contains("ExecStart=/opt/init.sh"),
+            "service must contain the original command"
+        );
+        assert!(
+            !service.contains("OnCalendar="),
+            "service must not contain an OnCalendar= directive"
+        );
+        assert!(
+            service.contains("@reboot"),
+            "service must reference @reboot origin for traceability"
+        );
     }
 
     // ---- Test 10: test_scan_systemd_timers ----
