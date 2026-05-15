@@ -8,7 +8,9 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
-use inspectah_core::types::scheduled::{AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer};
+use inspectah_core::types::scheduled::{
+    AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
+};
 use inspectah_core::types::selinux::SelinuxSection;
 use inspectah_pipeline::redaction::engine::{redact, RedactOptions};
 
@@ -134,7 +136,9 @@ fn test_redaction_cron_command_password() {
 
     let sched = snapshot.scheduled_tasks.as_ref().unwrap();
     assert!(
-        !sched.generated_timer_units[0].command.contains("cron_secret_88"),
+        !sched.generated_timer_units[0]
+            .command
+            .contains("cron_secret_88"),
         "password in cron command must be redacted, got: {}",
         sched.generated_timer_units[0].command
     );
@@ -166,7 +170,9 @@ fn test_redaction_timer_execstart_token() {
 
     let sched = snapshot.scheduled_tasks.as_ref().unwrap();
     assert!(
-        !sched.systemd_timers[0].exec_start.contains("timer_secret_77"),
+        !sched.systemd_timers[0]
+            .exec_start
+            .contains("timer_secret_77"),
         "token in timer ExecStart must be redacted, got: {}",
         sched.systemd_timers[0].exec_start
     );
@@ -272,12 +278,8 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
 
     // SELinux: audit rules and PAM configs with planted secrets
     snap.selinux = Some(SelinuxSection {
-        audit_rules: vec![
-            "# audit config password=audit_secret_33 for testing".into(),
-        ],
-        pam_configs: vec![
-            "auth required pam_exec.so password=pam_secret_11".into(),
-        ],
+        audit_rules: vec!["# audit config password=audit_secret_33 for testing".into()],
+        pam_configs: vec!["auth required pam_exec.so password=pam_secret_11".into()],
         ..Default::default()
     });
 
@@ -305,8 +307,7 @@ fn test_planted_secret_absent_from_snapshot_json() {
     let mut snapshot = snapshot_with_all_planted_secrets();
     redact(&mut snapshot, &RedactOptions::default());
 
-    let json = serde_json::to_string_pretty(&snapshot)
-        .expect("snapshot must serialize to JSON");
+    let json = serde_json::to_string_pretty(&snapshot).expect("snapshot must serialize to JSON");
 
     for secret in PLANTED_SECRETS {
         assert!(

@@ -20,16 +20,14 @@ const GETENFORCE_ENFORCING: &str =
     include_str!("../../testdata/fixtures/selinux/getenforce-enforcing.txt");
 const GETENFORCE_DISABLED: &str =
     include_str!("../../testdata/fixtures/selinux/getenforce-disabled.txt");
-const SELINUX_CONFIG: &str =
-    include_str!("../../testdata/fixtures/selinux/selinux-config.txt");
+const SELINUX_CONFIG: &str = include_str!("../../testdata/fixtures/selinux/selinux-config.txt");
 const SEMANAGE_BOOLEAN: &str =
     include_str!("../../testdata/fixtures/selinux/semanage-boolean-output.txt");
 const SEMANAGE_FCONTEXT: &str =
     include_str!("../../testdata/fixtures/selinux/semanage-fcontext-output.txt");
 const SEMANAGE_PORT: &str =
     include_str!("../../testdata/fixtures/selinux/semanage-port-output.txt");
-const AUDIT_RULES: &str =
-    include_str!("../../testdata/fixtures/selinux/audit-rules-custom.rules");
+const AUDIT_RULES: &str = include_str!("../../testdata/fixtures/selinux/audit-rules-custom.rules");
 const FIPS_ENABLED: &str = include_str!("../../testdata/fixtures/selinux/fips-enabled.txt");
 const PAM_CUSTOM_SSHD: &str =
     include_str!("../../testdata/fixtures/selinux/pam-d-custom-sshd.conf");
@@ -105,18 +103,9 @@ fn full_mock() -> MockExecutor {
             },
         )
         // Audit rules directory
-        .with_dir(
-            "/etc/audit/rules.d",
-            vec!["audit.rules", "custom.rules"],
-        )
-        .with_file(
-            "/etc/audit/rules.d/audit.rules",
-            "# default audit rules\n",
-        )
-        .with_file(
-            "/etc/audit/rules.d/custom.rules",
-            AUDIT_RULES,
-        )
+        .with_dir("/etc/audit/rules.d", vec!["audit.rules", "custom.rules"])
+        .with_file("/etc/audit/rules.d/audit.rules", "# default audit rules\n")
+        .with_file("/etc/audit/rules.d/custom.rules", AUDIT_RULES)
         // FIPS mode
         .with_file("/proc/sys/crypto/fips_enabled", FIPS_ENABLED)
         // PAM configs
@@ -192,10 +181,7 @@ fn test_selinux_inspector_happy_path() {
     );
 
     // Port labels
-    assert!(
-        !section.port_labels.is_empty(),
-        "should have port labels"
-    );
+    assert!(!section.port_labels.is_empty(), "should have port labels");
 
     // Audit rules: custom.rules is NOT rpm-owned, should be collected
     // audit.rules IS rpm-owned, should be skipped
@@ -273,14 +259,8 @@ fn test_selinux_inspector_disabled() {
         Err(other) => panic!("unexpected error: {other}"),
     };
 
-    assert_eq!(
-        section.mode, "Disabled",
-        "mode should be Disabled"
-    );
-    assert!(
-        !section.fips_mode,
-        "FIPS should be disabled"
-    );
+    assert_eq!(section.mode, "Disabled", "mode should be Disabled");
+    assert!(!section.fips_mode, "FIPS should be disabled");
 }
 
 /// semanage unavailable -- fallback behavior, may produce Degraded.
@@ -366,8 +346,7 @@ fn test_selinux_inspector_json_roundtrip() {
         other => panic!("expected SectionData::Selinux, got {:?}", other),
     };
 
-    let json =
-        serde_json::to_string_pretty(section).expect("section must serialize to JSON");
+    let json = serde_json::to_string_pretty(section).expect("section must serialize to JSON");
     let roundtrip: SelinuxSection =
         serde_json::from_str(&json).expect("JSON must deserialize back");
     let roundtrip_json =

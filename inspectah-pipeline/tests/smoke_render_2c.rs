@@ -15,14 +15,14 @@
 //! Tests 24–27: Negative contract tests
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
-use inspectah_core::types::selinux::{SelinuxSection, SelinuxPortLabel};
+use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
 use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, readme, report};
-use inspectah_core::traits::renderer::RenderContext;
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -298,15 +298,11 @@ fn smoke_configtree_config_files() {
     configtree::write_config_tree(&snap, dir.path()).unwrap();
     // Config files materialized under config/
     assert!(
-        dir.path()
-            .join("config/etc/httpd/conf/httpd.conf")
-            .exists(),
+        dir.path().join("config/etc/httpd/conf/httpd.conf").exists(),
         "must materialize httpd.conf under config/"
     );
     assert!(
-        dir.path()
-            .join("config/etc/sysconfig/network")
-            .exists(),
+        dir.path().join("config/etc/sysconfig/network").exists(),
         "must materialize network config under config/"
     );
 }
@@ -376,8 +372,7 @@ fn smoke_env_files_content_preserved() {
     let snap = snapshot_with_nonrpm();
     let dir = TempDir::new().unwrap();
     configtree::write_env_files(&snap, dir.path()).unwrap();
-    let content =
-        std::fs::read_to_string(dir.path().join("env-files/opt/app/.env")).unwrap();
+    let content = std::fs::read_to_string(dir.path().join("env-files/opt/app/.env")).unwrap();
     assert!(
         content.contains("DB_HOST=localhost"),
         "must preserve .env content"
@@ -444,23 +439,11 @@ fn audit_scheduled_section() {
         md.contains("## Scheduled Tasks"),
         "must contain Scheduled Tasks heading"
     );
-    assert!(
-        md.contains("Cron jobs:"),
-        "must show cron job count"
-    );
-    assert!(
-        md.contains("Systemd timers:"),
-        "must show timer count"
-    );
-    assert!(
-        md.contains("At jobs:"),
-        "must show at job count"
-    );
+    assert!(md.contains("Cron jobs:"), "must show cron job count");
+    assert!(md.contains("Systemd timers:"), "must show timer count");
+    assert!(md.contains("At jobs:"), "must show at job count");
     // @reboot warning
-    assert!(
-        md.contains("@reboot"),
-        "must warn about @reboot cron jobs"
-    );
+    assert!(md.contains("@reboot"), "must warn about @reboot cron jobs");
 }
 
 #[test]
@@ -471,32 +454,20 @@ fn audit_config_section() {
         md.contains("## Configuration Files"),
         "must contain Configuration Files heading"
     );
-    assert!(
-        md.contains("httpd.conf"),
-        "must list modified config file"
-    );
+    assert!(md.contains("httpd.conf"), "must list modified config file");
 }
 
 #[test]
 fn audit_selinux_section() {
     let snap = snapshot_with_selinux();
     let md = audit::render_audit(&snap);
-    assert!(
-        md.contains("## SELinux"),
-        "must contain SELinux heading"
-    );
-    assert!(
-        md.contains("enforcing"),
-        "must show SELinux mode"
-    );
+    assert!(md.contains("## SELinux"), "must contain SELinux heading");
+    assert!(md.contains("enforcing"), "must show SELinux mode");
     assert!(
         md.contains("Custom modules:"),
         "must show custom module count"
     );
-    assert!(
-        md.contains("FIPS mode:"),
-        "must show FIPS status"
-    );
+    assert!(md.contains("FIPS mode:"), "must show FIPS status");
 }
 
 #[test]
@@ -507,19 +478,13 @@ fn audit_nonrpm_section() {
         md.contains("## Non-RPM Software"),
         "must contain Non-RPM Software heading"
     );
-    assert!(
-        md.contains("Items (3)"),
-        "must show item count"
-    );
+    assert!(md.contains("Items (3)"), "must show item count");
     // Method breakdown
     assert!(md.contains("binary"), "must show binary method");
     assert!(md.contains("pip"), "must show pip method");
     assert!(md.contains("npm"), "must show npm method");
     // .env warning
-    assert!(
-        md.contains(".env"),
-        "must warn about .env files"
-    );
+    assert!(md.contains(".env"), "must warn about .env files");
 }
 
 // ---------------------------------------------------------------------------
@@ -535,10 +500,7 @@ fn report_scheduled_section() {
         "must contain Scheduled Tasks summary card"
     );
     // Total: 2 cron + 1 timer + 1 generated + 1 at = 5
-    assert!(
-        html.contains(">5<"),
-        "scheduled count must be 5"
-    );
+    assert!(html.contains(">5<"), "scheduled count must be 5");
 }
 
 #[test]
@@ -550,10 +512,7 @@ fn report_config_section() {
         "must contain Config Files summary card"
     );
     // 2 included config files
-    assert!(
-        html.contains(">2<"),
-        "config count must be 2"
-    );
+    assert!(html.contains(">2<"), "config count must be 2");
 }
 
 #[test]
@@ -564,10 +523,7 @@ fn report_selinux_section() {
         html.contains("SELinux"),
         "must contain SELinux summary card"
     );
-    assert!(
-        html.contains("enforcing"),
-        "SELinux card must show mode"
-    );
+    assert!(html.contains("enforcing"), "SELinux card must show mode");
 }
 
 #[test]
@@ -578,10 +534,7 @@ fn report_nonrpm_section() {
         html.contains("Non-RPM Items"),
         "must contain Non-RPM Items summary card"
     );
-    assert!(
-        html.contains(">3<"),
-        "non-RPM count must be 3"
-    );
+    assert!(html.contains(">3<"), "non-RPM count must be 3");
 }
 
 // ---------------------------------------------------------------------------
@@ -661,9 +614,7 @@ fn configtree_cron_spool_not_materialized() {
     configtree::write_config_tree(&snap, dir.path()).unwrap();
     // Cron jobs are advisory metadata, not materialized files
     assert!(
-        !dir.path()
-            .join("config/var/spool/cron/root")
-            .exists(),
+        !dir.path().join("config/var/spool/cron/root").exists(),
         "cron spool from /var must NOT be materialized in config tree"
     );
 }
@@ -681,9 +632,7 @@ fn configtree_audit_rules_not_in_config() {
     let dir = TempDir::new().unwrap();
     configtree::write_config_tree(&snap, dir.path()).unwrap();
     assert!(
-        !dir.path()
-            .join("config/etc/audit/rules.d")
-            .exists(),
+        !dir.path().join("config/etc/audit/rules.d").exists(),
         "audit rules owned by SELinux must NOT appear in config tree"
     );
 }

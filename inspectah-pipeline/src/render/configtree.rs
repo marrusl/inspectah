@@ -465,10 +465,7 @@ pub fn config_copy_roots(config_dir: &Path) -> Vec<String> {
 /// These are NOT written under `config/` because .env files are
 /// high-probability secret carriers requiring operator review before
 /// inclusion in a container image.
-pub fn write_env_files(
-    snap: &InspectionSnapshot,
-    output_dir: &Path,
-) -> Result<(), RenderError> {
+pub fn write_env_files(snap: &InspectionSnapshot, output_dir: &Path) -> Result<(), RenderError> {
     let nrs = match &snap.non_rpm_software {
         Some(n) => n,
         None => return Ok(()),

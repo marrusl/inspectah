@@ -280,10 +280,7 @@ fn handle_result(
 /// Extracts installed package names, full package list, verification
 /// results, and module streams. owned_paths and path_to_package will be
 /// populated when the RPM inspector produces file ownership data.
-fn extract_rpm_state(
-    rpm: &inspectah_core::types::rpm::RpmSection,
-    state: &mut RpmState,
-) {
+fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut RpmState) {
     state.installed_packages = rpm.packages_added.iter().map(|p| p.name.clone()).collect();
     state.packages = rpm.packages_added.clone();
     state.verification_results = rpm.rpm_va.clone();
@@ -828,10 +825,7 @@ mod tests {
         fn applicable_to(&self) -> &[SourceSystemKind] {
             &[SourceSystemKind::PackageBased]
         }
-        fn inspect(
-            &self,
-            ctx: &InspectionContext<'_>,
-        ) -> Result<InspectorOutput, InspectorError> {
+        fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
             let has_state = ctx.rpm_state.is_some();
             *self.received_rpm_state.lock().unwrap() = Some(has_state);
 

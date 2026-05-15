@@ -54,11 +54,7 @@ const SECRET_PATTERNS: &[&str] = &[
 const SCAN_ROOTS: &[&str] = &["/opt", "/srv", "/usr/local"];
 
 /// Ostree-internal /var paths to filter out.
-const OSTREE_VAR_INTERNALS: &[&str] = &[
-    "var/lib/ostree",
-    "var/lib/rpm-ostree",
-    "var/lib/flatpak",
-];
+const OSTREE_VAR_INTERNALS: &[&str] = &["var/lib/ostree", "var/lib/rpm-ostree", "var/lib/flatpak"];
 
 /// Inspects non-RPM software: ELF binaries in /opt, /srv, /usr/local,
 /// Python venvs, pip/npm/gem packages, .env files, and git repos.
@@ -157,9 +153,7 @@ impl Inspector for NonRpmInspector {
         deduplicate_items(&mut section);
 
         // Return Degraded if readelf was unavailable but we still got partial data.
-        if !has_readelf
-            && (!section.items.is_empty() || !section.env_files.is_empty())
-        {
+        if !has_readelf && (!section.items.is_empty() || !section.env_files.is_empty()) {
             return Err(InspectorError::Degraded {
                 reason: "readelf unavailable — ELF binary classification skipped".to_string(),
                 partial: Box::new(InspectorOutput {
@@ -207,8 +201,8 @@ fn classify_binary(exec: &dyn Executor, path: &str) -> Option<BinaryClassificati
         return None;
     }
 
-    let is_go = sections.stdout.contains(".note.go.buildid")
-        || sections.stdout.contains(".gopclntab");
+    let is_go =
+        sections.stdout.contains(".note.go.buildid") || sections.stdout.contains(".gopclntab");
     let is_rust = sections.stdout.contains(".rustc");
 
     let dynamic = exec.run("readelf", &["-d", path]);
@@ -478,9 +472,10 @@ fn find_venvs_walk(exec: &dyn Executor, dir: &str, results: &mut Vec<VenvInfo>) 
         if entry == "pyvenv.cfg" {
             // Found a venv — parse its config.
             let system_sp = match exec.read_file(Path::new(&child)) {
-                Ok(content) => content
-                    .lines()
-                    .any(|l| l.trim().eq_ignore_ascii_case("include-system-site-packages = true")),
+                Ok(content) => content.lines().any(|l| {
+                    l.trim()
+                        .eq_ignore_ascii_case("include-system-site-packages = true")
+                }),
                 Err(_) => false,
             };
             results.push(VenvInfo {
@@ -712,10 +707,7 @@ fn parse_package_lock(content: &str) -> Vec<NpmPackage> {
             if key.is_empty() {
                 continue; // Skip root entry.
             }
-            let name = key
-                .strip_prefix("node_modules/")
-                .unwrap_or(key)
-                .to_string();
+            let name = key.strip_prefix("node_modules/").unwrap_or(key).to_string();
             let version = value
                 .get("version")
                 .and_then(|v| v.as_str())
@@ -1000,10 +992,7 @@ fn deduplicate_items(section: &mut NonRpmSoftwareSection) {
     let items = std::mem::take(&mut section.items);
     section.items = order
         .iter()
-        .filter_map(|path| {
-            seen.get(path)
-                .map(|&(idx, _)| items[idx].clone())
-        })
+        .filter_map(|path| seen.get(path).map(|&(idx, _)| items[idx].clone()))
         .collect();
 }
 
@@ -1169,7 +1158,10 @@ mod tests {
 
         let bc = classify_binary(&exec, "/opt/app/myapp").unwrap();
         assert_eq!(bc.lang, "rust");
-        assert!(!bc.is_static, "Rust binary with NEEDED entries should be dynamic");
+        assert!(
+            !bc.is_static,
+            "Rust binary with NEEDED entries should be dynamic"
+        );
         assert!(
             bc.shared_libs.contains(&"libc.so.6".to_string()),
             "shared_libs should contain libc.so.6, got: {:?}",
@@ -1201,7 +1193,10 @@ mod tests {
 
         let bc = classify_binary(&exec, "/opt/app/myapp").unwrap();
         assert_eq!(bc.lang, "c/c++");
-        assert!(!bc.is_static, "C binary with NEEDED entries should be dynamic");
+        assert!(
+            !bc.is_static,
+            "C binary with NEEDED entries should be dynamic"
+        );
         assert!(!bc.shared_libs.is_empty());
     }
 
@@ -1229,7 +1224,10 @@ mod tests {
 
         let bc = classify_binary(&exec, "/opt/app/myapp").unwrap();
         assert_eq!(bc.lang, "c/c++");
-        assert!(bc.is_static, "C binary with no dynamic section should be static");
+        assert!(
+            bc.is_static,
+            "C binary with no dynamic section should be static"
+        );
         assert!(bc.shared_libs.is_empty());
     }
 
@@ -1255,7 +1253,10 @@ mod tests {
     #[test]
     fn test_strings_version_extraction() {
         let version = extract_version_from_text(strings_version_fixture());
-        assert_eq!(version, "1.2.3", "should extract version from 'version=1.2.3'");
+        assert_eq!(
+            version, "1.2.3",
+            "should extract version from 'version=1.2.3'"
+        );
     }
 
     // ---- Test 7: test_strings_version_go_pattern ----
@@ -1326,7 +1327,10 @@ mod tests {
         let exec = MockExecutor::new()
             .with_dir("/opt", vec!["venv"])
             .with_dir("/opt/venv", vec!["pyvenv.cfg", "lib"])
-            .with_file("/opt/venv/pyvenv.cfg", "home = /usr/bin\nversion = 3.9.18\n")
+            .with_file(
+                "/opt/venv/pyvenv.cfg",
+                "home = /usr/bin\nversion = 3.9.18\n",
+            )
             .with_dir("/opt/venv/lib", vec!["python3.9"])
             .with_dir("/opt/venv/lib/python3.9", vec!["site-packages"])
             .with_dir(
@@ -1344,8 +1348,12 @@ mod tests {
 
         let packages = scan_dist_info(&exec, "/opt/venv");
         assert_eq!(packages.len(), 2, "should find 2 dist-info packages");
-        assert!(packages.iter().any(|p| p.name == "flask" && p.version == "2.3.3"));
-        assert!(packages.iter().any(|p| p.name == "requests" && p.version == "2.31.0"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "flask" && p.version == "2.3.3"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "requests" && p.version == "2.31.0"));
     }
 
     // ---- Test 11: test_scan_npm_packages ----
@@ -1355,11 +1363,15 @@ mod tests {
         let packages = parse_package_lock(package_lock_fixture());
         assert_eq!(packages.len(), 2, "should find 2 npm packages");
         assert!(
-            packages.iter().any(|p| p.name == "express" && p.version == "4.18.2"),
+            packages
+                .iter()
+                .any(|p| p.name == "express" && p.version == "4.18.2"),
             "should find express package"
         );
         assert!(
-            packages.iter().any(|p| p.name == "lodash" && p.version == "4.17.21"),
+            packages
+                .iter()
+                .any(|p| p.name == "lodash" && p.version == "4.17.21"),
             "should find lodash package"
         );
     }
@@ -1369,17 +1381,18 @@ mod tests {
     #[test]
     fn test_scan_gem_packages() {
         let gems = parse_gemfile_lock(gemfile_lock_fixture());
+        assert!(!gems.is_empty(), "should find gems in Gemfile.lock");
         assert!(
-            !gems.is_empty(),
-            "should find gems in Gemfile.lock"
-        );
-        assert!(
-            gems.iter().any(|g| g.name == "rack" && g.version == "3.0.8"),
+            gems.iter()
+                .any(|g| g.name == "rack" && g.version == "3.0.8"),
             "should find rack gem, got: {:?}",
-            gems.iter().map(|g| format!("{}={}", g.name, g.version)).collect::<Vec<_>>()
+            gems.iter()
+                .map(|g| format!("{}={}", g.name, g.version))
+                .collect::<Vec<_>>()
         );
         assert!(
-            gems.iter().any(|g| g.name == "sinatra" && g.version == "3.1.0"),
+            gems.iter()
+                .any(|g| g.name == "sinatra" && g.version == "3.1.0"),
             "should find sinatra gem"
         );
     }
@@ -1446,10 +1459,7 @@ mod tests {
         let mut hints = Vec::new();
         collect_env_files(&exec, &mut section, &mut hints);
 
-        assert!(
-            !hints.is_empty(),
-            "should flag .env content for redaction"
-        );
+        assert!(!hints.is_empty(), "should flag .env content for redaction");
         assert!(
             hints.iter().any(|h| h.reason.contains("DATABASE_URL")),
             "should flag DATABASE_URL as potential secret, got: {:?}",

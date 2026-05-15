@@ -163,10 +163,7 @@ const UNOWNED_EXCLUDE_GLOBS: &[&str] = &[
 /// Cross-inspector ownership exclusions.
 /// These prefixes are skipped during the /etc walk to avoid double-ownership
 /// with the SELinux inspector, which is the sole collector for these paths.
-const CROSS_INSPECTOR_EXCLUDE_PREFIXES: &[&str] = &[
-    "/etc/audit/rules.d/",
-    "/etc/pam.d/",
-];
+const CROSS_INSPECTOR_EXCLUDE_PREFIXES: &[&str] = &["/etc/audit/rules.d/", "/etc/pam.d/"];
 
 /// Returns `true` if the path should be excluded from unowned file detection.
 ///
@@ -287,10 +284,7 @@ fn glob_match_chars(pat: &[char], txt: &[char]) -> bool {
 /// Returns relative paths (relative to `root`) of all regular files found.
 /// Prunes dev-artifact directories and VCS trees. Returns an error if the
 /// top-level directory read fails with PermissionDenied.
-pub fn walk_etc_recursive(
-    exec: &dyn Executor,
-    root: &str,
-) -> Result<Vec<String>, std::io::Error> {
+pub fn walk_etc_recursive(exec: &dyn Executor, root: &str) -> Result<Vec<String>, std::io::Error> {
     let mut files = Vec::new();
     let mut degraded_reasons = Vec::new();
     walk_recursive_inner(exec, root, "", &mut files, &mut degraded_reasons);
@@ -413,9 +407,7 @@ mod tests {
 
     #[test]
     fn test_is_excluded_unowned_glob() {
-        assert!(is_excluded_unowned(
-            "/etc/selinux/targeted/contexts/foo"
-        ));
+        assert!(is_excluded_unowned("/etc/selinux/targeted/contexts/foo"));
         assert!(is_excluded_unowned(
             "/etc/selinux/targeted/contexts/files/bar"
         ));

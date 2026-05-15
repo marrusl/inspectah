@@ -64,7 +64,10 @@ fn full_mock() -> MockExecutor {
         .with_dir("/var/spool/cron", vec!["appuser"])
         .with_file("/var/spool/cron/appuser", USER_CRONTAB)
         // Systemd timers
-        .with_dir("/etc/systemd/system", vec!["cleanup.timer", "cleanup.service"])
+        .with_dir(
+            "/etc/systemd/system",
+            vec!["cleanup.timer", "cleanup.service"],
+        )
         .with_file("/etc/systemd/system/cleanup.timer", CLEANUP_TIMER)
         .with_file("/etc/systemd/system/cleanup.service", CLEANUP_SERVICE)
         .with_dir("/usr/lib/systemd/system", vec![])
@@ -107,10 +110,7 @@ fn test_scheduled_inspector_happy_path() {
         .cron_jobs
         .iter()
         .find(|j| j.path.contains("logrotate"));
-    assert!(
-        logrotate.is_some(),
-        "should find logrotate cron job"
-    );
+    assert!(logrotate.is_some(), "should find logrotate cron job");
     assert!(
         logrotate.unwrap().rpm_owned,
         "logrotate cron file should be marked rpm_owned"
@@ -134,10 +134,7 @@ fn test_scheduled_inspector_happy_path() {
         !section.systemd_timers.is_empty(),
         "inspector must produce systemd_timers from fixture data"
     );
-    let cleanup = section
-        .systemd_timers
-        .iter()
-        .find(|t| t.name == "cleanup");
+    let cleanup = section.systemd_timers.iter().find(|t| t.name == "cleanup");
     assert!(cleanup.is_some(), "should find cleanup timer");
     assert!(
         !cleanup.unwrap().on_calendar.is_empty(),
@@ -154,10 +151,7 @@ fn test_scheduled_inspector_happy_path() {
         "inspector must produce at_jobs from fixture data"
     );
     let at_job = &section.at_jobs[0];
-    assert!(
-        !at_job.command.is_empty(),
-        "at job should have a command"
-    );
+    assert!(!at_job.command.is_empty(), "at job should have a command");
     assert!(
         at_job.command.contains("run-migration.sh"),
         "at job command should contain the actual command"
@@ -198,10 +192,7 @@ fn test_scheduled_inspector_cron_not_found() {
         section.cron_jobs.is_empty(),
         "no cron dirs means no cron_jobs"
     );
-    assert!(
-        section.at_jobs.is_empty(),
-        "no at spool means no at_jobs"
-    );
+    assert!(section.at_jobs.is_empty(), "no at spool means no at_jobs");
 }
 
 /// PermissionDenied on cron directories produces Degraded output.
@@ -228,10 +219,10 @@ fn test_scheduled_inspector_degraded_permissions() {
     match result {
         Ok(output) => {
             // Some warnings should mention permission issues
-            let has_perm_warning = output.warnings.iter().any(|w| {
-                w.message.contains("permission denied")
-                    || w.message.contains("degraded")
-            });
+            let has_perm_warning = output
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("permission denied") || w.message.contains("degraded"));
             assert!(
                 has_perm_warning,
                 "should have warnings about permission issues"
@@ -245,7 +236,10 @@ fn test_scheduled_inspector_degraded_permissions() {
             // Partial output should still be valid
             match &partial.section {
                 SectionData::ScheduledTasks(_) => {}
-                other => panic!("expected SectionData::ScheduledTasks in partial, got {:?}", other),
+                other => panic!(
+                    "expected SectionData::ScheduledTasks in partial, got {:?}",
+                    other
+                ),
             }
         }
         Err(other) => panic!("unexpected error: {other}"),
@@ -273,12 +267,11 @@ fn test_scheduled_inspector_json_roundtrip() {
         other => panic!("expected SectionData::ScheduledTasks, got {:?}", other),
     };
 
-    let json = serde_json::to_string_pretty(section)
-        .expect("section must serialize to JSON");
+    let json = serde_json::to_string_pretty(section).expect("section must serialize to JSON");
     let roundtrip: ScheduledTaskSection =
         serde_json::from_str(&json).expect("JSON must deserialize back");
-    let roundtrip_json = serde_json::to_string_pretty(&roundtrip)
-        .expect("roundtrip must serialize");
+    let roundtrip_json =
+        serde_json::to_string_pretty(&roundtrip).expect("roundtrip must serialize");
 
     assert_eq!(
         json, roundtrip_json,
