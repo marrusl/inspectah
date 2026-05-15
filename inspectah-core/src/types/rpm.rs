@@ -174,17 +174,17 @@ pub struct RpmSection {
     pub auto_packages: Option<Vec<String>>,
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
     pub module_streams: Vec<EnabledModuleStream>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
     pub version_locks: Vec<VersionLockEntry>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
     pub module_stream_conflicts: Vec<String>,
     pub baseline_module_streams: Option<std::collections::HashMap<String, String>>,
     pub versionlock_command_output: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
     pub multiarch_packages: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::deserialize_null_default")]
     pub duplicate_packages: Vec<String>,
     #[serde(default)]
     pub repo_providing_packages: Vec<String>,
