@@ -695,9 +695,7 @@ fn test_config_rpm_va_failure_degraded() {
                 "expected 'degraded' in reason, got: {reason}"
             );
         }
-        other => panic!(
-            "expected Degraded for config with file read failure, got: {other:?}"
-        ),
+        other => panic!("expected Degraded for config with file read failure, got: {other:?}"),
     }
 }
 
@@ -873,10 +871,7 @@ fn test_selinux_audit_permission_denied_degraded() {
             },
         )
         // Audit rules dir: PermissionDenied
-        .with_dir_error(
-            "/etc/audit/rules.d",
-            std::io::ErrorKind::PermissionDenied,
-        )
+        .with_dir_error("/etc/audit/rules.d", std::io::ErrorKind::PermissionDenied)
         // FIPS mode check
         .with_file("/proc/sys/crypto/fips_enabled", "0\n");
 
@@ -1048,9 +1043,9 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
                     "{name}: expected RPM-related failure reason, got: {reason}"
                 );
             }
-            other => panic!(
-                "{name}: expected InspectorError::Failed for None rpm_state, got: {other:?}"
-            ),
+            other => {
+                panic!("{name}: expected InspectorError::Failed for None rpm_state, got: {other:?}")
+            }
         }
     }
 

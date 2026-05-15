@@ -754,8 +754,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         // Git remote URLs — scan for embedded credentials (user:pass@host)
         for item in &mut nrs.items {
             if !item.git_remote.is_empty() {
-                let (masked, finding) =
-                    mask_proxy_credentials(&item.git_remote, &item.path);
+                let (masked, finding) = mask_proxy_credentials(&item.git_remote, &item.path);
                 if let Some(f) = finding {
                     item.git_remote = masked.into_owned();
                     all_findings.push(f);
@@ -771,12 +770,9 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
                                 .as_ref()
                                 .map(|k| format!("{:?}", k).to_lowercase())
                                 .unwrap_or_else(|| "secret".to_string());
-                            if let Some(pat) = PATTERNS
-                                .iter()
-                                .find(|p| {
-                                    format!("{:?}", p.finding_kind).to_lowercase() == kind_label
-                                })
-                            {
+                            if let Some(pat) = PATTERNS.iter().find(|p| {
+                                format!("{:?}", p.finding_kind).to_lowercase() == kind_label
+                            }) {
                                 let matches: Vec<(usize, usize, String)> = pat
                                     .regex
                                     .find_iter(&content)

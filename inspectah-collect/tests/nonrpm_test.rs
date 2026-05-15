@@ -16,8 +16,7 @@ use inspectah_core::types::system::SourceSystem;
 
 const READELF_SECTIONS_GO: &str =
     include_str!("../../testdata/fixtures/nonrpm/readelf-sections-go.txt");
-const STRINGS_VERSION: &str =
-    include_str!("../../testdata/fixtures/nonrpm/strings-version.txt");
+const STRINGS_VERSION: &str = include_str!("../../testdata/fixtures/nonrpm/strings-version.txt");
 const PYVENV_CFG: &str = include_str!("../../testdata/fixtures/nonrpm/pyvenv.cfg");
 const PACKAGE_LOCK: &str = include_str!("../../testdata/fixtures/nonrpm/package-lock.json");
 const GEMFILE_LOCK: &str = include_str!("../../testdata/fixtures/nonrpm/gemfile.lock");
@@ -271,10 +270,7 @@ fn test_nonrpm_inspector_degraded_no_readelf() {
             );
             let section = match &partial.section {
                 SectionData::NonRpmSoftware(s) => s,
-                other => panic!(
-                    "expected NonRpmSoftware in partial, got {:?}",
-                    other
-                ),
+                other => panic!("expected NonRpmSoftware in partial, got {:?}", other),
             };
             // Should still have env files even without readelf
             assert!(
@@ -324,8 +320,7 @@ fn test_nonrpm_inspector_json_roundtrip() {
         other => panic!("expected SectionData::NonRpmSoftware, got {:?}", other),
     };
 
-    let json =
-        serde_json::to_string_pretty(section).expect("section must serialize to JSON");
+    let json = serde_json::to_string_pretty(section).expect("section must serialize to JSON");
     let roundtrip: NonRpmSoftwareSection =
         serde_json::from_str(&json).expect("JSON must deserialize back");
     let roundtrip_json =
@@ -380,10 +375,8 @@ fn test_nonrpm_ignores_rpm_state() {
         .inspect(&ctx_b)
         .expect("run B should succeed");
 
-    let json_a = serde_json::to_string(&output_a.section)
-        .expect("A must serialize");
-    let json_b = serde_json::to_string(&output_b.section)
-        .expect("B must serialize");
+    let json_a = serde_json::to_string(&output_a.section).expect("A must serialize");
+    let json_b = serde_json::to_string(&output_b.section).expect("B must serialize");
 
     assert_eq!(
         json_a, json_b,

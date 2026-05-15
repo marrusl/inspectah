@@ -76,9 +76,7 @@ pub fn classify_config_path(path: &str) -> ConfigCategory {
             if path == *prefix {
                 return rule.category.clone();
             }
-            if (prefix.ends_with('/') || prefix.ends_with('.'))
-                && path.starts_with(prefix)
-            {
+            if (prefix.ends_with('/') || prefix.ends_with('.')) && path.starts_with(prefix) {
                 return rule.category.clone();
             }
         }

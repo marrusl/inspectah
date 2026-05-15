@@ -85,9 +85,21 @@ impl Inspector for SelinuxInspector {
         collect_boolean_overrides(exec, &mut section, &mut warnings, &mut degraded_reasons);
         collect_fcontext_rules(exec, &mut section, &policy_type);
         collect_port_labels(exec, &mut section);
-        collect_audit_rules(exec, &mut section, rpm_state, &mut hints, &mut degraded_reasons);
+        collect_audit_rules(
+            exec,
+            &mut section,
+            rpm_state,
+            &mut hints,
+            &mut degraded_reasons,
+        );
         collect_fips_mode(exec, &mut section);
-        collect_pam_configs(exec, &mut section, rpm_state, &mut hints, &mut degraded_reasons);
+        collect_pam_configs(
+            exec,
+            &mut section,
+            rpm_state,
+            &mut hints,
+            &mut degraded_reasons,
+        );
 
         let output = InspectorOutput {
             section: SectionData::Selinux(section),
@@ -313,9 +325,7 @@ fn collect_fcontext_rules(exec: &dyn Executor, section: &mut SelinuxSection, pol
     }
 
     // Fallback: read file_contexts.local
-    let fc_local = format!(
-        "/etc/selinux/{policy_type}/contexts/files/file_contexts.local"
-    );
+    let fc_local = format!("/etc/selinux/{policy_type}/contexts/files/file_contexts.local");
     if let Ok(content) = exec.read_file(Path::new(&fc_local)) {
         for line in content.lines() {
             let trimmed = line.trim();
@@ -613,8 +623,7 @@ mod tests {
     #[test]
     fn test_selinux_mode_fallback_sysfs() {
         // getenforce fails (not found), sysfs reports "1" -> Enforcing
-        let exec = MockExecutor::new()
-            .with_file("/sys/fs/selinux/enforce", "1\n");
+        let exec = MockExecutor::new().with_file("/sys/fs/selinux/enforce", "1\n");
 
         let rpm_state = empty_rpm_state();
         let source = test_source_system();
@@ -777,7 +786,11 @@ ftpd_full_access               (off  ,   off)  Allow ftpd full access\n";
             )
             .with_dir(
                 "/sys/fs/selinux/booleans",
-                vec!["httpd_can_network_connect", "container_manage_cgroup", "virt_use_nfs"],
+                vec![
+                    "httpd_can_network_connect",
+                    "container_manage_cgroup",
+                    "virt_use_nfs",
+                ],
             )
             .with_file("/sys/fs/selinux/booleans/httpd_can_network_connect", "1 0")
             .with_file("/sys/fs/selinux/booleans/container_manage_cgroup", "0 1")
@@ -948,8 +961,14 @@ redis_port_t                    tcp      6380\n";
                 "/etc/audit/rules.d",
                 vec!["custom-a.rules", "custom-b.rules"],
             )
-            .with_file("/etc/audit/rules.d/custom-a.rules", "-w /etc/shadow -p wa\n")
-            .with_file("/etc/audit/rules.d/custom-b.rules", "-a always,exit -F arch=b64\n");
+            .with_file(
+                "/etc/audit/rules.d/custom-a.rules",
+                "-w /etc/shadow -p wa\n",
+            )
+            .with_file(
+                "/etc/audit/rules.d/custom-b.rules",
+                "-a always,exit -F arch=b64\n",
+            );
 
         let rpm_state = empty_rpm_state();
         let source = test_source_system();
@@ -981,10 +1000,7 @@ redis_port_t                    tcp      6380\n";
                     ..Default::default()
                 },
             )
-            .with_dir(
-                "/etc/pam.d",
-                vec!["sshd", "custom-app"],
-            )
+            .with_dir("/etc/pam.d", vec!["sshd", "custom-app"])
             .with_file("/etc/pam.d/sshd", "auth required pam_sepermit.so\n")
             .with_file("/etc/pam.d/custom-app", "auth required pam_unix.so\n");
 
@@ -1018,10 +1034,7 @@ redis_port_t                    tcp      6380\n";
                     ..Default::default()
                 },
             )
-            .with_dir(
-                "/etc/pam.d",
-                vec!["custom-sshd", "myapp-auth"],
-            )
+            .with_dir("/etc/pam.d", vec!["custom-sshd", "myapp-auth"])
             .with_file("/etc/pam.d/custom-sshd", "auth required pam_unix.so\n")
             .with_file("/etc/pam.d/myapp-auth", "auth required pam_unix.so\n");
 
@@ -1157,9 +1170,7 @@ redis_port_t                    tcp      6380\n";
 
     // ---- Helper: extract section from Ok or Degraded ----
 
-    fn extract_section(
-        result: &Result<InspectorOutput, InspectorError>,
-    ) -> &SelinuxSection {
+    fn extract_section(result: &Result<InspectorOutput, InspectorError>) -> &SelinuxSection {
         match result {
             Ok(output) => {
                 if let SectionData::Selinux(ref section) = output.section {

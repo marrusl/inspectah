@@ -594,11 +594,7 @@ fn test_scheduled_tasks_field_coverage() {
 
     // at_jobs: 2 at jobs
     assert!(!section.at_jobs.is_empty(), "golden must contain at_jobs");
-    assert_eq!(
-        section.at_jobs.len(),
-        2,
-        "provisional golden has 2 at_jobs"
-    );
+    assert_eq!(section.at_jobs.len(), 2, "provisional golden has 2 at_jobs");
     let at = &section.at_jobs[0];
     assert!(!at.file.is_empty(), "at file must be populated");
     assert!(!at.command.is_empty(), "at command must be populated");
@@ -615,7 +611,10 @@ fn test_scheduled_tasks_field_coverage() {
         "provisional golden has 2 generated_timer_units"
     );
     let gen = &section.generated_timer_units[0];
-    assert!(!gen.name.is_empty(), "generated timer name must be populated");
+    assert!(
+        !gen.name.is_empty(),
+        "generated timer name must be populated"
+    );
     assert!(
         !gen.cron_expr.is_empty(),
         "generated timer cron_expr must be populated"
@@ -681,7 +680,13 @@ fn test_config_field_coverage() {
     let kinds: Vec<String> = section
         .files
         .iter()
-        .map(|f| serde_json::to_value(&f.kind).unwrap().as_str().unwrap().to_string())
+        .map(|f| {
+            serde_json::to_value(&f.kind)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .collect();
     assert!(
         kinds.contains(&"unowned".to_string()),
@@ -704,7 +709,13 @@ fn test_config_field_coverage() {
     let cats: Vec<String> = section
         .files
         .iter()
-        .map(|f| serde_json::to_value(&f.category).unwrap().as_str().unwrap().to_string())
+        .map(|f| {
+            serde_json::to_value(&f.category)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .collect();
     assert!(
         cats.contains(&"sysctl".to_string()),
@@ -877,9 +888,18 @@ fn test_non_rpm_software_field_coverage() {
 
     // Third item: npm project with git info
     let npm = &section.items[2];
-    assert!(!npm.git_remote.is_empty(), "npm project should have git_remote");
-    assert!(!npm.git_commit.is_empty(), "npm project should have git_commit");
-    assert!(!npm.git_branch.is_empty(), "npm project should have git_branch");
+    assert!(
+        !npm.git_remote.is_empty(),
+        "npm project should have git_remote"
+    );
+    assert!(
+        !npm.git_commit.is_empty(),
+        "npm project should have git_commit"
+    );
+    assert!(
+        !npm.git_branch.is_empty(),
+        "npm project should have git_branch"
+    );
     assert!(npm.files.is_some(), "npm project should have files");
 
     // Fourth item: static Go binary
@@ -974,17 +994,50 @@ fn test_full_snapshot_serde_all_sections_present() {
     ];
 
     let sections: &[(&str, &str)] = &[
-        ("rpm", include_str!("../../testdata/golden/go-v13-rpm-section.json")),
-        ("config", include_str!("../../testdata/golden/go-v13-config-section.json")),
-        ("services", include_str!("../../testdata/golden/go-v13-services-section.json")),
-        ("network", include_str!("../../testdata/golden/go-v13-network-section.json")),
-        ("storage", include_str!("../../testdata/golden/go-v13-storage-section.json")),
-        ("scheduled_tasks", include_str!("../../testdata/golden/go-v13-scheduled-tasks-section.json")),
-        ("containers", include_str!("../../testdata/golden/go-v13-containers-section.json")),
-        ("non_rpm_software", include_str!("../../testdata/golden/go-v13-non-rpm-software-section.json")),
-        ("kernel_boot", include_str!("../../testdata/golden/go-v13-kernelboot-section.json")),
-        ("selinux", include_str!("../../testdata/golden/go-v13-selinux-section.json")),
-        ("users_groups", include_str!("../../testdata/golden/go-v13-users-groups-section.json")),
+        (
+            "rpm",
+            include_str!("../../testdata/golden/go-v13-rpm-section.json"),
+        ),
+        (
+            "config",
+            include_str!("../../testdata/golden/go-v13-config-section.json"),
+        ),
+        (
+            "services",
+            include_str!("../../testdata/golden/go-v13-services-section.json"),
+        ),
+        (
+            "network",
+            include_str!("../../testdata/golden/go-v13-network-section.json"),
+        ),
+        (
+            "storage",
+            include_str!("../../testdata/golden/go-v13-storage-section.json"),
+        ),
+        (
+            "scheduled_tasks",
+            include_str!("../../testdata/golden/go-v13-scheduled-tasks-section.json"),
+        ),
+        (
+            "containers",
+            include_str!("../../testdata/golden/go-v13-containers-section.json"),
+        ),
+        (
+            "non_rpm_software",
+            include_str!("../../testdata/golden/go-v13-non-rpm-software-section.json"),
+        ),
+        (
+            "kernel_boot",
+            include_str!("../../testdata/golden/go-v13-kernelboot-section.json"),
+        ),
+        (
+            "selinux",
+            include_str!("../../testdata/golden/go-v13-selinux-section.json"),
+        ),
+        (
+            "users_groups",
+            include_str!("../../testdata/golden/go-v13-users-groups-section.json"),
+        ),
     ];
 
     for (key, json) in sections {
@@ -1008,8 +1061,8 @@ fn test_full_snapshot_serde_all_sections_present() {
 
     // Serialize the assembled snapshot, then deserialize into typed struct
     let full_json = serde_json::to_string_pretty(&snap_value).unwrap();
-    let snap: InspectionSnapshot = serde_json::from_str(&full_json)
-        .expect("full snapshot with all sections must deserialize");
+    let snap: InspectionSnapshot =
+        serde_json::from_str(&full_json).expect("full snapshot with all sections must deserialize");
 
     // All 11 section keys must be present (Some, not None)
     assert!(snap.rpm.is_some(), "rpm section must survive roundtrip");

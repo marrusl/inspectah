@@ -130,10 +130,7 @@ impl Inspector for ScheduledTasksInspector {
             if !degraded_reasons.is_empty() {
                 warnings.push(Warning {
                     inspector: "scheduled_tasks".into(),
-                    message: format!(
-                        "degraded: {}",
-                        degraded_reasons.join("; ")
-                    ),
+                    message: format!("degraded: {}", degraded_reasons.join("; ")),
                     ..Default::default()
                 });
             }
@@ -174,8 +171,7 @@ fn scan_cron_dir(
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            degraded_reasons
-                .push(format!("permission denied reading {dir_path}"));
+            degraded_reasons.push(format!("permission denied reading {dir_path}"));
             return;
         }
         Err(_) => return,
@@ -213,7 +209,14 @@ fn scan_cron_dir(
             Err(_) => continue,
         };
 
-        parse_cron_entries(section, &content, &file_path, &cron_source, entry_name, hints);
+        parse_cron_entries(
+            section,
+            &content,
+            &file_path,
+            &cron_source,
+            entry_name,
+            hints,
+        );
     }
 }
 
@@ -246,10 +249,7 @@ fn scan_cron_file(
         Err(_) => return,
     };
 
-    let name = file_path
-        .rsplit('/')
-        .next()
-        .unwrap_or("crontab");
+    let name = file_path.rsplit('/').next().unwrap_or("crontab");
 
     parse_cron_entries(section, &content, file_path, source, name, hints);
 }
@@ -381,8 +381,7 @@ fn scan_cron_period_dir(
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            degraded_reasons
-                .push(format!("permission denied reading {dir_path}"));
+            degraded_reasons.push(format!("permission denied reading {dir_path}"));
             return;
         }
         Err(_) => return,
@@ -638,12 +637,7 @@ pub fn cron_to_on_calendar(cron_expr: &str) -> (String, bool) {
 // ---------------------------------------------------------------------------
 
 /// Generates systemd .timer and .service unit content from a cron expression.
-fn make_timer_service(
-    _name: &str,
-    cron_expr: &str,
-    path: &str,
-    command: &str,
-) -> (String, String) {
+fn make_timer_service(_name: &str, cron_expr: &str, path: &str, command: &str) -> (String, String) {
     let (on_calendar, converted) = cron_to_on_calendar(cron_expr);
 
     let (fixme_lines, final_calendar) = if !converted {
@@ -719,8 +713,7 @@ fn scan_systemd_timers(
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            degraded_reasons
-                .push(format!("permission denied reading {dir_path}"));
+            degraded_reasons.push(format!("permission denied reading {dir_path}"));
             return;
         }
         Err(_) => return,
@@ -874,8 +867,7 @@ fn scan_at_jobs(
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            degraded_reasons
-                .push("permission denied reading /var/spool/at".into());
+            degraded_reasons.push("permission denied reading /var/spool/at".into());
             return;
         }
         Err(_) => return,
@@ -886,9 +878,7 @@ fn scan_at_jobs(
             continue;
         }
         let file_path = format!("/var/spool/at/{entry_name}");
-        let content = exec
-            .read_file(Path::new(&file_path))
-            .unwrap_or_default();
+        let content = exec.read_file(Path::new(&file_path)).unwrap_or_default();
         let rel_path = strip_leading_slash(&file_path);
         let job = parse_at_job(&content, &rel_path);
 
@@ -1027,8 +1017,7 @@ mod tests {
             # For details see man 4 crontabs\n\
             0  4  *  *  * root       /usr/local/bin/daily-maintenance.sh\n";
 
-        let exec = MockExecutor::new()
-            .with_file("/etc/crontab", crontab_content);
+        let exec = MockExecutor::new().with_file("/etc/crontab", crontab_content);
 
         let rpm_state = empty_rpm_state();
         let source = test_source_system();
@@ -1111,8 +1100,8 @@ mod tests {
 
     #[test]
     fn test_scan_cron_period_dir() {
-        let exec = MockExecutor::new()
-            .with_dir("/etc/cron.daily", vec!["logrotate", "rpm-owned-script"]);
+        let exec =
+            MockExecutor::new().with_dir("/etc/cron.daily", vec!["logrotate", "rpm-owned-script"]);
 
         let rpm_state = rpm_state_with_owned(vec!["/etc/cron.daily/rpm-owned-script"]);
         let source = test_source_system();
@@ -1134,11 +1123,17 @@ mod tests {
             assert_eq!(daily_jobs.len(), 2);
 
             // rpm-owned-script should be marked as rpm_owned
-            let rpm_job = daily_jobs.iter().find(|j| j.path.contains("rpm-owned")).expect("should find rpm-owned job");
+            let rpm_job = daily_jobs
+                .iter()
+                .find(|j| j.path.contains("rpm-owned"))
+                .expect("should find rpm-owned job");
             assert!(rpm_job.rpm_owned);
 
             // logrotate should NOT be rpm_owned (not in our state)
-            let log_job = daily_jobs.iter().find(|j| j.path.contains("logrotate")).expect("should find logrotate job");
+            let log_job = daily_jobs
+                .iter()
+                .find(|j| j.path.contains("logrotate"))
+                .expect("should find logrotate job");
             assert!(!log_job.rpm_owned);
 
             // Only logrotate should generate a timer (rpm-owned skipped)
@@ -1181,10 +1176,7 @@ mod tests {
             cal.contains("Mon..Fri"),
             "expected Mon..Fri dow, got: {cal}"
         );
-        assert!(
-            cal.contains("1..5"),
-            "expected 1..5 hour range, got: {cal}"
-        );
+        assert!(cal.contains("1..5"), "expected 1..5 hour range, got: {cal}");
     }
 
     // ---- Test 7: test_cron_to_on_calendar_shortcuts ----
@@ -1225,8 +1217,12 @@ mod tests {
 
     #[test]
     fn test_make_timer_service() {
-        let (timer, service) =
-            make_timer_service("cron-backup", "0 2 * * *", "etc/cron.d/backup", "/opt/backup.sh");
+        let (timer, service) = make_timer_service(
+            "cron-backup",
+            "0 2 * * *",
+            "etc/cron.d/backup",
+            "/opt/backup.sh",
+        );
 
         assert!(timer.contains("[Unit]"));
         assert!(timer.contains("[Timer]"));
@@ -1431,8 +1427,8 @@ mod tests {
 
     #[test]
     fn test_scheduled_degraded_permission_denied() {
-        let exec = MockExecutor::new()
-            .with_dir_error("/etc/cron.d", std::io::ErrorKind::PermissionDenied);
+        let exec =
+            MockExecutor::new().with_dir_error("/etc/cron.d", std::io::ErrorKind::PermissionDenied);
 
         let rpm_state = empty_rpm_state();
         let source = test_source_system();
@@ -1457,9 +1453,7 @@ mod tests {
                     panic!("expected ScheduledTasks section in degraded output");
                 }
             }
-            other => panic!(
-                "expected Degraded error for permission denied, got: {other:?}"
-            ),
+            other => panic!("expected Degraded error for permission denied, got: {other:?}"),
         }
     }
 

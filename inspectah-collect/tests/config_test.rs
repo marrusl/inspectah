@@ -138,10 +138,7 @@ fn full_mock() -> MockExecutor {
         .with_dir("/etc/crypto-policies/state", vec!["current"])
         .with_dir("/etc/myapp", vec!["app.conf", "database.yml"])
         .with_dir("/etc/sysconfig", vec!["network-scripts"])
-        .with_dir(
-            "/etc/sysconfig/network-scripts",
-            vec!["ifcfg-eth0"],
-        )
+        .with_dir("/etc/sysconfig/network-scripts", vec!["ifcfg-eth0"])
         // File contents for RPM-modified files
         .with_file("/etc/httpd/conf/httpd.conf", HTTPD_CONF)
         .with_file("/etc/ssh/sshd_config", SSHD_CONFIG)
@@ -159,31 +156,16 @@ fn full_mock() -> MockExecutor {
         // RPM-owned unmodified files (exist in owned_paths but not in rpm -Va)
         .with_file("/etc/ssh/ssh_config", "Host *\n")
         .with_file("/etc/ssh/moduli", "# moduli\n")
-        .with_file(
-            "/etc/httpd/conf.d/autoindex.conf",
-            "# autoindex\n",
-        )
-        .with_file(
-            "/etc/httpd/conf.d/ssl.conf",
-            "# ssl\n",
-        )
-        .with_file(
-            "/etc/httpd/conf.d/welcome.conf",
-            "# welcome\n",
-        )
+        .with_file("/etc/httpd/conf.d/autoindex.conf", "# autoindex\n")
+        .with_file("/etc/httpd/conf.d/ssl.conf", "# ssl\n")
+        .with_file("/etc/httpd/conf.d/welcome.conf", "# welcome\n")
         .with_file("/etc/logrotate.d/httpd", "# httpd logrotate\n")
         .with_file("/etc/pam.d/system-auth", "# system-auth\n")
         .with_file("/etc/pam.d/password-auth", "# password-auth\n")
         .with_file("/etc/cron.d/0hourly", "# 0hourly\n")
         .with_file("/etc/crontab", "# crontab\n")
-        .with_file(
-            "/etc/crypto-policies/config",
-            "DEFAULT\n",
-        )
-        .with_file(
-            "/etc/crypto-policies/state/current",
-            CRYPTO_POLICIES,
-        )
+        .with_file("/etc/crypto-policies/config", "DEFAULT\n")
+        .with_file("/etc/crypto-policies/state/current", CRYPTO_POLICIES)
         // NetworkManager connections for DHCP exclusion path
         .with_dir("/etc/NetworkManager", vec!["system-connections"])
         .with_dir("/etc/NetworkManager/system-connections", vec![])
@@ -247,10 +229,7 @@ fn test_config_inspector_happy_path() {
         .iter()
         .filter(|f| f.kind == ConfigFileKind::Unowned)
         .collect();
-    assert!(
-        !unowned.is_empty(),
-        "should have unowned files"
-    );
+    assert!(!unowned.is_empty(), "should have unowned files");
 
     // myapp/app.conf should be unowned
     let myapp = section
@@ -294,10 +273,7 @@ fn test_config_inspector_no_etc() {
         other => panic!("expected SectionData::Config, got {:?}", other),
     };
 
-    assert!(
-        section.files.is_empty(),
-        "no /etc means no config files"
-    );
+    assert!(section.files.is_empty(), "no /etc means no config files");
 }
 
 /// PermissionDenied during /etc walk produces Degraded output.
@@ -329,10 +305,7 @@ fn test_config_inspector_degraded_permissions() {
             );
             match &partial.section {
                 SectionData::Config(_) => {}
-                other => panic!(
-                    "expected SectionData::Config in partial, got {:?}",
-                    other
-                ),
+                other => panic!("expected SectionData::Config in partial, got {:?}", other),
             }
         }
         Err(other) => panic!("unexpected error: {other}"),
@@ -360,10 +333,8 @@ fn test_config_inspector_json_roundtrip() {
         other => panic!("expected SectionData::Config, got {:?}", other),
     };
 
-    let json =
-        serde_json::to_string_pretty(section).expect("section must serialize to JSON");
-    let roundtrip: ConfigSection =
-        serde_json::from_str(&json).expect("JSON must deserialize back");
+    let json = serde_json::to_string_pretty(section).expect("section must serialize to JSON");
+    let roundtrip: ConfigSection = serde_json::from_str(&json).expect("JSON must deserialize back");
     let roundtrip_json =
         serde_json::to_string_pretty(&roundtrip).expect("roundtrip must serialize");
 

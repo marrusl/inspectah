@@ -190,10 +190,7 @@ impl Inspector for ConfigInspector {
 
         // Check for degraded state
         if !degraded_reasons.is_empty() {
-            let reason = format!(
-                "config inspector degraded: {}",
-                degraded_reasons.join("; ")
-            );
+            let reason = format!("config inspector degraded: {}", degraded_reasons.join("; "));
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::Config(section),
@@ -225,10 +222,7 @@ fn read_config_content(
     match exec.read_file(Path::new(path)) {
         Ok(content) => {
             if content.len() > MAX_CONFIG_FILE_SIZE {
-                degraded_reasons.push(format!(
-                    "file too large ({} bytes): {path}",
-                    content.len()
-                ));
+                degraded_reasons.push(format!("file too large ({} bytes): {path}", content.len()));
                 String::new()
             } else {
                 content
@@ -244,7 +238,10 @@ fn read_config_content(
 
 /// Checks if the source system is an ostree/bootc variant.
 fn is_ostree_system(source: &SourceSystem) -> bool {
-    matches!(source, SourceSystem::RpmOstree { .. } | SourceSystem::Bootc { .. })
+    matches!(
+        source,
+        SourceSystem::RpmOstree { .. } | SourceSystem::Bootc { .. }
+    )
 }
 
 /// Detects the system crypto policy and adds a warning if non-default.
@@ -271,9 +268,9 @@ fn detect_crypto_policy(exec: &dyn Executor, warnings: &mut Vec<Warning>) {
     }
 
     // Validate policy name format: uppercase letters, digits, underscores, colons, dots, hyphens
-    let valid = policy
-        .chars()
-        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '_' | ':' | '.' | '-'));
+    let valid = policy.chars().all(|c| {
+        c.is_ascii_uppercase() || c.is_ascii_digit() || matches!(c, '_' | ':' | '.' | '-')
+    });
     if !valid || !policy.starts_with(|c: char| c.is_ascii_uppercase()) {
         warnings.push(Warning {
             inspector: "config".into(),
@@ -310,10 +307,7 @@ fn detect_orphaned_configs(
     degraded_reasons: &mut Vec<String>,
 ) {
     // Get removed packages from dnf history
-    let result = exec.run(
-        "dnf",
-        &["history", "list", "--reverse"],
-    );
+    let result = exec.run("dnf", &["history", "list", "--reverse"]);
     if result.exit_code != 0 {
         // dnf history not available — not fatal, just skip orphan detection
         return;
@@ -412,7 +406,11 @@ fn run_ostree_config(
 
     // Ostree volatile names — system-generated, skip
     let volatile_names: HashSet<&str> = [
-        "resolv.conf", "hostname", "machine-id", ".updated", "ld.so.cache",
+        "resolv.conf",
+        "hostname",
+        "machine-id",
+        ".updated",
+        "ld.so.cache",
     ]
     .into_iter()
     .collect();
@@ -441,7 +439,8 @@ fn run_ostree_config(
                 let display_path = format!("etc/{rel_path}");
 
                 // Content comparison
-                let usr_content = match exec.read_file(Path::new(&format!("{usr_etc}/{rel_path}"))) {
+                let usr_content = match exec.read_file(Path::new(&format!("{usr_etc}/{rel_path}")))
+                {
                     Ok(c) => c,
                     Err(_) => continue,
                 };
@@ -555,15 +554,13 @@ mod tests {
     }
 
     fn base_mock_with_etc() -> MockExecutor {
-        MockExecutor::new()
-            .with_dir("/etc", vec![])
-            .with_command(
-                "dnf history list --reverse",
-                ExecResult {
-                    exit_code: 1, // no dnf history available
-                    ..Default::default()
-                },
-            )
+        MockExecutor::new().with_dir("/etc", vec![]).with_command(
+            "dnf history list --reverse",
+            ExecResult {
+                exit_code: 1, // no dnf history available
+                ..Default::default()
+            },
+        )
     }
 
     // ---- Test 15: test_config_rpm_owned_modified ----
@@ -614,10 +611,7 @@ mod tests {
         if let SectionData::Config(ref section) = output.section {
             assert_eq!(section.files.len(), 1);
             assert_eq!(section.files[0].kind, ConfigFileKind::RpmOwnedModified);
-            assert_eq!(
-                section.files[0].rpm_va_flags,
-                Some("S.5....T.".to_string())
-            );
+            assert_eq!(section.files[0].rpm_va_flags, Some("S.5....T.".to_string()));
             assert_eq!(section.files[0].package, Some("httpd".to_string()));
             assert!(section.files[0].content.contains("Listen 8080"));
         } else {
@@ -718,10 +712,7 @@ mod tests {
             // because it's not RPM-owned) or as Orphaned (step 3 would catch it
             // if step 2 didn't). In practice, step 2 finds it first as Unowned.
             // The orphaned path only catches files that step 2 missed.
-            assert!(
-                !section.files.is_empty(),
-                "should find config files"
-            );
+            assert!(!section.files.is_empty(), "should find config files");
             let oldpkg = section
                 .files
                 .iter()
@@ -782,20 +773,14 @@ mod tests {
                 .iter()
                 .filter(|f| f.kind == ConfigFileKind::RpmOwnedModified)
                 .collect();
-            assert!(
-                !modified.is_empty(),
-                "should detect modified ostree config"
-            );
+            assert!(!modified.is_empty(), "should detect modified ostree config");
             // Should find unowned custom.conf (only in /etc, not in /usr/etc)
             let unowned: Vec<_> = section
                 .files
                 .iter()
                 .filter(|f| f.kind == ConfigFileKind::Unowned)
                 .collect();
-            assert!(
-                !unowned.is_empty(),
-                "should detect unowned ostree config"
-            );
+            assert!(!unowned.is_empty(), "should detect unowned ostree config");
         } else {
             panic!("expected Config section");
         }
@@ -880,9 +865,7 @@ mod tests {
                     panic!("expected Config section in degraded output");
                 }
             }
-            other => panic!(
-                "expected Degraded error for permission denied, got: {other:?}"
-            ),
+            other => panic!("expected Degraded error for permission denied, got: {other:?}"),
         }
     }
 
@@ -983,10 +966,7 @@ mod tests {
         let output = result.expect("should succeed");
         if let SectionData::Config(ref section) = output.section {
             let has_dhcp = section.files.iter().any(|f| f.path.contains("eth0"));
-            assert!(
-                !has_dhcp,
-                "DHCP connections should be excluded from config"
-            );
+            assert!(!has_dhcp, "DHCP connections should be excluded from config");
         } else {
             panic!("expected Config section");
         }
