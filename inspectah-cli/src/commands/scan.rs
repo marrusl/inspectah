@@ -11,10 +11,14 @@ use clap::Args;
 use std::path::PathBuf;
 
 use inspectah_collect::executor::real::RealExecutor;
+use inspectah_collect::inspectors::config::ConfigInspector;
 use inspectah_collect::inspectors::containers::ContainersInspector;
 use inspectah_collect::inspectors::kernelboot::KernelbootInspector;
 use inspectah_collect::inspectors::network::NetworkInspector;
+use inspectah_collect::inspectors::nonrpm::NonRpmInspector;
 use inspectah_collect::inspectors::rpm::RpmInspector;
+use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
+use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::users::UsersGroupsInspector;
@@ -100,6 +104,10 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(NetworkInspector::new()),
         Box::new(ContainersInspector::new()),
         Box::new(UsersGroupsInspector::new()),
+        Box::new(ScheduledTasksInspector::new()),
+        Box::new(ConfigInspector::new()),
+        Box::new(SelinuxInspector::new()),
+        Box::new(NonRpmInspector::new()),
     ];
     let collected = collect(&source, &executor, &inspectors);
 
@@ -198,5 +206,50 @@ VARIANT_ID="workstation"
         assert_eq!(os.id, "fedora");
         assert_eq!(os.version_id, "40");
         assert_eq!(os.name, "");
+    }
+
+    #[test]
+    fn test_cli_creates_all_inspectors() {
+        // Verify all 11 inspectors are registered
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(ServicesInspector::new()),
+            Box::new(StorageInspector::new()),
+            Box::new(KernelbootInspector::new()),
+            Box::new(NetworkInspector::new()),
+            Box::new(ContainersInspector::new()),
+            Box::new(UsersGroupsInspector::new()),
+            Box::new(ScheduledTasksInspector::new()),
+            Box::new(ConfigInspector::new()),
+            Box::new(SelinuxInspector::new()),
+            Box::new(NonRpmInspector::new()),
+        ];
+        assert_eq!(inspectors.len(), 11);
+    }
+
+    #[test]
+    fn test_cli_wave2_ids_present() {
+        use inspectah_core::types::completeness::InspectorId;
+
+        // Verify Wave 2 inspector IDs are present
+        let inspectors: Vec<Box<dyn Inspector>> = vec![
+            Box::new(RpmInspector::new()),
+            Box::new(ServicesInspector::new()),
+            Box::new(StorageInspector::new()),
+            Box::new(KernelbootInspector::new()),
+            Box::new(NetworkInspector::new()),
+            Box::new(ContainersInspector::new()),
+            Box::new(UsersGroupsInspector::new()),
+            Box::new(ScheduledTasksInspector::new()),
+            Box::new(ConfigInspector::new()),
+            Box::new(SelinuxInspector::new()),
+            Box::new(NonRpmInspector::new()),
+        ];
+
+        let ids: Vec<_> = inspectors.iter().map(|i| i.id()).collect();
+        assert!(ids.contains(&InspectorId::ScheduledTasks));
+        assert!(ids.contains(&InspectorId::Config));
+        assert!(ids.contains(&InspectorId::Selinux));
+        assert!(ids.contains(&InspectorId::NonRpmSoftware));
     }
 }
