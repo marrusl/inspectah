@@ -1,67 +1,10 @@
 {
   "mode": "enforcing",
-  "custom_modules": [
-    "myapp",
-    "custom_httpd"
-  ],
-  "boolean_overrides": [
-    {
-      "name": "httpd_can_network_connect",
-      "state": true,
-      "default_state": false
-    },
-    {
-      "name": "container_manage_cgroup",
-      "state": true,
-      "default_state": false
-    }
-  ],
-  "fcontext_rules": [
-    "fcontext -a -t httpd_sys_content_t '/srv/web(/.*)?'",
-    "fcontext -a -t container_file_t '/opt/containers(/.*)?'"
-  ],
-  "audit_rules": [
-    {
-      "path": "etc/audit/rules.d/httpd-avc.rules",
-      "content": "type=AVC msg=audit(1700000000.000:100): avc: denied { read } for pid=1234 comm=\"httpd\" name=\"index.html\" dev=\"sda1\" ino=5678 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:default_t:s0 tclass=file permissive=0"
-    },
-    {
-      "path": "etc/audit/rules.d/nginx-avc.rules",
-      "content": "type=AVC msg=audit(1700000001.000:101): avc: denied { connectto } for pid=2345 comm=\"nginx\" path=\"/run/php-fpm.sock\" scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:system_r:php_fpm_t:s0 tclass=unix_stream_socket permissive=0"
-    }
-  ],
+  "custom_modules": [],
+  "boolean_overrides": [],
+  "fcontext_rules": [],
+  "audit_rules": null,
   "fips_mode": false,
-  "pam_configs": [
-    {
-      "path": "etc/pam.d/system-auth",
-      "content": "auth required pam_env.so\nauth sufficient pam_unix.so"
-    },
-    {
-      "path": "etc/pam.d/password-auth",
-      "content": "auth required pam_env.so\nauth sufficient pam_unix.so"
-    }
-  ],
-  "port_labels": [
-    {
-      "protocol": "tcp",
-      "port": "8080",
-      "type": "http_port_t",
-      "include": true,
-      "fleet": null
-    },
-    {
-      "protocol": "tcp",
-      "port": "9443",
-      "type": "http_port_t",
-      "include": true,
-      "fleet": null
-    },
-    {
-      "protocol": "udp",
-      "port": "5353",
-      "type": "mdns_port_t",
-      "include": false,
-      "fleet": null
-    }
-  ]
+  "pam_configs": null,
+  "port_labels": []
 }
