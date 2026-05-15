@@ -14,6 +14,18 @@ pub struct SelinuxPortLabel {
     pub fleet: Option<FleetPrevalence>,
 }
 
+/// A file that the SELinux inspector carries forward for materialization
+/// in the config tree (audit rules, PAM configs).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CarryForwardFile {
+    /// Relative path (e.g. "etc/audit/rules.d/custom.rules").
+    #[serde(default)]
+    pub path: String,
+    /// File content to materialize.
+    #[serde(default)]
+    pub content: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelinuxSection {
     #[serde(default)]
@@ -25,11 +37,11 @@ pub struct SelinuxSection {
     #[serde(default)]
     pub fcontext_rules: Vec<String>,
     #[serde(default)]
-    pub audit_rules: Vec<String>,
+    pub audit_rules: Vec<CarryForwardFile>,
     #[serde(default)]
     pub fips_mode: bool,
     #[serde(default)]
-    pub pam_configs: Vec<String>,
+    pub pam_configs: Vec<CarryForwardFile>,
     #[serde(default)]
     pub port_labels: Vec<SelinuxPortLabel>,
 }
@@ -47,9 +59,15 @@ mod tests {
                 serde_json::json!({"name": "httpd_can_network_connect", "state": true}),
             ],
             fcontext_rules: vec!["/opt/app(/.*)?".to_string()],
-            audit_rules: vec![],
+            audit_rules: vec![CarryForwardFile {
+                path: "etc/audit/rules.d/custom.rules".to_string(),
+                content: "-w /etc/shadow -p wa".to_string(),
+            }],
             fips_mode: false,
-            pam_configs: vec![],
+            pam_configs: vec![CarryForwardFile {
+                path: "etc/pam.d/custom-sshd".to_string(),
+                content: "auth required pam_unix.so".to_string(),
+            }],
             port_labels: vec![SelinuxPortLabel {
                 protocol: "tcp".to_string(),
                 port: "8080".to_string(),

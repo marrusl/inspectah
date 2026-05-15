@@ -422,6 +422,27 @@ pub fn write_config_tree(
         }
     }
 
+    // SELinux carry-forward files: audit rules and PAM configs.
+    // These are declarative admin customizations — no FIXME wrapping.
+    if let Some(ref sel) = snap.selinux {
+        for rule in &sel.audit_rules {
+            if !rule.path.is_empty() && !rule.content.is_empty() {
+                let rel = rule.path.trim_start_matches('/');
+                if validate_path(rel).is_ok() {
+                    safe_write_file(&config_dir.join(rel), &rule.content);
+                }
+            }
+        }
+        for pam in &sel.pam_configs {
+            if !pam.path.is_empty() && !pam.content.is_empty() {
+                let rel = pam.path.trim_start_matches('/');
+                if validate_path(rel).is_ok() {
+                    safe_write_file(&config_dir.join(rel), &pam.content);
+                }
+            }
+        }
+    }
+
     // Non-RPM env files are NOT written under config/ — they go to a separate
     // env-files/ directory via write_env_files(). See design decision: .env files
     // are high-probability secret carriers requiring operator review.
@@ -509,6 +530,7 @@ mod tests {
     use inspectah_core::types::scheduled::{
         GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
     };
+    use inspectah_core::types::selinux::{CarryForwardFile, SelinuxSection};
     use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
     use tempfile::TempDir;
 
@@ -912,5 +934,82 @@ mod tests {
         assert!(!roots.contains(&"tmp".to_string()));
         // Verify sorted
         assert_eq!(roots, vec!["etc", "usr"]);
+    }
+
+    #[test]
+    fn test_config_tree_selinux_audit_rules_materialized() {
+        let mut snap = InspectionSnapshot::new();
+        snap.selinux = Some(SelinuxSection {
+            audit_rules: vec![
+                CarryForwardFile {
+                    path: "etc/audit/rules.d/custom.rules".to_string(),
+                    content: "-w /etc/shadow -p wa -k shadow".to_string(),
+                },
+                CarryForwardFile {
+                    path: "etc/audit/rules.d/compliance.rules".to_string(),
+                    content: "-a always,exit -F arch=b64".to_string(),
+                },
+            ],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+        let custom = dir.path().join("config/etc/audit/rules.d/custom.rules");
+        assert!(custom.exists());
+        assert_eq!(
+            std::fs::read_to_string(&custom).unwrap(),
+            "-w /etc/shadow -p wa -k shadow"
+        );
+        let compliance = dir.path().join("config/etc/audit/rules.d/compliance.rules");
+        assert!(compliance.exists());
+        assert_eq!(
+            std::fs::read_to_string(&compliance).unwrap(),
+            "-a always,exit -F arch=b64"
+        );
+    }
+
+    #[test]
+    fn test_config_tree_selinux_pam_configs_materialized() {
+        let mut snap = InspectionSnapshot::new();
+        snap.selinux = Some(SelinuxSection {
+            pam_configs: vec![CarryForwardFile {
+                path: "etc/pam.d/custom-sshd".to_string(),
+                content: "auth required pam_unix.so".to_string(),
+            }],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+        let pam = dir.path().join("config/etc/pam.d/custom-sshd");
+        assert!(pam.exists());
+        assert_eq!(
+            std::fs::read_to_string(&pam).unwrap(),
+            "auth required pam_unix.so"
+        );
+    }
+
+    #[test]
+    fn test_config_tree_selinux_empty_content_skipped() {
+        let mut snap = InspectionSnapshot::new();
+        snap.selinux = Some(SelinuxSection {
+            audit_rules: vec![CarryForwardFile {
+                path: "etc/audit/rules.d/empty.rules".to_string(),
+                content: String::new(),
+            }],
+            pam_configs: vec![CarryForwardFile {
+                path: String::new(),
+                content: "auth required pam_unix.so".to_string(),
+            }],
+            ..Default::default()
+        });
+        let dir = TempDir::new().unwrap();
+        write_config_tree(&snap, dir.path()).unwrap();
+        // Empty content should not be materialized
+        assert!(!dir
+            .path()
+            .join("config/etc/audit/rules.d/empty.rules")
+            .exists());
+        // Empty path should not be materialized
+        assert!(!dir.path().join("config/etc/pam.d").exists());
     }
 }

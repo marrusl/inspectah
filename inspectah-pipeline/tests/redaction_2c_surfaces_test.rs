@@ -278,8 +278,14 @@ fn snapshot_with_all_planted_secrets() -> InspectionSnapshot {
 
     // SELinux: audit rules and PAM configs with planted secrets
     snap.selinux = Some(SelinuxSection {
-        audit_rules: vec!["# audit config password=audit_secret_33 for testing".into()],
-        pam_configs: vec!["auth required pam_exec.so password=pam_secret_11".into()],
+        audit_rules: vec![inspectah_core::types::selinux::CarryForwardFile {
+            path: "etc/audit/rules.d/secret-test.rules".into(),
+            content: "# audit config password=audit_secret_33 for testing".into(),
+        }],
+        pam_configs: vec![inspectah_core::types::selinux::CarryForwardFile {
+            path: "etc/pam.d/secret-test".into(),
+            content: "auth required pam_exec.so password=pam_secret_11".into(),
+        }],
         ..Default::default()
     });
 
