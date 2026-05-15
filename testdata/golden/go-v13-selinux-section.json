@@ -1,0 +1,55 @@
+{
+  "mode": "enforcing",
+  "custom_modules": [
+    "myapp",
+    "custom_httpd"
+  ],
+  "boolean_overrides": [
+    {
+      "name": "httpd_can_network_connect",
+      "state": true,
+      "default_state": false
+    },
+    {
+      "name": "container_manage_cgroup",
+      "state": true,
+      "default_state": false
+    }
+  ],
+  "fcontext_rules": [
+    "fcontext -a -t httpd_sys_content_t '/srv/web(/.*)?'",
+    "fcontext -a -t container_file_t '/opt/containers(/.*)?'"
+  ],
+  "audit_rules": [
+    "type=AVC msg=audit(1700000000.000:100): avc: denied { read } for pid=1234 comm=\"httpd\" name=\"index.html\" dev=\"sda1\" ino=5678 scontext=system_u:system_r:httpd_t:s0 tcontext=unconfined_u:object_r:default_t:s0 tclass=file permissive=0",
+    "type=AVC msg=audit(1700000001.000:101): avc: denied { connectto } for pid=2345 comm=\"nginx\" path=\"/run/php-fpm.sock\" scontext=system_u:system_r:httpd_t:s0 tcontext=system_u:system_r:php_fpm_t:s0 tclass=unix_stream_socket permissive=0"
+  ],
+  "fips_mode": false,
+  "pam_configs": [
+    "/etc/pam.d/system-auth",
+    "/etc/pam.d/password-auth"
+  ],
+  "port_labels": [
+    {
+      "protocol": "tcp",
+      "port": "8080",
+      "type": "http_port_t",
+      "include": true,
+      "fleet": null
+    },
+    {
+      "protocol": "tcp",
+      "port": "9443",
+      "type": "http_port_t",
+      "include": true,
+      "fleet": null
+    },
+    {
+      "protocol": "udp",
+      "port": "5353",
+      "type": "mdns_port_t",
+      "include": false,
+      "fleet": null
+    }
+  ]
+}
