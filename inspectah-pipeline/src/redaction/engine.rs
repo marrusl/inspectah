@@ -589,6 +589,213 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
+    // Scan scheduled task commands for secrets.
+    if let Some(ref mut sched) = snapshot.scheduled_tasks {
+        // GeneratedTimerUnit.command fields (cron commands converted to timers)
+        for unit in &mut sched.generated_timer_units {
+            let findings = scan_content(&unit.command, &unit.source_path);
+            if !findings.is_empty() {
+                let mut content = unit.command.clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High) {
+                        let kind_label = finding
+                            .finding_kind
+                            .as_ref()
+                            .map(|k| format!("{:?}", k).to_lowercase())
+                            .unwrap_or_else(|| "secret".to_string());
+                        if let Some(pat) = PATTERNS
+                            .iter()
+                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                        {
+                            let matches: Vec<(usize, usize, String)> = pat
+                                .regex
+                                .find_iter(&content)
+                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                .collect();
+                            for (start, end, matched) in matches.into_iter().rev() {
+                                let token = registry.token_for(&kind_label, &matched);
+                                content.replace_range(start..end, &token);
+                            }
+                        }
+                    }
+                }
+                unit.command = content;
+                all_findings.extend(findings);
+            }
+        }
+
+        // AtJob.command fields
+        for at_job in &mut sched.at_jobs {
+            let findings = scan_content(&at_job.command, &at_job.file);
+            if !findings.is_empty() {
+                let mut content = at_job.command.clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High) {
+                        let kind_label = finding
+                            .finding_kind
+                            .as_ref()
+                            .map(|k| format!("{:?}", k).to_lowercase())
+                            .unwrap_or_else(|| "secret".to_string());
+                        if let Some(pat) = PATTERNS
+                            .iter()
+                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                        {
+                            let matches: Vec<(usize, usize, String)> = pat
+                                .regex
+                                .find_iter(&content)
+                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                .collect();
+                            for (start, end, matched) in matches.into_iter().rev() {
+                                let token = registry.token_for(&kind_label, &matched);
+                                content.replace_range(start..end, &token);
+                            }
+                        }
+                    }
+                }
+                at_job.command = content;
+                all_findings.extend(findings);
+            }
+        }
+
+        // SystemdTimer.exec_start fields
+        for timer in &mut sched.systemd_timers {
+            let source_path = if timer.path.is_empty() {
+                format!("timer:{}", timer.name)
+            } else {
+                timer.path.clone()
+            };
+            let findings = scan_content(&timer.exec_start, &source_path);
+            if !findings.is_empty() {
+                let mut content = timer.exec_start.clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High) {
+                        let kind_label = finding
+                            .finding_kind
+                            .as_ref()
+                            .map(|k| format!("{:?}", k).to_lowercase())
+                            .unwrap_or_else(|| "secret".to_string());
+                        if let Some(pat) = PATTERNS
+                            .iter()
+                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                        {
+                            let matches: Vec<(usize, usize, String)> = pat
+                                .regex
+                                .find_iter(&content)
+                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                .collect();
+                            for (start, end, matched) in matches.into_iter().rev() {
+                                let token = registry.token_for(&kind_label, &matched);
+                                content.replace_range(start..end, &token);
+                            }
+                        }
+                    }
+                }
+                timer.exec_start = content;
+                all_findings.extend(findings);
+            }
+        }
+    }
+
+    // Scan SELinux audit rules and PAM configs for secrets.
+    if let Some(ref mut selinux) = snapshot.selinux {
+        for rule in &mut selinux.audit_rules {
+            let redacted = redact_string(rule);
+            if let Cow::Owned(ref new_val) = redacted {
+                let findings = scan_content(rule, "audit_rules");
+                all_findings.extend(findings);
+                *rule = new_val.clone();
+            }
+        }
+        for pam in &mut selinux.pam_configs {
+            let redacted = redact_string(pam);
+            if let Cow::Owned(ref new_val) = redacted {
+                let findings = scan_content(pam, "pam_configs");
+                all_findings.extend(findings);
+                *pam = new_val.clone();
+            }
+        }
+    }
+
+    // Scan non-RPM software surfaces: .env file content and git remote URLs.
+    if let Some(ref mut nrs) = snapshot.non_rpm_software {
+        // .env file content (reuses ConfigFileEntry with .content field)
+        for env_file in &mut nrs.env_files {
+            let findings = scan_content(&env_file.content, &env_file.path);
+            if !findings.is_empty() {
+                let mut content = env_file.content.clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High) {
+                        let kind_label = finding
+                            .finding_kind
+                            .as_ref()
+                            .map(|k| format!("{:?}", k).to_lowercase())
+                            .unwrap_or_else(|| "secret".to_string());
+                        if let Some(pat) = PATTERNS
+                            .iter()
+                            .find(|p| format!("{:?}", p.finding_kind).to_lowercase() == kind_label)
+                        {
+                            let matches: Vec<(usize, usize, String)> = pat
+                                .regex
+                                .find_iter(&content)
+                                .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                .collect();
+                            for (start, end, matched) in matches.into_iter().rev() {
+                                let token = registry.token_for(&kind_label, &matched);
+                                content.replace_range(start..end, &token);
+                            }
+                        }
+                    }
+                }
+                env_file.content = content;
+                all_findings.extend(findings);
+            }
+        }
+
+        // Git remote URLs — scan for embedded credentials (user:pass@host)
+        for item in &mut nrs.items {
+            if !item.git_remote.is_empty() {
+                let (masked, finding) =
+                    mask_proxy_credentials(&item.git_remote, &item.path);
+                if let Some(f) = finding {
+                    item.git_remote = masked.into_owned();
+                    all_findings.push(f);
+                }
+                // Also run generic pattern scan for other secret patterns
+                let findings = scan_content(&item.git_remote, &item.path);
+                if !findings.is_empty() {
+                    let mut content = item.git_remote.clone();
+                    for finding in &findings {
+                        if finding.confidence == Some(Confidence::High) {
+                            let kind_label = finding
+                                .finding_kind
+                                .as_ref()
+                                .map(|k| format!("{:?}", k).to_lowercase())
+                                .unwrap_or_else(|| "secret".to_string());
+                            if let Some(pat) = PATTERNS
+                                .iter()
+                                .find(|p| {
+                                    format!("{:?}", p.finding_kind).to_lowercase() == kind_label
+                                })
+                            {
+                                let matches: Vec<(usize, usize, String)> = pat
+                                    .regex
+                                    .find_iter(&content)
+                                    .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+                                    .collect();
+                                for (start, end, matched) in matches.into_iter().rev() {
+                                    let token = registry.token_for(&kind_label, &matched);
+                                    content.replace_range(start..end, &token);
+                                }
+                            }
+                        }
+                    }
+                    item.git_remote = content;
+                    all_findings.extend(findings);
+                }
+            }
+        }
+    }
+
     // Scan sudoers rules for secrets via generic pattern pass.
     if let Some(ref mut users) = snapshot.users_groups {
         for rule in &mut users.sudoers_rules {
@@ -658,6 +865,32 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     }
     if let Some(ref kernelboot) = snapshot.kernel_boot {
         post_redaction_content.insert("/proc/cmdline".to_string(), kernelboot.cmdline.clone());
+    }
+    if let Some(ref sched) = snapshot.scheduled_tasks {
+        for unit in &sched.generated_timer_units {
+            post_redaction_content.insert(unit.source_path.clone(), unit.command.clone());
+        }
+        for at_job in &sched.at_jobs {
+            post_redaction_content.insert(at_job.file.clone(), at_job.command.clone());
+        }
+        for timer in &sched.systemd_timers {
+            let source_path = if timer.path.is_empty() {
+                format!("timer:{}", timer.name)
+            } else {
+                timer.path.clone()
+            };
+            post_redaction_content.insert(source_path, timer.exec_start.clone());
+        }
+    }
+    if let Some(ref nrs) = snapshot.non_rpm_software {
+        for env_file in &nrs.env_files {
+            post_redaction_content.insert(env_file.path.clone(), env_file.content.clone());
+        }
+        for item in &nrs.items {
+            if !item.git_remote.is_empty() {
+                post_redaction_content.insert(item.path.clone(), item.git_remote.clone());
+            }
+        }
     }
 
     // Convert inspector-emitted redaction hints into findings.
