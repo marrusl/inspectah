@@ -21,7 +21,7 @@ use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::scheduled::{
     AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
-use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
 use inspectah_pipeline::render::{audit, configtree, containerfile, kickstart, readme, report};
 use tempfile::TempDir;
 
@@ -620,36 +620,53 @@ fn configtree_cron_spool_not_materialized() {
 }
 
 #[test]
-fn configtree_audit_rules_not_in_config() {
-    // Audit rules owned by SELinux inspector should NOT appear in config
-    // section's file list — they are owned by SELinux
+fn configtree_audit_rules_materialized() {
+    // Audit rules from SELinux inspector ARE materialized in config tree
     let mut snap = InspectionSnapshot::new();
     snap.selinux = Some(SelinuxSection {
-        audit_rules: vec!["-w /etc/shadow -p wa -k shadow_changes".into()],
+        audit_rules: vec![CarryForwardFile {
+            path: "etc/audit/rules.d/custom-compliance.rules".into(),
+            content: "-w /etc/shadow -p wa -k shadow_changes".into(),
+        }],
         ..Default::default()
     });
-    // Verify configtree does not create audit rules from selinux section
     let dir = TempDir::new().unwrap();
     configtree::write_config_tree(&snap, dir.path()).unwrap();
+    let rule_path = dir
+        .path()
+        .join("config/etc/audit/rules.d/custom-compliance.rules");
     assert!(
-        !dir.path().join("config/etc/audit/rules.d").exists(),
-        "audit rules owned by SELinux must NOT appear in config tree"
+        rule_path.exists(),
+        "audit rules from SELinux must be materialized in config tree"
+    );
+    let content = std::fs::read_to_string(&rule_path).unwrap();
+    assert_eq!(
+        content, "-w /etc/shadow -p wa -k shadow_changes",
+        "audit rule content must be preserved"
     );
 }
 
 #[test]
-fn configtree_pam_not_in_config() {
-    // PAM configs owned by SELinux inspector should NOT appear in config
-    // section's file list — they are owned by SELinux
+fn configtree_pam_materialized() {
+    // PAM configs from SELinux inspector ARE materialized in config tree
     let mut snap = InspectionSnapshot::new();
     snap.selinux = Some(SelinuxSection {
-        pam_configs: vec!["auth required pam_faillock.so".into()],
+        pam_configs: vec![CarryForwardFile {
+            path: "etc/pam.d/custom-faillock".into(),
+            content: "auth required pam_faillock.so".into(),
+        }],
         ..Default::default()
     });
     let dir = TempDir::new().unwrap();
     configtree::write_config_tree(&snap, dir.path()).unwrap();
+    let pam_path = dir.path().join("config/etc/pam.d/custom-faillock");
     assert!(
-        !dir.path().join("config/etc/pam.d").exists(),
-        "PAM configs owned by SELinux must NOT appear in config tree"
+        pam_path.exists(),
+        "PAM configs from SELinux must be materialized in config tree"
+    );
+    let content = std::fs::read_to_string(&pam_path).unwrap();
+    assert_eq!(
+        content, "auth required pam_faillock.so",
+        "PAM config content must be preserved"
     );
 }

@@ -192,15 +192,25 @@ fn test_selinux_inspector_happy_path() {
     let has_custom_rules = section
         .audit_rules
         .iter()
-        .any(|r| r.contains("custom.rules"));
+        .any(|r| r.path.contains("custom.rules"));
     assert!(has_custom_rules, "should include custom.rules");
     let has_default_rules = section
         .audit_rules
         .iter()
-        .any(|r| r.contains("audit.rules") && !r.contains("custom"));
+        .any(|r| r.path.contains("audit.rules") && !r.path.contains("custom"));
     assert!(
         !has_default_rules,
         "should NOT include RPM-owned audit.rules"
+    );
+    // Content must be persisted
+    let custom = section
+        .audit_rules
+        .iter()
+        .find(|r| r.path.contains("custom.rules"))
+        .expect("custom.rules must exist");
+    assert!(
+        !custom.content.is_empty(),
+        "audit rule file content must be persisted"
     );
 
     // FIPS mode
@@ -214,8 +224,18 @@ fn test_selinux_inspector_happy_path() {
     let has_custom_pam = section
         .pam_configs
         .iter()
-        .any(|p| p.contains("custom-sshd"));
+        .any(|p| p.path.contains("custom-sshd"));
     assert!(has_custom_pam, "should include custom-sshd PAM config");
+    // Content must be persisted
+    let custom_pam = section
+        .pam_configs
+        .iter()
+        .find(|p| p.path.contains("custom-sshd"))
+        .expect("custom-sshd must exist");
+    assert!(
+        !custom_pam.content.is_empty(),
+        "PAM config file content must be persisted"
+    );
 }
 
 /// SELinux disabled -- minimal output (mode is Disabled, fewer fields populated).

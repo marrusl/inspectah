@@ -1196,8 +1196,15 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     if !sel.audit_rules.is_empty() {
         lines.push(format!(
-            "# {} audit rule file(s) — included in COPY config/etc/ above",
+            "# {} custom audit rule file(s) materialized under config/etc/audit/rules.d/",
             sel.audit_rules.len()
+        ));
+    }
+
+    if !sel.pam_configs.is_empty() {
+        lines.push(format!(
+            "# {} custom PAM config file(s) materialized under config/etc/pam.d/",
+            sel.pam_configs.len()
         ));
     }
 

@@ -699,19 +699,19 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // Scan SELinux audit rules and PAM configs for secrets.
     if let Some(ref mut selinux) = snapshot.selinux {
         for rule in &mut selinux.audit_rules {
-            let redacted = redact_string(rule);
+            let redacted = redact_string(&rule.content);
             if let Cow::Owned(ref new_val) = redacted {
-                let findings = scan_content(rule, "audit_rules");
+                let findings = scan_content(&rule.content, "audit_rules");
                 all_findings.extend(findings);
-                *rule = new_val.clone();
+                rule.content = new_val.clone();
             }
         }
         for pam in &mut selinux.pam_configs {
-            let redacted = redact_string(pam);
+            let redacted = redact_string(&pam.content);
             if let Cow::Owned(ref new_val) = redacted {
-                let findings = scan_content(pam, "pam_configs");
+                let findings = scan_content(&pam.content, "pam_configs");
                 all_findings.extend(findings);
-                *pam = new_val.clone();
+                pam.content = new_val.clone();
             }
         }
     }

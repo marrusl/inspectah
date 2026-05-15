@@ -4,7 +4,7 @@ use inspectah_core::traits::inspector::{
 };
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
-use inspectah_core::types::selinux::{SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
 use inspectah_core::types::warnings::Warning;
 use regex::Regex;
 use std::path::Path;
@@ -404,7 +404,7 @@ fn collect_audit_rules(
         Err(_) => return,
     };
 
-    let mut rules: Vec<String> = Vec::new();
+    let mut rules: Vec<CarryForwardFile> = Vec::new();
     for entry_name in &entries {
         let abs_path = format!("{audit_dir}/{entry_name}");
         if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
@@ -413,9 +413,10 @@ fn collect_audit_rules(
 
         let rel = format!("etc/audit/rules.d/{entry_name}");
         check_file_redaction(exec, &abs_path, hints);
-        rules.push(rel);
+        let content = exec.read_file(Path::new(&abs_path)).unwrap_or_default();
+        rules.push(CarryForwardFile { path: rel, content });
     }
-    rules.sort();
+    rules.sort_by(|a, b| a.path.cmp(&b.path));
     section.audit_rules = rules;
 }
 
@@ -454,7 +455,7 @@ fn collect_pam_configs(
         Err(_) => return,
     };
 
-    let mut configs: Vec<String> = Vec::new();
+    let mut configs: Vec<CarryForwardFile> = Vec::new();
     for entry_name in &entries {
         let abs_path = format!("{pam_dir}/{entry_name}");
         if rpm_state.is_rpm_owned(Path::new(&abs_path)) {
@@ -466,9 +467,10 @@ fn collect_pam_configs(
 
         let rel = format!("etc/pam.d/{entry_name}");
         check_file_redaction(exec, &abs_path, hints);
-        configs.push(rel);
+        let content = exec.read_file(Path::new(&abs_path)).unwrap_or_default();
+        configs.push(CarryForwardFile { path: rel, content });
     }
-    configs.sort();
+    configs.sort_by(|a, b| a.path.cmp(&b.path));
     section.pam_configs = configs;
 }
 
@@ -941,7 +943,12 @@ redis_port_t                    tcp      6380\n";
         let section = extract_section(&result);
         // Only custom-compliance.rules should be included (audit.rules is RPM-owned)
         assert_eq!(section.audit_rules.len(), 1);
-        assert!(section.audit_rules[0].contains("custom-compliance.rules"));
+        assert!(section.audit_rules[0]
+            .path
+            .contains("custom-compliance.rules"));
+        assert!(section.audit_rules[0]
+            .content
+            .contains("-w /etc/passwd -p wa -k identity"));
     }
 
     // ---- Test 13: test_audit_rules_custom_included ----
@@ -982,9 +989,18 @@ redis_port_t                    tcp      6380\n";
         let result = inspector.inspect(&ctx);
         let section = extract_section(&result);
         assert_eq!(section.audit_rules.len(), 2);
-        // Sorted
-        assert_eq!(section.audit_rules[0], "etc/audit/rules.d/custom-a.rules");
-        assert_eq!(section.audit_rules[1], "etc/audit/rules.d/custom-b.rules");
+        // Sorted by path
+        assert_eq!(
+            section.audit_rules[0].path,
+            "etc/audit/rules.d/custom-a.rules"
+        );
+        assert_eq!(
+            section.audit_rules[1].path,
+            "etc/audit/rules.d/custom-b.rules"
+        );
+        // Content persisted
+        assert!(section.audit_rules[0].content.contains("-w /etc/shadow"));
+        assert!(section.audit_rules[1].content.contains("-a always,exit"));
     }
 
     // ---- Test 14: test_pam_configs_rpm_owned_filtered ----
@@ -1018,7 +1034,10 @@ redis_port_t                    tcp      6380\n";
         let section = extract_section(&result);
         // Only custom-app should be included (sshd is RPM-owned)
         assert_eq!(section.pam_configs.len(), 1);
-        assert!(section.pam_configs[0].contains("custom-app"));
+        assert!(section.pam_configs[0].path.contains("custom-app"));
+        assert!(section.pam_configs[0]
+            .content
+            .contains("auth required pam_unix.so"));
     }
 
     // ---- Test 15: test_pam_configs_custom_included ----
@@ -1051,8 +1070,12 @@ redis_port_t                    tcp      6380\n";
         let section = extract_section(&result);
         // Both custom PAM configs included (neither RPM-owned nor excluded)
         assert_eq!(section.pam_configs.len(), 2);
-        assert_eq!(section.pam_configs[0], "etc/pam.d/custom-sshd");
-        assert_eq!(section.pam_configs[1], "etc/pam.d/myapp-auth");
+        assert_eq!(section.pam_configs[0].path, "etc/pam.d/custom-sshd");
+        assert_eq!(section.pam_configs[1].path, "etc/pam.d/myapp-auth");
+        // Content persisted
+        assert!(section.pam_configs[0]
+            .content
+            .contains("auth required pam_unix.so"));
     }
 
     // ---- Test 16: test_fips_mode_enabled ----
