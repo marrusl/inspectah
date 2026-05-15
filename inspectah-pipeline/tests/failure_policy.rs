@@ -565,8 +565,9 @@ fn redaction_state_set_after_engine() {
 // ===========================================================================
 
 /// Helper: build a MockExecutor with minimal RPM data for Wave 2 pipeline
-/// tests. Provides responses for the RPM inspector's `rpm -qa` and `rpm -Va`
-/// commands so Wave 1 completes successfully and populates RpmState.
+/// tests. Provides responses for the RPM inspector's `rpm -qa`, `rpm -Va`,
+/// and file ownership commands so Wave 1 completes successfully and
+/// populates RpmState with owned_paths.
 fn wave2_rpm_mock(exec: MockExecutor) -> MockExecutor {
     exec.with_command(
         "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
@@ -580,6 +581,14 @@ fn wave2_rpm_mock(exec: MockExecutor) -> MockExecutor {
         "rpm -Va",
         ExecResult {
             stdout: String::new(),
+            exit_code: 0,
+            ..Default::default()
+        },
+    )
+    .with_command(
+        "rpm -qa --queryformat [%{NAME}\\t%{FILENAMES}\\n]",
+        ExecResult {
+            stdout: "bash\t/etc/profile.d/bash_completion.sh\nbash\t/usr/bin/bash\n".into(),
             exit_code: 0,
             ..Default::default()
         },

@@ -278,15 +278,55 @@ fn handle_result(
 /// Populate RpmState from an RpmSection's data.
 ///
 /// Extracts installed package names, full package list, verification
-/// results, and module streams. owned_paths and path_to_package will be
-/// populated when the RPM inspector produces file ownership data.
+/// results, module streams, and file ownership. Builds `owned_paths`
+/// (filtered to `/etc`) and `path_to_package` reverse index from the
+/// file ownership data produced by the RPM inspector.
 fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut RpmState) {
     state.installed_packages = rpm.packages_added.iter().map(|p| p.name.clone()).collect();
     state.packages = rpm.packages_added.clone();
     state.verification_results = rpm.rpm_va.clone();
     state.module_streams = rpm.module_streams.clone();
-    // owned_paths and path_to_package: populated when RPM inspector
-    // produces file ownership query results (future enhancement).
+
+    // Build owned_paths and path_to_package from file ownership data.
+    // owned_paths: only /etc paths (matches Go's BuildRpmOwnedPaths filter).
+    // path_to_package: maps each /etc path to its owning package's index
+    // in state.packages.
+    //
+    // Also build a full path→package_name map (all paths, not just /etc)
+    // for RpmVaEntry.package attribution below.
+    let pkg_index: std::collections::HashMap<&str, usize> = state
+        .packages
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.name.as_str(), i))
+        .collect();
+
+    let mut path_to_name: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+
+    for entry in &rpm.file_ownership {
+        let pkg_idx = pkg_index.get(entry.package_name.as_str()).copied();
+        for path_str in &entry.paths {
+            path_to_name.insert(path_str.as_str(), entry.package_name.as_str());
+            if path_str.starts_with("/etc") {
+                let path = std::path::PathBuf::from(path_str);
+                state.owned_paths.insert(path.clone());
+                if let Some(idx) = pkg_idx {
+                    state.path_to_package.insert(path, idx);
+                }
+            }
+        }
+    }
+
+    // Annotate RpmVaEntry.package from file ownership data.
+    // rpm -Va output has paths but not package names; cross-reference
+    // against the ownership index to fill in the owning package.
+    for va in &mut state.verification_results {
+        if va.package.is_none() {
+            if let Some(&pkg_name) = path_to_name.get(va.path.as_str()) {
+                va.package = Some(pkg_name.to_string());
+            }
+        }
+    }
 }
 
 /// Classify whether an inspector belongs to Wave 2 (depends on RPM state).
@@ -934,6 +974,241 @@ mod tests {
         assert!(
             pipeline.state.snapshot.scheduled_tasks.is_some(),
             "Wave 2 inspector should succeed with populated rpm_state"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Regression: live collect path populates owned_paths from file ownership
+    // -----------------------------------------------------------------------
+
+    /// Mock Wave 2 inspector that captures the full RpmState for assertion.
+    struct OwnershipProbeInspector {
+        captured: std::sync::Arc<std::sync::Mutex<Option<RpmState>>>,
+    }
+
+    impl OwnershipProbeInspector {
+        fn new() -> (Self, std::sync::Arc<std::sync::Mutex<Option<RpmState>>>) {
+            let captured = std::sync::Arc::new(std::sync::Mutex::new(None));
+            (
+                Self {
+                    captured: captured.clone(),
+                },
+                captured,
+            )
+        }
+    }
+
+    impl Inspector for OwnershipProbeInspector {
+        fn id(&self) -> InspectorId {
+            InspectorId::ScheduledTasks
+        }
+        fn applicable_to(&self) -> &[SourceSystemKind] {
+            &[SourceSystemKind::PackageBased]
+        }
+        fn inspect(&self, ctx: &InspectionContext<'_>) -> Result<InspectorOutput, InspectorError> {
+            if let Some(rpm_state) = ctx.rpm_state {
+                *self.captured.lock().unwrap() = Some(rpm_state.clone());
+                Ok(InspectorOutput {
+                    section: SectionData::ScheduledTasks(Default::default()),
+                    warnings: vec![],
+                    redaction_hints: vec![],
+                })
+            } else {
+                Err(InspectorError::Failed {
+                    reason: "rpm_state is None".into(),
+                })
+            }
+        }
+    }
+
+    /// Build a MockExecutor with RPM data including file ownership for
+    /// end-to-end regression testing.
+    fn build_ownership_mock() -> MockExecutor {
+        let rpm_qa_output = "\
+0:bash-5.2.26-3.el9.x86_64
+0:httpd-2.4.57-5.el9.x86_64
+0:cronie-1.5.7-8.el9.x86_64
+0:pam-1.5.1-14.el9.x86_64
+";
+        // File ownership: package_name\tfilepath per line.
+        // Includes /etc paths (for owned_paths) and non-/etc (filtered out).
+        let file_ownership_output = "\
+bash\t/etc/profile.d/bash_completion.sh
+bash\t/usr/bin/bash
+httpd\t/etc/httpd/conf/httpd.conf
+httpd\t/etc/httpd/conf.d/ssl.conf
+httpd\t/usr/sbin/httpd
+cronie\t/etc/cron.d/0hourly
+cronie\t/etc/cron.daily/logrotate
+cronie\t/usr/sbin/crond
+pam\t/etc/pam.d/system-auth
+pam\t/etc/pam.d/password-auth
+pam\t/etc/security/limits.conf
+";
+        MockExecutor::new()
+            .with_command(
+                "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
+                ExecResult {
+                    stdout: rpm_qa_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qa --queryformat [%{NAME}\\t%{FILENAMES}\\n]",
+                ExecResult {
+                    stdout: file_ownership_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+    }
+
+    #[test]
+    fn test_collect_populates_owned_paths_from_file_ownership() {
+        let exec = build_ownership_mock();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+
+        let (probe, captured) = OwnershipProbeInspector::new();
+        let inspectors: Vec<Box<dyn Inspector>> =
+            vec![Box::new(RpmInspector::new()), Box::new(probe)];
+        let pipeline = collect(&source, &exec, &inspectors);
+
+        // RPM section should contain file_ownership data
+        let rpm = pipeline
+            .state
+            .snapshot
+            .rpm
+            .as_ref()
+            .expect("RPM section present");
+        assert!(
+            !rpm.file_ownership.is_empty(),
+            "file_ownership must be populated in production path"
+        );
+
+        // Wave 2 probe should have received populated RpmState
+        let rpm_state = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("OwnershipProbe must receive RpmState");
+
+        // owned_paths should contain /etc paths only
+        assert!(
+            rpm_state.is_rpm_owned(std::path::Path::new("/etc/httpd/conf/httpd.conf")),
+            "httpd config must be RPM-owned"
+        );
+        assert!(
+            rpm_state.is_rpm_owned(std::path::Path::new("/etc/cron.d/0hourly")),
+            "cronie cron file must be RPM-owned"
+        );
+        assert!(
+            rpm_state.is_rpm_owned(std::path::Path::new("/etc/pam.d/system-auth")),
+            "pam config must be RPM-owned"
+        );
+        assert!(
+            rpm_state.is_rpm_owned(std::path::Path::new("/etc/profile.d/bash_completion.sh")),
+            "bash profile script must be RPM-owned"
+        );
+
+        // Non-/etc paths should NOT be in owned_paths
+        assert!(
+            !rpm_state.is_rpm_owned(std::path::Path::new("/usr/bin/bash")),
+            "/usr paths must not be in owned_paths"
+        );
+        assert!(
+            !rpm_state.is_rpm_owned(std::path::Path::new("/usr/sbin/httpd")),
+            "/usr paths must not be in owned_paths"
+        );
+
+        // path_to_package should map /etc paths to correct package indices
+        let httpd_pkg = rpm_state
+            .package_for_path(std::path::Path::new("/etc/httpd/conf/httpd.conf"))
+            .expect("httpd config must map to a package");
+        assert_eq!(httpd_pkg.name, "httpd");
+
+        let cronie_pkg = rpm_state
+            .package_for_path(std::path::Path::new("/etc/cron.d/0hourly"))
+            .expect("cronie cron must map to a package");
+        assert_eq!(cronie_pkg.name, "cronie");
+
+        let pam_pkg = rpm_state
+            .package_for_path(std::path::Path::new("/etc/pam.d/system-auth"))
+            .expect("pam config must map to a package");
+        assert_eq!(pam_pkg.name, "pam");
+
+        // Unowned path should return None
+        assert!(rpm_state
+            .package_for_path(std::path::Path::new("/etc/custom/app.conf"))
+            .is_none());
+    }
+
+    #[test]
+    fn test_rpm_va_package_attribution_from_file_ownership() {
+        // Build mock with rpm -Va output AND file ownership data,
+        // then verify that extract_rpm_state populates RpmVaEntry.package.
+        let rpm_qa_output = "\
+0:httpd-2.4.57-5.el9.x86_64
+0:bash-5.2.26-3.el9.x86_64
+";
+        let file_ownership_output = "\
+httpd\t/etc/httpd/conf/httpd.conf
+httpd\t/usr/sbin/httpd
+bash\t/etc/profile.d/bash_completion.sh
+";
+        let exec = MockExecutor::new()
+            .with_command(
+                "rpm -qa --queryformat %{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n",
+                ExecResult {
+                    stdout: rpm_qa_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -qa --queryformat [%{NAME}\\t%{FILENAMES}\\n]",
+                ExecResult {
+                    stdout: file_ownership_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "rpm -Va",
+                ExecResult {
+                    stdout: "S.5....T.  c /etc/httpd/conf/httpd.conf\n".into(),
+                    exit_code: 1,
+                    ..Default::default()
+                },
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+
+        let (probe, captured) = OwnershipProbeInspector::new();
+        let inspectors: Vec<Box<dyn Inspector>> =
+            vec![Box::new(RpmInspector::new()), Box::new(probe)];
+        let _pipeline = collect(&source, &exec, &inspectors);
+
+        let rpm_state = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("probe must capture RpmState");
+
+        // rpm -Va entry for httpd.conf should have package attribution
+        let httpd_va = rpm_state
+            .verification_results()
+            .iter()
+            .find(|v| v.path == "/etc/httpd/conf/httpd.conf")
+            .expect("httpd.conf should be in verification results");
+        assert_eq!(
+            httpd_va.package.as_deref(),
+            Some("httpd"),
+            "RpmVaEntry.package should be populated from file ownership"
         );
     }
 }

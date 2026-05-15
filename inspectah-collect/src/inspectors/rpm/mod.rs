@@ -8,13 +8,17 @@ use inspectah_core::traits::inspector::{
     InspectionContext, Inspector, InspectorError, InspectorOutput,
 };
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
 use std::collections::HashMap;
 
 /// RPM query format string — matches Go's `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
+
+/// RPM query format for file ownership — produces `name\tpath` per owned file.
+/// The `[]` brackets iterate the FILENAMES array tag.
+const RPM_FILE_OWNERSHIP_FORMAT: &str = "[%{NAME}\\t%{FILENAMES}\\n]";
 
 struct SupplementaryData {
     repo_files: Vec<inspectah_core::types::rpm::RepoFile>,
@@ -51,6 +55,45 @@ impl RpmInspector {
     ) -> HashMap<String, PackageEntry> {
         // Phase 1: no baseline subtraction
         HashMap::new()
+    }
+
+    /// Query file ownership for all installed packages.
+    ///
+    /// Runs `rpm -qa --queryformat '[%{NAME}\t%{FILENAMES}\n]'` to produce
+    /// `package_name\tfilepath` per line. Groups results by package name
+    /// into `FileOwnershipEntry` structs. Matches Go's `BuildRpmOwnedPaths`
+    /// but retains per-package attribution for `path_to_package`.
+    fn query_file_ownership(&self, exec: &dyn Executor) -> Vec<FileOwnershipEntry> {
+        let result = exec.run("rpm", &["-qa", "--queryformat", RPM_FILE_OWNERSHIP_FORMAT]);
+        if !result.success() {
+            return Vec::new();
+        }
+
+        let mut pkg_map: HashMap<String, Vec<String>> = HashMap::new();
+        for line in result.stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some((name, path)) = line.split_once('\t') {
+                let name = name.trim();
+                let path = path.trim();
+                if !name.is_empty() && !path.is_empty() {
+                    pkg_map
+                        .entry(name.to_string())
+                        .or_default()
+                        .push(path.to_string());
+                }
+            }
+        }
+
+        pkg_map
+            .into_iter()
+            .map(|(package_name, paths)| FileOwnershipEntry {
+                package_name,
+                paths,
+            })
+            .collect()
     }
 
     fn collect_supplementary(
@@ -131,7 +174,10 @@ impl Inspector for RpmInspector {
         // 4. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
 
-        // 5. Build warnings
+        // 5. Query file ownership for Wave 2 inspectors
+        let file_ownership = self.query_file_ownership(exec);
+
+        // 6. Build warnings
         let mut warnings = Vec::new();
         let no_baseline = baseline.is_empty();
         if no_baseline {
@@ -141,8 +187,17 @@ impl Inspector for RpmInspector {
                 ..Default::default()
             });
         }
+        if file_ownership.is_empty() {
+            warnings.push(Warning {
+                inspector: "rpm".into(),
+                message: "rpm file ownership query returned no data — \
+                          RPM-owned file detection unavailable for Wave 2 inspectors"
+                    .into(),
+                ..Default::default()
+            });
+        }
 
-        // 6. Build RpmSection
+        // 7. Build RpmSection
         let section = RpmSection {
             packages_added,
             base_image_only,
@@ -151,6 +206,7 @@ impl Inspector for RpmInspector {
             gpg_keys: supp.gpg_keys,
             module_streams: supp.module_streams,
             version_locks: supp.version_locks,
+            file_ownership,
             no_baseline,
             ..Default::default()
         };
@@ -188,11 +244,30 @@ mod tests {
 (none):tzdata-2024a-1.el9.noarch
 0:gpg-pubkey-fd431d51-4ae0493b.x86_64
 ";
+        // File ownership output: package_name\tfilepath per line.
+        // Covers /etc (for owned_paths) and non-/etc (for completeness).
+        let file_ownership_output = "\
+bash\t/etc/profile.d/bash_completion.sh
+bash\t/usr/bin/bash
+httpd\t/etc/httpd/conf/httpd.conf
+httpd\t/etc/httpd/conf.d/ssl.conf
+httpd\t/usr/sbin/httpd
+vim-enhanced\t/usr/bin/vim
+tzdata\t/usr/share/zoneinfo/UTC
+";
         MockExecutor::new()
             .with_command(
                 &format!("rpm -qa --queryformat {}\n", RPM_QA_FORMAT),
                 ExecResult {
                     stdout: rpm_qa_output.into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                &format!("rpm -qa --queryformat {}", RPM_FILE_OWNERSHIP_FORMAT),
+                ExecResult {
+                    stdout: file_ownership_output.into(),
                     exit_code: 0,
                     ..Default::default()
                 },
@@ -280,6 +355,23 @@ mod tests {
             // rpm -Va collected for package-mode
             assert_eq!(rpm.rpm_va.len(), 1);
             assert_eq!(rpm.rpm_va[0].path, "/etc/httpd/conf/httpd.conf");
+
+            // File ownership collected
+            assert!(
+                !rpm.file_ownership.is_empty(),
+                "file_ownership should be populated"
+            );
+            let httpd_ownership = rpm
+                .file_ownership
+                .iter()
+                .find(|e| e.package_name == "httpd");
+            assert!(
+                httpd_ownership.is_some(),
+                "httpd should have ownership data"
+            );
+            let httpd_paths = &httpd_ownership.unwrap().paths;
+            assert!(httpd_paths.contains(&"/etc/httpd/conf/httpd.conf".to_string()));
+            assert!(httpd_paths.contains(&"/etc/httpd/conf.d/ssl.conf".to_string()));
         } else {
             panic!("expected SectionData::Rpm");
         }
