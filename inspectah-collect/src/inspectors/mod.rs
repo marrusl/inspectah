@@ -2,6 +2,7 @@ pub mod config;
 pub mod containers;
 pub mod kernelboot;
 pub mod network;
+pub mod nonrpm;
 pub mod rpm;
 pub mod scheduled;
 pub mod selinux;
