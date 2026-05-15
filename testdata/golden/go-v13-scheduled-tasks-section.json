@@ -1,83 +1,159 @@
 {
   "cron_jobs": [
     {
-      "path": "/etc/cron.d/0hourly",
-      "source": "file",
+      "path": "etc/cron.d/0hourly",
+      "source": "cron.d",
       "rpm_owned": true,
       "include": false,
       "fleet": null
     },
     {
-      "path": "/etc/cron.daily/logrotate",
-      "source": "file",
+      "path": "etc/crontab",
+      "source": "crontab",
       "rpm_owned": true,
       "include": false,
       "fleet": null
     },
     {
-      "path": "/var/spool/cron/root",
-      "source": "user_crontab",
-      "rpm_owned": false,
-      "include": true,
+      "path": "etc/cron.hourly/0anacron",
+      "source": "cron.hourly",
+      "rpm_owned": true,
+      "include": false,
       "fleet": null
     }
   ],
   "systemd_timers": [
     {
-      "name": "dnf-makecache.timer",
-      "on_calendar": "*:00/60",
+      "name": "dnf-makecache",
+      "on_calendar": "",
       "exec_start": "/usr/bin/dnf makecache --timer",
       "description": "dnf makecache --timer",
-      "source": "rpm",
-      "path": "/usr/lib/systemd/system/dnf-makecache.timer",
-      "timer_content": "[Unit]\nDescription=dnf makecache --timer\n\n[Timer]\nOnCalendar=*:00/60\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
-      "service_content": "[Unit]\nDescription=dnf makecache --timer\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/dnf makecache --timer\n"
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/dnf-makecache.timer",
+      "timer_content": "[Unit]\nDescription=dnf makecache --timer\nConditionKernelCommandLine=!rd.live.image\n# See comment in dnf-makecache.service\nConditionPathExists=!/run/ostree-booted\nWants=network-online.target\n\n[Timer]\nOnBootSec=10min\nOnUnitInactiveSec=1h\nRandomizedDelaySec=60m\nUnit=dnf-makecache.service\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=dnf makecache\n# On systems managed by either rpm-ostree/ostree, dnf is read-only;\n# while someone might theoretically want the cache updated, in practice\n# anyone who wants that could override this via a file in /etc.\nConditionPathExists=!/run/ostree-booted\n\nAfter=network-online.target\n\n[Service]\nType=oneshot\nNice=19\nIOSchedulingClass=2\nIOSchedulingPriority=7\nEnvironment=\"ABRT_IGNORE_PYTHON=1\"\nExecStart=/usr/bin/dnf makecache --timer\n"
     },
     {
-      "name": "systemd-tmpfiles-clean.timer",
+      "name": "fstrim",
+      "on_calendar": "weekly",
+      "exec_start": "/usr/sbin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose --quiet-unsupported",
+      "description": "Discard unused blocks once a week",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/fstrim.timer",
+      "timer_content": "[Unit]\nDescription=Discard unused blocks once a week\nDocumentation=man:fstrim\nConditionVirtualization=!container\nConditionPathExists=!/etc/initrd-release\n\n[Timer]\nOnCalendar=weekly\nAccuracySec=1h\nPersistent=true\nRandomizedDelaySec=6000\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=Discard unused blocks on filesystems from /etc/fstab\nDocumentation=man:fstrim(8)\nConditionVirtualization=!container\n\n[Service]\nType=oneshot\nExecStart=/usr/sbin/fstrim --listed-in /etc/fstab:/proc/self/mountinfo --verbose --quiet-unsupported\nPrivateDevices=no\nPrivateNetwork=yes\nPrivateUsers=no\nProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nMemoryDenyWriteExecute=yes\nSystemCallFilter=@default @file-system @basic-io @system-service\n"
+    },
+    {
+      "name": "fwupd-refresh",
+      "on_calendar": "*-*-* *:00:00",
+      "exec_start": "/usr/bin/fwupdmgr refresh",
+      "description": "Refresh fwupd metadata regularly",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/fwupd-refresh.timer",
+      "timer_content": "[Unit]\nDescription=Refresh fwupd metadata regularly\nConditionVirtualization=!container\n\n[Timer]\nOnCalendar=*-*-* *:00:00\nRandomizedDelaySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=Refresh fwupd metadata and update motd\nDocumentation=man:fwupdmgr(1)\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=oneshot\nCacheDirectory=fwupdmgr\nStandardError=null\nDynamicUser=yes\nRestrictAddressFamilies=AF_NETLINK AF_UNIX AF_INET AF_INET6\nSystemCallFilter=~@mount\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictRealtime=yes\nSuccessExitStatus=2\nExecStart=/usr/bin/fwupdmgr refresh\n"
+    },
+    {
+      "name": "logrotate",
       "on_calendar": "daily",
-      "exec_start": "/usr/bin/systemd-tmpfiles --clean",
+      "exec_start": "/usr/sbin/logrotate /etc/logrotate.conf",
+      "description": "Daily rotation of log files",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/logrotate.timer",
+      "timer_content": "[Unit]\nDescription=Daily rotation of log files\nDocumentation=man:logrotate(8) man:logrotate.conf(5)\n\n[Timer]\nOnCalendar=daily\nAccuracySec=1h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=Rotate log files\nDocumentation=man:logrotate(8) man:logrotate.conf(5)\nRequiresMountsFor=/var/log\nConditionACPower=true\n\n[Service]\nType=oneshot\nExecStart=/usr/sbin/logrotate /etc/logrotate.conf\n\n# performance options\nNice=19\nIOSchedulingClass=best-effort\nIOSchedulingPriority=7\n\n# hardening options\n#  details: https://www.freedesktop.org/software/systemd/man/systemd.exec.html\n#  no ProtectHome for userdir logs\n#  no PrivateNetwork for mail deliviery\n#  no NoNewPrivileges for third party rotate scripts\n#  no RestrictSUIDSGID for creating setgid directories\nLockPersonality=true\nMemoryDenyWriteExecute=true\nPrivateDevices=true\nPrivateTmp=true\nProtectClock=true\nProtectControlGroups=true\nProtectHostname=true\nProtectKernelLogs=true\nProtectKernelModules=true\nProtectKernelTunables=true\nProtectSystem=full\nRestrictNamespaces=true\nRestrictRealtime=true\n"
+    },
+    {
+      "name": "mdadm-last-resort@",
+      "on_calendar": "",
+      "exec_start": "/usr/sbin/mdadm --run /dev/%i",
+      "description": "Timer to wait for more drives before activating degraded array %I.",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/mdadm-last-resort@.timer",
+      "timer_content": "[Unit]\nDescription=Timer to wait for more drives before activating degraded array %I.\nDefaultDependencies=no\nConflicts=sys-devices-virtual-block-%i.device\n\n[Timer]\nOnActiveSec=30\n",
+      "service_content": "[Unit]\nDescription=Activate md array %I even though degraded\nDefaultDependencies=no\nConditionPathExists=!/sys/devices/virtual/block/%i/md/sync_action\nDocumentation=man:mdadm(8)\n\n[Service]\nType=oneshot\nExecStart=/usr/sbin/mdadm --run /dev/%i\n"
+    },
+    {
+      "name": "mdcheck_continue",
+      "on_calendar": "1:00:00",
+      "exec_start": "/usr/share/mdadm/mdcheck --continue --duration ${MDADM_CHECK_DURATION}",
+      "description": "MD array scrubbing - continuation",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/mdcheck_continue.timer",
+      "timer_content": "#  This file is part of mdadm.\n#\n#  mdadm is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU General Public License as published by\n#  the Free Software Foundation; either version 2 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=MD array scrubbing - continuation\n\n[Timer]\nOnCalendar= 1:00:00\n\n[Install]\nWantedBy= mdmonitor.service\n",
+      "service_content": "#  This file is part of mdadm.\n#\n#  mdadm is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU General Public License as published by\n#  the Free Software Foundation; either version 2 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=MD array scrubbing - continuation\nConditionPathExistsGlob=/var/lib/mdcheck/MD_UUID_*\nDocumentation=man:mdadm(8)\n\n[Service]\nType=simple\nEnvironment=\"MDADM_CHECK_DURATION=6 hours\"\nExecStart=/usr/share/mdadm/mdcheck --continue --duration ${MDADM_CHECK_DURATION}\n"
+    },
+    {
+      "name": "mdcheck_start",
+      "on_calendar": "Sun *-*-1..7 1:05:00",
+      "exec_start": "/usr/share/mdadm/mdcheck --duration ${MDADM_CHECK_DURATION}",
+      "description": "MD array scrubbing",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/mdcheck_start.timer",
+      "timer_content": "#  This file is part of mdadm.\n#\n#  mdadm is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU General Public License as published by\n#  the Free Software Foundation; either version 2 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=MD array scrubbing\n\n[Timer]\nOnCalendar=Sun *-*-1..7 1:05:00\n\n[Install]\nWantedBy= mdmonitor.service\nAlso= mdcheck_continue.timer\n",
+      "service_content": "#  This file is part of mdadm.\n#\n#  mdadm is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU General Public License as published by\n#  the Free Software Foundation; either version 2 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=MD array scrubbing\nWants=mdcheck_continue.timer\nDocumentation=man:mdadm(8)\n\n[Service]\nType=simple\nEnvironment=\"MDADM_CHECK_DURATION=6 hours\"\nExecStart=/usr/share/mdadm/mdcheck --duration ${MDADM_CHECK_DURATION}\n"
+    },
+    {
+      "name": "mdmonitor-oneshot",
+      "on_calendar": "2:00:00",
+      "exec_start": "/usr/sbin/mdadm --monitor --oneshot $MDADM_MONITOR_ARGS",
+      "description": "Reminder for degraded MD arrays",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/mdmonitor-oneshot.timer",
+      "timer_content": "#  This file is part of mdadm.\n#\n#  mdadm is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU General Public License as published by\n#  the Free Software Foundation; either version 2 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Reminder for degraded MD arrays\n\n[Timer]\nOnCalendar= 2:00:00\n\n[Install]\nWantedBy= mdmonitor.service\n",
+      "service_content": "#  This file is part of mdadm.\n#\n#  mdadm is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU General Public License as published by\n#  the Free Software Foundation; either version 2 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Reminder for degraded MD arrays\nDocumentation=man:mdadm(8)\n\n[Service]\nEnvironment=MDADM_MONITOR_ARGS=--scan\nEnvironmentFile=-/run/sysconfig/mdadm\nExecStartPre=-/usr/lib/mdadm/mdadm_env.sh\nExecStart=/usr/sbin/mdadm --monitor --oneshot $MDADM_MONITOR_ARGS\n"
+    },
+    {
+      "name": "podman-auto-update",
+      "on_calendar": "daily",
+      "exec_start": "/usr/bin/podman auto-update",
+      "description": "Podman auto-update timer",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/podman-auto-update.timer",
+      "timer_content": "[Unit]\nDescription=Podman auto-update timer\n\n[Timer]\nOnCalendar=daily\nRandomizedDelaySec=900\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=Podman auto-update service\nDocumentation=man:podman-auto-update(1)\nWants=network-online.target\nAfter=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/podman auto-update\nExecStartPost=/usr/bin/podman image prune -f\n\n[Install]\nWantedBy=default.target\n"
+    },
+    {
+      "name": "raid-check",
+      "on_calendar": "Sun *-*-* 01:00:00",
+      "exec_start": "/usr/sbin/raid-check",
+      "description": "Weekly RAID setup health check",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/raid-check.timer",
+      "timer_content": "[Unit]\nDescription=Weekly RAID setup health check\n\n[Timer]\nOnCalendar=Sun *-*-* 01:00:00\nPersistent=true\nAccuracySec=24h\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "[Unit]\nDescription=RAID setup health check\n\n[Service]\nType=oneshot\nExecStart=/usr/sbin/raid-check\n"
+    },
+    {
+      "name": "systemd-sysupdate-reboot",
+      "on_calendar": "4:10",
+      "exec_start": "/usr/lib/systemd/systemd-sysupdate reboot",
+      "description": "Reboot Automatically After System Update",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/systemd-sysupdate-reboot.timer",
+      "timer_content": "#  SPDX-License-Identifier: LGPL-2.1-or-later\n#\n#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU Lesser General Public License as published by\n#  the Free Software Foundation; either version 2.1 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Reboot Automatically After System Update\nDocumentation=man:systemd-sysupdate-reboot.service(8)\nConditionVirtualization=!container\n\n[Timer]\nOnCalendar=4:10\nRandomizedDelaySec=30min\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "#  SPDX-License-Identifier: LGPL-2.1-or-later\n#\n#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU Lesser General Public License as published by\n#  the Free Software Foundation; either version 2.1 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Reboot Automatically After System Update\nDocumentation=man:systemd-sysupdate-reboot.service(8)\nConditionVirtualization=!container\n\n[Service]\nType=oneshot\nExecStart=/usr/lib/systemd/systemd-sysupdate reboot\n\n[Install]\nAlso=systemd-sysupdate-reboot.timer\n"
+    },
+    {
+      "name": "systemd-sysupdate",
+      "on_calendar": "Sat",
+      "exec_start": "/usr/lib/systemd/systemd-sysupdate update",
+      "description": "Automatic System Update",
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/systemd-sysupdate.timer",
+      "timer_content": "#  SPDX-License-Identifier: LGPL-2.1-or-later\n#\n#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU Lesser General Public License as published by\n#  the Free Software Foundation; either version 2.1 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Automatic System Update\nDocumentation=man:systemd-sysupdate.service(8)\n\n# For containers we assume that the manager will handle updates. And we likely\n# can't even access our backing block device anyway.\nConditionVirtualization=!container\n\n[Timer]\n# Trigger the update 15min after boot, and then – on average – every 6h, but\n# randomly distributed in a 2h…6h interval. In addition trigger things\n# persistently once on each Saturday, to ensure that even on systems that are\n# never booted up for long we have a chance to to do the update.\nOnBootSec=15min\nOnUnitActiveSec=2h\nOnCalendar=Sat\nRandomizedDelaySec=4h\nPersistent=yes\n\n[Install]\nWantedBy=timers.target\n",
+      "service_content": "#  SPDX-License-Identifier: LGPL-2.1-or-later\n#\n#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU Lesser General Public License as published by\n#  the Free Software Foundation; either version 2.1 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Automatic System Update\nDocumentation=man:systemd-sysupdate.service(8)\nWants=network-online.target\nAfter=network-online.target\nConditionVirtualization=!container\n\n[Service]\nType=simple\nNotifyAccess=main\nExecStart=/usr/lib/systemd/systemd-sysupdate update\nCapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_MKNOD CAP_SETFCAP CAP_SYS_ADMIN CAP_SETPCAP CAP_DAC_OVERRIDE CAP_LINUX_IMMUTABLE\nNoNewPrivileges=yes\nMemoryDenyWriteExecute=yes\nProtectHostname=yes\nRestrictRealtime=yes\nRestrictNamespaces=net\nRestrictAddressFamilies=AF_UNIX AF_INET AF_INET6\nSystemCallFilter=@system-service @mount\nSystemCallErrorNumber=EPERM\nSystemCallArchitectures=native\nLockPersonality=yes\n\n[Install]\nAlso=systemd-sysupdate.timer\n"
+    },
+    {
+      "name": "systemd-tmpfiles-clean",
+      "on_calendar": "",
+      "exec_start": "systemd-tmpfiles --clean",
       "description": "Daily Cleanup of Temporary Directories",
-      "source": "rpm",
-      "path": "/usr/lib/systemd/system/systemd-tmpfiles-clean.timer",
-      "timer_content": "[Unit]\nDescription=Daily Cleanup of Temporary Directories\n\n[Timer]\nOnCalendar=daily\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
-      "service_content": "[Unit]\nDescription=Cleanup of Temporary Directories\n\n[Service]\nType=oneshot\nExecStart=/usr/bin/systemd-tmpfiles --clean\n"
+      "source": "vendor",
+      "path": "usr/lib/systemd/system/systemd-tmpfiles-clean.timer",
+      "timer_content": "#  SPDX-License-Identifier: LGPL-2.1-or-later\n#\n#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU Lesser General Public License as published by\n#  the Free Software Foundation; either version 2.1 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Daily Cleanup of Temporary Directories\nDocumentation=man:tmpfiles.d(5) man:systemd-tmpfiles(8)\nConditionPathExists=!/etc/initrd-release\n\n[Timer]\nOnBootSec=15min\nOnUnitActiveSec=1d\n",
+      "service_content": "#  SPDX-License-Identifier: LGPL-2.1-or-later\n#\n#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it\n#  under the terms of the GNU Lesser General Public License as published by\n#  the Free Software Foundation; either version 2.1 of the License, or\n#  (at your option) any later version.\n\n[Unit]\nDescription=Cleanup of Temporary Directories\nDocumentation=man:tmpfiles.d(5) man:systemd-tmpfiles(8)\n\nDefaultDependencies=no\nAfter=local-fs.target time-set.target\nConflicts=shutdown.target initrd-switch-root.target\nBefore=shutdown.target initrd-switch-root.target\n\n[Service]\nType=oneshot\nExecStart=systemd-tmpfiles --clean\nSuccessExitStatus=DATAERR\nIOSchedulingClass=idle\nLoadCredential=tmpfiles.extra\n"
     }
   ],
-  "at_jobs": [
-    {
-      "file": "a00001019e3a3c",
-      "command": "/usr/local/bin/batch-report.sh",
-      "user": "root",
-      "working_dir": "/root"
-    },
-    {
-      "file": "a00002019e4b2d",
-      "command": "echo maintenance-complete",
-      "user": "admin",
-      "working_dir": "/home/admin"
-    }
-  ],
-  "generated_timer_units": [
-    {
-      "name": "cron-root-backup.timer",
-      "timer_content": "[Unit]\nDescription=Converted from cron: root backup\n\n[Timer]\nOnCalendar=*-*-* 02:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
-      "service_content": "[Unit]\nDescription=Converted from cron: root backup\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/backup.sh\n",
-      "cron_expr": "0 2 * * *",
-      "source_path": "/var/spool/cron/root",
-      "command": "/usr/local/bin/backup.sh",
-      "include": true,
-      "fleet": null
-    },
-    {
-      "name": "cron-root-cleanup.timer",
-      "timer_content": "[Unit]\nDescription=Converted from cron: root cleanup\n\n[Timer]\nOnCalendar=Sun *-*-* 03:00:00\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n",
-      "service_content": "[Unit]\nDescription=Converted from cron: root cleanup\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/cleanup.sh\n",
-      "cron_expr": "0 3 * * 0",
-      "source_path": "/var/spool/cron/root",
-      "command": "/usr/local/bin/cleanup.sh",
-      "include": true,
-      "fleet": null
-    }
-  ]
+  "at_jobs": [],
+  "generated_timer_units": []
 }

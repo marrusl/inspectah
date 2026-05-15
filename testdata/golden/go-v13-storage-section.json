@@ -128,7 +128,7 @@
     },
     {
       "path": "var/lib/rsyslog",
-      "size_estimate": "152 bytes",
+      "size_estimate": "153 bytes",
       "recommendation": "PVC / volume mount — application data, review application needs"
     },
     {
