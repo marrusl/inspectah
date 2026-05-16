@@ -23,6 +23,7 @@ import { RepoGroupHeader } from "./RepoGroupHeader";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
 import { highestAttention } from "./attentionUtils";
+import type { ViewMode } from "./MainContent";
 
 interface GroupedItems {
   needs_review: DecisionItemKind[];
@@ -53,8 +54,13 @@ interface ToastEntry {
 }
 
 /** Collapsed summary for Tier 1 baseline-match packages. */
-function BaselineSummary({ count, items, revealItemId }: { count: number; items: DecisionItemKind[]; revealItemId?: string }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+function BaselineSummary({ count, items, revealItemId, defaultExpanded = false }: { count: number; items: DecisionItemKind[]; revealItemId?: string; defaultExpanded?: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  // Sync with defaultExpanded when viewMode changes
+  useEffect(() => {
+    setIsExpanded(defaultExpanded);
+  }, [defaultExpanded]);
 
   // Auto-expand when revealItemId matches an item in this summary
   useEffect(() => {
@@ -115,8 +121,13 @@ function BaselineSummary({ count, items, revealItemId }: { count: number; items:
 }
 
 /** Collapsed summary for Tier 1 package-managed configs (config_default / config_baseline_match). */
-function ConfigManagedSummary({ count, items, revealItemId }: { count: number; items: DecisionItemKind[]; revealItemId?: string }) {
-  const [isExpanded, setIsExpanded] = useState(false);
+function ConfigManagedSummary({ count, items, revealItemId, defaultExpanded = false }: { count: number; items: DecisionItemKind[]; revealItemId?: string; defaultExpanded?: boolean }) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+
+  // Sync with defaultExpanded when viewMode changes
+  useEffect(() => {
+    setIsExpanded(defaultExpanded);
+  }, [defaultExpanded]);
 
   // Auto-expand when revealItemId matches an item in this summary
   useEffect(() => {
@@ -188,6 +199,8 @@ export interface DecisionListProps {
   repoGroups?: RepoGroupInfo[];
   /** When set, auto-expands any collapsed summary containing this item ID. */
   revealItemId?: string;
+  /** Controls whether Tier 1 summaries start expanded ("full") or collapsed ("decisions"). */
+  viewMode?: ViewMode;
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;
   /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
@@ -200,6 +213,7 @@ export function DecisionList({
   filterText = "",
   repoGroups = [],
   revealItemId,
+  viewMode = "decisions",
   onViewUpdate,
   onMutationError,
   onViewedChange,
@@ -414,10 +428,10 @@ export function DecisionList({
             return (
               <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
                 {baselineItems.length > 0 && (
-                  <BaselineSummary count={baselineItems.length} items={baselineItems} revealItemId={revealItemId} />
+                  <BaselineSummary count={baselineItems.length} items={baselineItems} revealItemId={revealItemId} defaultExpanded={viewMode === "full"} />
                 )}
                 {configManagedItems.length > 0 && (
-                  <ConfigManagedSummary count={configManagedItems.length} items={configManagedItems} revealItemId={revealItemId} />
+                  <ConfigManagedSummary count={configManagedItems.length} items={configManagedItems} revealItemId={revealItemId} defaultExpanded={viewMode === "full"} />
                 )}
                 {otherRoutine.map((item) => {
                   runningRowIndex++;
