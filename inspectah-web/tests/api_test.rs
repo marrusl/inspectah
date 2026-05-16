@@ -119,14 +119,14 @@ async fn apply_valid_op() {
         &app,
         "/api/op",
         serde_json::json!({
-            "op": "ExcludePackage",
+            "op": "IncludePackage",
             "target": {"name": "httpd", "arch": "x86_64"}
         }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["generation"], 1);
-    assert_eq!(json["stats"]["excluded_packages"], 1);
+    assert_eq!(json["stats"]["included_packages"], 1);
 }
 
 #[tokio::test]
