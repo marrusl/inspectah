@@ -377,6 +377,7 @@ These items build on the fixed triage foundation and should be tracked for futur
 5. **Diff view** — Side-by-side "source system" vs "target Containerfile" for a migration overview.
 6. **Fleet normalization** — `normalize_package_defaults` supports single-host; fleet aggregate sessions need cross-host consensus logic.
 7. **Automount/static-route config exceptions** — Specialized config-file handling for automount entries and static network routes. Deferred from Phase 5 scope.
+8. **Base image selection and cross-distro conversion** — The Containerfile currently hardcodes `FROM registry.redhat.io/rhel9/rhel-bootc:9.4` regardless of the scanned host's actual OS. Three problems: (a) The target base image must match the host OS — CentOS Stream 9 hosts need a CentOS 9 bootc image, not RHEL. Supported targets: RHEL 9.6+, RHEL 10, CentOS Stream 9, Fedora (check Go version for exact minimum). (b) The scan should pull or reference the target base image to generate `baseline_package_names` and baseline config data — without this, baseline comparison is only as accurate as whatever static list is available. (c) A `--base-image` CLI override flag is needed to facilitate cross-distro conversions (e.g., CentOS→RHEL, Fedora→RHEL). This is a significant workstream touching the scan phase, CLI, and Containerfile renderer — needs its own spec.
 
 ## Files Changed
 
