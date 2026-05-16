@@ -363,7 +363,7 @@ impl RefineSession {
 /// Preview/export fidelity: both paths use `render_containerfile(snap,
 /// Some(&materialized_roots))` with the same materialized root set, so
 /// the exported Containerfile is byte-identical to what the preview shows.
-fn render_refine_export(
+pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
 ) -> Result<(), RefineError> {
