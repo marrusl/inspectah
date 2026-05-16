@@ -2,6 +2,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::redaction::{RedactionHint, RedactionState, Confidence};
+use inspectah_refine::attention::compute_config_attention;
 use inspectah_refine::types::{AttentionLevel, AttentionReason};
 
 // ---------------------------------------------------------------------------
@@ -167,7 +168,24 @@ fn config_rpm_default_gets_routine() {
 }
 
 #[test]
-fn sensitive_path_adds_extra_tag() {
+fn sensitive_path_adds_extra_tag_for_tier2() {
+    // Tier 2 (Unowned) at a sensitive path -> promoted with SensitivePath tag
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/ssh/custom_config".into(),
+            kind: ConfigFileKind::Unowned,
+            include: true, ..Default::default()
+        }],
+    });
+    let configs = inspectah_refine::attention::compute_config_attention(&snap);
+    assert_eq!(configs[0].attention.len(), 2);
+    assert!(configs[0].attention.iter().any(|t| t.reason == AttentionReason::SensitivePath));
+}
+
+#[test]
+fn sensitive_path_no_extra_tag_for_tier3() {
+    // Tier 3 (RpmOwnedModified) at a sensitive path -> NOT promoted (already NeedsReview)
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
@@ -177,8 +195,8 @@ fn sensitive_path_adds_extra_tag() {
         }],
     });
     let configs = inspectah_refine::attention::compute_config_attention(&snap);
-    assert_eq!(configs[0].attention.len(), 2);
-    assert!(configs[0].attention.iter().any(|t| t.reason == AttentionReason::SensitivePath));
+    assert_eq!(configs[0].attention.len(), 1);
+    assert!(!configs[0].attention.iter().any(|t| t.reason == AttentionReason::SensitivePath));
 }
 
 #[test]
@@ -242,4 +260,69 @@ fn fully_redacted_snapshot_no_hint_tags() {
         configs[0].attention.iter().all(|t| t.reason != AttentionReason::Custom("unresolved redaction hint".into())),
         "FullyRedacted snapshot must not produce hint attention tags"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Helper: build a snapshot with one config file entry
+// ---------------------------------------------------------------------------
+fn make_snap_with_config(path: &str, kind: ConfigFileKind) -> InspectionSnapshot {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: path.into(),
+            kind,
+            include: true,
+            ..Default::default()
+        }],
+    });
+    snap
+}
+
+// ---------------------------------------------------------------------------
+// Config classification matrix tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_config_rpm_owned_default_is_tier1() {
+    let snap = make_snap_with_config("/etc/httpd/conf/httpd.conf", ConfigFileKind::RpmOwnedDefault);
+    let configs = compute_config_attention(&snap);
+    assert_eq!(configs[0].attention[0].level, AttentionLevel::Routine);
+    assert_eq!(configs[0].attention[0].reason, AttentionReason::ConfigDefault);
+}
+
+#[test]
+fn test_config_baseline_match_is_tier1() {
+    let snap = make_snap_with_config("/etc/sysconfig/network", ConfigFileKind::BaselineMatch);
+    let configs = compute_config_attention(&snap);
+    assert_eq!(configs[0].attention[0].level, AttentionLevel::Routine);
+    assert_eq!(configs[0].attention[0].reason, AttentionReason::ConfigBaselineMatch);
+}
+
+#[test]
+fn test_config_unowned_is_tier2() {
+    let snap = make_snap_with_config("/etc/custom.conf", ConfigFileKind::Unowned);
+    let configs = compute_config_attention(&snap);
+    assert_eq!(configs[0].attention[0].level, AttentionLevel::Informational);
+    assert_eq!(configs[0].attention[0].reason, AttentionReason::ConfigUnowned);
+}
+
+#[test]
+fn test_config_rpm_owned_modified_is_tier3() {
+    let snap = make_snap_with_config("/etc/ssh/sshd_config", ConfigFileKind::RpmOwnedModified);
+    let configs = compute_config_attention(&snap);
+    assert_eq!(configs[0].attention[0].level, AttentionLevel::NeedsReview);
+    assert_eq!(configs[0].attention[0].reason, AttentionReason::ConfigModified);
+}
+
+#[test]
+fn test_config_sensitive_path_promotes_tier2_only() {
+    // Tier 2 (Unowned) at a sensitive path -> promoted to Tier 3
+    let snap = make_snap_with_config("/etc/ssh/custom_keys", ConfigFileKind::Unowned);
+    let configs = compute_config_attention(&snap);
+    assert!(configs[0].attention.iter().any(|t| t.reason == AttentionReason::SensitivePath));
+
+    // Tier 1 (RpmOwnedDefault) at a sensitive path -> NOT promoted
+    let snap2 = make_snap_with_config("/etc/pki/tls/cert.pem", ConfigFileKind::RpmOwnedDefault);
+    let configs2 = compute_config_attention(&snap2);
+    assert!(!configs2[0].attention.iter().any(|t| t.reason == AttentionReason::SensitivePath));
 }
