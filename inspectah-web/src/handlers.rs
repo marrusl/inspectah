@@ -35,7 +35,13 @@ pub async fn apply_op(
 
 pub async fn undo(
     State(state): State<AppState>,
+    body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
+    // Require JSON body to make this a non-simple request (triggers CORS preflight)
+    let _: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| AppError(inspectah_refine::types::RefineError::BadRequest(
+            "request body must be JSON (use {})".into()
+        )))?;
     let mut session = state.lock().unwrap();
     session.undo().map_err(AppError)?;
     Ok(Json(serde_json::to_value(session.view()).unwrap()))
@@ -43,7 +49,13 @@ pub async fn undo(
 
 pub async fn redo(
     State(state): State<AppState>,
+    body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
+    // Require JSON body to make this a non-simple request (triggers CORS preflight)
+    let _: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| AppError(inspectah_refine::types::RefineError::BadRequest(
+            "request body must be JSON (use {})".into()
+        )))?;
     let mut session = state.lock().unwrap();
     session.redo().map_err(AppError)?;
     Ok(Json(serde_json::to_value(session.view()).unwrap()))
