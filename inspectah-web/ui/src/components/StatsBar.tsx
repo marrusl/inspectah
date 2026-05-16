@@ -11,6 +11,8 @@ import type { RefineStats } from "../api/types";
 
 export interface StatsBarProps {
   stats: RefineStats | null;
+  /** Number of NeedsReview items the user has viewed/triaged. */
+  viewedNeedsReviewCount?: number;
   onUndo: () => void;
   onRedo: () => void;
   onExport: () => void;
@@ -25,18 +27,17 @@ function stat(value: number | null | undefined, fallback = "-"): string {
 
 export function StatsBar({
   stats,
+  viewedNeedsReviewCount = 0,
   onUndo,
   onRedo,
   onExport,
   isPending,
   hamburger,
 }: StatsBarProps) {
-  const remaining = stats
-    ? stat(stats.needs_review_count)
+  const needsReviewTotal = stats?.needs_review_count ?? null;
+  const remaining = needsReviewTotal != null
+    ? String(Math.max(0, needsReviewTotal - viewedNeedsReviewCount))
     : "-";
-  const totalDecisions = stats
-    ? stats.total_packages + stats.total_configs
-    : null;
   return (
     <Toolbar className="inspectah-statsbar" isSticky>
       <ToolbarContent>
@@ -61,9 +62,14 @@ export function StatsBar({
           <ToolbarItem>
             <Content component="small">
               <strong>Triage:</strong>{" "}
-              {remaining} of{" "}
-              {totalDecisions != null ? String(totalDecisions) : "-"}{" "}
-              remaining
+              {needsReviewTotal != null && needsReviewTotal > 0 && viewedNeedsReviewCount >= needsReviewTotal
+                ? "All items have been triaged"
+                : <>
+                    {remaining} of{" "}
+                    {needsReviewTotal != null ? String(needsReviewTotal) : "-"}{" "}
+                    to review
+                  </>
+              }
             </Content>
           </ToolbarItem>
         </ToolbarGroup>

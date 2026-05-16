@@ -173,10 +173,49 @@ impl RefineSession {
         self.project_snapshot()
     }
 
+    /// Valid section prefixes for viewed IDs.
+    const VALID_SECTIONS: &'static [&'static str] = &[
+        "packages",
+        "configs",
+        "services",
+        "containers",
+        "users_groups",
+        "network",
+        "storage",
+        "scheduled_tasks",
+        "non_rpm_software",
+        "kernel_boot",
+        "selinux",
+    ];
+
+    /// Validate that a viewed ID matches the `section:item_id` format.
+    fn validate_viewed_id(id: &str) -> Result<(), RefineError> {
+        let Some((section, item_id)) = id.split_once(':') else {
+            return Err(RefineError::BadRequest(format!(
+                "invalid viewed ID format: expected 'section:item_id', got '{id}'"
+            )));
+        };
+        if item_id.is_empty() {
+            return Err(RefineError::BadRequest(format!(
+                "invalid viewed ID: item_id is empty in '{id}'"
+            )));
+        }
+        if !Self::VALID_SECTIONS.contains(&section) {
+            return Err(RefineError::BadRequest(format!(
+                "invalid viewed ID section '{section}': must be one of {:?}",
+                Self::VALID_SECTIONS
+            )));
+        }
+        Ok(())
+    }
+
     /// Mark a context item as viewed by the user.
     /// `id` format: "section:item_id" (e.g., "packages:httpd.x86_64").
-    pub fn mark_viewed(&mut self, id: &str) {
+    /// Returns an error if the ID format is invalid.
+    pub fn mark_viewed(&mut self, id: &str) -> Result<(), RefineError> {
+        Self::validate_viewed_id(id)?;
         self.viewed.insert(id.to_string());
+        Ok(())
     }
 
     /// Check whether a context item has been viewed.

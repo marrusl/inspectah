@@ -235,7 +235,7 @@ pub async fn mark_viewed(
         )))
     })?;
     let mut session = state.session.lock().unwrap();
-    session.mark_viewed(&req.id);
+    session.mark_viewed(&req.id).map_err(AppError)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -321,3 +321,64 @@ fn stale_generation_export_rejected() {
         })
     ));
 }
+
+// -- Viewed ID validation tests ---
+
+#[test]
+fn mark_viewed_accepts_valid_packages_id() {
+    let mut session = RefineSession::new(test_snapshot());
+    assert!(session.mark_viewed("packages:httpd.x86_64").is_ok());
+    assert!(session.is_viewed("packages:httpd.x86_64"));
+}
+
+#[test]
+fn mark_viewed_accepts_valid_configs_id() {
+    let mut session = RefineSession::new(test_snapshot());
+    assert!(session.mark_viewed("configs:/etc/httpd/conf/httpd.conf").is_ok());
+    assert!(session.is_viewed("configs:/etc/httpd/conf/httpd.conf"));
+}
+
+#[test]
+fn mark_viewed_accepts_all_valid_sections() {
+    let mut session = RefineSession::new(test_snapshot());
+    let sections = [
+        "packages", "configs", "services", "containers",
+        "users_groups", "network", "storage", "scheduled_tasks",
+        "non_rpm_software", "kernel_boot", "selinux",
+    ];
+    for section in sections {
+        let id = format!("{section}:test_item");
+        assert!(
+            session.mark_viewed(&id).is_ok(),
+            "section '{section}' should be valid"
+        );
+    }
+}
+
+#[test]
+fn mark_viewed_rejects_missing_colon() {
+    let mut session = RefineSession::new(test_snapshot());
+    let result = session.mark_viewed("packages-httpd.x86_64");
+    assert!(matches!(result, Err(RefineError::BadRequest(_))));
+}
+
+#[test]
+fn mark_viewed_rejects_empty_item_id() {
+    let mut session = RefineSession::new(test_snapshot());
+    let result = session.mark_viewed("packages:");
+    assert!(matches!(result, Err(RefineError::BadRequest(_))));
+}
+
+#[test]
+fn mark_viewed_rejects_invalid_section() {
+    let mut session = RefineSession::new(test_snapshot());
+    let result = session.mark_viewed("pkg:httpd.x86_64");
+    assert!(matches!(result, Err(RefineError::BadRequest(_))));
+}
+
+#[test]
+fn mark_viewed_rejects_cfg_prefix() {
+    let mut session = RefineSession::new(test_snapshot());
+    let result = session.mark_viewed("cfg:/etc/httpd/conf/httpd.conf");
+    assert!(matches!(result, Err(RefineError::BadRequest(_))));
+}
