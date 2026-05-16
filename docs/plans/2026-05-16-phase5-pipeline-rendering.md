@@ -4,30 +4,37 @@
 
 **Goal:** Replace the flat NeedsReview attention model with baseline-aware three-tier classification, repo grouping with bulk actions, and Containerfile rendering fixes — reducing triage surface from ~734 to ~50-80 items.
 
-**Architecture:** Two-pass classify-then-normalize in `inspectah-refine`, with `RepoIndex` for repo identity/cascade. Normalization materializes at session construction time into authoritative snapshot state. Pipeline fixes in `inspectah-pipeline`. Tiered UI in `inspectah-web`.
+**Architecture:** Two-pass classify-then-normalize in `inspectah-refine`, with `RepoIndex` for repo identity/cascade. Normalization materializes at session construction time into authoritative snapshot state. Repo cascade lives in the projection path (`project_snapshot()`), not in view-only recomputation. Pipeline fixes in `inspectah-pipeline`. Tiered UI in `inspectah-web`.
 
 **Tech Stack:** Rust (inspectah-core, inspectah-refine, inspectah-pipeline, inspectah-web), React 19 + Vite + PatternFly 6 (web UI), Cargo test + Vitest + Playwright (testing)
 
 **Spec:** `docs/specs/proposed/2026-05-16-phase5-pipeline-rendering-design.md` (approved after 3 review rounds)
 
 **Ownership:**
-- **Tang:** Tasks 1-10 (all Rust — types, attention, normalize, repo index, session, containerfile, web handlers)
-- **Kit:** Tasks 11-17 (all React/TypeScript — layout, tier cards, repo grouping, config grouping, keyboard, responsive)
-- **Integration:** Task 18 (E2E smoke test)
+- **Tang:** Tasks 1-12 (all Rust — types, attention, normalize, repo index, session projection, cascade, view filtering, containerfile, source_repo, API contract, TS mirror)
+- **Kit:** Tasks 13-19 (all React/TypeScript — layout, tier cards, repo grouping, config grouping, search auto-reveal, keyboard/responsive, E2E)
 
-**Dependency chain:** Tasks 1-3 are foundational (types + classify). Task 4 (RepoIndex) depends on 1. Task 5 (normalize) depends on 2-3. Task 6 (ExcludeRepo) depends on 4-5. Tasks 7-10 depend on 1-6. Kit's tasks 11a-d (layout CSS) are independent. Kit's tasks 12-17 are blocked on Tang's pipeline landing.
+**Hard gates:**
+- Kit Tasks 14-18 are blocked on Tang Tasks 1-11 landing (pipeline + API contract)
+- Kit Task 13 (layout CSS) is independent — can ship immediately
+- Task 8 (source_repo proof) must complete with a passing test on a real CentOS Stream 9 tarball before Tang proceeds to Task 10 (API contract) or Kit proceeds to repo grouping tasks
+
+**Session state model (critical — read before implementing Tasks 6-7):**
+- `snapshot()` → the original normalized baseline. Does NOT change after construction.
+- `project_snapshot()` → replays ops from the undo/redo stack onto a clone of `snapshot()`. This is the current truth for rendering.
+- `snapshot_projected()` → public accessor calling `project_snapshot()`.
+- `recompute_view()` → calls `project_snapshot()`, then `compute_*_attention()`, then renders Containerfile preview, then caches as `RefinedView`.
+- **Repo cascade ops must live in `project_snapshot()`**, not in `recompute_view()`. Tests assert via `session.view()` or `session.snapshot_projected()`, never via `session.snapshot()` for post-op state.
 
 **Build/test commands:**
 ```bash
 export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"
-# Rust tests
 cargo test -p inspectah-core
 cargo test -p inspectah-refine
 cargo test -p inspectah-pipeline
 cargo test -p inspectah-web
-# UI tests
 cd inspectah-web/ui && npm test
-cd inspectah-web/ui && npx playwright test
+# E2E requires running server — see Task 19
 ```
 
 ---
@@ -89,30 +96,25 @@ In `inspectah-refine/src/types.rs`, replace the current `AttentionReason` enum:
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionReason {
-    // Package reasons
     PackageBaselineMatch,
     PackageUserAdded,
     PackageVersionChanged,
     PackageProvenanceUnavailable,
     PackageLocalInstall,
     PackageNoRepoSource,
-    // Config reasons
     ConfigDefault,
     ConfigBaselineMatch,
     ConfigModified,
     ConfigUnowned,
     ConfigOrphaned,
-    // Cross-cutting
     SensitivePath,
     Custom(String),
 }
 ```
 
-This replaces `PackageNotInBaseline`, `PackageStateChanged`, `PackageNoRepo`. Old names are removed — the attention module is being rewritten so no migration needed.
-
 - [ ] **Step 5: Add `RepoProvenance` enum**
 
-In `inspectah-refine/src/types.rs`, add:
+In `inspectah-refine/src/types.rs`:
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -125,8 +127,6 @@ pub enum RepoProvenance {
 ```
 
 - [ ] **Step 6: Add `ExcludeRepo` / `IncludeRepo` to `RefinementOp`**
-
-In `inspectah-refine/src/types.rs`, extend the enum:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,9 +141,7 @@ pub enum RefinementOp {
 }
 ```
 
-- [ ] **Step 7: Extend `ChangesSummary` for repo tracking**
-
-In `inspectah-refine/src/types.rs`:
+- [ ] **Step 7: Extend `ChangesSummary` and `RefineStats`**
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,13 +153,7 @@ pub struct ChangesSummary {
     pub repos_excluded: Vec<String>,
     pub is_dirty: bool,
 }
-```
 
-- [ ] **Step 8: Update `RefineStats` for config count semantics**
-
-In `inspectah-refine/src/types.rs`, replace `RefineStats`:
-
-```rust
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefineStats {
     pub total_packages: usize,
@@ -175,14 +167,15 @@ pub struct RefineStats {
     pub ops_applied: usize,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub baseline_available: bool,
 }
 ```
 
-`package_managed_configs` counts Tier 1 configs with `include = false` from normalization — distinct from operator-excluded configs.
+`baseline_available` signals to the UI whether baseline data was present at import time. Kit uses this for the provenance completeness banner.
 
-- [ ] **Step 9: Write serde round-trip tests for new variants**
+- [ ] **Step 8: Write serde round-trip tests for new variants**
 
-In `inspectah-refine/tests/serde_test.rs`, add:
+In `inspectah-refine/tests/serde_test.rs`:
 
 ```rust
 #[test]
@@ -221,16 +214,16 @@ fn test_repo_provenance_roundtrip() {
 }
 ```
 
-- [ ] **Step 10: Fix compilation errors from renamed reasons**
+- [ ] **Step 9: Fix compilation from renamed reasons**
 
-The attention module (`attention.rs`) uses old reason names. It will be rewritten in Task 2, but it needs to compile now. Temporarily map old names to new ones in `attention.rs` to keep the build green. (Task 2 replaces the entire function body.)
+Update `attention.rs` to compile with new reason names (temporary — Task 2 rewrites the function bodies).
 
-- [ ] **Step 11: Run all tests**
+- [ ] **Step 10: Run all tests**
 
 Run: `cargo test -p inspectah-core && cargo test -p inspectah-refine`
-Expected: All existing tests pass. New serde tests pass.
+Expected: All PASS.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add inspectah-core/src/types/config.rs inspectah-refine/src/types.rs inspectah-refine/tests/serde_test.rs inspectah-refine/src/attention.rs
@@ -286,7 +279,6 @@ fn test_added_baseline_match_is_tier1() {
         Some(vec!["glibc".into()]),
     );
     let pkgs = compute_package_attention(&snap);
-    assert_eq!(pkgs.len(), 1);
     assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
 }
@@ -315,9 +307,7 @@ fn test_added_not_in_baseline_empty_repo_is_tier3() {
 
 #[test]
 fn test_added_no_baseline_known_repo_is_provenance_unavailable() {
-    let snap = make_snap_with_package(
-        "httpd", PackageState::Added, "appstream", None,
-    );
+    let snap = make_snap_with_package("httpd", PackageState::Added, "appstream", None);
     let pkgs = compute_package_attention(&snap);
     assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Informational);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageProvenanceUnavailable);
@@ -325,9 +315,7 @@ fn test_added_no_baseline_known_repo_is_provenance_unavailable() {
 
 #[test]
 fn test_added_no_baseline_empty_repo_is_tier3() {
-    let snap = make_snap_with_package(
-        "mystery", PackageState::Added, "", None,
-    );
+    let snap = make_snap_with_package("mystery", PackageState::Added, "", None);
     let pkgs = compute_package_attention(&snap);
     assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
@@ -372,9 +360,7 @@ fn test_local_install_always_tier3() {
 #[test]
 fn test_no_repo_always_tier3() {
     for baseline in [Some(vec!["glibc".into()]), None] {
-        let snap = make_snap_with_package(
-            "orphan", PackageState::NoRepo, "", baseline,
-        );
+        let snap = make_snap_with_package("orphan", PackageState::NoRepo, "", baseline);
         let pkgs = compute_package_attention(&snap);
         assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
         assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
@@ -385,7 +371,7 @@ fn test_no_repo_always_tier3() {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p inspectah-refine test_added_baseline`
-Expected: FAIL — current implementation doesn't check baseline.
+Expected: FAIL
 
 - [ ] **Step 3: Rewrite `compute_package_attention()`**
 
@@ -406,9 +392,6 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
             let tag = classify_package(entry, baseline);
             let mut tags = vec![tag];
 
-            // Sensitive path overlay: promote Tier 2 → Tier 3.
-            // Tier 1 only promoted if baseline is absent (can't verify
-            // the sensitive file is an expected default).
             if is_sensitive_path(&entry.name) {
                 let primary_level = tags[0].level;
                 let should_promote = match primary_level {
@@ -431,7 +414,6 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
 }
 
 fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> AttentionTag {
-    // LocalInstall and NoRepo are always Tier 3, regardless of baseline/repo
     match entry.state {
         PackageState::LocalInstall => {
             return AttentionTag {
@@ -450,9 +432,7 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
         _ => {}
     }
 
-    // Empty source_repo with no baseline = Tier 3
-    let has_repo = !entry.source_repo.is_empty();
-    if !has_repo {
+    if entry.source_repo.is_empty() {
         return AttentionTag {
             level: AttentionLevel::NeedsReview,
             reason: AttentionReason::PackageNoRepoSource,
@@ -460,10 +440,8 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
         };
     }
 
-    // Baseline-aware classification for Added and Modified
     match baseline {
         Some(names) if names.iter().any(|n| n == &entry.name) => {
-            // In baseline → Tier 1
             AttentionTag {
                 level: AttentionLevel::Routine,
                 reason: AttentionReason::PackageBaselineMatch,
@@ -471,19 +449,13 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
             }
         }
         Some(_) => {
-            // Baseline present, not in baseline, repo known → Tier 2
             let reason = match entry.state {
                 PackageState::Modified => AttentionReason::PackageVersionChanged,
                 _ => AttentionReason::PackageUserAdded,
             };
-            AttentionTag {
-                level: AttentionLevel::Informational,
-                reason,
-                detail: None,
-            }
+            AttentionTag { level: AttentionLevel::Informational, reason, detail: None }
         }
         None => {
-            // Baseline missing, repo known → Tier 2 with degraded provenance
             AttentionTag {
                 level: AttentionLevel::Informational,
                 reason: AttentionReason::PackageProvenanceUnavailable,
@@ -494,7 +466,7 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
 }
 ```
 
-- [ ] **Step 4: Run package classification tests**
+- [ ] **Step 4: Run all package classification tests**
 
 Run: `cargo test -p inspectah-refine -- test_added test_modified test_local test_no_repo`
 Expected: All PASS.
@@ -566,12 +538,10 @@ fn test_config_rpm_owned_modified_is_tier3() {
 
 #[test]
 fn test_config_sensitive_path_promotes_tier2_only() {
-    // Tier 2 (Unowned) at a sensitive path → promoted to Tier 3
     let snap = make_snap_with_config("/etc/ssh/custom_keys", ConfigFileKind::Unowned);
     let configs = compute_config_attention(&snap);
     assert!(configs[0].attention.iter().any(|t| t.reason == AttentionReason::SensitivePath));
 
-    // Tier 1 (RpmOwnedDefault) at a sensitive path → NOT promoted
     let snap2 = make_snap_with_config("/etc/pki/tls/cert.pem", ConfigFileKind::RpmOwnedDefault);
     let configs2 = compute_config_attention(&snap2);
     assert!(!configs2[0].attention.iter().any(|t| t.reason == AttentionReason::SensitivePath));
@@ -581,11 +551,9 @@ fn test_config_sensitive_path_promotes_tier2_only() {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p inspectah-refine test_config_`
-Expected: FAIL — old classification.
+Expected: FAIL
 
 - [ ] **Step 3: Rewrite `compute_config_attention()`**
-
-Replace the function body in `inspectah-refine/src/attention.rs`:
 
 ```rust
 pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {
@@ -626,9 +594,6 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
             };
 
             let mut tags = vec![tag];
-
-            // Sensitive path overlay: promote Tier 2 → Tier 3.
-            // Tier 1 is NOT promoted (base image ships these files).
             if is_sensitive_path(&entry.path) && tags[0].level == AttentionLevel::Informational {
                 tags.push(AttentionTag {
                     level: AttentionLevel::NeedsReview,
@@ -641,7 +606,6 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
         })
         .collect();
 
-    // Surface unresolved redaction hints as NeedsReview
     if let Some(RedactionState::PartiallyRedacted { ref unresolved_hints, .. }) = snap.redaction_state {
         for hint in unresolved_hints {
             if let Some(cfg) = configs.iter_mut().find(|c| c.entry.path == hint.path) {
@@ -658,7 +622,7 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
 }
 ```
 
-- [ ] **Step 4: Run config classification tests**
+- [ ] **Step 4: Run config tests**
 
 Run: `cargo test -p inspectah-refine test_config_`
 Expected: All PASS.
@@ -666,7 +630,7 @@ Expected: All PASS.
 - [ ] **Step 5: Run full test suite**
 
 Run: `cargo test -p inspectah-refine`
-Expected: All PASS (existing tests may need attention reason updates).
+Expected: All PASS.
 
 - [ ] **Step 6: Commit**
 
@@ -686,7 +650,7 @@ git commit -m "feat(refine): config classification with BaselineMatch, intention
 
 - [ ] **Step 1: Write failing tests for RepoIndex**
 
-Create `inspectah-refine/tests/repo_index_test.rs`:
+Create `inspectah-refine/tests/repo_index_test.rs`. This file defines the shared `make_snap_with_repos()` helper that later tasks will also need. To share across integration test files, extract into a shared module later (Task 7), or inline in each test file.
 
 ```rust
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -694,53 +658,41 @@ use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSectio
 use inspectah_refine::repo_index::RepoIndex;
 use inspectah_refine::types::RepoProvenance;
 
-fn make_snap_with_repos() -> InspectionSnapshot {
+pub fn make_snap_with_repos() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
             PackageEntry {
-                name: "httpd".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                source_repo: "appstream".into(),
-                include: true,
-                ..Default::default()
+                name: "httpd".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: true, ..Default::default()
             },
             PackageEntry {
-                name: "epel-release".into(),
-                arch: "noarch".into(),
-                state: PackageState::Added,
-                source_repo: "epel".into(),
-                include: true,
-                ..Default::default()
+                name: "epel-release".into(), arch: "noarch".into(),
+                state: PackageState::Added, source_repo: "epel".into(),
+                include: true, ..Default::default()
             },
         ],
         repo_files: vec![
             RepoFile {
                 path: "/etc/yum.repos.d/centos.repo".into(),
-                content: "[baseos]\nname=CentOS Stream 9 - BaseOS\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n\n[appstream]\nname=CentOS Stream 9 - AppStream\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n".into(),
-                include: true,
-                ..Default::default()
+                content: "[baseos]\nname=CentOS BaseOS\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n\n[appstream]\nname=CentOS AppStream\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n".into(),
+                include: true, ..Default::default()
             },
             RepoFile {
                 path: "/etc/yum.repos.d/epel.repo".into(),
-                content: "[epel]\nname=Extra Packages for Enterprise Linux 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n".into(),
-                include: true,
-                ..Default::default()
+                content: "[epel]\nname=EPEL 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n".into(),
+                include: true, ..Default::default()
             },
         ],
         gpg_keys: vec![
             RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
-                content: "key-data".into(),
-                include: true,
-                ..Default::default()
+                content: "key-data".into(), include: true, ..Default::default()
             },
             RepoFile {
                 path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
-                content: "key-data".into(),
-                include: true,
-                ..Default::default()
+                content: "key-data".into(), include: true, ..Default::default()
             },
         ],
         ..Default::default()
@@ -760,7 +712,6 @@ fn test_repo_index_packages_by_repo() {
 fn test_repo_index_multi_section_repo_file() {
     let snap = make_snap_with_repos();
     let index = RepoIndex::build(&snap);
-    // centos.repo has both baseos and appstream sections
     let baseos_files = index.repo_file_by_section.get("baseos").unwrap();
     let appstream_files = index.repo_file_by_section.get("appstream").unwrap();
     assert!(baseos_files.contains(&"/etc/yum.repos.d/centos.repo".to_string()));
@@ -771,7 +722,6 @@ fn test_repo_index_multi_section_repo_file() {
 fn test_repo_index_gpg_shared_key() {
     let snap = make_snap_with_repos();
     let index = RepoIndex::build(&snap);
-    // RPM-GPG-KEY-centosofficial is shared by baseos and appstream
     let sections = index.sections_by_gpg_key
         .get("/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial").unwrap();
     assert!(sections.contains("baseos"));
@@ -789,31 +739,18 @@ fn test_repo_index_provenance_verified() {
 #[test]
 fn test_repo_index_provenance_incomplete() {
     let mut snap = make_snap_with_repos();
-    // Add a package from a repo with no matching repo file
     snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
-        name: "custom-pkg".into(),
-        arch: "x86_64".into(),
-        state: PackageState::Added,
-        source_repo: "custom-internal".into(),
-        include: true,
-        ..Default::default()
+        name: "custom-pkg".into(), arch: "x86_64".into(),
+        state: PackageState::Added, source_repo: "custom-internal".into(),
+        include: true, ..Default::default()
     });
     let index = RepoIndex::build(&snap);
     assert_eq!(index.provenance("custom-internal"), RepoProvenance::Incomplete);
 }
 
 #[test]
-fn test_repo_index_provenance_unknown() {
-    let mut snap = make_snap_with_repos();
-    snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
-        name: "mystery".into(),
-        arch: "x86_64".into(),
-        state: PackageState::Added,
-        source_repo: "".into(),
-        include: true,
-        ..Default::default()
-    });
-    let index = RepoIndex::build(&snap);
+fn test_repo_index_provenance_unknown_empty_repo() {
+    let index = RepoIndex::build(&make_snap_with_repos());
     assert_eq!(index.provenance(""), RepoProvenance::Unknown);
 }
 ```
@@ -821,7 +758,7 @@ fn test_repo_index_provenance_unknown() {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p inspectah-refine test_repo_index`
-Expected: FAIL — module doesn't exist yet.
+Expected: FAIL — module doesn't exist.
 
 - [ ] **Step 3: Implement `RepoIndex`**
 
@@ -851,149 +788,85 @@ impl RepoIndex {
             None => return Self::empty(),
         };
 
-        // 1. Parse repo files for INI sections
         let mut repo_file_by_section: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut gpg_keys_by_section: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut sections_by_gpg_key: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
         for rf in &rpm.repo_files {
-            let sections = parse_repo_sections(&rf.content);
-            for section in &sections {
-                repo_file_by_section
-                    .entry(section.id.clone())
-                    .or_default()
-                    .push(rf.path.clone());
+            for section in parse_repo_sections(&rf.content) {
+                repo_file_by_section.entry(section.id.clone()).or_default().push(rf.path.clone());
                 for key_path in &section.gpg_key_paths {
-                    gpg_keys_by_section
-                        .entry(section.id.clone())
-                        .or_default()
-                        .push(key_path.clone());
-                    sections_by_gpg_key
-                        .entry(key_path.clone())
-                        .or_default()
-                        .insert(section.id.clone());
+                    gpg_keys_by_section.entry(section.id.clone()).or_default().push(key_path.clone());
+                    sections_by_gpg_key.entry(key_path.clone()).or_default().insert(section.id.clone());
                 }
             }
         }
 
-        // 2. Map packages by source_repo
         let mut packages_by_repo: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for pkg in &rpm.packages_added {
             if !pkg.source_repo.is_empty() {
-                packages_by_repo
-                    .entry(pkg.source_repo.clone())
-                    .or_default()
-                    .push(pkg.name.clone());
+                packages_by_repo.entry(pkg.source_repo.clone()).or_default().push(pkg.name.clone());
             }
         }
 
-        // 3. Compute provenance per section ID
         let mut provenance_map: BTreeMap<String, RepoProvenance> = BTreeMap::new();
-        let all_section_ids: BTreeSet<String> = packages_by_repo.keys()
-            .chain(repo_file_by_section.keys())
-            .cloned()
-            .collect();
-
-        for sid in &all_section_ids {
-            if sid.is_empty() {
-                provenance_map.insert(sid.clone(), RepoProvenance::Unknown);
-                continue;
-            }
+        let all_ids: BTreeSet<String> = packages_by_repo.keys()
+            .chain(repo_file_by_section.keys()).cloned().collect();
+        for sid in &all_ids {
+            if sid.is_empty() { provenance_map.insert(sid.clone(), RepoProvenance::Unknown); continue; }
             let has_repo_file = repo_file_by_section.contains_key(sid);
-            let has_gpg = gpg_keys_by_section.contains_key(sid);
-            let prov = if has_repo_file && has_gpg {
-                RepoProvenance::Verified
-            } else if has_repo_file {
-                // Repo file exists but no gpgkey directive — still Verified
-                // (some repos don't use GPG)
-                RepoProvenance::Verified
-            } else {
-                RepoProvenance::Incomplete
-            };
-            provenance_map.insert(sid.clone(), prov);
+            provenance_map.insert(sid.clone(), if has_repo_file { RepoProvenance::Verified } else { RepoProvenance::Incomplete });
         }
 
-        Self {
-            packages_by_repo,
-            repo_file_by_section,
-            gpg_keys_by_section,
-            sections_by_gpg_key,
-            provenance_map,
-        }
+        Self { packages_by_repo, repo_file_by_section, gpg_keys_by_section, sections_by_gpg_key, provenance_map }
     }
 
     pub fn provenance(&self, section_id: &str) -> RepoProvenance {
-        if section_id.is_empty() {
-            return RepoProvenance::Unknown;
-        }
-        self.provenance_map
-            .get(section_id)
-            .copied()
-            .unwrap_or(RepoProvenance::Unknown)
+        if section_id.is_empty() { return RepoProvenance::Unknown; }
+        self.provenance_map.get(section_id).copied().unwrap_or(RepoProvenance::Unknown)
     }
 
-    pub fn is_distro_repo(section_id: &str) -> bool {
-        DISTRO_REPOS.contains(&section_id)
-    }
+    pub fn is_distro_repo(section_id: &str) -> bool { DISTRO_REPOS.contains(&section_id) }
 
     fn empty() -> Self {
-        Self {
-            packages_by_repo: BTreeMap::new(),
-            repo_file_by_section: BTreeMap::new(),
-            gpg_keys_by_section: BTreeMap::new(),
-            sections_by_gpg_key: BTreeMap::new(),
-            provenance_map: BTreeMap::new(),
-        }
+        Self { packages_by_repo: BTreeMap::new(), repo_file_by_section: BTreeMap::new(),
+               gpg_keys_by_section: BTreeMap::new(), sections_by_gpg_key: BTreeMap::new(),
+               provenance_map: BTreeMap::new() }
     }
 }
 
-struct RepoSection {
-    id: String,
-    gpg_key_paths: Vec<String>,
-}
+struct RepoSection { id: String, gpg_key_paths: Vec<String> }
 
 fn parse_repo_sections(content: &str) -> Vec<RepoSection> {
     let mut sections = Vec::new();
     let mut current_id: Option<String> = None;
     let mut current_keys: Vec<String> = Vec::new();
-
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            // Save previous section
             if let Some(id) = current_id.take() {
                 sections.push(RepoSection { id, gpg_key_paths: current_keys.clone() });
                 current_keys.clear();
             }
             current_id = Some(trimmed[1..trimmed.len()-1].to_string());
         } else if let Some(value) = trimmed.strip_prefix("gpgkey=") {
-            // gpgkey can be comma-separated or space-separated
             for path in value.split([',', ' ']) {
-                let path = path.trim();
-                if let Some(file_path) = path.strip_prefix("file://") {
+                if let Some(file_path) = path.trim().strip_prefix("file://") {
                     current_keys.push(file_path.to_string());
                 }
             }
         }
     }
-    // Save last section
     if let Some(id) = current_id {
         sections.push(RepoSection { id, gpg_key_paths: current_keys });
     }
-
     sections
 }
 ```
 
-- [ ] **Step 4: Register the module**
+- [ ] **Step 4: Register the module in `lib.rs`**
 
-In `inspectah-refine/src/lib.rs`, add:
-
-```rust
-pub mod repo_index;
-```
-
-- [ ] **Step 5: Run RepoIndex tests**
+- [ ] **Step 5: Run tests**
 
 Run: `cargo test -p inspectah-refine test_repo_index`
 Expected: All PASS.
@@ -1013,11 +886,9 @@ git commit -m "feat(refine): RepoIndex with INI parsing, provenance computation,
 - Modify: `inspectah-refine/src/normalize.rs`
 - Test: `inspectah-refine/tests/normalize_test.rs`
 
-The existing `normalize.rs` has the current normalize logic. This task replaces it with the tier-aware version that materializes into snapshot state.
-
 - [ ] **Step 1: Write failing tests**
 
-In `inspectah-refine/tests/normalize_test.rs`, add (or replace existing content):
+In `inspectah-refine/tests/normalize_test.rs`:
 
 ```rust
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -1025,19 +896,15 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSecti
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::attention::{compute_config_attention, compute_package_attention};
 use inspectah_refine::normalize::{normalize_config_defaults, normalize_package_defaults};
-use inspectah_refine::types::AttentionLevel;
 
 #[test]
 fn test_tier1_packages_include_true() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
-            name: "glibc".into(),
-            arch: "x86_64".into(),
-            state: PackageState::Added,
-            source_repo: "baseos".into(),
-            include: false, // starts false
-            ..Default::default()
+            name: "glibc".into(), arch: "x86_64".into(),
+            state: PackageState::Added, source_repo: "baseos".into(),
+            include: false, ..Default::default()
         }],
         baseline_package_names: Some(vec!["glibc".into()]),
         ..Default::default()
@@ -1052,12 +919,9 @@ fn test_tier3_packages_include_false() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
-            name: "mystery".into(),
-            arch: "x86_64".into(),
-            state: PackageState::LocalInstall,
-            source_repo: "".into(),
-            include: true, // starts true
-            ..Default::default()
+            name: "mystery".into(), arch: "x86_64".into(),
+            state: PackageState::LocalInstall, source_repo: "".into(),
+            include: true, ..Default::default()
         }],
         ..Default::default()
     });
@@ -1071,22 +935,12 @@ fn test_leaf_filtering_hides_non_leaf_tier2() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
-            PackageEntry {
-                name: "httpd".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                source_repo: "appstream".into(),
-                include: true,
-                ..Default::default()
-            },
-            PackageEntry {
-                name: "apr".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                source_repo: "appstream".into(),
-                include: true,
-                ..Default::default()
-            },
+            PackageEntry { name: "httpd".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: true, ..Default::default() },
+            PackageEntry { name: "apr".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: true, ..Default::default() },
         ],
         baseline_package_names: Some(vec![]),
         leaf_packages: Some(vec!["httpd".into()]),
@@ -1095,50 +949,21 @@ fn test_leaf_filtering_hides_non_leaf_tier2() {
     let pkgs = compute_package_attention(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();
-    assert!(rpm.packages_added[0].include, "httpd is leaf, should be included");
-    assert!(!rpm.packages_added[1].include, "apr is non-leaf, should be hidden");
+    assert!(rpm.packages_added[0].include, "httpd is leaf");
+    assert!(!rpm.packages_added[1].include, "apr is non-leaf, hidden");
 }
 
 #[test]
-fn test_tier1_configs_include_false() {
-    let mut snap = InspectionSnapshot::new();
-    snap.config = Some(ConfigSection {
-        files: vec![ConfigFileEntry {
-            path: "/etc/httpd/conf/httpd.conf".into(),
-            kind: ConfigFileKind::RpmOwnedDefault,
-            include: true, // starts true
-            ..Default::default()
-        }],
-    });
-    let configs = compute_config_attention(&snap);
-    normalize_config_defaults(&mut snap, &configs);
-    assert!(!snap.config.as_ref().unwrap().files[0].include,
-        "Tier 1 configs must NOT be copied — package manager handles them");
-}
-
-#[test]
-fn test_tier1_configs_absent_from_copy_roots() {
+fn test_tier1_configs_include_false_not_copied() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
         files: vec![
-            ConfigFileEntry {
-                path: "/etc/default.conf".into(),
-                kind: ConfigFileKind::RpmOwnedDefault,
-                include: true,
-                ..Default::default()
-            },
-            ConfigFileEntry {
-                path: "/etc/baseline.conf".into(),
-                kind: ConfigFileKind::BaselineMatch,
-                include: true,
-                ..Default::default()
-            },
-            ConfigFileEntry {
-                path: "/etc/custom.conf".into(),
-                kind: ConfigFileKind::Unowned,
-                include: true,
-                ..Default::default()
-            },
+            ConfigFileEntry { path: "/etc/default.conf".into(),
+                kind: ConfigFileKind::RpmOwnedDefault, include: true, ..Default::default() },
+            ConfigFileEntry { path: "/etc/baseline.conf".into(),
+                kind: ConfigFileKind::BaselineMatch, include: true, ..Default::default() },
+            ConfigFileEntry { path: "/etc/custom.conf".into(),
+                kind: ConfigFileKind::Unowned, include: true, ..Default::default() },
         ],
     });
     let configs = compute_config_attention(&snap);
@@ -1154,10 +979,8 @@ fn test_orphaned_configs_include_false() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
-            path: "/etc/old-package.conf".into(),
-            kind: ConfigFileKind::Orphaned,
-            include: true,
-            ..Default::default()
+            path: "/etc/old.conf".into(), kind: ConfigFileKind::Orphaned,
+            include: true, ..Default::default()
         }],
     });
     let configs = compute_config_attention(&snap);
@@ -1168,7 +991,7 @@ fn test_orphaned_configs_include_false() {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p inspectah-refine test_tier1 test_tier3 test_leaf test_orphaned`
+Run: `cargo test -p inspectah-refine -- test_tier1 test_tier3 test_leaf test_orphaned`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement normalize functions**
@@ -1195,26 +1018,17 @@ pub fn normalize_package_defaults(
     for (i, refined) in packages.iter().enumerate() {
         if i >= rpm.packages_added.len() { break; }
         let primary_level = refined.attention.first()
-            .map(|t| t.level)
-            .unwrap_or(AttentionLevel::Routine);
-
+            .map(|t| t.level).unwrap_or(AttentionLevel::Routine);
         match primary_level {
-            AttentionLevel::Routine => {
-                // Tier 1: auto-include
-                rpm.packages_added[i].include = true;
-            }
+            AttentionLevel::Routine => { rpm.packages_added[i].include = true; }
             AttentionLevel::Informational => {
-                // Tier 2: include if leaf (or no leaf data)
                 let is_leaf = match &leaf_set {
                     Some(set) => set.contains(rpm.packages_added[i].name.as_str()),
                     None => true,
                 };
                 rpm.packages_added[i].include = is_leaf;
             }
-            AttentionLevel::NeedsReview => {
-                // Tier 3: exclude by default, operator opts in
-                rpm.packages_added[i].include = false;
-            }
+            AttentionLevel::NeedsReview => { rpm.packages_added[i].include = false; }
         }
     }
 }
@@ -1227,34 +1041,19 @@ pub fn normalize_config_defaults(
         Some(c) => c,
         None => return,
     };
-
     for (i, refined) in configs.iter().enumerate() {
         if i >= config.files.len() { break; }
         let primary_level = refined.attention.first()
-            .map(|t| t.level)
-            .unwrap_or(AttentionLevel::Routine);
-
+            .map(|t| t.level).unwrap_or(AttentionLevel::Routine);
         match primary_level {
-            AttentionLevel::Routine => {
-                // Tier 1: NOT copied — package manager handles these
-                config.files[i].include = false;
-            }
+            AttentionLevel::Routine => { config.files[i].include = false; }
             AttentionLevel::Informational => {
-                match config.files[i].kind {
-                    inspectah_core::types::config::ConfigFileKind::Orphaned => {
-                        // Orphaned: exclude by default
-                        config.files[i].include = false;
-                    }
-                    _ => {
-                        // Unowned: include (user-created)
-                        config.files[i].include = true;
-                    }
-                }
+                config.files[i].include = !matches!(
+                    config.files[i].kind,
+                    inspectah_core::types::config::ConfigFileKind::Orphaned
+                );
             }
-            AttentionLevel::NeedsReview => {
-                // Tier 3 (RpmOwnedModified): include (user-customized)
-                config.files[i].include = true;
-            }
+            AttentionLevel::NeedsReview => { config.files[i].include = true; }
         }
     }
 }
@@ -1274,71 +1073,101 @@ git commit -m "feat(refine): tier-aware normalize with Tier1 config omission, le
 
 ---
 
-### Task 6: Session Integration — Normalize at Construction + ExcludeRepo
+### Task 6: Session Construction — Normalize at Import + RepoIndex
 
 **Files:**
 - Modify: `inspectah-refine/src/session.rs`
 - Test: `inspectah-refine/tests/session_test.rs`
 
-This is the heaviest task. It integrates RepoIndex into the session, materializes normalization at construction time, and adds ExcludeRepo/IncludeRepo cascade handling.
+This task integrates normalization and RepoIndex into the session constructor. Repo cascade ops are Task 7 (separate, smaller slice).
 
-- [ ] **Step 1: Write failing tests for normalization at construction**
+- [ ] **Step 1: Write failing tests**
 
-In `inspectah-refine/tests/session_test.rs`, add:
+In `inspectah-refine/tests/session_test.rs`:
 
 ```rust
 #[test]
 fn test_session_normalizes_at_construction() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
-        packages_added: vec![
-            PackageEntry {
-                name: "glibc".into(), arch: "x86_64".into(),
-                state: PackageState::Added, source_repo: "baseos".into(),
-                include: false, ..Default::default()
-            },
-        ],
+        packages_added: vec![PackageEntry {
+            name: "glibc".into(), arch: "x86_64".into(),
+            state: PackageState::Added, source_repo: "baseos".into(),
+            include: false, ..Default::default()
+        }],
         baseline_package_names: Some(vec!["glibc".into()]),
         ..Default::default()
     });
     let session = RefineSession::new(snap);
+    // View should reflect normalized state (Tier 1 = include true)
     let view = session.view();
-    // Tier 1 package should be auto-included after normalization
     assert!(view.packages[0].entry.include);
+    // Original snapshot also has normalized include (materialized at construction)
+    assert!(session.snapshot().rpm.as_ref().unwrap().packages_added[0].include);
 }
 
 #[test]
 fn test_session_preview_export_parity() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
-        packages_added: vec![
-            PackageEntry {
-                name: "httpd".into(), arch: "x86_64".into(),
-                state: PackageState::Added, source_repo: "appstream".into(),
-                include: false, ..Default::default()
-            },
-        ],
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(), arch: "x86_64".into(),
+            state: PackageState::Added, source_repo: "appstream".into(),
+            include: false, ..Default::default()
+        }],
         baseline_package_names: Some(vec![]),
         ..Default::default()
     });
     let session = RefineSession::new(snap);
+    // Both preview and projected snapshot agree on include state
+    assert!(session.view().packages[0].entry.include);
+    assert!(session.snapshot_projected().rpm.as_ref().unwrap().packages_added[0].include);
+    assert!(session.view().containerfile_preview.contains("httpd"));
+}
+
+#[test]
+fn test_session_baseline_available_in_stats() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        baseline_package_names: Some(vec!["glibc".into()]),
+        ..Default::default()
+    });
+    let session = RefineSession::new(snap);
+    assert!(session.view().stats.baseline_available);
+
+    let snap_no_baseline = InspectionSnapshot::new();
+    let session2 = RefineSession::new(snap_no_baseline);
+    assert!(!session2.view().stats.baseline_available);
+}
+
+#[test]
+fn test_tier1_configs_not_in_containerfile() {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry { path: "/etc/default.conf".into(),
+                kind: ConfigFileKind::RpmOwnedDefault, include: true, ..Default::default() },
+            ConfigFileEntry { path: "/etc/custom.conf".into(),
+                kind: ConfigFileKind::Unowned, include: true,
+                content: "custom content".into(), ..Default::default() },
+        ],
+    });
+    let session = RefineSession::new(snap);
     let preview = &session.view().containerfile_preview;
-    let snap_include = session.snapshot().rpm.as_ref().unwrap()
-        .packages_added[0].include;
-    // Preview and snapshot state must agree on include
-    assert!(snap_include, "normalized snapshot must have include=true for Tier 2");
-    assert!(preview.contains("httpd"), "preview must render included package");
+    assert!(!preview.contains("default.conf"), "Tier 1 config must not appear in Containerfile");
+    assert!(preview.contains("custom.conf") || preview.contains("config/etc"),
+        "Tier 2 config must appear in Containerfile");
 }
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p inspectah-refine test_session_normalizes test_session_preview`
+Run: `cargo test -p inspectah-refine test_session_normalizes test_session_preview test_session_baseline test_tier1_configs_not`
 Expected: FAIL.
 
-- [ ] **Step 3: Integrate normalization into `RefineSession::new()`**
+- [ ] **Step 3: Integrate normalization and RepoIndex into constructor**
 
-In `inspectah-refine/src/session.rs`, modify the constructor:
+In `inspectah-refine/src/session.rs`:
 
 ```rust
 use crate::repo_index::RepoIndex;
@@ -1347,6 +1176,7 @@ use crate::normalize::{normalize_package_defaults, normalize_config_defaults};
 pub struct RefineSession {
     original: InspectionSnapshot,
     repo_index: RepoIndex,
+    baseline_available: bool,
     ops: Vec<RefinementOp>,
     cursor: usize,
     cached_view: Option<RefinedView>,
@@ -1356,20 +1186,21 @@ pub struct RefineSession {
 
 impl RefineSession {
     pub fn new(mut snapshot: InspectionSnapshot) -> Self {
-        // Build repo index from raw snapshot
         let repo_index = RepoIndex::build(&snapshot);
+        let baseline_available = snapshot.rpm.as_ref()
+            .and_then(|r| r.baseline_package_names.as_ref())
+            .is_some();
 
-        // Classify
+        // Classify then normalize — materializes into snapshot state
         let pkgs = compute_package_attention(&snapshot);
         let configs = compute_config_attention(&snapshot);
-
-        // Normalize — materializes into snapshot state
         normalize_package_defaults(&mut snapshot, &pkgs);
         normalize_config_defaults(&mut snapshot, &configs);
 
         let mut session = Self {
             original: snapshot,
             repo_index,
+            baseline_available,
             ops: Vec::new(),
             cursor: 0,
             cached_view: None,
@@ -1380,31 +1211,141 @@ impl RefineSession {
         session
     }
 
-    pub fn repo_index(&self) -> &RepoIndex {
-        &self.repo_index
-    }
-
-    // ... rest unchanged
+    pub fn repo_index(&self) -> &RepoIndex { &self.repo_index }
+    // ...existing methods unchanged...
 }
 ```
 
-- [ ] **Step 4: Run normalization tests**
+Update `recompute_view()` to set `stats.baseline_available` and `stats.package_managed_configs`.
 
-Run: `cargo test -p inspectah-refine test_session_normalizes test_session_preview`
-Expected: PASS.
+- [ ] **Step 4: Run tests**
 
-- [ ] **Step 5: Write failing tests for ExcludeRepo**
+Run: `cargo test -p inspectah-refine test_session_normalizes test_session_preview test_session_baseline test_tier1_configs_not`
+Expected: All PASS.
+
+- [ ] **Step 5: Run full suite**
+
+Run: `cargo test -p inspectah-refine`
+Expected: All PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add inspectah-refine/src/session.rs inspectah-refine/tests/session_test.rs
+git commit -m "feat(refine): normalize at session construction, RepoIndex integration, baseline_available"
+```
+
+---
+
+### Task 7: ExcludeRepo / IncludeRepo Cascade in Projection Path
+
+**Files:**
+- Modify: `inspectah-refine/src/session.rs`
+- Create: `inspectah-refine/tests/helpers/mod.rs` (shared test fixture)
+- Test: `inspectah-refine/tests/session_test.rs`
+
+This is the load-bearing cascade task. All repo ops live in `project_snapshot()`, and all tests assert via `view()` or `snapshot_projected()`.
+
+- [ ] **Step 1: Create shared test fixture module**
+
+Create `inspectah-refine/tests/helpers/mod.rs` with `make_snap_with_repos()` and `make_snap_with_multi_section_third_party()` helpers. Register it from test files via `mod helpers;`.
 
 ```rust
+// inspectah-refine/tests/helpers/mod.rs
+use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+
+pub fn make_snap_with_repos() -> InspectionSnapshot {
+    // Same fixture from Task 4 tests — baseos/appstream in centos.repo, epel in epel.repo
+    // (duplicate the full fixture here — Rust integration tests don't share across files
+    // without an explicit mod)
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "httpd".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: true, ..Default::default() },
+            PackageEntry { name: "epel-release".into(), arch: "noarch".into(),
+                state: PackageState::Added, source_repo: "epel".into(),
+                include: true, ..Default::default() },
+        ],
+        repo_files: vec![
+            RepoFile { path: "/etc/yum.repos.d/centos.repo".into(),
+                content: "[baseos]\nname=CentOS BaseOS\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n\n[appstream]\nname=CentOS AppStream\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial\n".into(),
+                include: true, ..Default::default() },
+            RepoFile { path: "/etc/yum.repos.d/epel.repo".into(),
+                content: "[epel]\nname=EPEL 9\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9\n".into(),
+                include: true, ..Default::default() },
+        ],
+        gpg_keys: vec![
+            RepoFile { path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
+                content: "key-data".into(), include: true, ..Default::default() },
+            RepoFile { path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
+                content: "key-data".into(), include: true, ..Default::default() },
+        ],
+        baseline_package_names: Some(vec![]),
+        ..Default::default()
+    });
+    snap
+}
+
+pub fn make_snap_with_multi_section_third_party() -> InspectionSnapshot {
+    let mut snap = make_snap_with_repos();
+    let rpm = snap.rpm.as_mut().unwrap();
+    rpm.repo_files.push(RepoFile {
+        path: "/etc/yum.repos.d/custom-multi.repo".into(),
+        content: "[custom-a]\nname=Custom A\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n\n[custom-b]\nname=Custom B\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n".into(),
+        include: true, ..Default::default(),
+    });
+    rpm.gpg_keys.push(RepoFile {
+        path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom".into(),
+        content: "key-data".into(), include: true, ..Default::default(),
+    });
+    rpm.packages_added.push(PackageEntry {
+        name: "pkg-a".into(), arch: "x86_64".into(),
+        state: PackageState::Added, source_repo: "custom-a".into(),
+        include: true, ..Default::default(),
+    });
+    rpm.packages_added.push(PackageEntry {
+        name: "pkg-b".into(), arch: "x86_64".into(),
+        state: PackageState::Added, source_repo: "custom-b".into(),
+        include: true, ..Default::default(),
+    });
+    snap
+}
+```
+
+- [ ] **Step 2: Write failing tests for ExcludeRepo (assert via view/projected state)**
+
+In `inspectah-refine/tests/session_test.rs`:
+
+```rust
+mod helpers;
+use helpers::*;
+
 #[test]
-fn test_exclude_repo_cascades_packages() {
-    let snap = make_snap_with_repos(); // reuse from repo_index_test
+fn test_exclude_repo_cascades_packages_in_view() {
+    let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
-    let view = session.view();
-    let epel_pkg = view.packages.iter().find(|p| p.entry.name == "epel-release");
-    assert!(epel_pkg.is_some());
-    assert!(!epel_pkg.unwrap().entry.include, "epel package must be excluded");
+    let epel_pkg = session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap();
+    assert!(!epel_pkg.entry.include, "epel package must be excluded in view");
+}
+
+#[test]
+fn test_exclude_repo_cascades_in_projected_snapshot() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    let projected = session.snapshot_projected();
+    let epel_pkg = projected.rpm.as_ref().unwrap().packages_added.iter()
+        .find(|p| p.name == "epel-release").unwrap();
+    assert!(!epel_pkg.include, "epel package must be excluded in projected snapshot");
+    // Original snapshot is unchanged
+    let orig_pkg = session.snapshot().rpm.as_ref().unwrap().packages_added.iter()
+        .find(|p| p.name == "epel-release").unwrap();
+    assert!(orig_pkg.include, "original snapshot must be unchanged");
 }
 
 #[test]
@@ -1412,7 +1353,7 @@ fn test_exclude_repo_rejects_distro_repo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     let result = session.apply(RefinementOp::ExcludeRepo { section_id: "baseos".into() });
-    assert!(result.is_err(), "distro repos cannot be excluded");
+    assert!(result.is_err());
 }
 
 #[test]
@@ -1421,15 +1362,15 @@ fn test_exclude_repo_rejects_incomplete_provenance() {
     snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
         name: "custom".into(), arch: "x86_64".into(),
         state: PackageState::Added, source_repo: "no-repo-file".into(),
-        include: true, ..Default::default()
+        include: true, ..Default::default(),
     });
     let mut session = RefineSession::new(snap);
     let result = session.apply(RefinementOp::ExcludeRepo { section_id: "no-repo-file".into() });
-    assert!(result.is_err(), "incomplete provenance repos cannot be excluded");
+    assert!(result.is_err());
 }
 
 #[test]
-fn test_exclude_repo_is_dirty() {
+fn test_exclude_repo_is_dirty_with_repo_tracking() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     assert!(!session.is_dirty());
@@ -1441,51 +1382,54 @@ fn test_exclude_repo_is_dirty() {
 
 #[test]
 fn test_shared_repo_file_retained_until_last_section() {
-    // centos.repo has baseos + appstream. Excluding appstream alone
-    // must NOT exclude the repo file.
-    let mut snap = make_snap_with_repos();
-    // Make appstream non-distro for this test (distro repos can't be excluded)
-    // Instead test with a multi-section third-party repo file
-    snap.rpm.as_mut().unwrap().repo_files.push(RepoFile {
-        path: "/etc/yum.repos.d/custom-multi.repo".into(),
-        content: "[custom-a]\nname=Custom A\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n\n[custom-b]\nname=Custom B\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-custom\n".into(),
-        include: true,
-        ..Default::default()
-    });
-    snap.rpm.as_mut().unwrap().gpg_keys.push(RepoFile {
-        path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-custom".into(),
-        content: "key-data".into(),
-        include: true,
-        ..Default::default()
-    });
-    snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
-        name: "pkg-a".into(), arch: "x86_64".into(),
-        state: PackageState::Added, source_repo: "custom-a".into(),
-        include: true, ..Default::default()
-    });
-    snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
-        name: "pkg-b".into(), arch: "x86_64".into(),
-        state: PackageState::Added, source_repo: "custom-b".into(),
-        include: true, ..Default::default()
-    });
-
+    let snap = make_snap_with_multi_section_third_party();
     let mut session = RefineSession::new(snap);
-    // Exclude custom-a only
-    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-a".into() }).unwrap();
-    let snap_after = session.snapshot();
-    let repo_file = snap_after.rpm.as_ref().unwrap().repo_files.iter()
-        .find(|rf| rf.path.contains("custom-multi")).unwrap();
-    assert!(repo_file.include, "shared repo file must stay included while custom-b is enabled");
-    let gpg = snap_after.rpm.as_ref().unwrap().gpg_keys.iter()
-        .find(|k| k.path.contains("RPM-GPG-KEY-custom")).unwrap();
-    assert!(gpg.include, "shared GPG key must stay included while custom-b is enabled");
 
-    // Now exclude custom-b too
-    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-b".into() }).unwrap();
-    let snap_after2 = session.snapshot();
-    let gpg2 = snap_after2.rpm.as_ref().unwrap().gpg_keys.iter()
+    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-a".into() }).unwrap();
+    let projected = session.snapshot_projected();
+    let repo_file = projected.rpm.as_ref().unwrap().repo_files.iter()
+        .find(|rf| rf.path.contains("custom-multi")).unwrap();
+    assert!(repo_file.include, "shared repo file must stay while custom-b is enabled");
+    let gpg = projected.rpm.as_ref().unwrap().gpg_keys.iter()
         .find(|k| k.path.contains("RPM-GPG-KEY-custom")).unwrap();
-    assert!(!gpg2.include, "GPG key must be excluded once all referencing sections are excluded");
+    assert!(gpg.include, "shared GPG key must stay while custom-b is enabled");
+
+    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-b".into() }).unwrap();
+    let projected2 = session.snapshot_projected();
+    let gpg2 = projected2.rpm.as_ref().unwrap().gpg_keys.iter()
+        .find(|k| k.path.contains("RPM-GPG-KEY-custom")).unwrap();
+    assert!(!gpg2.include, "GPG key excluded once all sections excluded");
+}
+
+#[test]
+fn test_exclude_repo_then_per_package_then_include_repo() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    // 1. Exclude epel
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    assert!(!session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+
+    // 2. Re-include the specific package manually
+    session.apply(RefinementOp::IncludePackage(PackageTarget {
+        name: "epel-release".into(), arch: "noarch".into(),
+    })).unwrap();
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+
+    // 3. Include repo again — this sets include=true on ALL packages
+    //    The per-package override is now in the op stack history.
+    //    IncludeRepo re-enables everything; the per-package op was already
+    //    applied and is still in the stack but gets overridden.
+    session.apply(RefinementOp::IncludeRepo { section_id: "epel".into() }).unwrap();
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+
+    // 4. Undo the IncludeRepo — should restore per-package state
+    session.undo().unwrap();
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include,
+        "per-package include is still active after undoing repo include");
 }
 
 #[test]
@@ -1493,62 +1437,125 @@ fn test_exclude_repo_undo_redo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
-    assert!(!session.snapshot().rpm.as_ref().unwrap().packages_added
-        .iter().find(|p| p.name == "epel-release").unwrap().include);
+    assert!(!session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
     session.undo().unwrap();
-    assert!(session.snapshot().rpm.as_ref().unwrap().packages_added
-        .iter().find(|p| p.name == "epel-release").unwrap().include);
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
     session.redo().unwrap();
-    assert!(!session.snapshot().rpm.as_ref().unwrap().packages_added
-        .iter().find(|p| p.name == "epel-release").unwrap().include);
+    assert!(!session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
 }
 ```
 
-- [ ] **Step 6: Run tests to verify they fail**
+- [ ] **Step 3: Run tests to verify they fail**
 
 Run: `cargo test -p inspectah-refine test_exclude_repo test_shared_repo`
 Expected: FAIL.
 
-- [ ] **Step 7: Implement ExcludeRepo / IncludeRepo in session**
+- [ ] **Step 4: Implement repo cascade in `project_snapshot()`**
 
-Add the cascade logic to `session.rs`. This involves:
-1. Adding repo ops to `validate_target()` — check provenance and distro guard
-2. Adding repo ops to `is_op_noop()`
-3. Adding repo cascade to the replay loop in `recompute_view()`
-4. Extending `pending_changes()` to track repo exclusions
+In `session.rs`, modify `project_snapshot()` to handle `ExcludeRepo` / `IncludeRepo` ops. The cascade logic:
+- For `ExcludeRepo { section_id }`: set `include = false` on all packages where `source_repo == section_id`. For repo files: check if any other ENABLED section still uses this file (via `repo_index.repo_file_by_section`); if not, set `include = false`. For GPG keys: check `sections_by_gpg_key` ref count — only flip when ALL referencing sections are excluded.
+- For `IncludeRepo { section_id }`: reverse — set `include = true` on all matching packages, re-enable repo files and GPG keys.
 
-The implementation must use the `RepoIndex` for reference counting: when excluding a section, only flip a GPG key's `include` to false if ALL sections referencing that key are now excluded.
+Add `validate_target()` guard for repo ops: reject if `RepoIndex::is_distro_repo(section_id)` or if `repo_index.provenance(section_id) != Verified`.
 
-(Full implementation code omitted for brevity — the engineer implements the cascade logic following the test contracts above. The key function is a `apply_repo_cascade()` helper that takes a section_id and desired include state, walks `packages_by_repo`, `repo_file_by_section`, and `sections_by_gpg_key` from the RepoIndex, and flips include flags with reference counting.)
+Add `is_op_noop()` for repo ops.
 
-- [ ] **Step 8: Run all repo tests**
+Extend `pending_changes()` to track `repos_excluded`.
+
+- [ ] **Step 5: Run all repo cascade tests**
 
 Run: `cargo test -p inspectah-refine test_exclude_repo test_shared_repo`
 Expected: All PASS.
 
-- [ ] **Step 9: Run full test suite**
+- [ ] **Step 6: Run full suite**
 
 Run: `cargo test -p inspectah-refine`
 Expected: All PASS.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add inspectah-refine/src/session.rs inspectah-refine/tests/session_test.rs
-git commit -m "feat(refine): normalize at construction, ExcludeRepo/IncludeRepo with cascade and ref counting"
+git add inspectah-refine/src/session.rs inspectah-refine/tests/session_test.rs inspectah-refine/tests/helpers/mod.rs
+git commit -m "feat(refine): ExcludeRepo/IncludeRepo cascade in projection path with ref counting"
 ```
 
 ---
 
-### Task 7: Containerfile Renderer Fixes
+### Task 8: Non-Leaf Tier 2 View Filtering
+
+**Files:**
+- Modify: `inspectah-refine/src/session.rs` (in `recompute_view()`)
+- Test: `inspectah-refine/tests/session_test.rs`
+
+Normalization flips `include = false` on non-leaf Tier 2 packages, but the view still returns them. This task filters them out of the `RefinedView.packages` list so the triage count actually drops.
+
+- [ ] **Step 1: Write failing test**
+
+```rust
+#[test]
+fn test_non_leaf_tier2_excluded_from_view() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "httpd".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: true, ..Default::default() },
+            PackageEntry { name: "apr".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: true, ..Default::default() },
+        ],
+        baseline_package_names: Some(vec![]),
+        leaf_packages: Some(vec!["httpd".into()]),
+        ..Default::default()
+    });
+    let session = RefineSession::new(snap);
+    let view = session.view();
+    // Only leaf package should appear in the view
+    assert!(view.packages.iter().any(|p| p.entry.name == "httpd"));
+    assert!(!view.packages.iter().any(|p| p.entry.name == "apr"),
+        "non-leaf Tier 2 package must be filtered from view");
+}
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test -p inspectah-refine test_non_leaf_tier2`
+Expected: FAIL — apr still appears.
+
+- [ ] **Step 3: Filter in `recompute_view()`**
+
+In the `recompute_view()` method, after computing attention, filter out packages where `include == false` AND the package is Tier 2 (non-leaf dependency). These are not operator-excluded items — they're hidden dependencies. Keep Tier 3 `include == false` in the view because those need operator decision.
+
+The filter: only include packages in the view where `entry.include == true` OR where the primary attention level is `NeedsReview` (Tier 3 items that default to exclude but need operator attention).
+
+- [ ] **Step 4: Run test**
+
+Run: `cargo test -p inspectah-refine test_non_leaf_tier2`
+Expected: PASS.
+
+- [ ] **Step 5: Verify triage count semantics**
+
+The `needs_review_count` in stats should only count items visible in the view, not hidden dependencies.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add inspectah-refine/src/session.rs inspectah-refine/tests/session_test.rs
+git commit -m "feat(refine): filter non-leaf Tier 2 from triage view, update needs_review_count"
+```
+
+---
+
+### Task 9: Containerfile Renderer Fixes
 
 **Files:**
 - Modify: `inspectah-pipeline/src/render/containerfile.rs`
-- Test: existing inline tests in same file
+- Test: inline `#[cfg(test)]` in same file
 
 - [ ] **Step 1: Write failing test for GPG batching**
-
-In the `#[cfg(test)] mod tests` section of `containerfile.rs`:
 
 ```rust
 #[test]
@@ -1556,45 +1563,43 @@ fn test_gpg_standard_dir_single_copy() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         gpg_keys: vec![
-            RepoFile {
-                path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
-                content: "key1".into(), include: true, ..Default::default()
-            },
-            RepoFile {
-                path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
-                content: "key2".into(), include: true, ..Default::default()
-            },
+            RepoFile { path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
+                content: "key1".into(), include: true, ..Default::default() },
+            RepoFile { path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
+                content: "key2".into(), include: true, ..Default::default() },
         ],
         ..Default::default()
     });
     let output = render_containerfile(&snap, None);
-    // Should be one COPY line for the directory, no per-key rpm --import
     let copy_lines: Vec<_> = output.lines()
-        .filter(|l| l.contains("COPY") && l.contains("rpm-gpg"))
-        .collect();
+        .filter(|l| l.contains("COPY") && l.contains("rpm-gpg")).collect();
     assert_eq!(copy_lines.len(), 1, "standard dir keys should be single COPY");
-    assert!(!output.contains("rpm --import"), "standard dir keys should not have explicit imports");
+    assert!(!output.contains("rpm --import"), "no explicit imports for standard dir");
 }
 ```
 
-- [ ] **Step 2: Write failing test for service formatting**
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cargo test -p inspectah-pipeline test_gpg_standard`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement GPG batching**
+
+When all included GPG keys share `/etc/pki/rpm-gpg/`, emit single `COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/` with no `rpm --import`. For keys outside that directory, keep per-key pattern.
+
+- [ ] **Step 4: Write failing test for service continuation**
 
 ```rust
 #[test]
 fn test_service_backslash_continuation_over_3() {
     let mut snap = InspectionSnapshot::new();
     snap.services = Some(inspectah_core::types::services::ServiceSection {
-        enabled_units: vec![
-            "httpd.service".into(), "sshd.service".into(),
-            "chronyd.service".into(), "firewalld.service".into(),
-        ],
+        enabled_units: vec!["httpd.service".into(), "sshd.service".into(),
+            "chronyd.service".into(), "firewalld.service".into()],
         ..Default::default()
     });
     let output = render_containerfile(&snap, None);
-    assert!(output.contains("systemctl enable \\"),
-        "4+ services should use backslash continuation");
-    assert!(output.contains("    httpd.service \\"),
-        "each service on its own indented line");
+    assert!(output.contains("systemctl enable \\"), "4+ services should use continuation");
 }
 
 #[test]
@@ -1605,47 +1610,25 @@ fn test_service_single_line_under_4() {
         ..Default::default()
     });
     let output = render_containerfile(&snap, None);
-    assert!(output.contains("systemctl enable httpd.service sshd.service"),
-        "3 or fewer services should be single line");
+    assert!(output.contains("systemctl enable httpd.service sshd.service"));
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 5: Run tests to verify they fail**
 
-Run: `cargo test -p inspectah-pipeline test_gpg_standard test_service_backslash test_service_single`
+Run: `cargo test -p inspectah-pipeline test_service_backslash test_service_single`
 Expected: FAIL.
 
-- [ ] **Step 4: Implement GPG batching**
+- [ ] **Step 6: Implement service continuation**
 
-Modify the GPG section in `containerfile.rs`. When all included GPG keys share the `/etc/pki/rpm-gpg/` directory, emit a single `COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/` with no `rpm --import` lines. For keys outside that directory, keep the per-key pattern.
+When `safe_enabled.len() > 3`, format with backslash continuation. Same for `safe_disabled`.
 
-- [ ] **Step 5: Implement service backslash continuation**
-
-Modify `services_section_lines()` in `containerfile.rs`. When `safe_enabled.len() > 3`, format as:
-
-```rust
-if safe_enabled.len() > 3 {
-    lines.push("RUN systemctl enable \\".into());
-    for (i, u) in safe_enabled.iter().enumerate() {
-        if i < safe_enabled.len() - 1 {
-            lines.push(format!("    {} \\", u));
-        } else {
-            lines.push(format!("    {}", u));
-        }
-    }
-} else {
-    lines.push(format!("RUN systemctl enable {}", safe_enabled.join(" ")));
-}
-```
-
-Same for `safe_disabled`.
-
-- [ ] **Step 6: Run renderer tests**
+- [ ] **Step 7: Run all pipeline tests**
 
 Run: `cargo test -p inspectah-pipeline`
-Expected: All PASS (update golden files if needed).
+Expected: All PASS (update golden files as needed).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add inspectah-pipeline/src/render/containerfile.rs
@@ -1654,39 +1637,54 @@ git commit -m "feat(pipeline): GPG key batching for standard dir, service backsl
 
 ---
 
-### Task 8: source_repo Investigation and Fix
+### Task 10: source_repo Investigation and Fix
 
 **Files:**
-- Investigate: `inspectah-collect/src/inspectors/rpm/mod.rs` (Rust scanner)
-- Investigate: Go source `cmd/inspectah/internal/inspectors/rpm.go` (Go scanner `populateSourceRepos`)
-- Possibly modify: Rust RPM inspector or snapshot serialization
+- Investigate: Go source `cmd/inspectah/internal/inspectors/rpm.go`
+- Investigate: Rust source `inspectah-collect/src/inspectors/rpm/mod.rs`
+- Investigate: CentOS Stream 9 scan tarball
 
-This task is investigative — the root cause of the "Unknown" repo display is not yet known.
+**HARD GATE:** This task must produce a passing test proving `source_repo` is populated on a real CentOS Stream 9 tarball before Tang proceeds to Task 11 (API contract) or Kit starts repo grouping work.
 
-- [ ] **Step 1: Check Go scanner for `source_repo` population**
+- [ ] **Step 1: Check Go scanner**
 
-Read `cmd/inspectah/internal/inspectors/rpm.go` and search for `populateSourceRepos` or `source_repo` or `SourceRepo`. Document how the Go scanner determines and sets this field.
+Read `cmd/inspectah/internal/inspectors/rpm.go`, search for `populateSourceRepos` or `source_repo`. Document how Go determines the field.
 
-- [ ] **Step 2: Check a real Go-generated tarball**
+- [ ] **Step 2: Check actual tarball**
 
-Examine the CentOS Stream 9 scan tarball's `snapshot.json` for `source_repo` values on packages. Are they populated or empty?
+Examine `snapshot.json` from the CentOS Stream 9 tarball. Are `source_repo` values populated or empty?
 
 - [ ] **Step 3: Check Rust RPM inspector**
 
-Read `inspectah-collect/src/inspectors/rpm/mod.rs` for any `source_repo` population logic. If absent, this is the gap.
+Read `inspectah-collect/src/inspectors/rpm/mod.rs` for `source_repo` population.
 
-- [ ] **Step 4: Determine root cause and fix**
+- [ ] **Step 4: Implement fix**
 
-Based on investigation:
-- If Go populates but field name differs (e.g., `sourceRepo` vs `source_repo`): fix serde alias in Rust types
-- If Go populates but Rust scanner doesn't: port the `populateSourceRepos` logic to Rust
-- If Go doesn't populate for this scan: the scan predates the feature, re-scan needed
+Based on root cause (serde mismatch, missing Rust logic, or stale tarball).
 
-- [ ] **Step 5: Write a test proving `source_repo` is populated**
+- [ ] **Step 5: Write proof test**
 
-Add a test that deserializes a known-good snapshot and verifies `source_repo` is non-empty for packages from standard repos.
+```rust
+#[test]
+fn test_source_repo_populated_from_real_tarball() {
+    // Deserialize the CentOS Stream 9 snapshot
+    let snap: InspectionSnapshot = load_test_tarball("testdata/centos-stream-9.tar.gz");
+    let rpm = snap.rpm.as_ref().unwrap();
+    let packages_with_repo: Vec<_> = rpm.packages_added.iter()
+        .filter(|p| !p.source_repo.is_empty()).collect();
+    assert!(packages_with_repo.len() > 0, "at least some packages must have source_repo");
+    let known_repo = packages_with_repo.iter()
+        .any(|p| ["baseos", "appstream", "epel"].contains(&p.source_repo.as_str()));
+    assert!(known_repo, "at least one package must have a recognized repo name");
+}
+```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Run proof test**
+
+Run: `cargo test -p inspectah-refine test_source_repo_populated`
+Expected: PASS — this is the hard gate.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git commit -m "fix(collect): populate source_repo for packages from RPM metadata"
@@ -1694,253 +1692,519 @@ git commit -m "fix(collect): populate source_repo for packages from RPM metadata
 
 ---
 
-### Task 9: Health Endpoint — Policy Field
+### Task 11: API Contract for Kit — RefinedView + RepoGroups + TS Mirror
 
 **Files:**
 - Modify: `inspectah-web/src/handlers.rs`
-- Test: existing inline tests in same file
+- Modify: `inspectah-web/ui/src/api/types.ts`
+- Modify: `inspectah-web/ui/src/components/attentionUtils.ts`
+- Test: inline tests in `handlers.rs`
 
-- [ ] **Step 1: Write failing test**
+This task pins the exact browser-facing contract that Kit codes against. Tang owns the TS mirror updates.
+
+- [ ] **Step 1: Define `RepoGroupInfo` in Rust**
+
+In `inspectah-web/src/handlers.rs`:
 
 ```rust
-#[test]
-fn health_includes_policy_distro_repos() {
-    let snap = InspectionSnapshot::new();
-    let session = RefineSession::new(snap);
-    let state = Arc::new(AppState {
-        session: Arc::new(Mutex::new(session)),
-        sections_cache: OnceLock::new(),
-    });
-    // Call health handler and check for policy.distro_repos
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    let response = rt.block_on(health(State(state)));
-    let json = response.0;
-    let distro_repos = json["policy"]["distro_repos"].as_array().unwrap();
-    assert!(distro_repos.iter().any(|v| v == "baseos"));
-    assert!(distro_repos.iter().any(|v| v == "appstream"));
+#[derive(Serialize, Clone, Debug)]
+pub struct RepoGroupInfo {
+    pub section_id: String,
+    pub provenance: inspectah_refine::types::RepoProvenance,
+    pub is_distro: bool,
+    pub package_count: usize,
+    pub enabled: bool,
 }
 ```
 
-- [ ] **Step 2: Add policy field to health response**
+`enabled` is `true` when no `ExcludeRepo` for this section is active in the projected state. Kit uses this to render toggle state.
 
-In `handlers.rs`, modify the `health()` handler to include:
+- [ ] **Step 2: Extend health endpoint with `policy`**
 
 ```rust
 use inspectah_refine::repo_index::DISTRO_REPOS;
 
-// In the health handler's json! macro:
+// In health handler:
 "policy": {
     "distro_repos": DISTRO_REPOS,
 }
 ```
 
-- [ ] **Step 3: Run test**
+- [ ] **Step 3: Extend view response with `repo_groups` and `baseline_available`**
 
-Run: `cargo test -p inspectah-web health_includes_policy`
+The existing view endpoint returns `session.view()` which is a `RefinedView`. Extend the handler to wrap it:
+
+```rust
+#[derive(Serialize)]
+pub struct ViewResponse {
+    #[serde(flatten)]
+    pub view: RefinedView,
+    pub repo_groups: Vec<RepoGroupInfo>,
+}
+```
+
+Build `repo_groups` from `session.repo_index()` plus projected state to determine `enabled`. Include an entry for empty `source_repo` packages with `provenance: Unknown`, `is_distro: false`, `enabled: true` (no toggle).
+
+- [ ] **Step 4: Write handler test**
+
+```rust
+#[test]
+fn test_view_response_includes_repo_groups() {
+    // Build session with known repos, call view handler, verify repo_groups
+    // has entries for appstream (distro, verified, no toggle) and epel (third-party, verified, toggle)
+}
+
+#[test]
+fn test_health_includes_policy_distro_repos() {
+    // Verify policy.distro_repos contains the expected list
+}
+```
+
+- [ ] **Step 5: Run tests**
+
+Run: `cargo test -p inspectah-web`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Update TypeScript mirror**
+
+In `inspectah-web/ui/src/api/types.ts`, add:
+
+```typescript
+// --- New Phase 5 types ---
+
+export type RepoProvenance = "verified" | "incomplete" | "unknown";
+
+export interface RepoGroupInfo {
+  section_id: string;
+  provenance: RepoProvenance;
+  is_distro: boolean;
+  package_count: number;
+  enabled: boolean;
+}
+
+// Update AttentionReason to include new variants
+export type AttentionReason =
+  | "package_baseline_match"
+  | "package_user_added"
+  | "package_version_changed"
+  | "package_provenance_unavailable"
+  | "package_local_install"
+  | "package_no_repo_source"
+  | "config_default"
+  | "config_baseline_match"
+  | "config_modified"
+  | "config_unowned"
+  | "config_orphaned"
+  | "sensitive_path"
+  | { custom: string };
+
+// Update RefineStats
+export interface RefineStats {
+  total_packages: number;
+  included_packages: number;
+  excluded_packages: number;
+  total_configs: number;
+  included_configs: number;
+  package_managed_configs: number;
+  excluded_configs: number;
+  needs_review_count: number;
+  ops_applied: number;
+  can_undo: boolean;
+  can_redo: boolean;
+  baseline_available: boolean;
+}
+
+// Update HealthResponse
+export interface HealthResponse {
+  status: string;
+  host: { hostname: string; os_name: string; os_version: string; os_id: string; system_type: string; schema_version: number; };
+  completeness: string;
+  policy: { distro_repos: string[] };
+}
+
+// View response now includes repo_groups
+export interface ViewResponse extends RefinedView {
+  repo_groups: RepoGroupInfo[];
+}
+```
+
+- [ ] **Step 7: Update `attentionUtils.ts`**
+
+In `inspectah-web/ui/src/components/attentionUtils.ts`, update `formatReasonText()` and `attentionLabelColor()` to handle new reason values. Key additions:
+
+```typescript
+export function formatReasonText(reason: AttentionReason): string {
+  if (typeof reason === "object" && "custom" in reason) return reason.custom;
+  const map: Record<string, string> = {
+    package_baseline_match: "Baseline",
+    package_user_added: "User Added",
+    package_version_changed: "Version Changed",
+    package_provenance_unavailable: "Baseline Unavailable",
+    package_local_install: "Local Install",
+    package_no_repo_source: "No Repo Source",
+    config_default: "Package Default",
+    config_baseline_match: "Baseline Match",
+    config_modified: "Modified",
+    config_unowned: "Unowned",
+    config_orphaned: "Orphaned",
+    sensitive_path: "Sensitive Path",
+  };
+  return map[reason] ?? reason.split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+}
+```
+
+- [ ] **Step 8: Run UI tests to verify TS compiles and existing tests pass**
+
+Run: `cd inspectah-web/ui && npm test`
+Expected: PASS (some tests may need attention reason updates in fixtures).
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add inspectah-web/src/handlers.rs
-git commit -m "feat(web): add policy.distro_repos to health endpoint for UI repo classification"
+git add inspectah-web/src/handlers.rs inspectah-web/ui/src/api/types.ts inspectah-web/ui/src/components/attentionUtils.ts
+git commit -m "feat(web): pin ViewResponse+RepoGroupInfo contract, update TS mirror and attentionUtils"
 ```
 
 ---
 
-### Task 10: Expose RepoIndex Data via API
+### Task 12: Add ExcludeRepo / IncludeRepo API Endpoint
 
 **Files:**
 - Modify: `inspectah-web/src/handlers.rs`
+- Modify: `inspectah-web/ui/src/api/client.ts`
 
-The UI needs repo provenance data to determine which repos get toggle controls. Add repo metadata to the refined view response.
+- [ ] **Step 1: Add handler for repo ops**
 
-- [ ] **Step 1: Add repo metadata to the view endpoint**
+The existing `/api/snapshot/apply` handler dispatches `RefinementOp`. Since `ExcludeRepo` / `IncludeRepo` are now variants of `RefinementOp`, verify the handler already handles them through the existing `session.apply(op)` path. If the handler deserializes the op correctly (it should via serde `tag`/`content`), no new endpoint is needed — the existing apply handler works.
 
-Extend the `/api/snapshot/view` response (or `/api/snapshot/refined`) to include repo grouping data:
+- [ ] **Step 2: Write test proving repo ops work through the apply endpoint**
 
 ```rust
-#[derive(Serialize)]
-pub struct RepoGroupInfo {
-    pub section_id: String,
-    pub provenance: RepoProvenance,
-    pub is_distro: bool,
-    pub package_count: usize,
+#[test]
+fn test_apply_exclude_repo_via_handler() {
+    // POST {"op": "ExcludeRepo", "target": {"section_id": "epel"}} to /api/snapshot/apply
+    // Verify response includes updated view with repo excluded
 }
 ```
 
-Include `Vec<RepoGroupInfo>` in the view response, built from `session.repo_index()`.
+- [ ] **Step 3: Run test**
 
-- [ ] **Step 2: Write test**
+Run: `cargo test -p inspectah-web test_apply_exclude_repo`
+Expected: PASS.
 
-Verify the response includes repo groups with correct provenance and distro flags.
+- [ ] **Step 4: Update client.ts**
 
-- [ ] **Step 3: Commit**
+Add typed helper in `client.ts`:
+
+```typescript
+export async function excludeRepo(sectionId: string, generation: number): Promise<ViewResponse> {
+  return applyOp({ op: "ExcludeRepo", target: { section_id: sectionId } }, generation);
+}
+
+export async function includeRepo(sectionId: string, generation: number): Promise<ViewResponse> {
+  return applyOp({ op: "IncludeRepo", target: { section_id: sectionId } }, generation);
+}
+```
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add inspectah-web/src/handlers.rs
-git commit -m "feat(web): expose repo group metadata with provenance in view response"
+git add inspectah-web/src/handlers.rs inspectah-web/ui/src/api/client.ts
+git commit -m "feat(web): wire ExcludeRepo/IncludeRepo through apply endpoint and TS client"
 ```
 
 ---
 
 ## Kit Tasks (Web UI)
 
-### Task 11: Layout Fixes (Independent — No Pipeline Dependency)
+### Task 13: Layout Fixes (Independent — Ship Now)
 
 **Files:**
 - Modify: `inspectah-web/ui/src/App.css`
+- Modify: `inspectah-web/ui/src/components/MainContent.tsx` (for `PageSection` padding)
 - Modify: `inspectah-web/ui/src/components/Sidebar.tsx`
 - Modify: `inspectah-web/ui/src/components/ContainerfilePanel.tsx`
+- Test: `inspectah-web/ui/src/components/__tests__/Sidebar.test.tsx`
+- Test: `inspectah-web/ui/src/components/__tests__/ContainerfilePanel.test.tsx`
+- Test: `inspectah-web/ui/src/components/__tests__/ResponsiveLayout.test.tsx`
 
-These are independent of the pipeline changes and can ship immediately.
+No pipeline dependency. Can ship in parallel with Tang's work.
 
-- [ ] **Step 1: Full-width layout**
+- [ ] **Step 1: Write failing test for hostname position**
 
-In `App.css`, strip PatternFly Page padding:
+In `Sidebar.test.tsx`, add a test verifying the hostname element appears before nav items in the DOM:
 
-```css
-.pf-v6-c-page__main {
-  padding: 0;
-}
+```typescript
+it("renders hostname above nav groups", () => {
+  render(<Sidebar {...defaultProps} />);
+  const host = screen.getByText(defaultProps.health.host.hostname);
+  const firstNav = screen.getByRole("navigation");
+  // hostname should precede nav in DOM order
+  expect(host.compareDocumentPosition(firstNav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
 ```
 
-- [ ] **Step 2: Nav spacing fix**
+- [ ] **Step 2: Run test to verify it fails**
 
-In `App.css`, remove `flex: 1` from sidebar nav so items top-align:
-
-```css
-.inspectah-sidebar nav {
-  flex: initial;
-}
-```
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- Sidebar`
+Expected: FAIL — hostname currently below nav.
 
 - [ ] **Step 3: Move hostname to top of sidebar**
 
-In `Sidebar.tsx`, move the `inspectah-sidebar__host` block above the `<Nav>` element. Change from subtle small text to bold hostname with OS info below. Add bottom border instead of top.
+In `Sidebar.tsx`, move the `inspectah-sidebar__host` block above the `<Nav>` element. Bold hostname, OS below. Bottom border separating from nav.
 
-- [ ] **Step 4: Fix panel collapse icon direction**
+- [ ] **Step 4: Run test to verify it passes**
 
-In `ContainerfilePanel.tsx`, flip the icon so it points right when collapsed (indicating "expand right") and left when open (indicating "collapse left").
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- Sidebar`
+Expected: PASS.
 
-- [ ] **Step 5: Verify visually**
+- [ ] **Step 5: Full-width layout**
+
+In `App.css`, strip PF Page padding. In `MainContent.tsx`, verify `PageSection` doesn't add extra padding.
+
+- [ ] **Step 6: Nav spacing fix**
+
+In `App.css`, remove `flex: 1` from sidebar nav.
+
+- [ ] **Step 7: Panel collapse icon direction**
+
+In `ContainerfilePanel.tsx`, flip icon. Write test in `ContainerfilePanel.test.tsx` verifying icon direction matches panel state.
+
+- [ ] **Step 8: Run all affected tests**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- Sidebar ContainerfilePanel ResponsiveLayout`
+Expected: All PASS.
+
+- [ ] **Step 9: Visual verification**
 
 Run: `cd inspectah-web/ui && npm run dev`
-Open browser, verify: full-width layout, top-aligned nav, hostname at top, correct collapse icon direction.
+Open browser, verify: full-width, top-aligned nav, hostname at top, correct collapse icon.
 
-- [ ] **Step 6: Run existing tests**
-
-Run: `cd inspectah-web/ui && npm test`
-Expected: All PASS (update selectors if needed).
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add inspectah-web/ui/src/App.css inspectah-web/ui/src/components/Sidebar.tsx inspectah-web/ui/src/components/ContainerfilePanel.tsx
+git add inspectah-web/ui/src/App.css inspectah-web/ui/src/components/Sidebar.tsx inspectah-web/ui/src/components/ContainerfilePanel.tsx inspectah-web/ui/src/components/MainContent.tsx
 git commit -m "fix(web): full-width layout, nav spacing, hostname to top, panel collapse icon"
 ```
 
 ---
 
-### Task 12: Tier-Aware Card Treatment
+### Task 14: Tier-Aware Card Treatment
 
 **Files:**
-- Modify: `inspectah-web/ui/src/components/DecisionSections.tsx`
+- Modify: `inspectah-web/ui/src/components/AttentionGroup.tsx`
+- Modify: `inspectah-web/ui/src/components/DecisionItem.tsx`
+- Modify: `inspectah-web/ui/src/components/DecisionList.tsx`
 - Modify: `inspectah-web/ui/src/components/PackageDetail.tsx`
 - Modify: `inspectah-web/ui/src/App.css`
 - Test: `inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx`
 
-Depends on Tang's pipeline landing (Tasks 1-6).
+Blocked on Tang Tasks 1-11.
 
-- [ ] **Step 1: Render Tier 1 as collapsed summary**
+- [ ] **Step 1: Write failing test for Tier 1 collapsed summary**
 
-In `DecisionSections.tsx`, detect `AttentionLevel::Routine` items and render them as a collapsed summary group: "N baseline packages (auto-included)" with an expand toggle.
+In `DecisionSections.test.tsx`:
 
-When expanded, render a compact list (name only, muted text, no cards, no checkboxes).
+```typescript
+it("renders Tier 1 packages as collapsed summary", () => {
+  const view = makeView({
+    packages: [
+      makePkg({ source_repo: "baseos", attention: [{ level: "routine", reason: "package_baseline_match", detail: null }] }),
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  expect(screen.getByText(/baseline packages/i)).toBeInTheDocument();
+  expect(screen.queryByText("glibc")).not.toBeInTheDocument(); // collapsed
+});
+```
 
-- [ ] **Step 2: Render Tier 2 with info-level styling**
+- [ ] **Step 2: Run test to verify it fails**
 
-Change the left border color from warning to info (blue) for `AttentionLevel::Informational` items. Badge shows `source_repo` value when provenance is `Verified`, or "baseline unavailable" when `PackageProvenanceUnavailable`.
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: FAIL.
 
-- [ ] **Step 3: Add provenance completeness banner**
+- [ ] **Step 3: Implement Tier 1 collapsed summary**
 
-When the API response indicates baseline data is unavailable, show a banner at the top of the Packages section: "Baseline data unavailable — classification confidence reduced."
+In `AttentionGroup.tsx` (or `DecisionList.tsx`), detect Routine-level items and render as collapsed summary: "N baseline packages (auto-included)" with expand toggle. When expanded, compact list (name only, muted text).
 
-- [ ] **Step 4: Write tests**
+- [ ] **Step 4: Write failing test for Tier 2 badge text**
 
-Test that Tier 1 items render as collapsed summary, Tier 2 items show correct badge text for verified vs. provenance-unavailable, and Tier 3 items render unchanged.
+```typescript
+it("shows repo source badge for verified Tier 2", () => {
+  const view = makeView({
+    packages: [
+      makePkg({ source_repo: "appstream", attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  expect(screen.getByText("appstream")).toBeInTheDocument();
+});
+
+it("shows 'Baseline Unavailable' for provenance-unavailable Tier 2", () => {
+  const view = makeView({
+    packages: [
+      makePkg({ attention: [{ level: "informational", reason: "package_provenance_unavailable", detail: null }] }),
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  expect(screen.getByText(/baseline unavailable/i)).toBeInTheDocument();
+});
+```
+
+- [ ] **Step 5: Run tests to verify they fail**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: FAIL.
+
+- [ ] **Step 6: Implement badge text in PackageDetail.tsx**
+
+Update `PackageDetail.tsx` to show `source_repo` as badge when reason is `package_user_added`, or "Baseline Unavailable" when `package_provenance_unavailable`.
+
+- [ ] **Step 7: Implement provenance completeness banner**
+
+When `stats.baseline_available === false`, show banner at top of Packages section.
+
+- [ ] **Step 8: Run all tests**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: All PASS.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git commit -m "feat(web): tier-aware cards with collapsed Tier 1, provenance badges, baseline banner"
+```
+
+---
+
+### Task 15: Repo Group Headers and Bulk Toggle
+
+**Files:**
+- Create: `inspectah-web/ui/src/components/RepoGroupHeader.tsx`
+- Modify: `inspectah-web/ui/src/components/DecisionList.tsx`
+- Modify: `inspectah-web/ui/src/hooks/useMutation.ts`
+- Test: `inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx`
+
+- [ ] **Step 1: Write failing test for repo group rendering**
+
+```typescript
+it("groups Tier 2 packages by repo with header", () => {
+  const view = makeView({
+    packages: [
+      makePkg({ name: "httpd", source_repo: "appstream", attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
+      makePkg({ name: "epel-release", source_repo: "epel", attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
+    ],
+    repo_groups: [
+      { section_id: "appstream", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  expect(screen.getByText(/appstream/)).toBeInTheDocument();
+  expect(screen.getByText(/Distro/)).toBeInTheDocument();
+  expect(screen.getByText(/Third-party/)).toBeInTheDocument();
+});
+
+it("shows toggle for verified third-party, no toggle for distro", () => {
+  // Same fixture as above
+  const distroGroup = screen.getByText(/appstream/).closest("[data-repo-group]");
+  expect(within(distroGroup).queryByRole("switch")).not.toBeInTheDocument();
+  const thirdPartyGroup = screen.getByText(/epel/).closest("[data-repo-group]");
+  expect(within(thirdPartyGroup).getByRole("switch")).toBeInTheDocument();
+});
+
+it("does not show toggle for unverified provenance", () => {
+  const view = makeView({
+    repo_groups: [
+      { section_id: "mystery", provenance: "incomplete", is_distro: false, package_count: 2, enabled: true },
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  expect(screen.getByText(/Unverified/)).toBeInTheDocument();
+  expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: FAIL.
+
+- [ ] **Step 3: Create `RepoGroupHeader.tsx`**
+
+Renders: repo label, badge ("Distro"/"Third-party"/"Unverified"/"Unknown"), package count, conditional toggle. Toggle only for third-party + `Verified`. Badges abbreviate to "D"/"3P" at <768px with `aria-label`.
+
+- [ ] **Step 4: Wire toggle to ExcludeRepo/IncludeRepo**
+
+In `DecisionList.tsx` / `useMutation.ts`, wire toggle to call `excludeRepo()` / `includeRepo()` from the client. Optimistic UI: flip immediately, show undo toast via `role="status"` on success, revert + `role="alert"` error banner on failure.
 
 - [ ] **Step 5: Run tests**
 
-Run: `cd inspectah-web/ui && npm test`
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
 Expected: All PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git commit -m "feat(web): tier-aware card treatment with collapsed Tier 1, info-level Tier 2, provenance banner"
+git commit -m "feat(web): repo group headers with bulk toggle, distro/third-party badges"
 ```
 
 ---
 
-### Task 13: Repo Group Headers and Bulk Toggle
+### Task 16: Config Kind Grouping
 
 **Files:**
-- Create: `inspectah-web/ui/src/components/RepoGroupHeader.tsx`
-- Modify: `inspectah-web/ui/src/components/DecisionSections.tsx`
-- Test: `inspectah-web/ui/src/components/__tests__/RepoGroupHeader.test.tsx`
+- Modify: `inspectah-web/ui/src/components/AttentionGroup.tsx` or `DecisionList.tsx`
+- Modify: `inspectah-web/ui/src/components/ConfigDetail.tsx`
+- Test: `inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx`
 
-- [ ] **Step 1: Create `RepoGroupHeader` component**
+- [ ] **Step 1: Write failing test for config Tier 1 summary**
 
-Renders: repo label, distro/third-party/unverified/unknown badge, package count, and conditional enable/disable toggle. Toggle only shown for third-party repos with `Verified` provenance.
+```typescript
+it("renders Tier 1 configs as 'managed by packages (not copied)' summary", () => {
+  const view = makeView({
+    config_files: [
+      makeConfig({ path: "/etc/default.conf", kind: "rpm_owned_default",
+        attention: [{ level: "routine", reason: "config_default", detail: null }] }),
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  expect(screen.getByText(/managed by packages/i)).toBeInTheDocument();
+  expect(screen.queryByText("/etc/default.conf")).not.toBeInTheDocument();
+});
+```
 
-Props: `sectionId`, `provenance`, `isDistro`, `packageCount`, `enabled`, `onToggle`.
+- [ ] **Step 2: Run test to verify it fails**
 
-Badge labels: "Distro" / "Third-party" / "Unverified" / "Unknown". Abbreviate to "D" / "3P" at <768px with `aria-label` preserving full text.
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: FAIL.
 
-- [ ] **Step 2: Group Tier 2 packages by repo in DecisionSections**
+- [ ] **Step 3: Implement config kind grouping**
 
-Read repo group data from the API response. Render each repo as a group with `RepoGroupHeader` followed by the group's package cards.
+Tier 1 collapsed: "N configs managed by packages (not copied)". Tier 2 shown as cards. Tier 3 shown with attention badge and "View diff" link when `diff_against_rpm` is available.
 
-- [ ] **Step 3: Wire toggle to ExcludeRepo / IncludeRepo API call**
+- [ ] **Step 4: Write test for diff indicator**
 
-Optimistic UI: flip immediately, send API request, show undo toast via `role="status"` live region on success, revert + error banner via `role="alert"` on failure.
+```typescript
+it("shows View diff link when diff_against_rpm is available", () => {
+  const view = makeView({
+    config_files: [
+      makeConfig({ path: "/etc/ssh/sshd_config", kind: "rpm_owned_modified",
+        diff_against_rpm: "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new",
+        attention: [{ level: "needs_review", reason: "config_modified", detail: null }] }),
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  expect(screen.getByText(/view diff/i)).toBeInTheDocument();
+});
+```
 
-- [ ] **Step 4: Keyboard traversal**
+- [ ] **Step 5: Run tests**
 
-Group headers are Tab stops. Within a header, Tab moves to the toggle (if present), then to the first item. Arrow/j/k navigate within a group.
-
-- [ ] **Step 5: Write tests**
-
-Test header rendering for each provenance state, toggle visibility rules, and keyboard focus order.
-
-- [ ] **Step 6: Run tests**
-
-Run: `cd inspectah-web/ui && npm test`
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
 Expected: All PASS.
 
-- [ ] **Step 7: Commit**
-
-```bash
-git commit -m "feat(web): repo group headers with bulk toggle, distro/third-party badges, keyboard nav"
-```
-
----
-
-### Task 14: Config Grouping
-
-**Files:**
-- Modify: `inspectah-web/ui/src/components/DecisionSections.tsx` (or create `ConfigGroup.tsx`)
-
-- [ ] **Step 1: Group configs by kind**
-
-Tier 1 collapsed: "N configs managed by packages (not copied)". Tier 2 (Unowned) shown as reviewable cards grouped by parent directory. Tier 3 (RpmOwnedModified) shown with attention badge.
-
-- [ ] **Step 2: Config diff indicator**
-
-When `diff_against_rpm` is available on a config entry, show a "View diff" link. Clicking opens inline diff below the card. No indicator when no diff data.
-
-- [ ] **Step 3: Write tests and commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git commit -m "feat(web): config kind grouping with Tier 1 collapsed, diff indicator"
@@ -1948,21 +2212,37 @@ git commit -m "feat(web): config kind grouping with Tier 1 collapsed, diff indic
 
 ---
 
-### Task 15: Search Auto-Reveal for Collapsed Groups
+### Task 17: Search Auto-Reveal for Collapsed Groups
 
 **Files:**
-- Modify: `inspectah-web/ui/src/components/GlobalSearch.tsx` (or equivalent)
-- Modify: `inspectah-web/ui/src/components/DecisionSections.tsx`
+- Modify: `inspectah-web/ui/src/App.tsx` (search/focus orchestration lives here)
+- Modify: `inspectah-web/ui/src/components/GlobalSearch.tsx`
+- Test: `inspectah-web/ui/src/components/__tests__/GlobalSearch.test.tsx`
 
-- [ ] **Step 1: Implement auto-reveal**
+- [ ] **Step 1: Write failing test**
 
-When global search selects an item inside a collapsed group:
-1. Auto-expand the containing group
-2. Scroll item into view
-3. Flash highlight (2-second CSS animation)
-4. Focus lands on the item's primary action control
+```typescript
+it("auto-expands collapsed group when search selects item inside it", () => {
+  // Render with Tier 1 group collapsed, search for a Tier 1 package name
+  // Verify: group expands, item is visible, has flash highlight class
+});
+```
 
-- [ ] **Step 2: Write test and commit**
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- GlobalSearch`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement auto-reveal**
+
+In `App.tsx` search handler: when search result targets an item inside a collapsed group, expand the group, scroll into view, apply `inspectah-search-highlight` class (2s CSS animation), focus on item's primary action.
+
+- [ ] **Step 4: Run test**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- GlobalSearch`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
 
 ```bash
 git commit -m "feat(web): search auto-reveal for collapsed tier/repo groups"
@@ -1970,47 +2250,121 @@ git commit -m "feat(web): search auto-reveal for collapsed tier/repo groups"
 
 ---
 
-### Task 16: Responsive Behavior
+### Task 18: Keyboard Traversal and Responsive Behavior
 
 **Files:**
+- Modify: `inspectah-web/ui/src/App.tsx` (keyboard handling)
 - Modify: `inspectah-web/ui/src/App.css`
+- Test: `inspectah-web/ui/src/components/__tests__/FocusAndNavigation.test.tsx`
+- Test: `inspectah-web/ui/src/components/__tests__/ResponsiveLayout.test.tsx`
 
-- [ ] **Step 1: Responsive repo headers**
+- [ ] **Step 1: Write failing test for group header keyboard stops**
 
-At <1024px: label + count on first line, toggle on second. At <768px: badge abbreviates to "D" / "3P" with `aria-label`.
+```typescript
+it("Tab moves from group header to toggle to first item", () => {
+  // Render with repo group, focus header, Tab → toggle, Tab → first item
+});
+```
 
-- [ ] **Step 2: Verify and commit**
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- FocusAndNavigation`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement keyboard traversal**
+
+Group headers as Tab stops. Tab: header → toggle → first item. Arrow/j/k within group.
+
+- [ ] **Step 4: Write failing test for responsive badges**
+
+```typescript
+it("abbreviates badges at narrow width with aria-label", () => {
+  // Render at 600px, verify "D" visible, aria-label="Distro"
+});
+```
+
+- [ ] **Step 5: Run test to verify it fails**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- ResponsiveLayout`
+Expected: FAIL.
+
+- [ ] **Step 6: Implement responsive rules**
+
+Badge abbreviation at <768px with `aria-label`. Repo headers stack at <1024px.
+
+- [ ] **Step 7: Run all tests**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- FocusAndNavigation ResponsiveLayout`
+Expected: All PASS.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git commit -m "feat(web): responsive repo headers and badge abbreviation"
+git commit -m "feat(web): keyboard traversal for repo groups, responsive badge abbreviation"
 ```
 
 ---
 
-## Integration
-
-### Task 17: E2E Smoke Test with CentOS Stream 9 Tarball
+### Task 19: E2E Smoke Tests
 
 **Files:**
-- Test: `inspectah-web/ui/tests/e2e/` (Playwright)
+- Modify: `inspectah-web/ui/e2e/triage.spec.ts`
+- Test fixtures: `testdata/` (CentOS Stream 9 tarball)
 
-- [ ] **Step 1: Add E2E test for triage count reduction**
+E2E tests require a running `inspectah refine` server with a test tarball. See `inspectah-web/ui/e2e/README.md` for server setup.
 
-Create a Playwright test that loads the CentOS Stream 9 tarball, verifies the triage counter shows ~50-80 items (not ~734), verifies Tier 1 packages are collapsed, and verifies repo grouping is visible.
+- [ ] **Step 1: Write E2E test for triage count reduction**
 
-- [ ] **Step 2: Add E2E test for ExcludeRepo flow**
+In `inspectah-web/ui/e2e/triage.spec.ts`:
 
-Test: click a third-party repo toggle, verify packages disappear from triage and Containerfile, verify undo toast appears, click undo, verify restoration.
+```typescript
+test("Phase 5: triage surface reduced from ~734 to <100", async ({ page }) => {
+  // Navigate to refine UI, verify needs_review count < 100
+  // Verify Tier 1 section shows "baseline packages" collapsed summary
+  // Verify repo groups are visible
+});
+```
 
-- [ ] **Step 3: Run E2E tests**
+- [ ] **Step 2: Write E2E test for ExcludeRepo flow**
 
-Run: `cd inspectah-web/ui && npx playwright test`
+```typescript
+test("ExcludeRepo removes packages and shows undo toast", async ({ page }) => {
+  // Find third-party repo toggle, click it
+  // Verify packages disappear from triage
+  // Verify Containerfile preview updates
+  // Verify undo toast appears
+  // Click undo, verify restoration
+});
+```
+
+- [ ] **Step 3: Write E2E test for no-toggle on unverified repo**
+
+```typescript
+test("unverified repo shows label but no toggle", async ({ page }) => {
+  // Verify repo with incomplete provenance has no switch element
+});
+```
+
+- [ ] **Step 4: Write E2E test for Tier 1 config "not copied"**
+
+```typescript
+test("Tier 1 configs show 'managed by packages' and are not in Containerfile", async ({ page }) => {
+  // Verify config section shows "managed by packages" summary
+  // Open Containerfile panel, verify no COPY directives for default configs
+});
+```
+
+- [ ] **Step 5: Run E2E tests**
+
+Start server: `cargo run -p inspectah-cli -- refine testdata/centos-stream-9.tar.gz &`
+Run: `cd inspectah-web/ui && npx playwright test e2e/triage.spec.ts`
 Expected: All PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git commit -m "test(web): E2E smoke tests for tiered triage and repo exclusion"
+git add inspectah-web/ui/e2e/triage.spec.ts
+git commit -m "test(web): E2E for tiered triage, repo exclusion, provenance, config omission"
 ```
 
 ---
@@ -2018,14 +2372,23 @@ git commit -m "test(web): E2E smoke tests for tiered triage and repo exclusion"
 ## Task Dependency Summary
 
 ```
-Task 1 (types) ─────┬──→ Task 2 (pkg classify) ──→ Task 5 (normalize) ──→ Task 6 (session) ──→ Task 7 (containerfile)
-                     ├──→ Task 3 (cfg classify) ──→ Task 5                                  ──→ Task 8 (source_repo)
-                     └──→ Task 4 (repo index) ────→ Task 6                                  ──→ Task 9 (health endpoint)
-                                                                                             ──→ Task 10 (view endpoint)
+Task 1 (types) ──┬──→ Task 2 (pkg classify) ──┬──→ Task 5 (normalize) ──→ Task 6 (session construction)
+                  ├──→ Task 3 (cfg classify) ──┘                           ↓
+                  └──→ Task 4 (repo index) ────────────────────────→ Task 7 (ExcludeRepo cascade)
+                                                                     ↓
+                                                               Task 8 (non-leaf view filter)
+                                                                     ↓
+                                                               Task 9 (containerfile fixes)
+                                                                     ↓
+                                                               Task 10 (source_repo ◆ HARD GATE)
+                                                                     ↓
+                                                               Task 11 (API contract + TS mirror)
+                                                                     ↓
+                                                               Task 12 (repo op endpoint)
 
-Task 11 (layout CSS) ─── independent, ship anytime
+Task 13 (layout CSS) ─── independent, ship anytime
 
-Tasks 12-16 (UI tiers, repo groups, config groups, search, responsive) ── blocked on Tasks 1-10
+Tasks 14-18 (tier cards, repo groups, config groups, search, keyboard) ── blocked on Tasks 1-12
 
-Task 17 (E2E) ── blocked on all above
+Task 19 (E2E) ── blocked on all above
 ```
