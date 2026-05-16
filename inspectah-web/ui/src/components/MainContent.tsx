@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { PageSection, Content, Skeleton } from "@patternfly/react-core";
-import type { RefinedView, RefinedPackage, RefinedConfig } from "../api/types";
+import type { RefinedView, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
+import { ContextList } from "./ContextList";
 
 /** Section ID to human-readable label. */
 const SECTION_LABELS: Record<string, string> = {
@@ -23,6 +24,7 @@ export interface MainContentProps {
   activeSection: string;
   loading: boolean;
   viewData: RefinedView | null;
+  sections: ContextSection[] | null;
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;
 }
@@ -39,6 +41,7 @@ export function MainContent({
   activeSection,
   loading,
   viewData,
+  sections,
   onViewUpdate,
   onMutationError,
 }: MainContentProps) {
@@ -93,6 +96,43 @@ export function MainContent({
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
         />
+      </PageSection>
+    );
+  }
+
+  // Context sections: services, containers, users_groups, network, storage,
+  // scheduled_tasks, non_rpm_software, kernel_boot, selinux
+  const contextSectionIds = [
+    "services",
+    "containers",
+    "users_groups",
+    "network",
+    "storage",
+    "scheduled_tasks",
+    "non_rpm_software",
+    "kernel_boot",
+    "selinux",
+  ];
+
+  if (contextSectionIds.includes(activeSection)) {
+    const section = sections?.find((s) => s.id === activeSection);
+    if (!section) {
+      return (
+        <PageSection>
+          <Content>
+            <h2>{label}</h2>
+            <p>Section data not available.</p>
+          </Content>
+        </PageSection>
+      );
+    }
+
+    return (
+      <PageSection>
+        <Content>
+          <h2>{label}</h2>
+        </Content>
+        <ContextList section={section} />
       </PageSection>
     );
   }
