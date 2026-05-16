@@ -2,6 +2,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::RefinementOp;
@@ -79,7 +80,11 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         .unwrap_or_default();
 
     let system_type = serde_json::to_value(&snap.system_type).unwrap_or(json!("unknown"));
-    let completeness = serde_json::to_value(&snap.completeness).unwrap_or(json!("unknown"));
+    let completeness = match &snap.completeness {
+        Completeness::Complete => "complete",
+        Completeness::Partial { .. } => "partial",
+        Completeness::Incomplete { .. } => "incomplete",
+    };
 
     Json(json!({
         "status": "ok",
@@ -379,7 +384,14 @@ fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
             let service_names: Vec<&str> =
                 cf.images.iter().map(|s| s.service.as_str()).collect();
             let subtitle = service_names.join(", ");
-            let search = format!("{} {}", cf.path, service_names.join(" "));
+            let mut search = format!("{} {}", cf.path, service_names.join(" "));
+            // Append image refs for searchability (spec: ComposeService.image → searchable_text)
+            for svc in &cf.images {
+                if !svc.image.is_empty() {
+                    search.push(' ');
+                    search.push_str(&svc.image);
+                }
+            }
             items.push(ContextItem {
                 id: cf.path.clone(),
                 title: basename,
@@ -409,12 +421,17 @@ fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
             } else {
                 Some(detail_parts.join("\n"))
             };
+            let mut search = format!("{} {} {}", rc.name, rc.image, rc.status);
+            if !rc.restart_policy.is_empty() {
+                search.push(' ');
+                search.push_str(&rc.restart_policy);
+            }
             items.push(ContextItem {
                 id: rc.id.clone(),
                 title: rc.name.clone(),
                 subtitle: Some(subtitle),
                 detail,
-                searchable_text: format!("{} {} {}", rc.name, rc.image, rc.status),
+                searchable_text: search,
             });
         }
 
@@ -855,6 +872,7 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
         // NonRpmItem
         for item in &nrpm.items {
             let subtitle = format!("{} ({})", item.method, item.confidence);
+            // detail always includes path; pip packages appended when present
             let detail = if !item.packages.is_empty() {
                 let pkg_list: Vec<String> = item
                     .packages
@@ -867,7 +885,7 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
                         }
                     })
                     .collect();
-                Some(pkg_list.join(", "))
+                Some(format!("{}\n{}", item.path, pkg_list.join(", ")))
             } else {
                 Some(item.path.clone())
             };
@@ -1109,14 +1127,15 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
             });
         }
 
-        // FIPS mode — single synthetic item
-        if se.fips_mode {
+        // FIPS mode — always emitted (spec: show even when disabled)
+        {
+            let fips_label = if se.fips_mode { "enabled" } else { "disabled" };
             items.push(ContextItem {
                 id: "fips_mode".to_string(),
                 title: "FIPS mode".to_string(),
-                subtitle: Some("enabled".to_string()),
+                subtitle: Some(fips_label.to_string()),
                 detail: None,
-                searchable_text: "fips mode enabled".to_string(),
+                searchable_text: format!("fips mode {}", fips_label),
             });
         }
 
@@ -1211,5 +1230,284 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
         id: "selinux".to_string(),
         display_name: "SELinux".to_string(),
         items,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::types::completeness::{Completeness, InspectorId};
+    use inspectah_core::types::containers::{
+        ComposeFile, ComposeService, ContainerSection, RunningContainer,
+    };
+    use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
+    use inspectah_core::types::selinux::SelinuxSection;
+
+    fn empty_snapshot() -> InspectionSnapshot {
+        InspectionSnapshot::new()
+    }
+
+    // -- Fix 1: Health completeness wire shape ---------------------------------
+
+    #[test]
+    fn health_completeness_complete_is_string() {
+        let mut snap = empty_snapshot();
+        snap.completeness = Completeness::Complete;
+        let val = serde_json::to_value(&snap.completeness).unwrap();
+        // The raw serde produces an object, NOT what the wire contract wants.
+        // Verify our match-based conversion produces a flat string.
+        let wire = match &snap.completeness {
+            Completeness::Complete => "complete",
+            Completeness::Partial { .. } => "partial",
+            Completeness::Incomplete { .. } => "incomplete",
+        };
+        assert_eq!(wire, "complete");
+        // Confirm serde would NOT produce the right shape on its own
+        assert!(val.is_object(), "raw serde produces object, not string");
+    }
+
+    #[test]
+    fn health_completeness_partial_is_string() {
+        let snap_completeness = Completeness::Partial {
+            degraded_sections: vec![InspectorId::Rpm],
+            reason: "timeout".into(),
+        };
+        let wire = match &snap_completeness {
+            Completeness::Complete => "complete",
+            Completeness::Partial { .. } => "partial",
+            Completeness::Incomplete { .. } => "incomplete",
+        };
+        assert_eq!(wire, "partial");
+    }
+
+    #[test]
+    fn health_completeness_incomplete_is_string() {
+        let snap_completeness = Completeness::Incomplete {
+            failed_sections: vec![InspectorId::Network],
+            degraded_sections: vec![],
+            reason: "crash".into(),
+        };
+        let wire = match &snap_completeness {
+            Completeness::Complete => "complete",
+            Completeness::Partial { .. } => "partial",
+            Completeness::Incomplete { .. } => "incomplete",
+        };
+        assert_eq!(wire, "incomplete");
+    }
+
+    // -- Fix 2a: ComposeFile image refs in searchable_text --------------------
+
+    #[test]
+    fn compose_searchable_text_includes_image_refs() {
+        let mut snap = empty_snapshot();
+        snap.containers = Some(ContainerSection {
+            compose_files: vec![ComposeFile {
+                path: "/opt/app/docker-compose.yml".into(),
+                images: vec![
+                    ComposeService {
+                        service: "web".into(),
+                        image: "nginx:1.25".into(),
+                    },
+                    ComposeService {
+                        service: "db".into(),
+                        image: "postgres:16".into(),
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+        let containers = sections.iter().find(|s| s.id == "containers").unwrap();
+        let item = containers
+            .items
+            .iter()
+            .find(|i| i.id == "/opt/app/docker-compose.yml")
+            .unwrap();
+
+        assert!(
+            item.searchable_text.contains("nginx:1.25"),
+            "searchable_text should contain image ref nginx:1.25, got: {}",
+            item.searchable_text
+        );
+        assert!(
+            item.searchable_text.contains("postgres:16"),
+            "searchable_text should contain image ref postgres:16, got: {}",
+            item.searchable_text
+        );
+        // Also verify service names are still present
+        assert!(item.searchable_text.contains("web"));
+        assert!(item.searchable_text.contains("db"));
+    }
+
+    // -- Fix 2b: RunningContainer restart_policy in searchable_text -----------
+
+    #[test]
+    fn container_searchable_text_includes_restart_policy() {
+        let mut snap = empty_snapshot();
+        snap.containers = Some(ContainerSection {
+            running_containers: vec![RunningContainer {
+                id: "abc123".into(),
+                name: "my-app".into(),
+                image: "myapp:latest".into(),
+                status: "running".into(),
+                restart_policy: "always".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+        let containers = sections.iter().find(|s| s.id == "containers").unwrap();
+        let item = containers.items.iter().find(|i| i.id == "abc123").unwrap();
+
+        assert!(
+            item.searchable_text.contains("always"),
+            "searchable_text should contain restart_policy, got: {}",
+            item.searchable_text
+        );
+    }
+
+    #[test]
+    fn container_searchable_text_omits_empty_restart_policy() {
+        let mut snap = empty_snapshot();
+        snap.containers = Some(ContainerSection {
+            running_containers: vec![RunningContainer {
+                id: "abc123".into(),
+                name: "my-app".into(),
+                image: "myapp:latest".into(),
+                status: "running".into(),
+                restart_policy: String::new(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+        let containers = sections.iter().find(|s| s.id == "containers").unwrap();
+        let item = containers.items.iter().find(|i| i.id == "abc123").unwrap();
+
+        // Should end cleanly without trailing space
+        assert_eq!(item.searchable_text, "my-app myapp:latest running");
+    }
+
+    // -- Fix 2c: NonRpmItem detail includes both path and pip packages --------
+
+    #[test]
+    fn nonrpm_detail_includes_path_and_packages() {
+        let mut snap = empty_snapshot();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "myenv".into(),
+                path: "/opt/venvs/myenv".into(),
+                method: "pip".into(),
+                confidence: "high".into(),
+                packages: vec![
+                    PipPackage {
+                        name: "requests".into(),
+                        version: "2.31".into(),
+                    },
+                    PipPackage {
+                        name: "flask".into(),
+                        version: "".into(),
+                    },
+                ],
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+        let nonrpm = sections
+            .iter()
+            .find(|s| s.id == "non_rpm_software")
+            .unwrap();
+        let item = nonrpm.items.iter().find(|i| i.id == "myenv").unwrap();
+        let detail = item.detail.as_ref().unwrap();
+
+        assert!(
+            detail.contains("/opt/venvs/myenv"),
+            "detail should contain path, got: {}",
+            detail
+        );
+        assert!(
+            detail.contains("requests==2.31"),
+            "detail should contain pip packages, got: {}",
+            detail
+        );
+        assert!(
+            detail.contains("flask"),
+            "detail should contain flask, got: {}",
+            detail
+        );
+    }
+
+    #[test]
+    fn nonrpm_detail_path_only_when_no_packages() {
+        let mut snap = empty_snapshot();
+        snap.non_rpm_software = Some(NonRpmSoftwareSection {
+            items: vec![NonRpmItem {
+                name: "mybin".into(),
+                path: "/opt/bin/mybin".into(),
+                method: "binary".into(),
+                confidence: "medium".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+        let nonrpm = sections
+            .iter()
+            .find(|s| s.id == "non_rpm_software")
+            .unwrap();
+        let item = nonrpm.items.iter().find(|i| i.id == "mybin").unwrap();
+
+        assert_eq!(item.detail.as_deref(), Some("/opt/bin/mybin"));
+    }
+
+    // -- Fix 2d: FIPS mode synthetic row emitted when disabled ----------------
+
+    #[test]
+    fn fips_mode_disabled_emits_row() {
+        let mut snap = empty_snapshot();
+        snap.selinux = Some(SelinuxSection {
+            mode: "enforcing".into(),
+            fips_mode: false,
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+        let selinux = sections.iter().find(|s| s.id == "selinux").unwrap();
+        let fips = selinux
+            .items
+            .iter()
+            .find(|i| i.id == "fips_mode")
+            .expect("FIPS mode item should exist even when disabled");
+
+        assert_eq!(fips.subtitle.as_deref(), Some("disabled"));
+        assert!(fips.searchable_text.contains("disabled"));
+    }
+
+    #[test]
+    fn fips_mode_enabled_emits_row() {
+        let mut snap = empty_snapshot();
+        snap.selinux = Some(SelinuxSection {
+            mode: "enforcing".into(),
+            fips_mode: true,
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+        let selinux = sections.iter().find(|s| s.id == "selinux").unwrap();
+        let fips = selinux
+            .items
+            .iter()
+            .find(|i| i.id == "fips_mode")
+            .expect("FIPS mode item should exist when enabled");
+
+        assert_eq!(fips.subtitle.as_deref(), Some("enabled"));
+        assert!(fips.searchable_text.contains("enabled"));
     }
 }
