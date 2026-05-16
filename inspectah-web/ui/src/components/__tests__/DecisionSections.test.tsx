@@ -15,6 +15,7 @@ import type {
   RefinedView,
   RefineStats,
   ViewResponse,
+  RepoGroupInfo,
 } from "../../api/types";
 
 // --- Mock fetch globally ---
@@ -114,6 +115,7 @@ function makeViewResponse(overrides: {
   packages?: RefinedPackage[];
   config_files?: RefinedConfig[];
   stats?: Partial<RefineStats>;
+  repo_groups?: RepoGroupInfo[];
 } = {}): ViewResponse {
   return {
     packages: overrides.packages ?? [],
@@ -121,7 +123,7 @@ function makeViewResponse(overrides: {
     containerfile_preview: "",
     stats: { ...MOCK_STATS, ...overrides.stats },
     generation: 1,
-    repo_groups: [],
+    repo_groups: overrides.repo_groups ?? [],
   };
 }
 
@@ -1358,5 +1360,160 @@ describe("Tier-aware card treatment", () => {
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
     expect(screen.getByText(/classification confidence reduced/i)).toBeInTheDocument();
+  });
+});
+
+// ---- Repo group header tests ----
+
+describe("Repo group headers", () => {
+  it("groups Tier 2 packages by repo with header", async () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ name: "httpd", source_repo: "appstream" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
+        makePkg({ name: "epel-release", source_repo: "epel" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
+      ],
+      repo_groups: [
+        { section_id: "appstream", provenance: "verified" as const, is_distro: true, package_count: 1, enabled: true },
+        { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: true },
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Expand the informational group (starts collapsed)
+    const infoToggle = screen.getByText(/Informational/);
+    await userEvent.click(infoToggle);
+
+    // Repo group headers should appear
+    expect(screen.getByTestId("repo-group-appstream")).toBeInTheDocument();
+    expect(screen.getByTestId("repo-group-epel")).toBeInTheDocument();
+    // Badge labels
+    expect(screen.getByText("Distro")).toBeInTheDocument();
+    expect(screen.getByText("Third-party")).toBeInTheDocument();
+  });
+
+  it("shows toggle for verified third-party, no toggle for distro", async () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ name: "httpd", source_repo: "appstream" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
+        makePkg({ name: "epel-release", source_repo: "epel" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
+      ],
+      repo_groups: [
+        { section_id: "appstream", provenance: "verified" as const, is_distro: true, package_count: 1, enabled: true },
+        { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: true },
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Expand the informational group
+    const infoToggle = screen.getByText(/Informational/);
+    await userEvent.click(infoToggle);
+
+    // Only the epel group should have a repo toggle (verified + third-party)
+    expect(screen.getByRole("switch", { name: /toggle epel repo/i })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /toggle appstream repo/i })).not.toBeInTheDocument();
+  });
+
+  it("does not show toggle for unverified provenance", async () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ name: "mystery", source_repo: "custom" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
+      ],
+      repo_groups: [
+        { section_id: "custom", provenance: "incomplete" as const, is_distro: false, package_count: 1, enabled: true },
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Expand the informational group
+    const infoToggle = screen.getByText(/Informational/);
+    await userEvent.click(infoToggle);
+
+    expect(screen.getByText("Unverified")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /toggle custom repo/i })).not.toBeInTheDocument();
+  });
+
+  it("reverts toggle and shows alert on backend failure", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    // Make /api/op fail for ExcludeRepo
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
+      }
+      if (url === "/api/viewed" && opts?.method === "POST") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      if (url === "/api/op") {
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          json: () => Promise.resolve({ error: "repo exclusion failed" }),
+        });
+      }
+      if (url === "/api/view") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_VIEW),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: "not found" }) });
+    });
+
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ name: "epel-release", source_repo: "epel" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
+      ],
+      repo_groups: [
+        { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: true },
+      ],
+    });
+
+    const onMutationError = vi.fn();
+
+    render(
+      <MainContent
+        {...defaultMainContentProps}
+        viewData={view}
+        onMutationError={onMutationError}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Expand the informational group
+    const infoToggle = screen.getByText(/Informational/);
+    await user.click(infoToggle);
+
+    // Click the repo toggle to exclude epel
+    const repoToggle = screen.getByRole("switch", { name: /toggle epel repo/i });
+    await user.click(repoToggle);
+
+    // Wait for error alert to appear
+    await waitFor(() => {
+      expect(screen.getByText(/Error: repo exclusion failed/)).toBeInTheDocument();
+    });
+
+    // Toggle should revert (checked again since it was enabled and op failed)
+    expect(repoToggle).toBeChecked();
+
+    vi.useRealTimers();
   });
 });

@@ -12,12 +12,14 @@ import type {
   AttentionLevel,
   RefinementOp,
   RefinedView,
+  RepoGroupInfo,
 } from "../api/types";
 import { fetchView } from "../api/client";
 import { ApiError } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
 import { useViewed } from "../hooks/useViewed";
 import { AttentionGroup } from "./AttentionGroup";
+import { RepoGroupHeader } from "./RepoGroupHeader";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
 import { highestAttention } from "./attentionUtils";
@@ -104,6 +106,8 @@ export interface DecisionListProps {
   sectionLabel: string;
   /** Active filter text — when non-empty, groups with matching items are force-expanded. */
   filterText?: string;
+  /** Repo group metadata from ViewResponse, used for informational tier sub-grouping. */
+  repoGroups?: RepoGroupInfo[];
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;
   /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
@@ -114,6 +118,7 @@ export function DecisionList({
   items,
   sectionLabel,
   filterText = "",
+  repoGroups = [],
   onViewUpdate,
   onMutationError,
   onViewedChange,
@@ -183,6 +188,25 @@ export function DecisionList({
     },
     [mutation],
   );
+
+  const handleRepoToggle = useCallback(
+    (sectionId: string, enabled: boolean) => {
+      const op: RefinementOp = enabled
+        ? { op: "IncludeRepo", target: { section_id: sectionId } }
+        : { op: "ExcludeRepo", target: { section_id: sectionId } };
+      mutation.mutate(op);
+    },
+    [mutation],
+  );
+
+  // Build a lookup map for repo group metadata
+  const repoGroupMap = useMemo(() => {
+    const map = new Map<string, RepoGroupInfo>();
+    for (const rg of repoGroups) {
+      map.set(rg.section_id, rg);
+    }
+    return map;
+  }, [repoGroups]);
 
   const grouped = groupByAttention(items);
   const levels: AttentionLevel[] = [
@@ -315,6 +339,68 @@ export function DecisionList({
                       onMarkViewed={markAsViewed}
                       onKeyDown={handleRowKeyDown}
                     />
+                  );
+                })}
+              </AttentionGroup>
+            );
+          }
+
+          // Informational tier: sub-group by source_repo when repo_groups available
+          if (level === "informational" && repoGroups.length > 0) {
+            // Group items by source_repo
+            const byRepo = new Map<string, DecisionItemKind[]>();
+            for (const item of groupItems) {
+              const repo = item.type === "package" ? item.data.entry.source_repo : "__other__";
+              const list = byRepo.get(repo) ?? [];
+              list.push(item);
+              byRepo.set(repo, list);
+            }
+            // Order repos: distro first, then verified third-party, then unverified/unknown
+            const repoOrder = [...byRepo.keys()].sort((a, b) => {
+              const rgA = repoGroupMap.get(a);
+              const rgB = repoGroupMap.get(b);
+              const rankA = rgA?.is_distro ? 0 : rgA?.provenance === "verified" ? 1 : 2;
+              const rankB = rgB?.is_distro ? 0 : rgB?.provenance === "verified" ? 1 : 2;
+              return rankA - rankB;
+            });
+
+            return (
+              <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
+                {repoOrder.map((repo) => {
+                  const repoItems = byRepo.get(repo) ?? [];
+                  const rg = repoGroupMap.get(repo);
+                  return (
+                    <div key={repo}>
+                      {rg && (
+                        <RepoGroupHeader
+                          sectionId={rg.section_id}
+                          provenance={rg.provenance}
+                          isDistro={rg.is_distro}
+                          packageCount={repoItems.length}
+                          enabled={rg.enabled}
+                          onToggle={handleRepoToggle}
+                        />
+                      )}
+                      {repoItems.map((item) => {
+                        runningRowIndex++;
+                        const id = getItemId(item);
+                        const flatIdx = flatItemIds.indexOf(id);
+                        return (
+                          <DecisionItem
+                            key={id}
+                            item={item}
+                            level={level}
+                            rowIndex={runningRowIndex}
+                            isViewed={viewedIds.has(id)}
+                            isPending={mutation.isPending}
+                            tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                            onToggleInclude={handleToggle}
+                            onMarkViewed={markAsViewed}
+                            onKeyDown={handleRowKeyDown}
+                          />
+                        );
+                      })}
+                    </div>
                   );
                 })}
               </AttentionGroup>
