@@ -18,7 +18,7 @@ Playwright e2e tests for the inspectah refine web UI.
    cargo build -p inspectah-cli
 
    # Start the server (uses port 8642 by default)
-   ./target/debug/inspectah refine --no-open <path-to-tarball.tar.gz>
+   ./target/debug/inspectah refine --open=false <path-to-tarball.tar.gz>
    ```
 
    The tarball must be a valid inspectah scan output (`.tar.gz`) containing

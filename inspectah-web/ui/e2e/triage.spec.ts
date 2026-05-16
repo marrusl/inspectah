@@ -29,9 +29,10 @@ test.describe("Triage workflow", () => {
       .first()
       .textContent();
 
-    // Find the first package row with an exclude/include toggle
+    // Find the first Switch toggle in a decision item.
+    // PF Switch renders as checkbox with aria-label="Toggle <name>".
     const firstToggle = page
-      .locator('[data-testid="decision-toggle"], .inspectah-decision-toggle')
+      .getByRole("checkbox", { name: /toggle/i })
       .first();
 
     // Only proceed if there's a toggleable item
@@ -42,7 +43,7 @@ test.describe("Triage workflow", () => {
     }
 
     // Click to toggle (exclude)
-    await firstToggle.click();
+    await firstToggle.click({ force: true });
 
     // Wait for the API response to update the view
     await page.waitForResponse((res) => res.url().includes("/api/op"));
@@ -62,7 +63,7 @@ test.describe("Triage workflow", () => {
 
     // Find and click a toggle
     const toggle = page
-      .locator('[data-testid="decision-toggle"], .inspectah-decision-toggle')
+      .getByRole("checkbox", { name: /toggle/i })
       .first();
     const toggleExists = await toggle.isVisible().catch(() => false);
     if (!toggleExists) {
@@ -70,7 +71,7 @@ test.describe("Triage workflow", () => {
       return;
     }
 
-    await toggle.click();
+    await toggle.click({ force: true });
     await page.waitForResponse((res) => res.url().includes("/api/op"));
 
     // Stats should have changed
@@ -88,7 +89,7 @@ test.describe("Triage workflow", () => {
 
   test("redo re-applies an undone operation", async ({ page }) => {
     const toggle = page
-      .locator('[data-testid="decision-toggle"], .inspectah-decision-toggle')
+      .getByRole("checkbox", { name: /toggle/i })
       .first();
     const toggleExists = await toggle.isVisible().catch(() => false);
     if (!toggleExists) {
@@ -97,7 +98,7 @@ test.describe("Triage workflow", () => {
     }
 
     // Toggle, undo, then redo
-    await toggle.click();
+    await toggle.click({ force: true });
     await page.waitForResponse((res) => res.url().includes("/api/op"));
     const afterToggle = await page.locator(".inspectah-statsbar").textContent();
 

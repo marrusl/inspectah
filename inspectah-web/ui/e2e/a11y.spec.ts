@@ -40,10 +40,12 @@ test.describe("Accessibility", () => {
     const nav = page.locator(".inspectah-layout__sidebar nav");
     await expect(nav).toBeVisible();
 
-    // Nav items should be focusable
-    const navItems = nav.getByRole("link");
-    const count = await navItems.count();
-    expect(count).toBeGreaterThan(0);
+    // Nav items should be focusable (PF NavItem renders as <a> or <button>)
+    const navLinks = nav.getByRole("link");
+    const navButtons = nav.getByRole("button");
+    const linkCount = await navLinks.count();
+    const buttonCount = await navButtons.count();
+    expect(linkCount + buttonCount).toBeGreaterThan(0);
   });
 
   test("stats bar buttons have accessible names", async ({ page }) => {
