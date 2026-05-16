@@ -22,8 +22,12 @@ pub async fn get_view(State(state): State<AppState>) -> impl IntoResponse {
 
 pub async fn apply_op(
     State(state): State<AppState>,
-    Json(op): Json<RefinementOp>,
+    body: axum::body::Bytes,
 ) -> Result<impl IntoResponse, AppError> {
+    let op: RefinementOp = serde_json::from_slice(&body)
+        .map_err(|e| AppError(inspectah_refine::types::RefineError::BadRequest(
+            format!("invalid operation: {e}")
+        )))?;
     let mut session = state.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(serde_json::to_value(session.view()).unwrap()))
