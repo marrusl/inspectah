@@ -1,4 +1,4 @@
-import { useCallback, useState, useRef, useEffect } from "react";
+import { useCallback, useMemo, useState, useRef, useEffect } from "react";
 import {
   Alert,
   AlertGroup,
@@ -6,16 +6,16 @@ import {
   AlertVariant,
 } from "@patternfly/react-core";
 import type {
-  RefinedPackage,
-  RefinedConfig,
   AttentionLevel,
   RefinementOp,
   RefinedView,
 } from "../api/types";
+import { fetchView } from "../api/client";
+import { ApiError } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
 import { useViewed } from "../hooks/useViewed";
 import { AttentionGroup } from "./AttentionGroup";
-import { DecisionItem } from "./DecisionItem";
+import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
 import { highestAttention } from "./attentionUtils";
 
@@ -72,6 +72,16 @@ export function DecisionList({
 
   const handleError = useCallback(
     (err: Error) => {
+      // Auto re-fetch on 409 "stale generation" instead of showing an error
+      if (err instanceof ApiError && err.status === 409 && err.message.includes("stale generation")) {
+        fetchView()
+          .then((view) => onViewUpdate(view))
+          .catch((refetchErr: unknown) => {
+            onMutationError(refetchErr instanceof Error ? refetchErr : new Error(String(refetchErr)));
+          });
+        return;
+      }
+
       const id = ++toastIdRef.current;
       const isNetwork =
         err.message.includes("fetch") ||
@@ -90,9 +100,16 @@ export function DecisionList({
         }, 3000);
       }
 
+      // Optimistic revert: re-fetch server state to restore UI
+      fetchView()
+        .then((view) => onViewUpdate(view))
+        .catch(() => {
+          // If re-fetch also fails, the error toast is already visible
+        });
+
       onMutationError(err);
     },
-    [onMutationError],
+    [onMutationError, onViewUpdate],
   );
 
   const mutation = useMutation(handleSuccess, handleError);
@@ -115,6 +132,53 @@ export function DecisionList({
     "informational",
     "routine",
   ];
+
+  // Build flat ordered list of item IDs for roving tabindex
+  const flatItemIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const level of levels) {
+      const groupItems = grouped[level];
+      for (const item of groupItems) {
+        ids.push(getItemId(item));
+      }
+    }
+    return ids;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
+  const [focusedIndex, setFocusedIndex] = useState(0);
+
+  // Reset focused index when items change
+  useEffect(() => {
+    setFocusedIndex(0);
+  }, [flatItemIds]);
+
+  const handleRowKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      const total = flatItemIds.length;
+      if (total === 0) return;
+
+      let nextIndex: number | null = null;
+
+      if (e.key === "ArrowDown" || e.key === "j") {
+        e.preventDefault();
+        nextIndex = (focusedIndex + 1) % total;
+      } else if (e.key === "ArrowUp" || e.key === "k") {
+        e.preventDefault();
+        nextIndex = (focusedIndex - 1 + total) % total;
+      }
+
+      if (nextIndex !== null) {
+        setFocusedIndex(nextIndex);
+        const targetId = flatItemIds[nextIndex];
+        const el = document.querySelector(
+          `[data-testid="decision-item-${targetId}"]`,
+        ) as HTMLElement | null;
+        el?.focus();
+      }
+    },
+    [flatItemIds, focusedIndex],
+  );
 
   // Clean up auto-dismiss timers
   const timerIds = useRef<number[]>([]);
@@ -153,10 +217,8 @@ export function DecisionList({
         return (
           <AttentionGroup key={level} level={level} count={groupItems.length}>
             {groupItems.map((item) => {
-              const id =
-                item.type === "package"
-                  ? `pkg:${item.data.entry.name}:${(item.data as RefinedPackage).entry.arch}`
-                  : `cfg:${(item.data as RefinedConfig).entry.path}`;
+              const id = getItemId(item);
+              const flatIdx = flatItemIds.indexOf(id);
               return (
                 <DecisionItem
                   key={id}
@@ -164,8 +226,10 @@ export function DecisionList({
                   level={level}
                   isViewed={viewedIds.has(id)}
                   isPending={mutation.isPending}
+                  tabIndex={flatIdx === focusedIndex ? 0 : -1}
                   onToggleInclude={handleToggle}
                   onMarkViewed={markAsViewed}
+                  onKeyDown={handleRowKeyDown}
                 />
               );
             })}
