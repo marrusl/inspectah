@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ExportDialog } from "../ExportDialog";
-import type { RefineStats, RefinedView } from "../../api/types";
+import type { RefineStats, ViewResponse } from "../../api/types";
 
 // --- Mock fetch globally ---
 const mockFetch = vi.fn();
@@ -29,12 +29,13 @@ const MOCK_STATS: RefineStats = {
   baseline_available: true,
 };
 
-const MOCK_VIEW: RefinedView = {
+const MOCK_VIEW: ViewResponse = {
   packages: [],
   config_files: [],
   containerfile_preview: "",
   stats: MOCK_STATS,
   generation: 7,
+  repo_groups: [],
 };
 
 describe("ExportDialog", () => {

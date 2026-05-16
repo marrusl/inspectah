@@ -9,7 +9,7 @@ import {
   Content,
   Alert,
 } from "@patternfly/react-core";
-import type { RefineStats, RefinedView } from "../api/types";
+import type { RefineStats, ViewResponse } from "../api/types";
 import { exportTarball, fetchView } from "../api/client";
 import { ApiError } from "../api/types";
 
@@ -18,7 +18,7 @@ export interface ExportDialogProps {
   onClose: () => void;
   stats: RefineStats | null;
   generation: number;
-  onViewUpdate: (view: RefinedView) => void;
+  onViewUpdate: (view: ViewResponse) => void;
 }
 
 export function ExportDialog({

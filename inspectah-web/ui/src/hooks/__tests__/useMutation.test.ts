@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useMutation } from "../useMutation";
-import type { RefinedView, RefinementOp } from "../../api/types";
+import type { ViewResponse, RefinementOp } from "../../api/types";
 
-const MOCK_VIEW: RefinedView = {
+const MOCK_VIEW: ViewResponse = {
   packages: [],
   config_files: [],
   containerfile_preview: "FROM ubi9\n",
@@ -22,6 +22,7 @@ const MOCK_VIEW: RefinedView = {
     baseline_available: false,
   },
   generation: 1,
+  repo_groups: [],
 };
 
 beforeEach(() => {

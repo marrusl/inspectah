@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import type { RefinementOp, RefinedView } from "../api/types";
+import type { RefinementOp, ViewResponse } from "../api/types";
 import { applyOp, undo as apiUndo, redo as apiRedo } from "../api/client";
 
 export interface UseMutationResult {
@@ -15,7 +15,7 @@ type QueueEntry =
   | { kind: "redo" };
 
 export function useMutation(
-  onSuccess: (view: RefinedView) => void,
+  onSuccess: (view: ViewResponse) => void,
   onError: (err: Error) => void,
 ): UseMutationResult {
   const [isPending, setIsPending] = useState(false);
@@ -30,7 +30,7 @@ export function useMutation(
     while (queueRef.current.length > 0) {
       const entry = queueRef.current[0];
       try {
-        let result: RefinedView;
+        let result: ViewResponse;
         if (entry.kind === "op") {
           result = await applyOp(entry.op);
         } else if (entry.kind === "undo") {

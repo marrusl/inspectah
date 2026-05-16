@@ -125,10 +125,15 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
 
 pub async fn get_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session = state.session.lock().unwrap();
-    let view = session.view().clone();
-    let repo_groups = build_repo_groups(&session);
-    let response = ViewResponse { view, repo_groups };
+    let response = build_view_response(&session);
     Json(serde_json::to_value(&response).unwrap())
+}
+
+/// Build a complete `ViewResponse` from session state (view + repo groups).
+fn build_view_response(session: &RefineSession) -> ViewResponse {
+    let view = session.view().clone();
+    let repo_groups = build_repo_groups(session);
+    ViewResponse { view, repo_groups }
 }
 
 /// Build `RepoGroupInfo` entries from the session's repo index and current view.
@@ -195,7 +200,7 @@ pub async fn apply_op(
     })?;
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
-    Ok(Json(serde_json::to_value(session.view()).unwrap()))
+    Ok(Json(serde_json::to_value(&build_view_response(&session)).unwrap()))
 }
 
 pub async fn undo(
@@ -210,7 +215,7 @@ pub async fn undo(
     })?;
     let mut session = state.session.lock().unwrap();
     session.undo().map_err(AppError)?;
-    Ok(Json(serde_json::to_value(session.view()).unwrap()))
+    Ok(Json(serde_json::to_value(&build_view_response(&session)).unwrap()))
 }
 
 pub async fn redo(
@@ -225,7 +230,7 @@ pub async fn redo(
     })?;
     let mut session = state.session.lock().unwrap();
     session.redo().map_err(AppError)?;
-    Ok(Json(serde_json::to_value(session.view()).unwrap()))
+    Ok(Json(serde_json::to_value(&build_view_response(&session)).unwrap()))
 }
 
 pub async fn get_ops(State(state): State<Arc<AppState>>) -> impl IntoResponse {
