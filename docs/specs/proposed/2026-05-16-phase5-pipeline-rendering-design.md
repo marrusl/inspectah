@@ -1,7 +1,7 @@
 # Phase 5: Pipeline Rendering & Triage Quality
 
 **Date:** 2026-05-16
-**Status:** Proposed
+**Status:** Proposed (revision 2 — addresses round 1 review)
 **Scope:** inspectah-core, inspectah-refine, inspectah-pipeline, inspectah-web
 
 ## Problem
@@ -27,6 +27,8 @@ Two-pass classify-then-normalize architecture, matching the Go version's proven 
 1. **Classify** — rewrite attention model for three-tier baseline-aware classification
 2. **Normalize** — separate function applies leaf filtering and include-defaults based on tier
 
+Normalization materializes into the working snapshot at session construction time (same as Go). Both preview and export consume the same normalized state — there is no view-only layer that diverges from export truth.
+
 This keeps each function focused, testable, and naturally accommodates fleet normalization later.
 
 ## Design
@@ -41,23 +43,80 @@ The Go schema has a `baseline_match` kind for config files whose content matches
 
 Add to the existing enum:
 - `PackageBaselineMatch` — Tier 1 package found in baseline
-- `PackageUserAdded` — Tier 2 package from a recognized repo, not in baseline
+- `PackageUserAdded` — Tier 2 package from a recognized repo, baseline verified
+- `PackageProvenanceUnavailable` — Tier 2 package from a recognized repo, but baseline data is missing (distinct from `PackageUserAdded` — signals reduced classification confidence)
 - `PackageNoRepoSource` — Tier 3 package with no repository source
 - `ConfigBaselineMatch` — Tier 1 config matching base image
 
-These give the UI meaningful badge text instead of generic "Package Not In Baseline" on everything.
+These give the UI meaningful badge text. Critically, `PackageProvenanceUnavailable` prevents the UI from displaying calm "appstream" badges when the baseline check was never performed — the operator sees "baseline unavailable" instead of false confidence.
 
-**1c. New `RefinementOp` variant: `ExcludeRepo` / `IncludeRepo`**
+**1c. Repo identity model**
 
-A repo-level bulk action in the refine session. `ExcludeRepo { repo_id: String }` cascades: sets `include = false` on all packages with matching `source_repo`, excludes the corresponding entry from `repo_files`, and excludes GPG key imports associated with that repo. `IncludeRepo` re-enables them. These are discrete operations through the existing undo/redo stack.
+The canonical unit of repo identity is the **repo section ID** — the INI stanza header from `.repo` files (e.g., `[baseos]`, `[appstream]`, `[epel]`). This is what `PackageEntry.source_repo` contains and what the Go version uses for classification.
 
-Only third-party repos can be disabled. Distro repos (baseos, appstream, crb, fedora, updates, anaconda) are always included — the `ExcludeRepo` operation should reject attempts to disable them. The distro repo list is defined once as a constant in `inspectah-refine` and used by both the `ExcludeRepo` guard and the UI's repo group rendering.
+Key structural facts that the identity model must handle:
+- **One repo file can define multiple repo section IDs.** `centos.repo` carries `baseos`, `appstream`, and `crb` as separate `[section]` stanzas. `ExcludeRepo` operates on a section ID, not a file — excluding `epel` does not exclude other sections in the same `.repo` file.
+- **Multiple repo section IDs can share the same GPG key path.** `baseos` and `appstream` both reference `/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial`. GPG key exclusion uses reference counting: a key's `include` flips to `false` only when ALL repo section IDs that reference it are excluded.
+- **Repo files are the container, not the identity.** The `.repo` file path is a storage detail. The section ID is the semantic identity. `repo_files` entries map to section IDs via INI parsing of their `content` field.
 
-**1d. Repo grouping metadata**
+**`RepoIndex`** — built at session construction time from snapshot data:
 
-The attention model output carries grouping information via the existing `entry.source_repo` field on `RefinedPackage`. The UI derives `is_distro_repo` from the shared constant list (exposed via the `/api/health` or a new `/api/config` endpoint) to determine which repos get a disable toggle and which get a "Distro" vs "Third-party" label.
+```
+RepoIndex {
+    // section_id → list of package names with this source_repo
+    packages_by_repo: BTreeMap<String, Vec<String>>,
+    // section_id → repo file path(s) containing this section
+    repo_file_by_section: BTreeMap<String, Vec<String>>,
+    // section_id → GPG key paths referenced by this section's gpgkey directive
+    gpg_keys_by_section: BTreeMap<String, Vec<String>>,
+    // GPG key path → set of section IDs that reference it (for ref counting)
+    sections_by_gpg_key: BTreeMap<String, BTreeSet<String>>,
+    // section_id → provenance state
+    provenance: BTreeMap<String, RepoProvenance>,
+}
+```
 
-No changes needed to `PackageState`, `RpmSection`, or the `baseline_package_names` / `leaf_packages` / `source_repo` fields — they already exist in the types.
+**`RepoProvenance`** — computed during `RepoIndex` construction:
+
+| State | Meaning | Bulk toggle available? |
+|-------|---------|----------------------|
+| `Verified` | Section ID found in `repo_files` content, GPG linkage resolved, packages mapped | Yes (if not a distro repo) |
+| `Incomplete` | Section ID exists on packages but no matching repo file stanza, or GPG linkage unresolved | No — show label as informational text only, per-item review available |
+| `Unknown` | No `source_repo` data at all (empty or missing field) | No — per-item review only |
+
+When provenance is `Incomplete` or `Unknown`, the UI shows the repo label but removes the bulk toggle. The operator can still include/exclude individual packages. This is the fail-closed behavior: bulk actions only operate on proven scope.
+
+**1d. New `RefinementOp` variants: `ExcludeRepo` / `IncludeRepo`**
+
+`ExcludeRepo { section_id: String }` cascades:
+1. Sets `include = false` on all packages where `source_repo == section_id`
+2. If no other enabled section IDs reference the same `.repo` file path, sets `include = false` on the repo file
+3. For each GPG key referenced by this section: decrements the reference count. If the count reaches zero (no other enabled sections reference this key), sets `include = false` on the key
+
+`IncludeRepo { section_id: String }` reverses the cascade with the same logic (increment ref counts, re-enable artifacts).
+
+**Override preservation:** Repo-level and package-level operations are both entries in the same undo/redo stack. `IncludeRepo` sets `include = true` on all packages in the section. If the operator previously made per-package overrides AFTER an `ExcludeRepo`, those overrides are part of the op stack history — undo/redo replays them in order. There is no special "preserve overrides" logic; the stack provides the correct semantics naturally.
+
+**Guards:**
+- `ExcludeRepo` rejects distro repo section IDs. The distro repo list is: `baseos`, `appstream`, `crb`, `fedora`, `updates`, `anaconda`. Defined once as `DISTRO_REPOS: &[&str]` in `inspectah-refine`.
+- `ExcludeRepo` rejects section IDs with `RepoProvenance::Incomplete` or `Unknown`. Fail-closed: if we can't prove the cascade scope, we don't allow it.
+
+**`ChangesSummary` integration:** Repo-level ops must show as dirty in `pending_changes()`. Add repo include/exclude tracking alongside existing package/config tracking.
+
+**1e. Distro repo constant and browser exposure**
+
+`DISTRO_REPOS` is defined in `inspectah-refine` and exposed to the browser via a new `policy` field in the existing `/api/health` response:
+
+```json
+{
+  "status": "ok",
+  "policy": {
+    "distro_repos": ["baseos", "appstream", "crb", "fedora", "updates", "anaconda"]
+  }
+}
+```
+
+The `policy` object is narrow and versioned. It contains only classification constants needed by the UI. No filesystem paths, secrets, or host-local config details are exposed through this mechanism.
 
 ### 2. Attention Model — Classify (Pass 1)
 
@@ -68,27 +127,40 @@ Rewrite `compute_package_attention()` in `inspectah-refine/src/attention.rs`:
 | Condition | Tier | AttentionLevel | AttentionReason |
 |-----------|------|---------------|-----------------|
 | Name in `baseline_package_names` | 1 | Routine | PackageBaselineMatch |
-| `source_repo` is a known repo, not in baseline | 2 | Informational | PackageUserAdded |
+| `baseline_package_names` present, not in baseline, `source_repo` is known | 2 | Informational | PackageUserAdded |
+| `baseline_package_names` is `None`, `source_repo` is known | 2 | Informational | PackageProvenanceUnavailable |
 | `PackageState::LocalInstall` | 3 | NeedsReview | PackageLocalInstall |
 | `PackageState::NoRepo` | 3 | NeedsReview | PackageNoRepoSource |
 
 **Bug fix:** `NoRepo` currently maps to `Informational` — change to `NeedsReview`.
 
-**Fallback when `baseline_package_names` is `None`:** All `PackageState::Added` packages default to Tier 2 (Informational) rather than NeedsReview. The known-standard-repo list provides partial tiering even without baseline data.
+**Provenance-aware fallback when `baseline_package_names` is `None`:** All `PackageState::Added` packages from known repos classify as Tier 2 `Informational` but with `PackageProvenanceUnavailable` reason, not `PackageUserAdded`. This is the key distinction from round 1: the operator sees "baseline unavailable" badge text and a section-level completeness warning, not calm repo badges that imply verified classification.
 
 **Config classification (rewrite `compute_config_attention()`):**
 
 | Condition | Tier | AttentionLevel | AttentionReason |
 |-----------|------|---------------|-----------------|
-| `ConfigFileKind::RpmOwnedDefault` | 1 | Routine | ConfigModified |
+| `ConfigFileKind::RpmOwnedDefault` | 1 | Routine | ConfigDefault |
 | `ConfigFileKind::BaselineMatch` | 1 | Routine | ConfigBaselineMatch |
 | `ConfigFileKind::Unowned` | 2 | Informational | ConfigUnowned |
 | `ConfigFileKind::RpmOwnedModified` | 3 | NeedsReview | ConfigModified |
 | `ConfigFileKind::Orphaned` | — | Informational | ConfigOrphaned |
 
-**Sensitive path overlay:** Additive NeedsReview tag for sensitive paths (`/etc/shadow`, `/etc/ssh/`, etc.), but only promotes Tier 2 items to Tier 3. Tier 1 items (baseline match) are NOT promoted — if the base image ships these files, they don't need review.
+**Intentional divergence from Go:** The Go version treats `RpmOwnedModified` as tier 2 (included by default, reviewable). This spec promotes it to Tier 3 (NeedsReview). Rationale: a config file that the operator explicitly modified is a real decision point — the operator should confirm it belongs in the target image. This is a deliberate product choice, not a parity gap.
+
+**Sensitive path overlay:** Additive NeedsReview tag for sensitive paths (`/etc/shadow`, `/etc/ssh/`, etc.), but behavior depends on provenance:
+- Tier 1 with verified baseline provenance → NOT promoted. The base image ships this file; it doesn't need review.
+- Tier 1 without baseline provenance (classified via repo metadata fallback) → promoted to Tier 3. Without baseline verification, we cannot confirm the sensitive file is an expected default.
+- Tier 2 → promoted to Tier 3 as before.
 
 ### 3. Normalize Defaults (Pass 2)
+
+**State authority:** Normalization happens at session construction time, immediately after classification. It materializes into the working snapshot's `include` flags before the operation stack begins. This means:
+- The "original" snapshot state (used as the baseline for undo/redo and dirty tracking) already reflects normalized defaults
+- Both live preview and export render from the same projected state — there is no divergence between what the UI shows and what the tarball contains
+- This matches Go's model where normalization happens before the immutable sidecar is created
+
+**Lifecycle:** `import tarball → deserialize snapshot → build RepoIndex → classify (compute attention) → normalize (materialize include defaults) → op stack begins empty → operator interacts`
 
 **`normalize_package_defaults(packages: &mut Vec<RefinedPackage>, rpm: &RpmSection)`**
 
@@ -110,18 +182,39 @@ Rewrite `compute_package_attention()` in `inspectah-refine/src/attention.rs`:
 - Packages: ~734 → ~50-80 visible (Tier 2 leaf + Tier 3)
 - Configs: ~257 → ~20-40 visible
 
-### 4. `source_repo` Data Fix
+### 4. Repo Identity and `source_repo` Data Fix
+
+**4a. `source_repo` population**
 
 All packages currently display "Unknown" for repository. The `source_repo` field exists in `PackageEntry` and the UI reads it (`entry.source_repo || "Unknown"`), but scan data isn't populating it.
 
-**Investigation scope:**
-1. Does the Go scanner populate `source_repo` in the snapshot JSON?
+Investigation scope:
+1. Does the Go scanner populate `source_repo` in the snapshot JSON? (The Go `populateSourceRepos(...)` function suggests yes, but verify the field name in serialized output.)
 2. Does the Rust RPM inspector populate it during `inspectah scan`?
 3. Is there a serialization mismatch (field naming, casing)?
 
-**Required outcome:** `source_repo` is populated with the actual repo name (e.g., "baseos", "appstream", "epel") for every package in `packages_added`.
+Required outcome: `source_repo` is populated with the repo section ID (e.g., "baseos", "appstream", "epel") for every package in `packages_added`. This is the same value used as the canonical repo identity.
 
-**Repo-to-artifact linkage:** Verify that `source_repo` on packages maps consistently to `repo_id` on `repo_files` entries and that GPG keys can be traced to their originating repo. This linkage is what makes `ExcludeRepo` cascading work. If the mapping is inconsistent, the cascade logic needs a fallback (e.g., matching by repo file path patterns).
+**4b. `RepoIndex` construction**
+
+At session construction time (during import), build the `RepoIndex` by:
+
+1. **Parse repo files:** For each entry in `rpm.repo_files`, parse the `content` field as INI to extract section IDs. Map each section ID to its repo file path. Extract `gpgkey` directives to map section IDs to GPG key paths.
+2. **Map packages:** Group `packages_added` by `source_repo` to build `packages_by_repo`.
+3. **Link GPG keys:** Build `sections_by_gpg_key` reverse index for reference counting.
+4. **Compute provenance:** For each unique `source_repo` value found on packages:
+   - If a matching section ID exists in a parsed repo file AND GPG linkage resolves → `Verified`
+   - If `source_repo` is non-empty but no matching repo file stanza found, or GPG linkage is partial → `Incomplete`
+   - If `source_repo` is empty → `Unknown`
+
+**4c. Incomplete linkage behavior**
+
+When provenance is `Incomplete` or `Unknown`:
+- Packages still classify normally (tiers work on `source_repo` + baseline, not on repo file linkage)
+- Repo grouping in the UI still shows the `source_repo` label — it's useful context even without a repo file
+- Bulk toggle is DISABLED — label is informational text only, no `ExcludeRepo` / `IncludeRepo` available
+- Per-package include/exclude still works normally
+- A completeness warning appears on the section header: "N packages from repos with unverified provenance"
 
 ### 5. Containerfile Renderer Fixes
 
@@ -129,9 +222,9 @@ Changes to `inspectah-pipeline/src/render/containerfile.rs`:
 
 **5a. GPG key batching**
 
-When all GPG keys share a common standard directory (`/etc/pki/rpm-gpg/`), emit a single directory COPY with no explicit `rpm --import` (keys in the standard path are picked up automatically). For keys in non-standard locations, keep the per-key `COPY` + `rpm --import` pattern.
+When all included GPG keys share a common standard directory (`/etc/pki/rpm-gpg/`), emit a single directory COPY with no explicit `rpm --import` (keys in the standard path are picked up automatically). For keys in non-standard locations, keep the per-key `COPY` + `rpm --import` pattern.
 
-When a repo is excluded via `ExcludeRepo`, its GPG keys are excluded from the render — key filtering happens upstream via `include` flags.
+GPG key exclusion respects reference counting from the `RepoIndex`: a key's `include` is `false` only when all referencing repo sections are excluded. The renderer just checks `include` flags — the ref counting logic lives in the session's `ExcludeRepo` handler.
 
 **5b. Service enablement formatting**
 
@@ -147,7 +240,7 @@ At 3 or fewer, keep the single-line format. Same treatment for `systemctl disabl
 
 **5c. Repo-aware rendering**
 
-When a repo is excluded, all its artifacts disappear from the Containerfile — packages, repo file COPY, GPG imports. The Containerfile re-renders via the existing live-preview mechanism. No new renderer logic beyond respecting `include` flags.
+When a repo is excluded, all its artifacts disappear from the Containerfile — packages, repo file COPY, GPG imports (subject to ref counting). The Containerfile re-renders via the existing live-preview mechanism. No new renderer logic beyond respecting `include` flags.
 
 ### 6. Web UI Changes
 
@@ -156,28 +249,62 @@ When a repo is excluded, all its artifacts disappear from the Containerfile — 
 - **Full-width layout:** Strip PatternFly Page padding. CSS-only in `App.css`.
 - **Nav spacing:** Remove `flex: 1` from sidebar nav. Top-align items with natural spacing. CSS-only.
 - **Hostname to top of sidebar:** Move hostname/OS block above nav groups. Bold hostname, OS name + version below. First thing the operator sees.
-- **Panel collapse direction:** Fix icon to point in the direction the panel will move. Component change in `ContainerfilePanel.tsx`.
+- **Panel collapse direction:** Fix icon to point in the direction the panel will move (right-pointing when collapsed, left-pointing when open). Component change in `ContainerfilePanel.tsx`.
 
 **6b. Tier-aware card treatment (depends on pipeline fix)**
 
-- **Tier 1 (Routine):** Collapsed summary — "N baseline packages (auto-included)" with expand toggle. When expanded, compact list (name only, muted text). No checkbox or action buttons.
-- **Tier 2 (Informational):** Full card layout with info-level styling (blue left border). Badge shows repo source ("appstream", "epel") instead of "Package Not In Baseline."
+- **Tier 1 (Routine):** Collapsed summary — "N baseline packages (auto-included)" with expand toggle. Default: collapsed. When expanded, compact list (name only, muted text). No checkbox or action buttons.
+- **Tier 2 (Informational):** Full card layout with info-level styling (blue left border). Badge shows repo source ("appstream", "epel") when provenance is `Verified`, or "baseline unavailable" when `PackageProvenanceUnavailable`.
 - **Tier 3 (NeedsReview):** Current card layout with attention badge.
+
+**Provenance completeness warning:** When `baseline_package_names` is `None`, the Packages section header shows a banner: "Baseline data unavailable — classification confidence reduced. All packages shown for review." This ties into existing completeness signaling.
 
 **6c. Repo grouping and bulk actions (depends on pipeline + source_repo fix)**
 
-- Group Tier 2 packages by `source_repo`.
-- **Distro repos** (baseos, appstream, crb, fedora, updates, anaconda): labeled "Distro". Cannot be disabled — no toggle. Always included.
-- **Third-party repos** (epel, custom repos, anything not in the distro list): labeled "Third-party". Enable/disable toggle fires `ExcludeRepo` / `IncludeRepo` cascade.
-- Unknown repos treated as third-party by default.
+- Group Tier 2 packages by `source_repo`. Each group has a header row showing: repo label, distro/third-party badge, package count, and (for third-party repos with `Verified` provenance) an enable/disable toggle.
+- **Distro repos** (from `policy.distro_repos`): labeled "Distro". No toggle. Always included.
+- **Third-party repos with `Verified` provenance:** labeled "Third-party". Toggle fires `ExcludeRepo` / `IncludeRepo`.
+- **Repos with `Incomplete` or `Unknown` provenance:** labeled "Third-party" (or "Unknown"). No toggle — label is informational only. Packages are individually actionable.
 - Tier 3 items appear in their own "Needs Review" section, not grouped by repo.
+
+**Expand/collapse behavior:**
+- Tier 1 groups: collapsed by default. Expand/collapse state is session-local (not persisted across browser sessions).
+- Tier 2 repo groups: expanded by default. Each group is independently collapsible.
+- Config kind groups: expanded by default.
+
+**Search auto-reveal:** When global search selects an item that is inside a collapsed group (Tier 1 or collapsed repo group):
+1. Auto-expand the containing group
+2. Scroll the item into view
+3. Apply a flash highlight (2-second fade) on the item
+4. Focus lands on the item's primary action control (toggle or expand button)
+
+**Keyboard traversal:**
+- Repo group headers are first-class keyboard stops in the existing nav model
+- `Tab` / `Shift-Tab` moves between group headers
+- `Arrow` / `j` / `k` moves between items within the currently focused group
+- `Enter` or `Space` on a group header toggles expand/collapse
+- `Enter` or `Space` on a repo toggle fires `ExcludeRepo` / `IncludeRepo`
+- All shortcuts suppressed when focus is inside a search field, dialog, or text input
+
+**Repo toggle feedback:**
+- Optimistic UI: toggle state flips immediately on click/keypress
+- On success: brief undo toast ("Excluded epel — N packages, 1 repo file, 2 GPG keys removed. Undo")
+- On failure: revert toggle, show error banner with reason
+- Containerfile preview updates on next render cycle (existing mechanism)
 
 **6d. Config grouping (depends on pipeline fix)**
 
-- Tier 1 collapsed: "N configs match base image (auto-included)"
-- Tier 2 (Unowned) shown as reviewable cards
-- Tier 3 (RpmOwnedModified) shown with diff indicator when available
-- Grouped by kind, not a flat list
+- Tier 1 collapsed: "N configs match base image (auto-included)" — collapsed by default, expand to see compact list
+- Tier 2 (Unowned) shown as reviewable cards, grouped by parent directory for visual organization
+- Tier 3 (RpmOwnedModified) shown with attention badge. When `diff_against_rpm` data is available on the config entry, show a "View diff" link that opens an inline diff below the card. When no diff data is present, no indicator shown.
+- Kind groups are expanded by default
+
+**6e. Responsive behavior**
+
+At widths where the sidebar hides (<1024px) and the Containerfile panel collapses:
+- Repo group headers: label + count on first line, toggle (if available) on second line. Truncate long repo names with ellipsis.
+- Distro/third-party badges: abbreviate to "D" / "3P" at <768px
+- Tier summary counts remain inline
 
 ## Testing & Success Criteria
 
@@ -187,16 +314,34 @@ When a repo is excluded, all its artifacts disappear from the Containerfile — 
 - `source_repo` shows actual repo names, not "Unknown"
 - Containerfile GPG: 1-2 lines for standard keys, not N repeated imports
 - Service enablement: readable multi-line format when >3 services
-- Repo grouping visible with distro/third-party labels
-- ExcludeRepo on a third-party repo removes packages, repo file, and GPG keys from Containerfile
+- Repo grouping visible with distro/third-party labels and provenance states
+- ExcludeRepo on a verified third-party repo removes packages, repo file, and GPG keys from Containerfile
+- ExcludeRepo rejected for distro repos and repos with incomplete provenance
 
-**Testing approach:**
-- Unit tests for classification (given package state + baseline data → expect tier)
-- Unit tests for normalization (given tiers + leaf data → expect include defaults)
-- Unit tests for `ExcludeRepo` / `IncludeRepo` cascade (packages + repo files + GPG keys toggle together)
-- Containerfile renderer tests for GPG batching and service formatting
+**Contract-level tests:**
+- Serde round-trip for new enum variants (`BaselineMatch`, all new `AttentionReason` variants) and `RefinementOp` variants
+- Repo identity canonicalization: INI parsing of multi-section repo files, section ID extraction, GPG key mapping
+- `RepoIndex` construction with verified/incomplete/unknown provenance states
+- `RepoProvenance` guard: `ExcludeRepo` accepted for `Verified` third-party, rejected for distro and `Incomplete`/`Unknown`
+- Preview/export parity: after normalization, the Containerfile rendered for preview matches the Containerfile in the exported tarball (same `include` flags, same projection path)
+- Fallback behavior when `baseline_package_names` is `None`: verify `PackageProvenanceUnavailable` reason, distinct badge text, completeness warning
+- Fallback behavior when `leaf_packages` is `None`: all Tier 2 visible, no filtering applied
+- Fallback behavior when `source_repo` is empty: packages classify correctly (Tier 2 or 3 based on state), provenance `Unknown`, no bulk toggle
+- Undo/redo for `ExcludeRepo` → per-package override → `IncludeRepo`: op stack replays correctly
+- GPG key reference counting: shared key stays `include = true` until all referencing sections excluded
+- Config tier regression: verify each `ConfigFileKind` maps to the expected tier, with explicit test for `RpmOwnedModified` → Tier 3 (intentional divergence from Go)
+
+**Smoke tests:**
 - E2E test with actual CentOS Stream 9 tarball for end-to-end triage counts
 - Regression: existing golden-file tests updated to match new output
+
+## Intentional Divergences from Go
+
+| Behavior | Go | Rust (this spec) | Rationale |
+|----------|----|----|-----------|
+| `RpmOwnedModified` config tier | Tier 2 (included, reviewable) | Tier 3 (NeedsReview) | Operator explicitly changed this config — it's a real decision point |
+| Missing baseline fallback | Not applicable (baseline always present in Go fleet path) | Tier 2 with `ProvenanceUnavailable` reason + completeness warning | Honest about reduced confidence |
+| Sensitive path on Tier 1 without baseline | Not applicable | Promotes to Tier 3 | Without baseline verification, can't confirm sensitive file is expected |
 
 ## Deferred / Future Work
 
@@ -207,25 +352,32 @@ These items build on the fixed triage foundation and should be tracked for futur
 3. **Decision/Full view toggle** — Progressive disclosure toggle between "Decisions only" (Tier 2+3) and "Full view" (Tier 1 expanded). Depends on tiering being stable.
 4. **Diff view** — Side-by-side "source system" vs "target Containerfile" for a migration overview.
 5. **Fleet normalization** — `normalize_package_defaults` supports single-host; fleet aggregate sessions need cross-host consensus logic.
+6. **Automount/static-route config exceptions** — Specialized config-file handling for automount entries and static network routes. Deferred from Phase 5 scope.
 
 ## Files Changed
 
 **inspectah-core:**
-- `src/types/config.rs` — add `BaselineMatch` variant
+- `src/types/config.rs` — add `BaselineMatch` variant to `ConfigFileKind`
 - `src/types/rpm.rs` — verify `source_repo` serialization
 
 **inspectah-refine:**
-- `src/attention.rs` — rewrite `compute_package_attention()` and `compute_config_attention()`
+- `src/attention.rs` — rewrite `compute_package_attention()` and `compute_config_attention()` with provenance-aware classification
 - `src/normalize.rs` (new) — `normalize_package_defaults()`, `normalize_config_defaults()`
-- `src/session.rs` — add `ExcludeRepo` / `IncludeRepo` operation handling with cascade
-- `src/types.rs` — new `AttentionReason` variants, `RefinementOp` variants
+- `src/repo_index.rs` (new) — `RepoIndex` construction, INI parsing, provenance computation, reference counting
+- `src/session.rs` — add `ExcludeRepo` / `IncludeRepo` operation handling with cascade, `RepoIndex` integration, `ChangesSummary` extension
+- `src/types.rs` — new `AttentionReason` variants, `RefinementOp` variants, `RepoProvenance` enum
 
 **inspectah-pipeline:**
 - `src/render/containerfile.rs` — GPG batching, service formatting
 
-**inspectah-web:**
+**inspectah-web (Rust):**
+- `src/handlers.rs` — add `policy` field to `/api/health` response
+
+**inspectah-web (UI):**
 - `ui/src/App.css` — full-width, nav spacing
 - `ui/src/components/Sidebar.tsx` — hostname to top
 - `ui/src/components/ContainerfilePanel.tsx` — collapse icon direction
-- `ui/src/components/DecisionSections.tsx` — tier-aware card treatment, repo grouping
-- `ui/src/components/PackageDetail.tsx` — repo badge, distro/third-party label
+- `ui/src/components/DecisionSections.tsx` — tier-aware card treatment, repo grouping, expand/collapse, keyboard stops
+- `ui/src/components/PackageDetail.tsx` — repo badge with provenance-aware text, distro/third-party label
+- `ui/src/components/RepoGroupHeader.tsx` (new) — group header with label, badge, count, conditional toggle
+- `ui/src/components/ConfigGroup.tsx` (new or refactored) — kind-based grouping with collapse
