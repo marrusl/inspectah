@@ -42,7 +42,7 @@ function readPanelPref(): boolean {
 function initialPanelOpen(): boolean {
   const savedOpen = readPanelPref();
   // On narrow viewports, always start collapsed regardless of persisted state
-  if (typeof window !== "undefined" && window.matchMedia("(max-width: 1280px)").matches) {
+  if (typeof window !== "undefined" && window.matchMedia("(max-width: 1279px)").matches) {
     return false;
   }
   return savedOpen;
@@ -163,7 +163,12 @@ function App() {
           if (el instanceof HTMLElement) {
             el.focus();
           } else {
-            mainContentRef.current?.focus();
+            // Target not in DOM — navigate to its section and set pending focus
+            const section = testId.includes("packages:") ? "packages" : "configs";
+            const itemId = testId.replace("decision-item-", "");
+            setActiveSection(section);
+            setFilterClearCounter((c) => c + 1);
+            pendingFocusItemRef.current = itemId;
           }
         });
       }
@@ -308,7 +313,7 @@ function App() {
         setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
       }
     });
-  }, [activeSection, view.data]);
+  }, [activeSection, view.data, filterClearCounter]);
 
   const handleSidebarSelect = useCallback(
     (sectionId: string) => {

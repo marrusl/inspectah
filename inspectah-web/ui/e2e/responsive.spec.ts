@@ -47,26 +47,38 @@ test.describe("Responsive layout", () => {
     await expect(hamburger).toBeHidden();
   });
 
-  test("at 1280px, Containerfile panel auto-collapses", async ({ page }) => {
+  test("at 1280px, Containerfile panel stays open (full layout)", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto("/");
     await expect(page.locator(".inspectah-page")).toBeVisible();
 
-    // At exactly 1280px, the viewport is at the breakpoint boundary.
-    // The panel initializes collapsed due to initialPanelOpen() logic.
-    // Verify the panel starts collapsed and can be toggled.
+    // At exactly 1280px, the full three-zone layout applies (>= 1280px).
+    // The panel should start open.
     const cfPanel = page.locator(".inspectah-cf-panel");
     await expect(cfPanel).toBeVisible();
 
-    // Panel should have collapsed class initially at 1280px
-    await expect(cfPanel).toHaveClass(/inspectah-cf-panel--collapsed/);
-
-    // Toggle panel with Ctrl+E to expand
-    await page.keyboard.press("Control+e");
+    // Panel should be open at 1280px
     await expect(cfPanel).toHaveClass(/inspectah-cf-panel--open/);
 
-    // Toggle again to collapse
+    // Toggle panel with Ctrl+E to collapse
     await page.keyboard.press("Control+e");
+    await expect(cfPanel).toHaveClass(/inspectah-cf-panel--collapsed/);
+
+    // Toggle again to re-open
+    await page.keyboard.press("Control+e");
+    await expect(cfPanel).toHaveClass(/inspectah-cf-panel--open/);
+  });
+
+  test("at 1279px, Containerfile panel auto-collapses", async ({ page }) => {
+    await page.setViewportSize({ width: 1279, height: 800 });
+    await page.goto("/");
+    await expect(page.locator(".inspectah-page")).toBeVisible();
+
+    // Below 1280px, the panel initializes collapsed.
+    const cfPanel = page.locator(".inspectah-cf-panel");
+    await expect(cfPanel).toBeVisible();
+
+    // Panel should have collapsed class at 1279px
     await expect(cfPanel).toHaveClass(/inspectah-cf-panel--collapsed/);
   });
 
