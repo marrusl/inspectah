@@ -1623,3 +1623,120 @@ describe("Config kind grouping", () => {
     expect(screen.getByText("/etc/custom.conf")).toBeInTheDocument();
   });
 });
+
+// ---- Search auto-reveal tests ----
+
+describe("Search auto-reveal for collapsed groups", () => {
+  it("auto-expands baseline summary when revealItemId matches a baseline package", async () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg(
+          { name: "glibc", source_repo: "baseos" },
+          [{ level: "routine", reason: "package_baseline_match", detail: null }],
+        ),
+      ],
+    });
+    const { rerender } = render(
+      <MainContent {...defaultMainContentProps} viewData={view} />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Baseline summary should be collapsed — item not visible
+    expect(screen.getByTestId("baseline-summary")).toBeInTheDocument();
+    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
+
+    // Set revealItemId to the baseline package
+    rerender(
+      <MainContent
+        {...defaultMainContentProps}
+        viewData={view}
+        revealItemId="packages:glibc.x86_64"
+      />,
+    );
+
+    // Baseline summary should auto-expand, item should be visible
+    await waitFor(() => {
+      expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
+    });
+    // The item should have a data-testid for focus targeting
+    expect(
+      screen.getByTestId("decision-item-packages:glibc.x86_64"),
+    ).toBeInTheDocument();
+  });
+
+  it("auto-expands config-managed summary when revealItemId matches a managed config", async () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig(
+          { path: "/etc/default.conf", kind: "rpm_owned_default" },
+          [{ level: "routine", reason: "config_default", detail: null }],
+        ),
+      ],
+    });
+    const { rerender } = render(
+      <MainContent
+        {...defaultMainContentProps}
+        activeSection="configs"
+        viewData={view}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Config summary should be collapsed — path not visible
+    expect(screen.getByTestId("config-managed-summary")).toBeInTheDocument();
+    expect(screen.queryByText("/etc/default.conf")).not.toBeInTheDocument();
+
+    // Set revealItemId to the managed config
+    rerender(
+      <MainContent
+        {...defaultMainContentProps}
+        activeSection="configs"
+        viewData={view}
+        revealItemId="configs:/etc/default.conf"
+      />,
+    );
+
+    // Config summary should auto-expand, path should be visible
+    await waitFor(() => {
+      expect(screen.getByText("/etc/default.conf")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId("decision-item-configs:/etc/default.conf"),
+    ).toBeInTheDocument();
+  });
+
+  it("does not expand unrelated summaries when revealItemId targets a different item", async () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg(
+          { name: "glibc", source_repo: "baseos" },
+          [{ level: "routine", reason: "package_baseline_match", detail: null }],
+        ),
+        makePkg(
+          { name: "httpd", source_repo: "appstream" },
+          [{ level: "needs_review", reason: "package_user_added", detail: null }],
+        ),
+      ],
+    });
+    render(
+      <MainContent
+        {...defaultMainContentProps}
+        viewData={view}
+        revealItemId="packages:httpd.x86_64"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // The baseline summary should stay collapsed since revealItemId targets httpd, not glibc
+    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
+  });
+});

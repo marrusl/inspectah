@@ -78,6 +78,91 @@ function renderGlobalSearch(overrides: Partial<GlobalSearchProps> = {}) {
   return { ...render(<GlobalSearch {...defaultProps} />), props: defaultProps };
 }
 
+describe("GlobalSearch auto-reveal", () => {
+  it("auto-expands collapsed baseline summary when search selects item inside it", async () => {
+    // Create a baseline-match package (Tier 1, collapsed by default)
+    const baselineItem: DecisionItemKind = {
+      type: "package",
+      data: {
+        entry: {
+          name: "glibc",
+          arch: "x86_64",
+          epoch: "0",
+          version: "2.34",
+          release: "1.el9",
+          state: "added",
+          include: true,
+          source_repo: "baseos",
+          fleet: null,
+        },
+        attention: [
+          { level: "routine", reason: "package_baseline_match", detail: null },
+        ],
+      },
+    };
+
+    const onNavigate = vi.fn();
+    renderGlobalSearch({
+      packageItems: [baselineItem],
+      onNavigate,
+    });
+
+    const input = screen.getByLabelText("Search all sections");
+    await userEvent.type(input, "glibc");
+
+    // Should find the baseline item in search results
+    const results = screen.getByTestId("global-search-results");
+    const options = within(results).getAllByRole("option");
+    expect(options.length).toBeGreaterThanOrEqual(1);
+
+    // Select the result
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    // onNavigate should be called with the correct section and item ID
+    expect(onNavigate).toHaveBeenCalledWith("packages", "packages:glibc.x86_64");
+  });
+
+  it("auto-expands collapsed config-managed summary when search selects item inside it", async () => {
+    const configManagedItem: DecisionItemKind = {
+      type: "config",
+      data: {
+        entry: {
+          path: "/etc/yum.conf",
+          kind: "rpm_owned_default",
+          category: "other",
+          content: "",
+          rpm_va_flags: null,
+          package: "yum",
+          diff_against_rpm: null,
+          include: true,
+          tie: false,
+          tie_winner: false,
+          fleet: null,
+        },
+        attention: [
+          { level: "routine", reason: "config_default", detail: null },
+        ],
+      },
+    };
+
+    const onNavigate = vi.fn();
+    renderGlobalSearch({
+      configItems: [configManagedItem],
+      onNavigate,
+    });
+
+    const input = screen.getByLabelText("Search all sections");
+    await userEvent.type(input, "yum.conf");
+
+    const results = screen.getByTestId("global-search-results");
+    const options = within(results).getAllByRole("option");
+    expect(options.length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onNavigate).toHaveBeenCalledWith("configs", "configs:/etc/yum.conf");
+  });
+});
+
 describe("GlobalSearch", () => {
   it("renders search input in sidebar", () => {
     renderGlobalSearch();

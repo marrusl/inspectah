@@ -42,6 +42,8 @@ export interface MainContentProps {
   onViewedChange?: () => void;
   /** Incremented when global search navigates, to clear section filter even for same-section nav. */
   filterClearCounter?: number;
+  /** When set, auto-expands any collapsed summary containing this item ID. */
+  revealItemId?: string;
 }
 
 function toPackageItems(packages: RefinedPackage[]): DecisionItemKind[] {
@@ -63,6 +65,7 @@ export function MainContent({
   onSectionSearchClose,
   onViewedChange,
   filterClearCounter = 0,
+  revealItemId,
 }: MainContentProps) {
   const label = SECTION_LABELS[activeSection] ?? activeSection;
   const [filterText, setFilterText] = useState("");
@@ -168,6 +171,7 @@ export function MainContent({
             sectionLabel="Packages"
             filterText={filterText}
             repoGroups={viewData?.repo_groups ?? []}
+            revealItemId={revealItemId}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
             onViewedChange={onViewedChange}
@@ -207,6 +211,7 @@ export function MainContent({
             items={filteredConfigItems}
             sectionLabel="Config Files"
             filterText={filterText}
+            revealItemId={revealItemId}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
             onViewedChange={onViewedChange}
