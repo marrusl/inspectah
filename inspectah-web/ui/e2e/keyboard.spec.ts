@@ -22,7 +22,7 @@ test.describe("Keyboard navigation", () => {
     await page.keyboard.press("j");
 
     // A row should have focus (tabindex="0" means it's the active roving item)
-    const focusedRow = page.locator('[role="row"][tabindex="0"]');
+    const focusedRow = page.locator('[role="group"][tabindex="0"]');
     // At least one row should exist in the decision list
     const rowCount = await focusedRow.count();
     // j should work if there are items — gracefully skip if empty
@@ -47,7 +47,7 @@ test.describe("Keyboard navigation", () => {
     // Navigate to first item
     await page.keyboard.press("j");
 
-    const focusedRow = page.locator('[role="row"][tabindex="0"]');
+    const focusedRow = page.locator('[role="group"][tabindex="0"]');
     const hasRow = (await focusedRow.count()) > 0;
     if (!hasRow) {
       test.skip();
@@ -99,8 +99,9 @@ test.describe("Keyboard navigation", () => {
     await page.keyboard.press("Control+k");
 
     // The sidebar search input should be focused
-    const searchInput = page.locator('[data-testid="global-search-input"]');
-    await expect(searchInput).toBeVisible();
+    const searchWrapper = page.locator('[data-testid="global-search-input"]');
+    await expect(searchWrapper).toBeVisible();
+    const searchInput = searchWrapper.locator('input');
     await expect(searchInput).toBeFocused({ timeout: 2000 });
   });
 

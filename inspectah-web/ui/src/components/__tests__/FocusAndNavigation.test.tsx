@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, act } from "@testing-library/react";
+import { render, screen, within, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import App from "../../App";
 
@@ -137,7 +137,7 @@ describe("Focus management after section change", () => {
     });
 
     // The first row should be focusable (it has the item)
-    const rows = screen.getAllByRole("row");
+    const rows = screen.getAllByRole("group");
     expect(rows.length).toBeGreaterThan(0);
     // The main content wrapper should NOT be the focused element
     // (it could be the row or nothing if rAF hasn't fired in jsdom)
@@ -414,8 +414,9 @@ describe("Undo/redo focus restore", () => {
       expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
     });
 
-    // Focus a specific decision item
-    const rows = screen.getAllByRole("row");
+    // Focus a specific decision item (scope to decision list, not nav)
+    const decisionList = screen.getByTestId("decision-list-packages");
+    const rows = within(decisionList).getAllByRole("group");
     const targetRow = rows[0];
     targetRow.focus();
     expect(document.activeElement).toBe(targetRow);

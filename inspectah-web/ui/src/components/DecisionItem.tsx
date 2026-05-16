@@ -25,8 +25,6 @@ export interface DecisionItemProps {
   isViewed: boolean;
   isPending: boolean;
   tabIndex?: number;
-  /** 1-based row index for aria-rowindex. */
-  rowIndex?: number;
   onToggleInclude: (op: RefinementOp) => void;
   onMarkViewed: (id: string) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
@@ -69,7 +67,6 @@ export function DecisionItem({
   isViewed,
   isPending,
   tabIndex = 0,
-  rowIndex,
   onToggleInclude,
   onMarkViewed,
   onKeyDown: onKeyDownProp,
@@ -123,14 +120,12 @@ export function DecisionItem({
     // Full card layout for NeedsReview items
     return (
       <div
-        role="row"
-        aria-checked={included}
-        aria-expanded={isExpanded}
-        aria-rowindex={rowIndex}
-        aria-label={`${name}, ${included ? "included" : "excluded"}`}
+        role="group"
+        aria-label={name}
         tabIndex={tabIndex}
         onKeyDown={handleKeyDown}
         data-testid={`decision-item-${id}`}
+        data-expanded={isExpanded ? "true" : "false"}
         style={{
           borderLeft: `3px solid var(--pf-t--global--color--status--danger--default)`,
           padding: "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
@@ -140,7 +135,7 @@ export function DecisionItem({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
+          <div style={{ flexShrink: 0 }}>
             <Switch
               id={`switch-${id}`}
               label={included ? "Include" : "Exclude"}
@@ -150,9 +145,10 @@ export function DecisionItem({
               aria-label={`Toggle ${name}`}
             />
           </div>
-          <div role="gridcell" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
+          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
             {showUnviewedDot && (
               <span
+                role="img"
                 data-testid="unviewed-dot"
                 style={{
                   width: 8,
@@ -166,14 +162,14 @@ export function DecisionItem({
             )}
             <span style={{ fontWeight: showUnviewedDot ? 600 : 400 }}>{name}</span>
           </div>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
+          <div style={{ flexShrink: 0 }}>
             {topReason && (
               <Label color={attentionLabelColor(topAttention)}>
                 {formatReasonText(topReason.reason)}
               </Label>
             )}
           </div>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
+          <div style={{ flexShrink: 0 }}>
             <button
               onClick={handleExpand}
               aria-hidden="true"
@@ -207,14 +203,12 @@ export function DecisionItem({
   // Compact row for Informational/Routine items
   return (
     <div
-      role="row"
-      aria-checked={included}
-      aria-expanded={isExpanded}
-      aria-rowindex={rowIndex}
-      aria-label={`${name}, ${included ? "included" : "excluded"}`}
+      role="group"
+      aria-label={name}
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
       data-testid={`decision-item-${id}`}
+      data-expanded={isExpanded ? "true" : "false"}
       style={{
         display: "flex",
         alignItems: "center",
@@ -223,7 +217,7 @@ export function DecisionItem({
         borderBottom: "1px solid var(--pf-t--global--border--color--default)",
       }}
     >
-      <div role="gridcell" style={{ flexShrink: 0 }}>
+      <div style={{ flexShrink: 0 }}>
         <Switch
           id={`switch-${id}`}
           label={included ? "Include" : "Exclude"}
@@ -233,10 +227,10 @@ export function DecisionItem({
           aria-label={`Toggle ${name}`}
         />
       </div>
-      <div role="gridcell" style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
         <span>{name}</span>
       </div>
-      <div role="gridcell" style={{ flexShrink: 0 }}>
+      <div style={{ flexShrink: 0 }}>
         <button
           onClick={handleExpand}
           aria-hidden="true"
@@ -254,7 +248,7 @@ export function DecisionItem({
         </button>
       </div>
       {isExpanded && (
-        <div role="gridcell" style={{ flexBasis: "100%", paddingTop: "var(--pf-t--global--spacer--xs)" }}>
+        <div style={{ flexBasis: "100%", paddingTop: "var(--pf-t--global--spacer--xs)" }}>
           {item.type === "package" ? (
             <PackageDetail pkg={item.data as RefinedPackage} />
           ) : (

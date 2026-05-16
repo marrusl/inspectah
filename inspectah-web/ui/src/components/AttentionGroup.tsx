@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ExpandableSection } from "@patternfly/react-core";
+import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type { AttentionLevel } from "../api/types";
 
 /** PatternFly token-based border colors per attention level. */
@@ -42,14 +42,30 @@ export function AttentionGroup({ level, count, forceExpanded, children }: Attent
         marginBottom: "var(--pf-t--global--spacer--md)",
       }}
     >
-      <ExpandableSection
-        toggleText={toggleText}
-        isExpanded={effectiveExpanded}
-        onToggle={(_e, expanded) => setIsExpanded(expanded)}
-        aria-label={`${label} items`}
+      <button
+        type="button"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        aria-expanded={effectiveExpanded}
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: "var(--pf-t--global--spacer--xs) 0",
+          marginBottom: "var(--pf-t--global--spacer--xs)",
+          fontWeight: 600,
+          fontSize: "var(--pf-t--global--font--size--md)",
+          color: "var(--pf-t--global--link--color--default)",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--pf-t--global--spacer--xs)",
+        }}
       >
+        {effectiveExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
+        {toggleText}
+      </button>
+      <div hidden={!effectiveExpanded}>
         {children}
-      </ExpandableSection>
+      </div>
     </div>
   );
 }
