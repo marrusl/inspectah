@@ -1,5 +1,5 @@
-import { useState, useMemo, useCallback, useRef, useEffect } from "react";
-import { Modal, ModalBody, ModalHeader, SearchInput } from "@patternfly/react-core";
+import { useState, useMemo, useCallback, useRef, useEffect, forwardRef, useImperativeHandle } from "react";
+import { SearchInput } from "@patternfly/react-core";
 import type { DecisionItemKind } from "./DecisionItem";
 import { itemId as getItemId } from "./DecisionItem";
 import type { ContextSection } from "../api/types";
@@ -31,17 +31,23 @@ const SECTION_LABELS: Record<string, string> = {
 };
 
 export interface GlobalSearchProps {
-  isOpen: boolean;
-  onClose: () => void;
   /** All decision items from packages section. */
   packageItems: DecisionItemKind[];
   /** All decision items from configs section. */
   configItems: DecisionItemKind[];
   /** Context sections (services, containers, etc.). */
   contextSections: ContextSection[] | null;
-  /** Called when user selects a result — navigates to section + item. */
+  /** Called when user selects a result -- navigates to section + item. */
   onNavigate: (sectionId: string, itemId: string) => void;
 }
+
+/** Imperative handle exposed by GlobalSearch for focusing the input. */
+export interface GlobalSearchHandle {
+  focus: () => void;
+}
+
+/** Set of section IDs that match a search query. Empty set means no active filter. */
+export type MatchingSections = Set<string>;
 
 function itemName(item: DecisionItemKind): string {
   if (item.type === "package") {
@@ -62,164 +68,151 @@ function itemSearchText(item: DecisionItemKind): string {
 }
 
 /**
- * Global search overlay — Ctrl+K to open.
- * Searches across all decision + context sections. Results show section
- * name + item title. Selecting a result navigates to that section and item.
+ * Sidebar-integrated global search.
+ * Always-visible search input at the top of the sidebar. Typing filters
+ * sections inline -- matching sections are highlighted, non-matching hidden.
+ * Ctrl+K focuses this input.
  */
-export function GlobalSearch({
-  isOpen,
-  onClose,
-  packageItems,
-  configItems,
-  contextSections,
-  onNavigate,
-}: GlobalSearchProps) {
-  const [query, setQuery] = useState("");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const resultsRef = useRef<HTMLDivElement>(null);
+export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
+  function GlobalSearch({ packageItems, configItems, contextSections, onNavigate }, ref) {
+    const [query, setQuery] = useState("");
+    const [selectedIndex, setSelectedIndex] = useState(0);
+    const inputRef = useRef<HTMLInputElement>(null);
+    const resultsRef = useRef<HTMLDivElement>(null);
 
-  // Reset state when opening
-  useEffect(() => {
-    if (isOpen) {
-      setQuery("");
-      setSelectedIndex(0);
-      // Focus input after modal opens
-      setTimeout(() => inputRef.current?.focus(), 50);
-    }
-  }, [isOpen]);
+    useImperativeHandle(ref, () => ({
+      focus: () => inputRef.current?.focus(),
+    }));
 
-  // Build searchable index of all items
-  const allItems = useMemo((): GlobalSearchResult[] => {
-    const results: GlobalSearchResult[] = [];
+    // Build searchable index of all items
+    const allItems = useMemo((): GlobalSearchResult[] => {
+      const results: GlobalSearchResult[] = [];
 
-    for (const item of packageItems) {
-      results.push({
-        sectionId: "packages",
-        sectionLabel: SECTION_LABELS.packages,
-        title: itemName(item),
-        itemId: getItemId(item),
-      });
-    }
+      for (const item of packageItems) {
+        results.push({
+          sectionId: "packages",
+          sectionLabel: SECTION_LABELS.packages,
+          title: itemName(item),
+          itemId: getItemId(item),
+        });
+      }
 
-    for (const item of configItems) {
-      results.push({
-        sectionId: "configs",
-        sectionLabel: SECTION_LABELS.configs,
-        title: itemName(item),
-        itemId: getItemId(item),
-      });
-    }
+      for (const item of configItems) {
+        results.push({
+          sectionId: "configs",
+          sectionLabel: SECTION_LABELS.configs,
+          title: itemName(item),
+          itemId: getItemId(item),
+        });
+      }
 
-    if (contextSections) {
-      for (const section of contextSections) {
-        const label = SECTION_LABELS[section.id] ?? section.display_name;
-        for (const ci of section.items) {
-          results.push({
-            sectionId: section.id,
-            sectionLabel: label,
-            title: ci.title,
-            itemId: ci.id,
-          });
+      if (contextSections) {
+        for (const section of contextSections) {
+          const label = SECTION_LABELS[section.id] ?? section.display_name;
+          for (const ci of section.items) {
+            results.push({
+              sectionId: section.id,
+              sectionLabel: label,
+              title: ci.title,
+              itemId: ci.id,
+            });
+          }
         }
       }
-    }
 
-    return results;
-  }, [packageItems, configItems, contextSections]);
+      return results;
+    }, [packageItems, configItems, contextSections]);
 
-  // Build searchable text for decision items (keyed by itemId)
-  const searchTextMap = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const item of packageItems) {
-      map.set(getItemId(item), itemSearchText(item));
-    }
-    for (const item of configItems) {
-      map.set(getItemId(item), itemSearchText(item));
-    }
-    if (contextSections) {
-      for (const section of contextSections) {
-        for (const ci of section.items) {
-          map.set(ci.id, ci.searchable_text.toLowerCase());
+    // Build searchable text for decision items (keyed by itemId)
+    const searchTextMap = useMemo(() => {
+      const map = new Map<string, string>();
+      for (const item of packageItems) {
+        map.set(getItemId(item), itemSearchText(item));
+      }
+      for (const item of configItems) {
+        map.set(getItemId(item), itemSearchText(item));
+      }
+      if (contextSections) {
+        for (const section of contextSections) {
+          for (const ci of section.items) {
+            map.set(ci.id, ci.searchable_text.toLowerCase());
+          }
         }
       }
-    }
-    return map;
-  }, [packageItems, configItems, contextSections]);
+      return map;
+    }, [packageItems, configItems, contextSections]);
 
-  // Filter results
-  const filtered = useMemo(() => {
-    if (!query.trim()) return [];
-    const q = query.toLowerCase();
-    return allItems.filter((r) => {
-      const text = searchTextMap.get(r.itemId) ?? r.title.toLowerCase();
-      return text.includes(q) || r.title.toLowerCase().includes(q);
-    }).slice(0, 50); // Cap at 50 results
-  }, [allItems, searchTextMap, query]);
+    // Filter results
+    const filtered = useMemo(() => {
+      if (!query.trim()) return [];
+      const q = query.toLowerCase();
+      return allItems
+        .filter((r) => {
+          const text = searchTextMap.get(r.itemId) ?? r.title.toLowerCase();
+          return text.includes(q) || r.title.toLowerCase().includes(q);
+        })
+        .slice(0, 50); // Cap at 50 results
+    }, [allItems, searchTextMap, query]);
 
-  // Clamp selected index
-  useEffect(() => {
-    if (selectedIndex >= filtered.length) {
-      setSelectedIndex(Math.max(0, filtered.length - 1));
-    }
-  }, [filtered.length, selectedIndex]);
-
-  const handleSelect = useCallback(
-    (result: GlobalSearchResult) => {
-      onNavigate(result.sectionId, result.itemId);
-      onClose();
-    },
-    [onNavigate, onClose],
-  );
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        setSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1));
-        return;
+    // Clamp selected index
+    useEffect(() => {
+      if (selectedIndex >= filtered.length) {
+        setSelectedIndex(Math.max(0, filtered.length - 1));
       }
-      if (e.key === "ArrowUp") {
-        e.preventDefault();
-        setSelectedIndex((prev) => Math.max(prev - 1, 0));
-        return;
-      }
-      if (e.key === "Enter" && filtered.length > 0) {
-        e.preventDefault();
-        handleSelect(filtered[selectedIndex]);
-        return;
-      }
-    },
-    [filtered, selectedIndex, handleSelect],
-  );
+    }, [filtered.length, selectedIndex]);
 
-  // Scroll selected item into view
-  useEffect(() => {
-    if (resultsRef.current) {
-      const selected = resultsRef.current.querySelector(
-        `[data-result-index="${selectedIndex}"]`,
-      );
-      if (typeof selected?.scrollIntoView === "function") {
-        selected.scrollIntoView({ block: "nearest" });
+    const handleSelect = useCallback(
+      (result: GlobalSearchResult) => {
+        onNavigate(result.sectionId, result.itemId);
+        setQuery("");
+      },
+      [onNavigate],
+    );
+
+    const handleKeyDown = useCallback(
+      (e: React.KeyboardEvent) => {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSelectedIndex((prev) => Math.max(prev - 1, 0));
+          return;
+        }
+        if (e.key === "Enter" && filtered.length > 0) {
+          e.preventDefault();
+          handleSelect(filtered[selectedIndex]);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setQuery("");
+          inputRef.current?.blur();
+          return;
+        }
+      },
+      [filtered, selectedIndex, handleSelect],
+    );
+
+    // Scroll selected item into view
+    useEffect(() => {
+      if (resultsRef.current) {
+        const selected = resultsRef.current.querySelector(
+          `[data-result-index="${selectedIndex}"]`,
+        );
+        if (typeof selected?.scrollIntoView === "function") {
+          selected.scrollIntoView({ block: "nearest" });
+        }
       }
-    }
-  }, [selectedIndex]);
+    }, [selectedIndex]);
 
-  if (!isOpen) return null;
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      aria-label="Global search"
-      variant="medium"
-      data-testid="global-search-modal"
-    >
-      <ModalHeader title="Search all sections" />
-      <ModalBody>
+    return (
+      <div className="inspectah-sidebar__search" data-testid="sidebar-search">
         <SearchInput
           ref={inputRef}
-          placeholder="Search packages, configs, services..."
+          placeholder="Search all sections..."
           value={query}
           onChange={(_e, val) => {
             setQuery(val);
@@ -237,17 +230,18 @@ export function GlobalSearch({
             aria-label="Search results"
             data-testid="global-search-results"
             style={{
-              marginTop: "var(--pf-t--global--spacer--sm)",
-              maxHeight: 320,
+              marginTop: "var(--pf-t--global--spacer--xs)",
+              maxHeight: 240,
               overflowY: "auto",
             }}
           >
             {filtered.length === 0 ? (
               <div
                 style={{
-                  padding: "var(--pf-t--global--spacer--md)",
+                  padding: "var(--pf-t--global--spacer--sm)",
                   textAlign: "center",
                   color: "var(--pf-t--global--color--200)",
+                  fontSize: "var(--pf-t--global--font--size--sm)",
                 }}
               >
                 No results found
@@ -276,24 +270,27 @@ export function GlobalSearch({
                     display: "flex",
                     alignItems: "center",
                     gap: "var(--pf-t--global--spacer--sm)",
+                    fontSize: "var(--pf-t--global--font--size--sm)",
                   }}
                 >
                   <span
                     style={{
                       fontSize: "var(--pf-t--global--font--size--xs)",
                       opacity: 0.7,
-                      minWidth: 80,
+                      minWidth: 70,
                     }}
                   >
                     {result.sectionLabel}
                   </span>
-                  <span>{result.title}</span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {result.title}
+                  </span>
                 </div>
               ))
             )}
           </div>
         )}
-      </ModalBody>
-    </Modal>
-  );
-}
+      </div>
+    );
+  },
+);

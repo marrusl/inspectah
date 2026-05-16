@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ContainerfilePanel } from "../ContainerfilePanel";
 
@@ -105,21 +105,6 @@ describe("ContainerfilePanel", () => {
     await userEvent.click(
       screen.getByLabelText("Expand Containerfile panel"),
     );
-    expect(onToggle).toHaveBeenCalled();
-  });
-
-  it("toggles on Ctrl+E", () => {
-    const onToggle = vi.fn();
-    render(
-      <ContainerfilePanel
-        content={"FROM ubi9\n"}
-        isOpen={true}
-        onToggle={onToggle}
-        loading={false}
-      />,
-    );
-
-    fireEvent.keyDown(document, { key: "e", ctrlKey: true });
     expect(onToggle).toHaveBeenCalled();
   });
 

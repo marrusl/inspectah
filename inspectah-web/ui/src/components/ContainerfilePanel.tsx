@@ -1,4 +1,4 @@
-import { useEffect, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 import { Button, Content, Skeleton } from "@patternfly/react-core";
 import { AngleDoubleRightIcon } from "@patternfly/react-icons";
 
@@ -41,22 +41,6 @@ export function ContainerfilePanel({
       ]),
     [],
   );
-
-  // Keyboard shortcut: Ctrl+E
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === "e") {
-        e.preventDefault();
-        onToggle();
-      }
-    },
-    [onToggle],
-  );
-
-  useEffect(() => {
-    document.addEventListener("keydown", handleKeyDown);
-    return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
 
   // Auto-collapse below 1280px
   useEffect(() => {

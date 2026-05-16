@@ -64,8 +64,6 @@ function makeContextSection(id: string, items: { id: string; title: string }[]):
 
 function renderGlobalSearch(overrides: Partial<GlobalSearchProps> = {}) {
   const defaultProps: GlobalSearchProps = {
-    isOpen: true,
-    onClose: vi.fn(),
     packageItems: [makePackageItem("httpd"), makePackageItem("nginx")],
     configItems: [makeConfigItem("/etc/httpd/httpd.conf")],
     contextSections: [
@@ -81,25 +79,10 @@ function renderGlobalSearch(overrides: Partial<GlobalSearchProps> = {}) {
 }
 
 describe("GlobalSearch", () => {
-  it("renders nothing when closed", () => {
-    const { container } = render(
-      <GlobalSearch
-        isOpen={false}
-        onClose={vi.fn()}
-        packageItems={[]}
-        configItems={[]}
-        contextSections={null}
-        onNavigate={vi.fn()}
-      />,
-    );
-
-    expect(container.innerHTML).toBe("");
-  });
-
-  it("renders modal with search input when open", () => {
+  it("renders search input in sidebar", () => {
     renderGlobalSearch();
 
-    expect(screen.getByTestId("global-search-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("sidebar-search")).toBeInTheDocument();
     expect(screen.getByTestId("global-search-input")).toBeInTheDocument();
   });
 
@@ -132,7 +115,7 @@ describe("GlobalSearch", () => {
     expect(screen.getByText("No results found")).toBeInTheDocument();
   });
 
-  it("navigates on Enter and calls onClose", async () => {
+  it("navigates on Enter", async () => {
     const { props } = renderGlobalSearch();
 
     const input = screen.getByLabelText("Search all sections");
@@ -142,7 +125,6 @@ describe("GlobalSearch", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(props.onNavigate).toHaveBeenCalledTimes(1);
-    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("navigates with ArrowDown then Enter", async () => {
@@ -168,7 +150,6 @@ describe("GlobalSearch", () => {
     await userEvent.click(firstResult);
 
     expect(props.onNavigate).toHaveBeenCalledTimes(1);
-    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("shows section labels in results", async () => {
@@ -177,7 +158,7 @@ describe("GlobalSearch", () => {
     const input = screen.getByLabelText("Search all sections");
     await userEvent.type(input, "httpd");
 
-    // Should show section labels like "Packages", "Config Files", "Services"
+    // Should show section labels like "Packages"
     expect(screen.getByText("Packages")).toBeInTheDocument();
   });
 
@@ -189,6 +170,17 @@ describe("GlobalSearch", () => {
     expect(screen.getByTestId("global-search-results")).toBeInTheDocument();
 
     await userEvent.clear(input);
+    expect(screen.queryByTestId("global-search-results")).not.toBeInTheDocument();
+  });
+
+  it("clears query on Escape", async () => {
+    renderGlobalSearch();
+
+    const input = screen.getByLabelText("Search all sections");
+    await userEvent.type(input, "httpd");
+    expect(screen.getByTestId("global-search-results")).toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Escape" });
     expect(screen.queryByTestId("global-search-results")).not.toBeInTheDocument();
   });
 });

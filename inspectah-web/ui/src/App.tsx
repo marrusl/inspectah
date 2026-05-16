@@ -1,5 +1,12 @@
-import { useState, useCallback, useEffect } from "react";
-import { Page } from "@patternfly/react-core";
+import { useState, useCallback, useEffect, useRef } from "react";
+import {
+  Page,
+  PageSection,
+  EmptyState,
+  EmptyStateBody,
+  EmptyStateFooter,
+  Button,
+} from "@patternfly/react-core";
 import type { RefinedView } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
@@ -12,6 +19,7 @@ import { ContainerfilePanel } from "./components/ContainerfilePanel";
 import { MainContent } from "./components/MainContent";
 import { ShortcutOverlay } from "./components/ShortcutOverlay";
 import { GlobalSearch } from "./components/GlobalSearch";
+import type { GlobalSearchHandle } from "./components/GlobalSearch";
 import { ExportDialog } from "./components/ExportDialog";
 import "highlight.js/styles/github.css";
 import "./App.css";
@@ -32,11 +40,17 @@ function App() {
   const [activeSection, setActiveSection] = useState("packages");
   const [cfPanelOpen, setCfPanelOpen] = useState(readPanelPref);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const mainContentRef = useRef<HTMLDivElement>(null);
+  const globalSearchRef = useRef<GlobalSearchHandle>(null);
+
+  // Focus main content area when active section changes
+  useEffect(() => {
+    mainContentRef.current?.focus();
+  }, [activeSection]);
 
   // Responsive breakpoint: < 1024px hides sidebar, shows hamburger
   useEffect(() => {
@@ -94,7 +108,7 @@ function App() {
   }, []);
 
   const handleOpenGlobalSearch = useCallback(() => {
-    setGlobalSearchOpen(true);
+    globalSearchRef.current?.focus();
   }, []);
 
   const handleOpenSectionSearch = useCallback(() => {
@@ -104,7 +118,6 @@ function App() {
   const handleNavigateFromGlobalSearch = useCallback(
     (sectionId: string, _itemId: string) => {
       setActiveSection(sectionId);
-      setGlobalSearchOpen(false);
     },
     [],
   );
@@ -136,6 +149,52 @@ function App() {
   });
 
   const viewLoading = view.loading && view.data === null;
+
+  // Initial load error: show full-page error with retry when first fetch fails
+  const initialLoadError =
+    !view.loading && view.error && view.data === null
+      ? view.error
+      : !health.loading && health.error && health.data === null
+        ? health.error
+        : null;
+
+  if (initialLoadError) {
+    return (
+      <Page className="inspectah-page">
+        <PageSection>
+          <EmptyState
+            titleText="Failed to load"
+            headingLevel="h2"
+            data-testid="initial-load-error"
+          >
+            <EmptyStateBody>
+              {initialLoadError.message || "Could not connect to the inspectah server."}
+            </EmptyStateBody>
+            <EmptyStateFooter>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  view.refetch();
+                }}
+              >
+                Retry
+              </Button>
+            </EmptyStateFooter>
+          </EmptyState>
+        </PageSection>
+      </Page>
+    );
+  }
+
+  const searchSlot = (
+    <GlobalSearch
+      ref={globalSearchRef}
+      packageItems={view.data ? view.data.packages.map((p) => ({ type: "package" as const, data: p })) : []}
+      configItems={view.data ? view.data.config_files.map((c) => ({ type: "config" as const, data: c })) : []}
+      contextSections={sections.data}
+      onNavigate={handleNavigateFromGlobalSearch}
+    />
+  );
 
   return (
     <Page className="inspectah-page">
@@ -169,10 +228,11 @@ function App() {
               stats={view.data?.stats ?? null}
               sections={sections.data}
               health={health.data}
+              searchSlot={searchSlot}
             />
           </div>
         )}
-        <div className="inspectah-layout__main">
+        <div className="inspectah-layout__main" ref={mainContentRef} tabIndex={-1}>
           <MainContent
             activeSection={activeSection}
             loading={viewLoading}
@@ -200,19 +260,12 @@ function App() {
           health={health.data}
           overlay
           onClose={() => setSidebarOverlayOpen(false)}
+          searchSlot={searchSlot}
         />
       )}
       <ShortcutOverlay
         isOpen={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
-      />
-      <GlobalSearch
-        isOpen={globalSearchOpen}
-        onClose={() => setGlobalSearchOpen(false)}
-        packageItems={view.data ? view.data.packages.map((p) => ({ type: "package" as const, data: p })) : []}
-        configItems={view.data ? view.data.config_files.map((c) => ({ type: "config" as const, data: c })) : []}
-        contextSections={sections.data}
-        onNavigate={handleNavigateFromGlobalSearch}
       />
       <ExportDialog
         isOpen={exportDialogOpen}
