@@ -9,13 +9,21 @@ use serde_json::Value;
 /// Entries with an existing `"include": false` are untouched. This
 /// resolves the `serde(default)` bool ambiguity where absent and
 /// explicit-false collapse to the same `false`.
+///
+/// Enforces the same schema version gate as `InspectionSnapshot::load()`
+/// (MIN_SCHEMA..=SCHEMA_VERSION) by round-tripping through the patched
+/// JSON string and calling `load()`.
 pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError> {
     let mut value: Value = serde_json::from_str(raw_json)
         .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
 
     patch_missing_includes(&mut value);
 
-    let mut snap: InspectionSnapshot = serde_json::from_value(value)
+    // Serialize patched Value back to string and use InspectionSnapshot::load()
+    // which enforces MIN_SCHEMA..=SCHEMA_VERSION (12..=14).
+    let patched_json = serde_json::to_string(&value)
+        .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
+    let mut snap = InspectionSnapshot::load(&patched_json)
         .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
 
     migrate(&mut snap);
