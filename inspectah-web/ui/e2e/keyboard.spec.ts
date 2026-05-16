@@ -21,10 +21,8 @@ test.describe("Keyboard navigation", () => {
     // Press j to move to first/next item
     await page.keyboard.press("j");
 
-    // A row should have focus (aria-selected or data-focused)
-    const focusedRow = page.locator(
-      '[role="row"][tabindex="0"], [data-focused="true"], tr:focus',
-    );
+    // A row should have focus (tabindex="0" means it's the active roving item)
+    const focusedRow = page.locator('[role="row"][tabindex="0"]');
     // At least one row should exist in the decision list
     const rowCount = await focusedRow.count();
     // j should work if there are items — gracefully skip if empty
@@ -49,9 +47,7 @@ test.describe("Keyboard navigation", () => {
     // Navigate to first item
     await page.keyboard.press("j");
 
-    const focusedRow = page.locator(
-      '[role="row"][tabindex="0"], [data-focused="true"], tr:focus',
-    );
+    const focusedRow = page.locator('[role="row"][tabindex="0"]');
     const hasRow = (await focusedRow.count()) > 0;
     if (!hasRow) {
       test.skip();
@@ -82,13 +78,14 @@ test.describe("Keyboard navigation", () => {
   });
 
   test("/ opens section search", async ({ page }) => {
+    // Focus main content so / is not captured by sidebar search
+    await page.locator(".inspectah-layout__main").click();
+
     // Press / to open section search
     await page.keyboard.press("/");
 
-    // A search input should appear
-    const searchInput = page.locator(
-      '[data-testid="section-search"] input, .inspectah-section-search input',
-    );
+    // The section search input should appear (inline above decision list)
+    const searchInput = page.locator('[data-testid="section-search"] input');
     await expect(searchInput).toBeVisible({ timeout: 2000 });
 
     // Escape closes it
@@ -96,27 +93,22 @@ test.describe("Keyboard navigation", () => {
     await expect(searchInput).not.toBeVisible({ timeout: 2000 });
   });
 
-  test("Ctrl+K opens global search", async ({ page }) => {
+  test("Ctrl+K focuses global search in sidebar", async ({ page }) => {
+    // Global search is always-visible in the sidebar, not a modal.
+    // Ctrl+K focuses the search input.
     await page.keyboard.press("Control+k");
 
-    // Global search modal/overlay should appear
-    const globalSearch = page.locator(
-      '[data-testid="global-search"], .inspectah-global-search',
-    );
-    await expect(globalSearch).toBeVisible({ timeout: 2000 });
-
-    // Escape closes it
-    await page.keyboard.press("Escape");
-    await expect(globalSearch).not.toBeVisible({ timeout: 2000 });
+    // The sidebar search input should be focused
+    const searchInput = page.locator('[data-testid="global-search-input"]');
+    await expect(searchInput).toBeVisible();
+    await expect(searchInput).toBeFocused({ timeout: 2000 });
   });
 
   test("? opens shortcut overlay", async ({ page }) => {
     await page.keyboard.press("?");
 
-    // Shortcut help overlay should appear
-    const overlay = page.locator(
-      '[data-testid="shortcut-overlay"], .inspectah-shortcut-overlay',
-    );
+    // Shortcut help overlay should appear (rendered as a PF Modal)
+    const overlay = page.locator('[data-testid="shortcut-overlay"]');
     await expect(overlay).toBeVisible({ timeout: 2000 });
 
     // Escape closes it
@@ -124,26 +116,14 @@ test.describe("Keyboard navigation", () => {
     await expect(overlay).not.toBeVisible({ timeout: 2000 });
   });
 
-  test("Escape closes overlays", async ({ page }) => {
+  test("Escape closes shortcut overlay", async ({ page }) => {
     // Open shortcut overlay
     await page.keyboard.press("?");
-    const overlay = page.locator(
-      '[data-testid="shortcut-overlay"], .inspectah-shortcut-overlay',
-    );
+    const overlay = page.locator('[data-testid="shortcut-overlay"]');
     await expect(overlay).toBeVisible({ timeout: 2000 });
 
     // Escape should close it
     await page.keyboard.press("Escape");
     await expect(overlay).not.toBeVisible({ timeout: 2000 });
-
-    // Open global search
-    await page.keyboard.press("Control+k");
-    const globalSearch = page.locator(
-      '[data-testid="global-search"], .inspectah-global-search',
-    );
-    await expect(globalSearch).toBeVisible({ timeout: 2000 });
-
-    await page.keyboard.press("Escape");
-    await expect(globalSearch).not.toBeVisible({ timeout: 2000 });
   });
 });

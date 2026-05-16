@@ -58,7 +58,7 @@ jobs:
       - name: Start refine server
         run: |
           if [ -f testdata/e2e-fixture.tar.gz ]; then
-            ./target/debug/inspectah refine --no-open testdata/e2e-fixture.tar.gz &
+            ./target/debug/inspectah refine --open=false testdata/e2e-fixture.tar.gz &
             SERVER_PID=$!
             echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
             # Wait for server to be ready
