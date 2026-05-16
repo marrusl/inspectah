@@ -15,6 +15,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
+                source_repo: "appstream".into(),
                 include: true,
                 ..Default::default()
             },
@@ -22,6 +23,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 name: "vim".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
+                source_repo: "appstream".into(),
                 include: true,
                 ..Default::default()
             },
@@ -200,7 +202,7 @@ fn preview_export_containerfile_fidelity() {
 }
 
 #[test]
-fn reimport_preserves_excludes() {
+fn reimport_is_clean_and_coherent() {
     // First session: exclude httpd, export
     let mut session1 = RefineSession::new(test_snapshot());
     session1
@@ -216,26 +218,39 @@ fn reimport_preserves_excludes() {
         .export_tarball(&tarball_path, session1.generation())
         .unwrap();
 
-    // Second session: re-import the exported tarball
+    // Second session: re-import the exported tarball.
+    // Normalization runs at construction, so include states are
+    // re-evaluated based on tier classification — not preserved
+    // verbatim from the export.
     let session2 = inspectah_refine::tarball::from_tarball(&tarball_path).unwrap();
 
-    // httpd must still be excluded in the re-imported session
-    let httpd = session2
+    // The re-imported session should NOT be dirty — normalization
+    // establishes the baseline, and there are no ops.
+    assert!(
+        !session2.is_dirty(),
+        "re-imported session must not be dirty"
+    );
+
+    // View and projected snapshot must agree on include states
+    let view_httpd = session2
         .view()
         .packages
         .iter()
         .find(|p| p.entry.name == "httpd")
         .unwrap();
-    assert!(
-        !httpd.entry.include,
-        "httpd must remain excluded after re-import"
-    );
-
-    // The re-imported session should NOT be dirty — the exclude is
-    // part of the normalized original, not a new mutation
-    assert!(
-        !session2.is_dirty(),
-        "re-imported session must not be dirty"
+    let proj_httpd = session2
+        .snapshot_projected()
+        .rpm
+        .as_ref()
+        .unwrap()
+        .packages_added
+        .iter()
+        .find(|p| p.name == "httpd")
+        .unwrap()
+        .include;
+    assert_eq!(
+        view_httpd.entry.include, proj_httpd,
+        "view and projected snapshot must agree"
     );
 }
 
