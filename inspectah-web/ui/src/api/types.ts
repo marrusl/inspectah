@@ -84,14 +84,18 @@ export type AttentionLevel = "needs_review" | "informational" | "routine";
  * The Custom variant serializes as { "custom": "detail string" }
  */
 export type AttentionReason =
+  | "package_baseline_match"
+  | "package_user_added"
+  | "package_version_changed"
+  | "package_provenance_unavailable"
+  | "package_local_install"
+  | "package_no_repo_source"
+  | "config_default"
+  | "config_baseline_match"
   | "config_modified"
   | "config_unowned"
   | "config_orphaned"
   | "sensitive_path"
-  | "package_not_in_baseline"
-  | "package_local_install"
-  | "package_state_changed"
-  | "package_no_repo"
   | { custom: string };
 
 export interface AttentionTag {
@@ -116,11 +120,13 @@ export interface RefineStats {
   excluded_packages: number;
   total_configs: number;
   included_configs: number;
+  package_managed_configs: number;
   excluded_configs: number;
   needs_review_count: number;
   ops_applied: number;
   can_undo: boolean;
   can_redo: boolean;
+  baseline_available: boolean;
 }
 
 export interface RefinedView {
@@ -146,6 +152,7 @@ export interface ChangesSummary {
   packages_excluded: PackageTarget[];
   configs_included: string[];
   configs_excluded: string[];
+  repos_excluded: string[];
   is_dirty: boolean;
 }
 
@@ -176,6 +183,17 @@ export interface ContextSection {
   items: ContextItem[];
 }
 
+/** Rust: #[serde(rename_all = "snake_case")] */
+export type RepoProvenance = "verified" | "incomplete" | "unknown";
+
+export interface RepoGroupInfo {
+  section_id: string;
+  provenance: RepoProvenance;
+  is_distro: boolean;
+  package_count: number;
+  enabled: boolean;
+}
+
 export interface HealthResponse {
   status: string;
   host: {
@@ -187,6 +205,12 @@ export interface HealthResponse {
     schema_version: number;
   };
   completeness: string;
+  policy: { distro_repos: string[] };
+}
+
+/** View endpoint response: RefinedView + repo_groups. */
+export interface ViewResponse extends RefinedView {
+  repo_groups: RepoGroupInfo[];
 }
 
 // --- Error type ---

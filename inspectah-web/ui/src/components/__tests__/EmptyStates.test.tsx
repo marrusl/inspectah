@@ -48,11 +48,13 @@ const MOCK_STATS: RefineStats = {
   excluded_packages: 0,
   total_configs: 0,
   included_configs: 0,
+  package_managed_configs: 0,
   excluded_configs: 0,
   needs_review_count: 0,
   ops_applied: 0,
   can_undo: false,
   can_redo: false,
+  baseline_available: false,
 };
 
 const MOCK_VIEW: RefinedView = {
@@ -195,7 +197,7 @@ describe("Completion state", () => {
   it("does not show completion message when unviewed NeedsReview items exist", async () => {
     const NEEDS_REVIEW_TAG: AttentionTag = {
       level: "needs_review",
-      reason: "package_not_in_baseline",
+      reason: "package_user_added",
       detail: null,
     };
 
@@ -231,7 +233,7 @@ describe("Completion state", () => {
   it("shows completion message when all NeedsReview items have been viewed", async () => {
     const NEEDS_REVIEW_TAG: AttentionTag = {
       level: "needs_review",
-      reason: "package_not_in_baseline",
+      reason: "package_user_added",
       detail: null,
     };
 

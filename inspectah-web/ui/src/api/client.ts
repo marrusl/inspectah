@@ -1,5 +1,6 @@
 import type {
   RefinedView,
+  ViewResponse,
   ContextSection,
   AnnotatedOp,
   ChangesSummary,
@@ -37,7 +38,7 @@ export function fetchHealth(): Promise<HealthResponse> {
   return getJson("/api/health");
 }
 
-export function fetchView(): Promise<RefinedView> {
+export function fetchView(): Promise<ViewResponse> {
   return getJson("/api/view");
 }
 

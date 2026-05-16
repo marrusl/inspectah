@@ -22,7 +22,7 @@ const MOCK_VIEW = {
         fleet: null,
       },
       attention: [
-        { level: "needs_review", reason: "package_not_in_baseline", detail: "Not found in base image" },
+        { level: "needs_review", reason: "package_user_added", detail: "Not found in base image" },
       ],
     },
     {
@@ -38,7 +38,7 @@ const MOCK_VIEW = {
         fleet: null,
       },
       attention: [
-        { level: "informational", reason: "package_state_changed", detail: null },
+        { level: "informational", reason: "package_version_changed", detail: null },
       ],
     },
   ],
@@ -50,13 +50,16 @@ const MOCK_VIEW = {
     excluded_packages: 0,
     total_configs: 0,
     included_configs: 0,
+    package_managed_configs: 0,
     excluded_configs: 0,
     needs_review_count: 1,
     ops_applied: 0,
     can_undo: false,
     can_redo: false,
+    baseline_available: false,
   },
   generation: 1,
+  repo_groups: [],
 };
 
 const MOCK_SECTIONS = [
@@ -78,6 +81,7 @@ const MOCK_HEALTH = {
     schema_version: 1,
   },
   completeness: "full",
+  policy: { distro_repos: ["baseos", "appstream"] },
 };
 
 beforeEach(() => {

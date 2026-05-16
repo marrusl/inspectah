@@ -4,10 +4,12 @@ use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_refine::repo_index::{RepoIndex, DISTRO_REPOS};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::RefinementOp;
+use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -36,6 +38,24 @@ pub struct ContextItem {
     pub subtitle: Option<String>,
     pub detail: Option<String>,
     pub searchable_text: String,
+}
+
+// -- Repo group + view response DTOs --------------------------------------
+
+#[derive(Serialize, Clone, Debug)]
+pub struct RepoGroupInfo {
+    pub section_id: String,
+    pub provenance: RepoProvenance,
+    pub is_distro: bool,
+    pub package_count: usize,
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+pub struct ViewResponse {
+    #[serde(flatten)]
+    pub view: RefinedView,
+    pub repo_groups: Vec<RepoGroupInfo>,
 }
 
 // -- Viewed tracking request body -----------------------------------------
@@ -97,12 +117,71 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
             "schema_version": snap.schema_version,
         },
         "completeness": completeness,
+        "policy": {
+            "distro_repos": DISTRO_REPOS,
+        },
     }))
 }
 
 pub async fn get_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let session = state.session.lock().unwrap();
-    Json(serde_json::to_value(session.view()).unwrap())
+    let view = session.view().clone();
+    let repo_groups = build_repo_groups(&session);
+    let response = ViewResponse { view, repo_groups };
+    Json(serde_json::to_value(&response).unwrap())
+}
+
+/// Build `RepoGroupInfo` entries from the session's repo index and current view.
+fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
+    let view = session.view();
+    let repo_index = session.repo_index();
+    let changes = session.pending_changes();
+    let excluded: BTreeSet<&str> = changes.repos_excluded.iter().map(|s| s.as_str()).collect();
+
+    // Count visible packages per source_repo
+    let mut repo_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for pkg in &view.packages {
+        let section = &pkg.entry.source_repo;
+        *repo_counts.entry(section.clone()).or_insert(0) += 1;
+    }
+
+    // Also include repos known to the index but not visible (0-count)
+    for section_id in repo_index.packages_by_repo.keys() {
+        repo_counts.entry(section_id.clone()).or_insert(0);
+    }
+
+    let mut groups: Vec<RepoGroupInfo> = repo_counts
+        .into_iter()
+        .map(|(section_id, package_count)| {
+            let provenance = if section_id.is_empty() {
+                RepoProvenance::Unknown
+            } else {
+                repo_index.provenance(&section_id)
+            };
+            let is_distro = if section_id.is_empty() {
+                false
+            } else {
+                RepoIndex::is_distro_repo(&section_id)
+            };
+            let enabled = !excluded.contains(section_id.as_str());
+            RepoGroupInfo {
+                section_id,
+                provenance,
+                is_distro,
+                package_count,
+                enabled,
+            }
+        })
+        .collect();
+
+    // Sort: distro repos first, then by section_id
+    groups.sort_by(|a, b| {
+        b.is_distro
+            .cmp(&a.is_distro)
+            .then_with(|| a.section_id.cmp(&b.section_id))
+    });
+
+    groups
 }
 
 pub async fn apply_op(
@@ -1242,6 +1321,7 @@ mod tests {
         ComposeFile, ComposeService, ContainerSection, RunningContainer,
     };
     use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
     use inspectah_core::types::selinux::SelinuxSection;
 
     fn empty_snapshot() -> InspectionSnapshot {
@@ -1510,5 +1590,153 @@ mod tests {
 
         assert_eq!(fips.subtitle.as_deref(), Some("enabled"));
         assert!(fips.searchable_text.contains("enabled"));
+    }
+
+    // -- Health endpoint includes policy.distro_repos -------------------------
+
+    #[test]
+    fn health_includes_policy_distro_repos() {
+        let snap = empty_snapshot();
+        let session = RefineSession::new(snap);
+        let state = Arc::new(AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
+
+        // Call the health handler synchronously via tokio runtime
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(async {
+            let Json(val) = health(State(state)).await;
+            val
+        });
+
+        let policy = result.get("policy").expect("response should have policy");
+        let distro_repos = policy
+            .get("distro_repos")
+            .expect("policy should have distro_repos")
+            .as_array()
+            .expect("distro_repos should be an array");
+
+        assert!(!distro_repos.is_empty(), "distro_repos should not be empty");
+        let repo_strs: Vec<&str> = distro_repos
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(repo_strs.contains(&"baseos"));
+        assert!(repo_strs.contains(&"appstream"));
+    }
+
+    // -- View response includes repo_groups -----------------------------------
+
+    #[test]
+    fn view_response_includes_repo_groups() {
+        let mut snap = empty_snapshot();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "kernel".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    source_repo: "baseos".into(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "custom-tool".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    source_repo: "epel".into(),
+                    ..Default::default()
+                },
+            ],
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/redhat.repo".into(),
+                content: "[appstream]\nname=AppStream\ngpgcheck=1\n[baseos]\nname=BaseOS\ngpgcheck=1"
+                    .into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let groups = build_repo_groups(&session);
+
+        // Should have entries for appstream, baseos, and epel
+        assert!(
+            groups.len() >= 3,
+            "expected at least 3 repo groups, got {}",
+            groups.len()
+        );
+
+        let appstream = groups
+            .iter()
+            .find(|g| g.section_id == "appstream")
+            .expect("should have appstream group");
+        assert!(appstream.is_distro);
+        assert_eq!(appstream.provenance, RepoProvenance::Verified);
+        assert!(appstream.enabled);
+
+        let baseos = groups
+            .iter()
+            .find(|g| g.section_id == "baseos")
+            .expect("should have baseos group");
+        assert!(baseos.is_distro);
+
+        let epel = groups
+            .iter()
+            .find(|g| g.section_id == "epel")
+            .expect("should have epel group");
+        assert!(!epel.is_distro);
+        // epel has packages but no repo file -> Incomplete
+        assert_eq!(epel.provenance, RepoProvenance::Incomplete);
+        assert!(epel.enabled);
+    }
+
+    #[test]
+    fn view_response_repo_groups_distro_sorted_first() {
+        let mut snap = empty_snapshot();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    source_repo: "appstream".into(),
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "zsh".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    include: true,
+                    source_repo: "epel".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let session = RefineSession::new(snap);
+        let groups = build_repo_groups(&session);
+
+        // Distro repos should come before non-distro
+        let first_non_distro = groups.iter().position(|g| !g.is_distro);
+        let last_distro = groups.iter().rposition(|g| g.is_distro);
+        if let (Some(fnd), Some(ld)) = (first_non_distro, last_distro) {
+            assert!(
+                ld < fnd,
+                "distro repos should be sorted before non-distro repos"
+            );
+        }
     }
 }

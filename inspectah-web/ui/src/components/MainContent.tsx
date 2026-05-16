@@ -7,7 +7,7 @@ import {
   EmptyStateBody,
   Button,
 } from "@patternfly/react-core";
-import type { RefinedView, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
+import type { ViewResponse, RefinedView, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
@@ -31,7 +31,7 @@ const SECTION_LABELS: Record<string, string> = {
 export interface MainContentProps {
   activeSection: string;
   loading: boolean;
-  viewData: RefinedView | null;
+  viewData: ViewResponse | null;
   sections: ContextSection[] | null;
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;

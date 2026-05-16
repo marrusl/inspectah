@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type {
-  RefinedView,
+  ViewResponse,
   ContextSection,
   AnnotatedOp,
   ChangesSummary,
@@ -37,9 +37,10 @@ const mockHealth: HealthResponse = {
     schema_version: 14,
   },
   completeness: "full",
+  policy: { distro_repos: ["baseos", "appstream", "crb"] },
 };
 
-const mockView: RefinedView = {
+const mockView: ViewResponse = {
   packages: [
     {
       entry: {
@@ -56,7 +57,7 @@ const mockView: RefinedView = {
       attention: [
         {
           level: "needs_review",
-          reason: "package_not_in_baseline",
+          reason: "package_user_added",
           detail: null,
         },
       ],
@@ -93,13 +94,18 @@ const mockView: RefinedView = {
     excluded_packages: 2,
     total_configs: 5,
     included_configs: 4,
+    package_managed_configs: 3,
     excluded_configs: 1,
     needs_review_count: 3,
     ops_applied: 1,
     can_undo: true,
     can_redo: false,
+    baseline_available: true,
   },
   generation: 1,
+  repo_groups: [
+    { section_id: "appstream", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+  ],
 };
 
 const mockSections: ContextSection[] = [
@@ -136,6 +142,7 @@ const mockChanges: ChangesSummary = {
   packages_excluded: [{ name: "nano", arch: "x86_64" }],
   configs_included: [],
   configs_excluded: ["/etc/nanorc"],
+  repos_excluded: [],
   is_dirty: true,
 };
 
@@ -214,7 +221,7 @@ describe("GET endpoints", () => {
   });
 
   describe("fetchView", () => {
-    it("sends GET to /api/view and returns RefinedView", async () => {
+    it("sends GET to /api/view and returns ViewResponse", async () => {
       mockFetchSuccess(mockView);
       const result = await fetchView();
       const { url, init } = lastFetchCall();
