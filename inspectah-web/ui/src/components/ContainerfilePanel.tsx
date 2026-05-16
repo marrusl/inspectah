@@ -46,7 +46,7 @@ export function ContainerfilePanel({
   // Initial narrow-viewport state is handled by the parent (App.tsx)
   // synchronously during useState initialization.
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 1280px)");
+    const mq = window.matchMedia("(max-width: 1279px)");
     const handler = (e: MediaQueryListEvent) => {
       if (e.matches && isOpen) onToggle();
     };

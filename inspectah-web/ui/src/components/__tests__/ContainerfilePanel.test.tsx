@@ -144,7 +144,7 @@ describe("ContainerfilePanel", () => {
       writable: true,
       value: () => ({
         matches: true, // narrow viewport
-        media: "(max-width: 1280px)",
+        media: "(max-width: 1279px)",
         onchange: null,
         addListener: () => {},
         removeListener: () => {},
