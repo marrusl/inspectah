@@ -370,12 +370,13 @@ At widths where the sidebar hides (<1024px) and the Containerfile panel collapse
 
 These items build on the fixed triage foundation and should be tracked for future phases:
 
-1. **Image-mode incompatible service flagging** — Flag services like `dnf-makecache.service`, `dnf-makecache.timer`, `packagekit.service` as incompatible with image mode. New detection logic. Should be its own spec.
+1. **Baseline-aware service filtering** — Services enabled by default in the base image should not be explicitly enabled in the Containerfile. Only render `systemctl enable` for services the user enabled beyond the baseline, and `systemctl disable` for services the user disabled from the baseline. Requires a `baseline_enabled_services` field in the scan schema and a tiering model for services analogous to packages. Pairs with item 2 below.
+2. **Image-mode incompatible service flagging** — Flag services like `dnf-makecache.service`, `dnf-makecache.timer`, `packagekit.service` as incompatible with image mode. New detection logic. Should be its own spec.
 2. **Migration summary framing** — Human-readable summary alongside the Containerfile ("Install 23 packages from 3 repos, copy 12 config files, enable 4 services"). Presentation layer enhancement.
-3. **Decision/Full view toggle** — Progressive disclosure toggle between "Decisions only" (Tier 2+3) and "Full view" (Tier 1 expanded). Depends on tiering being stable.
-4. **Diff view** — Side-by-side "source system" vs "target Containerfile" for a migration overview.
-5. **Fleet normalization** — `normalize_package_defaults` supports single-host; fleet aggregate sessions need cross-host consensus logic.
-6. **Automount/static-route config exceptions** — Specialized config-file handling for automount entries and static network routes. Deferred from Phase 5 scope.
+4. **Decision/Full view toggle** — Progressive disclosure toggle between "Decisions only" (Tier 2+3) and "Full view" (Tier 1 expanded). Depends on tiering being stable.
+5. **Diff view** — Side-by-side "source system" vs "target Containerfile" for a migration overview.
+6. **Fleet normalization** — `normalize_package_defaults` supports single-host; fleet aggregate sessions need cross-host consensus logic.
+7. **Automount/static-route config exceptions** — Specialized config-file handling for automount entries and static network routes. Deferred from Phase 5 scope.
 
 ## Files Changed
 
