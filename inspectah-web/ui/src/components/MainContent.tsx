@@ -10,7 +10,7 @@ import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@patternfly/react-core";
-import type { ViewResponse, RefinedView, RefinedPackage, RefinedConfig, ContextSection, RepoGroupInfo } from "../api/types";
+import type { ViewResponse, RefinedView, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";

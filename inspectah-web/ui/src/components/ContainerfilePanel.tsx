@@ -1,9 +1,6 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { Button, Content, Skeleton } from "@patternfly/react-core";
-import {
-  AngleDoubleLeftIcon,
-  AngleDoubleRightIcon,
-} from "@patternfly/react-icons";
+import { AngleDoubleLeftIcon } from "@patternfly/react-icons";
 
 export interface ContainerfilePanelProps {
   content: string | null;

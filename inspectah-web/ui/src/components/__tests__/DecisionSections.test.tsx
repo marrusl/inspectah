@@ -1718,7 +1718,7 @@ describe("Decision/Full view toggle", () => {
         {...defaultMainContentProps}
         activeSection="services"
         viewData={makeViewResponse()}
-        sections={[{ id: "services", label: "Services", items: [] }]}
+        sections={[{ id: "services", display_name: "Services", items: [] }]}
       />,
     );
     expect(screen.queryByRole("button", { name: /decisions/i })).not.toBeInTheDocument();
