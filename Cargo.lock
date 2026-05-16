@@ -418,6 +418,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "inspectah-refine"
+version = "0.8.0-alpha.1"
+dependencies = [
+ "flate2",
+ "inspectah-core",
+ "inspectah-pipeline",
+ "insta",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "thiserror",
+ "walkdir",
+]
+
+[[package]]
 name = "inspectah-web"
 version = "0.8.0-alpha.1"
 dependencies = [

@@ -12,12 +12,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 tempfile = "3"
 tar = "0.4"
-flate2 = "0.2"
+flate2 = "1"
 walkdir = "2"
 
 [dev-dependencies]
 insta.workspace = true
 tempfile = "3"
 tar = "0.4"
-flate2 = "0.2"
+flate2 = "1"
 walkdir = "2"
