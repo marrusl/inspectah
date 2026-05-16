@@ -4,6 +4,8 @@
 
 **Goal:** Replace the flat NeedsReview attention model with baseline-aware three-tier classification, repo grouping with bulk actions, and Containerfile rendering fixes — reducing triage surface from ~734 to ~50-80 items.
 
+**Design principle:** Baseline subtraction — the Containerfile captures only the delta between the source system and the target base image. Packages, configs, and services already present in the target image are excluded from output, even if the user explicitly installed them on the source (e.g., `podman` is in all bootc images, so it never appears in `dnf install`). Phase 5 implements this using `baseline_package_names`; Phase 6 makes it fully accurate by pulling the actual target image.
+
 **Architecture:** Two-pass classify-then-normalize in `inspectah-refine`, with `RepoIndex` for repo identity/cascade. Normalization materializes at session construction time into authoritative snapshot state. Repo cascade lives in the projection path (`project_snapshot()`), not in view-only recomputation. Pipeline fixes in `inspectah-pipeline`. Tiered UI in `inspectah-web`.
 
 **Tech Stack:** Rust (inspectah-core, inspectah-refine, inspectah-pipeline, inspectah-web), React 19 + Vite + PatternFly 6 (web UI), Cargo test + Vitest + Playwright (testing)

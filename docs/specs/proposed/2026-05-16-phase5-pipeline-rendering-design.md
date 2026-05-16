@@ -20,6 +20,20 @@ First real-user testing of `inspectah refine` against a CentOS Stream 9 scan rev
 7. Service enablement: single joined line wraps chaotically in the panel
 8. Layout issues: not full-width, hostname buried at bottom of sidebar
 
+## Design Principle: Baseline Subtraction
+
+The Containerfile captures **only the delta** between the source system and the target base image. Anything already present in the target image — packages, configs, enabled services — is excluded from the output regardless of whether the user explicitly installed or configured it on the source.
+
+Example: if a user installed `podman` on their package-mode RHEL system, the Containerfile should NOT include `dnf install podman` because podman ships in all bootc base images. The tool must check the target image's contents, not assume.
+
+This principle applies across every artifact type:
+- **Packages:** Only include packages not already in the target image's package set
+- **Configs:** Only copy configs that differ from the target image's versions (Phase 5 handles RPM-owned defaults; Phase 6 enables image-level comparison)
+- **Services:** Only enable/disable services that differ from the target image's defaults (deferred — requires `baseline_enabled_services` data)
+- **GPG keys / repo files:** Only include repos not already configured in the target image
+
+Phase 5 implements baseline subtraction using `baseline_package_names` from the scan data. Phase 6 (base image selection) makes this fully accurate by pulling the actual target image for comparison.
+
 ## Approach
 
 Two-pass classify-then-normalize architecture, matching the Go version's proven `classifyPackage()` + `NormalizeLeafDefaults()` pattern:
