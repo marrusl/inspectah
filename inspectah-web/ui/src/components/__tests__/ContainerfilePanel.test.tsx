@@ -137,4 +137,52 @@ describe("ContainerfilePanel", () => {
     const skeletons = screen.getByRole("complementary").querySelectorAll(".pf-v6-c-skeleton");
     expect(skeletons.length).toBeGreaterThan(0);
   });
+
+  it("auto-collapses on initial mount when viewport is narrow", () => {
+    // Override matchMedia to report narrow viewport
+    const listeners: Array<(e: MediaQueryListEvent) => void> = [];
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: () => ({
+        matches: true, // narrow viewport
+        media: "(max-width: 1280px)",
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) => {
+          listeners.push(cb);
+        },
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+
+    const onToggle = vi.fn();
+    render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={onToggle}
+        loading={false}
+      />,
+    );
+
+    // Should call onToggle on mount because viewport is already narrow
+    expect(onToggle).toHaveBeenCalled();
+
+    // Restore default matchMedia
+    Object.defineProperty(window, "matchMedia", {
+      writable: true,
+      value: () => ({
+        matches: false,
+        media: "",
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+  });
 });

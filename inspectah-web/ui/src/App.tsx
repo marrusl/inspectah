@@ -47,10 +47,23 @@ function App() {
   const [isMobile, setIsMobile] = useState(false);
   const mainContentRef = useRef<HTMLDivElement>(null);
   const globalSearchRef = useRef<GlobalSearchHandle>(null);
+  const hamburgerRef = useRef<HTMLButtonElement>(null);
+  const pendingFocusItemRef = useRef<string | null>(null);
 
-  // Focus main content area when active section changes
+  // Focus first item in section after section change
   useEffect(() => {
-    mainContentRef.current?.focus();
+    requestAnimationFrame(() => {
+      // If there's a pending item from search navigation, handle it separately
+      if (pendingFocusItemRef.current) return;
+      const firstRow = mainContentRef.current?.querySelector(
+        '[role="row"]',
+      ) as HTMLElement | null;
+      if (firstRow) {
+        firstRow.focus();
+      } else {
+        mainContentRef.current?.focus();
+      }
+    });
   }, [activeSection]);
 
   // Responsive breakpoint: < 1024px hides sidebar, shows hamburger
@@ -150,19 +163,63 @@ function App() {
     setSectionSearchOpen(true);
   }, []);
 
+  const closeSidebarOverlay = useCallback(() => {
+    setSidebarOverlayOpen(false);
+    requestAnimationFrame(() => {
+      hamburgerRef.current?.focus();
+    });
+  }, []);
+
   const handleNavigateFromGlobalSearch = useCallback(
-    (sectionId: string, _itemId: string) => {
+    (sectionId: string, itemId: string) => {
+      pendingFocusItemRef.current = itemId;
       setActiveSection(sectionId);
+      if (isMobile) closeSidebarOverlay();
     },
-    [],
+    [isMobile, closeSidebarOverlay],
   );
+
+  // Handle pending focus item after render (from search navigation)
+  useEffect(() => {
+    const itemId = pendingFocusItemRef.current;
+    if (!itemId) return;
+
+    requestAnimationFrame(() => {
+      pendingFocusItemRef.current = null;
+      const el = document.querySelector(
+        `[data-testid="decision-item-${itemId}"]`,
+      ) as HTMLElement | null;
+      if (!el) return;
+
+      // Expand the AttentionGroup if the item is hidden
+      const hiddenAncestor = el.closest("[hidden]");
+      if (hiddenAncestor) {
+        // Find the ExpandableSection toggle button and click it
+        const group = hiddenAncestor.closest("[data-testid^='attention-group-']");
+        const toggle = group?.querySelector("button") as HTMLElement | null;
+        toggle?.click();
+        // Wait for expansion animation
+        requestAnimationFrame(() => {
+          el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          el.classList.add("inspectah-highlight");
+          el.focus();
+          setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
+        });
+      } else {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        el.classList.add("inspectah-highlight");
+        el.focus();
+        setTimeout(() => el.classList.remove("inspectah-highlight"), 1500);
+      }
+    });
+  }, [activeSection, view.data]);
 
   const handleSidebarSelect = useCallback(
     (sectionId: string) => {
       setActiveSection(sectionId);
-      if (isMobile) setSidebarOverlayOpen(false);
+      if (isMobile) closeSidebarOverlay();
     },
-    [isMobile],
+    [isMobile, closeSidebarOverlay],
   );
 
   const handleExportViewUpdate = useCallback(
@@ -191,7 +248,9 @@ function App() {
       ? view.error
       : !health.loading && health.error && health.data === null
         ? health.error
-        : null;
+        : !sections.loading && sections.error && sections.data === null
+          ? sections.error
+          : null;
 
   if (initialLoadError) {
     return (
@@ -243,6 +302,7 @@ function App() {
         hamburger={
           isMobile ? (
             <button
+              ref={hamburgerRef}
               type="button"
               className="inspectah-hamburger"
               aria-label={sidebarOverlayOpen ? "Close navigation" : "Open navigation"}
@@ -295,7 +355,7 @@ function App() {
           sections={sections.data}
           health={health.data}
           overlay
-          onClose={() => setSidebarOverlayOpen(false)}
+          onClose={closeSidebarOverlay}
           searchSlot={searchSlot}
         />
       )}
