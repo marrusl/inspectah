@@ -64,25 +64,33 @@ pub async fn health(State(state): State<Arc<AppState>>) -> Json<serde_json::Valu
         .unwrap_or("")
         .to_string();
 
-    let os_release = snap.os_release.as_ref().map(|os| {
-        let mut parts = Vec::new();
-        if !os.name.is_empty() {
-            parts.push(os.name.clone());
-        }
-        if !os.version.is_empty() {
-            parts.push(os.version.clone());
-        }
-        parts.join(" ")
-    });
+    let (os_name, os_version, os_id) = snap
+        .os_release
+        .as_ref()
+        .map(|os| {
+            // pretty_name with name fallback
+            let name = if !os.pretty_name.is_empty() {
+                os.pretty_name.clone()
+            } else {
+                os.name.clone()
+            };
+            (name, os.version_id.clone(), os.id.clone())
+        })
+        .unwrap_or_default();
 
     let system_type = serde_json::to_value(&snap.system_type).unwrap_or(json!("unknown"));
     let completeness = serde_json::to_value(&snap.completeness).unwrap_or(json!("unknown"));
 
     Json(json!({
         "status": "ok",
-        "hostname": hostname,
-        "os_release": os_release,
-        "system_type": system_type,
+        "host": {
+            "hostname": hostname,
+            "os_name": os_name,
+            "os_version": os_version,
+            "os_id": os_id,
+            "system_type": system_type,
+            "schema_version": snap.schema_version,
+        },
         "completeness": completeness,
     }))
 }
@@ -847,17 +855,38 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
         // NonRpmItem
         for item in &nrpm.items {
             let subtitle = format!("{} ({})", item.method, item.confidence);
-            let detail = Some(item.path.clone());
+            let detail = if !item.packages.is_empty() {
+                let pkg_list: Vec<String> = item
+                    .packages
+                    .iter()
+                    .map(|p| {
+                        if p.version.is_empty() {
+                            p.name.clone()
+                        } else {
+                            format!("{}=={}", p.name, p.version)
+                        }
+                    })
+                    .collect();
+                Some(pkg_list.join(", "))
+            } else {
+                Some(item.path.clone())
+            };
+
+            let mut search = format!(
+                "{} {} {} {}",
+                item.name, item.path, item.method, item.lang
+            );
+            if !item.version.is_empty() {
+                search.push(' ');
+                search.push_str(&item.version);
+            }
 
             items.push(ContextItem {
                 id: item.name.clone(),
                 title: item.name.clone(),
                 subtitle: Some(subtitle),
                 detail,
-                searchable_text: format!(
-                    "{} {} {} {}",
-                    item.name, item.path, item.method, item.lang
-                ),
+                searchable_text: search,
             });
         }
 

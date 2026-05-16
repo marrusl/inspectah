@@ -6,6 +6,7 @@ use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, FlatpakApp, QuadletUnit, RunningContainer,
 };
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
 use inspectah_core::types::network::{FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry};
 use inspectah_core::types::os::OsRelease;
@@ -352,6 +353,9 @@ fn rich_snapshot() -> InspectionSnapshot {
     snap.os_release = Some(OsRelease {
         name: "Red Hat Enterprise Linux".into(),
         version: "9.4 (Plow)".into(),
+        version_id: "9.4".into(),
+        id: "rhel".into(),
+        pretty_name: "Red Hat Enterprise Linux 9.4 (Plow)".into(),
         ..Default::default()
     });
 
@@ -488,6 +492,39 @@ fn rich_snapshot() -> InspectionSnapshot {
             path: "/etc/modules-load.d/custom.conf".into(),
             content: "br_netfilter".into(),
         }],
+        ..Default::default()
+    });
+
+    snap.non_rpm_software = Some(NonRpmSoftwareSection {
+        items: vec![
+            NonRpmItem {
+                name: "myapp-venv".into(),
+                path: "/opt/myapp/venv".into(),
+                method: "pip".into(),
+                confidence: "high".into(),
+                lang: "python".into(),
+                version: "3.11".into(),
+                packages: vec![
+                    PipPackage {
+                        name: "requests".into(),
+                        version: "2.31.0".into(),
+                    },
+                    PipPackage {
+                        name: "flask".into(),
+                        version: "3.0.0".into(),
+                    },
+                ],
+                ..Default::default()
+            },
+            NonRpmItem {
+                name: "node-app".into(),
+                path: "/opt/node-app".into(),
+                method: "binary".into(),
+                confidence: "medium".into(),
+                lang: "javascript".into(),
+                ..Default::default()
+            },
+        ],
         ..Default::default()
     });
 
@@ -684,12 +721,19 @@ async fn health_extended_fields() {
     let (status, json) = get_json(&app, "/api/health").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["status"], "ok");
-    assert_eq!(json["hostname"], "testhost.example.com");
+
+    // Host object structure
+    let host = json.get("host").expect("health must have 'host' object");
+    assert_eq!(host["hostname"], "testhost.example.com");
     assert_eq!(
-        json["os_release"],
-        "Red Hat Enterprise Linux 9.4 (Plow)"
+        host["os_name"],
+        "Red Hat Enterprise Linux 9.4 (Plow)",
+        "os_name uses pretty_name"
     );
-    assert!(json.get("system_type").is_some());
+    assert_eq!(host["os_version"], "9.4", "os_version uses version_id");
+    assert_eq!(host["os_id"], "rhel");
+    assert!(host.get("system_type").is_some());
+    assert_eq!(host["schema_version"], 14);
     assert!(json.get("completeness").is_some());
 }
 
@@ -700,8 +744,13 @@ async fn health_minimal_snapshot() {
     let (status, json) = get_json(&app, "/api/health").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json["status"], "ok");
-    assert_eq!(json["hostname"], "");
-    assert!(json["os_release"].is_null());
+
+    let host = json.get("host").expect("health must have 'host' object");
+    assert_eq!(host["hostname"], "");
+    assert_eq!(host["os_name"], "");
+    assert_eq!(host["os_version"], "");
+    assert_eq!(host["os_id"], "");
+    assert_eq!(host["schema_version"], 14);
 }
 
 // --- normalize_for_context unit tests ---------------------------------------
@@ -908,13 +957,141 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
 }
 
 #[test]
-fn normalize_non_rpm_empty_section() {
+fn normalize_non_rpm_maps_packages_and_version() {
     let snap = rich_snapshot();
     let sections = normalize_for_context(&snap);
     let nrpm = sections
         .iter()
         .find(|s| s.id == "non_rpm_software")
         .unwrap();
-    // Rich snapshot has no non-rpm items — section should exist but be empty
+
+    assert_eq!(nrpm.items.len(), 2, "2 non-rpm items");
+
+    // Item with pip packages — detail should list packages, not path
+    let venv = nrpm.items.iter().find(|i| i.id == "myapp-venv").unwrap();
+    let detail = venv.detail.as_ref().unwrap();
+    assert!(
+        detail.contains("requests==2.31.0"),
+        "detail should include pip package name+version"
+    );
+    assert!(
+        detail.contains("flask==3.0.0"),
+        "detail should include all pip packages"
+    );
+    // searchable_text should include version
+    assert!(
+        venv.searchable_text.contains("3.11"),
+        "searchable_text should include version when non-empty"
+    );
+
+    // Item without packages — detail should fall back to path
+    let node = nrpm.items.iter().find(|i| i.id == "node-app").unwrap();
+    assert_eq!(
+        node.detail.as_deref(),
+        Some("/opt/node-app"),
+        "detail should fall back to path when no packages"
+    );
+    // Empty version should not add trailing space to searchable_text
+    assert!(
+        !node.searchable_text.ends_with(' '),
+        "no trailing space in searchable_text when version is empty"
+    );
+}
+
+#[test]
+fn normalize_non_rpm_empty_section() {
+    // Snapshot with no non-rpm data
+    let snap = InspectionSnapshot::new();
+    let sections = normalize_for_context(&snap);
+    let nrpm = sections
+        .iter()
+        .find(|s| s.id == "non_rpm_software")
+        .unwrap();
     assert!(nrpm.items.is_empty());
+}
+
+#[test]
+fn normalize_for_context_section_count_and_ids() {
+    let snap = rich_snapshot();
+    let sections = normalize_for_context(&snap);
+    assert_eq!(sections.len(), 9, "exactly 9 context sections");
+
+    let expected_ids = [
+        "services",
+        "containers",
+        "users_groups",
+        "network",
+        "storage",
+        "scheduled_tasks",
+        "non_rpm_software",
+        "kernel_boot",
+        "selinux",
+    ];
+    for (i, expected) in expected_ids.iter().enumerate() {
+        assert_eq!(
+            sections[i].id, *expected,
+            "section {} should be '{}'",
+            i, expected
+        );
+    }
+}
+
+#[test]
+fn normalize_for_context_item_counts() {
+    let snap = rich_snapshot();
+    let sections = normalize_for_context(&snap);
+
+    // Verify non-zero item counts for sections with data
+    let svc = sections.iter().find(|s| s.id == "services").unwrap();
+    assert!(
+        !svc.items.is_empty(),
+        "services should have items from rich_snapshot"
+    );
+
+    let nrpm = sections
+        .iter()
+        .find(|s| s.id == "non_rpm_software")
+        .unwrap();
+    assert_eq!(nrpm.items.len(), 2, "non_rpm_software should have 2 items");
+}
+
+#[test]
+fn sections_cache_returns_same_pointer() {
+    use std::ptr;
+    let state = rich_state();
+
+    // First call populates cache
+    let sections1 = state.sections_cache.get_or_init(|| {
+        let session = state.session.lock().unwrap();
+        normalize_for_context(session.snapshot())
+    });
+    // Second call returns cached value
+    let sections2 = state.sections_cache.get().unwrap();
+    assert!(
+        ptr::eq(sections1, sections2),
+        "OnceLock must return the same allocation"
+    );
+}
+
+#[tokio::test]
+async fn health_pretty_name_fallback_to_name() {
+    // When pretty_name is empty, os_name should fall back to name
+    let mut snap = InspectionSnapshot::new();
+    snap.os_release = Some(OsRelease {
+        name: "Fedora Linux".into(),
+        pretty_name: "".into(),
+        version_id: "41".into(),
+        id: "fedora".into(),
+        ..Default::default()
+    });
+    let state = Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    });
+    let app = app(state);
+    let (_, json) = get_json(&app, "/api/health").await;
+    let host = json.get("host").unwrap();
+    assert_eq!(host["os_name"], "Fedora Linux", "should fall back to name");
+    assert_eq!(host["os_version"], "41");
+    assert_eq!(host["os_id"], "fedora");
 }
