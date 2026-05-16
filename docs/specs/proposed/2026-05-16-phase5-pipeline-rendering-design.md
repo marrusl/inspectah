@@ -175,7 +175,7 @@ This matrix is exhaustive over the four `PackageState` variants that appear in `
 
 **Lifecycle:** `import tarball → deserialize snapshot → build RepoIndex → classify (compute attention) → normalize (materialize include defaults) → op stack begins empty → operator interacts`
 
-**`normalize_package_defaults(packages: &mut Vec<RefinedPackage>, rpm: &RpmSection)`**
+**`normalize_package_defaults(snapshot: &mut InspectionSnapshot, packages: &[RefinedPackage])`**
 
 - **Leaf filtering:** When `rpm.leaf_packages` is `Some`, non-leaf Tier 2 packages are hidden from triage. They're still included in the Containerfile (dnf resolves them), but they don't appear as individual triage items. Dependency info from `leaf_dep_tree` is available on expand but is not a decision point.
 - **Include defaults by tier:**
@@ -184,12 +184,16 @@ This matrix is exhaustive over the four `PackageState` variants that appear in `
   - Tier 3 → `include = false` (operator must explicitly opt in)
 - **Fallback when `leaf_packages` is `None`:** All Tier 2 packages remain visible as triage items with `include = true`. Noisier (150-200 items) but still dramatically better than 734 NeedsReview.
 
-**`normalize_config_defaults(configs: &mut Vec<RefinedConfig>)`**
+**`normalize_config_defaults(snapshot: &mut InspectionSnapshot, configs: &[RefinedConfig])`**
+
+These signatures take the snapshot (not just the view objects) because normalization materializes into authoritative snapshot state at construction time, not into presentation-only clones.
 
 - Tier 1 (RpmOwnedDefault, BaselineMatch) → `include = false`. These files are managed by the package manager or already present in the base image. Copying them would freeze source system defaults and potentially override newer configs from the target image's packages. The collapsed Tier 1 summary is informational: "N configs managed by packages (not copied)."
 - Tier 2 (Unowned) → `include = true`. User-created files that need to be explicitly copied to the target.
 - Tier 3 (RpmOwnedModified) → `include = true`. User-customized configs that must be preserved — these are the files the operator intentionally changed.
 - Orphaned → `include = false`. The owning package was removed — config is likely stale.
+
+**Count/reporting semantics:** Tier 1 configs with `include = false` are NOT counted as "excluded" in `RefineStats` or export summaries. They are a separate category: "package-managed" (not copied because the package manager handles them). This prevents the UI/export from describing RPM defaults as if the operator explicitly excluded them. `RefineStats` should distinguish: included configs (Tier 2 + Tier 3 with `include = true`), package-managed configs (Tier 1 with `include = false` from normalization), operator-excluded configs (`include = false` from explicit operator action), and orphaned configs (`include = false` from normalization).
 
 **Expected triage surface for a typical CentOS Stream 9 system:**
 - Packages: ~734 → ~50-80 visible (Tier 2 leaf + Tier 3)
@@ -325,7 +329,7 @@ At widths where the sidebar hides (<1024px) and the Containerfile panel collapse
 **Success metrics (against CentOS Stream 9 scan):**
 - Package triage: ~734 → ~50-80 items (Tier 2 leaf + Tier 3)
 - Config triage: ~257 → ~20-40 items
-- `source_repo` shows actual repo names, not "Unknown"
+- `source_repo` shows actual repo names for packages with known provenance; packages with genuinely unknown provenance (LocalInstall, removed repos) display "Unknown" with appropriate degraded styling
 - Containerfile GPG: 1-2 lines for standard keys, not N repeated imports
 - Service enablement: readable multi-line format when >3 services
 - Repo grouping visible with distro/third-party labels and provenance states
@@ -345,6 +349,8 @@ At widths where the sidebar hides (<1024px) and the Containerfile panel collapse
 - GPG key reference counting: shared key stays `include = true` until all referencing sections excluded
 - **Shared repo file retention:** excluding one section from a multi-section `.repo` file (e.g., excluding `crb` from `centos.repo` which also carries `baseos` and `appstream`) must leave the repo file `include = true` until the last enabled section using that file is excluded
 - **Repo-only dirty tracking:** a repo-level `ExcludeRepo` / `IncludeRepo` operation must appear in `pending_changes()` and cause `is_dirty()` to return `true`, even if the operation does not change any individual package or config `include` flags (e.g., an empty repo with no matching packages)
+- **`Modified` + verified baseline + known repo → `PackageVersionChanged`:** explicit proof that `Modified` packages with full provenance classify as Tier 2 Informational with the `PackageVersionChanged` reason, not as `PackageUserAdded` or `NeedsReview`
+- **Tier 1 config kinds stay out of copied config tree:** `RpmOwnedDefault` and `BaselineMatch` configs must default to `include = false` and must NOT appear in the materialized config COPY roots. Verify that the Containerfile renderer does not emit COPY directives for these files.
 - Config tier regression: verify each `ConfigFileKind` maps to the expected tier, with explicit test for `RpmOwnedModified` → Tier 3 (intentional divergence from Go)
 
 **Smoke tests:**
@@ -358,6 +364,7 @@ At widths where the sidebar hides (<1024px) and the Containerfile panel collapse
 | `RpmOwnedModified` config tier | Tier 2 (included, reviewable) | Tier 3 (NeedsReview) | Operator explicitly changed this config — it's a real decision point |
 | Missing baseline fallback | Not applicable (baseline always present in Go fleet path) | Tier 2 with `ProvenanceUnavailable` reason + completeness warning | Honest about reduced confidence |
 | Sensitive path on Tier 1 without baseline | Not applicable | Promotes to Tier 3 | Without baseline verification, can't confirm sensitive file is expected |
+| Tier 1 config `include` default | `include = true` (copied to target) | `include = false` (not copied — package manager handles) | Source defaults should not freeze into target image; target packages install correct versions |
 
 ## Deferred / Future Work
 
