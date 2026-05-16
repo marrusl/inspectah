@@ -95,15 +95,25 @@ async fn refine_server_lifecycle() {
     assert_eq!(view["generation"], 1);
     assert_eq!(view["stats"]["excluded_packages"], 1);
 
-    // 4. Undo
-    let resp = client.post(format!("{base}/api/undo")).send().await.unwrap();
+    // 4. Undo (requires JSON body)
+    let resp = client
+        .post(format!("{base}/api/undo"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     let view: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(view["generation"], 2);
     assert_eq!(view["stats"]["excluded_packages"], 0);
 
-    // 5. Redo
-    let resp = client.post(format!("{base}/api/redo")).send().await.unwrap();
+    // 5. Redo (requires JSON body)
+    let resp = client
+        .post(format!("{base}/api/redo"))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
 
     // 6. Changes
