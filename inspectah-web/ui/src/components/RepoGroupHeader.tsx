@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { Switch, Label } from "@patternfly/react-core";
 import type { RepoProvenance } from "../api/types";
 
@@ -15,6 +16,13 @@ function badgeLabel(isDistro: boolean, provenance: RepoProvenance): string {
   if (provenance === "verified") return "Third-party";
   if (provenance === "incomplete") return "Unverified";
   return "Unknown";
+}
+
+function badgeAbbrev(isDistro: boolean, provenance: RepoProvenance): string {
+  if (isDistro) return "D";
+  if (provenance === "verified") return "3P";
+  if (provenance === "incomplete") return "U";
+  return "?";
 }
 
 function badgeColor(isDistro: boolean, provenance: RepoProvenance): "blue" | "orange" | "grey" | "green" {
@@ -35,48 +43,54 @@ export function RepoGroupHeader({
   enabled,
   onToggle,
 }: RepoGroupHeaderProps) {
-  const label = badgeLabel(isDistro, provenance);
+  const fullLabel = badgeLabel(isDistro, provenance);
+  const abbrevLabel = badgeAbbrev(isDistro, provenance);
   const color = badgeColor(isDistro, provenance);
   const canToggle = showToggle(isDistro, provenance);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (canToggle && (e.key === "Enter" || e.key === " ")) {
+        e.preventDefault();
+        onToggle?.(sectionId, !enabled);
+      }
+    },
+    [canToggle, onToggle, sectionId, enabled],
+  );
 
   return (
     <div
       data-testid={`repo-group-${sectionId}`}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "var(--pf-t--global--spacer--sm)",
-        padding: "var(--pf-t--global--spacer--xs) 0",
-        marginTop: "var(--pf-t--global--spacer--sm)",
-        marginBottom: "var(--pf-t--global--spacer--xs)",
-        borderBottom: "1px solid var(--pf-t--global--border--color--default)",
-      }}
+      role="heading"
+      aria-level={3}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      className="inspectah-repo-group-header"
     >
-      <span
-        style={{
-          fontWeight: 600,
-          fontSize: "var(--pf-t--global--font--size--body--default)",
-        }}
-      >
+      <span className="inspectah-repo-group-header__label">
         {sectionId}
       </span>
-      <Label color={color}>{label}</Label>
-      <span
-        style={{
-          color: "var(--pf-t--global--text--color--subtle)",
-          fontSize: "var(--pf-t--global--font--size--body--sm)",
-        }}
-      >
+      {/* Full badge: visible at >= 768px, hidden at narrow */}
+      <span className="inspectah-repo-group-header__badge-full">
+        <Label color={color} aria-label={fullLabel}>{fullLabel}</Label>
+      </span>
+      {/* Abbreviated badge: hidden at >= 768px, visible at narrow */}
+      <span className="inspectah-repo-group-header__badge-abbrev">
+        <Label color={color} aria-label={fullLabel}>{abbrevLabel}</Label>
+      </span>
+      <span className="inspectah-repo-group-header__count">
         {packageCount} {packageCount === 1 ? "package" : "packages"}
       </span>
       {canToggle && (
-        <Switch
-          id={`repo-toggle-${sectionId}`}
-          label={enabled ? "Enabled" : "Disabled"}
-          isChecked={enabled}
-          onChange={() => onToggle?.(sectionId, !enabled)}
-          aria-label={`Toggle ${sectionId} repo`}
-        />
+        <span className="inspectah-repo-group-header__toggle">
+          <Switch
+            id={`repo-toggle-${sectionId}`}
+            label={enabled ? "Enabled" : "Disabled"}
+            isChecked={enabled}
+            onChange={() => onToggle?.(sectionId, !enabled)}
+            aria-label={`Toggle ${sectionId} repo`}
+          />
+        </span>
       )}
     </div>
   );

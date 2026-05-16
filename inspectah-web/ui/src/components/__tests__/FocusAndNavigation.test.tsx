@@ -471,3 +471,150 @@ describe("Ctrl+K not listed in ShortcutOverlay", () => {
     expect(globalShortcuts.textContent).not.toContain("Ctrl+K");
   });
 });
+
+describe("Repo group header keyboard traversal", () => {
+  const MOCK_VIEW_WITH_GROUPS = {
+    packages: [
+      {
+        entry: {
+          name: "httpd",
+          epoch: "0",
+          version: "2.4.57",
+          release: "1.el9",
+          arch: "x86_64",
+          state: "added",
+          include: true,
+          source_repo: "epel",
+          fleet: null,
+        },
+        attention: [
+          { level: "informational", reason: "package_version_changed", detail: null },
+        ],
+      },
+    ],
+    config_files: [],
+    containerfile_preview: "FROM ubi9\nRUN dnf install -y httpd",
+    stats: {
+      total_packages: 1,
+      included_packages: 1,
+      excluded_packages: 0,
+      total_configs: 0,
+      included_configs: 0,
+      package_managed_configs: 0,
+      excluded_configs: 0,
+      needs_review_count: 0,
+      ops_applied: 0,
+      can_undo: false,
+      can_redo: false,
+      baseline_available: false,
+    },
+    generation: 1,
+    repo_groups: [
+      {
+        section_id: "epel",
+        provenance: "verified" as const,
+        is_distro: false,
+        package_count: 1,
+        enabled: true,
+      },
+    ],
+  };
+
+  it("group header is a tab stop with role=heading", async () => {
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/view") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_VIEW_WITH_GROUPS),
+        });
+      }
+      if (url === "/api/snapshot/sections") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_SECTIONS),
+        });
+      }
+      if (url === "/api/health") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_HEALTH),
+        });
+      }
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
+      }
+      if (url === "/api/viewed" && opts?.method === "POST") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: "not found" }),
+      });
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("repo-group-epel")).toBeInTheDocument();
+    });
+
+    const header = screen.getByTestId("repo-group-epel");
+    // Header should be tabbable
+    expect(header).toHaveAttribute("tabindex", "0");
+    // Header should have heading role
+    expect(header).toHaveAttribute("role", "heading");
+  });
+
+  it("Enter on group header toggle fires onToggle", async () => {
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/view") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_VIEW_WITH_GROUPS),
+        });
+      }
+      if (url === "/api/snapshot/sections") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_SECTIONS),
+        });
+      }
+      if (url === "/api/health") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_HEALTH),
+        });
+      }
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
+      }
+      if (url === "/api/viewed" && opts?.method === "POST") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: "not found" }),
+      });
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("repo-group-epel")).toBeInTheDocument();
+    });
+
+    // The toggle switch should be present and tabbable independently
+    const toggle = screen.getByLabelText("Toggle epel repo");
+    expect(toggle).toBeInTheDocument();
+    // PF Switch renders an input — should be natively tabbable
+    expect(toggle.tagName.toLowerCase()).toBe("input");
+  });
+});

@@ -206,3 +206,100 @@ describe("StatsBar hamburger button", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("Repo group header responsive badge abbreviation", () => {
+  it("renders both full and abbreviated badges with correct aria-labels", async () => {
+    const { RepoGroupHeader } = await import("../RepoGroupHeader");
+
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    // Both badge variants should exist in the DOM (CSS controls visibility)
+    const fullBadge = document.querySelector(".inspectah-repo-group-header__badge-full");
+    const abbrevBadge = document.querySelector(".inspectah-repo-group-header__badge-abbrev");
+    expect(fullBadge).toBeInTheDocument();
+    expect(abbrevBadge).toBeInTheDocument();
+
+    // Full badge shows "Third-party"
+    expect(fullBadge!.textContent).toContain("Third-party");
+    // Abbreviated badge shows "3P"
+    expect(abbrevBadge!.textContent).toContain("3P");
+
+    // Both badges carry aria-label for screen readers
+    const fullLabel = fullBadge!.querySelector("[aria-label]");
+    const abbrevLabel = abbrevBadge!.querySelector("[aria-label]");
+    expect(fullLabel).toHaveAttribute("aria-label", "Third-party");
+    expect(abbrevLabel).toHaveAttribute("aria-label", "Third-party");
+  });
+
+  it("abbreviates distro badge to 'D' with aria-label='Distro'", async () => {
+    const { RepoGroupHeader } = await import("../RepoGroupHeader");
+
+    render(
+      <RepoGroupHeader
+        sectionId="baseos"
+        provenance="verified"
+        isDistro={true}
+        packageCount={10}
+        enabled={true}
+      />,
+    );
+
+    const abbrevBadge = document.querySelector(".inspectah-repo-group-header__badge-abbrev");
+    expect(abbrevBadge).toBeInTheDocument();
+    expect(abbrevBadge!.textContent).toContain("D");
+
+    const label = abbrevBadge!.querySelector("[aria-label]");
+    expect(label).toHaveAttribute("aria-label", "Distro");
+  });
+
+  it("header has tabindex=0 and role=heading for keyboard access", async () => {
+    const { RepoGroupHeader } = await import("../RepoGroupHeader");
+
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={3}
+        enabled={true}
+      />,
+    );
+
+    const header = screen.getByTestId("repo-group-epel");
+    expect(header).toHaveAttribute("tabindex", "0");
+    expect(header).toHaveAttribute("role", "heading");
+    expect(header).toHaveAttribute("aria-level", "3");
+  });
+
+  it("wraps toggle to second line via CSS class structure", async () => {
+    const { RepoGroupHeader } = await import("../RepoGroupHeader");
+
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={3}
+        enabled={true}
+        onToggle={vi.fn()}
+      />,
+    );
+
+    // The toggle wrapper should exist with the correct CSS class
+    const toggleWrapper = document.querySelector(".inspectah-repo-group-header__toggle");
+    expect(toggleWrapper).toBeInTheDocument();
+
+    // The header itself should have the class for CSS-based responsive wrapping
+    const header = screen.getByTestId("repo-group-epel");
+    expect(header).toHaveClass("inspectah-repo-group-header");
+  });
+});
