@@ -1,0 +1,944 @@
+2,143c2
+<   "alternatives": [
+<     {
+<       "name": "apropos",
+<       "path": "/usr/bin/apropos.man-db",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "apropos.1.gz",
+<       "path": "/usr/share/man/man1/apropos.man-db.1.gz",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "arptables",
+<       "path": "/usr/sbin/arptables-nft",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "arptables-helper",
+<       "path": "/usr/libexec/arptables-nft-helper",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "arptables-man",
+<       "path": "/usr/share/man/man8/arptables-nft.8.gz",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "arptables-restore",
+<       "path": "/usr/sbin/arptables-nft-restore",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "arptables-restore-man",
+<       "path": "/usr/share/man/man8/arptables-nft-restore.8.gz",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "arptables-save",
+<       "path": "/usr/sbin/arptables-nft-save",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "arptables-save-man",
+<       "path": "/usr/share/man/man8/arptables-nft-save.8.gz",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "cifs-idmap-plugin",
+<       "path": "/usr/lib64/cifs-utils/cifs_idmap_sss.so",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ebtables",
+<       "path": "/usr/sbin/ebtables-nft",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ebtables-man",
+<       "path": "/usr/share/man/man8/ebtables-nft.8.gz",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ebtables-restore",
+<       "path": "/usr/sbin/ebtables-nft-restore",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ebtables-save",
+<       "path": "/usr/sbin/ebtables-nft-save",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ip6tables",
+<       "path": "/usr/sbin/ip6tables-nft",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ip6tables-restore",
+<       "path": "/usr/sbin/ip6tables-nft-restore",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ip6tables-save",
+<       "path": "/usr/sbin/ip6tables-nft-save",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "iptables",
+<       "path": "/usr/sbin/iptables-nft",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "iptables-restore",
+<       "path": "/usr/sbin/iptables-nft-restore",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "iptables-save",
+<       "path": "/usr/sbin/iptables-nft-save",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "ld",
+<       "path": "/usr/bin/ld.bfd",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "libnssckbi.so",
+<       "path": "/usr/lib64/pkcs11/p11-kit-trust.so",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "man",
+<       "path": "/usr/bin/man.man-db",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "man.1.gz",
+<       "path": "/usr/share/man/man1/man.man-db.1.gz",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "soelim",
+<       "path": "/usr/bin/soelim.groff",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "soelim.1.gz",
+<       "path": "/usr/share/man/man1/soelim.groff.1.gz",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "whatis",
+<       "path": "/usr/bin/whatis.man-db",
+<       "status": "auto"
+<     },
+<     {
+<       "name": "whatis.1.gz",
+<       "path": "/usr/share/man/man1/whatis.man-db.1.gz",
+<       "status": "auto"
+<     }
+<   ],
+---
+>   "alternatives": [],
+146c5
+<   "grub_defaults": "GRUB_TIMEOUT=5\nGRUB_DISTRIBUTOR=\"$(sed 's, release .*$,,g' /etc/system-release)\"\nGRUB_DEFAULT=saved\nGRUB_DISABLE_SUBMENU=true\nGRUB_TERMINAL_OUTPUT=\"console\"\nGRUB_CMDLINE_LINUX=\"crashkernel=1G-4G:256M,4G-64G:320M,64G-:576M rd.lvm.lv=cs/root rd.lvm.lv=cs/swap\"\nGRUB_DISABLE_RECOVERY=\"true\"\nGRUB_ENABLE_BLSCFG=true",
+---
+>   "grub_defaults": "",
+149c8
+<       "include": false,
+---
+>       "include": true,
+152c11
+<       "used_by": ""
+---
+>       "used_by": "1"
+155c14
+<       "include": false,
+---
+>       "include": true,
+158c17
+<       "used_by": ""
+---
+>       "used_by": "2"
+161c20
+<       "include": false,
+---
+>       "include": true,
+164c23
+<       "used_by": ""
+---
+>       "used_by": "1"
+167c26
+<       "include": false,
+---
+>       "include": true,
+170c29
+<       "used_by": ""
+---
+>       "used_by": "1"
+173c32
+<       "include": false,
+---
+>       "include": true,
+176c35
+<       "used_by": ""
+---
+>       "used_by": "3"
+179c38
+<       "include": false,
+---
+>       "include": true,
+182c41
+<       "used_by": ""
+---
+>       "used_by": "1"
+185c44
+<       "include": false,
+---
+>       "include": true,
+188c47
+<       "used_by": ""
+---
+>       "used_by": "8"
+191c50
+<       "include": false,
+---
+>       "include": true,
+194c53
+<       "used_by": ""
+---
+>       "used_by": "9"
+197c56
+<       "include": false,
+---
+>       "include": true,
+200c59
+<       "used_by": ""
+---
+>       "used_by": "0"
+203c62
+<       "include": false,
+---
+>       "include": true,
+206c65
+<       "used_by": ""
+---
+>       "used_by": "0"
+209c68
+<       "include": false,
+---
+>       "include": true,
+212c71
+<       "used_by": "bridge"
+---
+>       "used_by": "1 bridge"
+215c74
+<       "include": false,
+---
+>       "include": true,
+218c77
+<       "used_by": "bridge,stp"
+---
+>       "used_by": "2 bridge,stp"
+221c80
+<       "include": false,
+---
+>       "include": true,
+224c83
+<       "used_by": ""
+---
+>       "used_by": "0"
+227c86
+<       "include": false,
+---
+>       "include": true,
+230c89
+<       "used_by": ""
+---
+>       "used_by": "1"
+233c92
+<       "include": false,
+---
+>       "include": true,
+236c95
+<       "used_by": ""
+---
+>       "used_by": "1"
+239c98
+<       "include": false,
+---
+>       "include": true,
+242c101
+<       "used_by": "nft_fib_inet"
+---
+>       "used_by": "1 nft_fib_inet"
+245c104
+<       "include": false,
+---
+>       "include": true,
+248c107
+<       "used_by": "nft_fib_inet"
+---
+>       "used_by": "1 nft_fib_inet"
+251c110
+<       "include": false,
+---
+>       "include": true,
+254c113
+<       "used_by": "nft_fib_ipv6,nft_fib_ipv4,nft_fib_inet"
+---
+>       "used_by": "3 nft_fib_ipv6,nft_fib_ipv4,nft_fib_inet"
+257c116
+<       "include": false,
+---
+>       "include": true,
+260c119
+<       "used_by": ""
+---
+>       "used_by": "6"
+263c122
+<       "include": false,
+---
+>       "include": true,
+266c125
+<       "used_by": "nft_reject_inet"
+---
+>       "used_by": "1 nft_reject_inet"
+269c128
+<       "include": false,
+---
+>       "include": true,
+272c131
+<       "used_by": "nft_reject_inet"
+---
+>       "used_by": "1 nft_reject_inet"
+275c134
+<       "include": false,
+---
+>       "include": true,
+278c137
+<       "used_by": "nft_reject_inet"
+---
+>       "used_by": "1 nft_reject_inet"
+281c140
+<       "include": false,
+---
+>       "include": true,
+284c143
+<       "used_by": ""
+---
+>       "used_by": "7"
+287c146
+<       "include": false,
+---
+>       "include": true,
+290c149
+<       "used_by": ""
+---
+>       "used_by": "6"
+293c152
+<       "include": false,
+---
+>       "include": true,
+296c155
+<       "used_by": "nft_chain_nat,xt_MASQUERADE"
+---
+>       "used_by": "2 nft_chain_nat,xt_MASQUERADE"
+299c158
+<       "include": false,
+---
+>       "include": true,
+302c161
+<       "used_by": "xt_conntrack,nf_nat,nft_ct,xt_MASQUERADE"
+---
+>       "used_by": "4 xt_conntrack,nf_nat,nft_ct,xt_MASQUERADE"
+305c164
+<       "include": false,
+---
+>       "include": true,
+308c167
+<       "used_by": "nf_conntrack"
+---
+>       "used_by": "1 nf_conntrack"
+311c170
+<       "include": false,
+---
+>       "include": true,
+314c173
+<       "used_by": "nf_conntrack"
+---
+>       "used_by": "1 nf_conntrack"
+317c176
+<       "include": false,
+---
+>       "include": true,
+320c179
+<       "used_by": "nft_ct,nft_compat,nft_reject_inet,nft_fib_ipv6,nft_fib_ipv4,nft_counter,nft_chain_nat,nft_reject,nft_fib,nft_fib_inet"
+---
+>       "used_by": "266 nft_ct,nft_compat,nft_reject_inet,nft_fib_ipv6,nft_fib_ipv4,nft_counter,nft_chain_nat,nft_reject,nft_fib,nft_fib_inet"
+323c182
+<       "include": false,
+---
+>       "include": true,
+326c185
+<       "used_by": "nft_compat,nf_tables"
+---
+>       "used_by": "3 nft_compat,nf_tables"
+329c188
+<       "include": false,
+---
+>       "include": true,
+332c191
+<       "used_by": ""
+---
+>       "used_by": "1"
+335c194
+<       "include": false,
+---
+>       "include": true,
+338c197
+<       "used_by": "vfat"
+---
+>       "used_by": "1 vfat"
+341c200
+<       "include": false,
+---
+>       "include": true,
+344c203
+<       "used_by": ""
+---
+>       "used_by": "1"
+347c206
+<       "include": false,
+---
+>       "include": true,
+350c209
+<       "used_by": ""
+---
+>       "used_by": "0"
+353c212
+<       "include": false,
+---
+>       "include": true,
+356c215
+<       "used_by": "snd_hda_intel"
+---
+>       "used_by": "1 snd_hda_intel"
+359c218
+<       "include": false,
+---
+>       "include": true,
+362c221
+<       "used_by": "snd_hda_codec_generic,snd_hda_intel"
+---
+>       "used_by": "2 snd_hda_codec_generic,snd_hda_intel"
+365c224
+<       "include": false,
+---
+>       "include": true,
+368c227
+<       "used_by": "snd_hda_codec_generic,snd_hda_intel,snd_hda_codec"
+---
+>       "used_by": "3 snd_hda_codec_generic,snd_hda_intel,snd_hda_codec"
+371c230
+<       "include": false,
+---
+>       "include": true,
+374c233
+<       "used_by": "snd_hda_codec"
+---
+>       "used_by": "1 snd_hda_codec"
+377c236
+<       "include": false,
+---
+>       "include": true,
+380c239
+<       "used_by": ""
+---
+>       "used_by": "0"
+383c242
+<       "include": false,
+---
+>       "include": true,
+386c245
+<       "used_by": "snd_hda_intel,snd_hda_codec,snd_hda_core"
+---
+>       "used_by": "3 snd_hda_intel,snd_hda_codec,snd_hda_core"
+389c248
+<       "include": false,
+---
+>       "include": true,
+392c251
+<       "used_by": "vmw_vsock_virtio_transport"
+---
+>       "used_by": "1 vmw_vsock_virtio_transport"
+395c254
+<       "include": false,
+---
+>       "include": true,
+398c257
+<       "used_by": ""
+---
+>       "used_by": "0"
+401c260
+<       "include": false,
+---
+>       "include": true,
+404c263
+<       "used_by": "vmw_vsock_virtio_transport_common,vmw_vsock_virtio_transport"
+---
+>       "used_by": "2 vmw_vsock_virtio_transport_common,vmw_vsock_virtio_transport"
+407c266
+<       "include": false,
+---
+>       "include": true,
+410c269
+<       "used_by": "snd_pcm"
+---
+>       "used_by": "1 snd_pcm"
+413c272
+<       "include": false,
+---
+>       "include": true,
+416c275
+<       "used_by": "snd_hda_codec_generic,snd_hwdep,snd_hda_intel,snd_hda_codec,snd_timer,snd_pcm"
+---
+>       "used_by": "6 snd_hda_codec_generic,snd_hwdep,snd_hda_intel,snd_hda_codec,snd_timer,snd_pcm"
+419c278
+<       "include": false,
+---
+>       "include": true,
+422c281
+<       "used_by": "snd"
+---
+>       "used_by": "1 snd"
+425c284
+<       "include": false,
+---
+>       "include": true,
+428c287
+<       "used_by": ""
+---
+>       "used_by": "1"
+431c290
+<       "include": false,
+---
+>       "include": true,
+434c293
+<       "used_by": ""
+---
+>       "used_by": "3"
+437c296
+<       "include": false,
+---
+>       "include": true,
+440c299
+<       "used_by": "nf_conntrack,nf_nat,nf_tables,xfs"
+---
+>       "used_by": "4 nf_conntrack,nf_nat,nf_tables,xfs"
+443c302
+<       "include": false,
+---
+>       "include": true,
+446c305
+<       "used_by": ""
+---
+>       "used_by": "0"
+449c308
+<       "include": false,
+---
+>       "include": true,
+452c311
+<       "used_by": ""
+---
+>       "used_by": "0"
+455c314
+<       "include": false,
+---
+>       "include": true,
+458c317
+<       "used_by": "sr_mod"
+---
+>       "used_by": "1 sr_mod"
+461c320
+<       "include": false,
+---
+>       "include": true,
+464c323
+<       "used_by": "virtio_gpu"
+---
+>       "used_by": "1 virtio_gpu"
+467c326
+<       "include": false,
+---
+>       "include": true,
+470c329
+<       "used_by": ""
+---
+>       "used_by": "0"
+473c332
+<       "include": false,
+---
+>       "include": true,
+476c335
+<       "used_by": "virtio_gpu"
+---
+>       "used_by": "1 virtio_gpu"
+479c338
+<       "include": false,
+---
+>       "include": true,
+482c341
+<       "used_by": "virtio_gpu"
+---
+>       "used_by": "2 virtio_gpu"
+485c344
+<       "include": false,
+---
+>       "include": true,
+488c347
+<       "used_by": "drm_shmem_helper,virtio_gpu,drm_client_lib"
+---
+>       "used_by": "3 drm_shmem_helper,virtio_gpu,drm_client_lib"
+491c350
+<       "include": false,
+---
+>       "include": true,
+494c353
+<       "used_by": ""
+---
+>       "used_by": "1"
+497c356
+<       "include": false,
+---
+>       "include": true,
+500c359
+<       "used_by": ""
+---
+>       "used_by": "0"
+503c362
+<       "include": false,
+---
+>       "include": true,
+506c365
+<       "used_by": ""
+---
+>       "used_by": "0"
+509c368
+<       "include": false,
+---
+>       "include": true,
+512c371
+<       "used_by": "drm_kms_helper,drm_shmem_helper,virtio_gpu,drm_client_lib"
+---
+>       "used_by": "5 drm_kms_helper,drm_shmem_helper,virtio_gpu,drm_client_lib"
+515c374
+<       "include": false,
+---
+>       "include": true,
+518c377
+<       "used_by": "sha2_ce"
+---
+>       "used_by": "1 sha2_ce"
+521c380
+<       "include": false,
+---
+>       "include": true,
+524c383
+<       "used_by": ""
+---
+>       "used_by": "0"
+527c386
+<       "include": false,
+---
+>       "include": true,
+530c389
+<       "used_by": ""
+---
+>       "used_by": "0"
+533c392
+<       "include": false,
+---
+>       "include": true,
+536c395
+<       "used_by": "virtio_net"
+---
+>       "used_by": "1 virtio_net"
+539c398
+<       "include": false,
+---
+>       "include": true,
+542c401
+<       "used_by": "net_failover"
+---
+>       "used_by": "1 net_failover"
+545c404
+<       "include": false,
+---
+>       "include": true,
+548c407
+<       "used_by": ""
+---
+>       "used_by": "5"
+551c410
+<       "include": false,
+---
+>       "include": true,
+554c413
+<       "used_by": "ahci_platform"
+---
+>       "used_by": "1 ahci_platform"
+557c416
+<       "include": false,
+---
+>       "include": true,
+560c419
+<       "used_by": ""
+---
+>       "used_by": "0"
+563c422
+<       "include": false,
+---
+>       "include": true,
+566c425
+<       "used_by": ""
+---
+>       "used_by": "0"
+569c428
+<       "include": false,
+---
+>       "include": true,
+572c431
+<       "used_by": "dm_mirror"
+---
+>       "used_by": "1 dm_mirror"
+575c434
+<       "include": false,
+---
+>       "include": true,
+578c437
+<       "used_by": "dm_region_hash,dm_mirror"
+---
+>       "used_by": "2 dm_region_hash,dm_mirror"
+581c440
+<       "include": false,
+---
+>       "include": true,
+584c443
+<       "used_by": "dm_log,dm_mirror"
+---
+>       "used_by": "12 dm_log,dm_mirror"
+587c446
+<   "locale": "en_US.UTF-8",
+---
+>   "locale": "\"en_US.UTF-8\"",
+591c450
+<       "path": "etc/modprobe.d/firewalld-sysctls.conf"
+---
+>       "path": "/etc/modprobe.d/firewalld-sysctls.conf"
+595,794c454
+<   "non_default_modules": [
+<     {
+<       "include": false,
+<       "name": "binfmt_misc",
+<       "size": "24576",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "xt_addrtype",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "xt_mark",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "xt_conntrack",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "xt_comment",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "xt_MASQUERADE",
+<       "size": "16384",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "nft_compat",
+<       "size": "20480",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "nft_counter",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "veth",
+<       "size": "36864",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "bridge",
+<       "size": "311296",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "overlay",
+<       "size": "188416",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "rfkill",
+<       "size": "32768",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "nft_fib_inet",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "nft_reject_inet",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "nft_ct",
+<       "size": "24576",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "nft_chain_nat",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "vfat",
+<       "size": "20480",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "snd_hda_codec_generic",
+<       "size": "90112",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "snd_hda_intel",
+<       "size": "57344",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "vmw_vsock_virtio_transport",
+<       "size": "20480",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "virtio_balloon",
+<       "size": "28672",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "xfs",
+<       "size": "2297856",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "virtio_gpu",
+<       "size": "77824",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "sr_mod",
+<       "size": "24576",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "sg",
+<       "size": "40960",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "crct10dif_ce",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "ghash_ce",
+<       "size": "16384",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "sha2_ce",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "sha1_ce",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "virtio_net",
+<       "size": "73728",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "ahci_platform",
+<       "size": "12288",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "virtio_mmio",
+<       "size": "20480",
+<       "used_by": ""
+<     },
+<     {
+<       "include": false,
+<       "name": "dm_mirror",
+<       "size": "24576",
+<       "used_by": ""
+<     }
+<   ],
+---
+>   "non_default_modules": [],

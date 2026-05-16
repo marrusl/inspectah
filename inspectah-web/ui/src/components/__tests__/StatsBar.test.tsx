@@ -46,7 +46,7 @@ describe("StatsBar", () => {
       />,
     );
 
-    expect(screen.getByText(/3 of 3 to review/)).toBeInTheDocument();
+    expect(screen.getByText(/3 items remaining/i)).toBeInTheDocument();
   });
 
   it("shows remaining NeedsReview items minus viewed count", () => {
@@ -61,7 +61,7 @@ describe("StatsBar", () => {
       />,
     );
 
-    expect(screen.getByText(/2 of 3 to review/)).toBeInTheDocument();
+    expect(screen.getByText(/2 items remaining/i)).toBeInTheDocument();
   });
 
   it("shows completion message when all NeedsReview items triaged", () => {
@@ -76,7 +76,7 @@ describe("StatsBar", () => {
       />,
     );
 
-    expect(screen.getByText("All items have been triaged")).toBeInTheDocument();
+    expect(screen.getByText(/all actionable items reviewed/i)).toBeInTheDocument();
   });
 
   it("renders dashes when stats are null", () => {
@@ -168,5 +168,33 @@ describe("StatsBar", () => {
 
     await userEvent.click(screen.getByText("Export"));
     expect(onExport).toHaveBeenCalled();
+  });
+
+  it("shows remaining count when items need review", () => {
+    const stats = { ...MOCK_STATS, needs_review_count: 12 };
+    render(
+      <StatsBar
+        stats={stats}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+    expect(screen.getByText(/12 items remaining/i)).toBeInTheDocument();
+  });
+
+  it("shows completion state when all items reviewed", () => {
+    const stats = { ...MOCK_STATS, needs_review_count: 0 };
+    render(
+      <StatsBar
+        stats={stats}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+    expect(screen.getByText(/all actionable items reviewed/i)).toBeInTheDocument();
   });
 });

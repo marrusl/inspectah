@@ -5,6 +5,7 @@ import {
   ToolbarGroup,
   Button,
   Content,
+  Label,
 } from "@patternfly/react-core";
 import { UndoIcon, RedoIcon, ExportIcon } from "@patternfly/react-icons";
 import type { RefineStats } from "../api/types";
@@ -36,8 +37,13 @@ export function StatsBar({
 }: StatsBarProps) {
   const needsReviewTotal = stats?.needs_review_count ?? null;
   const remaining = needsReviewTotal != null
-    ? String(Math.max(0, needsReviewTotal - viewedNeedsReviewCount))
-    : "-";
+    ? Math.max(0, needsReviewTotal - viewedNeedsReviewCount)
+    : null;
+
+  // Completion signal logic
+  const showCompletionSignal = needsReviewTotal != null && remaining !== null;
+  const isComplete = showCompletionSignal && remaining === 0;
+
   return (
     <Toolbar className="inspectah-statsbar" isSticky>
       <ToolbarContent>
@@ -62,14 +68,19 @@ export function StatsBar({
           <ToolbarItem>
             <Content component="small">
               <strong>Triage:</strong>{" "}
-              {needsReviewTotal != null && needsReviewTotal > 0 && viewedNeedsReviewCount >= needsReviewTotal
-                ? "All items have been triaged"
-                : <>
-                    {remaining} of{" "}
-                    {needsReviewTotal != null ? String(needsReviewTotal) : "-"}{" "}
-                    to review
-                  </>
-              }
+              {showCompletionSignal ? (
+                isComplete ? (
+                  <Label color="green">All actionable items reviewed</Label>
+                ) : (
+                  <Label color="info">{remaining} items remaining</Label>
+                )
+              ) : (
+                <>
+                  {remaining != null ? String(remaining) : "-"} of{" "}
+                  {needsReviewTotal != null ? String(needsReviewTotal) : "-"}{" "}
+                  to review
+                </>
+              )}
             </Content>
           </ToolbarItem>
         </ToolbarGroup>
