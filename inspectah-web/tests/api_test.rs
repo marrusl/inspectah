@@ -139,7 +139,8 @@ async fn undo_on_fresh_session_returns_409() {
             Request::builder()
                 .method("POST")
                 .uri("/api/undo")
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
                 .unwrap(),
         )
         .await
@@ -156,7 +157,8 @@ async fn redo_on_fresh_session_returns_409() {
             Request::builder()
                 .method("POST")
                 .uri("/api/redo")
-                .body(Body::empty())
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
                 .unwrap(),
         )
         .await
@@ -248,4 +250,61 @@ async fn apply_malformed_json_returns_400_json() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json.get("error").is_some(), "error response must be JSON with 'error' field");
+}
+
+#[tokio::test]
+async fn evil_origin_post_rejected() {
+    let app = app(test_state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/undo")
+                .header("origin", "http://evil.example.com")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn matching_origin_post_allowed() {
+    let app = app(test_state());
+    // Undo on fresh session returns 409 (nothing to undo), but NOT 403.
+    // This proves the origin guard passed.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/undo")
+                .header("origin", "http://localhost:8642")
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn undo_without_json_body_returns_400() {
+    let app = app(test_state());
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/undo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
