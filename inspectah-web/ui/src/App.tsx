@@ -5,10 +5,13 @@ import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
 import { useMutation } from "./hooks/useMutation";
+import { useKeyboard } from "./hooks/useKeyboard";
 import { Sidebar } from "./components/Sidebar";
 import { StatsBar } from "./components/StatsBar";
 import { ContainerfilePanel } from "./components/ContainerfilePanel";
 import { MainContent } from "./components/MainContent";
+import { ShortcutOverlay } from "./components/ShortcutOverlay";
+import { GlobalSearch } from "./components/GlobalSearch";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
@@ -27,6 +30,9 @@ function readPanelPref(): boolean {
 function App() {
   const [activeSection, setActiveSection] = useState("packages");
   const [cfPanelOpen, setCfPanelOpen] = useState(readPanelPref);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
+  const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
 
   const view = useView();
   const sections = useSections();
@@ -68,6 +74,37 @@ function App() {
     console.log("Export triggered");
   }, []);
 
+  const handleToggleShortcuts = useCallback(() => {
+    setShortcutsOpen((prev) => !prev);
+  }, []);
+
+  const handleOpenGlobalSearch = useCallback(() => {
+    setGlobalSearchOpen(true);
+  }, []);
+
+  const handleOpenSectionSearch = useCallback(() => {
+    setSectionSearchOpen(true);
+  }, []);
+
+  const handleNavigateFromGlobalSearch = useCallback(
+    (sectionId: string, _itemId: string) => {
+      setActiveSection(sectionId);
+      setGlobalSearchOpen(false);
+    },
+    [],
+  );
+
+  useKeyboard({
+    onUndo: mutation.undo,
+    onRedo: mutation.redo,
+    onTogglePanel: togglePanel,
+    onExport: handleExport,
+    onSectionChange: setActiveSection,
+    onOpenSearch: handleOpenSectionSearch,
+    onOpenGlobalSearch: handleOpenGlobalSearch,
+    onOpenShortcuts: handleToggleShortcuts,
+  });
+
   const viewLoading = view.loading && view.data === null;
 
   return (
@@ -97,6 +134,8 @@ function App() {
             sections={sections.data}
             onViewUpdate={() => view.invalidate()}
             onMutationError={(err) => console.error("Mutation failed:", err.message)}
+            sectionSearchOpen={sectionSearchOpen}
+            onSectionSearchClose={() => setSectionSearchOpen(false)}
           />
         </div>
         <ContainerfilePanel
@@ -106,6 +145,18 @@ function App() {
           loading={viewLoading}
         />
       </div>
+      <ShortcutOverlay
+        isOpen={shortcutsOpen}
+        onClose={() => setShortcutsOpen(false)}
+      />
+      <GlobalSearch
+        isOpen={globalSearchOpen}
+        onClose={() => setGlobalSearchOpen(false)}
+        packageItems={view.data ? view.data.packages.map((p) => ({ type: "package" as const, data: p })) : []}
+        configItems={view.data ? view.data.config_files.map((c) => ({ type: "config" as const, data: c })) : []}
+        contextSections={sections.data}
+        onNavigate={handleNavigateFromGlobalSearch}
+      />
     </Page>
   );
 }
