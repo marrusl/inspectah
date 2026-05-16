@@ -14,6 +14,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 name: "httpd".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
+                source_repo: "appstream".into(),
                 include: true,
                 ..Default::default()
             },
@@ -21,6 +22,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 name: "glibc".into(),
                 arch: "x86_64".into(),
                 state: PackageState::Added,
+                source_repo: "baseos".into(),
                 include: true,
                 ..Default::default()
             },
@@ -28,6 +30,7 @@ fn test_snapshot() -> InspectionSnapshot {
                 name: "glibc".into(),
                 arch: "i686".into(),
                 state: PackageState::Added,
+                source_repo: "baseos".into(),
                 include: true,
                 ..Default::default()
             },
@@ -381,4 +384,118 @@ fn mark_viewed_rejects_cfg_prefix() {
     let mut session = RefineSession::new(test_snapshot());
     let result = session.mark_viewed("cfg:/etc/httpd/conf/httpd.conf");
     assert!(matches!(result, Err(RefineError::BadRequest(_))));
+}
+
+// -- Normalization at construction tests --
+
+#[test]
+fn test_session_normalizes_at_construction() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "glibc".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "baseos".into(),
+            include: false,
+            ..Default::default()
+        }],
+        baseline_package_names: Some(vec!["glibc".into()]),
+        ..Default::default()
+    });
+    let session = RefineSession::new(snap);
+    let view = session.view();
+    assert!(
+        view.packages[0].entry.include,
+        "Tier 1 should be auto-included after normalization"
+    );
+    assert!(
+        session
+            .snapshot()
+            .rpm
+            .as_ref()
+            .unwrap()
+            .packages_added[0]
+            .include,
+        "Original snapshot must reflect normalized state"
+    );
+}
+
+#[test]
+fn test_session_preview_export_parity() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "appstream".into(),
+            include: false,
+            ..Default::default()
+        }],
+        baseline_package_names: Some(vec![]),
+        ..Default::default()
+    });
+    let session = RefineSession::new(snap);
+    assert!(
+        session.view().packages[0].entry.include,
+        "View should show Tier 2 as included"
+    );
+    assert!(
+        session
+            .snapshot_projected()
+            .rpm
+            .as_ref()
+            .unwrap()
+            .packages_added[0]
+            .include,
+        "Projected snapshot must agree with view"
+    );
+    assert!(
+        session.view().containerfile_preview.contains("httpd"),
+        "Preview must render included package"
+    );
+}
+
+#[test]
+fn test_session_baseline_available_in_stats() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        baseline_package_names: Some(vec!["glibc".into()]),
+        ..Default::default()
+    });
+    let session = RefineSession::new(snap);
+    assert!(session.view().stats.baseline_available);
+
+    let snap_no_baseline = InspectionSnapshot::new();
+    let session2 = RefineSession::new(snap_no_baseline);
+    assert!(!session2.view().stats.baseline_available);
+}
+
+#[test]
+fn test_tier1_configs_not_in_containerfile() {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![
+            ConfigFileEntry {
+                path: "/etc/default.conf".into(),
+                kind: ConfigFileKind::RpmOwnedDefault,
+                include: true,
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/custom.conf".into(),
+                kind: ConfigFileKind::Unowned,
+                include: true,
+                content: "custom content".into(),
+                ..Default::default()
+            },
+        ],
+    });
+    let session = RefineSession::new(snap);
+    let preview = &session.view().containerfile_preview;
+    assert!(
+        !preview.contains("default.conf"),
+        "Tier 1 config must not appear in Containerfile"
+    );
 }

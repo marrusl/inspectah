@@ -2,13 +2,18 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::config::ConfigFileKind;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
+use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
+use crate::repo_index::RepoIndex;
 use crate::types::*;
 
 pub struct RefineSession {
     original: InspectionSnapshot,
+    repo_index: RepoIndex,
+    baseline_available: bool,
     ops: Vec<RefinementOp>,
     cursor: usize,
     cached_view: Option<RefinedView>,
@@ -20,18 +25,37 @@ pub struct RefineSession {
 }
 
 impl RefineSession {
-    pub fn new(snapshot: InspectionSnapshot) -> Self {
+    pub fn new(mut snapshot: InspectionSnapshot) -> Self {
+        let repo_index = RepoIndex::build(&snapshot);
+        let baseline_available = snapshot
+            .rpm
+            .as_ref()
+            .and_then(|r| r.baseline_package_names.as_ref())
+            .is_some();
+
+        // Classify then normalize — materializes tier-aware defaults
+        // into the snapshot BEFORE the op stack begins.
+        let pkgs = compute_package_attention(&snapshot);
+        let configs = compute_config_attention(&snapshot);
+        normalize_package_defaults(&mut snapshot, &pkgs);
+        normalize_config_defaults(&mut snapshot, &configs);
+
         let mut session = Self {
             original: snapshot,
+            repo_index,
+            baseline_available,
             ops: Vec::new(),
             cursor: 0,
             cached_view: None,
             generation: 0,
             viewed: HashSet::new(),
         };
-        // Eagerly compute initial view
         session.recompute_view();
         session
+    }
+
+    pub fn repo_index(&self) -> &RepoIndex {
+        &self.repo_index
     }
 
     pub fn view(&self) -> &RefinedView {
@@ -412,8 +436,23 @@ impl RefineSession {
             ops_applied: self.cursor,
             can_undo: self.can_undo(),
             can_redo: self.can_redo(),
-            package_managed_configs: 0,
-            baseline_available: false,
+            package_managed_configs: projected
+                .config
+                .as_ref()
+                .map(|c| {
+                    c.files
+                        .iter()
+                        .filter(|f| {
+                            !f.include
+                                && matches!(
+                                    f.kind,
+                                    ConfigFileKind::RpmOwnedDefault | ConfigFileKind::BaselineMatch
+                                )
+                        })
+                        .count()
+                })
+                .unwrap_or(0),
+            baseline_available: self.baseline_available,
         };
 
         self.cached_view = Some(RefinedView {
