@@ -15,9 +15,9 @@
 - **Kit:** Tasks 13-19 (all React/TypeScript — layout, tier cards, repo grouping, config grouping, search auto-reveal, keyboard/responsive, E2E)
 
 **Hard gates:**
-- Kit Tasks 14-18 are blocked on Tang Tasks 1-11 landing (pipeline + API contract)
+- Kit Tasks 14-18 are blocked on Tang Tasks 1-12 landing (pipeline + API contract + repo op endpoint)
 - Kit Task 13 (layout CSS) is independent — can ship immediately
-- Task 8 (source_repo proof) must complete with a passing test on a real CentOS Stream 9 tarball before Tang proceeds to Task 10 (API contract) or Kit proceeds to repo grouping tasks
+- Task 10 (source_repo proof) must complete with a passing test on a real CentOS Stream 9 tarball before Tang proceeds to Task 11 (API contract) or Kit proceeds to repo grouping tasks
 
 **Session state model (critical — read before implementing Tasks 6-7):**
 - `snapshot()` → the original normalized baseline. Does NOT change after construction.
@@ -1640,67 +1640,100 @@ git commit -m "feat(pipeline): GPG key batching for standard dir, service backsl
 ### Task 10: source_repo Investigation and Fix
 
 **Files:**
-- Investigate: Go source `cmd/inspectah/internal/inspectors/rpm.go`
+- Investigate: Go source `cmd/inspectah/internal/inspector/rpm.go`
 - Investigate: Rust source `inspectah-collect/src/inspectors/rpm/mod.rs`
-- Investigate: CentOS Stream 9 scan tarball
+- Investigate: CentOS Stream 9 scan tarball `snapshot.json`
+- Test: `inspectah-refine/tests/source_repo_gate_test.rs` (new — the hard gate proof)
+- Fixture: uses the CentOS Stream 9 tarball already in `testdata/`
 
 **HARD GATE:** This task must produce a passing test proving `source_repo` is populated on a real CentOS Stream 9 tarball before Tang proceeds to Task 11 (API contract) or Kit starts repo grouping work.
 
-- [ ] **Step 1: Check Go scanner**
+- [ ] **Step 1: Write the failing proof test FIRST**
 
-Read `cmd/inspectah/internal/inspectors/rpm.go`, search for `populateSourceRepos` or `source_repo`. Document how Go determines the field.
-
-- [ ] **Step 2: Check actual tarball**
-
-Examine `snapshot.json` from the CentOS Stream 9 tarball. Are `source_repo` values populated or empty?
-
-- [ ] **Step 3: Check Rust RPM inspector**
-
-Read `inspectah-collect/src/inspectors/rpm/mod.rs` for `source_repo` population.
-
-- [ ] **Step 4: Implement fix**
-
-Based on root cause (serde mismatch, missing Rust logic, or stale tarball).
-
-- [ ] **Step 5: Write proof test**
+Create `inspectah-refine/tests/source_repo_gate_test.rs`:
 
 ```rust
+use inspectah_core::snapshot::InspectionSnapshot;
+use std::fs;
+
+fn load_snapshot_from_tarball(tarball_path: &str) -> InspectionSnapshot {
+    // Extract snapshot.json from the tarball and deserialize.
+    // The tarball contains a top-level snapshot.json.
+    let tar_gz = fs::File::open(tarball_path)
+        .unwrap_or_else(|e| panic!("cannot open {}: {}", tarball_path, e));
+    let tar = flate2::read::GzDecoder::new(tar_gz);
+    let mut archive = tar::Archive::new(tar);
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        if entry.path().unwrap().ends_with("snapshot.json") {
+            let snap: InspectionSnapshot = serde_json::from_reader(&mut entry).unwrap();
+            return snap;
+        }
+    }
+    panic!("snapshot.json not found in tarball");
+}
+
 #[test]
 fn test_source_repo_populated_from_real_tarball() {
-    // Deserialize the CentOS Stream 9 snapshot
-    let snap: InspectionSnapshot = load_test_tarball("testdata/centos-stream-9.tar.gz");
-    let rpm = snap.rpm.as_ref().unwrap();
+    let snap = load_snapshot_from_tarball("testdata/centos-stream-9.tar.gz");
+    let rpm = snap.rpm.as_ref().expect("tarball must have rpm section");
     let packages_with_repo: Vec<_> = rpm.packages_added.iter()
         .filter(|p| !p.source_repo.is_empty()).collect();
-    assert!(packages_with_repo.len() > 0, "at least some packages must have source_repo");
+    assert!(!packages_with_repo.is_empty(),
+        "at least some packages must have non-empty source_repo");
     let known_repo = packages_with_repo.iter()
         .any(|p| ["baseos", "appstream", "epel"].contains(&p.source_repo.as_str()));
-    assert!(known_repo, "at least one package must have a recognized repo name");
+    assert!(known_repo,
+        "at least one package must have a recognized repo name, got: {:?}",
+        packages_with_repo.iter().map(|p| &p.source_repo).collect::<Vec<_>>());
 }
 ```
 
-- [ ] **Step 6: Run proof test**
+Add `flate2` and `tar` as dev-dependencies in `inspectah-refine/Cargo.toml` if not already present.
+
+- [ ] **Step 2: Run the proof test — expect FAIL**
 
 Run: `cargo test -p inspectah-refine test_source_repo_populated`
-Expected: PASS — this is the hard gate.
+Expected: FAIL — this is the current broken state. Document the exact failure message (empty `source_repo` values, serde mismatch, or missing fixture).
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 3: Investigate root cause**
+
+Read `cmd/inspectah/internal/inspector/rpm.go` (note: `inspector/`, not `inspectors/`), search for `populateSourceRepos` or `SourceRepo`. Check whether the Go scanner populates the field and how. Check whether the Rust RPM inspector in `inspectah-collect/src/inspectors/rpm/mod.rs` has equivalent logic. Check the tarball's `snapshot.json` directly for `source_repo` field values.
+
+- [ ] **Step 4: Implement fix based on root cause**
+
+The fix depends on what Step 3 reveals:
+- If serde field name mismatch → add `#[serde(alias = "...")]` in Rust types
+- If Rust scanner doesn't populate → port Go's `populateSourceRepos` logic
+- If tarball predates the field → re-scan with current Go binary to produce a fresh fixture
+
+- [ ] **Step 5: Run the proof test — expect PASS**
+
+Run: `cargo test -p inspectah-refine test_source_repo_populated`
+Expected: PASS — this is the hard gate. Do NOT proceed to Task 11 until this passes.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git commit -m "fix(collect): populate source_repo for packages from RPM metadata"
+git add inspectah-refine/tests/source_repo_gate_test.rs inspectah-refine/Cargo.toml
+# Add any modified source files from the fix
+git commit -m "fix: populate source_repo for packages — unblock repo grouping"
 ```
 
 ---
 
-### Task 11: API Contract for Kit — RefinedView + RepoGroups + TS Mirror
+### Task 11: API Contract for Kit — RefinedView + RepoGroups + TS Mirror + Read-Path Plumbing
 
 **Files:**
 - Modify: `inspectah-web/src/handlers.rs`
 - Modify: `inspectah-web/ui/src/api/types.ts`
+- Modify: `inspectah-web/ui/src/api/client.ts`
+- Modify: `inspectah-web/ui/src/hooks/useView.ts`
+- Modify: `inspectah-web/ui/src/components/MainContent.tsx`
 - Modify: `inspectah-web/ui/src/components/attentionUtils.ts`
 - Test: inline tests in `handlers.rs`
 
-This task pins the exact browser-facing contract that Kit codes against. Tang owns the TS mirror updates.
+This task pins the exact browser-facing contract that Kit codes against AND threads it through the existing read path so Kit can consume it without guessing. Tang owns all TS mirror and read-path type updates.
 
 - [ ] **Step 1: Define `RepoGroupInfo` in Rust**
 
@@ -1853,16 +1886,63 @@ export function formatReasonText(reason: AttentionReason): string {
 }
 ```
 
-- [ ] **Step 8: Run UI tests to verify TS compiles and existing tests pass**
+- [ ] **Step 8: Update `client.ts` — change `fetchView()` return type**
+
+In `inspectah-web/ui/src/api/client.ts`, update:
+
+```typescript
+export function fetchView(): Promise<ViewResponse> {
+  return getJson("/api/snapshot/view");
+}
+```
+
+The return type changes from `RefinedView` to `ViewResponse`. Since `ViewResponse extends RefinedView`, all existing consumers of `packages`, `config_files`, `containerfile_preview`, `stats`, and `generation` continue to work. The new `repo_groups` field is now available.
+
+- [ ] **Step 9: Update `useView.ts` — store `ViewResponse`**
+
+In `inspectah-web/ui/src/hooks/useView.ts`:
+
+```typescript
+import type { ViewResponse } from "../api/types";
+
+export interface UseViewResult {
+  data: ViewResponse | null;
+  // ...existing fields
+}
+
+export function useView(): UseViewResult {
+  const [data, setData] = useState<ViewResponse | null>(null);
+  // ...rest unchanged — fetchView() already returns ViewResponse
+}
+```
+
+- [ ] **Step 10: Update `MainContent.tsx` — accept `ViewResponse`**
+
+In `inspectah-web/ui/src/components/MainContent.tsx`:
+
+```typescript
+import type { ViewResponse, /* existing imports */ } from "../api/types";
+
+export interface MainContentProps {
+  // ...
+  viewData: ViewResponse | null;
+  onViewUpdate: (view: ViewResponse) => void;
+  // ...
+}
+```
+
+Kit can now access `viewData.repo_groups`, `viewData.stats.baseline_available`, and `viewData.stats.package_managed_configs` directly. No inference needed.
+
+- [ ] **Step 11: Run UI tests to verify TS compiles and existing tests pass**
 
 Run: `cd inspectah-web/ui && npm test`
 Expected: PASS (some tests may need attention reason updates in fixtures).
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
-git add inspectah-web/src/handlers.rs inspectah-web/ui/src/api/types.ts inspectah-web/ui/src/components/attentionUtils.ts
-git commit -m "feat(web): pin ViewResponse+RepoGroupInfo contract, update TS mirror and attentionUtils"
+git add inspectah-web/src/handlers.rs inspectah-web/ui/src/api/types.ts inspectah-web/ui/src/api/client.ts inspectah-web/ui/src/hooks/useView.ts inspectah-web/ui/src/components/MainContent.tsx inspectah-web/ui/src/components/attentionUtils.ts
+git commit -m "feat(web): pin ViewResponse contract, thread through client/useView/MainContent read path"
 ```
 
 ---
@@ -1873,17 +1953,18 @@ git commit -m "feat(web): pin ViewResponse+RepoGroupInfo contract, update TS mir
 - Modify: `inspectah-web/src/handlers.rs`
 - Modify: `inspectah-web/ui/src/api/client.ts`
 
-- [ ] **Step 1: Add handler for repo ops**
+- [ ] **Step 1: Verify repo ops work through existing `/api/op` handler**
 
-The existing `/api/snapshot/apply` handler dispatches `RefinementOp`. Since `ExcludeRepo` / `IncludeRepo` are now variants of `RefinementOp`, verify the handler already handles them through the existing `session.apply(op)` path. If the handler deserializes the op correctly (it should via serde `tag`/`content`), no new endpoint is needed — the existing apply handler works.
+The existing `/api/op` handler dispatches `RefinementOp` via `session.apply(op)`. Since `ExcludeRepo` / `IncludeRepo` are now variants of `RefinementOp`, they should deserialize and apply through the existing handler with no new endpoint needed. Verify this with a test.
 
-- [ ] **Step 2: Write test proving repo ops work through the apply endpoint**
+- [ ] **Step 2: Write failing test**
 
 ```rust
 #[test]
-fn test_apply_exclude_repo_via_handler() {
-    // POST {"op": "ExcludeRepo", "target": {"section_id": "epel"}} to /api/snapshot/apply
-    // Verify response includes updated view with repo excluded
+fn test_apply_exclude_repo_via_op_endpoint() {
+    // POST {"op": "ExcludeRepo", "target": {"section_id": "epel"}} to /api/op
+    // Verify response includes updated ViewResponse with repo excluded
+    // and repo_groups showing epel with enabled: false
 }
 ```
 
@@ -1892,19 +1973,21 @@ fn test_apply_exclude_repo_via_handler() {
 Run: `cargo test -p inspectah-web test_apply_exclude_repo`
 Expected: PASS.
 
-- [ ] **Step 4: Update client.ts**
+- [ ] **Step 4: Add typed repo helpers in `client.ts`**
 
-Add typed helper in `client.ts`:
+The existing client has `applyOp(op: RefinementOp): Promise<ViewResponse>` which posts to `/api/op`. Repo helpers wrap this with the correct op shape:
 
 ```typescript
-export async function excludeRepo(sectionId: string, generation: number): Promise<ViewResponse> {
-  return applyOp({ op: "ExcludeRepo", target: { section_id: sectionId } }, generation);
+export function excludeRepo(sectionId: string): Promise<ViewResponse> {
+  return applyOp({ op: "ExcludeRepo", target: { section_id: sectionId } } as RefinementOp);
 }
 
-export async function includeRepo(sectionId: string, generation: number): Promise<ViewResponse> {
-  return applyOp({ op: "IncludeRepo", target: { section_id: sectionId } }, generation);
+export function includeRepo(sectionId: string): Promise<ViewResponse> {
+  return applyOp({ op: "IncludeRepo", target: { section_id: sectionId } } as RefinementOp);
 }
 ```
+
+Note: these use the same `applyOp(op)` signature — no `generation` parameter. The generation check is handled server-side by the existing op handler.
 
 - [ ] **Step 5: Commit**
 
@@ -1992,6 +2075,7 @@ git commit -m "fix(web): full-width layout, nav spacing, hostname to top, panel 
 ### Task 14: Tier-Aware Card Treatment
 
 **Files:**
+- Modify: `inspectah-web/ui/src/components/MainContent.tsx` (owns section headings, banners, and data brokering to DecisionList)
 - Modify: `inspectah-web/ui/src/components/AttentionGroup.tsx`
 - Modify: `inspectah-web/ui/src/components/DecisionItem.tsx`
 - Modify: `inspectah-web/ui/src/components/DecisionList.tsx`
@@ -1999,7 +2083,7 @@ git commit -m "fix(web): full-width layout, nav spacing, hostname to top, panel 
 - Modify: `inspectah-web/ui/src/App.css`
 - Test: `inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx`
 
-Blocked on Tang Tasks 1-11.
+Blocked on Tang Tasks 1-12.
 
 - [ ] **Step 1: Write failing test for Tier 1 collapsed summary**
 
@@ -2062,7 +2146,7 @@ Update `PackageDetail.tsx` to show `source_repo` as badge when reason is `packag
 
 - [ ] **Step 7: Implement provenance completeness banner**
 
-When `stats.baseline_available === false`, show banner at top of Packages section.
+In `MainContent.tsx` (which owns the Packages section heading and brokers data to `DecisionList`): when `viewData.stats.baseline_available === false`, render a PatternFly Alert banner above the package list: "Baseline data unavailable — classification confidence reduced. All packages shown for review."
 
 - [ ] **Step 8: Run all tests**
 
@@ -2081,6 +2165,7 @@ git commit -m "feat(web): tier-aware cards with collapsed Tier 1, provenance bad
 
 **Files:**
 - Create: `inspectah-web/ui/src/components/RepoGroupHeader.tsx`
+- Modify: `inspectah-web/ui/src/components/MainContent.tsx` (passes `repo_groups` from `ViewResponse` to `DecisionList`)
 - Modify: `inspectah-web/ui/src/components/DecisionList.tsx`
 - Modify: `inspectah-web/ui/src/hooks/useMutation.ts`
 - Test: `inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx`
@@ -2138,15 +2223,47 @@ Renders: repo label, badge ("Distro"/"Third-party"/"Unverified"/"Unknown"), pack
 
 In `DecisionList.tsx` / `useMutation.ts`, wire toggle to call `excludeRepo()` / `includeRepo()` from the client. Optimistic UI: flip immediately, show undo toast via `role="status"` on success, revert + `role="alert"` error banner on failure.
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Write failing test for toggle failure/rollback**
+
+```typescript
+it("reverts toggle and shows alert on backend failure", async () => {
+  // Mock /api/op to return 500 for ExcludeRepo
+  server.use(
+    http.post("/api/op", () => HttpResponse.json({ error: "provenance incomplete" }, { status: 422 }))
+  );
+  const view = makeView({
+    repo_groups: [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 3, enabled: true },
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  const toggle = screen.getByRole("switch");
+  await userEvent.click(toggle);
+  // Toggle should revert to enabled after failure
+  await waitFor(() => expect(toggle).toBeChecked());
+  // Alert should appear via role="alert"
+  expect(screen.getByRole("alert")).toHaveTextContent(/provenance incomplete/i);
+});
+```
+
+- [ ] **Step 6: Run test to verify it fails**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: FAIL — rollback not yet implemented.
+
+- [ ] **Step 7: Implement failure/rollback handling in `useMutation.ts`**
+
+On `applyOp` rejection: revert the optimistic state, show error via `role="alert"` live region.
+
+- [ ] **Step 8: Run all tests**
 
 Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
 Expected: All PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git commit -m "feat(web): repo group headers with bulk toggle, distro/third-party badges"
+git commit -m "feat(web): repo group headers with bulk toggle, failure rollback, distro/third-party badges"
 ```
 
 ---
