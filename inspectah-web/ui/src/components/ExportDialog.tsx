@@ -92,6 +92,11 @@ export function ExportDialog({
           </p>
         </Content>
 
+        <Alert variant="info" isInline isPlain title="Context sections">
+          Context sections (services, containers, users, etc.) are included in
+          the export as-is and cannot be toggled.
+        </Alert>
+
         {error && (
           <Alert variant="danger" isInline title="Export failed">
             {error}

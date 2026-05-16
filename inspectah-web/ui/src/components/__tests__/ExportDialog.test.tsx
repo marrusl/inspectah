@@ -68,6 +68,23 @@ describe("ExportDialog", () => {
     expect(screen.getByText(/7/)).toBeInTheDocument();
   });
 
+  it("shows context-sections info warning when open", () => {
+    render(
+      <ExportDialog
+        isOpen={true}
+        onClose={vi.fn()}
+        stats={MOCK_STATS}
+        generation={7}
+        onViewUpdate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Context sections")).toBeInTheDocument();
+    expect(
+      screen.getByText(/cannot be toggled/),
+    ).toBeInTheDocument();
+  });
+
   it("renders Export and Cancel buttons", () => {
     render(
       <ExportDialog

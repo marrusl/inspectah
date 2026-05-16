@@ -90,10 +90,23 @@
   word-break: break-all;
 }
 
+.inspectah-cf-panel__keyword {
+  color: var(--pf-t--global--color--brand--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
 .inspectah-cf-panel__footer {
   padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
   border-top: 1px solid var(--pf-t--global--border--color--default);
   text-align: right;
+}
+
+.inspectah-cf-panel__footer-note {
+  display: block;
+  text-align: left;
+  color: var(--pf-t--global--text--color--subtle);
+  font-style: italic;
+  margin-top: var(--pf-t--global--spacer--xs);
 }
 
 /* Containerfile panel — collapsed */

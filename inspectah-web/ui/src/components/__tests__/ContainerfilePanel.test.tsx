@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { ContainerfilePanel } from "../ContainerfilePanel";
 
 describe("ContainerfilePanel", () => {
-  it("renders syntax-highlighted content when open", () => {
+  it("renders content as text (no dangerouslySetInnerHTML)", () => {
     render(
       <ContainerfilePanel
         content={"FROM ubi9\nRUN dnf install -y httpd"}
@@ -15,10 +15,34 @@ describe("ContainerfilePanel", () => {
     );
 
     expect(screen.getByText("Containerfile")).toBeInTheDocument();
-    // highlight.js wraps keywords in spans
     const codeEl = screen.getByRole("complementary").querySelector("code");
     expect(codeEl).toBeTruthy();
-    expect(codeEl!.innerHTML).toContain("FROM");
+    // Content rendered as text nodes, not innerHTML
+    expect(codeEl!.textContent).toContain("FROM");
+    expect(codeEl!.textContent).toContain("ubi9");
+    // No dangerouslySetInnerHTML — keywords are in styled spans
+    const keywords = codeEl!.querySelectorAll(".inspectah-cf-panel__keyword");
+    expect(keywords.length).toBe(2); // FROM, RUN
+    expect(keywords[0].textContent).toBe("FROM");
+    expect(keywords[1].textContent).toBe("RUN");
+  });
+
+  it("renders Containerfile content as safe text, not innerHTML", () => {
+    const malicious = 'FROM ubi9\nRUN echo "<img src=x onerror=alert(1)>"';
+    render(
+      <ContainerfilePanel
+        content={malicious}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const codeEl = screen.getByRole("complementary").querySelector("code");
+    expect(codeEl).toBeTruthy();
+    // The XSS payload is rendered as text, not parsed as HTML
+    expect(codeEl!.textContent).toContain("<img src=x onerror=alert(1)>");
+    expect(codeEl!.querySelector("img")).toBeNull();
   });
 
   it("shows line count in footer", () => {
@@ -97,6 +121,21 @@ describe("ContainerfilePanel", () => {
 
     fireEvent.keyDown(document, { key: "e", ctrlKey: true });
     expect(onToggle).toHaveBeenCalled();
+  });
+
+  it("shows context-sections footer note", () => {
+    render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    expect(
+      screen.getByText(/Context sections are included as-is/),
+    ).toBeInTheDocument();
   });
 
   it("shows skeletons when loading", () => {
