@@ -64,6 +64,14 @@ export function applyOp(op: RefinementOp): Promise<RefinedView> {
   return postJson("/api/op", op);
 }
 
+export function excludeRepo(sectionId: string): Promise<RefinedView> {
+  return applyOp({ op: "ExcludeRepo", target: { section_id: sectionId } });
+}
+
+export function includeRepo(sectionId: string): Promise<RefinedView> {
+  return applyOp({ op: "IncludeRepo", target: { section_id: sectionId } });
+}
+
 export function undo(): Promise<RefinedView> {
   return postJson("/api/undo", {});
 }

@@ -145,7 +145,9 @@ export type RefinementOp =
   | { op: "ExcludePackage"; target: PackageTarget }
   | { op: "IncludePackage"; target: PackageTarget }
   | { op: "ExcludeConfig"; target: { path: string } }
-  | { op: "IncludeConfig"; target: { path: string } };
+  | { op: "IncludeConfig"; target: { path: string } }
+  | { op: "ExcludeRepo"; target: { section_id: string } }
+  | { op: "IncludeRepo"; target: { section_id: string } };
 
 export interface ChangesSummary {
   packages_included: PackageTarget[];
