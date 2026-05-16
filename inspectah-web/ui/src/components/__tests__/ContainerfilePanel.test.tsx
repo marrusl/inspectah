@@ -138,9 +138,8 @@ describe("ContainerfilePanel", () => {
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
-  it("auto-collapses on initial mount when viewport is narrow", () => {
+  it("does NOT call onToggle on mount for narrow viewport (parent handles init)", () => {
     // Override matchMedia to report narrow viewport
-    const listeners: Array<(e: MediaQueryListEvent) => void> = [];
     Object.defineProperty(window, "matchMedia", {
       writable: true,
       value: () => ({
@@ -149,26 +148,30 @@ describe("ContainerfilePanel", () => {
         onchange: null,
         addListener: () => {},
         removeListener: () => {},
-        addEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) => {
-          listeners.push(cb);
-        },
+        addEventListener: () => {},
         removeEventListener: () => {},
         dispatchEvent: () => false,
       }),
     });
 
     const onToggle = vi.fn();
+    // Parent already computed isOpen=false for narrow viewports,
+    // so the panel renders collapsed without calling onToggle.
     render(
       <ContainerfilePanel
         content={"FROM ubi9\n"}
-        isOpen={true}
+        isOpen={false}
         onToggle={onToggle}
         loading={false}
       />,
     );
 
-    // Should call onToggle on mount because viewport is already narrow
-    expect(onToggle).toHaveBeenCalled();
+    // onToggle should NOT be called — the parent passed the correct initial state
+    expect(onToggle).not.toHaveBeenCalled();
+    // Panel should be in collapsed state
+    expect(
+      screen.getByLabelText("Expand Containerfile panel"),
+    ).toBeInTheDocument();
 
     // Restore default matchMedia
     Object.defineProperty(window, "matchMedia", {

@@ -42,11 +42,11 @@ export function ContainerfilePanel({
     [],
   );
 
-  // Auto-collapse below 1280px — also check initial state on mount
+  // Auto-collapse below 1280px on runtime viewport changes.
+  // Initial narrow-viewport state is handled by the parent (App.tsx)
+  // synchronously during useState initialization.
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1280px)");
-    // Check matches immediately for initial narrow viewport
-    if (mq.matches && isOpen) onToggle();
     const handler = (e: MediaQueryListEvent) => {
       if (e.matches && isOpen) onToggle();
     };

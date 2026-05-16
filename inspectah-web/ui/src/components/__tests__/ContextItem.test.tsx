@@ -87,4 +87,11 @@ describe("ContextItem", () => {
     await user.click(expandButton);
     expect(expandButton).toHaveAttribute("aria-expanded", "false");
   });
+
+  it("has data-testid and tabIndex for focus targeting", () => {
+    render(<ContextItem item={mockItem} />);
+    const el = screen.getByTestId("context-item-svc-1");
+    expect(el).toBeInTheDocument();
+    expect(el).toHaveAttribute("tabindex", "-1");
+  });
 });

@@ -22,7 +22,11 @@ export function ContextItem({ item }: ContextItemProps) {
   }, []);
 
   return (
-    <DataListItem aria-labelledby={`context-item-${item.id}`}>
+    <DataListItem
+      aria-labelledby={`context-item-${item.id}`}
+      data-testid={`context-item-${item.id}`}
+      tabIndex={-1}
+    >
       <DataListItemRow>
         <DataListItemCells
           dataListCells={[

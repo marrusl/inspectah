@@ -37,9 +37,19 @@ function readPanelPref(): boolean {
   }
 }
 
+/** Compute initial panel state synchronously to avoid flash on narrow viewports. */
+function initialPanelOpen(): boolean {
+  const savedOpen = readPanelPref();
+  // On narrow viewports, always start collapsed regardless of persisted state
+  if (typeof window !== "undefined" && window.matchMedia("(max-width: 1280px)").matches) {
+    return false;
+  }
+  return savedOpen;
+}
+
 function App() {
   const [activeSection, setActiveSection] = useState("packages");
-  const [cfPanelOpen, setCfPanelOpen] = useState(readPanelPref);
+  const [cfPanelOpen, setCfPanelOpen] = useState(initialPanelOpen);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
@@ -50,19 +60,37 @@ function App() {
   const hamburgerRef = useRef<HTMLButtonElement>(null);
   const pendingFocusItemRef = useRef<string | null>(null);
 
-  // Focus first item in section after section change
+  // Focus first item in section after section change.
+  // Cascade: decision row > context item > section heading > main wrapper.
   useEffect(() => {
     requestAnimationFrame(() => {
       // If there's a pending item from search navigation, handle it separately
       if (pendingFocusItemRef.current) return;
-      const firstRow = mainContentRef.current?.querySelector(
+      const container = mainContentRef.current;
+      if (!container) return;
+
+      // 1. Decision sections use role="row"
+      const firstRow = container.querySelector(
         '[role="row"]',
       ) as HTMLElement | null;
-      if (firstRow) {
-        firstRow.focus();
-      } else {
-        mainContentRef.current?.focus();
+      if (firstRow) { firstRow.focus(); return; }
+
+      // 2. Context sections use ContextItem with data-testid
+      const firstContextItem = container.querySelector(
+        '[data-testid^="context-item-"]',
+      ) as HTMLElement | null;
+      if (firstContextItem) { firstContextItem.focus(); return; }
+
+      // 3. Empty sections: focus the heading
+      const heading = container.querySelector("h2, h3") as HTMLElement | null;
+      if (heading) {
+        heading.setAttribute("tabindex", "-1");
+        heading.focus();
+        return;
       }
+
+      // 4. Ultimate fallback
+      container.focus();
     });
   }, [activeSection]);
 
@@ -174,9 +202,10 @@ function App() {
     (sectionId: string, itemId: string) => {
       pendingFocusItemRef.current = itemId;
       setActiveSection(sectionId);
-      if (isMobile) closeSidebarOverlay();
+      // Close mobile overlay so the target item is visible
+      if (isMobile && sidebarOverlayOpen) closeSidebarOverlay();
     },
-    [isMobile, closeSidebarOverlay],
+    [isMobile, sidebarOverlayOpen, closeSidebarOverlay],
   );
 
   // Handle pending focus item after render (from search navigation)
@@ -186,8 +215,11 @@ function App() {
 
     requestAnimationFrame(() => {
       pendingFocusItemRef.current = null;
-      const el = document.querySelector(
-        `[data-testid="decision-item-${itemId}"]`,
+
+      // Try decision item first, then context item
+      const el = (
+        document.querySelector(`[data-testid="decision-item-${itemId}"]`) ??
+        document.querySelector(`[data-testid="context-item-${itemId}"]`)
       ) as HTMLElement | null;
       if (!el) return;
 
@@ -269,6 +301,8 @@ function App() {
                 variant="primary"
                 onClick={() => {
                   view.refetch();
+                  health.refetch();
+                  sections.refetch();
                 }}
               >
                 Retry
