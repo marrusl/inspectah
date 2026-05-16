@@ -27,7 +27,6 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     title: "Global",
     shortcuts: [
       { keys: "/", description: "Open section search" },
-      { keys: "Ctrl+K", description: "Focus global search" },
       { keys: "Ctrl+Z", description: "Undo" },
       { keys: "Ctrl+Shift+Z", description: "Redo" },
       { keys: "Ctrl+E", description: "Toggle Containerfile panel" },

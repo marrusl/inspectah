@@ -42,9 +42,11 @@ export function ContainerfilePanel({
     [],
   );
 
-  // Auto-collapse below 1280px
+  // Auto-collapse below 1280px — also check initial state on mount
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 1280px)");
+    // Check matches immediately for initial narrow viewport
+    if (mq.matches && isOpen) onToggle();
     const handler = (e: MediaQueryListEvent) => {
       if (e.matches && isOpen) onToggle();
     };

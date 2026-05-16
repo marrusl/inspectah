@@ -188,6 +188,25 @@
   }
 }
 
+/* Search result highlight animation */
+.inspectah-highlight {
+  animation: inspectah-highlight-fade 1.5s ease-out;
+}
+
+@keyframes inspectah-highlight-fade {
+  0% {
+    outline: 2px solid var(--pf-t--global--color--brand--default);
+    outline-offset: -2px;
+    background-color: var(--pf-t--global--color--brand--default);
+    background-color: color-mix(in srgb, var(--pf-t--global--color--brand--default) 15%, transparent);
+  }
+  100% {
+    outline: 2px solid transparent;
+    outline-offset: -2px;
+    background-color: transparent;
+  }
+}
+
 /* Responsive: hide sidebar below 1024px */
 @media (max-width: 1023px) {
   .inspectah-layout__sidebar {

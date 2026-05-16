@@ -25,6 +25,8 @@ export interface DecisionItemProps {
   isViewed: boolean;
   isPending: boolean;
   tabIndex?: number;
+  /** 1-based row index for aria-rowindex. */
+  rowIndex?: number;
   onToggleInclude: (op: RefinementOp) => void;
   onMarkViewed: (id: string) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
@@ -67,6 +69,7 @@ export function DecisionItem({
   isViewed,
   isPending,
   tabIndex = 0,
+  rowIndex,
   onToggleInclude,
   onMarkViewed,
   onKeyDown: onKeyDownProp,
@@ -122,6 +125,8 @@ export function DecisionItem({
       <div
         role="row"
         aria-checked={included}
+        aria-expanded={isExpanded}
+        aria-rowindex={rowIndex}
         aria-label={`${name}, ${included ? "included" : "excluded"}`}
         tabIndex={tabIndex}
         onKeyDown={handleKeyDown}
@@ -171,8 +176,8 @@ export function DecisionItem({
           <div role="gridcell" style={{ flexShrink: 0 }}>
             <button
               onClick={handleExpand}
-              aria-label={isExpanded ? "Collapse detail" : "Expand detail"}
-              aria-expanded={isExpanded}
+              aria-hidden="true"
+              tabIndex={-1}
               style={{
                 background: "none",
                 border: "none",
@@ -204,6 +209,8 @@ export function DecisionItem({
     <div
       role="row"
       aria-checked={included}
+      aria-expanded={isExpanded}
+      aria-rowindex={rowIndex}
       aria-label={`${name}, ${included ? "included" : "excluded"}`}
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
@@ -232,8 +239,8 @@ export function DecisionItem({
       <div role="gridcell" style={{ flexShrink: 0 }}>
         <button
           onClick={handleExpand}
-          aria-label={isExpanded ? "Collapse detail" : "Expand detail"}
-          aria-expanded={isExpanded}
+          aria-hidden="true"
+          tabIndex={-1}
           style={{
             background: "none",
             border: "none",

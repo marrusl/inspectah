@@ -364,8 +364,10 @@ describe("Viewed tracking", () => {
     };
     render(<DecisionItem item={item} {...baseProps} onMarkViewed={onMarkViewed} />);
 
-    const expandBtn = screen.getByRole("button", { name: /expand/i });
-    await userEvent.click(expandBtn);
+    // Expand via Enter on the row (expand button is aria-hidden)
+    const row = screen.getByRole("row");
+    row.focus();
+    await userEvent.keyboard("{Enter}");
     expect(onMarkViewed).toHaveBeenCalledWith("packages:httpd.x86_64");
   });
 
@@ -382,9 +384,10 @@ describe("Viewed tracking", () => {
     await userEvent.click(toggle);
     expect(onMarkViewed).toHaveBeenCalledTimes(1);
 
-    // Then expand (should NOT call markViewed again)
-    const expandBtn = screen.getByRole("button", { name: /expand/i });
-    await userEvent.click(expandBtn);
+    // Then expand via Enter (should NOT call markViewed again)
+    const row = screen.getByRole("row");
+    row.focus();
+    await userEvent.keyboard("{Enter}");
     // Only the toggle call, not an expand call
     expect(onMarkViewed).toHaveBeenCalledTimes(1);
   });
@@ -1091,5 +1094,109 @@ describe("Filter auto-expand", () => {
 
     const rowAfterFilter = screen.getByRole("row");
     expect(rowAfterFilter.closest("[hidden]")).toBeFalsy();
+  });
+});
+
+// ---- Grid ARIA tests (Blocker 3) ----
+
+describe("Grid ARIA attributes", () => {
+  it("grid element has aria-rowcount matching total items", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [INFO_TAG]) },
+      { type: "package", data: makePkg({ name: "ccc" }, [ROUTINE_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const grid = screen.getByRole("grid");
+    expect(grid).toHaveAttribute("aria-rowcount", "3");
+  });
+
+  it("each row has aria-rowindex (1-based)", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const rows = screen.getAllByRole("row");
+    expect(rows[0]).toHaveAttribute("aria-rowindex", "1");
+    expect(rows[1]).toHaveAttribute("aria-rowindex", "2");
+  });
+
+  it("row has aria-expanded instead of expand button", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const row = screen.getByRole("row");
+    expect(row).toHaveAttribute("aria-expanded", "false");
+
+    // The expand button should be aria-hidden
+    const expandBtn = row.querySelector("button[aria-hidden='true']");
+    expect(expandBtn).toBeTruthy();
+  });
+
+  it("aria-expanded updates when row is expanded via Enter", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const row = screen.getByRole("row");
+    expect(row).toHaveAttribute("aria-expanded", "false");
+
+    row.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(row).toHaveAttribute("aria-expanded", "true");
   });
 });
