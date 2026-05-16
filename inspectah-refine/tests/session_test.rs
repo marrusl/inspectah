@@ -1,3 +1,5 @@
+mod helpers;
+
 use std::path::PathBuf;
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -5,6 +7,8 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSecti
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{PackageTarget, RefineError, RefinementOp};
+
+use helpers::*;
 
 fn test_snapshot() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
@@ -498,4 +502,125 @@ fn test_tier1_configs_not_in_containerfile() {
         !preview.contains("default.conf"),
         "Tier 1 config must not appear in Containerfile"
     );
+}
+
+// -- Repo cascade tests (Task 7) --
+
+#[test]
+fn test_exclude_repo_cascades_packages_in_view() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    let epel_pkg = session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap();
+    assert!(!epel_pkg.entry.include, "epel package must be excluded in view");
+}
+
+#[test]
+fn test_exclude_repo_cascades_in_projected_snapshot() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    let projected = session.snapshot_projected();
+    let epel_pkg = projected.rpm.as_ref().unwrap().packages_added.iter()
+        .find(|p| p.name == "epel-release").unwrap();
+    assert!(!epel_pkg.include, "epel package must be excluded in projected snapshot");
+    let orig_pkg = session.snapshot().rpm.as_ref().unwrap().packages_added.iter()
+        .find(|p| p.name == "epel-release").unwrap();
+    assert!(orig_pkg.include, "original snapshot must be unchanged");
+}
+
+#[test]
+fn test_exclude_repo_rejects_distro_repo() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    let result = session.apply(RefinementOp::ExcludeRepo { section_id: "baseos".into() });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_exclude_repo_rejects_incomplete_provenance() {
+    let mut snap = make_snap_with_repos();
+    snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
+        name: "custom".into(),
+        arch: "x86_64".into(),
+        state: PackageState::Added,
+        source_repo: "no-repo-file".into(),
+        include: true,
+        ..Default::default()
+    });
+    let mut session = RefineSession::new(snap);
+    let result = session.apply(RefinementOp::ExcludeRepo { section_id: "no-repo-file".into() });
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_exclude_repo_is_dirty_with_repo_tracking() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    assert!(!session.is_dirty());
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    assert!(session.is_dirty());
+    let changes = session.pending_changes();
+    assert!(changes.repos_excluded.contains(&"epel".to_string()));
+}
+
+#[test]
+fn test_shared_repo_file_retained_until_last_section() {
+    let snap = make_snap_with_multi_section_third_party();
+    let mut session = RefineSession::new(snap);
+
+    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-a".into() }).unwrap();
+    let projected = session.snapshot_projected();
+    let repo_file = projected.rpm.as_ref().unwrap().repo_files.iter()
+        .find(|rf| rf.path.contains("custom-multi")).unwrap();
+    assert!(repo_file.include, "shared repo file must stay while custom-b is enabled");
+    let gpg = projected.rpm.as_ref().unwrap().gpg_keys.iter()
+        .find(|k| k.path.contains("RPM-GPG-KEY-custom")).unwrap();
+    assert!(gpg.include, "shared GPG key must stay while custom-b is enabled");
+
+    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-b".into() }).unwrap();
+    let projected2 = session.snapshot_projected();
+    let gpg2 = projected2.rpm.as_ref().unwrap().gpg_keys.iter()
+        .find(|k| k.path.contains("RPM-GPG-KEY-custom")).unwrap();
+    assert!(!gpg2.include, "GPG key excluded once all sections excluded");
+}
+
+#[test]
+fn test_exclude_repo_then_per_package_then_include_repo() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    assert!(!session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+
+    session.apply(RefinementOp::IncludePackage(PackageTarget {
+        name: "epel-release".into(), arch: "noarch".into(),
+    })).unwrap();
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+
+    session.apply(RefinementOp::IncludeRepo { section_id: "epel".into() }).unwrap();
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+
+    session.undo().unwrap();
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include,
+        "per-package include is still active after undoing repo include");
+}
+
+#[test]
+fn test_exclude_repo_undo_redo() {
+    let snap = make_snap_with_repos();
+    let mut session = RefineSession::new(snap);
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    assert!(!session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    session.undo().unwrap();
+    assert!(session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    session.redo().unwrap();
+    assert!(!session.view().packages.iter()
+        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
 }
