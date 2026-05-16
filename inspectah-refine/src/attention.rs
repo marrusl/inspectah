@@ -1,5 +1,6 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::PackageState;
 use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedConfig, RefinedPackage};
 
@@ -74,7 +75,7 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
         None => return Vec::new(),
     };
 
-    config.files
+    let mut configs: Vec<RefinedConfig> = config.files
         .iter()
         .map(|entry| {
             let mut tags = Vec::new();
@@ -117,5 +118,21 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
             }
             RefinedConfig { entry: entry.clone(), attention: tags }
         })
-        .collect()
+        .collect();
+
+    // Surface unresolved redaction hints as needs-review tags on matching
+    // config files. Only applies when the snapshot is PartiallyRedacted.
+    if let Some(RedactionState::PartiallyRedacted { ref unresolved_hints, .. }) = snap.redaction_state {
+        for hint in unresolved_hints {
+            if let Some(cfg) = configs.iter_mut().find(|c| c.entry.path == hint.path) {
+                cfg.attention.push(AttentionTag {
+                    level: AttentionLevel::NeedsReview,
+                    reason: AttentionReason::Custom("unresolved redaction hint".into()),
+                    detail: Some(hint.reason.clone()),
+                });
+            }
+        }
+    }
+
+    configs
 }

@@ -1,6 +1,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::redaction::{RedactionHint, RedactionState, Confidence};
 use inspectah_refine::types::{AttentionLevel, AttentionReason};
 
 #[test]
@@ -85,4 +86,62 @@ fn empty_snapshot_returns_empty_attention() {
     let snap = InspectionSnapshot::new();
     assert!(inspectah_refine::attention::compute_package_attention(&snap).is_empty());
     assert!(inspectah_refine::attention::compute_config_attention(&snap).is_empty());
+}
+
+#[test]
+fn unresolved_hints_surface_as_needs_review() {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/myapp/config".into(),
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
+        }],
+    });
+    snap.redaction_state = Some(RedactionState::PartiallyRedacted {
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc".into(),
+        unresolved_count: 1,
+        unresolved_hints: vec![RedactionHint {
+            path: "/etc/myapp/config".into(),
+            reason: "file content may contain credentials (matched 'password')".into(),
+            confidence: Some(Confidence::Medium),
+        }],
+    });
+
+    let configs = inspectah_refine::attention::compute_config_attention(&snap);
+    assert_eq!(configs.len(), 1);
+    // Should have the normal ConfigModified tag PLUS the hint tag
+    let hint_tags: Vec<_> = configs[0].attention.iter()
+        .filter(|t| t.reason == AttentionReason::Custom("unresolved redaction hint".into()))
+        .collect();
+    assert_eq!(hint_tags.len(), 1, "unresolved hint must produce a NeedsReview tag");
+    assert_eq!(hint_tags[0].level, AttentionLevel::NeedsReview);
+    assert!(hint_tags[0].detail.as_ref().unwrap().contains("password"));
+}
+
+#[test]
+fn fully_redacted_snapshot_no_hint_tags() {
+    let mut snap = InspectionSnapshot::new();
+    snap.config = Some(ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/myapp/config".into(),
+            kind: ConfigFileKind::RpmOwnedModified,
+            include: true,
+            ..Default::default()
+        }],
+    });
+    snap.redaction_state = Some(RedactionState::FullyRedacted {
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc".into(),
+    });
+
+    let configs = inspectah_refine::attention::compute_config_attention(&snap);
+    assert_eq!(configs.len(), 1);
+    // No hint tags — only the normal ConfigModified tag
+    assert!(
+        configs[0].attention.iter().all(|t| t.reason != AttentionReason::Custom("unresolved redaction hint".into())),
+        "FullyRedacted snapshot must not produce hint attention tags"
+    );
 }

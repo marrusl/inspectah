@@ -11,6 +11,22 @@ use std::sync::LazyLock;
 
 use crate::redaction::patterns::{scan_shadow, PATTERNS};
 
+/// Paths that are known false-positive sources for credential scanning.
+/// Files under these prefixes use keywords like "password", "auth", and
+/// "credential" as PAM module type tokens — not actual secrets.
+/// Listed WITHOUT a leading slash — the check handles both absolute
+/// (`/etc/pam.d/...`) and relative (`etc/pam.d/...`) forms.
+const REDACTION_ALLOWLIST: &[&str] = &[
+    "etc/pam.d/",
+];
+
+/// Returns true if `path` matches a known false-positive prefix.
+/// Handles both absolute and relative path forms.
+fn is_allowlisted_path(path: &str) -> bool {
+    let normalized = path.strip_prefix('/').unwrap_or(path);
+    REDACTION_ALLOWLIST.iter().any(|prefix| normalized.starts_with(prefix))
+}
+
 /// Compiled regex for proxy credential masking.
 /// Matches `://user:password@` in proxy URLs, capturing three groups:
 ///   1. `://user:` (scheme + username + colon)
@@ -834,7 +850,7 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         for pam in &mut selinux.pam_configs {
             let redacted = redact_string(&pam.content);
             if let Cow::Owned(ref new_val) = redacted {
-                let findings = scan_content(&pam.content, "pam_configs");
+                let findings = scan_content(&pam.content, &pam.path);
                 all_findings.extend(findings);
                 pam.content = new_val.clone();
             }
@@ -1051,6 +1067,12 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // still survives in the post-redaction content — if it does, this
     // specific hint was not addressed by the regex pass.
     for hint in &snapshot.redaction_hints {
+        // Suppress hints for allowlisted paths entirely — no finding,
+        // no unresolved count increment, no PartiallyRedacted.
+        if is_allowlisted_path(&hint.path) {
+            continue;
+        }
+
         let effective_confidence = if hint.confidence == Some(Confidence::High) {
             // Per-hint resolution: check if the hint's specific flagged
             // content still survives in the post-redaction content.
@@ -1385,6 +1407,30 @@ mod tests {
     }
 
     // --- Inspector hint consumption tests ---
+
+    #[test]
+    fn test_pam_allowlist_suppresses_hints() {
+        let mut snapshot = InspectionSnapshot::new();
+        snapshot.redaction_hints = vec![RedactionHint {
+            path: "/etc/pam.d/password-auth".into(),
+            reason: "file content may contain credentials (matched 'password')".into(),
+            confidence: Some(Confidence::Medium),
+        }];
+
+        redact(&mut snapshot, &RedactOptions::default());
+
+        // The allowlisted hint must NOT produce a finding or unresolved state.
+        assert!(
+            snapshot.redactions.is_empty(),
+            "allowlisted hint must not produce a finding"
+        );
+        match &snapshot.redaction_state {
+            Some(RedactionState::FullyRedacted { .. }) => {}
+            other => panic!(
+                "expected FullyRedacted when only hint is allowlisted, got {other:?}"
+            ),
+        }
+    }
 
     #[test]
     fn test_hints_converted_to_findings() {
