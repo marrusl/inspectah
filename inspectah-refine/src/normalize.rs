@@ -1,5 +1,5 @@
 use inspectah_core::snapshot::{migrate, InspectionSnapshot};
-use crate::types::RefineError;
+use crate::types::{AttentionLevel, RefineError, RefinedConfig, RefinedPackage};
 use serde_json::Value;
 
 /// Load a raw JSON snapshot for refine, applying presence-aware defaulting.
@@ -48,6 +48,82 @@ fn patch_array_includes(parent: &mut Value, array_key: &str) {
                 if !map.contains_key("include") {
                     map.insert("include".into(), Value::Bool(true));
                 }
+            }
+        }
+    }
+}
+
+/// Materialize tier-aware include defaults for packages.
+///
+/// Baseline subtraction: Tier 1 (Routine/baseline match) packages are
+/// included because the package manager handles them. Tier 2
+/// (Informational/user-added) packages are included only if they are
+/// leaf packages (or if leaf data is unavailable). Tier 3
+/// (NeedsReview/unknown provenance) packages are excluded.
+pub fn normalize_package_defaults(
+    snapshot: &mut InspectionSnapshot,
+    packages: &[RefinedPackage],
+) {
+    let rpm = match snapshot.rpm.as_mut() {
+        Some(r) => r,
+        None => return,
+    };
+
+    let leaf_set: Option<std::collections::HashSet<&str>> = rpm.leaf_packages
+        .as_ref()
+        .map(|lp| lp.iter().map(|s| s.as_str()).collect());
+
+    for (i, refined) in packages.iter().enumerate() {
+        if i >= rpm.packages_added.len() { break; }
+        let primary_level = refined.attention.first()
+            .map(|t| t.level).unwrap_or(AttentionLevel::Routine);
+        match primary_level {
+            AttentionLevel::Routine => { rpm.packages_added[i].include = true; }
+            AttentionLevel::Informational => {
+                let is_leaf = match &leaf_set {
+                    Some(set) => set.contains(rpm.packages_added[i].name.as_str()),
+                    None => true,
+                };
+                rpm.packages_added[i].include = is_leaf;
+            }
+            AttentionLevel::NeedsReview => { rpm.packages_added[i].include = false; }
+        }
+    }
+}
+
+/// Materialize tier-aware include defaults for config files.
+///
+/// Baseline subtraction: Tier 1 (Routine) configs — RpmOwnedDefault
+/// and BaselineMatch — are NOT copied because the package manager or
+/// base image already provides them. Tier 2 (Informational) configs
+/// are included unless orphaned. Tier 3 (NeedsReview/user-modified)
+/// configs are always included.
+pub fn normalize_config_defaults(
+    snapshot: &mut InspectionSnapshot,
+    configs: &[RefinedConfig],
+) {
+    let config = match snapshot.config.as_mut() {
+        Some(c) => c,
+        None => return,
+    };
+    for (i, refined) in configs.iter().enumerate() {
+        if i >= config.files.len() { break; }
+        let primary_level = refined.attention.first()
+            .map(|t| t.level).unwrap_or(AttentionLevel::Routine);
+        match primary_level {
+            AttentionLevel::Routine => {
+                // Tier 1: NOT copied — package manager handles these
+                config.files[i].include = false;
+            }
+            AttentionLevel::Informational => {
+                config.files[i].include = !matches!(
+                    config.files[i].kind,
+                    inspectah_core::types::config::ConfigFileKind::Orphaned
+                );
+            }
+            AttentionLevel::NeedsReview => {
+                // Tier 3: user-customized, include
+                config.files[i].include = true;
             }
         }
     }
