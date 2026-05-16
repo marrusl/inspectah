@@ -1,0 +1,131 @@
+/* inspectah refine — app shell layout */
+
+.inspectah-page {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Stats bar */
+.inspectah-statsbar {
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+  flex-shrink: 0;
+}
+
+/* Three-zone layout */
+.inspectah-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.inspectah-layout__sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--pf-t--global--border--color--default);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.inspectah-layout__main {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* Sidebar */
+.inspectah-sidebar {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+
+.inspectah-sidebar .pf-v6-c-nav {
+  flex: 1;
+}
+
+.inspectah-sidebar__host {
+  padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
+  border-top: 1px solid var(--pf-t--global--border--color--default);
+}
+
+/* Containerfile panel — open */
+.inspectah-cf-panel--open {
+  width: 280px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--pf-t--global--border--color--default);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: width 200ms ease;
+}
+
+.inspectah-cf-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
+}
+
+.inspectah-cf-panel__header h3 {
+  margin: 0;
+  font-size: var(--pf-t--global--font--size--body--default);
+  font-weight: var(--pf-t--global--font--weight--body--bold);
+}
+
+.inspectah-cf-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--pf-t--global--spacer--sm);
+}
+
+.inspectah-cf-panel__code {
+  margin: 0;
+  font-size: var(--pf-t--global--font--size--body--sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.inspectah-cf-panel__footer {
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md);
+  border-top: 1px solid var(--pf-t--global--border--color--default);
+  text-align: right;
+}
+
+/* Containerfile panel — collapsed */
+.inspectah-cf-panel--collapsed {
+  width: 28px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--pf-t--global--border--color--default);
+  display: flex;
+  align-items: stretch;
+  transition: width 200ms ease;
+}
+
+.inspectah-cf-panel__tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: var(--pf-t--global--font--size--body--sm);
+  color: var(--pf-t--global--text--color--regular);
+  letter-spacing: 0.05em;
+}
+
+.inspectah-cf-panel__tab:hover {
+  background: var(--pf-t--global--background--color--secondary--default);
+}
+
+.inspectah-cf-panel__tab-label {
+  transform: rotate(180deg);
+}

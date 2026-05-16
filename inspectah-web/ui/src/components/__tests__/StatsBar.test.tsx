@@ -1,0 +1,140 @@
+import { describe, it, expect, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { StatsBar } from "../StatsBar";
+import type { RefineStats } from "../../api/types";
+
+const MOCK_STATS: RefineStats = {
+  total_packages: 10,
+  included_packages: 8,
+  excluded_packages: 2,
+  total_configs: 5,
+  included_configs: 3,
+  excluded_configs: 2,
+  needs_review_count: 3,
+  ops_applied: 1,
+  can_undo: true,
+  can_redo: false,
+};
+
+describe("StatsBar", () => {
+  it("renders package and config stats", () => {
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    expect(screen.getByText(/8 included .* 2 excluded/)).toBeInTheDocument();
+    expect(screen.getByText(/3 included .* 2 excluded/)).toBeInTheDocument();
+  });
+
+  it("renders triage remaining count", () => {
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    expect(screen.getByText(/3 of 15 remaining/)).toBeInTheDocument();
+  });
+
+  it("renders dashes when stats are null", () => {
+    render(
+      <StatsBar
+        stats={null}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    const dashes = screen.getAllByText(/-/);
+    expect(dashes.length).toBeGreaterThan(0);
+  });
+
+  it("disables undo when can_undo is false", () => {
+    render(
+      <StatsBar
+        stats={{ ...MOCK_STATS, can_undo: false }}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    expect(screen.getByLabelText("Undo")).toBeDisabled();
+  });
+
+  it("disables redo when can_redo is false", () => {
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    // MOCK_STATS has can_redo: false
+    expect(screen.getByLabelText("Redo")).toBeDisabled();
+  });
+
+  it("disables undo/redo when isPending is true", () => {
+    render(
+      <StatsBar
+        stats={{ ...MOCK_STATS, can_undo: true, can_redo: true }}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={true}
+      />,
+    );
+
+    expect(screen.getByLabelText("Undo")).toBeDisabled();
+    expect(screen.getByLabelText("Redo")).toBeDisabled();
+  });
+
+  it("calls onUndo when undo button is clicked", async () => {
+    const onUndo = vi.fn();
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={onUndo}
+        onRedo={vi.fn()}
+        onExport={vi.fn()}
+        isPending={false}
+      />,
+    );
+
+    await userEvent.click(screen.getByLabelText("Undo"));
+    expect(onUndo).toHaveBeenCalled();
+  });
+
+  it("calls onExport when export button is clicked", async () => {
+    const onExport = vi.fn();
+    render(
+      <StatsBar
+        stats={MOCK_STATS}
+        onUndo={vi.fn()}
+        onRedo={vi.fn()}
+        onExport={onExport}
+        isPending={false}
+      />,
+    );
+
+    await userEvent.click(screen.getByText("Export"));
+    expect(onExport).toHaveBeenCalled();
+  });
+});
