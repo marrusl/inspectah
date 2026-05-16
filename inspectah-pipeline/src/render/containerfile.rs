@@ -207,15 +207,20 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
         lines.push(String::new());
     }
 
-    // GPG keys — generate per-key rpm --import using actual paths
+    // GPG keys — batch standard-dir keys, per-key import for non-standard
     let included_gpg: Vec<_> = rpm.gpg_keys.iter().filter(|k| k.include).collect();
     if !included_gpg.is_empty() {
         lines.push(format!("# === GPG Keys ({}) ===", included_gpg.len()));
 
-        // COPY each unique parent directory containing GPG keys
-        let mut gpg_dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        let mut safe_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
+        const STANDARD_GPG_DIR: &str = "etc/pki/rpm-gpg";
+
+        // Classify keys: safe vs unsafe, standard-dir vs non-standard vs root
+        let mut standard_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
+        let mut nonstandard_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
         let mut root_keys: Vec<&inspectah_core::types::rpm::RepoFile> = Vec::new();
+        let mut nonstandard_dirs: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+
         for key in &included_gpg {
             // Host paths are absolute — check for traversal, NUL, and whitespace
             if key.path.contains("..") || key.path.contains('\0') {
@@ -235,16 +240,31 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
             let rel = key.path.trim_start_matches('/');
             match rel.rsplit_once('/') {
                 Some((dir, _)) if !dir.is_empty() => {
-                    gpg_dirs.insert(dir.to_string());
+                    if dir == STANDARD_GPG_DIR {
+                        standard_keys.push(key);
+                    } else {
+                        nonstandard_dirs.insert(dir.to_string());
+                        nonstandard_keys.push(key);
+                    }
                 }
                 _ => {
                     // Root-level key (e.g., /good-key) — stage the file directly
                     root_keys.push(key);
+                    nonstandard_keys.push(key);
                 }
             }
-            safe_keys.push(key);
         }
-        for dir in &gpg_dirs {
+
+        // Standard-dir keys: single directory COPY, no rpm --import needed
+        // (RPM automatically picks up keys in /etc/pki/rpm-gpg/)
+        if !standard_keys.is_empty() {
+            lines.push(format!(
+                "COPY config/{STANDARD_GPG_DIR}/ /{STANDARD_GPG_DIR}/"
+            ));
+        }
+
+        // Non-standard directory keys: COPY parent dir + per-key rpm --import
+        for dir in &nonstandard_dirs {
             match super::safety::sanitize_shell_value(dir) {
                 Some(safe) => lines.push(format!("COPY config/{safe}/ /{safe}/")),
                 None => lines.push(format!(
@@ -260,8 +280,8 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> 
             lines.push(format!("COPY config/{rel} {}", key.path));
         }
 
-        // Per-key rpm --import only for keys that passed validation AND have staging
-        for key in &safe_keys {
+        // rpm --import only for non-standard keys (standard-dir keys are auto-imported)
+        for key in &nonstandard_keys {
             lines.push(format!("RUN rpm --import {}", key.path));
         }
         lines.push(String::new());
@@ -461,6 +481,24 @@ fn unreachable_state(snap: &InspectionSnapshot, name: &str) -> String {
 
 // --- Services section ---
 
+/// Format a `RUN systemctl enable/disable` block. When the unit count
+/// exceeds 3, use backslash line-continuation for readability.
+fn systemctl_lines(verb: &str, units: &[String]) -> Vec<String> {
+    if units.len() <= 3 {
+        vec![format!("RUN systemctl {} {}", verb, units.join(" "))]
+    } else {
+        let mut lines = vec![format!("RUN systemctl {} \\", verb)];
+        for (i, u) in units.iter().enumerate() {
+            if i < units.len() - 1 {
+                lines.push(format!("    {} \\", u));
+            } else {
+                lines.push(format!("    {}", u));
+            }
+        }
+        lines
+    }
+}
+
 fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let mut lines = Vec::new();
 
@@ -520,10 +558,10 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
 
     if !safe_enabled.is_empty() {
-        lines.push(format!("RUN systemctl enable {}", safe_enabled.join(" ")));
+        lines.extend(systemctl_lines("enable", &safe_enabled));
     }
     if !safe_disabled.is_empty() {
-        lines.push(format!("RUN systemctl disable {}", safe_disabled.join(" ")));
+        lines.extend(systemctl_lines("disable", &safe_disabled));
     }
     if !deferred.is_empty() {
         lines.push(format!(
@@ -1647,9 +1685,15 @@ mod tests {
             ..Default::default()
         });
         let output = render_containerfile(&snap, None);
+        // Standard-dir key should NOT have rpm --import (auto-imported)
         assert!(
-            output.contains("rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9"),
-            "must have rpm --import for standard path key"
+            !output.contains("rpm --import /etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9"),
+            "standard-dir key must NOT have rpm --import (auto-imported)"
+        );
+        // Standard-dir key should have directory COPY
+        assert!(
+            output.contains("COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/"),
+            "standard-dir key must have directory COPY"
         );
         assert!(
             output.contains("rpm --import /opt/custom/keys/signing-key.asc"),
@@ -1683,9 +1727,14 @@ mod tests {
             !output.contains("rpm --import ../../etc/shadow"),
             "traversal path must NOT reach rpm --import"
         );
+        // GOOD-KEY is in the standard GPG dir — gets directory COPY, no rpm --import
         assert!(
-            output.contains("rpm --import /etc/pki/rpm-gpg/GOOD-KEY"),
-            "safe path must still work"
+            output.contains("COPY config/etc/pki/rpm-gpg/ /etc/pki/rpm-gpg/"),
+            "safe standard-dir key must get directory COPY"
+        );
+        assert!(
+            !output.contains("rpm --import /etc/pki/rpm-gpg/GOOD-KEY"),
+            "standard-dir key must NOT have rpm --import (auto-imported)"
         );
     }
 
@@ -1709,6 +1758,137 @@ mod tests {
         assert!(
             !output.contains("rpm --import /opt/custom keys"),
             "whitespace path must NOT reach rpm --import"
+        );
+    }
+
+    #[test]
+    fn test_gpg_standard_dir_single_copy() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            gpg_keys: vec![
+                inspectah_core::types::rpm::RepoFile {
+                    path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
+                    content: "key1".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                inspectah_core::types::rpm::RepoFile {
+                    path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial".into(),
+                    content: "key2".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        let copy_lines: Vec<_> = output
+            .lines()
+            .filter(|l| l.contains("COPY") && l.contains("rpm-gpg"))
+            .collect();
+        assert_eq!(
+            copy_lines.len(),
+            1,
+            "standard dir keys should be single COPY, got: {:?}",
+            copy_lines
+        );
+        assert!(
+            !output.contains("rpm --import"),
+            "standard dir keys should not have explicit imports"
+        );
+    }
+
+    #[test]
+    fn test_gpg_mixed_paths() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            gpg_keys: vec![
+                inspectah_core::types::rpm::RepoFile {
+                    path: "/etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL-9".into(),
+                    content: "key1".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                inspectah_core::types::rpm::RepoFile {
+                    path: "/opt/custom/keys/signing-key.asc".into(),
+                    content: "key2".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        // Standard dir key gets directory COPY
+        assert!(
+            output.contains("COPY config/etc/pki/rpm-gpg/"),
+            "standard dir keys should get directory COPY"
+        );
+        // Non-standard key gets per-key COPY + import
+        assert!(
+            output.contains("rpm --import /opt/custom/keys/signing-key.asc"),
+            "non-standard key should get rpm --import"
+        );
+    }
+
+    #[test]
+    fn test_service_backslash_continuation_over_3() {
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            enabled_units: vec![
+                "httpd.service".into(),
+                "sshd.service".into(),
+                "chronyd.service".into(),
+                "firewalld.service".into(),
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("systemctl enable \\"),
+            "4+ services should use continuation, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("    httpd.service \\"),
+            "services on indented lines with continuation"
+        );
+    }
+
+    #[test]
+    fn test_service_single_line_under_4() {
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            enabled_units: vec!["httpd.service".into(), "sshd.service".into()],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("systemctl enable httpd.service sshd.service"),
+            "2 services should be single line"
+        );
+        assert!(
+            !output.contains("\\"),
+            "2 services should not use backslash continuation"
+        );
+    }
+
+    #[test]
+    fn test_service_disable_backslash_continuation_over_3() {
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            disabled_units: vec![
+                "cups.service".into(),
+                "avahi-daemon.service".into(),
+                "bluetooth.service".into(),
+                "ModemManager.service".into(),
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("systemctl disable \\"),
+            "4+ disabled services should use continuation"
         );
     }
 
