@@ -1095,3 +1095,109 @@ async fn health_pretty_name_fallback_to_name() {
     assert_eq!(host["os_version"], "41");
     assert_eq!(host["os_id"], "fedora");
 }
+
+// --- Embedded asset resolution tests -----------------------------------------
+
+#[test]
+fn embedded_assets_include_prefixed_files() {
+    use inspectah_web::assets::StaticAssets;
+
+    let asset_files: Vec<String> = StaticAssets::iter()
+        .filter(|path| path.starts_with("assets/"))
+        .map(|path| path.to_string())
+        .collect();
+
+    assert!(
+        !asset_files.is_empty(),
+        "rust-embed must include files under the assets/ prefix"
+    );
+
+    // Every assets/* file must be resolvable via StaticAssets::get with the
+    // full prefix — this is the invariant the fallback handler relies on.
+    for file in &asset_files {
+        assert!(
+            StaticAssets::get(file).is_some(),
+            "StaticAssets::get({:?}) must resolve",
+            file
+        );
+    }
+}
+
+#[test]
+fn embedded_assets_include_index_html() {
+    use inspectah_web::assets::StaticAssets;
+
+    assert!(
+        StaticAssets::get("index.html").is_some(),
+        "index.html must be embedded at the root of ui/dist/"
+    );
+}
+
+#[tokio::test]
+async fn fallback_serves_asset_files() {
+    let app = app(test_state());
+
+    // Request a known JS asset via the /assets/ path.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/assets/index-CXipiI4o.js")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "/assets/<file> must resolve via fallback"
+    );
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.contains("javascript"),
+        "JS asset must have a javascript content-type, got: {}",
+        content_type
+    );
+}
+
+#[tokio::test]
+async fn fallback_serves_spa_for_unknown_paths() {
+    let app = app(test_state());
+
+    // A path that is neither an API route nor an embedded file should get
+    // index.html (SPA client-side routing).
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/some/client/route")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "unknown paths should fall back to index.html"
+    );
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.contains("text/html"),
+        "SPA fallback must serve text/html, got: {}",
+        content_type
+    );
+}
