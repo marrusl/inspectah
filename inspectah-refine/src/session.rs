@@ -381,6 +381,26 @@ pub fn render_refine_export(
     inspectah_pipeline::render::configtree::write_env_files(snap, out)
         .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
 
+    // 2b. Remove any top-level artifacts outside the approved export contract.
+    // write_config_tree() can emit drop-ins/, quadlet/, flatpak/ at root.
+    let allowed_top_level: std::collections::HashSet<&str> = [
+        "config", "env-files", "schema",
+        "inspection-snapshot.json", "Containerfile", "audit-report.md",
+    ].iter().copied().collect();
+
+    for entry in std::fs::read_dir(out)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if !allowed_top_level.contains(name_str.as_ref()) {
+            if entry.file_type()?.is_dir() {
+                std::fs::remove_dir_all(entry.path())?;
+            } else {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+    }
+
     // 3. Containerfile -- uses materialized_roots from the SAME config
     //    tree write that populated the tarball's config/ directory.
     //    Preview also materializes to a tempdir for the same roots,
