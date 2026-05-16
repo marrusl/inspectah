@@ -44,8 +44,10 @@ The Go schema has a `baseline_match` kind for config files whose content matches
 Add to the existing enum:
 - `PackageBaselineMatch` — Tier 1 package found in baseline
 - `PackageUserAdded` — Tier 2 package from a recognized repo, baseline verified
+- `PackageVersionChanged` — Tier 2 package with version drift from baseline (Modified state)
 - `PackageProvenanceUnavailable` — Tier 2 package from a recognized repo, but baseline data is missing (distinct from `PackageUserAdded` — signals reduced classification confidence)
 - `PackageNoRepoSource` — Tier 3 package with no repository source
+- `ConfigDefault` — Tier 1 config unchanged from RPM default
 - `ConfigBaselineMatch` — Tier 1 config matching base image
 
 These give the UI meaningful badge text. Critically, `PackageProvenanceUnavailable` prevents the UI from displaying calm "appstream" badges when the baseline check was never performed — the operator sees "baseline unavailable" instead of false confidence.
@@ -122,25 +124,36 @@ The `policy` object is narrow and versioned. It contains only classification con
 
 Rewrite `compute_package_attention()` in `inspectah-refine/src/attention.rs`:
 
-**Package classification:**
+**Complete package classification matrix:**
 
-| Condition | Tier | AttentionLevel | AttentionReason |
-|-----------|------|---------------|-----------------|
-| Name in `baseline_package_names` | 1 | Routine | PackageBaselineMatch |
-| `baseline_package_names` present, not in baseline, `source_repo` is known | 2 | Informational | PackageUserAdded |
-| `baseline_package_names` is `None`, `source_repo` is known | 2 | Informational | PackageProvenanceUnavailable |
-| `PackageState::LocalInstall` | 3 | NeedsReview | PackageLocalInstall |
-| `PackageState::NoRepo` | 3 | NeedsReview | PackageNoRepoSource |
+This matrix is exhaustive over the four `PackageState` variants that appear in `packages_added`, crossed with baseline availability and `source_repo` availability. Every cell is a deliberate design choice — no fallthrough or implementer guesswork.
 
-**Bug fix:** `NoRepo` currently maps to `Informational` — change to `NeedsReview`.
+| PackageState | Baseline present, in baseline | Baseline present, not in baseline, repo known | Baseline present, not in baseline, repo empty | Baseline missing, repo known | Baseline missing, repo empty | 
+|---|---|---|---|---|---|
+| `Added` | Tier 1 Routine `PackageBaselineMatch` | Tier 2 Informational `PackageUserAdded` | Tier 3 NeedsReview `PackageNoRepoSource` | Tier 2 Informational `PackageProvenanceUnavailable` | Tier 3 NeedsReview `PackageNoRepoSource` |
+| `Modified` | Tier 1 Routine `PackageBaselineMatch` | Tier 2 Informational `PackageVersionChanged` | Tier 3 NeedsReview `PackageNoRepoSource` | Tier 2 Informational `PackageProvenanceUnavailable` | Tier 3 NeedsReview `PackageNoRepoSource` |
+| `LocalInstall` | Tier 3 NeedsReview `PackageLocalInstall` | Tier 3 NeedsReview `PackageLocalInstall` | Tier 3 NeedsReview `PackageLocalInstall` | Tier 3 NeedsReview `PackageLocalInstall` | Tier 3 NeedsReview `PackageLocalInstall` |
+| `NoRepo` | Tier 3 NeedsReview `PackageNoRepoSource` | Tier 3 NeedsReview `PackageNoRepoSource` | Tier 3 NeedsReview `PackageNoRepoSource` | Tier 3 NeedsReview `PackageNoRepoSource` | Tier 3 NeedsReview `PackageNoRepoSource` |
 
-**Provenance-aware fallback when `baseline_package_names` is `None`:** All `PackageState::Added` packages from known repos classify as Tier 2 `Informational` but with `PackageProvenanceUnavailable` reason, not `PackageUserAdded`. This is the key distinction from round 1: the operator sees "baseline unavailable" badge text and a section-level completeness warning, not calm repo badges that imply verified classification.
+**Reading the matrix:**
+- **`Added` + baseline match** → Tier 1. Standard OS package, auto-include.
+- **`Added` + baseline present + known repo** → Tier 2 with `PackageUserAdded`. Verified classification.
+- **`Added` + baseline present + repo empty** → Tier 3. Without repo provenance, we can't distinguish user-added from problematic. Fail-closed.
+- **`Added` + baseline missing + known repo** → Tier 2 with `PackageProvenanceUnavailable`. Distinct from `PackageUserAdded` — signals reduced confidence.
+- **`Added` + baseline missing + repo empty** → Tier 3. No baseline AND no repo = genuinely unknown.
+- **`Modified`** → same classification as `Added` for the corresponding provenance state, but with `PackageVersionChanged` reason when Tier 2 with verified baseline. `Modified` means the host has a different version than the baseline — the package is known and from a repo, just version-drifted.
+- **`LocalInstall`** → always Tier 3 regardless of baseline or repo. Locally installed without a repository source — always needs operator input.
+- **`NoRepo`** → always Tier 3 regardless of baseline or repo. No repository source means inspectah cannot reconstruct install steps.
+
+**Bug fix:** `NoRepo` currently maps to `Informational` — change to `NeedsReview`. This was a severity inversion.
+
+**Provenance-aware fallback when `baseline_package_names` is `None`:** `Added` and `Modified` packages from known repos classify as Tier 2 `Informational` but with `PackageProvenanceUnavailable` reason, not `PackageUserAdded`. The operator sees "baseline unavailable" badge text and a section-level completeness warning, not calm repo badges that imply verified classification. Packages with empty `source_repo` classify as Tier 3 regardless — no baseline AND no repo = no basis for calm classification.
 
 **Config classification (rewrite `compute_config_attention()`):**
 
 | Condition | Tier | AttentionLevel | AttentionReason |
 |-----------|------|---------------|-----------------|
-| `ConfigFileKind::RpmOwnedDefault` | 1 | Routine | ConfigDefault |
+| `ConfigFileKind::RpmOwnedDefault` | 1 | Routine | ConfigDefault (new variant) |
 | `ConfigFileKind::BaselineMatch` | 1 | Routine | ConfigBaselineMatch |
 | `ConfigFileKind::Unowned` | 2 | Informational | ConfigUnowned |
 | `ConfigFileKind::RpmOwnedModified` | 3 | NeedsReview | ConfigModified |
@@ -193,7 +206,7 @@ Investigation scope:
 2. Does the Rust RPM inspector populate it during `inspectah scan`?
 3. Is there a serialization mismatch (field naming, casing)?
 
-Required outcome: `source_repo` is populated with the repo section ID (e.g., "baseos", "appstream", "epel") for every package in `packages_added`. This is the same value used as the canonical repo identity.
+**Required outcome:** `source_repo` should be populated with the repo section ID (e.g., "baseos", "appstream", "epel") whenever the scanner can determine the source repository. However, empty/missing `source_repo` is a valid degraded state — some packages genuinely lack repo provenance (locally installed RPMs, packages from removed repos). The classification matrix in Section 2 explicitly handles empty `source_repo` as a separate column: these packages classify based on their `PackageState` and baseline availability, falling to Tier 3 when provenance is insufficient. The `RepoIndex` assigns `RepoProvenance::Unknown` for empty `source_repo` (Section 4b), disabling bulk repo actions for those packages.
 
 **4b. `RepoIndex` construction**
 
@@ -264,7 +277,8 @@ When a repo is excluded, all its artifacts disappear from the Containerfile — 
 - Group Tier 2 packages by `source_repo`. Each group has a header row showing: repo label, distro/third-party badge, package count, and (for third-party repos with `Verified` provenance) an enable/disable toggle.
 - **Distro repos** (from `policy.distro_repos`): labeled "Distro". No toggle. Always included.
 - **Third-party repos with `Verified` provenance:** labeled "Third-party". Toggle fires `ExcludeRepo` / `IncludeRepo`.
-- **Repos with `Incomplete` or `Unknown` provenance:** labeled "Third-party" (or "Unknown"). No toggle — label is informational only. Packages are individually actionable.
+- **Repos with `Incomplete` provenance:** labeled "Unverified". No toggle — label is informational only. Packages are individually actionable.
+- **Repos with `Unknown` provenance (empty `source_repo`):** labeled "Unknown". No toggle. Per-item review only.
 - Tier 3 items appear in their own "Needs Review" section, not grouped by repo.
 
 **Expand/collapse behavior:**
@@ -280,7 +294,7 @@ When a repo is excluded, all its artifacts disappear from the Containerfile — 
 
 **Keyboard traversal:**
 - Repo group headers are first-class keyboard stops in the existing nav model
-- `Tab` / `Shift-Tab` moves between group headers
+- `Tab` / `Shift-Tab` moves between group headers. Within a group header, `Tab` advances focus from the header label to the repo toggle (if present), then to the first item in the group. This gives the toggle a natural focus position without requiring a separate keyboard mode.
 - `Arrow` / `j` / `k` moves between items within the currently focused group
 - `Enter` or `Space` on a group header toggles expand/collapse
 - `Enter` or `Space` on a repo toggle fires `ExcludeRepo` / `IncludeRepo`
@@ -288,8 +302,8 @@ When a repo is excluded, all its artifacts disappear from the Containerfile — 
 
 **Repo toggle feedback:**
 - Optimistic UI: toggle state flips immediately on click/keypress
-- On success: brief undo toast ("Excluded epel — N packages, 1 repo file, 2 GPG keys removed. Undo")
-- On failure: revert toggle, show error banner with reason
+- On success: undo toast announced via `role="status"` live region (non-focus-stealing). Text: "Excluded epel — N packages, 1 repo file, 2 GPG keys removed. Undo". Toast does not steal focus from the toggle.
+- On failure: revert toggle, show error banner via `role="alert"` live region with reason
 - Containerfile preview updates on next render cycle (existing mechanism)
 
 **6d. Config grouping (depends on pipeline fix)**
@@ -303,7 +317,7 @@ When a repo is excluded, all its artifacts disappear from the Containerfile — 
 
 At widths where the sidebar hides (<1024px) and the Containerfile panel collapses:
 - Repo group headers: label + count on first line, toggle (if available) on second line. Truncate long repo names with ellipsis.
-- Distro/third-party badges: abbreviate to "D" / "3P" at <768px
+- Distro/third-party badges: abbreviate to "D" / "3P" at <768px. Abbreviated badges retain `aria-label="Distro"` / `aria-label="Third-party"` / `aria-label="Unverified"` / `aria-label="Unknown"` so screen readers announce the full meaning regardless of visual abbreviation.
 - Tier summary counts remain inline
 
 ## Testing & Success Criteria
@@ -326,9 +340,11 @@ At widths where the sidebar hides (<1024px) and the Containerfile panel collapse
 - Preview/export parity: after normalization, the Containerfile rendered for preview matches the Containerfile in the exported tarball (same `include` flags, same projection path)
 - Fallback behavior when `baseline_package_names` is `None`: verify `PackageProvenanceUnavailable` reason, distinct badge text, completeness warning
 - Fallback behavior when `leaf_packages` is `None`: all Tier 2 visible, no filtering applied
-- Fallback behavior when `source_repo` is empty: packages classify correctly (Tier 2 or 3 based on state), provenance `Unknown`, no bulk toggle
+- Fallback behavior when `source_repo` is empty: `Added`/`Modified` with empty repo + baseline present → Tier 3 `PackageNoRepoSource`; `Added`/`Modified` with empty repo + baseline missing → Tier 3 `PackageNoRepoSource`; `LocalInstall` → Tier 3 always; `NoRepo` → Tier 3 always. Provenance `Unknown`, no bulk toggle.
 - Undo/redo for `ExcludeRepo` → per-package override → `IncludeRepo`: op stack replays correctly
 - GPG key reference counting: shared key stays `include = true` until all referencing sections excluded
+- **Shared repo file retention:** excluding one section from a multi-section `.repo` file (e.g., excluding `crb` from `centos.repo` which also carries `baseos` and `appstream`) must leave the repo file `include = true` until the last enabled section using that file is excluded
+- **Repo-only dirty tracking:** a repo-level `ExcludeRepo` / `IncludeRepo` operation must appear in `pending_changes()` and cause `is_dirty()` to return `true`, even if the operation does not change any individual package or config `include` flags (e.g., an empty repo with no matching packages)
 - Config tier regression: verify each `ConfigFileKind` maps to the expected tier, with explicit test for `RpmOwnedModified` → Tier 3 (intentional divergence from Go)
 
 **Smoke tests:**
