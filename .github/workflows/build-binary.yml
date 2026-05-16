@@ -1,0 +1,56 @@
+name: Build binary
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [rust]
+    paths:
+      - 'inspectah-*/src/**'
+      - 'inspectah-*/Cargo.toml'
+      - 'inspectah-web/ui/src/**'
+      - 'inspectah-web/ui/package.json'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            name: linux-arm64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: inspectah-web/ui/package-lock.json
+
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build release binary
+        run: cargo build -p inspectah-cli --release --target ${{ matrix.target }}
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: inspectah-${{ matrix.name }}
+          path: target/${{ matrix.target }}/release/inspectah
+          retention-days: 30
