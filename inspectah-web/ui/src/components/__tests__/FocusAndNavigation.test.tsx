@@ -137,7 +137,7 @@ describe("Focus management after section change", () => {
     });
 
     // The first row should be focusable (it has the item)
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     expect(rows.length).toBeGreaterThan(0);
     // The main content wrapper should NOT be the focused element
     // (it could be the row or nothing if rAF hasn't fired in jsdom)
@@ -394,6 +394,14 @@ describe("Undo/redo focus restore", () => {
       if (url === "/api/viewed" && opts?.method === "POST") {
         return Promise.resolve({ ok: true, status: 204 });
       }
+      if (url === "/api/ops") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            { op: "ExcludePackage", target: { name: "httpd", arch: "x86_64" }, active: true },
+          ]),
+        });
+      }
       if (url === "/api/undo") {
         return Promise.resolve({
           ok: true,
@@ -416,7 +424,7 @@ describe("Undo/redo focus restore", () => {
 
     // Focus a specific decision item (scope to decision list, not nav)
     const decisionList = screen.getByTestId("decision-list-packages");
-    const rows = within(decisionList).getAllByRole("group");
+    const rows = within(decisionList).getAllByRole("row");
     const targetRow = rows[0];
     targetRow.focus();
     expect(document.activeElement).toBe(targetRow);
