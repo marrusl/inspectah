@@ -1,5 +1,6 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::session::RefineSession;
@@ -235,5 +236,32 @@ fn reimport_preserves_excludes() {
     assert!(
         !session2.is_dirty(),
         "re-imported session must not be dirty"
+    );
+}
+
+#[test]
+fn export_excludes_extra_config_tree_artifacts() {
+    let mut snap = test_snapshot();
+    snap.containers = Some(ContainerSection {
+        quadlet_units: vec![QuadletUnit {
+            name: "myapp.container".into(),
+            content: "[Container]\nImage=registry.example.com/myapp:latest\n".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session.export_tarball(&tarball_path, session.generation()).unwrap();
+
+    let files = tarball_file_set(&tarball_path);
+
+    // quadlet/ must NOT appear in the export
+    assert!(
+        !files.iter().any(|f| f.starts_with("quadlet/")),
+        "quadlet/ must not be in refine export, got: {files:?}"
     );
 }
