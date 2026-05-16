@@ -1,7 +1,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::rpm::PackageState;
+use inspectah_core::types::rpm::{PackageEntry, PackageState};
 use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedConfig, RefinedPackage};
 
 const SENSITIVE_PATHS: &[&str] = &[
@@ -23,50 +23,91 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
         None => return Vec::new(),
     };
 
+    let baseline: Option<&[String]> = rpm.baseline_package_names.as_deref();
+
     rpm.packages_added
         .iter()
         .map(|entry| {
-            let mut tags = Vec::new();
-            match entry.state {
-                PackageState::Added => {
+            let tag = classify_package(entry, baseline);
+            let mut tags = vec![tag];
+
+            if is_sensitive_path(&entry.name) {
+                let primary_level = tags[0].level;
+                let should_promote = match primary_level {
+                    AttentionLevel::Informational => true,
+                    AttentionLevel::Routine => baseline.is_none(),
+                    AttentionLevel::NeedsReview => false,
+                };
+                if should_promote {
                     tags.push(AttentionTag {
                         level: AttentionLevel::NeedsReview,
-                        reason: AttentionReason::PackageNoRepoSource,
-                        detail: None,
-                    });
-                }
-                PackageState::LocalInstall => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::NeedsReview,
-                        reason: AttentionReason::PackageLocalInstall,
-                        detail: None,
-                    });
-                }
-                PackageState::Modified => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::Informational,
-                        reason: AttentionReason::PackageNoRepoSource,
-                        detail: None,
-                    });
-                }
-                PackageState::NoRepo => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::Informational,
-                        reason: AttentionReason::PackageNoRepoSource,
-                        detail: None,
-                    });
-                }
-                _ => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::Routine,
-                        reason: AttentionReason::PackageNoRepoSource,
-                        detail: None,
+                        reason: AttentionReason::SensitivePath,
+                        detail: Some(entry.name.clone()),
                     });
                 }
             }
+
             RefinedPackage { entry: entry.clone(), attention: tags }
         })
         .collect()
+}
+
+fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> AttentionTag {
+    // LocalInstall and NoRepo are always Tier 3, regardless of baseline or repo.
+    match entry.state {
+        PackageState::LocalInstall => {
+            return AttentionTag {
+                level: AttentionLevel::NeedsReview,
+                reason: AttentionReason::PackageLocalInstall,
+                detail: None,
+            };
+        }
+        PackageState::NoRepo => {
+            return AttentionTag {
+                level: AttentionLevel::NeedsReview,
+                reason: AttentionReason::PackageNoRepoSource,
+                detail: None,
+            };
+        }
+        _ => {}
+    }
+
+    // Empty source_repo means unknown provenance — always Tier 3.
+    if entry.source_repo.is_empty() {
+        return AttentionTag {
+            level: AttentionLevel::NeedsReview,
+            reason: AttentionReason::PackageNoRepoSource,
+            detail: None,
+        };
+    }
+
+    // Classify based on baseline availability and membership.
+    match baseline {
+        Some(names) if names.iter().any(|n| n == &entry.name) => {
+            // In baseline with known repo — expected package, Tier 1.
+            AttentionTag {
+                level: AttentionLevel::Routine,
+                reason: AttentionReason::PackageBaselineMatch,
+                detail: None,
+            }
+        }
+        Some(_) => {
+            // Not in baseline but has a known repo — user-added or version-changed, Tier 2.
+            let reason = match entry.state {
+                PackageState::Modified => AttentionReason::PackageVersionChanged,
+                _ => AttentionReason::PackageUserAdded,
+            };
+            AttentionTag { level: AttentionLevel::Informational, reason, detail: None }
+        }
+        None => {
+            // No baseline available — can't determine provenance, Tier 2.
+            AttentionTag {
+                level: AttentionLevel::Informational,
+                reason: AttentionReason::PackageProvenanceUnavailable,
+                detail: None,
+            }
+        }
+    }
 }
 
 pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig> {

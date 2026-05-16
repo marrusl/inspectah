@@ -4,38 +4,138 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSecti
 use inspectah_core::types::redaction::{RedactionHint, RedactionState, Confidence};
 use inspectah_refine::types::{AttentionLevel, AttentionReason};
 
-#[test]
-fn package_added_gets_needs_review() {
+// ---------------------------------------------------------------------------
+// Helper: build a snapshot with one package and optional baseline
+// ---------------------------------------------------------------------------
+fn make_snap_with_package(
+    name: &str,
+    state: PackageState,
+    source_repo: &str,
+    baseline: Option<Vec<String>>,
+) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
-            name: "httpd".into(), arch: "x86_64".into(),
-            state: PackageState::Added, include: true,
+            name: name.into(),
+            arch: "x86_64".into(),
+            state,
+            source_repo: source_repo.into(),
+            include: true,
             ..Default::default()
         }],
+        baseline_package_names: baseline,
         ..Default::default()
     });
-    let packages = inspectah_refine::attention::compute_package_attention(&snap);
-    assert_eq!(packages.len(), 1);
-    assert_eq!(packages[0].attention[0].level, AttentionLevel::NeedsReview);
-    assert_eq!(packages[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    snap
+}
+
+// ---------------------------------------------------------------------------
+// Package classification matrix tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_added_baseline_match_is_tier1() {
+    let snap = make_snap_with_package(
+        "glibc", PackageState::Added, "baseos",
+        Some(vec!["glibc".into()]),
+    );
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs.len(), 1);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
 }
 
 #[test]
-fn package_local_install_gets_needs_review() {
-    let mut snap = InspectionSnapshot::new();
-    snap.rpm = Some(RpmSection {
-        packages_added: vec![PackageEntry {
-            name: "custom-tool".into(), arch: "x86_64".into(),
-            state: PackageState::LocalInstall, include: true,
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-    let packages = inspectah_refine::attention::compute_package_attention(&snap);
-    assert_eq!(packages[0].attention[0].level, AttentionLevel::NeedsReview);
-    assert_eq!(packages[0].attention[0].reason, AttentionReason::PackageLocalInstall);
+fn test_added_not_in_baseline_known_repo_is_tier2() {
+    let snap = make_snap_with_package(
+        "httpd", PackageState::Added, "appstream",
+        Some(vec!["glibc".into()]),
+    );
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Informational);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageUserAdded);
 }
+
+#[test]
+fn test_added_not_in_baseline_empty_repo_is_tier3() {
+    let snap = make_snap_with_package(
+        "mystery", PackageState::Added, "",
+        Some(vec!["glibc".into()]),
+    );
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+}
+
+#[test]
+fn test_added_no_baseline_known_repo_is_provenance_unavailable() {
+    let snap = make_snap_with_package("httpd", PackageState::Added, "appstream", None);
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Informational);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageProvenanceUnavailable);
+}
+
+#[test]
+fn test_added_no_baseline_empty_repo_is_tier3() {
+    let snap = make_snap_with_package("mystery", PackageState::Added, "", None);
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+}
+
+#[test]
+fn test_modified_baseline_match_is_tier1() {
+    let snap = make_snap_with_package(
+        "glibc", PackageState::Modified, "baseos",
+        Some(vec!["glibc".into()]),
+    );
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+}
+
+#[test]
+fn test_modified_not_in_baseline_known_repo_is_version_changed() {
+    let snap = make_snap_with_package(
+        "httpd", PackageState::Modified, "appstream",
+        Some(vec!["glibc".into()]),
+    );
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Informational);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+}
+
+#[test]
+fn test_local_install_always_tier3() {
+    for baseline in [Some(vec!["glibc".into()]), None] {
+        for repo in ["appstream", ""] {
+            let snap = make_snap_with_package(
+                "custom", PackageState::LocalInstall, repo, baseline.clone(),
+            );
+            let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+            assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview,
+                "LocalInstall should always be NeedsReview (repo={repo:?}, baseline={baseline:?})");
+            assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageLocalInstall,
+                "LocalInstall should always be PackageLocalInstall (repo={repo:?}, baseline={baseline:?})");
+        }
+    }
+}
+
+#[test]
+fn test_no_repo_always_tier3() {
+    for baseline in [Some(vec!["glibc".into()]), None] {
+        let snap = make_snap_with_package("orphan", PackageState::NoRepo, "", baseline.clone());
+        let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+        assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview,
+            "NoRepo should always be NeedsReview (baseline={baseline:?})");
+        assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageNoRepoSource,
+            "NoRepo should always be PackageNoRepoSource (baseline={baseline:?})");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Existing config attention tests (preserved from Task 1)
+// ---------------------------------------------------------------------------
 
 #[test]
 fn config_modified_gets_needs_review() {
@@ -112,7 +212,6 @@ fn unresolved_hints_surface_as_needs_review() {
 
     let configs = inspectah_refine::attention::compute_config_attention(&snap);
     assert_eq!(configs.len(), 1);
-    // Should have the normal ConfigModified tag PLUS the hint tag
     let hint_tags: Vec<_> = configs[0].attention.iter()
         .filter(|t| t.reason == AttentionReason::Custom("unresolved redaction hint".into()))
         .collect();
@@ -139,7 +238,6 @@ fn fully_redacted_snapshot_no_hint_tags() {
 
     let configs = inspectah_refine::attention::compute_config_attention(&snap);
     assert_eq!(configs.len(), 1);
-    // No hint tags — only the normal ConfigModified tag
     assert!(
         configs[0].attention.iter().all(|t| t.reason != AttentionReason::Custom("unresolved redaction hint".into())),
         "FullyRedacted snapshot must not produce hint attention tags"
