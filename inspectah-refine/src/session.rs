@@ -516,8 +516,42 @@ impl RefineSession {
 
     fn recompute_view(&mut self) {
         let projected = self.project_snapshot();
-        let packages = compute_package_attention(&projected);
+        let all_packages = compute_package_attention(&projected);
         let config_files = compute_config_attention(&projected);
+
+        // Build a set of packages that were normalized to include=false at
+        // construction time (non-leaf Tier 2 dependencies). These are hidden
+        // from the triage view because dnf resolves them automatically.
+        // Packages the user explicitly excluded via ops remain visible so
+        // the user can undo the exclusion.
+        let hidden_deps: HashSet<(&str, &str)> = self.original.rpm.as_ref()
+            .map(|r| {
+                r.packages_added.iter()
+                    .filter(|p| !p.include)
+                    .map(|p| (p.name.as_str(), p.arch.as_str()))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let packages: Vec<_> = all_packages.into_iter()
+            .filter(|p| {
+                // Only filter out packages that were normalized to include=false
+                // at construction AND are still false after ops AND are not
+                // NeedsReview. These are non-leaf Tier 2 dependencies the
+                // operator never needs to see. User-excluded packages (include
+                // was true originally) stay visible. Tier 3 (NeedsReview)
+                // items stay visible even though they default to include=false.
+                if !p.entry.include
+                    && hidden_deps.contains(&(p.entry.name.as_str(), p.entry.arch.as_str()))
+                {
+                    let primary = p.attention.first().map(|t| t.level);
+                    if !matches!(primary, Some(AttentionLevel::NeedsReview)) {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
 
         // Preview must use the SAME root derivation as export to guarantee
         // byte-identical Containerfile output. The config tree materializer

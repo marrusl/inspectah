@@ -390,6 +390,46 @@ fn mark_viewed_rejects_cfg_prefix() {
     assert!(matches!(result, Err(RefineError::BadRequest(_))));
 }
 
+// -- Non-leaf Tier 2 view filtering tests --
+
+#[test]
+fn test_non_leaf_tier2_excluded_from_view() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
+        baseline_package_names: Some(vec![]),
+        leaf_packages: Some(vec!["httpd".into()]),
+        ..Default::default()
+    });
+    let session = RefineSession::new(snap);
+    let view = session.view();
+    assert!(
+        view.packages.iter().any(|p| p.entry.name == "httpd"),
+        "leaf package must appear in view"
+    );
+    assert!(
+        !view.packages.iter().any(|p| p.entry.name == "apr"),
+        "non-leaf Tier 2 package must be filtered from view"
+    );
+}
+
 // -- Normalization at construction tests --
 
 #[test]
