@@ -35,6 +35,11 @@ function isTextInput(target: EventTarget | null): boolean {
   return false;
 }
 
+/** Returns true if any modal/dialog is currently open in the DOM. */
+function isDialogOpen(): boolean {
+  return document.querySelector('[role="dialog"]') !== null;
+}
+
 /**
  * Global keyboard handler for the inspectah refine UI.
  *
@@ -106,8 +111,8 @@ export function useKeyboard(options: UseKeyboardOptions): void {
         }
       }
 
-      // --- Single-key shortcuts (suppressed in text inputs) ---
-      if (inTextInput) return;
+      // --- Single-key shortcuts (suppressed in text inputs and behind dialogs) ---
+      if (inTextInput || isDialogOpen()) return;
 
       if (e.key === "/") {
         e.preventDefault();

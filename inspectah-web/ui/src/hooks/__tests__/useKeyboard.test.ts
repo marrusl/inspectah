@@ -130,6 +130,44 @@ describe("useKeyboard", () => {
     document.body.removeChild(input);
   });
 
+  it("suppresses single-key shortcuts when a dialog is open", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    // Simulate a dialog being open in the DOM
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.appendChild(dialog);
+
+    fireEvent.keyDown(document, { key: "/" });
+    expect(opts.onOpenSearch).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document, { key: "?" });
+    expect(opts.onOpenShortcuts).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document, { key: "1" });
+    expect(opts.onSectionChange).not.toHaveBeenCalled();
+
+    document.body.removeChild(dialog);
+  });
+
+  it("allows Ctrl-chord shortcuts even when a dialog is open", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    document.body.appendChild(dialog);
+
+    fireEvent.keyDown(document, { key: "z", ctrlKey: true });
+    expect(opts.onUndo).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(document, { key: "e", ctrlKey: true });
+    expect(opts.onTogglePanel).toHaveBeenCalledTimes(1);
+
+    document.body.removeChild(dialog);
+  });
+
   it("cleans up event listener on unmount", () => {
     const opts = makeOptions();
     const { unmount } = renderHook(() => useKeyboard(opts));

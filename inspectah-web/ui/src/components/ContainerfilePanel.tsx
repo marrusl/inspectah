@@ -1,10 +1,6 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useCallback, useMemo } from "react";
 import { Button, Content, Skeleton } from "@patternfly/react-core";
 import { AngleDoubleRightIcon } from "@patternfly/react-icons";
-import hljs from "highlight.js/lib/core";
-import dockerfile from "highlight.js/lib/languages/dockerfile";
-
-hljs.registerLanguage("dockerfile", dockerfile);
 
 export interface ContainerfilePanelProps {
   content: string | null;
@@ -19,7 +15,32 @@ export function ContainerfilePanel({
   onToggle,
   loading,
 }: ContainerfilePanelProps) {
-  const codeRef = useRef<HTMLElement>(null);
+  // Dockerfile keywords for CSS-based highlighting
+  const DOCKERFILE_KEYWORDS = useMemo(
+    () =>
+      new Set([
+        "FROM",
+        "RUN",
+        "CMD",
+        "LABEL",
+        "MAINTAINER",
+        "EXPOSE",
+        "ENV",
+        "ADD",
+        "COPY",
+        "ENTRYPOINT",
+        "VOLUME",
+        "USER",
+        "WORKDIR",
+        "ARG",
+        "ONBUILD",
+        "STOPSIGNAL",
+        "HEALTHCHECK",
+        "SHELL",
+        "AS",
+      ]),
+    [],
+  );
 
   // Keyboard shortcut: Ctrl+E
   const handleKeyDown = useCallback(
@@ -47,13 +68,28 @@ export function ContainerfilePanel({
     return () => mq.removeEventListener("change", handler);
   }, [isOpen, onToggle]);
 
-  const highlighted =
-    content != null
-      ? hljs.highlight(content, { language: "dockerfile" }).value
-      : "";
+  /** Split a line into tokens: keyword spans get a CSS class, everything else is plain text. */
+  const tokenizeLine = useCallback(
+    (line: string): Array<{ text: string; isKeyword: boolean }> => {
+      const match = line.match(/^(\s*)([A-Z]+)(.*)/);
+      if (match && DOCKERFILE_KEYWORDS.has(match[2])) {
+        const tokens: Array<{ text: string; isKeyword: boolean }> = [];
+        if (match[1]) tokens.push({ text: match[1], isKeyword: false });
+        tokens.push({ text: match[2], isKeyword: true });
+        if (match[3]) tokens.push({ text: match[3], isKeyword: false });
+        return tokens;
+      }
+      return [{ text: line, isKeyword: false }];
+    },
+    [DOCKERFILE_KEYWORDS],
+  );
 
-  const lineCount =
-    content != null ? content.split("\n").filter((l) => l.length > 0).length : 0;
+  const lines = useMemo(
+    () => (content != null ? content.split("\n") : []),
+    [content],
+  );
+
+  const lineCount = lines.filter((l) => l.length > 0).length;
 
   if (!isOpen) {
     return (
@@ -100,16 +136,34 @@ export function ContainerfilePanel({
           </>
         ) : (
           <pre className="inspectah-cf-panel__code">
-            <code
-              ref={codeRef}
-              className="hljs language-dockerfile"
-              dangerouslySetInnerHTML={{ __html: highlighted }}
-            />
+            <code className="inspectah-cf-panel__dockerfile">
+              {lines.map((line, i) => (
+                <span key={i} className="inspectah-cf-panel__line">
+                  {tokenizeLine(line).map((tok, j) =>
+                    tok.isKeyword ? (
+                      <span
+                        key={j}
+                        className="inspectah-cf-panel__keyword"
+                      >
+                        {tok.text}
+                      </span>
+                    ) : (
+                      <span key={j}>{tok.text}</span>
+                    ),
+                  )}
+                  {"\n"}
+                </span>
+              ))}
+            </code>
           </pre>
         )}
       </div>
       <div className="inspectah-cf-panel__footer">
         <Content component="small">{lineCount} lines</Content>
+        <Content component="small" className="inspectah-cf-panel__footer-note">
+          Preview reflects package and config decisions. Context sections are
+          included as-is.
+        </Content>
       </div>
     </div>
   );
