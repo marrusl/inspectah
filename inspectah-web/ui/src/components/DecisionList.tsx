@@ -259,7 +259,8 @@ export function DecisionList({
       )}
 
       {items.length > 0 &&
-        items.every((item) => item.data.attention.length === 0 || highestAttention(item.data.attention) === "routine") && (
+        grouped.needs_review.length > 0 &&
+        grouped.needs_review.every((item) => viewedIds.has(getItemId(item))) && (
         <div
           style={{
             padding: "var(--pf-t--global--spacer--md)",
@@ -268,7 +269,7 @@ export function DecisionList({
           }}
           data-testid="completion-message"
         >
-          All {sectionLabel.toLowerCase()} have been triaged.
+          All items have been triaged.
         </div>
       )}
     </div>

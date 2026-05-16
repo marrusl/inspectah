@@ -32,9 +32,9 @@ export interface DecisionItemProps {
 
 export function itemId(item: DecisionItemKind): string {
   if (item.type === "package") {
-    return `pkg:${item.data.entry.name}:${item.data.entry.arch}`;
+    return `packages:${item.data.entry.name}.${item.data.entry.arch}`;
   }
-  return `cfg:${item.data.entry.path}`;
+  return `configs:${item.data.entry.path}`;
 }
 
 function itemName(item: DecisionItemKind): string {

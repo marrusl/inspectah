@@ -353,7 +353,7 @@ describe("Viewed tracking", () => {
 
     const toggle = screen.getByRole("switch", { name: /toggle/i });
     await userEvent.click(toggle);
-    expect(onMarkViewed).toHaveBeenCalledWith("pkg:httpd:x86_64");
+    expect(onMarkViewed).toHaveBeenCalledWith("packages:httpd.x86_64");
   });
 
   it("expanding non-toggled item marks viewed", async () => {
@@ -366,7 +366,7 @@ describe("Viewed tracking", () => {
 
     const expandBtn = screen.getByRole("button", { name: /expand/i });
     await userEvent.click(expandBtn);
-    expect(onMarkViewed).toHaveBeenCalledWith("pkg:httpd:x86_64");
+    expect(onMarkViewed).toHaveBeenCalledWith("packages:httpd.x86_64");
   });
 
   it("expanding already-toggled item does NOT re-mark viewed", async () => {

@@ -134,7 +134,8 @@ describe("Empty state", () => {
 });
 
 describe("Completion state", () => {
-  it("shows completion message when all items are routine (triaged)", async () => {
+  it("does not show completion message when no NeedsReview items exist", async () => {
+    // Routine-only items have nothing to triage
     const items: DecisionItemKind[] = [
       {
         type: "package",
@@ -159,13 +160,13 @@ describe("Completion state", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(screen.getByTestId("completion-message")).toBeInTheDocument();
     expect(
-      screen.getByText("All packages have been triaged."),
-    ).toBeInTheDocument();
+      screen.queryByTestId("completion-message"),
+    ).not.toBeInTheDocument();
   });
 
-  it("shows completion message when all items have no attention tags", async () => {
+  it("does not show completion message when items have no attention tags", async () => {
+    // No attention tags means no NeedsReview items — nothing to triage
     const items: DecisionItemKind[] = [
       {
         type: "package",
@@ -186,13 +187,12 @@ describe("Completion state", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(screen.getByTestId("completion-message")).toBeInTheDocument();
     expect(
-      screen.getByText("All config files have been triaged."),
-    ).toBeInTheDocument();
+      screen.queryByTestId("completion-message"),
+    ).not.toBeInTheDocument();
   });
 
-  it("does not show completion message when needs_review items exist", async () => {
+  it("does not show completion message when unviewed NeedsReview items exist", async () => {
     const NEEDS_REVIEW_TAG: AttentionTag = {
       level: "needs_review",
       reason: "package_not_in_baseline",
@@ -226,6 +226,63 @@ describe("Completion state", () => {
     expect(
       screen.queryByTestId("completion-message"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows completion message when all NeedsReview items have been viewed", async () => {
+    const NEEDS_REVIEW_TAG: AttentionTag = {
+      level: "needs_review",
+      reason: "package_not_in_baseline",
+      detail: null,
+    };
+
+    const items: DecisionItemKind[] = [
+      {
+        type: "package",
+        data: makePkg({ name: "pkg-a" }, [NEEDS_REVIEW_TAG]),
+      },
+      {
+        type: "package",
+        data: makePkg({ name: "pkg-b" }, [ROUTINE_TAG]),
+      },
+    ];
+
+    // Pre-seed viewed IDs so all NeedsReview items are already viewed
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/viewed" && opts?.method === "POST") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: ["packages:pkg-a.x86_64"] }),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: "not found" }),
+      });
+    });
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("completion-message")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText("All items have been triaged."),
+    ).toBeInTheDocument();
   });
 });
 
