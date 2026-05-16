@@ -143,11 +143,28 @@ function App() {
     return count;
   }, [view.data, viewedIds]);
 
+  // Ref to hold the testid of the focused element before undo/redo
+  const undoFocusRef = useRef<string | null>(null);
+
   const onMutationSuccess = useCallback(
     (_result: RefinedView) => {
       // After successful mutation, refetch view data and viewed IDs
       view.invalidate();
       refreshViewed();
+
+      // Restore focus after undo/redo
+      const testId = undoFocusRef.current;
+      if (testId) {
+        undoFocusRef.current = null;
+        requestAnimationFrame(() => {
+          const el = document.querySelector(`[data-testid="${testId}"]`);
+          if (el instanceof HTMLElement) {
+            el.focus();
+          } else {
+            mainContentRef.current?.focus();
+          }
+        });
+      }
     },
     [view.invalidate, refreshViewed],
   );
@@ -157,11 +174,26 @@ function App() {
       // Refetch to restore correct state after error
       view.invalidate();
       console.error("Mutation failed:", err.message);
+      undoFocusRef.current = null;
     },
     [view.invalidate],
   );
 
   const mutation = useMutation(onMutationSuccess, onMutationError);
+
+  /** Capture focused element's testid, then fire undo. */
+  const handleUndo = useCallback(() => {
+    const focused = document.activeElement;
+    undoFocusRef.current = focused?.getAttribute("data-testid") ?? null;
+    mutation.undo();
+  }, [mutation]);
+
+  /** Capture focused element's testid, then fire redo. */
+  const handleRedo = useCallback(() => {
+    const focused = document.activeElement;
+    undoFocusRef.current = focused?.getAttribute("data-testid") ?? null;
+    mutation.redo();
+  }, [mutation]);
 
   const togglePanel = useCallback(() => {
     setCfPanelOpen((prev) => {
@@ -262,8 +294,8 @@ function App() {
   );
 
   useKeyboard({
-    onUndo: mutation.undo,
-    onRedo: mutation.redo,
+    onUndo: handleUndo,
+    onRedo: handleRedo,
     onTogglePanel: togglePanel,
     onExport: handleExport,
     onSectionChange: setActiveSection,
@@ -329,8 +361,8 @@ function App() {
       <StatsBar
         stats={view.data?.stats ?? null}
         viewedNeedsReviewCount={viewedNeedsReviewCount}
-        onUndo={mutation.undo}
-        onRedo={mutation.redo}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
         onExport={handleExport}
         isPending={mutation.isPending}
         hamburger={
@@ -372,6 +404,7 @@ function App() {
             onMutationError={(err) => console.error("Mutation failed:", err.message)}
             sectionSearchOpen={sectionSearchOpen}
             onSectionSearchClose={() => setSectionSearchOpen(false)}
+            onViewedChange={refreshViewed}
           />
         </div>
         <ContainerfilePanel
