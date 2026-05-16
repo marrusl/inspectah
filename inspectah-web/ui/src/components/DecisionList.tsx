@@ -7,6 +7,7 @@ import {
   EmptyState,
   EmptyStateBody,
 } from "@patternfly/react-core";
+import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type {
   AttentionLevel,
   RefinementOp,
@@ -47,6 +48,55 @@ interface ToastEntry {
   id: number;
   message: string;
   variant: AlertVariant;
+}
+
+/** Collapsed summary for Tier 1 baseline-match packages. */
+function BaselineSummary({ count, items }: { count: number; items: DecisionItemKind[] }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  return (
+    <div data-testid="baseline-summary" style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}>
+      <button
+        type="button"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        aria-expanded={isExpanded}
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: "var(--pf-t--global--spacer--xs) 0",
+          fontSize: "var(--pf-t--global--font--size--body--default)",
+          color: "var(--pf-t--global--text--color--subtle)",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--pf-t--global--spacer--xs)",
+        }}
+      >
+        {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
+        {count} baseline packages (auto-included)
+      </button>
+      {isExpanded && (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {items.map((item) => {
+            const name = item.type === "package"
+              ? `${item.data.entry.name}.${(item.data as any).entry.arch}`
+              : (item.data as any).entry.path;
+            return (
+              <li
+                key={name}
+                style={{
+                  padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md)",
+                  color: "var(--pf-t--global--text--color--subtle)",
+                  fontSize: "var(--pf-t--global--font--size--body--sm)",
+                }}
+              >
+                {name}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 export interface DecisionListProps {
@@ -231,6 +281,46 @@ export function DecisionList({
           if (groupItems.length === 0) return null;
           // Force-expand groups when a filter is active and this group has matching items
           const forceExpanded = filterText.trim().length > 0 && groupItems.length > 0;
+
+          // Tier 1: routine items with package_baseline_match reason get collapsed summary
+          if (level === "routine") {
+            const baselineItems = groupItems.filter(
+              (item) => item.data.attention.length > 0 &&
+                item.data.attention[0].reason === "package_baseline_match",
+            );
+            const otherRoutine = groupItems.filter(
+              (item) => item.data.attention.length === 0 ||
+                item.data.attention[0].reason !== "package_baseline_match",
+            );
+
+            return (
+              <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
+                {baselineItems.length > 0 && (
+                  <BaselineSummary count={baselineItems.length} items={baselineItems} />
+                )}
+                {otherRoutine.map((item) => {
+                  runningRowIndex++;
+                  const id = getItemId(item);
+                  const flatIdx = flatItemIds.indexOf(id);
+                  return (
+                    <DecisionItem
+                      key={id}
+                      item={item}
+                      level={level}
+                      rowIndex={runningRowIndex}
+                      isViewed={viewedIds.has(id)}
+                      isPending={mutation.isPending}
+                      tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                      onToggleInclude={handleToggle}
+                      onMarkViewed={markAsViewed}
+                      onKeyDown={handleRowKeyDown}
+                    />
+                  );
+                })}
+              </AttentionGroup>
+            );
+          }
+
           return (
             <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
               {groupItems.map((item) => {

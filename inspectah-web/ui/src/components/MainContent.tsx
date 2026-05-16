@@ -6,6 +6,7 @@ import {
   EmptyState,
   EmptyStateBody,
   Button,
+  Alert,
 } from "@patternfly/react-core";
 import type { ViewResponse, RefinedView, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
 import { DecisionList } from "./DecisionList";
@@ -130,11 +131,20 @@ export function MainContent({
   if (activeSection === "packages") {
     const hasFilter = filterText.trim().length > 0;
     const noResults = hasFilter && filteredPackageItems.length === 0;
+    const baselineUnavailable = viewData?.stats.baseline_available === false;
     return (
       <PageSection>
         <Content>
           <h2>{label}</h2>
         </Content>
+        {baselineUnavailable && (
+          <Alert
+            variant="warning"
+            isInline
+            title="Baseline data unavailable — classification confidence reduced. All packages shown for review."
+            style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
+          />
+        )}
         {sectionSearchOpen && (
           <SectionSearch
             value={filterText}

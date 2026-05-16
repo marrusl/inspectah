@@ -204,7 +204,87 @@ export function DecisionItem({
     );
   }
 
-  // Compact row for Informational/Routine items
+  // Informational (Tier 2) — full card with info-level styling and provenance badge
+  if (level === "informational") {
+    const badgeText = topReason?.reason === "package_provenance_unavailable"
+      ? "Baseline Unavailable"
+      : topReason?.reason === "package_user_added" && item.type === "package"
+        ? (item.data as RefinedPackage).entry.source_repo || "Unknown"
+        : topReason
+          ? formatReasonText(topReason.reason)
+          : null;
+
+    return (
+      <div
+        role="row"
+        aria-rowindex={rowIndex}
+        aria-label={name}
+        tabIndex={tabIndex}
+        onKeyDown={handleKeyDown}
+        data-testid={`decision-item-${id}`}
+        data-expanded={isExpanded ? "true" : "false"}
+        style={{
+          borderLeft: "3px solid var(--pf-t--global--color--status--info--default)",
+          padding: "var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md)",
+          marginBottom: "var(--pf-t--global--spacer--sm)",
+          background: "var(--pf-t--global--background--color--secondary--default)",
+          borderRadius: "var(--pf-t--global--border--radius--small)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
+          <div role="gridcell" style={{ flexShrink: 0 }}>
+            <Switch
+              id={`switch-${id}`}
+              label={included ? "Include" : "Exclude"}
+              isChecked={included}
+              onChange={handleToggle}
+              isDisabled={isPending}
+              aria-label={`Toggle ${name}`}
+            />
+          </div>
+          <div role="gridcell" style={{ flex: 1, minWidth: 0 }}>
+            <span>{name}</span>
+          </div>
+          <div role="gridcell" style={{ flexShrink: 0 }}>
+            {badgeText && (
+              <Label color="blue">
+                {badgeText}
+              </Label>
+            )}
+          </div>
+          <div role="gridcell" style={{ flexShrink: 0 }}>
+            <button
+              onClick={handleExpand}
+              aria-expanded={isExpanded}
+              aria-label={`${isExpanded ? "Collapse" : "Expand"} ${name}`}
+              tabIndex={-1}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px",
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
+            </button>
+          </div>
+        </div>
+        {isExpanded && (
+          <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
+            {item.type === "package" ? (
+              <PackageDetail pkg={item.data as RefinedPackage} />
+            ) : (
+              <ConfigDetail config={item.data as RefinedConfig} />
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Compact row for Routine items
   return (
     <div
       role="row"
