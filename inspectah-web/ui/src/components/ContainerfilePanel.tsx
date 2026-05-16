@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo } from "react";
 import { Button, Content, Skeleton } from "@patternfly/react-core";
-import { AngleDoubleRightIcon } from "@patternfly/react-icons";
+import {
+  AngleDoubleLeftIcon,
+  AngleDoubleRightIcon,
+} from "@patternfly/react-icons";
 
 export interface ContainerfilePanelProps {
   content: string | null;
@@ -108,7 +111,7 @@ export function ContainerfilePanel({
           variant="plain"
           aria-label="Collapse Containerfile panel"
           onClick={onToggle}
-          icon={<AngleDoubleRightIcon />}
+          icon={<AngleDoubleLeftIcon />}
           size="sm"
         />
       </div>
