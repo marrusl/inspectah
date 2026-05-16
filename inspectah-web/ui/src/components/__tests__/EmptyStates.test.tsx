@@ -8,6 +8,7 @@ import type {
   AttentionTag,
   RefineStats,
   RefinedView,
+  ViewResponse,
 } from "../../api/types";
 
 // --- Mock fetch globally ---
@@ -293,12 +294,13 @@ describe("Filter empty state in MainContent", () => {
     // Import MainContent for this test
     const { MainContent } = await import("../MainContent");
 
-    const viewData: RefinedView = {
+    const viewData: ViewResponse = {
       packages: [makePkg({ name: "httpd" }, [ROUTINE_TAG])],
       config_files: [],
       containerfile_preview: "",
       stats: { ...MOCK_STATS, total_packages: 1, included_packages: 1 },
       generation: 1,
+      repo_groups: [],
     };
 
     render(

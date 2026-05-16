@@ -1739,4 +1739,75 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn apply_exclude_repo_via_op_endpoint() {
+        use inspectah_core::types::rpm::RepoFile;
+        use inspectah_refine::types::RefinementOp;
+
+        // Build snapshot with packages from multiple repos including epel
+        let mut snap = empty_snapshot();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "epel-release".into(),
+                    arch: "noarch".into(),
+                    state: PackageState::Added,
+                    source_repo: "epel".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            repo_files: vec![
+                RepoFile {
+                    path: "/etc/yum.repos.d/centos.repo".into(),
+                    content: "[baseos]\nname=CentOS BaseOS\n\n[appstream]\nname=CentOS AppStream\n"
+                        .into(),
+                    include: true,
+                    ..Default::default()
+                },
+                RepoFile {
+                    path: "/etc/yum.repos.d/epel.repo".into(),
+                    content: "[epel]\nname=EPEL 9\n".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let mut session = RefineSession::new(snap);
+
+        // Apply ExcludeRepo via the op API
+        let op = RefinementOp::ExcludeRepo {
+            section_id: "epel".into(),
+        };
+        session.apply(op).expect("ExcludeRepo should succeed");
+
+        // Verify epel packages are now excluded
+        let view = session.view();
+        let epel_pkg = view
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release");
+        assert!(epel_pkg.is_some(), "epel-release should still be in view");
+        assert!(
+            !epel_pkg.unwrap().entry.include,
+            "epel-release should be excluded"
+        );
+
+        // Verify repo groups reflect the exclusion
+        let groups = build_repo_groups(&session);
+        let epel_group = groups.iter().find(|g| g.section_id == "epel");
+        assert!(epel_group.is_some(), "epel group should exist");
+        assert!(!epel_group.unwrap().enabled, "epel group should be disabled");
+    }
 }
