@@ -15,6 +15,8 @@ export interface StatsBarProps {
   onRedo: () => void;
   onExport: () => void;
   isPending: boolean;
+  /** Hamburger menu button rendered at < 1024px. */
+  hamburger?: React.ReactNode;
 }
 
 function stat(value: number | null | undefined, fallback = "-"): string {
@@ -27,6 +29,7 @@ export function StatsBar({
   onRedo,
   onExport,
   isPending,
+  hamburger,
 }: StatsBarProps) {
   const remaining = stats
     ? stat(stats.needs_review_count)
@@ -37,6 +40,9 @@ export function StatsBar({
   return (
     <Toolbar className="inspectah-statsbar" isSticky>
       <ToolbarContent>
+        {hamburger && (
+          <ToolbarItem>{hamburger}</ToolbarItem>
+        )}
         <ToolbarGroup align={{ default: "alignStart" }}>
           <ToolbarItem>
             <Content component="small">

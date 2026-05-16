@@ -129,3 +129,55 @@
 .inspectah-cf-panel__tab-label {
   transform: rotate(180deg);
 }
+
+/* Hamburger button */
+.inspectah-hamburger {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 1.25rem;
+  padding: var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+  color: var(--pf-t--global--text--color--regular);
+  line-height: 1;
+}
+
+.inspectah-hamburger:hover {
+  background: var(--pf-t--global--background--color--secondary--default);
+  border-radius: var(--pf-t--global--border--radius--small);
+}
+
+/* Sidebar overlay backdrop */
+.inspectah-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* Sidebar overlay panel */
+.inspectah-sidebar--overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 280px;
+  z-index: 501;
+  background: var(--pf-t--global--background--color--primary--default);
+  border-right: 1px solid var(--pf-t--global--border--color--default);
+  overflow-y: auto;
+  box-shadow: var(--pf-t--global--box-shadow--md);
+}
+
+/* Responsive: auto-collapse Containerfile panel below 1280px */
+@media (max-width: 1279px) {
+  .inspectah-cf-panel--open {
+    width: 28px;
+  }
+}
+
+/* Responsive: hide sidebar below 1024px */
+@media (max-width: 1023px) {
+  .inspectah-layout__sidebar {
+    display: none;
+  }
+}
