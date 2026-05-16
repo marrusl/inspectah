@@ -277,29 +277,27 @@ function App() {
     [isMobile, sidebarOverlayOpen, closeSidebarOverlay],
   );
 
-  // Handle pending focus item after render (from search navigation)
+  // Handle pending focus item after render (from search or undo/redo navigation).
+  // The ref is NOT cleared until the element is found — this lets the effect retry
+  // across re-renders (e.g., waiting for filter clear or view data refresh).
   useEffect(() => {
     const itemId = pendingFocusItemRef.current;
     if (!itemId) return;
 
     requestAnimationFrame(() => {
-      pendingFocusItemRef.current = null;
-
-      // Try decision item first, then context item
       const el = (
         document.querySelector(`[data-testid="decision-item-${itemId}"]`) ??
         document.querySelector(`[data-testid="context-item-${itemId}"]`)
       ) as HTMLElement | null;
       if (!el) return;
 
-      // Expand the AttentionGroup if the item is hidden
+      pendingFocusItemRef.current = null;
+
       const hiddenAncestor = el.closest("[hidden]");
       if (hiddenAncestor) {
-        // Find the ExpandableSection toggle button and click it
         const group = hiddenAncestor.closest("[data-testid^='attention-group-']");
         const toggle = group?.querySelector("button") as HTMLElement | null;
         toggle?.click();
-        // Wait for expansion animation
         requestAnimationFrame(() => {
           el.scrollIntoView({ behavior: "smooth", block: "nearest" });
           el.classList.add("inspectah-highlight");
