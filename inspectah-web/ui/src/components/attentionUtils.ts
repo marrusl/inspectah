@@ -3,12 +3,12 @@ import type { AttentionLevel, AttentionReason } from "../api/types";
 /** Map attention level to PatternFly Label color prop. */
 export function attentionLabelColor(
   level: AttentionLevel,
-): "red" | "orange" | "green" {
+): "red" | "blue" | "green" {
   switch (level) {
     case "needs_review":
       return "red";
     case "informational":
-      return "orange";
+      return "blue";
     case "routine":
       return "green";
   }

@@ -7,12 +7,14 @@ import type { DecisionItemKind } from "../DecisionItem";
 import { PackageDetail } from "../PackageDetail";
 import { ConfigDetail } from "../ConfigDetail";
 import { DecisionList } from "../DecisionList";
+import { MainContent } from "../MainContent";
 import type {
   RefinedPackage,
   RefinedConfig,
   AttentionTag,
   RefinedView,
   RefineStats,
+  ViewResponse,
 } from "../../api/types";
 
 // --- Mock fetch globally ---
@@ -108,6 +110,31 @@ function makeConfig(overrides: Partial<RefinedConfig["entry"]> = {}, attention: 
   };
 }
 
+function makeViewResponse(overrides: {
+  packages?: RefinedPackage[];
+  config_files?: RefinedConfig[];
+  stats?: Partial<RefineStats>;
+} = {}): ViewResponse {
+  return {
+    packages: overrides.packages ?? [],
+    config_files: overrides.config_files ?? [],
+    containerfile_preview: "",
+    stats: { ...MOCK_STATS, ...overrides.stats },
+    generation: 1,
+    repo_groups: [],
+  };
+}
+
+const defaultMainContentProps = {
+  activeSection: "packages" as string,
+  loading: false,
+  sections: null,
+  onViewUpdate: vi.fn(),
+  onMutationError: vi.fn(),
+  sectionSearchOpen: false,
+  onSectionSearchClose: vi.fn(),
+};
+
 const NEEDS_REVIEW_TAG: AttentionTag = {
   level: "needs_review",
   reason: "package_user_added",
@@ -146,7 +173,7 @@ describe("AttentionGroup", () => {
       </AttentionGroup>,
     );
     const wrapper = container.firstChild as HTMLElement;
-    expect(wrapper.style.borderLeft).toContain("--pf-t--global--color--status--warning--default");
+    expect(wrapper.style.borderLeft).toContain("--pf-t--global--color--status--info--default");
   });
 
   it("renders with correct border color for routine", () => {
@@ -1289,5 +1316,47 @@ describe("Grid ARIA attributes", () => {
     row.focus();
     await userEvent.keyboard("{Enter}");
     expect(row).toHaveAttribute("data-expanded", "true");
+  });
+});
+
+// ---- Tier-aware card treatment tests ----
+
+describe("Tier-aware card treatment", () => {
+  it("renders Tier 1 packages as collapsed summary", () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ source_repo: "baseos" }, [{ level: "routine", reason: "package_baseline_match", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+    expect(screen.getByText(/baseline packages/i)).toBeInTheDocument();
+  });
+
+  it("shows repo source badge for verified Tier 2", () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ source_repo: "appstream" }, [{ level: "informational", reason: "package_user_added", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+    expect(screen.getByText("appstream")).toBeInTheDocument();
+  });
+
+  it("shows 'Baseline Unavailable' for provenance-unavailable Tier 2", () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ attention: [] } as any, [{ level: "informational", reason: "package_provenance_unavailable", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+    expect(screen.getByText(/baseline unavailable/i)).toBeInTheDocument();
+  });
+
+  it("shows baseline unavailable banner when baseline_available is false", () => {
+    const view = makeViewResponse({
+      stats: { baseline_available: false },
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+    expect(screen.getByText(/classification confidence reduced/i)).toBeInTheDocument();
   });
 });

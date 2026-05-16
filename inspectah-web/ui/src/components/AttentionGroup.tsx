@@ -5,7 +5,7 @@ import type { AttentionLevel } from "../api/types";
 /** PatternFly token-based border colors per attention level. */
 const BORDER_COLORS: Record<AttentionLevel, string> = {
   needs_review: "var(--pf-t--global--color--status--danger--default)",
-  informational: "var(--pf-t--global--color--status--warning--default)",
+  informational: "var(--pf-t--global--color--status--info--default)",
   routine: "var(--pf-t--global--color--status--success--default)",
 };
 
