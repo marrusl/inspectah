@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Content, DescriptionList, DescriptionListGroup, DescriptionListTerm, DescriptionListDescription, Label } from "@patternfly/react-core";
 import type { RefinedConfig, AttentionTag } from "../api/types";
 import { attentionLabelColor, formatReasonText } from "./attentionUtils";
@@ -14,6 +15,9 @@ function formatKind(kind: string): string {
 }
 
 export function ConfigDetail({ config }: ConfigDetailProps) {
+  const [showDiff, setShowDiff] = useState(false);
+  const hasDiff = config.entry.diff_against_rpm != null && config.entry.diff_against_rpm.length > 0;
+
   return (
     <div data-testid="config-detail" style={{ padding: "var(--pf-t--global--spacer--sm) 0" }}>
       <DescriptionList isHorizontal isCompact>
@@ -81,6 +85,42 @@ export function ConfigDetail({ config }: ConfigDetailProps) {
           </DescriptionListGroup>
         )}
       </DescriptionList>
+      {hasDiff && (
+        <div style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
+          <button
+            type="button"
+            onClick={() => setShowDiff((prev) => !prev)}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+              color: "var(--pf-t--global--link--color--default)",
+              fontSize: "var(--pf-t--global--font--size--body--sm)",
+              textDecoration: "underline",
+            }}
+          >
+            {showDiff ? "Hide diff" : "View diff"}
+          </button>
+          {showDiff && (
+            <pre
+              data-testid="config-diff"
+              style={{
+                marginTop: "var(--pf-t--global--spacer--xs)",
+                padding: "var(--pf-t--global--spacer--sm)",
+                background: "var(--pf-t--global--background--color--secondary--default)",
+                borderRadius: "var(--pf-t--global--border--radius--small)",
+                fontSize: "var(--pf-t--global--font--size--body--sm)",
+                overflow: "auto",
+                maxHeight: "300px",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {config.entry.diff_against_rpm}
+            </pre>
+          )}
+        </div>
+      )}
     </div>
   );
 }

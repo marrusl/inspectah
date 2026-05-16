@@ -1517,3 +1517,109 @@ describe("Repo group headers", () => {
     vi.useRealTimers();
   });
 });
+
+// ---- Config kind grouping tests ----
+
+describe("Config kind grouping", () => {
+  it("renders Tier 1 configs as 'managed by packages (not copied)' summary", () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/default.conf", kind: "rpm_owned_default" },
+          [{ level: "routine", reason: "config_default", detail: null }]),
+        makeConfig({ path: "/etc/baseline.conf", kind: "rpm_owned_default" },
+          [{ level: "routine", reason: "config_baseline_match", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+    expect(screen.getByText(/managed by packages/i)).toBeInTheDocument();
+    // Paths should NOT be visible by default (collapsed)
+    expect(screen.queryByText("/etc/default.conf")).not.toBeInTheDocument();
+    expect(screen.queryByText("/etc/baseline.conf")).not.toBeInTheDocument();
+  });
+
+  it("expands Tier 1 config summary to show paths on click", async () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/default.conf", kind: "rpm_owned_default" },
+          [{ level: "routine", reason: "config_default", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+
+    const toggle = screen.getByText(/managed by packages/i);
+    await userEvent.click(toggle);
+    expect(screen.getByText("/etc/default.conf")).toBeInTheDocument();
+  });
+
+  it("shows View diff link when diff_against_rpm is available", async () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/ssh/sshd_config", kind: "rpm_owned_modified",
+          diff_against_rpm: "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new" },
+          [{ level: "needs_review", reason: "config_modified", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+
+    // Expand the row to reveal ConfigDetail
+    const expandBtn = screen.getByRole("button", { name: /expand/i });
+    await userEvent.click(expandBtn);
+    expect(screen.getByText(/view diff/i)).toBeInTheDocument();
+  });
+
+  it("does not show View diff link when diff_against_rpm is null", async () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/ssh/sshd_config", kind: "rpm_owned_modified",
+          diff_against_rpm: null },
+          [{ level: "needs_review", reason: "config_modified", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+
+    // Expand the row to reveal ConfigDetail
+    const expandBtn = screen.getByRole("button", { name: /expand/i });
+    await userEvent.click(expandBtn);
+    expect(screen.queryByText(/view diff/i)).not.toBeInTheDocument();
+  });
+
+  it("toggles inline diff display when View diff is clicked", async () => {
+    const diffContent = "--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new";
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/ssh/sshd_config", kind: "rpm_owned_modified",
+          diff_against_rpm: diffContent },
+          [{ level: "needs_review", reason: "config_modified", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+
+    // Expand the row to reveal ConfigDetail
+    const expandBtn = screen.getByRole("button", { name: /expand/i });
+    await userEvent.click(expandBtn);
+
+    // Diff not visible initially (only "View diff" link)
+    expect(screen.queryByTestId("config-diff")).not.toBeInTheDocument();
+
+    // Click "View diff"
+    await userEvent.click(screen.getByText(/view diff/i));
+    expect(screen.getByTestId("config-diff")).toBeInTheDocument();
+    expect(screen.getByText(/--- a/)).toBeInTheDocument();
+  });
+
+  it("does not include Tier 1 configs in other routine items", () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/default.conf", kind: "rpm_owned_default" },
+          [{ level: "routine", reason: "config_default", detail: null }]),
+        makeConfig({ path: "/etc/custom.conf", kind: "unowned" },
+          [{ level: "routine", reason: "config_unowned", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+    // Tier 1 collapsed summary should appear
+    expect(screen.getByText(/managed by packages/i)).toBeInTheDocument();
+    // The unowned config should still render as a card (not collapsed)
+    expect(screen.getByText("/etc/custom.conf")).toBeInTheDocument();
+  });
+});
