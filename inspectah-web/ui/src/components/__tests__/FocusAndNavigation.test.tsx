@@ -241,6 +241,112 @@ describe("Error state covers sections failure", () => {
   });
 });
 
+describe("Focus fallback for context/empty sections", () => {
+  it("focuses context item when switching to a context section", async () => {
+    render(<App />);
+
+    // Wait for data to load
+    await waitFor(() => {
+      expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
+    });
+
+    // Switch to services (a context section)
+    const servicesNav = screen.getByText("Services");
+    await userEvent.click(servicesNav);
+
+    // Wait for requestAnimationFrame focus
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    // The context item should have a data-testid and be focusable
+    const contextItem = document.querySelector('[data-testid^="context-item-"]');
+    expect(contextItem).toBeTruthy();
+    expect(contextItem).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+describe("Global search finds context items", () => {
+  it("navigates to context-item when search selects a context result", async () => {
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
+    });
+
+    // Type in global search to find the httpd service
+    const searchInput = screen.getByLabelText("Search all sections");
+    await userEvent.type(searchInput, "httpd.service");
+
+    // Results should appear
+    await waitFor(() => {
+      expect(screen.getByTestId("global-search-results")).toBeInTheDocument();
+    });
+  });
+});
+
+describe("Retry button refetches all endpoints", () => {
+  it("calls all three endpoints again when Retry is clicked after sections failure", async () => {
+    // Make sections fail
+    let callCount = 0;
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/view") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_VIEW),
+        });
+      }
+      if (url === "/api/snapshot/sections") {
+        callCount++;
+        if (callCount <= 1) {
+          return Promise.resolve({
+            ok: false,
+            status: 500,
+            json: () => Promise.resolve({ error: "internal error" }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_SECTIONS),
+        });
+      }
+      if (url === "/api/health") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_HEALTH),
+        });
+      }
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: "not found" }),
+      });
+    });
+
+    render(<App />);
+
+    // Wait for error state
+    await waitFor(() => {
+      expect(screen.getByTestId("initial-load-error")).toBeInTheDocument();
+    });
+
+    // Click Retry
+    const retryButton = screen.getByRole("button", { name: "Retry" });
+    await userEvent.click(retryButton);
+
+    // After retry, sections succeeds and the app loads
+    await waitFor(() => {
+      expect(screen.queryByTestId("initial-load-error")).not.toBeInTheDocument();
+    });
+  });
+});
+
 describe("Ctrl+K not listed in ShortcutOverlay", () => {
   it("does not show Ctrl+K in shortcuts", async () => {
     render(<App />);

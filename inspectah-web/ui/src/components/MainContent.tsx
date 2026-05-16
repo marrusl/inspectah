@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import {
   PageSection,
   Content,
@@ -59,6 +59,11 @@ export function MainContent({
 }: MainContentProps) {
   const label = SECTION_LABELS[activeSection] ?? activeSection;
   const [filterText, setFilterText] = useState("");
+
+  // Clear stale filter when switching sections (e.g. from global search)
+  useEffect(() => {
+    setFilterText("");
+  }, [activeSection]);
 
   // Reset filter when section changes or search closes
   const handleSearchClose = useCallback(() => {
