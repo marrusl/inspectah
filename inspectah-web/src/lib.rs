@@ -8,6 +8,7 @@ use handlers::AppState;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
+use std::sync::Arc;
 
 /// Middleware that rejects POST requests with a mismatched Origin header.
 ///
@@ -38,7 +39,7 @@ async fn origin_guard(
     next.run(req).await
 }
 
-pub fn router(state: AppState, served_origin: &str) -> Router {
+pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::exact(
             HeaderValue::from_str(served_origin).unwrap(),
@@ -59,6 +60,8 @@ pub fn router(state: AppState, served_origin: &str) -> Router {
         .route("/api/ops", get(handlers::get_ops))
         .route("/api/changes", get(handlers::get_changes))
         .route("/api/tarball", post(handlers::export_tarball))
+        .route("/api/snapshot/sections", get(handlers::get_sections))
+        .route("/api/viewed", get(handlers::get_viewed).post(handlers::mark_viewed))
         .layer(cors)
         .layer(axum::middleware::from_fn(move |req, next| {
             origin_guard(served.clone(), req, next)

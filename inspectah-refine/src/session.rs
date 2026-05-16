@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -12,6 +13,10 @@ pub struct RefineSession {
     cursor: usize,
     cached_view: Option<RefinedView>,
     generation: u64,
+    /// Tracks which context items the user has viewed in the UI.
+    /// Format: "section:item_id" (e.g., "packages:httpd.x86_64").
+    /// Non-serialized — excluded from tarball export.
+    viewed: HashSet<String>,
 }
 
 impl RefineSession {
@@ -22,6 +27,7 @@ impl RefineSession {
             cursor: 0,
             cached_view: None,
             generation: 0,
+            viewed: HashSet::new(),
         };
         // Eagerly compute initial view
         session.recompute_view();
@@ -155,11 +161,32 @@ impl RefineSession {
         self.generation
     }
 
+    /// Returns a reference to the original (unmodified) snapshot.
+    pub fn snapshot(&self) -> &InspectionSnapshot {
+        &self.original
+    }
+
     /// Snapshot the current projected state. Returns an owned clone.
     /// Used by the HTTP layer to snapshot under the lock and then
     /// release the lock before doing expensive export work.
     pub fn snapshot_projected(&self) -> InspectionSnapshot {
         self.project_snapshot()
+    }
+
+    /// Mark a context item as viewed by the user.
+    /// `id` format: "section:item_id" (e.g., "packages:httpd.x86_64").
+    pub fn mark_viewed(&mut self, id: &str) {
+        self.viewed.insert(id.to_string());
+    }
+
+    /// Check whether a context item has been viewed.
+    pub fn is_viewed(&self, id: &str) -> bool {
+        self.viewed.contains(id)
+    }
+
+    /// Returns the full set of viewed item IDs.
+    pub fn viewed_ids(&self) -> &HashSet<String> {
+        &self.viewed
     }
 
     pub fn export_tarball(

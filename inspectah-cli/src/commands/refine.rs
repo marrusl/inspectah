@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[derive(clap::Args)]
 pub struct RefineArgs {
@@ -20,7 +20,10 @@ pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
 
     let session = inspectah_refine::tarball::from_tarball(&args.tarball)?;
     let is_dirty_on_exit = {
-        let state: inspectah_web::handlers::AppState = Arc::new(Mutex::new(session));
+        let state = Arc::new(inspectah_web::handlers::AppState {
+            session: Arc::new(Mutex::new(session)),
+            sections_cache: OnceLock::new(),
+        });
 
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
@@ -45,7 +48,7 @@ pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
                 .with_graceful_shutdown(shutdown_signal())
                 .await?;
 
-            let session = state.lock().unwrap();
+            let session = state.session.lock().unwrap();
             Ok::<bool, anyhow::Error>(session.is_dirty())
         })?
     };
