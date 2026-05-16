@@ -80,12 +80,15 @@ impl RepoIndex {
             }
         }
 
-        // 2. Map packages by source_repo.
+        // 2. Map packages by source_repo (normalized to lowercase).
+        // The Go scanner emits mixed-case repo IDs (e.g. "AppStream")
+        // while INI section headers from .repo files are already lowercase.
+        // Normalizing here ensures packages match their repo definitions.
         let mut packages_by_repo: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for pkg in &rpm.packages_added {
             if !pkg.source_repo.is_empty() {
                 packages_by_repo
-                    .entry(pkg.source_repo.clone())
+                    .entry(pkg.source_repo.to_lowercase())
                     .or_default()
                     .push(pkg.name.clone());
             }
@@ -235,5 +238,44 @@ mod tests {
         assert!(RepoIndex::is_distro_repo("appstream"));
         assert!(!RepoIndex::is_distro_repo("epel"));
         assert!(!RepoIndex::is_distro_repo("custom-internal"));
+    }
+
+    #[test]
+    fn test_repo_index_case_insensitive() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "AppStream".into(), // Mixed case from Go scanner
+                include: true,
+                ..Default::default()
+            }],
+            repo_files: vec![RepoFile {
+                path: "/etc/yum.repos.d/centos.repo".into(),
+                content: "[appstream]\nname=CentOS AppStream\n".into(), // Lowercase section
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let index = RepoIndex::build(&snap);
+        // Package with "AppStream" should map to lowercase "appstream"
+        assert!(
+            index.packages_by_repo.contains_key("appstream"),
+            "packages_by_repo should use lowercase key"
+        );
+        assert!(
+            !index.packages_by_repo.contains_key("AppStream"),
+            "mixed-case key should not exist"
+        );
+        // Provenance should be Verified (matched the repo file section)
+        assert_eq!(index.provenance("appstream"), RepoProvenance::Verified);
+        // Should be recognized as distro
+        assert!(RepoIndex::is_distro_repo("appstream"));
     }
 }
