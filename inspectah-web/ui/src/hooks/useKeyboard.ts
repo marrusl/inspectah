@@ -52,8 +52,9 @@ function isDialogOpen(): boolean {
  * - ?: open shortcut overlay
  * - 1-9: jump to section by index
  *
- * Single-key shortcuts (/, ?, 1-9) are suppressed when focus is in a text input.
- * Ctrl-chord shortcuts always fire.
+ * ALL shortcuts are suppressed when a modal dialog is open.
+ * Single-key shortcuts (/, ?, 1-9) are also suppressed when focus is in a text input.
+ * Ctrl-chord shortcuts fire in text inputs but not in dialogs.
  */
 export function useKeyboard(options: UseKeyboardOptions): void {
   const {
@@ -69,9 +70,12 @@ export function useKeyboard(options: UseKeyboardOptions): void {
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
+      // --- Dialog guard: suppress ALL shortcuts when a dialog is open ---
+      if (isDialogOpen()) return;
+
       const inTextInput = isTextInput(e.target);
 
-      // --- Ctrl-chord shortcuts (always active) ---
+      // --- Ctrl-chord shortcuts (active even in text inputs) ---
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         if (e.key === "z" && !e.shiftKey) {
           e.preventDefault();
@@ -111,8 +115,8 @@ export function useKeyboard(options: UseKeyboardOptions): void {
         }
       }
 
-      // --- Single-key shortcuts (suppressed in text inputs and behind dialogs) ---
-      if (inTextInput || isDialogOpen()) return;
+      // --- Single-key shortcuts (suppressed in text inputs) ---
+      if (inTextInput) return;
 
       if (e.key === "/") {
         e.preventDefault();
