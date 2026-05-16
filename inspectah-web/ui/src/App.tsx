@@ -57,6 +57,7 @@ function App() {
   const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
   const [filterClearCounter, setFilterClearCounter] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
+  const [revealItemId, setRevealItemId] = useState<string | undefined>();
   const mainContentRef = useRef<HTMLDivElement>(null);
   const globalSearchRef = useRef<GlobalSearchHandle>(null);
   const hamburgerRef = useRef<HTMLButtonElement>(null);
@@ -269,6 +270,7 @@ function App() {
   const handleNavigateFromGlobalSearch = useCallback(
     (sectionId: string, itemId: string) => {
       pendingFocusItemRef.current = itemId;
+      setRevealItemId(itemId);
       setActiveSection(sectionId);
       setFilterClearCounter((c) => c + 1);
       // Close mobile overlay so the target item is visible
@@ -292,6 +294,7 @@ function App() {
       if (!el) return;
 
       pendingFocusItemRef.current = null;
+      setRevealItemId(undefined);
 
       const hiddenAncestor = el.closest("[hidden]");
       if (hiddenAncestor) {
@@ -441,6 +444,7 @@ function App() {
             onSectionSearchClose={() => setSectionSearchOpen(false)}
             onViewedChange={refreshViewed}
             filterClearCounter={filterClearCounter}
+            revealItemId={revealItemId}
           />
         </div>
         <ContainerfilePanel

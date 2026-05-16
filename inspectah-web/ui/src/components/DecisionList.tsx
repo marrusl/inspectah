@@ -53,8 +53,18 @@ interface ToastEntry {
 }
 
 /** Collapsed summary for Tier 1 baseline-match packages. */
-function BaselineSummary({ count, items }: { count: number; items: DecisionItemKind[] }) {
+function BaselineSummary({ count, items, revealItemId }: { count: number; items: DecisionItemKind[]; revealItemId?: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Auto-expand when revealItemId matches an item in this summary
+  useEffect(() => {
+    if (!revealItemId) return;
+    const match = items.some((item) => getItemId(item) === revealItemId);
+    if (match && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [revealItemId, items, isExpanded]);
+
   return (
     <div data-testid="baseline-summary" style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}>
       <button
@@ -79,12 +89,15 @@ function BaselineSummary({ count, items }: { count: number; items: DecisionItemK
       {isExpanded && (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {items.map((item) => {
+            const id = getItemId(item);
             const name = item.type === "package"
               ? `${item.data.entry.name}.${(item.data as any).entry.arch}`
               : (item.data as any).entry.path;
             return (
               <li
                 key={name}
+                data-testid={`decision-item-${id}`}
+                tabIndex={-1}
                 style={{
                   padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md)",
                   color: "var(--pf-t--global--text--color--subtle)",
@@ -102,8 +115,18 @@ function BaselineSummary({ count, items }: { count: number; items: DecisionItemK
 }
 
 /** Collapsed summary for Tier 1 package-managed configs (config_default / config_baseline_match). */
-function ConfigManagedSummary({ count, items }: { count: number; items: DecisionItemKind[] }) {
+function ConfigManagedSummary({ count, items, revealItemId }: { count: number; items: DecisionItemKind[]; revealItemId?: string }) {
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // Auto-expand when revealItemId matches an item in this summary
+  useEffect(() => {
+    if (!revealItemId) return;
+    const match = items.some((item) => getItemId(item) === revealItemId);
+    if (match && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [revealItemId, items, isExpanded]);
+
   return (
     <div data-testid="config-managed-summary" style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}>
       <button
@@ -128,12 +151,15 @@ function ConfigManagedSummary({ count, items }: { count: number; items: Decision
       {isExpanded && (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
           {items.map((item) => {
+            const id = getItemId(item);
             const path = item.type === "config"
               ? item.data.entry.path
               : "";
             return (
               <li
                 key={path}
+                data-testid={`decision-item-${id}`}
+                tabIndex={-1}
                 style={{
                   padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md)",
                   color: "var(--pf-t--global--text--color--subtle)",
@@ -160,6 +186,8 @@ export interface DecisionListProps {
   filterText?: string;
   /** Repo group metadata from ViewResponse, used for informational tier sub-grouping. */
   repoGroups?: RepoGroupInfo[];
+  /** When set, auto-expands any collapsed summary containing this item ID. */
+  revealItemId?: string;
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;
   /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
@@ -171,6 +199,7 @@ export function DecisionList({
   sectionLabel,
   filterText = "",
   repoGroups = [],
+  revealItemId,
   onViewUpdate,
   onMutationError,
   onViewedChange,
@@ -385,10 +414,10 @@ export function DecisionList({
             return (
               <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
                 {baselineItems.length > 0 && (
-                  <BaselineSummary count={baselineItems.length} items={baselineItems} />
+                  <BaselineSummary count={baselineItems.length} items={baselineItems} revealItemId={revealItemId} />
                 )}
                 {configManagedItems.length > 0 && (
-                  <ConfigManagedSummary count={configManagedItems.length} items={configManagedItems} />
+                  <ConfigManagedSummary count={configManagedItems.length} items={configManagedItems} revealItemId={revealItemId} />
                 )}
                 {otherRoutine.map((item) => {
                   runningRowIndex++;
