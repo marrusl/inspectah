@@ -1,5 +1,12 @@
 import { useState, useMemo, useCallback } from "react";
-import { PageSection, Content, Skeleton } from "@patternfly/react-core";
+import {
+  PageSection,
+  Content,
+  Skeleton,
+  EmptyState,
+  EmptyStateBody,
+  Button,
+} from "@patternfly/react-core";
 import type { RefinedView, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
@@ -110,6 +117,8 @@ export function MainContent({
   }
 
   if (activeSection === "packages") {
+    const hasFilter = filterText.trim().length > 0;
+    const noResults = hasFilter && filteredPackageItems.length === 0;
     return (
       <PageSection>
         <Content>
@@ -124,18 +133,30 @@ export function MainContent({
             resultCount={filteredPackageItems.length}
           />
         )}
-        <DecisionList
-          items={filteredPackageItems}
-          sectionLabel="Packages"
-          filterText={filterText}
-          onViewUpdate={onViewUpdate}
-          onMutationError={onMutationError}
-        />
+        {noResults ? (
+          <EmptyState titleText="No items match your search" headingLevel="h3">
+            <EmptyStateBody>
+              <Button variant="link" onClick={() => setFilterText("")}>
+                Clear filter
+              </Button>
+            </EmptyStateBody>
+          </EmptyState>
+        ) : (
+          <DecisionList
+            items={filteredPackageItems}
+            sectionLabel="Packages"
+            filterText={filterText}
+            onViewUpdate={onViewUpdate}
+            onMutationError={onMutationError}
+          />
+        )}
       </PageSection>
     );
   }
 
   if (activeSection === "configs") {
+    const hasFilter = filterText.trim().length > 0;
+    const noResults = hasFilter && filteredConfigItems.length === 0;
     return (
       <PageSection>
         <Content>
@@ -150,13 +171,23 @@ export function MainContent({
             resultCount={filteredConfigItems.length}
           />
         )}
-        <DecisionList
-          items={filteredConfigItems}
-          sectionLabel="Config Files"
-          filterText={filterText}
-          onViewUpdate={onViewUpdate}
-          onMutationError={onMutationError}
-        />
+        {noResults ? (
+          <EmptyState titleText="No items match your search" headingLevel="h3">
+            <EmptyStateBody>
+              <Button variant="link" onClick={() => setFilterText("")}>
+                Clear filter
+              </Button>
+            </EmptyStateBody>
+          </EmptyState>
+        ) : (
+          <DecisionList
+            items={filteredConfigItems}
+            sectionLabel="Config Files"
+            filterText={filterText}
+            onViewUpdate={onViewUpdate}
+            onMutationError={onMutationError}
+          />
+        )}
       </PageSection>
     );
   }

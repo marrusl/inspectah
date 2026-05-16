@@ -528,7 +528,7 @@ describe("DecisionList", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(screen.getByText("No items in this section.")).toBeInTheDocument();
+    expect(screen.getByText("No items in this section")).toBeInTheDocument();
   });
 
   it("has grid role with aria-label", async () => {

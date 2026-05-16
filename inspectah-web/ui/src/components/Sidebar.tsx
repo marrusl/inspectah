@@ -1,3 +1,4 @@
+import { useEffect, useRef, useCallback } from "react";
 import {
   Nav,
   NavGroup,
@@ -35,6 +36,10 @@ export interface SidebarProps {
   stats: RefineStats | null;
   sections: ContextSection[] | null;
   health: HealthResponse | null;
+  /** When true, renders as a fixed overlay with backdrop. */
+  overlay?: boolean;
+  /** Called to close the overlay (Escape, backdrop click). */
+  onClose?: () => void;
 }
 
 function sectionCount(
@@ -62,9 +67,64 @@ export function Sidebar({
   stats,
   sections,
   health,
+  overlay = false,
+  onClose,
 }: SidebarProps) {
-  return (
-    <nav className="inspectah-sidebar" aria-label="Section navigation">
+  const sidebarRef = useRef<HTMLElement>(null);
+
+  // Focus trap and Escape handler for overlay mode
+  useEffect(() => {
+    if (!overlay) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        onClose?.();
+        return;
+      }
+
+      // Focus trap: cycle through focusable elements
+      if (e.key === "Tab") {
+        const sidebar = sidebarRef.current;
+        if (!sidebar) return;
+        const focusable = sidebar.querySelectorAll<HTMLElement>(
+          'a, button, [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+
+    // Focus first nav link on open
+    const sidebar = sidebarRef.current;
+    if (sidebar) {
+      const firstLink = sidebar.querySelector<HTMLElement>("a, button");
+      firstLink?.focus();
+    }
+
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [overlay, onClose]);
+
+  const handleBackdropClick = useCallback(() => {
+    onClose?.();
+  }, [onClose]);
+
+  const sidebarContent = (
+    <nav
+      className={`inspectah-sidebar${overlay ? " inspectah-sidebar--overlay" : ""}`}
+      aria-label="Section navigation"
+      id={overlay ? "inspectah-sidebar-overlay" : undefined}
+      ref={sidebarRef}
+    >
       <Nav aria-label="Sections">
         <NavGroup title="Decisions">
           {DECISION_SECTIONS.map((sec) => (
@@ -107,4 +167,16 @@ export function Sidebar({
       </div>
     </nav>
   );
+
+  if (overlay) {
+    return (
+      <div className="inspectah-sidebar-backdrop" onClick={handleBackdropClick} data-testid="sidebar-backdrop">
+        <div onClick={(e) => e.stopPropagation()}>
+          {sidebarContent}
+        </div>
+      </div>
+    );
+  }
+
+  return sidebarContent;
 }

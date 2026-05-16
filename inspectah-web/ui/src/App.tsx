@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Page } from "@patternfly/react-core";
 import type { RefinedView } from "./api/types";
 import { useView } from "./hooks/useView";
@@ -12,6 +12,7 @@ import { ContainerfilePanel } from "./components/ContainerfilePanel";
 import { MainContent } from "./components/MainContent";
 import { ShortcutOverlay } from "./components/ShortcutOverlay";
 import { GlobalSearch } from "./components/GlobalSearch";
+import { ExportDialog } from "./components/ExportDialog";
 import "highlight.js/styles/github.css";
 import "./App.css";
 
@@ -33,6 +34,21 @@ function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Responsive breakpoint: < 1024px hides sidebar, shows hamburger
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 1023px)");
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => {
+      setIsMobile(e.matches);
+      if (!e.matches) setSidebarOverlayOpen(false);
+    };
+    handler(mql);
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, []);
 
   const view = useView();
   const sections = useSections();
@@ -70,8 +86,7 @@ function App() {
   }, []);
 
   const handleExport = useCallback(() => {
-    // Export will be implemented in Task 8
-    console.log("Export triggered");
+    setExportDialogOpen(true);
   }, []);
 
   const handleToggleShortcuts = useCallback(() => {
@@ -92,6 +107,21 @@ function App() {
       setGlobalSearchOpen(false);
     },
     [],
+  );
+
+  const handleSidebarSelect = useCallback(
+    (sectionId: string) => {
+      setActiveSection(sectionId);
+      if (isMobile) setSidebarOverlayOpen(false);
+    },
+    [isMobile],
+  );
+
+  const handleExportViewUpdate = useCallback(
+    (_updatedView: RefinedView) => {
+      view.invalidate();
+    },
+    [view.invalidate],
   );
 
   useKeyboard({
@@ -115,17 +145,33 @@ function App() {
         onRedo={mutation.redo}
         onExport={handleExport}
         isPending={mutation.isPending}
+        hamburger={
+          isMobile ? (
+            <button
+              type="button"
+              className="inspectah-hamburger"
+              aria-label={sidebarOverlayOpen ? "Close navigation" : "Open navigation"}
+              aria-expanded={sidebarOverlayOpen}
+              aria-controls="inspectah-sidebar-overlay"
+              onClick={() => setSidebarOverlayOpen((prev) => !prev)}
+            >
+              &#x2630;
+            </button>
+          ) : undefined
+        }
       />
       <div className="inspectah-layout">
-        <div className="inspectah-layout__sidebar">
-          <Sidebar
-            activeSection={activeSection}
-            onSelect={setActiveSection}
-            stats={view.data?.stats ?? null}
-            sections={sections.data}
-            health={health.data}
-          />
-        </div>
+        {!isMobile && (
+          <div className="inspectah-layout__sidebar">
+            <Sidebar
+              activeSection={activeSection}
+              onSelect={handleSidebarSelect}
+              stats={view.data?.stats ?? null}
+              sections={sections.data}
+              health={health.data}
+            />
+          </div>
+        )}
         <div className="inspectah-layout__main">
           <MainContent
             activeSection={activeSection}
@@ -145,6 +191,17 @@ function App() {
           loading={viewLoading}
         />
       </div>
+      {isMobile && sidebarOverlayOpen && (
+        <Sidebar
+          activeSection={activeSection}
+          onSelect={handleSidebarSelect}
+          stats={view.data?.stats ?? null}
+          sections={sections.data}
+          health={health.data}
+          overlay
+          onClose={() => setSidebarOverlayOpen(false)}
+        />
+      )}
       <ShortcutOverlay
         isOpen={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
@@ -156,6 +213,13 @@ function App() {
         configItems={view.data ? view.data.config_files.map((c) => ({ type: "config" as const, data: c })) : []}
         contextSections={sections.data}
         onNavigate={handleNavigateFromGlobalSearch}
+      />
+      <ExportDialog
+        isOpen={exportDialogOpen}
+        onClose={() => setExportDialogOpen(false)}
+        stats={view.data?.stats ?? null}
+        generation={view.data?.generation ?? 0}
+        onViewUpdate={handleExportViewUpdate}
       />
     </Page>
   );

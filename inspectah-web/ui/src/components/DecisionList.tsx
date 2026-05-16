@@ -4,6 +4,8 @@ import {
   AlertGroup,
   AlertActionCloseButton,
   AlertVariant,
+  EmptyState,
+  EmptyStateBody,
 } from "@patternfly/react-core";
 import type {
   AttentionLevel,
@@ -249,8 +251,24 @@ export function DecisionList({
       })}
 
       {items.length === 0 && (
-        <div style={{ padding: "var(--pf-t--global--spacer--lg)", textAlign: "center", color: "var(--pf-t--global--color--200)" }}>
-          No items in this section.
+        <EmptyState titleText="No items in this section" headingLevel="h3">
+          <EmptyStateBody>
+            There are no {sectionLabel.toLowerCase()} to triage.
+          </EmptyStateBody>
+        </EmptyState>
+      )}
+
+      {items.length > 0 &&
+        items.every((item) => item.data.attention.length === 0 || highestAttention(item.data.attention) === "routine") && (
+        <div
+          style={{
+            padding: "var(--pf-t--global--spacer--md)",
+            textAlign: "center",
+            color: "var(--pf-t--global--text--color--subtle)",
+          }}
+          data-testid="completion-message"
+        >
+          All {sectionLabel.toLowerCase()} have been triaged.
         </div>
       )}
     </div>
