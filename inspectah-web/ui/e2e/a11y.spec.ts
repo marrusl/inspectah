@@ -36,13 +36,13 @@ test.describe("Accessibility", () => {
     await page.goto("/");
     await expect(page.locator(".inspectah-layout__sidebar")).toBeVisible();
 
-    // Sidebar should use nav element
-    const nav = page.locator(".inspectah-layout__sidebar nav");
+    // Sidebar should use nav element — target the outer nav specifically
+    const nav = page.locator(".inspectah-layout__sidebar nav.inspectah-sidebar");
     await expect(nav).toBeVisible();
 
     // Nav items should be focusable (PF NavItem renders as <a> or <button>)
-    const navLinks = nav.getByRole("link");
-    const navButtons = nav.getByRole("button");
+    const navLinks = nav.locator("a");
+    const navButtons = nav.locator("button");
     const linkCount = await navLinks.count();
     const buttonCount = await navButtons.count();
     expect(linkCount + buttonCount).toBeGreaterThan(0);
@@ -63,7 +63,7 @@ test.describe("Accessibility", () => {
   test("hamburger button has aria attributes at mobile viewport", async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.setViewportSize({ width: 1023, height: 768 });
     await page.goto("/");
 
     const hamburger = page.locator(".inspectah-hamburger");

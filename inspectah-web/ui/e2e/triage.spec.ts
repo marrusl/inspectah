@@ -14,19 +14,16 @@ test.describe("Triage workflow", () => {
   test("toggle a package exclusion updates Containerfile preview", async ({
     page,
   }) => {
-    // Get the initial Containerfile preview content
-    const cfPanel = page.locator(".inspectah-cf-panel");
-
-    // If the panel isn't visible, it may be collapsed — check for toggle
-    const panelVisible = await cfPanel.isVisible().catch(() => false);
-    if (!panelVisible) {
-      // Try Ctrl+E to open the panel
+    // The panel may be collapsed at 1280px viewport — expand if needed
+    const cfPanelOpen = page.locator(".inspectah-cf-panel--open");
+    const isOpen = await cfPanelOpen.isVisible().catch(() => false);
+    if (!isOpen) {
       await page.keyboard.press("Control+e");
+      await expect(cfPanelOpen).toBeVisible({ timeout: 2000 });
     }
 
-    const initialPreview = await cfPanel
-      .locator("code, pre")
-      .first()
+    const initialPreview = await cfPanelOpen
+      .locator(".inspectah-cf-panel__code")
       .textContent();
 
     // Find the first Switch toggle in a decision item.
@@ -49,9 +46,8 @@ test.describe("Triage workflow", () => {
     await page.waitForResponse((res) => res.url().includes("/api/op"));
 
     // Containerfile preview should change
-    const updatedPreview = await cfPanel
-      .locator("code, pre")
-      .first()
+    const updatedPreview = await cfPanelOpen
+      .locator(".inspectah-cf-panel__code")
       .textContent();
     expect(updatedPreview).not.toBe(initialPreview);
   });

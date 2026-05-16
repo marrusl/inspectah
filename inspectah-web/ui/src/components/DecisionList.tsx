@@ -202,26 +202,10 @@ export function DecisionList({
     };
   }, []);
 
-  // Compute running row index offsets per attention level for aria-rowindex
-  const rowIndexOffsets = useMemo(() => {
-    const offsets: Record<AttentionLevel, number> = {
-      needs_review: 0,
-      informational: 0,
-      routine: 0,
-    };
-    let running = 0;
-    for (const level of levels) {
-      offsets[level] = running;
-      running += grouped[level].length;
-    }
-    return offsets;
-  }, [grouped]);
-
   return (
     <div
-      role="grid"
+      role="region"
       aria-label={`${sectionLabel} decisions`}
-      aria-rowcount={items.length}
       data-testid={`decision-list-${sectionLabel.toLowerCase().replace(/\s+/g, "-")}`}
     >
       {toasts.length > 0 && (
@@ -248,10 +232,9 @@ export function DecisionList({
         const forceExpanded = filterText.trim().length > 0 && groupItems.length > 0;
         return (
           <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
-            {groupItems.map((item, groupIdx) => {
+            {groupItems.map((item) => {
               const id = getItemId(item);
               const flatIdx = flatItemIds.indexOf(id);
-              const rowIndex = rowIndexOffsets[level] + groupIdx + 1; // 1-based
               return (
                 <DecisionItem
                   key={id}
@@ -260,7 +243,6 @@ export function DecisionList({
                   isViewed={viewedIds.has(id)}
                   isPending={mutation.isPending}
                   tabIndex={flatIdx === focusedIndex ? 0 : -1}
-                  rowIndex={rowIndex}
                   onToggleInclude={handleToggle}
                   onMarkViewed={markAsViewed}
                   onKeyDown={handleRowKeyDown}
