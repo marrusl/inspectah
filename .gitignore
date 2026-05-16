@@ -41,6 +41,7 @@ cmd/inspectah/inspector.test
 !/inspectah-pipeline/
 !/inspectah-cli/
 !/inspectah-web/
+!/inspectah-refine/
 
 # Test artifacts
 *.actual.json
