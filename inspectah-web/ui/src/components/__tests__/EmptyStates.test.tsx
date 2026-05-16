@@ -7,7 +7,6 @@ import type {
   RefinedPackage,
   AttentionTag,
   RefineStats,
-  RefinedView,
   ViewResponse,
 } from "../../api/types";
 
@@ -58,12 +57,13 @@ const MOCK_STATS: RefineStats = {
   baseline_available: false,
 };
 
-const MOCK_VIEW: RefinedView = {
+const MOCK_VIEW: ViewResponse = {
   packages: [],
   config_files: [],
   containerfile_preview: "",
   stats: MOCK_STATS,
   generation: 1,
+  repo_groups: [],
 };
 
 const ROUTINE_TAG: AttentionTag = {

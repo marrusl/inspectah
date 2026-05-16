@@ -7,7 +7,7 @@ import {
   EmptyStateFooter,
   Button,
 } from "@patternfly/react-core";
-import type { RefinedView } from "./api/types";
+import type { ViewResponse } from "./api/types";
 import { fetchViewed, fetchOps } from "./api/client";
 import type { AnnotatedOp } from "./api/types";
 import { useView } from "./hooks/useView";
@@ -150,7 +150,7 @@ function App() {
   const undoFocusRef = useRef<string | null>(null);
 
   const onMutationSuccess = useCallback(
-    (_result: RefinedView) => {
+    (_result: ViewResponse) => {
       // After successful mutation, refetch view data and viewed IDs
       view.invalidate();
       refreshViewed();
@@ -325,7 +325,7 @@ function App() {
   );
 
   const handleExportViewUpdate = useCallback(
-    (_updatedView: RefinedView) => {
+    (_updatedView: ViewResponse) => {
       view.invalidate();
     },
     [view.invalidate],

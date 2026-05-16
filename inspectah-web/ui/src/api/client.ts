@@ -1,5 +1,4 @@
 import type {
-  RefinedView,
   ViewResponse,
   ContextSection,
   AnnotatedOp,
@@ -60,23 +59,23 @@ export function fetchViewed(): Promise<{ ids: string[] }> {
 
 // --- Mutation endpoints ---
 
-export function applyOp(op: RefinementOp): Promise<RefinedView> {
+export function applyOp(op: RefinementOp): Promise<ViewResponse> {
   return postJson("/api/op", op);
 }
 
-export function excludeRepo(sectionId: string): Promise<RefinedView> {
+export function excludeRepo(sectionId: string): Promise<ViewResponse> {
   return applyOp({ op: "ExcludeRepo", target: { section_id: sectionId } });
 }
 
-export function includeRepo(sectionId: string): Promise<RefinedView> {
+export function includeRepo(sectionId: string): Promise<ViewResponse> {
   return applyOp({ op: "IncludeRepo", target: { section_id: sectionId } });
 }
 
-export function undo(): Promise<RefinedView> {
+export function undo(): Promise<ViewResponse> {
   return postJson("/api/undo", {});
 }
 
-export function redo(): Promise<RefinedView> {
+export function redo(): Promise<ViewResponse> {
   return postJson("/api/redo", {});
 }
 

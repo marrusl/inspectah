@@ -12,7 +12,6 @@ import type {
   RefinedPackage,
   RefinedConfig,
   AttentionTag,
-  RefinedView,
   RefineStats,
   ViewResponse,
   RepoGroupInfo,
@@ -65,12 +64,13 @@ const MOCK_STATS: RefineStats = {
   baseline_available: false,
 };
 
-const MOCK_VIEW: RefinedView = {
+const MOCK_VIEW: ViewResponse = {
   packages: [],
   config_files: [],
   containerfile_preview: "",
   stats: MOCK_STATS,
   generation: 1,
+  repo_groups: [],
 };
 
 function makePkg(overrides: Partial<RefinedPackage["entry"]> = {}, attention: AttentionTag[] = []): RefinedPackage {

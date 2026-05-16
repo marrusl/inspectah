@@ -11,7 +11,7 @@ import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type {
   AttentionLevel,
   RefinementOp,
-  RefinedView,
+  ViewResponse,
   RepoGroupInfo,
 } from "../api/types";
 import { fetchView } from "../api/client";
@@ -201,7 +201,7 @@ export interface DecisionListProps {
   revealItemId?: string;
   /** Controls whether Tier 1 summaries start expanded ("full") or collapsed ("decisions"). */
   viewMode?: ViewMode;
-  onViewUpdate: (view: RefinedView) => void;
+  onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
   onViewedChange?: () => void;
@@ -222,7 +222,7 @@ export function DecisionList({
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
 
   const handleSuccess = useCallback(
-    (view: RefinedView) => {
+    (view: ViewResponse) => {
       onViewUpdate(view);
     },
     [onViewUpdate],
