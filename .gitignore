@@ -43,5 +43,9 @@ cmd/inspectah/inspector.test
 !/inspectah-web/
 !/inspectah-refine/
 
+# UI build artifacts (inspectah-web)
+inspectah-web/ui/node_modules/
+inspectah-web/ui/dist/
+
 # Test artifacts
 *.actual.json
