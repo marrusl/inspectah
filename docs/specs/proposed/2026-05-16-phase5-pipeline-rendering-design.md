@@ -380,19 +380,37 @@ At widths where the sidebar hides (<1024px) and the Containerfile panel collapse
 | Sensitive path on Tier 1 without baseline | Not applicable | Promotes to Tier 3 | Without baseline verification, can't confirm sensitive file is expected |
 | Tier 1 config `include` default | `include = true` (copied to target) | `include = false` (not copied — package manager handles) | Source defaults should not freeze into target image; target packages install correct versions |
 
+## Added to Phase 5 Scope (from Fern/Ember roadmap review)
+
+These items were originally deferred but promoted into Phase 5 based on team feedback:
+
+1. **Decision/Full view toggle** — First-class toggle between "Decisions only" (Tier 2+3) and "Full view" (Tier 1 expanded). Phase 5 builds the three-tier spine — deferring the toggle means building the engine without the steering wheel. Makes the progressive disclosure mental model explicit and testable.
+2. **Triage completion signal** — Progress indicator showing "N of M items remaining" with an "All actionable items reviewed" completion state. Without this, the operator has no way to know when the Containerfile is ready to use. The triage loop needs a "done" signal.
+
 ## Deferred / Future Work
 
-These items build on the fixed triage foundation and should be tracked for future phases:
+**Phase 6 — Base Image Selection & Cross-Distro (next after Phase 5):**
 
-1. **Baseline-aware service filtering** — Services enabled by default in the base image should not be explicitly enabled in the Containerfile. Only render `systemctl enable` for services the user enabled beyond the baseline, and `systemctl disable` for services the user disabled from the baseline. Requires a `baseline_enabled_services` field in the scan schema and a tiering model for services analogous to packages. Pairs with item 2 below.
-2. **Image-mode incompatible service flagging** — Flag services like `dnf-makecache.service`, `dnf-makecache.timer`, `packagekit.service` as incompatible with image mode. New detection logic. Should be its own spec.
-2. **Migration summary framing** — Human-readable summary alongside the Containerfile ("Install 23 packages from 3 repos, copy 12 config files, enable 4 services"). Presentation layer enhancement.
-4. **Decision/Full view toggle** — Progressive disclosure toggle between "Decisions only" (Tier 2+3) and "Full view" (Tier 1 expanded). Depends on tiering being stable.
-5. **Diff view** — Side-by-side "source system" vs "target Containerfile" for a migration overview.
-6. **Fleet normalization** — `normalize_package_defaults` supports single-host; fleet aggregate sessions need cross-host consensus logic.
-7. **Automount/static-route config exceptions** — Specialized config-file handling for automount entries and static network routes. Deferred from Phase 5 scope.
-8. **Scan progress feedback** — Currently no visual output during `inspectah scan`. Needs progress indication (progress bar, per-inspector status, or text). Becomes more important once base image pulling adds scan time.
-9. **Base image selection and cross-distro conversion (Phase 6 — next after Phase 5)** — The Containerfile currently hardcodes `FROM registry.redhat.io/rhel9/rhel-bootc:9.4` regardless of the scanned host's actual OS. Three problems: (a) The target base image must match the host OS — CentOS Stream 9 hosts need a CentOS 9 bootc image, not RHEL. Supported targets: RHEL 9.6+, RHEL 10, CentOS Stream 9, Fedora (check Go version for exact minimum). (b) The scan should pull or reference the target base image to generate `baseline_package_names` and baseline config data — without this, baseline comparison is only as accurate as whatever static list is available. (c) A `--base-image` CLI override flag is needed to facilitate cross-distro conversions (e.g., CentOS→RHEL, Fedora→RHEL). This is a significant workstream touching the scan phase, CLI, and Containerfile renderer — needs its own spec.
+Bundle these together — they all depend on or benefit from pulling the actual target image:
+
+1. **Base image selection and cross-distro conversion** — The Containerfile currently hardcodes `FROM registry.redhat.io/rhel9/rhel-bootc:9.4` regardless of the scanned host's actual OS. Must auto-detect (CentOS, RHEL 9.6+, RHEL 10, Fedora). Scan should pull/reference the target image for accurate `baseline_package_names`. `--base-image` CLI override for cross-distro conversions. Needs its own spec.
+2. **Scan progress feedback** — Bundle with Phase 6. Image pulling adds scan time; shipping longer scans without feedback is a UX regression.
+3. **Baseline-aware service filtering** — Bundle with Phase 6. Pulling the target image can populate `baseline_enabled_services` at the same time. Without this, services feel like a regression after packages get tiered treatment.
+4. **Positive baseline verification banner** — "Baseline verified against [image:tag]" in the same location as Phase 5's "baseline unavailable" banner. The data quality upgrade must be visible, not silent.
+5. **Image-mode incompatible service flagging** — Flag `dnf-makecache.service`, `dnf-makecache.timer`, `packagekit.service` as incompatible. Pairs with service filtering.
+
+**Before CLI Cutover:**
+
+6. **Migration summary framing** — Human-readable summary alongside the Containerfile ("Install 23 packages from 3 repos, copy 12 config files, enable 4 services"). Highest-impact deferred item — turns inspectah from a developer tool into a migration planning tool.
+
+**Sequence explicitly closer to cutover:**
+
+7. **Fleet normalization** — Single-host is a demo, fleet is the product. `normalize_package_defaults` needs fleet aggregate consensus logic. Needs explicit sequencing, not indefinite deferral.
+
+**Lower priority:**
+
+8. **Diff view** — Side-by-side "source system" vs "target Containerfile" for a migration overview.
+9. **Automount/static-route config exceptions** — Specialized config-file handling for automount entries and static network routes.
 
 ## Files Changed
 

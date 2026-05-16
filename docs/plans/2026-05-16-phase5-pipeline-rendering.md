@@ -14,7 +14,7 @@
 
 **Ownership:**
 - **Tang:** Tasks 1-12 (all Rust — types, attention, normalize, repo index, session projection, cascade, view filtering, containerfile, source_repo, API contract, TS mirror)
-- **Kit:** Tasks 13-19 (all React/TypeScript — layout, tier cards, repo grouping, config grouping, search auto-reveal, keyboard/responsive, E2E)
+- **Kit:** Tasks 13-21 (all React/TypeScript — layout, tier cards, repo grouping, config grouping, search auto-reveal, keyboard/responsive, decision/full toggle, triage completion signal, E2E)
 
 **Hard gates:**
 - Kit Tasks 14-18 are blocked on Tang Tasks 1-12 landing (pipeline + API contract + repo op endpoint)
@@ -2424,7 +2424,125 @@ git commit -m "feat(web): keyboard traversal for repo groups, responsive badge a
 
 ---
 
-### Task 19: E2E Smoke Tests
+### Task 19: Decision/Full View Toggle
+
+**Files:**
+- Modify: `inspectah-web/ui/src/components/MainContent.tsx`
+- Modify: `inspectah-web/ui/src/components/DecisionList.tsx`
+- Modify: `inspectah-web/ui/src/App.css`
+- Test: `inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx`
+
+Phase 5 builds the three-tier spine. This toggle gives the operator the primary control to use it.
+
+- [ ] **Step 1: Write failing test for toggle rendering**
+
+```typescript
+it("renders Decision/Full toggle with Decisions active by default", () => {
+  const view = makeView({
+    packages: [
+      makePkg({ attention: [{ level: "routine", reason: "package_baseline_match", detail: null }] }),
+      makePkg({ attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  const toggle = screen.getByRole("button", { name: /decisions/i });
+  expect(toggle).toHaveAttribute("aria-pressed", "true");
+  // Tier 1 should be collapsed (Decisions mode)
+  expect(screen.queryByText(/baseline packages/i)).toBeInTheDocument();
+});
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: FAIL.
+
+- [ ] **Step 3: Write failing test for Full view mode**
+
+```typescript
+it("Full view expands all tiers including Tier 1", () => {
+  const view = makeView({
+    packages: [
+      makePkg({ name: "glibc", attention: [{ level: "routine", reason: "package_baseline_match", detail: null }] }),
+      makePkg({ name: "httpd", attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
+    ],
+  });
+  render(<MainContent {...defaultProps} view={view} />);
+  const fullBtn = screen.getByRole("button", { name: /full/i });
+  await userEvent.click(fullBtn);
+  // Tier 1 items should now be visible
+  expect(screen.getByText("glibc")).toBeInTheDocument();
+});
+```
+
+- [ ] **Step 4: Run test to verify it fails**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: FAIL.
+
+- [ ] **Step 5: Implement toggle**
+
+Add a segmented button group ("Decisions" / "Full") in `MainContent.tsx` above the package section. State is local (session-only). "Decisions" mode: Tier 1 collapsed into summary, Tier 2+3 shown as cards. "Full" mode: all tiers expanded, Tier 1 shown as compact list.
+
+- [ ] **Step 6: Run tests**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- DecisionSections`
+Expected: All PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git commit -m "feat(web): Decision/Full view toggle for progressive disclosure"
+```
+
+---
+
+### Task 20: Triage Completion Signal
+
+**Files:**
+- Modify: `inspectah-web/ui/src/components/StatsBar.tsx`
+- Modify: `inspectah-web/ui/src/App.css`
+- Test: `inspectah-web/ui/src/components/__tests__/StatsBar.test.tsx`
+
+- [ ] **Step 1: Write failing test for progress indicator**
+
+```typescript
+it("shows remaining count when items need review", () => {
+  const stats = makeStats({ needs_review_count: 12 });
+  render(<StatsBar stats={stats} />);
+  expect(screen.getByText(/12 items remaining/i)).toBeInTheDocument();
+});
+
+it("shows completion state when all items reviewed", () => {
+  const stats = makeStats({ needs_review_count: 0 });
+  render(<StatsBar stats={stats} />);
+  expect(screen.getByText(/all actionable items reviewed/i)).toBeInTheDocument();
+});
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- StatsBar`
+Expected: FAIL.
+
+- [ ] **Step 3: Implement completion signal in StatsBar**
+
+Add a progress segment to `StatsBar.tsx`: "N items remaining" when `needs_review_count > 0`, "All actionable items reviewed" with a success icon when `needs_review_count === 0`. Use PatternFly's `Label` component with appropriate color (info for remaining, green for complete).
+
+- [ ] **Step 4: Run tests**
+
+Run: `cd inspectah-web/ui && npx vitest run --reporter=verbose -- StatsBar`
+Expected: All PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat(web): triage completion signal in StatsBar"
+```
+
+---
+
+### Task 21: E2E Smoke Tests
 
 **Files:**
 - Modify: `inspectah-web/ui/e2e/triage.spec.ts`
@@ -2509,5 +2627,7 @@ Task 13 (layout CSS) ─── independent, ship anytime
 
 Tasks 14-18 (tier cards, repo groups, config groups, search, keyboard) ── blocked on Tasks 1-12
 
-Task 19 (E2E) ── blocked on all above
+Tasks 19-20 (decision/full toggle, completion signal) ── blocked on Tasks 1-12 + Task 14
+
+Task 21 (E2E) ── blocked on all above
 ```
