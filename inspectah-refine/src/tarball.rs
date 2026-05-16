@@ -131,9 +131,10 @@ fn flatten_if_needed(dir: &Path) -> Result<std::path::PathBuf, RefineError> {
 
 fn validate_provenance(snap: &InspectionSnapshot) -> Result<(), RefineError> {
     match &snap.redaction_state {
-        Some(RedactionState::FullyRedacted { .. }) => Ok(()),
+        Some(RedactionState::FullyRedacted { .. })
+        | Some(RedactionState::PartiallyRedacted { .. }) => Ok(()),
         _ => Err(RefineError::UntrustedSnapshot(
-            "Snapshot has not been fully redacted. Run inspectah scan to produce a redacted snapshot before refining.".into(),
+            "Snapshot has not been redacted. Run inspectah scan to produce a redacted snapshot before refining.".into(),
         )),
     }
 }
