@@ -29,15 +29,40 @@ pub async fn serve_report() -> Response {
     }
 }
 
-pub async fn serve_static(axum::extract::Path(path): axum::extract::Path<String>) -> Response {
-    match StaticAssets::get(&path) {
+/// Fallback handler: serves embedded static files by full path, or falls back
+/// to `index.html` for SPA client-side routing.
+///
+/// Unlike the old `serve_static` route, this receives the full URI path
+/// (e.g. `/assets/index-CXipiI4o.js`) and strips only the leading `/` before
+/// looking up the file in rust-embed.  This matches the `ui/dist/` directory
+/// layout where assets live under `assets/`.
+pub async fn serve_fallback(uri: axum::http::Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+
+    // Try the exact embedded file first.
+    if let Some(content) = StaticAssets::get(path) {
+        let mime = mime_guess::from_path(path)
+            .first_or_octet_stream()
+            .to_string();
+        let mut resp = (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, mime)],
+            content.data.to_vec(),
+        )
+            .into_response();
+        resp.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        );
+        return resp;
+    }
+
+    // No matching file — serve index.html for SPA client-side routing.
+    match StaticAssets::get("index.html") {
         Some(content) => {
-            let mime = mime_guess::from_path(&path)
-                .first_or_octet_stream()
-                .to_string();
             let mut resp = (
                 StatusCode::OK,
-                [(header::CONTENT_TYPE, mime)],
+                [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
                 content.data.to_vec(),
             )
                 .into_response();

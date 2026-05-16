@@ -51,7 +51,6 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
 
     Router::new()
         .route("/", get(assets::serve_report))
-        .route("/assets/{*path}", get(assets::serve_static))
         .route("/api/health", get(handlers::health))
         .route("/api/view", get(handlers::get_view))
         .route("/api/op", post(handlers::apply_op))
@@ -68,4 +67,5 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         }))
         .layer(axum::extract::DefaultBodyLimit::max(1024 * 1024)) // 1 MiB
         .with_state(state)
+        .fallback(assets::serve_fallback)
 }
