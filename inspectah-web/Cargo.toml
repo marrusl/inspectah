@@ -3,6 +3,7 @@ name = "inspectah-web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+build = "build.rs"
 
 [dependencies]
 inspectah-core = { path = "../inspectah-core" }
