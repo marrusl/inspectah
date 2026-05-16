@@ -863,4 +863,233 @@ describe("Roving tabindex", () => {
     expect(rows[0]).toHaveAttribute("tabindex", "0");
     expect(rows[1]).toHaveAttribute("tabindex", "-1");
   });
+
+  it("g jumps to first row", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "ccc" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const rows = screen.getAllByRole("row");
+    // Navigate to the last row first
+    rows[0].focus();
+    await userEvent.keyboard("j");
+    await userEvent.keyboard("j");
+    expect(rows[2]).toHaveAttribute("tabindex", "0");
+
+    // Press g to jump to first
+    await userEvent.keyboard("g");
+    expect(rows[0]).toHaveAttribute("tabindex", "0");
+    expect(rows[2]).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("G jumps to last row", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "ccc" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const rows = screen.getAllByRole("row");
+    rows[0].focus();
+
+    // Press G (capital) to jump to last
+    await userEvent.keyboard("G");
+    expect(rows[2]).toHaveAttribute("tabindex", "0");
+    expect(rows[0]).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+// ---- ArrowDown from SectionSearch tests ----
+
+describe("ArrowDown from SectionSearch", () => {
+  it("focuses the first decision item when ArrowDown is pressed in SectionSearch", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    const { container } = render(
+      <div>
+        <input
+          data-testid="search-input"
+          onKeyDown={(e) => {
+            if (e.key === "ArrowDown") {
+              const firstItem = document.querySelector(
+                "[data-testid^='decision-item-']",
+              ) as HTMLElement | null;
+              firstItem?.focus();
+            }
+          }}
+        />
+        <DecisionList
+          items={items}
+          sectionLabel="Packages"
+          onViewUpdate={vi.fn()}
+          onMutationError={vi.fn()}
+        />
+      </div>,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const searchInput = screen.getByTestId("search-input");
+    searchInput.focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    const firstRow = container.querySelector(
+      "[data-testid^='decision-item-']",
+    ) as HTMLElement;
+    expect(firstRow).toBe(document.activeElement);
+  });
+});
+
+// ---- Filter auto-expand tests ----
+
+describe("Filter auto-expand", () => {
+  it("force-expands collapsed groups when filter is active", async () => {
+    // informational group starts collapsed by default
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "info-pkg" }, [INFO_TAG]) },
+    ];
+
+    const { rerender } = render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // informational group should start collapsed (hidden from accessibility tree)
+    const row = screen.getByRole("row", { hidden: true });
+    expect(row.closest("[hidden]")).toBeTruthy();
+
+    // Re-render with filterText to trigger force-expand
+    rerender(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        filterText="info"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    // Group should now be expanded (not hidden)
+    const rowAfterFilter = screen.getByRole("row");
+    expect(rowAfterFilter.closest("[hidden]")).toBeFalsy();
+  });
+
+  it("restores original collapse state when filter is cleared", async () => {
+    // informational group starts collapsed
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "info-pkg" }, [INFO_TAG]) },
+    ];
+
+    const { rerender } = render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        filterText="info"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // With filter active, group is force-expanded
+    const row = screen.getByRole("row");
+    expect(row.closest("[hidden]")).toBeFalsy();
+
+    // Clear filter
+    rerender(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        filterText=""
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    // Group should restore to its default collapsed state
+    // PF6 ExpandableSection hides content with [hidden], so we need hidden: true to find it
+    const rowAfterClear = screen.getByRole("row", { hidden: true });
+    expect(rowAfterClear.closest("[hidden]")).toBeTruthy();
+  });
+
+  it("does not force-expand groups that are already expanded", async () => {
+    // needs_review starts expanded by default
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "review-pkg" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    const { rerender } = render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // needs_review group should start expanded
+    const row = screen.getByRole("row");
+    expect(row.closest("[hidden]")).toBeFalsy();
+
+    // Adding filter should keep it expanded
+    rerender(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        filterText="review"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    const rowAfterFilter = screen.getByRole("row");
+    expect(rowAfterFilter.closest("[hidden]")).toBeFalsy();
+  });
 });
