@@ -1,0 +1,88 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { renderHook, waitFor, act } from "@testing-library/react";
+import { useView } from "../useView";
+import type { RefinedView } from "../../api/types";
+
+const MOCK_VIEW: RefinedView = {
+  packages: [],
+  config_files: [],
+  containerfile_preview: "FROM ubi9\n",
+  stats: {
+    total_packages: 10,
+    included_packages: 8,
+    excluded_packages: 2,
+    total_configs: 5,
+    included_configs: 3,
+    excluded_configs: 2,
+    needs_review_count: 3,
+    ops_applied: 1,
+    can_undo: true,
+    can_redo: false,
+  },
+  generation: 1,
+};
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("useView", () => {
+  it("returns loading initially", () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      () => new Promise(() => {}), // never resolves
+    );
+    const { result } = renderHook(() => useView());
+    expect(result.current.loading).toBe(true);
+    expect(result.current.data).toBeNull();
+    expect(result.current.error).toBeNull();
+  });
+
+  it("returns data on success", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(MOCK_VIEW),
+    } as Response);
+
+    const { result } = renderHook(() => useView());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.data).toEqual(MOCK_VIEW);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("returns error on failure", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: () => Promise.resolve({ error: "server error" }),
+    } as unknown as Response);
+
+    const { result } = renderHook(() => useView());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.data).toBeNull();
+    expect(result.current.error).toBeTruthy();
+  });
+
+  it("refetch triggers a new fetch", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(MOCK_VIEW),
+    } as Response);
+
+    const { result } = renderHook(() => useView());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.refetch();
+    });
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+  });
+});
