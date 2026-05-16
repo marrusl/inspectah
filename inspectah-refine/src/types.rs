@@ -28,6 +28,8 @@ pub enum RefinementOp {
     IncludePackage(PackageTarget),
     ExcludeConfig { path: PathBuf },
     IncludeConfig { path: PathBuf },
+    ExcludeRepo { section_id: String },
+    IncludeRepo { section_id: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,15 +43,27 @@ pub enum AttentionLevel {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionReason {
+    PackageBaselineMatch,
+    PackageUserAdded,
+    PackageVersionChanged,
+    PackageProvenanceUnavailable,
+    PackageLocalInstall,
+    PackageNoRepoSource,
+    ConfigDefault,
+    ConfigBaselineMatch,
     ConfigModified,
     ConfigUnowned,
     ConfigOrphaned,
     SensitivePath,
-    PackageNotInBaseline,
-    PackageLocalInstall,
-    PackageStateChanged,
-    PackageNoRepo,
     Custom(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepoProvenance {
+    Verified,
+    Incomplete,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,11 +92,13 @@ pub struct RefineStats {
     pub excluded_packages: usize,
     pub total_configs: usize,
     pub included_configs: usize,
+    pub package_managed_configs: usize,
     pub excluded_configs: usize,
     pub needs_review_count: usize,
     pub ops_applied: usize,
     pub can_undo: bool,
     pub can_redo: bool,
+    pub baseline_available: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -100,6 +116,7 @@ pub struct ChangesSummary {
     pub packages_excluded: Vec<PackageTarget>,
     pub configs_included: Vec<String>,
     pub configs_excluded: Vec<String>,
+    pub repos_excluded: Vec<String>,
     pub is_dirty: bool,
 }
 

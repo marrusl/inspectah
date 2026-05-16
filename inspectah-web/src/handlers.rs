@@ -919,6 +919,7 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
                 ConfigFileKind::RpmOwnedModified => "rpm-modified",
                 ConfigFileKind::Unowned => "unowned",
                 ConfigFileKind::Orphaned => "orphaned",
+                ConfigFileKind::BaselineMatch => "baseline-match",
             };
             items.push(ContextItem {
                 id: ef.path.clone(),

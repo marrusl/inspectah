@@ -18,7 +18,7 @@ fn package_added_gets_needs_review() {
     let packages = inspectah_refine::attention::compute_package_attention(&snap);
     assert_eq!(packages.len(), 1);
     assert_eq!(packages[0].attention[0].level, AttentionLevel::NeedsReview);
-    assert_eq!(packages[0].attention[0].reason, AttentionReason::PackageNotInBaseline);
+    assert_eq!(packages[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
 }
 
 #[test]

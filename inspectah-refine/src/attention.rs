@@ -31,7 +31,7 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
                 PackageState::Added => {
                     tags.push(AttentionTag {
                         level: AttentionLevel::NeedsReview,
-                        reason: AttentionReason::PackageNotInBaseline,
+                        reason: AttentionReason::PackageNoRepoSource,
                         detail: None,
                     });
                 }
@@ -45,21 +45,21 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
                 PackageState::Modified => {
                     tags.push(AttentionTag {
                         level: AttentionLevel::Informational,
-                        reason: AttentionReason::PackageStateChanged,
+                        reason: AttentionReason::PackageNoRepoSource,
                         detail: None,
                     });
                 }
                 PackageState::NoRepo => {
                     tags.push(AttentionTag {
                         level: AttentionLevel::Informational,
-                        reason: AttentionReason::PackageNoRepo,
+                        reason: AttentionReason::PackageNoRepoSource,
                         detail: None,
                     });
                 }
                 _ => {
                     tags.push(AttentionTag {
                         level: AttentionLevel::Routine,
-                        reason: AttentionReason::PackageStateChanged,
+                        reason: AttentionReason::PackageNoRepoSource,
                         detail: None,
                     });
                 }
@@ -105,6 +105,13 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
                     tags.push(AttentionTag {
                         level: AttentionLevel::Routine,
                         reason: AttentionReason::ConfigModified,
+                        detail: None,
+                    });
+                }
+                ConfigFileKind::BaselineMatch => {
+                    tags.push(AttentionTag {
+                        level: AttentionLevel::Routine,
+                        reason: AttentionReason::ConfigBaselineMatch,
                         detail: None,
                     });
                 }

@@ -9,6 +9,8 @@ pub enum ConfigFileKind {
     #[default]
     Unowned,
     Orphaned,
+    #[serde(alias = "baseline_match")]
+    BaselineMatch,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +76,16 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: ConfigSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn test_baseline_match_roundtrip() {
+        assert_eq!(
+            serde_json::to_string(&ConfigFileKind::BaselineMatch).unwrap(),
+            r#""baseline_match""#
+        );
+        let parsed: ConfigFileKind = serde_json::from_str(r#""baseline_match""#).unwrap();
+        assert_eq!(parsed, ConfigFileKind::BaselineMatch);
     }
 
     #[test]

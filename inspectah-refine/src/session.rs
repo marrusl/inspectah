@@ -149,6 +149,7 @@ impl RefineSession {
             packages_excluded,
             configs_included,
             configs_excluded,
+            repos_excluded: Vec::new(),
             is_dirty,
         }
     }
@@ -272,6 +273,10 @@ impl RefineSession {
                     ));
                 }
             }
+            RefinementOp::ExcludeRepo { section_id } | RefinementOp::IncludeRepo { section_id } => {
+                // Repo validation will be implemented in Task 7
+                let _ = section_id;
+            }
         }
         Ok(())
     }
@@ -311,6 +316,10 @@ impl RefineSession {
                     .map(|e| e.include)
                     .unwrap_or(false)
             }
+            RefinementOp::ExcludeRepo { .. } | RefinementOp::IncludeRepo { .. } => {
+                // Repo noop detection will be implemented in Task 7
+                false
+            }
         }
     }
 
@@ -346,6 +355,9 @@ impl RefineSession {
                             entry.include = true;
                         }
                     }
+                }
+                RefinementOp::ExcludeRepo { .. } | RefinementOp::IncludeRepo { .. } => {
+                    // Repo projection will be implemented in Task 7
                 }
             }
         }
@@ -400,6 +412,8 @@ impl RefineSession {
             ops_applied: self.cursor,
             can_undo: self.can_undo(),
             can_redo: self.can_redo(),
+            package_managed_configs: 0,
+            baseline_available: false,
         };
 
         self.cached_view = Some(RefinedView {
