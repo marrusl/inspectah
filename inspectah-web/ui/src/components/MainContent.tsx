@@ -37,6 +37,8 @@ export interface MainContentProps {
   onMutationError: (err: Error) => void;
   sectionSearchOpen: boolean;
   onSectionSearchClose: () => void;
+  /** Called when a viewed POST succeeds, so App can refresh its viewed count. */
+  onViewedChange?: () => void;
 }
 
 function toPackageItems(packages: RefinedPackage[]): DecisionItemKind[] {
@@ -56,6 +58,7 @@ export function MainContent({
   onMutationError,
   sectionSearchOpen,
   onSectionSearchClose,
+  onViewedChange,
 }: MainContentProps) {
   const label = SECTION_LABELS[activeSection] ?? activeSection;
   const [filterText, setFilterText] = useState("");
@@ -153,6 +156,7 @@ export function MainContent({
             filterText={filterText}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
+            onViewedChange={onViewedChange}
           />
         )}
       </PageSection>
@@ -191,6 +195,7 @@ export function MainContent({
             filterText={filterText}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
+            onViewedChange={onViewedChange}
           />
         )}
       </PageSection>

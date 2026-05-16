@@ -56,6 +56,8 @@ export interface DecisionListProps {
   filterText?: string;
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;
+  /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
+  onViewedChange?: () => void;
 }
 
 export function DecisionList({
@@ -64,6 +66,7 @@ export function DecisionList({
   filterText = "",
   onViewUpdate,
   onMutationError,
+  onViewedChange,
 }: DecisionListProps) {
   const toastIdRef = useRef(0);
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
@@ -118,7 +121,7 @@ export function DecisionList({
   );
 
   const mutation = useMutation(handleSuccess, handleError);
-  const { viewedIds, markAsViewed } = useViewed();
+  const { viewedIds, markAsViewed } = useViewed(onViewedChange);
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
