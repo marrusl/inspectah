@@ -1,9 +1,10 @@
-import { useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { PageSection, Content, Skeleton } from "@patternfly/react-core";
 import type { RefinedView, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
+import { SectionSearch } from "./SectionSearch";
 
 /** Section ID to human-readable label. */
 const SECTION_LABELS: Record<string, string> = {
@@ -27,6 +28,8 @@ export interface MainContentProps {
   sections: ContextSection[] | null;
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;
+  sectionSearchOpen: boolean;
+  onSectionSearchClose: () => void;
 }
 
 function toPackageItems(packages: RefinedPackage[]): DecisionItemKind[] {
@@ -44,8 +47,17 @@ export function MainContent({
   sections,
   onViewUpdate,
   onMutationError,
+  sectionSearchOpen,
+  onSectionSearchClose,
 }: MainContentProps) {
   const label = SECTION_LABELS[activeSection] ?? activeSection;
+  const [filterText, setFilterText] = useState("");
+
+  // Reset filter when section changes or search closes
+  const handleSearchClose = useCallback(() => {
+    setFilterText("");
+    onSectionSearchClose();
+  }, [onSectionSearchClose]);
 
   const packageItems = useMemo(
     () => (viewData ? toPackageItems(viewData.packages) : []),
@@ -55,6 +67,35 @@ export function MainContent({
     () => (viewData ? toConfigItems(viewData.config_files) : []),
     [viewData],
   );
+
+  // Filter decision items by search text
+  const filteredPackageItems = useMemo(() => {
+    if (!filterText.trim()) return packageItems;
+    const q = filterText.toLowerCase();
+    return packageItems.filter((item) => {
+      if (item.type !== "package") return false;
+      const e = item.data.entry;
+      const text = `${e.name} ${e.arch} ${e.version} ${e.source_repo}`.toLowerCase();
+      return text.includes(q);
+    });
+  }, [packageItems, filterText]);
+
+  const filteredConfigItems = useMemo(() => {
+    if (!filterText.trim()) return configItems;
+    const q = filterText.toLowerCase();
+    return configItems.filter((item) => {
+      if (item.type !== "config") return false;
+      const e = item.data.entry;
+      const text = `${e.path} ${e.kind} ${e.category} ${e.package ?? ""}`.toLowerCase();
+      return text.includes(q);
+    });
+  }, [configItems, filterText]);
+
+  const handleArrowDown = useCallback(() => {
+    // Focus the first decision item in the list
+    const firstItem = document.querySelector("[data-testid^='decision-item-']") as HTMLElement | null;
+    firstItem?.focus();
+  }, []);
 
   if (loading) {
     return (
@@ -74,8 +115,17 @@ export function MainContent({
         <Content>
           <h2>{label}</h2>
         </Content>
+        {sectionSearchOpen && (
+          <SectionSearch
+            value={filterText}
+            onChange={setFilterText}
+            onClose={handleSearchClose}
+            onArrowDown={handleArrowDown}
+            resultCount={filteredPackageItems.length}
+          />
+        )}
         <DecisionList
-          items={packageItems}
+          items={filteredPackageItems}
           sectionLabel="Packages"
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
@@ -90,8 +140,17 @@ export function MainContent({
         <Content>
           <h2>{label}</h2>
         </Content>
+        {sectionSearchOpen && (
+          <SectionSearch
+            value={filterText}
+            onChange={setFilterText}
+            onClose={handleSearchClose}
+            onArrowDown={handleArrowDown}
+            resultCount={filteredConfigItems.length}
+          />
+        )}
         <DecisionList
-          items={configItems}
+          items={filteredConfigItems}
           sectionLabel="Config Files"
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}

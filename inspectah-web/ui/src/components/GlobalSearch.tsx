@@ -1,0 +1,299 @@
+import { useState, useMemo, useCallback, useRef, useEffect } from "react";
+import { Modal, ModalBody, ModalHeader, SearchInput } from "@patternfly/react-core";
+import type { DecisionItemKind } from "./DecisionItem";
+import { itemId as getItemId } from "./DecisionItem";
+import type { ContextSection } from "../api/types";
+
+export interface GlobalSearchResult {
+  /** Section ID (e.g. "packages", "configs", "services"). */
+  sectionId: string;
+  /** Human-readable section label. */
+  sectionLabel: string;
+  /** Display title of the item. */
+  title: string;
+  /** Unique item ID within the section. */
+  itemId: string;
+}
+
+/** Section ID to human-readable label. */
+const SECTION_LABELS: Record<string, string> = {
+  packages: "Packages",
+  configs: "Config Files",
+  services: "Services",
+  containers: "Containers",
+  users_groups: "Users & Groups",
+  network: "Network",
+  storage: "Storage",
+  scheduled_tasks: "Scheduled Tasks",
+  non_rpm_software: "Non-RPM Software",
+  kernel_boot: "Kernel & Boot",
+  selinux: "SELinux",
+};
+
+export interface GlobalSearchProps {
+  isOpen: boolean;
+  onClose: () => void;
+  /** All decision items from packages section. */
+  packageItems: DecisionItemKind[];
+  /** All decision items from configs section. */
+  configItems: DecisionItemKind[];
+  /** Context sections (services, containers, etc.). */
+  contextSections: ContextSection[] | null;
+  /** Called when user selects a result — navigates to section + item. */
+  onNavigate: (sectionId: string, itemId: string) => void;
+}
+
+function itemName(item: DecisionItemKind): string {
+  if (item.type === "package") {
+    return `${item.data.entry.name}.${item.data.entry.arch}`;
+  }
+  return item.data.entry.path;
+}
+
+function itemSearchText(item: DecisionItemKind): string {
+  if (item.type === "package") {
+    const e = item.data.entry;
+    const reasons = item.data.attention.map((a) => a.detail ?? "").join(" ");
+    return `${e.name} ${e.arch} ${e.version} ${e.source_repo} ${reasons}`.toLowerCase();
+  }
+  const e = item.data.entry;
+  const reasons = item.data.attention.map((a) => a.detail ?? "").join(" ");
+  return `${e.path} ${e.kind} ${e.category} ${e.package ?? ""} ${reasons}`.toLowerCase();
+}
+
+/**
+ * Global search overlay — Ctrl+K to open.
+ * Searches across all decision + context sections. Results show section
+ * name + item title. Selecting a result navigates to that section and item.
+ */
+export function GlobalSearch({
+  isOpen,
+  onClose,
+  packageItems,
+  configItems,
+  contextSections,
+  onNavigate,
+}: GlobalSearchProps) {
+  const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+
+  // Reset state when opening
+  useEffect(() => {
+    if (isOpen) {
+      setQuery("");
+      setSelectedIndex(0);
+      // Focus input after modal opens
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [isOpen]);
+
+  // Build searchable index of all items
+  const allItems = useMemo((): GlobalSearchResult[] => {
+    const results: GlobalSearchResult[] = [];
+
+    for (const item of packageItems) {
+      results.push({
+        sectionId: "packages",
+        sectionLabel: SECTION_LABELS.packages,
+        title: itemName(item),
+        itemId: getItemId(item),
+      });
+    }
+
+    for (const item of configItems) {
+      results.push({
+        sectionId: "configs",
+        sectionLabel: SECTION_LABELS.configs,
+        title: itemName(item),
+        itemId: getItemId(item),
+      });
+    }
+
+    if (contextSections) {
+      for (const section of contextSections) {
+        const label = SECTION_LABELS[section.id] ?? section.display_name;
+        for (const ci of section.items) {
+          results.push({
+            sectionId: section.id,
+            sectionLabel: label,
+            title: ci.title,
+            itemId: ci.id,
+          });
+        }
+      }
+    }
+
+    return results;
+  }, [packageItems, configItems, contextSections]);
+
+  // Build searchable text for decision items (keyed by itemId)
+  const searchTextMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const item of packageItems) {
+      map.set(getItemId(item), itemSearchText(item));
+    }
+    for (const item of configItems) {
+      map.set(getItemId(item), itemSearchText(item));
+    }
+    if (contextSections) {
+      for (const section of contextSections) {
+        for (const ci of section.items) {
+          map.set(ci.id, ci.searchable_text.toLowerCase());
+        }
+      }
+    }
+    return map;
+  }, [packageItems, configItems, contextSections]);
+
+  // Filter results
+  const filtered = useMemo(() => {
+    if (!query.trim()) return [];
+    const q = query.toLowerCase();
+    return allItems.filter((r) => {
+      const text = searchTextMap.get(r.itemId) ?? r.title.toLowerCase();
+      return text.includes(q) || r.title.toLowerCase().includes(q);
+    }).slice(0, 50); // Cap at 50 results
+  }, [allItems, searchTextMap, query]);
+
+  // Clamp selected index
+  useEffect(() => {
+    if (selectedIndex >= filtered.length) {
+      setSelectedIndex(Math.max(0, filtered.length - 1));
+    }
+  }, [filtered.length, selectedIndex]);
+
+  const handleSelect = useCallback(
+    (result: GlobalSearchResult) => {
+      onNavigate(result.sectionId, result.itemId);
+      onClose();
+    },
+    [onNavigate, onClose],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIndex((prev) => Math.max(prev - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" && filtered.length > 0) {
+        e.preventDefault();
+        handleSelect(filtered[selectedIndex]);
+        return;
+      }
+    },
+    [filtered, selectedIndex, handleSelect],
+  );
+
+  // Scroll selected item into view
+  useEffect(() => {
+    if (resultsRef.current) {
+      const selected = resultsRef.current.querySelector(
+        `[data-result-index="${selectedIndex}"]`,
+      );
+      if (typeof selected?.scrollIntoView === "function") {
+        selected.scrollIntoView({ block: "nearest" });
+      }
+    }
+  }, [selectedIndex]);
+
+  if (!isOpen) return null;
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      aria-label="Global search"
+      variant="medium"
+      data-testid="global-search-modal"
+    >
+      <ModalHeader title="Search all sections" />
+      <ModalBody>
+        <SearchInput
+          ref={inputRef}
+          placeholder="Search packages, configs, services..."
+          value={query}
+          onChange={(_e, val) => {
+            setQuery(val);
+            setSelectedIndex(0);
+          }}
+          onClear={() => setQuery("")}
+          onKeyDown={handleKeyDown}
+          aria-label="Search all sections"
+          data-testid="global-search-input"
+        />
+        {query.trim() && (
+          <div
+            ref={resultsRef}
+            role="listbox"
+            aria-label="Search results"
+            data-testid="global-search-results"
+            style={{
+              marginTop: "var(--pf-t--global--spacer--sm)",
+              maxHeight: 320,
+              overflowY: "auto",
+            }}
+          >
+            {filtered.length === 0 ? (
+              <div
+                style={{
+                  padding: "var(--pf-t--global--spacer--md)",
+                  textAlign: "center",
+                  color: "var(--pf-t--global--color--200)",
+                }}
+              >
+                No results found
+              </div>
+            ) : (
+              filtered.map((result, idx) => (
+                <div
+                  key={`${result.sectionId}:${result.itemId}`}
+                  role="option"
+                  aria-selected={idx === selectedIndex}
+                  data-result-index={idx}
+                  data-testid={`global-search-result-${idx}`}
+                  onClick={() => handleSelect(result)}
+                  style={{
+                    padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm)",
+                    cursor: "pointer",
+                    background:
+                      idx === selectedIndex
+                        ? "var(--pf-t--global--color--brand--default)"
+                        : "transparent",
+                    color:
+                      idx === selectedIndex
+                        ? "var(--pf-t--global--color--nonstatus--white--default)"
+                        : "inherit",
+                    borderRadius: "var(--pf-t--global--border--radius--small)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--pf-t--global--spacer--sm)",
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: "var(--pf-t--global--font--size--xs)",
+                      opacity: 0.7,
+                      minWidth: 80,
+                    }}
+                  >
+                    {result.sectionLabel}
+                  </span>
+                  <span>{result.title}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
+      </ModalBody>
+    </Modal>
+  );
+}
