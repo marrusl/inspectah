@@ -119,51 +119,45 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
     let mut configs: Vec<RefinedConfig> = config.files
         .iter()
         .map(|entry| {
-            let mut tags = Vec::new();
-            match entry.kind {
-                ConfigFileKind::RpmOwnedModified => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::NeedsReview,
-                        reason: AttentionReason::ConfigModified,
-                        detail: None,
-                    });
-                }
-                ConfigFileKind::Unowned => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::NeedsReview,
-                        reason: AttentionReason::ConfigUnowned,
-                        detail: None,
-                    });
-                }
-                ConfigFileKind::Orphaned => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::Informational,
-                        reason: AttentionReason::ConfigOrphaned,
-                        detail: None,
-                    });
-                }
-                ConfigFileKind::RpmOwnedDefault => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::Routine,
-                        reason: AttentionReason::ConfigModified,
-                        detail: None,
-                    });
-                }
-                ConfigFileKind::BaselineMatch => {
-                    tags.push(AttentionTag {
-                        level: AttentionLevel::Routine,
-                        reason: AttentionReason::ConfigBaselineMatch,
-                        detail: None,
-                    });
-                }
-            }
-            if is_sensitive_path(&entry.path) {
+            let tag = match entry.kind {
+                ConfigFileKind::RpmOwnedDefault => AttentionTag {
+                    level: AttentionLevel::Routine,
+                    reason: AttentionReason::ConfigDefault,
+                    detail: None,
+                },
+                ConfigFileKind::BaselineMatch => AttentionTag {
+                    level: AttentionLevel::Routine,
+                    reason: AttentionReason::ConfigBaselineMatch,
+                    detail: None,
+                },
+                ConfigFileKind::Unowned => AttentionTag {
+                    level: AttentionLevel::Informational,
+                    reason: AttentionReason::ConfigUnowned,
+                    detail: None,
+                },
+                ConfigFileKind::RpmOwnedModified => AttentionTag {
+                    level: AttentionLevel::NeedsReview,
+                    reason: AttentionReason::ConfigModified,
+                    detail: None,
+                },
+                ConfigFileKind::Orphaned => AttentionTag {
+                    level: AttentionLevel::Informational,
+                    reason: AttentionReason::ConfigOrphaned,
+                    detail: None,
+                },
+            };
+
+            let mut tags = vec![tag];
+            // Sensitive path overlay: promote Tier 2 -> Tier 3.
+            // Tier 1 is NOT promoted (base image ships these files).
+            if is_sensitive_path(&entry.path) && tags[0].level == AttentionLevel::Informational {
                 tags.push(AttentionTag {
                     level: AttentionLevel::NeedsReview,
                     reason: AttentionReason::SensitivePath,
                     detail: Some(entry.path.clone()),
                 });
             }
+
             RefinedConfig { entry: entry.clone(), attention: tags }
         })
         .collect();
