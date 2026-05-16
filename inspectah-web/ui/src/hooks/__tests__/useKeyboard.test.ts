@@ -151,7 +151,7 @@ describe("useKeyboard", () => {
     document.body.removeChild(dialog);
   });
 
-  it("allows Ctrl-chord shortcuts even when a dialog is open", () => {
+  it("suppresses Ctrl-chord shortcuts when a dialog is open", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));
 
@@ -160,10 +160,13 @@ describe("useKeyboard", () => {
     document.body.appendChild(dialog);
 
     fireEvent.keyDown(document, { key: "z", ctrlKey: true });
-    expect(opts.onUndo).toHaveBeenCalledTimes(1);
+    expect(opts.onUndo).not.toHaveBeenCalled();
 
     fireEvent.keyDown(document, { key: "e", ctrlKey: true });
-    expect(opts.onTogglePanel).toHaveBeenCalledTimes(1);
+    expect(opts.onTogglePanel).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(document, { key: "k", ctrlKey: true });
+    expect(opts.onOpenGlobalSearch).not.toHaveBeenCalled();
 
     document.body.removeChild(dialog);
   });

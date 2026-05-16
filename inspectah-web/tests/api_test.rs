@@ -1135,14 +1135,21 @@ fn embedded_assets_include_index_html() {
 
 #[tokio::test]
 async fn fallback_serves_asset_files() {
+    use inspectah_web::assets::StaticAssets;
+
+    // Dynamically discover a JS asset — Vite hashes change every build.
+    let js_asset = StaticAssets::iter()
+        .find(|path| path.starts_with("assets/") && path.ends_with(".js"))
+        .expect("at least one assets/*.js file must be embedded");
+
     let app = app(test_state());
 
-    // Request a known JS asset via the /assets/ path.
+    // Request the discovered JS asset via /assets/ path.
     let response = app
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/assets/index-CXipiI4o.js")
+                .uri(&format!("/{}", js_asset))
                 .body(Body::empty())
                 .unwrap(),
         )

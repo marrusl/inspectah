@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import {
   Page,
   PageSection,
@@ -8,6 +8,7 @@ import {
   Button,
 } from "@patternfly/react-core";
 import type { RefinedView } from "./api/types";
+import { fetchViewed } from "./api/client";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
@@ -68,12 +69,46 @@ function App() {
   const sections = useSections();
   const health = useHealth();
 
+  // Track viewed item IDs for triage progress
+  const [viewedIds, setViewedIds] = useState<Set<string>>(new Set());
+
+  const refreshViewed = useCallback(() => {
+    fetchViewed()
+      .then((resp) => setViewedIds(new Set(resp.ids)))
+      .catch(() => {/* ignore – non-critical */});
+  }, []);
+
+  // Fetch viewed IDs on mount
+  useEffect(() => {
+    refreshViewed();
+  }, [refreshViewed]);
+
+  // Compute how many NeedsReview items have been viewed
+  const viewedNeedsReviewCount = useMemo(() => {
+    if (!view.data) return 0;
+    let count = 0;
+    for (const pkg of view.data.packages) {
+      if (pkg.attention.some((a) => a.level === "needs_review")) {
+        const id = `packages:${pkg.entry.name}.${pkg.entry.arch}`;
+        if (viewedIds.has(id)) count++;
+      }
+    }
+    for (const cfg of view.data.config_files) {
+      if (cfg.attention.some((a) => a.level === "needs_review")) {
+        const id = `configs:${cfg.entry.path}`;
+        if (viewedIds.has(id)) count++;
+      }
+    }
+    return count;
+  }, [view.data, viewedIds]);
+
   const onMutationSuccess = useCallback(
     (_result: RefinedView) => {
-      // After successful mutation, refetch view data
+      // After successful mutation, refetch view data and viewed IDs
       view.invalidate();
+      refreshViewed();
     },
-    [view.invalidate],
+    [view.invalidate, refreshViewed],
   );
 
   const onMutationError = useCallback(
@@ -200,6 +235,7 @@ function App() {
     <Page className="inspectah-page">
       <StatsBar
         stats={view.data?.stats ?? null}
+        viewedNeedsReviewCount={viewedNeedsReviewCount}
         onUndo={mutation.undo}
         onRedo={mutation.redo}
         onExport={handleExport}
