@@ -13,6 +13,8 @@ on:
       - 'inspectah-web/ui/vite.config.ts'
       - 'inspectah-web/ui/tsconfig.json'
       - 'inspectah-web/ui/index.html'
+      - 'inspectah-web/ui/e2e/**'
+      - 'inspectah-web/ui/playwright.config.ts'
       - 'inspectah-web/build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -40,8 +42,44 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace -- -W clippy::all
+      - name: Install UI dependencies
+        working-directory: inspectah-web/ui
+        run: npm ci
+      - name: Vitest unit tests
+        working-directory: inspectah-web/ui
+        run: npm run test
       - name: Test (no ffi-rpm)
         run: cargo test --workspace
+      - name: Install Playwright browsers
+        working-directory: inspectah-web/ui
+        run: npx playwright install --with-deps chromium
+      - name: Build binary for e2e
+        run: cargo build -p inspectah-cli
+      - name: Start refine server
+        run: |
+          if [ -f testdata/e2e-fixture.tar.gz ]; then
+            ./target/debug/inspectah refine --no-open testdata/e2e-fixture.tar.gz &
+            SERVER_PID=$!
+            echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+            # Wait for server to be ready
+            for i in $(seq 1 30); do
+              if curl -sf http://127.0.0.1:8642/api/health > /dev/null 2>&1; then
+                echo "Server ready after ${i}s"
+                break
+              fi
+              sleep 1
+            done
+          else
+            echo "::warning::No e2e fixture tarball found at testdata/e2e-fixture.tar.gz — skipping e2e tests"
+            echo "SKIP_E2E=true" >> "$GITHUB_ENV"
+          fi
+      - name: Playwright e2e tests
+        if: env.SKIP_E2E != 'true'
+        working-directory: inspectah-web/ui
+        run: npm run test:e2e
+      - name: Stop refine server
+        if: always() && env.SERVER_PID != ''
+        run: kill $SERVER_PID || true
 
   tier2:
     name: Test with librpm FFI
