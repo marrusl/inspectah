@@ -101,6 +101,58 @@ function BaselineSummary({ count, items }: { count: number; items: DecisionItemK
   );
 }
 
+/** Collapsed summary for Tier 1 package-managed configs (config_default / config_baseline_match). */
+function ConfigManagedSummary({ count, items }: { count: number; items: DecisionItemKind[] }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  return (
+    <div data-testid="config-managed-summary" style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}>
+      <button
+        type="button"
+        onClick={() => setIsExpanded((prev) => !prev)}
+        aria-expanded={isExpanded}
+        style={{
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          padding: "var(--pf-t--global--spacer--xs) 0",
+          fontSize: "var(--pf-t--global--font--size--body--default)",
+          color: "var(--pf-t--global--text--color--subtle)",
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--pf-t--global--spacer--xs)",
+        }}
+      >
+        {isExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
+        {count} configs managed by packages (not copied)
+      </button>
+      {isExpanded && (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {items.map((item) => {
+            const path = item.type === "config"
+              ? item.data.entry.path
+              : "";
+            return (
+              <li
+                key={path}
+                style={{
+                  padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md)",
+                  color: "var(--pf-t--global--text--color--subtle)",
+                  fontSize: "var(--pf-t--global--font--size--body--sm)",
+                }}
+              >
+                {path}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Attention reasons that indicate a config is package-managed (Tier 1). */
+const CONFIG_MANAGED_REASONS = new Set(["config_default", "config_baseline_match"]);
+
 export interface DecisionListProps {
   items: DecisionItemKind[];
   sectionLabel: string;
@@ -306,21 +358,37 @@ export function DecisionList({
           // Force-expand groups when a filter is active and this group has matching items
           const forceExpanded = filterText.trim().length > 0 && groupItems.length > 0;
 
-          // Tier 1: routine items with package_baseline_match reason get collapsed summary
+          // Tier 1: routine items with baseline/managed reasons get collapsed summaries
           if (level === "routine") {
             const baselineItems = groupItems.filter(
               (item) => item.data.attention.length > 0 &&
                 item.data.attention[0].reason === "package_baseline_match",
             );
+            const configManagedItems = groupItems.filter(
+              (item) => item.data.attention.length > 0 &&
+                CONFIG_MANAGED_REASONS.has(
+                  typeof item.data.attention[0].reason === "string"
+                    ? item.data.attention[0].reason
+                    : "",
+                ),
+            );
             const otherRoutine = groupItems.filter(
               (item) => item.data.attention.length === 0 ||
-                item.data.attention[0].reason !== "package_baseline_match",
+                (item.data.attention[0].reason !== "package_baseline_match" &&
+                  !CONFIG_MANAGED_REASONS.has(
+                    typeof item.data.attention[0].reason === "string"
+                      ? item.data.attention[0].reason
+                      : "",
+                  )),
             );
 
             return (
               <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
                 {baselineItems.length > 0 && (
                   <BaselineSummary count={baselineItems.length} items={baselineItems} />
+                )}
+                {configManagedItems.length > 0 && (
+                  <ConfigManagedSummary count={configManagedItems.length} items={configManagedItems} />
                 )}
                 {otherRoutine.map((item) => {
                   runningRowIndex++;
