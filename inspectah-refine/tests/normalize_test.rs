@@ -85,6 +85,20 @@ fn empty_snapshot_loads() {
 }
 
 #[test]
+fn reject_below_floor_schema() {
+    let json = r#"{"schema_version": 10}"#;
+    let result = inspectah_refine::normalize::load_for_refine(json);
+    assert!(result.is_err(), "schema_version 10 must be rejected");
+}
+
+#[test]
+fn reject_future_schema() {
+    let json = r#"{"schema_version": 999}"#;
+    let result = inspectah_refine::normalize::load_for_refine(json);
+    assert!(result.is_err(), "schema_version 999 must be rejected");
+}
+
+#[test]
 fn go_emitted_snapshot_roundtrip() {
     let json = r#"{"schema_version": 14, "rpm": {"packages_added": [
         {"name": "httpd", "arch": "x86_64", "state": "added", "include": true},
