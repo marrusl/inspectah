@@ -18,15 +18,20 @@ const LEVEL_LABELS: Record<AttentionLevel, string> = {
 export interface AttentionGroupProps {
   level: AttentionLevel;
   count: number;
+  /** When true, the group is forced open by a filter regardless of user toggle state. */
+  forceExpanded?: boolean;
   children: React.ReactNode;
 }
 
-export function AttentionGroup({ level, count, children }: AttentionGroupProps) {
+export function AttentionGroup({ level, count, forceExpanded, children }: AttentionGroupProps) {
   const defaultExpanded = level === "needs_review";
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   const label = LEVEL_LABELS[level];
   const toggleText = `${label} (${count})`;
+
+  // forceExpanded overrides user toggle; user toggle still controls when filter is inactive
+  const effectiveExpanded = forceExpanded || isExpanded;
 
   return (
     <div
@@ -39,7 +44,7 @@ export function AttentionGroup({ level, count, children }: AttentionGroupProps) 
     >
       <ExpandableSection
         toggleText={toggleText}
-        isExpanded={isExpanded}
+        isExpanded={effectiveExpanded}
         onToggle={(_e, expanded) => setIsExpanded(expanded)}
         aria-label={`${label} items`}
       >

@@ -50,6 +50,8 @@ interface ToastEntry {
 export interface DecisionListProps {
   items: DecisionItemKind[];
   sectionLabel: string;
+  /** Active filter text — when non-empty, groups with matching items are force-expanded. */
+  filterText?: string;
   onViewUpdate: (view: RefinedView) => void;
   onMutationError: (err: Error) => void;
 }
@@ -57,6 +59,7 @@ export interface DecisionListProps {
 export function DecisionList({
   items,
   sectionLabel,
+  filterText = "",
   onViewUpdate,
   onMutationError,
 }: DecisionListProps) {
@@ -166,6 +169,12 @@ export function DecisionList({
       } else if (e.key === "ArrowUp" || e.key === "k") {
         e.preventDefault();
         nextIndex = (focusedIndex - 1 + total) % total;
+      } else if (e.key === "g") {
+        e.preventDefault();
+        nextIndex = 0;
+      } else if (e.key === "G") {
+        e.preventDefault();
+        nextIndex = total - 1;
       }
 
       if (nextIndex !== null) {
@@ -214,8 +223,10 @@ export function DecisionList({
       {levels.map((level) => {
         const groupItems = grouped[level];
         if (groupItems.length === 0) return null;
+        // Force-expand groups when a filter is active and this group has matching items
+        const forceExpanded = filterText.trim().length > 0 && groupItems.length > 0;
         return (
-          <AttentionGroup key={level} level={level} count={groupItems.length}>
+          <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
             {groupItems.map((item) => {
               const id = getItemId(item);
               const flatIdx = flatItemIds.indexOf(id);

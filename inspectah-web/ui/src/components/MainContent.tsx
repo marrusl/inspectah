@@ -127,6 +127,7 @@ export function MainContent({
         <DecisionList
           items={filteredPackageItems}
           sectionLabel="Packages"
+          filterText={filterText}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
         />
@@ -152,6 +153,7 @@ export function MainContent({
         <DecisionList
           items={filteredConfigItems}
           sectionLabel="Config Files"
+          filterText={filterText}
           onViewUpdate={onViewUpdate}
           onMutationError={onMutationError}
         />
