@@ -5,6 +5,7 @@ members = [
     "inspectah-pipeline",
     "inspectah-cli",
     "inspectah-web",
+    "inspectah-refine",
 ]
 resolver = "2"
 

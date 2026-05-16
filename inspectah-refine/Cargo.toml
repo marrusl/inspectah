@@ -1,0 +1,23 @@
+[package]
+name = "inspectah-refine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+inspectah-core = { path = "../inspectah-core" }
+inspectah-pipeline = { path = "../inspectah-pipeline" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tempfile = "3"
+tar = "0.4"
+flate2 = "0.2"
+walkdir = "2"
+
+[dev-dependencies]
+insta.workspace = true
+tempfile = "3"
+tar = "0.4"
+flate2 = "0.2"
+walkdir = "2"
