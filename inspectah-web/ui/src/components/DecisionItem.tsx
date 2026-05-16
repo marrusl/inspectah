@@ -22,6 +22,7 @@ export type DecisionItemKind =
 export interface DecisionItemProps {
   item: DecisionItemKind;
   level: AttentionLevel;
+  rowIndex: number;
   isViewed: boolean;
   isPending: boolean;
   tabIndex?: number;
@@ -64,6 +65,7 @@ function buildToggleOp(item: DecisionItemKind): RefinementOp {
 export function DecisionItem({
   item,
   level,
+  rowIndex,
   isViewed,
   isPending,
   tabIndex = 0,
@@ -120,7 +122,8 @@ export function DecisionItem({
     // Full card layout for NeedsReview items
     return (
       <div
-        role="group"
+        role="row"
+        aria-rowindex={rowIndex}
         aria-label={name}
         tabIndex={tabIndex}
         onKeyDown={handleKeyDown}
@@ -135,7 +138,7 @@ export function DecisionItem({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
-          <div style={{ flexShrink: 0 }}>
+          <div role="gridcell" style={{ flexShrink: 0 }}>
             <Switch
               id={`switch-${id}`}
               label={included ? "Include" : "Exclude"}
@@ -145,7 +148,7 @@ export function DecisionItem({
               aria-label={`Toggle ${name}`}
             />
           </div>
-          <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
+          <div role="gridcell" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
             {showUnviewedDot && (
               <span
                 role="img"
@@ -162,17 +165,18 @@ export function DecisionItem({
             )}
             <span style={{ fontWeight: showUnviewedDot ? 600 : 400 }}>{name}</span>
           </div>
-          <div style={{ flexShrink: 0 }}>
+          <div role="gridcell" style={{ flexShrink: 0 }}>
             {topReason && (
               <Label color={attentionLabelColor(topAttention)}>
                 {formatReasonText(topReason.reason)}
               </Label>
             )}
           </div>
-          <div style={{ flexShrink: 0 }}>
+          <div role="gridcell" style={{ flexShrink: 0 }}>
             <button
               onClick={handleExpand}
-              aria-hidden="true"
+              aria-expanded={isExpanded}
+              aria-label={`${isExpanded ? "Collapse" : "Expand"} ${name}`}
               tabIndex={-1}
               style={{
                 background: "none",
@@ -188,7 +192,7 @@ export function DecisionItem({
           </div>
         </div>
         {isExpanded && (
-          <div style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
+          <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
             {item.type === "package" ? (
               <PackageDetail pkg={item.data as RefinedPackage} />
             ) : (
@@ -203,7 +207,8 @@ export function DecisionItem({
   // Compact row for Informational/Routine items
   return (
     <div
-      role="group"
+      role="row"
+      aria-rowindex={rowIndex}
       aria-label={name}
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
@@ -217,7 +222,7 @@ export function DecisionItem({
         borderBottom: "1px solid var(--pf-t--global--border--color--default)",
       }}
     >
-      <div style={{ flexShrink: 0 }}>
+      <div role="gridcell" style={{ flexShrink: 0 }}>
         <Switch
           id={`switch-${id}`}
           label={included ? "Include" : "Exclude"}
@@ -227,13 +232,14 @@ export function DecisionItem({
           aria-label={`Toggle ${name}`}
         />
       </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div role="gridcell" style={{ flex: 1, minWidth: 0 }}>
         <span>{name}</span>
       </div>
-      <div style={{ flexShrink: 0 }}>
+      <div role="gridcell" style={{ flexShrink: 0 }}>
         <button
           onClick={handleExpand}
-          aria-hidden="true"
+          aria-expanded={isExpanded}
+          aria-label={`${isExpanded ? "Collapse" : "Expand"} ${name}`}
           tabIndex={-1}
           style={{
             background: "none",
@@ -248,7 +254,7 @@ export function DecisionItem({
         </button>
       </div>
       {isExpanded && (
-        <div style={{ flexBasis: "100%", paddingTop: "var(--pf-t--global--spacer--xs)" }}>
+        <div role="gridcell" style={{ flexBasis: "100%", paddingTop: "var(--pf-t--global--spacer--xs)" }}>
           {item.type === "package" ? (
             <PackageDetail pkg={item.data as RefinedPackage} />
           ) : (

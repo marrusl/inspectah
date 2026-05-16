@@ -202,6 +202,7 @@ describe("AttentionGroup", () => {
 describe("DecisionItem", () => {
   const defaultProps = {
     level: "needs_review" as const,
+    rowIndex: 1,
     isViewed: false,
     isPending: false,
     onToggleInclude: vi.fn(),
@@ -264,7 +265,7 @@ describe("DecisionItem", () => {
     const item: DecisionItemKind = { type: "package", data: makePkg() };
     render(<DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />);
 
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     row.focus();
     await userEvent.keyboard(" ");
     expect(onToggle).toHaveBeenCalled();
@@ -275,7 +276,7 @@ describe("DecisionItem", () => {
     const item: DecisionItemKind = { type: "package", data: makePkg() };
     render(<DecisionItem item={item} {...defaultProps} onToggleInclude={onToggle} />);
 
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     row.focus();
     await userEvent.keyboard("x");
     expect(onToggle).toHaveBeenCalled();
@@ -285,7 +286,7 @@ describe("DecisionItem", () => {
     const item: DecisionItemKind = { type: "package", data: makePkg({}, [NEEDS_REVIEW_TAG]) };
     render(<DecisionItem item={item} {...defaultProps} />);
 
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     row.focus();
     await userEvent.keyboard("{Enter}");
     expect(screen.getByTestId("package-detail")).toBeInTheDocument();
@@ -340,6 +341,7 @@ describe("DecisionItem", () => {
 describe("Viewed tracking", () => {
   const baseProps = {
     level: "needs_review" as const,
+    rowIndex: 1,
     isViewed: false,
     isPending: false,
     onToggleInclude: vi.fn(),
@@ -365,7 +367,7 @@ describe("Viewed tracking", () => {
     render(<DecisionItem item={item} {...baseProps} onMarkViewed={onMarkViewed} />);
 
     // Expand via Enter on the row (expand button is aria-hidden)
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     row.focus();
     await userEvent.keyboard("{Enter}");
     expect(onMarkViewed).toHaveBeenCalledWith("packages:httpd.x86_64");
@@ -385,7 +387,7 @@ describe("Viewed tracking", () => {
     expect(onMarkViewed).toHaveBeenCalledTimes(1);
 
     // Then expand via Enter (should NOT call markViewed again)
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     row.focus();
     await userEvent.keyboard("{Enter}");
     // Only the toggle call, not an expand call
@@ -548,7 +550,8 @@ describe("DecisionList", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole("region", { name: "Packages decisions" })).toBeInTheDocument();
+    // Grid role is now on each AttentionGroup's inner container, not the outer list
+    expect(screen.getByTestId("decision-list-packages")).toBeInTheDocument();
   });
 });
 
@@ -714,7 +717,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     expect(rows[0]).toHaveAttribute("tabindex", "0");
     expect(rows[1]).toHaveAttribute("tabindex", "-1");
     expect(rows[2]).toHaveAttribute("tabindex", "-1");
@@ -739,7 +742,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     rows[0].focus();
     await userEvent.keyboard("{ArrowDown}");
 
@@ -766,7 +769,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     // First move down to row 1
     rows[0].focus();
     await userEvent.keyboard("{ArrowDown}");
@@ -796,7 +799,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     rows[0].focus();
     // Move down to last row
     await userEvent.keyboard("{ArrowDown}");
@@ -826,7 +829,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     rows[0].focus();
     // ArrowUp from first row wraps to last
     await userEvent.keyboard("{ArrowUp}");
@@ -854,7 +857,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     rows[0].focus();
     await userEvent.keyboard("j");
 
@@ -887,7 +890,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     // Navigate to the last row first
     rows[0].focus();
     await userEvent.keyboard("j");
@@ -920,7 +923,7 @@ describe("Roving tabindex", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const rows = screen.getAllByRole("group");
+    const rows = screen.getAllByRole("row");
     rows[0].focus();
 
     // Press G (capital) to jump to last
@@ -998,7 +1001,7 @@ describe("Filter auto-expand", () => {
     });
 
     // informational group should start collapsed (hidden from accessibility tree)
-    const row = screen.getByRole("group", { hidden: true });
+    const row = screen.getByRole("row", { hidden: true });
     expect(row.closest("[hidden]")).toBeTruthy();
 
     // Re-render with filterText to trigger force-expand
@@ -1013,7 +1016,7 @@ describe("Filter auto-expand", () => {
     );
 
     // Group should now be expanded (not hidden)
-    const rowAfterFilter = screen.getByRole("group");
+    const rowAfterFilter = screen.getByRole("row");
     expect(rowAfterFilter.closest("[hidden]")).toBeFalsy();
   });
 
@@ -1038,7 +1041,7 @@ describe("Filter auto-expand", () => {
     });
 
     // With filter active, group is force-expanded
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     expect(row.closest("[hidden]")).toBeFalsy();
 
     // Clear filter
@@ -1054,7 +1057,7 @@ describe("Filter auto-expand", () => {
 
     // Group should restore to its default collapsed state
     // PF6 ExpandableSection hides content with [hidden], so we need hidden: true to find it
-    const rowAfterClear = screen.getByRole("group", { hidden: true });
+    const rowAfterClear = screen.getByRole("row", { hidden: true });
     expect(rowAfterClear.closest("[hidden]")).toBeTruthy();
   });
 
@@ -1078,7 +1081,7 @@ describe("Filter auto-expand", () => {
     });
 
     // needs_review group should start expanded
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     expect(row.closest("[hidden]")).toBeFalsy();
 
     // Adding filter should keep it expanded
@@ -1092,7 +1095,7 @@ describe("Filter auto-expand", () => {
       />,
     );
 
-    const rowAfterFilter = screen.getByRole("group");
+    const rowAfterFilter = screen.getByRole("row");
     expect(rowAfterFilter.closest("[hidden]")).toBeFalsy();
   });
 });
@@ -1125,7 +1128,7 @@ describe("Viewed sync callback", () => {
     });
 
     // Expand the item (non-toggled expand marks viewed)
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     row.focus();
     await user.keyboard("{Enter}");
 
@@ -1163,7 +1166,7 @@ describe("Viewed sync callback", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     row.focus();
     await userEvent.keyboard("{Enter}");
 
@@ -1200,8 +1203,12 @@ describe("Grid ARIA attributes", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const list = screen.getByRole("region");
-    expect(list).toHaveAttribute("aria-label", "Packages decisions");
+    // Each attention group has its own grid with aria-rowcount (some hidden)
+    const grids = screen.getAllByRole("grid", { hidden: true });
+    expect(grids.length).toBe(3);
+    // The grids collectively should have the items
+    const totalRows = grids.reduce((sum, g) => sum + Number(g.getAttribute("aria-rowcount") ?? 0), 0);
+    expect(totalRows).toBe(3);
   });
 
   it("each item has a unique data-testid", async () => {
@@ -1223,7 +1230,7 @@ describe("Grid ARIA attributes", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const items1 = screen.getAllByRole("group");
+    const items1 = screen.getAllByRole("row");
     expect(items1).toHaveLength(2);
     expect(items1[0]).toHaveAttribute("data-testid", expect.stringContaining("decision-item-"));
     expect(items1[1]).toHaveAttribute("data-testid", expect.stringContaining("decision-item-"));
@@ -1247,12 +1254,13 @@ describe("Grid ARIA attributes", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     expect(row).toHaveAttribute("data-expanded", "false");
 
-    // The expand button should be aria-hidden
-    const expandBtn = row.querySelector("button[aria-hidden='true']");
+    // The expand button should have aria-expanded
+    const expandBtn = row.querySelector("button[aria-expanded]");
     expect(expandBtn).toBeTruthy();
+    expect(expandBtn).toHaveAttribute("aria-expanded", "false");
   });
 
   it("data-expanded updates when row is expanded via Enter", async () => {
@@ -1273,7 +1281,7 @@ describe("Grid ARIA attributes", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    const row = screen.getByRole("group");
+    const row = screen.getByRole("row");
     expect(row).toHaveAttribute("data-expanded", "false");
 
     row.focus();

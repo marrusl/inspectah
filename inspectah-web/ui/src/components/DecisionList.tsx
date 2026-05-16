@@ -204,7 +204,6 @@ export function DecisionList({
 
   return (
     <div
-      role="region"
       aria-label={`${sectionLabel} decisions`}
       data-testid={`decision-list-${sectionLabel.toLowerCase().replace(/\s+/g, "-")}`}
     >
@@ -225,33 +224,38 @@ export function DecisionList({
         </AlertGroup>
       )}
 
-      {levels.map((level) => {
-        const groupItems = grouped[level];
-        if (groupItems.length === 0) return null;
-        // Force-expand groups when a filter is active and this group has matching items
-        const forceExpanded = filterText.trim().length > 0 && groupItems.length > 0;
-        return (
-          <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
-            {groupItems.map((item) => {
-              const id = getItemId(item);
-              const flatIdx = flatItemIds.indexOf(id);
-              return (
-                <DecisionItem
-                  key={id}
-                  item={item}
-                  level={level}
-                  isViewed={viewedIds.has(id)}
-                  isPending={mutation.isPending}
-                  tabIndex={flatIdx === focusedIndex ? 0 : -1}
-                  onToggleInclude={handleToggle}
-                  onMarkViewed={markAsViewed}
-                  onKeyDown={handleRowKeyDown}
-                />
-              );
-            })}
-          </AttentionGroup>
-        );
-      })}
+      {(() => {
+        let runningRowIndex = 0;
+        return levels.map((level) => {
+          const groupItems = grouped[level];
+          if (groupItems.length === 0) return null;
+          // Force-expand groups when a filter is active and this group has matching items
+          const forceExpanded = filterText.trim().length > 0 && groupItems.length > 0;
+          return (
+            <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
+              {groupItems.map((item) => {
+                runningRowIndex++;
+                const id = getItemId(item);
+                const flatIdx = flatItemIds.indexOf(id);
+                return (
+                  <DecisionItem
+                    key={id}
+                    item={item}
+                    level={level}
+                    rowIndex={runningRowIndex}
+                    isViewed={viewedIds.has(id)}
+                    isPending={mutation.isPending}
+                    tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                    onToggleInclude={handleToggle}
+                    onMarkViewed={markAsViewed}
+                    onKeyDown={handleRowKeyDown}
+                  />
+                );
+              })}
+            </AttentionGroup>
+          );
+        });
+      })()}
 
       {items.length === 0 && (
         <EmptyState titleText="No items in this section" headingLevel="h3">

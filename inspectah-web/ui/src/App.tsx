@@ -8,7 +8,8 @@ import {
   Button,
 } from "@patternfly/react-core";
 import type { RefinedView } from "./api/types";
-import { fetchViewed } from "./api/client";
+import { fetchViewed, fetchOps } from "./api/client";
+import type { AnnotatedOp } from "./api/types";
 import { useView } from "./hooks/useView";
 import { useSections } from "./hooks/useSections";
 import { useHealth } from "./hooks/useHealth";
@@ -54,6 +55,7 @@ function App() {
   const [sectionSearchOpen, setSectionSearchOpen] = useState(false);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [sidebarOverlayOpen, setSidebarOverlayOpen] = useState(false);
+  const [filterClearCounter, setFilterClearCounter] = useState(0);
   const [isMobile, setIsMobile] = useState(false);
   const mainContentRef = useRef<HTMLDivElement>(null);
   const globalSearchRef = useRef<GlobalSearchHandle>(null);
@@ -181,18 +183,47 @@ function App() {
 
   const mutation = useMutation(onMutationSuccess, onMutationError);
 
-  /** Capture focused element's testid, then fire undo. */
+  /** Extract the decision-item testid from an annotated op. */
+  function getItemTestIdFromOp(op: AnnotatedOp): string | null {
+    if (op.op === "ExcludePackage" || op.op === "IncludePackage") {
+      const t = op.target as { name: string; arch: string };
+      return `decision-item-packages:${t.name}.${t.arch}`;
+    }
+    if (op.op === "ExcludeConfig" || op.op === "IncludeConfig") {
+      const t = op.target as { path: string };
+      return `decision-item-configs:${t.path}`;
+    }
+    return null;
+  }
+
+  /** Fetch ops to find the undo target, then fire undo. */
   const handleUndo = useCallback(() => {
-    const focused = document.activeElement;
-    undoFocusRef.current = focused?.getAttribute("data-testid") ?? null;
-    mutation.undo();
+    fetchOps()
+      .then((ops) => {
+        // The last active op is the one being undone
+        const lastActive = [...ops].reverse().find((o) => o.active);
+        undoFocusRef.current = lastActive ? getItemTestIdFromOp(lastActive) : null;
+        mutation.undo();
+      })
+      .catch(() => {
+        undoFocusRef.current = null;
+        mutation.undo();
+      });
   }, [mutation]);
 
-  /** Capture focused element's testid, then fire redo. */
+  /** Fetch ops to find the redo target, then fire redo. */
   const handleRedo = useCallback(() => {
-    const focused = document.activeElement;
-    undoFocusRef.current = focused?.getAttribute("data-testid") ?? null;
-    mutation.redo();
+    fetchOps()
+      .then((ops) => {
+        // The first inactive op is the one being re-applied
+        const firstInactive = ops.find((o) => !o.active);
+        undoFocusRef.current = firstInactive ? getItemTestIdFromOp(firstInactive) : null;
+        mutation.redo();
+      })
+      .catch(() => {
+        undoFocusRef.current = null;
+        mutation.redo();
+      });
   }, [mutation]);
 
   const togglePanel = useCallback(() => {
@@ -234,6 +265,7 @@ function App() {
     (sectionId: string, itemId: string) => {
       pendingFocusItemRef.current = itemId;
       setActiveSection(sectionId);
+      setFilterClearCounter((c) => c + 1);
       // Close mobile overlay so the target item is visible
       if (isMobile && sidebarOverlayOpen) closeSidebarOverlay();
     },
@@ -405,6 +437,7 @@ function App() {
             sectionSearchOpen={sectionSearchOpen}
             onSectionSearchClose={() => setSectionSearchOpen(false)}
             onViewedChange={refreshViewed}
+            filterClearCounter={filterClearCounter}
           />
         </div>
         <ContainerfilePanel

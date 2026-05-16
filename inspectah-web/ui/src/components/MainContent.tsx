@@ -39,6 +39,8 @@ export interface MainContentProps {
   onSectionSearchClose: () => void;
   /** Called when a viewed POST succeeds, so App can refresh its viewed count. */
   onViewedChange?: () => void;
+  /** Incremented when global search navigates, to clear section filter even for same-section nav. */
+  filterClearCounter?: number;
 }
 
 function toPackageItems(packages: RefinedPackage[]): DecisionItemKind[] {
@@ -59,14 +61,15 @@ export function MainContent({
   sectionSearchOpen,
   onSectionSearchClose,
   onViewedChange,
+  filterClearCounter = 0,
 }: MainContentProps) {
   const label = SECTION_LABELS[activeSection] ?? activeSection;
   const [filterText, setFilterText] = useState("");
 
-  // Clear stale filter when switching sections (e.g. from global search)
+  // Clear stale filter when switching sections or when global search navigates within same section
   useEffect(() => {
     setFilterText("");
-  }, [activeSection]);
+  }, [activeSection, filterClearCounter]);
 
   // Reset filter when section changes or search closes
   const handleSearchClose = useCallback(() => {

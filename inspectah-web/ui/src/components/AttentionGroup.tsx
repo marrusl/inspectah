@@ -20,10 +20,12 @@ export interface AttentionGroupProps {
   count: number;
   /** When true, the group is forced open by a filter regardless of user toggle state. */
   forceExpanded?: boolean;
+  /** aria-label for the grid element, set by parent. */
+  gridLabel?: string;
   children: React.ReactNode;
 }
 
-export function AttentionGroup({ level, count, forceExpanded, children }: AttentionGroupProps) {
+export function AttentionGroup({ level, count, forceExpanded, gridLabel, children }: AttentionGroupProps) {
   const defaultExpanded = level === "needs_review";
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
@@ -63,8 +65,10 @@ export function AttentionGroup({ level, count, forceExpanded, children }: Attent
         {effectiveExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
         {toggleText}
       </button>
-      <div hidden={!effectiveExpanded}>
-        {children}
+      <div role="grid" aria-label={gridLabel ?? label} aria-rowcount={count} hidden={!effectiveExpanded}>
+        <div role="rowgroup">
+          {children}
+        </div>
       </div>
     </div>
   );
