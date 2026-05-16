@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { useView } from "../useView";
-import type { RefinedView } from "../../api/types";
+import type { ViewResponse } from "../../api/types";
 
-const MOCK_VIEW: RefinedView = {
+const MOCK_VIEW: ViewResponse = {
   packages: [],
   config_files: [],
   containerfile_preview: "FROM ubi9\n",
@@ -13,13 +13,16 @@ const MOCK_VIEW: RefinedView = {
     excluded_packages: 2,
     total_configs: 5,
     included_configs: 3,
+    package_managed_configs: 2,
     excluded_configs: 2,
     needs_review_count: 3,
     ops_applied: 1,
     can_undo: true,
     can_redo: false,
+    baseline_available: false,
   },
   generation: 1,
+  repo_groups: [],
 };
 
 beforeEach(() => {

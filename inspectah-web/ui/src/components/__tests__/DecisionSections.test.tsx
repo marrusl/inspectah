@@ -53,11 +53,13 @@ const MOCK_STATS: RefineStats = {
   excluded_packages: 1,
   total_configs: 2,
   included_configs: 1,
+  package_managed_configs: 0,
   excluded_configs: 1,
   needs_review_count: 2,
   ops_applied: 0,
   can_undo: false,
   can_redo: false,
+  baseline_available: false,
 };
 
 const MOCK_VIEW: RefinedView = {
@@ -108,13 +110,13 @@ function makeConfig(overrides: Partial<RefinedConfig["entry"]> = {}, attention: 
 
 const NEEDS_REVIEW_TAG: AttentionTag = {
   level: "needs_review",
-  reason: "package_not_in_baseline",
+  reason: "package_user_added",
   detail: "Not found in base image",
 };
 
 const INFO_TAG: AttentionTag = {
   level: "informational",
-  reason: "package_state_changed",
+  reason: "package_version_changed",
   detail: null,
 };
 
@@ -298,7 +300,7 @@ describe("DecisionItem", () => {
       data: makePkg({}, [NEEDS_REVIEW_TAG]),
     };
     render(<DecisionItem item={item} {...defaultProps} />);
-    expect(screen.getByText("Package Not In Baseline")).toBeInTheDocument();
+    expect(screen.getByText("User Added")).toBeInTheDocument();
   });
 
   it("shows unviewed dot for unviewed needs_review items", () => {
@@ -425,7 +427,7 @@ describe("PackageDetail", () => {
   it("shows attention reasons with labels", () => {
     const pkg = makePkg({}, [NEEDS_REVIEW_TAG]);
     render(<PackageDetail pkg={pkg} />);
-    expect(screen.getByText("Package Not In Baseline")).toBeInTheDocument();
+    expect(screen.getByText("User Added")).toBeInTheDocument();
     expect(screen.getByText("Not found in base image")).toBeInTheDocument();
   });
 });

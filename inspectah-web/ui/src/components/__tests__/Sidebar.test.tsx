@@ -10,11 +10,13 @@ const MOCK_STATS: RefineStats = {
   excluded_packages: 4,
   total_configs: 15,
   included_configs: 12,
+  package_managed_configs: 8,
   excluded_configs: 3,
   needs_review_count: 5,
   ops_applied: 2,
   can_undo: true,
   can_redo: false,
+  baseline_available: true,
 };
 
 const MOCK_SECTIONS: ContextSection[] = [
@@ -40,6 +42,7 @@ const MOCK_HEALTH: HealthResponse = {
     schema_version: 1,
   },
   completeness: "full",
+  policy: { distro_repos: ["baseos", "appstream"] },
 };
 
 describe("Sidebar", () => {

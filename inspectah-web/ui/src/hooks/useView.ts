@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { RefinedView } from "../api/types";
+import type { ViewResponse } from "../api/types";
 import { fetchView } from "../api/client";
 
 export interface UseViewResult {
-  data: RefinedView | null;
+  data: ViewResponse | null;
   loading: boolean;
   error: Error | null;
   refetch: () => void;
@@ -12,7 +12,7 @@ export interface UseViewResult {
 }
 
 export function useView(): UseViewResult {
-  const [data, setData] = useState<RefinedView | null>(null);
+  const [data, setData] = useState<ViewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
   const generationRef = useRef(0);
