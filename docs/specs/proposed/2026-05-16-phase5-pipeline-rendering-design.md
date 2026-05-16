@@ -186,10 +186,10 @@ This matrix is exhaustive over the four `PackageState` variants that appear in `
 
 **`normalize_config_defaults(configs: &mut Vec<RefinedConfig>)`**
 
-- Tier 1 → `include = true`, collapsed in UI
-- Tier 2 (Unowned) → `include = true`, shown as reviewable cards
-- Tier 3 (RpmOwnedModified) → `include = true`, shown with attention badge
-- Orphaned → `include = false`
+- Tier 1 (RpmOwnedDefault, BaselineMatch) → `include = false`. These files are managed by the package manager or already present in the base image. Copying them would freeze source system defaults and potentially override newer configs from the target image's packages. The collapsed Tier 1 summary is informational: "N configs managed by packages (not copied)."
+- Tier 2 (Unowned) → `include = true`. User-created files that need to be explicitly copied to the target.
+- Tier 3 (RpmOwnedModified) → `include = true`. User-customized configs that must be preserved — these are the files the operator intentionally changed.
+- Orphaned → `include = false`. The owning package was removed — config is likely stale.
 
 **Expected triage surface for a typical CentOS Stream 9 system:**
 - Packages: ~734 → ~50-80 visible (Tier 2 leaf + Tier 3)
@@ -308,7 +308,7 @@ When a repo is excluded, all its artifacts disappear from the Containerfile — 
 
 **6d. Config grouping (depends on pipeline fix)**
 
-- Tier 1 collapsed: "N configs match base image (auto-included)" — collapsed by default, expand to see compact list
+- Tier 1 collapsed: "N configs managed by packages (not copied)" — collapsed by default, expand to see compact list. These files are handled by the package manager in the target image; copying them would freeze source defaults.
 - Tier 2 (Unowned) shown as reviewable cards, grouped by parent directory for visual organization
 - Tier 3 (RpmOwnedModified) shown with attention badge. When `diff_against_rpm` data is available on the config entry, show a "View diff" link that opens an inline diff below the card. When no diff data is present, no indicator shown.
 - Kind groups are expanded by default
