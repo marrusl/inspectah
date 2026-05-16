@@ -49,8 +49,10 @@ async fn refine_server_lifecycle() {
 
     // Load tarball and create session
     let session = inspectah_refine::tarball::from_tarball(&tarball).unwrap();
-    let state: inspectah_web::handlers::AppState =
-        std::sync::Arc::new(std::sync::Mutex::new(session));
+    let state = std::sync::Arc::new(inspectah_web::handlers::AppState {
+        session: std::sync::Arc::new(std::sync::Mutex::new(session)),
+        sections_cache: std::sync::OnceLock::new(),
+    });
 
     // Bind to ephemeral port
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -130,7 +132,7 @@ async fn refine_server_lifecycle() {
 
     // 8. Export with matching generation
     let current_gen = {
-        let s = state.lock().unwrap();
+        let s = state.session.lock().unwrap();
         s.generation()
     };
     let resp = client
