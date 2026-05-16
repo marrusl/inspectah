@@ -90,7 +90,13 @@ function App() {
           />
         </div>
         <div className="inspectah-layout__main">
-          <MainContent activeSection={activeSection} loading={viewLoading} />
+          <MainContent
+            activeSection={activeSection}
+            loading={viewLoading}
+            viewData={view.data}
+            onViewUpdate={() => view.invalidate()}
+            onMutationError={(err) => console.error("Mutation failed:", err.message)}
+          />
         </div>
         <ContainerfilePanel
           content={view.data?.containerfile_preview ?? null}
