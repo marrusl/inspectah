@@ -72,7 +72,7 @@ export function StatsBar({
                 isComplete ? (
                   <Label color="green">All actionable items reviewed</Label>
                 ) : (
-                  <Label color="info">{remaining} items remaining</Label>
+                  <Label color="blue">{remaining} items remaining</Label>
                 )
               ) : (
                 <>
