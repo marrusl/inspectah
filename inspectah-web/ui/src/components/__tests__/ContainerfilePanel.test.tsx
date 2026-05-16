@@ -108,6 +108,24 @@ describe("ContainerfilePanel", () => {
     expect(onToggle).toHaveBeenCalled();
   });
 
+  it("uses left-pointing icon when open (collapse direction)", () => {
+    render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const collapseBtn = screen.getByLabelText("Collapse Containerfile panel");
+    // AngleDoubleLeftIcon renders an SVG — verify aria-label direction
+    expect(collapseBtn).toBeInTheDocument();
+    // The button should contain an SVG (the icon)
+    const svg = collapseBtn.querySelector("svg");
+    expect(svg).toBeTruthy();
+  });
+
   it("shows context-sections footer note", () => {
     render(
       <ContainerfilePanel

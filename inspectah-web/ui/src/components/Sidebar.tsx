@@ -128,6 +128,20 @@ export function Sidebar({
       id={overlay ? "inspectah-sidebar-overlay" : undefined}
       ref={sidebarRef}
     >
+      <div className="inspectah-sidebar__host">
+        {health ? (
+          <>
+            <Content component="p">
+              <strong>{health.host.hostname}</strong>
+            </Content>
+            <Content component="small">
+              {health.host.os_name} {health.host.os_version}
+            </Content>
+          </>
+        ) : (
+          <Skeleton width="80%" />
+        )}
+      </div>
       {searchSlot}
       <Nav aria-label="Sections">
         <NavGroup title="Decisions">
@@ -159,16 +173,6 @@ export function Sidebar({
           ))}
         </NavGroup>
       </Nav>
-      <div className="inspectah-sidebar__host">
-        {health ? (
-          <Content component="small">
-            {health.host.hostname} &mdash; {health.host.os_name}{" "}
-            {health.host.os_version}
-          </Content>
-        ) : (
-          <Skeleton width="80%" />
-        )}
-      </div>
     </nav>
   );
 

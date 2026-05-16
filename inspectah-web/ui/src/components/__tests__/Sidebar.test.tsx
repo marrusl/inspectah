@@ -131,6 +131,25 @@ describe("Sidebar", () => {
     expect(screen.getByText(/9\.4/)).toBeInTheDocument();
   });
 
+  it("renders hostname above nav groups", () => {
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={MOCK_HEALTH}
+      />,
+    );
+
+    const host = screen.getByText(/testhost/);
+    const nav = screen.getByLabelText("Sections");
+    expect(
+      host.compareDocumentPosition(nav) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   it("calls onSelect when a nav item is clicked", async () => {
     const onSelect = vi.fn();
     render(

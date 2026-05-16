@@ -6,6 +6,15 @@
   flex-direction: column;
 }
 
+/* Strip PatternFly Page padding so the app fills full screen width */
+.inspectah-page .pf-v6-c-page__main {
+  padding: 0;
+}
+
+.inspectah-page .pf-v6-c-page__main-section {
+  padding-inline: var(--pf-t--global--spacer--md);
+}
+
 /* Stats bar */
 .inspectah-statsbar {
   border-bottom: 1px solid var(--pf-t--global--border--color--default);
@@ -43,12 +52,12 @@
 }
 
 .inspectah-sidebar .pf-v6-c-nav {
-  flex: 1;
+  flex: none;
 }
 
 .inspectah-sidebar__host {
   padding: var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
-  border-top: 1px solid var(--pf-t--global--border--color--default);
+  border-bottom: 1px solid var(--pf-t--global--border--color--default);
 }
 
 /* Containerfile panel — open */
