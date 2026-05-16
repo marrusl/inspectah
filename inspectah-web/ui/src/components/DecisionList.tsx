@@ -54,7 +54,7 @@ interface ToastEntry {
 }
 
 /** Collapsed summary for Tier 1 baseline-match packages. */
-function BaselineSummary({ count, items, revealItemId, defaultExpanded = false }: { count: number; items: DecisionItemKind[]; revealItemId?: string; defaultExpanded?: boolean }) {
+function BaselineSummary({ count, items, revealItemId, defaultExpanded = false, filterActive = false }: { count: number; items: DecisionItemKind[]; revealItemId?: string; defaultExpanded?: boolean; filterActive?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   // Sync with defaultExpanded when viewMode changes
@@ -70,6 +70,13 @@ function BaselineSummary({ count, items, revealItemId, defaultExpanded = false }
       setIsExpanded(true);
     }
   }, [revealItemId, items, isExpanded]);
+
+  // Auto-expand when section search filter is active and has matching items
+  useEffect(() => {
+    if (filterActive && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div data-testid="baseline-summary" style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}>
@@ -121,7 +128,7 @@ function BaselineSummary({ count, items, revealItemId, defaultExpanded = false }
 }
 
 /** Collapsed summary for Tier 1 package-managed configs (config_default / config_baseline_match). */
-function ConfigManagedSummary({ count, items, revealItemId, defaultExpanded = false }: { count: number; items: DecisionItemKind[]; revealItemId?: string; defaultExpanded?: boolean }) {
+function ConfigManagedSummary({ count, items, revealItemId, defaultExpanded = false, filterActive = false }: { count: number; items: DecisionItemKind[]; revealItemId?: string; defaultExpanded?: boolean; filterActive?: boolean }) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
 
   // Sync with defaultExpanded when viewMode changes
@@ -137,6 +144,13 @@ function ConfigManagedSummary({ count, items, revealItemId, defaultExpanded = fa
       setIsExpanded(true);
     }
   }, [revealItemId, items, isExpanded]);
+
+  // Auto-expand when section search filter is active and has matching items
+  useEffect(() => {
+    if (filterActive && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [filterActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div data-testid="config-managed-summary" style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}>
@@ -310,18 +324,37 @@ export function DecisionList({
     "routine",
   ];
 
-  // Build flat ordered list of item IDs for roving tabindex
+  // Build flat ordered list of item IDs for roving tabindex.
+  // Exclude items inside collapsed Tier 1 summaries so j/k skips them.
+  const summariesCollapsed = viewMode !== "full" && !filterText.trim();
   const flatItemIds = useMemo(() => {
     const ids: string[] = [];
     for (const level of levels) {
       const groupItems = grouped[level];
-      for (const item of groupItems) {
-        ids.push(getItemId(item));
+      if (level === "routine" && summariesCollapsed) {
+        // Only include "other routine" items — skip baseline and config-managed
+        // items that are hidden inside collapsed summaries.
+        for (const item of groupItems) {
+          const reason = item.data.attention.length > 0
+            ? item.data.attention[0].reason
+            : "";
+          const isBaseline = reason === "package_baseline_match";
+          const isConfigManaged = CONFIG_MANAGED_REASONS.has(
+            typeof reason === "string" ? reason : "",
+          );
+          if (!isBaseline && !isConfigManaged) {
+            ids.push(getItemId(item));
+          }
+        }
+      } else {
+        for (const item of groupItems) {
+          ids.push(getItemId(item));
+        }
       }
     }
     return ids;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items]);
+  }, [items, summariesCollapsed]);
 
   const [focusedIndex, setFocusedIndex] = useState(0);
 
@@ -428,10 +461,10 @@ export function DecisionList({
             return (
               <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
                 {baselineItems.length > 0 && (
-                  <BaselineSummary count={baselineItems.length} items={baselineItems} revealItemId={revealItemId} defaultExpanded={viewMode === "full"} />
+                  <BaselineSummary count={baselineItems.length} items={baselineItems} revealItemId={revealItemId} defaultExpanded={viewMode === "full"} filterActive={forceExpanded} />
                 )}
                 {configManagedItems.length > 0 && (
-                  <ConfigManagedSummary count={configManagedItems.length} items={configManagedItems} revealItemId={revealItemId} defaultExpanded={viewMode === "full"} />
+                  <ConfigManagedSummary count={configManagedItems.length} items={configManagedItems} revealItemId={revealItemId} defaultExpanded={viewMode === "full"} filterActive={forceExpanded} />
                 )}
                 {otherRoutine.map((item) => {
                   runningRowIndex++;
