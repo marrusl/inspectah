@@ -94,6 +94,7 @@ function App() {
             activeSection={activeSection}
             loading={viewLoading}
             viewData={view.data}
+            sections={sections.data}
             onViewUpdate={() => view.invalidate()}
             onMutationError={(err) => console.error("Mutation failed:", err.message)}
           />
