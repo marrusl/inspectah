@@ -24,11 +24,13 @@ export interface DecisionItemProps {
   level: AttentionLevel;
   isViewed: boolean;
   isPending: boolean;
+  tabIndex?: number;
   onToggleInclude: (op: RefinementOp) => void;
   onMarkViewed: (id: string) => void;
+  onKeyDown?: (e: React.KeyboardEvent) => void;
 }
 
-function itemId(item: DecisionItemKind): string {
+export function itemId(item: DecisionItemKind): string {
   if (item.type === "package") {
     return `pkg:${item.data.entry.name}:${item.data.entry.arch}`;
   }
@@ -64,8 +66,10 @@ export function DecisionItem({
   level,
   isViewed,
   isPending,
+  tabIndex = 0,
   onToggleInclude,
   onMarkViewed,
+  onKeyDown: onKeyDownProp,
 }: DecisionItemProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const id = itemId(item);
@@ -100,9 +104,11 @@ export function DecisionItem({
       } else if (e.key === "Enter") {
         e.preventDefault();
         handleExpand();
+      } else if (onKeyDownProp) {
+        onKeyDownProp(e);
       }
     },
-    [handleToggle, handleExpand],
+    [handleToggle, handleExpand, onKeyDownProp],
   );
 
   const topAttention = item.data.attention.length > 0
@@ -115,7 +121,7 @@ export function DecisionItem({
     return (
       <div
         role="row"
-        tabIndex={0}
+        tabIndex={tabIndex}
         onKeyDown={handleKeyDown}
         data-testid={`decision-item-${id}`}
         style={{
@@ -195,7 +201,7 @@ export function DecisionItem({
   return (
     <div
       role="row"
-      tabIndex={0}
+      tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
       data-testid={`decision-item-${id}`}
       style={{

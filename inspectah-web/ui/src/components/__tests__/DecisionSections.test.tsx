@@ -556,7 +556,76 @@ describe("Error handling", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
 
-    // Make applyOp fail
+    // Make applyOp fail with a non-409 error
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
+      }
+      if (url === "/api/viewed" && opts?.method === "POST") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      if (url === "/api/op") {
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          json: () => Promise.resolve({ error: "invalid operation" }),
+        });
+      }
+      // Optimistic revert re-fetch
+      if (url === "/api/view") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_VIEW),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: "not found" }) });
+    });
+
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    const onViewUpdate = vi.fn();
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={onViewUpdate}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    // Wait for initial viewed fetch
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Toggle the switch to trigger mutation
+    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    await user.click(toggle);
+
+    // Wait for error toast and optimistic revert re-fetch to complete
+    await waitFor(() => {
+      expect(screen.getByText(/Error: invalid operation/)).toBeInTheDocument();
+      expect(onViewUpdate).toHaveBeenCalledWith(MOCK_VIEW);
+    });
+
+    // Auto-dismiss after 3 seconds
+    vi.advanceTimersByTime(3100);
+    await waitFor(() => {
+      expect(screen.queryByText(/Error: invalid operation/)).not.toBeInTheDocument();
+    });
+
+    vi.useRealTimers();
+  });
+
+  it("auto re-fetches on 409 stale generation without showing toast", async () => {
+    const REFRESHED_VIEW = { ...MOCK_VIEW, generation: 42 };
+
     mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
       if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
         return Promise.resolve({
@@ -571,7 +640,13 @@ describe("Error handling", () => {
         return Promise.resolve({
           ok: false,
           status: 409,
-          json: () => Promise.resolve({ error: "generation mismatch" }),
+          json: () => Promise.resolve({ error: "stale generation" }),
+        });
+      }
+      if (url === "/api/view") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(REFRESHED_VIEW),
         });
       }
       return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: "not found" }) });
@@ -579,6 +654,48 @@ describe("Error handling", () => {
 
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "httpd" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    const onViewUpdate = vi.fn();
+    const onMutationError = vi.fn();
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const toggle = screen.getByRole("switch", { name: /toggle/i });
+    await userEvent.click(toggle);
+
+    // Should auto re-fetch and update view
+    await waitFor(() => {
+      expect(onViewUpdate).toHaveBeenCalledWith(REFRESHED_VIEW);
+    });
+
+    // Should NOT show an error toast
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Should NOT call onMutationError
+    expect(onMutationError).not.toHaveBeenCalled();
+  });
+});
+
+// ---- Roving tabindex tests ----
+
+describe("Roving tabindex", () => {
+  it("first row has tabindex 0, others have tabindex -1", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "ccc" }, [NEEDS_REVIEW_TAG]) },
     ];
 
     render(
@@ -590,26 +707,160 @@ describe("Error handling", () => {
       />,
     );
 
-    // Wait for initial viewed fetch
     await waitFor(() => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    // Toggle the switch to trigger mutation
-    const toggle = screen.getByRole("switch", { name: /toggle/i });
-    await user.click(toggle);
+    const rows = screen.getAllByRole("row");
+    expect(rows[0]).toHaveAttribute("tabindex", "0");
+    expect(rows[1]).toHaveAttribute("tabindex", "-1");
+    expect(rows[2]).toHaveAttribute("tabindex", "-1");
+  });
 
-    // Wait for error toast to appear
+  it("ArrowDown moves focus to next row", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
     await waitFor(() => {
-      expect(screen.getByText(/Error: generation mismatch/)).toBeInTheDocument();
+      expect(mockFetch).toHaveBeenCalled();
     });
 
-    // Auto-dismiss after 3 seconds
-    vi.advanceTimersByTime(3100);
+    const rows = screen.getAllByRole("row");
+    rows[0].focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(rows[1]).toHaveAttribute("tabindex", "0");
+    expect(rows[0]).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("ArrowUp moves focus to previous row", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
     await waitFor(() => {
-      expect(screen.queryByText(/Error: generation mismatch/)).not.toBeInTheDocument();
+      expect(mockFetch).toHaveBeenCalled();
     });
 
-    vi.useRealTimers();
+    const rows = screen.getAllByRole("row");
+    // First move down to row 1
+    rows[0].focus();
+    await userEvent.keyboard("{ArrowDown}");
+    // Then move up back to row 0
+    await userEvent.keyboard("{ArrowUp}");
+
+    expect(rows[0]).toHaveAttribute("tabindex", "0");
+    expect(rows[1]).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("wraps from last to first on ArrowDown", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const rows = screen.getAllByRole("row");
+    rows[0].focus();
+    // Move down to last row
+    await userEvent.keyboard("{ArrowDown}");
+    // Wrap to first
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(rows[0]).toHaveAttribute("tabindex", "0");
+    expect(rows[1]).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("wraps from first to last on ArrowUp", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const rows = screen.getAllByRole("row");
+    rows[0].focus();
+    // ArrowUp from first row wraps to last
+    await userEvent.keyboard("{ArrowUp}");
+
+    expect(rows[1]).toHaveAttribute("tabindex", "0");
+    expect(rows[0]).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("j/k keys also navigate rows", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "aaa" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "bbb" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const rows = screen.getAllByRole("row");
+    rows[0].focus();
+    await userEvent.keyboard("j");
+
+    expect(rows[1]).toHaveAttribute("tabindex", "0");
+    expect(rows[0]).toHaveAttribute("tabindex", "-1");
+
+    await userEvent.keyboard("k");
+
+    expect(rows[0]).toHaveAttribute("tabindex", "0");
+    expect(rows[1]).toHaveAttribute("tabindex", "-1");
   });
 });
