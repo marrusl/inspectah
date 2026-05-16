@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, type ReactNode } from "react";
 import {
   Nav,
   NavGroup,
@@ -40,6 +40,8 @@ export interface SidebarProps {
   overlay?: boolean;
   /** Called to close the overlay (Escape, backdrop click). */
   onClose?: () => void;
+  /** Optional search component rendered at the top of the sidebar. */
+  searchSlot?: ReactNode;
 }
 
 function sectionCount(
@@ -69,6 +71,7 @@ export function Sidebar({
   health,
   overlay = false,
   onClose,
+  searchSlot,
 }: SidebarProps) {
   const sidebarRef = useRef<HTMLElement>(null);
 
@@ -125,6 +128,7 @@ export function Sidebar({
       id={overlay ? "inspectah-sidebar-overlay" : undefined}
       ref={sidebarRef}
     >
+      {searchSlot}
       <Nav aria-label="Sections">
         <NavGroup title="Decisions">
           {DECISION_SECTIONS.map((sec) => (

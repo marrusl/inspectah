@@ -48,7 +48,7 @@ describe("ShortcutOverlay", () => {
     render(<ShortcutOverlay isOpen={true} onClose={vi.fn()} />);
 
     expect(screen.getByText("Open section search")).toBeInTheDocument();
-    expect(screen.getByText("Open global search")).toBeInTheDocument();
+    expect(screen.getByText("Focus global search")).toBeInTheDocument();
     expect(screen.getByText("Undo")).toBeInTheDocument();
     expect(screen.getByText("Redo")).toBeInTheDocument();
     expect(screen.getByText("Toggle Containerfile panel")).toBeInTheDocument();

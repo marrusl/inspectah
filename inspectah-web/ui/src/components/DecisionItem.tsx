@@ -121,6 +121,8 @@ export function DecisionItem({
     return (
       <div
         role="row"
+        aria-checked={included}
+        aria-label={`${name}, ${included ? "included" : "excluded"}`}
         tabIndex={tabIndex}
         onKeyDown={handleKeyDown}
         data-testid={`decision-item-${id}`}
@@ -201,6 +203,8 @@ export function DecisionItem({
   return (
     <div
       role="row"
+      aria-checked={included}
+      aria-label={`${name}, ${included ? "included" : "excluded"}`}
       tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
       data-testid={`decision-item-${id}`}
