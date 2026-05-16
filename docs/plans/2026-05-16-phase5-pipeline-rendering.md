@@ -1650,35 +1650,47 @@ git commit -m "feat(pipeline): GPG key batching for standard dir, service backsl
 
 **HARD GATE:** This task must produce a passing test proving `source_repo` is populated on a real CentOS Stream 9 tarball before Tang proceeds to Task 11 (API contract) or Kit starts repo grouping work.
 
-- [ ] **Step 1: Write the failing proof test FIRST**
+- [ ] **Step 1: Generate the test fixture tarball**
 
-Create `inspectah-refine/tests/source_repo_gate_test.rs`:
+The inspectah repo does not currently contain any scan tarballs. Generate one by running the Go scanner against a CentOS Stream 9 system (VM or container):
+
+```bash
+# On the CentOS Stream 9 host (or via run-inspectah.sh):
+./run-inspectah.sh
+# This produces an output tarball in /tmp/inspectah-output/
+
+# Copy the tarball to the repo fixture location:
+cp /tmp/inspectah-output/*.tar.gz testdata/centos-stream-9.tar.gz
+```
+
+If no CentOS Stream 9 host is available, extract a `snapshot.json` from an existing scan output directory and create a minimal fixture:
+
+```bash
+# Alternative: use an existing snapshot.json directly
+mkdir -p testdata
+cp /path/to/existing/scan/snapshot.json testdata/centos-stream-9-snapshot.json
+```
+
+Verify the fixture exists and contains an `rpm` section before proceeding.
+
+- [ ] **Step 2: Write the failing proof test**
+
+Create `inspectah-refine/tests/source_repo_gate_test.rs`. The test reads a raw `snapshot.json` file (not a tarball) to avoid extra dependencies:
 
 ```rust
 use inspectah_core::snapshot::InspectionSnapshot;
 use std::fs;
 
-fn load_snapshot_from_tarball(tarball_path: &str) -> InspectionSnapshot {
-    // Extract snapshot.json from the tarball and deserialize.
-    // The tarball contains a top-level snapshot.json.
-    let tar_gz = fs::File::open(tarball_path)
-        .unwrap_or_else(|e| panic!("cannot open {}: {}", tarball_path, e));
-    let tar = flate2::read::GzDecoder::new(tar_gz);
-    let mut archive = tar::Archive::new(tar);
-    for entry in archive.entries().unwrap() {
-        let mut entry = entry.unwrap();
-        if entry.path().unwrap().ends_with("snapshot.json") {
-            let snap: InspectionSnapshot = serde_json::from_reader(&mut entry).unwrap();
-            return snap;
-        }
-    }
-    panic!("snapshot.json not found in tarball");
-}
-
 #[test]
-fn test_source_repo_populated_from_real_tarball() {
-    let snap = load_snapshot_from_tarball("testdata/centos-stream-9.tar.gz");
-    let rpm = snap.rpm.as_ref().expect("tarball must have rpm section");
+fn test_source_repo_populated_from_real_snapshot() {
+    let fixture = "testdata/centos-stream-9-snapshot.json";
+    let content = fs::read_to_string(fixture)
+        .unwrap_or_else(|e| panic!(
+            "cannot read fixture {}: {}. Run Step 1 to generate it.", fixture, e
+        ));
+    let snap: InspectionSnapshot = serde_json::from_str(&content)
+        .unwrap_or_else(|e| panic!("cannot parse fixture: {}", e));
+    let rpm = snap.rpm.as_ref().expect("fixture must have rpm section");
     let packages_with_repo: Vec<_> = rpm.packages_added.iter()
         .filter(|p| !p.source_repo.is_empty()).collect();
     assert!(!packages_with_repo.is_empty(),
@@ -1691,33 +1703,33 @@ fn test_source_repo_populated_from_real_tarball() {
 }
 ```
 
-Add `flate2` and `tar` as dev-dependencies in `inspectah-refine/Cargo.toml` if not already present.
+No extra dev-dependencies needed — just `std::fs` and `serde_json` (already a dependency).
 
-- [ ] **Step 2: Run the proof test — expect FAIL**
+- [ ] **Step 3: Run the proof test — expect FAIL**
 
 Run: `cargo test -p inspectah-refine test_source_repo_populated`
-Expected: FAIL — this is the current broken state. Document the exact failure message (empty `source_repo` values, serde mismatch, or missing fixture).
+Expected: FAIL — either fixture missing, `source_repo` empty, or serde mismatch. Document the exact failure.
 
-- [ ] **Step 3: Investigate root cause**
+- [ ] **Step 4: Investigate root cause**
 
-Read `cmd/inspectah/internal/inspector/rpm.go` (note: `inspector/`, not `inspectors/`), search for `populateSourceRepos` or `SourceRepo`. Check whether the Go scanner populates the field and how. Check whether the Rust RPM inspector in `inspectah-collect/src/inspectors/rpm/mod.rs` has equivalent logic. Check the tarball's `snapshot.json` directly for `source_repo` field values.
+Read `cmd/inspectah/internal/inspector/rpm.go` (note: `inspector/`, not `inspectors/`), search for `populateSourceRepos` or `SourceRepo`. Check whether the Go scanner populates the field and how. Check whether the Rust RPM inspector in `inspectah-collect/src/inspectors/rpm/mod.rs` has equivalent logic. Check the fixture `snapshot.json` directly for `source_repo` field values.
 
-- [ ] **Step 4: Implement fix based on root cause**
+- [ ] **Step 5: Implement fix based on root cause**
 
-The fix depends on what Step 3 reveals:
+The fix depends on what Step 4 reveals:
 - If serde field name mismatch → add `#[serde(alias = "...")]` in Rust types
 - If Rust scanner doesn't populate → port Go's `populateSourceRepos` logic
-- If tarball predates the field → re-scan with current Go binary to produce a fresh fixture
+- If fixture predates the field → re-scan with current Go binary to produce a fresh fixture
 
-- [ ] **Step 5: Run the proof test — expect PASS**
+- [ ] **Step 6: Run the proof test — expect PASS**
 
 Run: `cargo test -p inspectah-refine test_source_repo_populated`
 Expected: PASS — this is the hard gate. Do NOT proceed to Task 11 until this passes.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add inspectah-refine/tests/source_repo_gate_test.rs inspectah-refine/Cargo.toml
+git add inspectah-refine/tests/source_repo_gate_test.rs testdata/centos-stream-9-snapshot.json
 # Add any modified source files from the fix
 git commit -m "fix: populate source_repo for packages — unblock repo grouping"
 ```
@@ -1894,7 +1906,7 @@ In `inspectah-web/ui/src/api/client.ts`, update:
 
 ```typescript
 export function fetchView(): Promise<ViewResponse> {
-  return getJson("/api/snapshot/view");
+  return getJson("/api/view");
 }
 ```
 
@@ -2098,7 +2110,7 @@ it("renders Tier 1 packages as collapsed summary", () => {
       makePkg({ source_repo: "baseos", attention: [{ level: "routine", reason: "package_baseline_match", detail: null }] }),
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   expect(screen.getByText(/baseline packages/i)).toBeInTheDocument();
   expect(screen.queryByText("glibc")).not.toBeInTheDocument(); // collapsed
 });
@@ -2122,7 +2134,7 @@ it("shows repo source badge for verified Tier 2", () => {
       makePkg({ source_repo: "appstream", attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   expect(screen.getByText("appstream")).toBeInTheDocument();
 });
 
@@ -2132,7 +2144,7 @@ it("shows 'Baseline Unavailable' for provenance-unavailable Tier 2", () => {
       makePkg({ attention: [{ level: "informational", reason: "package_provenance_unavailable", detail: null }] }),
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   expect(screen.getByText(/baseline unavailable/i)).toBeInTheDocument();
 });
 ```
@@ -2186,7 +2198,7 @@ it("groups Tier 2 packages by repo with header", () => {
       { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   expect(screen.getByText(/appstream/)).toBeInTheDocument();
   expect(screen.getByText(/Distro/)).toBeInTheDocument();
   expect(screen.getByText(/Third-party/)).toBeInTheDocument();
@@ -2206,7 +2218,7 @@ it("does not show toggle for unverified provenance", () => {
       { section_id: "mystery", provenance: "incomplete", is_distro: false, package_count: 2, enabled: true },
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   expect(screen.getByText(/Unverified/)).toBeInTheDocument();
   expect(screen.queryByRole("switch")).not.toBeInTheDocument();
 });
@@ -2238,7 +2250,7 @@ it("reverts toggle and shows alert on backend failure", async () => {
       { section_id: "epel", provenance: "verified", is_distro: false, package_count: 3, enabled: true },
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   const toggle = screen.getByRole("switch");
   await userEvent.click(toggle);
   // Toggle should revert to enabled after failure
@@ -2287,7 +2299,7 @@ it("renders Tier 1 configs as 'managed by packages (not copied)' summary", () =>
         attention: [{ level: "routine", reason: "config_default", detail: null }] }),
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   expect(screen.getByText(/managed by packages/i)).toBeInTheDocument();
   expect(screen.queryByText("/etc/default.conf")).not.toBeInTheDocument();
 });
@@ -2313,7 +2325,7 @@ it("shows View diff link when diff_against_rpm is available", () => {
         attention: [{ level: "needs_review", reason: "config_modified", detail: null }] }),
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   expect(screen.getByText(/view diff/i)).toBeInTheDocument();
 });
 ```
@@ -2444,7 +2456,7 @@ it("renders Decision/Full toggle with Decisions active by default", () => {
       makePkg({ attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   const toggle = screen.getByRole("button", { name: /decisions/i });
   expect(toggle).toHaveAttribute("aria-pressed", "true");
   // Tier 1 should be collapsed (Decisions mode)
@@ -2467,7 +2479,7 @@ it("Full view expands all tiers including Tier 1", () => {
       makePkg({ name: "httpd", attention: [{ level: "informational", reason: "package_user_added", detail: null }] }),
     ],
   });
-  render(<MainContent {...defaultProps} view={view} />);
+  render(<MainContent {...defaultProps} viewData={view} />);
   const fullBtn = screen.getByRole("button", { name: /full/i });
   await userEvent.click(fullBtn);
   // Tier 1 items should now be visible
@@ -2593,8 +2605,25 @@ test("Tier 1 configs show 'managed by packages' and are not in Containerfile", a
 
 - [ ] **Step 5: Run E2E tests**
 
-Start server: `cargo run -p inspectah-cli -- refine testdata/centos-stream-9.tar.gz &`
-Run: `cd inspectah-web/ui && npx playwright test e2e/triage.spec.ts`
+The E2E tests require a scan tarball. If Task 10 generated a `testdata/centos-stream-9.tar.gz` during fixture creation, use that. Otherwise, generate one by running `./run-inspectah.sh` on a CentOS Stream 9 host and copying the output tarball to `testdata/`.
+
+Start server (wait for "listening on" before running tests):
+```bash
+cargo run -p inspectah-cli -- refine testdata/centos-stream-9.tar.gz &
+SERVER_PID=$!
+sleep 2  # wait for server startup
+```
+
+Run tests:
+```bash
+cd inspectah-web/ui && npx playwright test e2e/triage.spec.ts
+```
+
+Teardown:
+```bash
+kill $SERVER_PID
+```
+
 Expected: All PASS.
 
 - [ ] **Step 6: Commit**
