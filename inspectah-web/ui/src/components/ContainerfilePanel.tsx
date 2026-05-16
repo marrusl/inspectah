@@ -112,7 +112,7 @@ export function ContainerfilePanel({
           size="sm"
         />
       </div>
-      <div className="inspectah-cf-panel__body">
+      <div className="inspectah-cf-panel__body" tabIndex={0} aria-label="Containerfile preview content">
         {loading ? (
           <>
             <Skeleton width="90%" />
