@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::repo_index::{RepoIndex, DISTRO_REPOS};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance};
@@ -56,6 +57,7 @@ pub struct ViewResponse {
     #[serde(flatten)]
     pub view: RefinedView,
     pub repo_groups: Vec<RepoGroupInfo>,
+    pub baseline_summary: Option<BaselineSummary>,
 }
 
 // -- Viewed tracking request body -----------------------------------------
@@ -133,7 +135,8 @@ pub async fn get_view(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 fn build_view_response(session: &RefineSession) -> ViewResponse {
     let view = session.view().clone();
     let repo_groups = build_repo_groups(session);
-    ViewResponse { view, repo_groups }
+    let baseline_summary = session.baseline_summary();
+    ViewResponse { view, repo_groups, baseline_summary }
 }
 
 /// Build `RepoGroupInfo` entries from the session's repo index and current view.

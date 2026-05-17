@@ -34,6 +34,7 @@ pub fn render_containerfile(
     materialized_roots: Option<&[String]>,
 ) -> String {
     let base = base_image_from_snapshot(snap);
+    let base_str = base.as_deref().unwrap_or("");
     let mut lines: Vec<String> = Vec::new();
 
     // Completeness warning — surface before any build instructions
@@ -69,11 +70,11 @@ pub fn render_containerfile(
     }
 
     // 1. Packages section (FROM + repos + GPG + modules + packages)
-    lines.extend(packages_section_lines(snap, &base));
+    lines.extend(packages_section_lines(snap, base.as_deref()));
 
     // bootc label for ostree-desktops base images
     if matches!(snap.system_type, SystemType::RpmOstree | SystemType::Bootc)
-        && base.contains("fedora-ostree-desktops")
+        && base_str.contains("fedora-ostree-desktops")
     {
         lines.push("# ostree-desktops images may need bootc label for compatibility".into());
         lines.push("LABEL containers.bootc 1".into());
@@ -170,24 +171,36 @@ fn is_degraded(completeness: &Completeness, id: InspectorId) -> bool {
     }
 }
 
-/// Returns the base image reference from the snapshot.
-pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> String {
+/// Returns the base image reference from the snapshot, if determinable.
+///
+/// Phase 6: prefers `target_image.image_ref` (normalized ref from resolution).
+/// Falls back to legacy `rpm.base_image` for Go-generated snapshots.
+/// Returns `None` when neither source is available — callers render a comment.
+pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> Option<String> {
+    // Phase 6: prefer top-level target_image (stores normalized ref)
+    if let Some(ref ti) = snap.target_image {
+        return Some(ti.image_ref.clone());
+    }
+    // Backward compat: Go-generated snapshots with rpm.base_image
     if let Some(rpm) = &snap.rpm {
         if let Some(ref base) = rpm.base_image {
             if !base.is_empty() {
-                return base.clone();
+                return Some(base.clone());
             }
         }
     }
-    "registry.redhat.io/rhel9/rhel-bootc:9.4".to_string()
+    None
 }
 
 // --- Packages section ---
 
-fn packages_section_lines(snap: &InspectionSnapshot, base: &str) -> Vec<String> {
+fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<String> {
     let mut lines = Vec::new();
 
-    lines.push(format!("FROM {base}"));
+    match base {
+        Some(b) => lines.push(format!("FROM {b}")),
+        None => lines.push("# FROM line omitted \u{2014} target image could not be determined. Use --base-image to specify.".to_string()),
+    }
     lines.push(String::new());
 
     let rpm = match &snap.rpm {
@@ -1394,7 +1407,11 @@ mod tests {
     fn test_containerfile_package_based() {
         let snap = snapshot_with_packages(&["httpd", "vim-enhanced"]);
         let output = render_containerfile(&snap, None);
-        assert!(output.contains("FROM"), "must contain FROM line");
+        // No target_image or rpm.base_image → FROM omitted
+        assert!(
+            output.contains("# FROM line omitted"),
+            "must omit FROM when no base image source"
+        );
         assert!(
             output.contains("RUN dnf install -y"),
             "must contain dnf install"
@@ -1442,7 +1459,14 @@ mod tests {
     fn test_containerfile_empty_snapshot() {
         let snap = InspectionSnapshot::new();
         let output = render_containerfile(&snap, None);
-        assert!(output.contains("FROM"), "must contain FROM even if empty");
+        assert!(
+            output.contains("# FROM line omitted"),
+            "empty snapshot must omit FROM with comment"
+        );
+        assert!(
+            !output.starts_with("FROM "),
+            "empty snapshot must not have a FROM directive"
+        );
         assert!(
             output.contains("RUN bootc container lint"),
             "must contain lint epilogue"
@@ -1609,12 +1633,12 @@ mod tests {
             output.contains("config"),
             "must list the incomplete section"
         );
-        // Warning must appear before the FROM line
+        // Warning must appear before the FROM/omitted comment
         let warning_pos = output.find("WARNING").unwrap();
-        let from_pos = output.find("FROM").unwrap();
+        let from_pos = output.find("# FROM line omitted").unwrap();
         assert!(
             warning_pos < from_pos,
-            "completeness warning must appear before FROM line"
+            "completeness warning must appear before FROM comment"
         );
     }
 
@@ -1912,6 +1936,100 @@ mod tests {
         assert!(
             output.contains("rpm --import /good-key"),
             "root-level key must have rpm --import after staging"
+        );
+    }
+
+    // -- Phase 6: Dynamic FROM tests ------------------------------------------
+
+    #[test]
+    fn test_from_uses_target_image() {
+        use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
+            strategy: ResolutionStrategy::OsRelease,
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("FROM registry.redhat.io/rhel9/rhel-bootc:9.6"),
+            "must use target_image.image_ref for FROM, got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_from_target_image_with_no_baseline_degraded() {
+        use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
+            strategy: ResolutionStrategy::OsRelease,
+        });
+        snap.no_baseline = true;
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("FROM registry.redhat.io/rhel9/rhel-bootc:9.6"),
+            "degraded (no_baseline=true) must still use target_image for FROM"
+        );
+    }
+
+    #[test]
+    fn test_from_omitted_when_no_target_image() {
+        let snap = InspectionSnapshot::new();
+        let result = base_image_from_snapshot(&snap);
+        assert!(result.is_none(), "no target_image or rpm.base_image must return None");
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("# FROM line omitted"),
+            "must contain omission comment"
+        );
+        assert!(
+            !output.lines().any(|l| l.starts_with("FROM ")),
+            "must not contain a FROM directive"
+        );
+    }
+
+    #[test]
+    fn test_from_legacy_go_snapshot_uses_rpm_base_image() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            base_image: Some("quay.io/legacy/image:1.0".into()),
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("FROM quay.io/legacy/image:1.0"),
+            "legacy Go snapshot must use rpm.base_image"
+        );
+    }
+
+    #[test]
+    fn test_from_no_fallback_without_any_source() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            base_image: None,
+            ..Default::default()
+        });
+        let result = base_image_from_snapshot(&snap);
+        assert!(result.is_none(), "no hardcoded fallback when rpm.base_image is None");
+    }
+
+    #[test]
+    fn test_from_target_image_takes_priority_over_rpm_base_image() {
+        use inspectah_core::baseline::{ResolutionStrategy, TargetImageIdentity};
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
+            strategy: ResolutionStrategy::OsRelease,
+        });
+        snap.rpm = Some(RpmSection {
+            base_image: Some("quay.io/old/image:1.0".into()),
+            ..Default::default()
+        });
+        let result = base_image_from_snapshot(&snap);
+        assert_eq!(
+            result.unwrap(),
+            "registry.redhat.io/rhel9/rhel-bootc:9.6",
+            "target_image must take priority over rpm.base_image"
         );
     }
 }
