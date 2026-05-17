@@ -63,12 +63,29 @@
 /* Containerfile panel — open */
 .inspectah-cf-panel--open {
   flex: 0 0 340px;
-  min-width: 260px;
+  min-width: 200px;
   border-left: 1px solid var(--pf-t--global--border--color--default);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  transition: flex-basis 200ms ease;
+  position: relative;
+}
+
+/* Resize drag handle on left edge */
+.inspectah-cf-panel__drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 10;
+  background: transparent;
+}
+
+.inspectah-cf-panel__drag-handle:hover {
+  background: var(--pf-t--global--color--brand--default);
+  opacity: 0.3;
 }
 
 .inspectah-cf-panel__header {
@@ -196,6 +213,9 @@
   .inspectah-cf-panel--open {
     flex: 0 0 28px;
     min-width: 28px;
+  }
+  .inspectah-cf-panel__drag-handle {
+    display: none;
   }
 }
 
