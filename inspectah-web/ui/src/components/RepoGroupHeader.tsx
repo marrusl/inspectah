@@ -105,7 +105,9 @@ export function RepoGroupHeader({
         </span>
       )}
       <span className="inspectah-repo-group-header__count">
-        {packageCount} {packageCount === 1 ? "package" : "packages"}
+        {!enabled
+          ? `${packageCount} ${packageCount === 1 ? "package" : "packages"} excluded`
+          : `${packageCount} ${packageCount === 1 ? "package" : "packages"}`}
       </span>
       {enabled && infoCount != null && infoCount > 0 && (
         <span className="inspectah-repo-group-header__info-count">
