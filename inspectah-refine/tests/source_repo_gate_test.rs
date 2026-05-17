@@ -1,3 +1,4 @@
+use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::types::rpm::{RpmSection, PackageEntry, PackageState};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_refine::session::RefineSession;
@@ -54,8 +55,13 @@ fn test_source_repo_proof_rust_collector_path() {
                 include: true, ..Default::default()
             },
         ],
-        baseline_package_names: Some(vec![]),
         ..Default::default()
+    });
+    // Empty baseline — presence puts us in verified mode
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-05-17T00:00:00Z".into(),
     });
 
     // Verify the refine session correctly classifies based on source_repo

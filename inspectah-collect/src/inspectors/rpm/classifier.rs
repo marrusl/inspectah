@@ -19,13 +19,16 @@ pub fn classify_packages(
                         && ver_cmp == std::cmp::Ordering::Equal
                         && rel_cmp == std::cmp::Ordering::Equal
                     {
-                        PackageState::BaseImageOnly
+                        // Same EVR — package matches baseline. Keep as Added.
+                        // The attention model assigns PackageBaselineMatch.
+                        PackageState::Added
                     } else {
                         PackageState::Modified
                     }
                 }
             };
-            let include = state != PackageState::BaseImageOnly;
+            // All host packages get include: true — attention model decides visibility
+            let include = true;
             PackageEntry {
                 state,
                 include,
@@ -73,12 +76,12 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_base_image_only() {
+    fn test_classify_same_evr_is_added() {
         let host = vec![pkg("bash", "5.2.26", "3.el9")];
         let baseline = baseline_with(&[("bash", "5.2.26", "3.el9")]);
         let result = classify_packages(&host, &baseline);
-        assert_eq!(result[0].state, PackageState::BaseImageOnly);
-        assert!(!result[0].include);
+        assert_eq!(result[0].state, PackageState::Added);
+        assert!(result[0].include);
     }
 
     #[test]
@@ -200,9 +203,9 @@ mod tests {
 
         let result = classify_packages(&host, &classifier_baseline);
 
-        // bash: same EVR -> BaseImageOnly, include: false
-        assert_eq!(result[0].state, PackageState::BaseImageOnly);
-        assert!(!result[0].include);
+        // bash: same EVR -> Added (baseline match handled by attention model), include: true
+        assert_eq!(result[0].state, PackageState::Added);
+        assert!(result[0].include);
 
         // glibc: different release -> Modified, include: true
         assert_eq!(result[1].state, PackageState::Modified);

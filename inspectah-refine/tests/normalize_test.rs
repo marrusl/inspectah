@@ -118,11 +118,30 @@ fn go_emitted_snapshot_roundtrip() {
 
 // --- Tier-aware normalize defaults tests ---
 
+use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_refine::attention::{compute_config_attention, compute_package_attention};
 use inspectah_refine::normalize::{normalize_config_defaults, normalize_package_defaults};
+
+/// Helper: build a BaselineData with the given package names (all x86_64).
+fn make_baseline(names: &[&str]) -> BaselineData {
+    BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: names.iter().map(|n| {
+            let key = format!("{}.x86_64", n);
+            (key, BaselinePackageEntry {
+                name: n.to_string(),
+                epoch: Some("0".into()),
+                version: "1.0".into(),
+                release: "1.el9".into(),
+                arch: "x86_64".into(),
+            })
+        }).collect(),
+        extracted_at: "2026-05-17T00:00:00Z".into(),
+    }
+}
 
 #[test]
 fn test_tier1_packages_include_true() {
@@ -133,9 +152,9 @@ fn test_tier1_packages_include_true() {
             state: PackageState::Added, source_repo: "baseos".into(),
             include: false, ..Default::default()
         }],
-        baseline_package_names: Some(vec!["glibc".into()]),
         ..Default::default()
     });
+    snap.baseline = Some(make_baseline(&["glibc"]));
     let pkgs = compute_package_attention(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     assert!(snap.rpm.as_ref().unwrap().packages_added[0].include);
@@ -254,10 +273,11 @@ fn test_user_added_with_baseline_is_routine_included() {
                 state: PackageState::Added, source_repo: "appstream".into(),
                 include: false, ..Default::default() },
         ],
-        baseline_package_names: Some(vec![]),
         leaf_packages: Some(vec!["httpd".into()]),
         ..Default::default()
     });
+    // Empty baseline (no packages) — presence of baseline puts us in verified mode
+    snap.baseline = Some(make_baseline(&[]));
     let pkgs = compute_package_attention(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();

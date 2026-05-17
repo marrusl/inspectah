@@ -1,3 +1,4 @@
+use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
@@ -7,12 +8,13 @@ use inspectah_refine::types::{AttentionLevel, AttentionReason};
 
 // ---------------------------------------------------------------------------
 // Helper: build a snapshot with one package and optional baseline
+// Phase 6: baseline data goes in top-level snap.baseline, not rpm.baseline_package_names
 // ---------------------------------------------------------------------------
 fn make_snap_with_package(
     name: &str,
     state: PackageState,
     source_repo: &str,
-    baseline: Option<Vec<String>>,
+    baseline_names: Option<Vec<String>>,
 ) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
@@ -24,9 +26,25 @@ fn make_snap_with_package(
             include: true,
             ..Default::default()
         }],
-        baseline_package_names: baseline,
         ..Default::default()
     });
+    // Phase 6: baseline data goes in top-level snap.baseline
+    if let Some(names) = baseline_names {
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: names.iter().map(|n| {
+                let key = format!("{}.x86_64", n);
+                (key, BaselinePackageEntry {
+                    name: n.clone(),
+                    epoch: Some("0".into()),
+                    version: "1.0".into(),
+                    release: "1.el9".into(),
+                    arch: "x86_64".into(),
+                })
+            }).collect(),
+            extracted_at: "2026-05-17T00:00:00Z".into(),
+        });
+    }
     snap
 }
 
@@ -85,14 +103,15 @@ fn test_added_no_baseline_empty_repo_is_tier3() {
 }
 
 #[test]
-fn test_modified_baseline_match_is_tier1() {
+fn test_modified_in_baseline_is_needs_review_version_changed() {
+    // Modified packages ALWAYS need review, even when in baseline.
     let snap = make_snap_with_package(
         "glibc", PackageState::Modified, "baseos",
         Some(vec!["glibc".into()]),
     );
     let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
-    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
-    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
 }
 
 #[test]
