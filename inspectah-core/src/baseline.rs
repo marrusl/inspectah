@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::types::os::OsRelease;
+
 /// Strategy used to resolve the base image reference.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -195,6 +197,243 @@ impl fmt::Display for NormalizationError {
 
 impl std::error::Error for NormalizationError {}
 
+// ---------------------------------------------------------------------------
+// Transport prefixes stripped from UBlue image-ref values
+// ---------------------------------------------------------------------------
+
+const TRANSPORT_PREFIXES: &[&str] = &[
+    "ostree-image-signed:docker://",
+    "docker://",
+    "containers-storage:",
+];
+
+/// Known Fedora Atomic desktop variant IDs.
+const FEDORA_ATOMIC_DESKTOP_VARIANTS: &[&str] = &[
+    "silverblue",
+    "kinoite",
+    "sway-atomic",
+    "budgie-atomic",
+    "cosmic-atomic",
+    "lxqt-atomic",
+    "xfce-atomic",
+];
+
+/// UBlue metadata path.
+pub const UBLUE_METADATA_PATH: &str = "/usr/share/ublue-os/image-info.json";
+
+// ---------------------------------------------------------------------------
+// Version clamping
+// ---------------------------------------------------------------------------
+
+/// Compare dot-separated integer version strings, return max(version, minimum).
+///
+/// If either string is unparseable, returns `minimum` (fail safe).
+pub fn clamp_version(version: &str, minimum: &str) -> String {
+    let v_parts = match parse_version_parts(version) {
+        Some(p) => p,
+        None => return minimum.to_string(),
+    };
+    let m_parts = match parse_version_parts(minimum) {
+        Some(p) => p,
+        None => return minimum.to_string(),
+    };
+
+    let max_len = v_parts.len().max(m_parts.len());
+    for i in 0..max_len {
+        let v = v_parts.get(i).copied().unwrap_or(0);
+        let m = m_parts.get(i).copied().unwrap_or(0);
+        if v < m {
+            return minimum.to_string();
+        }
+        if v > m {
+            return version.to_string();
+        }
+    }
+    version.to_string()
+}
+
+/// Split a version string like "9.6" into [9, 6].
+fn parse_version_parts(version: &str) -> Option<Vec<u32>> {
+    if version.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for p in version.split('.') {
+        match p.parse::<u32>() {
+            Ok(n) => parts.push(n),
+            Err(_) => return None,
+        }
+    }
+    Some(parts)
+}
+
+// ---------------------------------------------------------------------------
+// Base image resolution
+// ---------------------------------------------------------------------------
+
+/// Strip known container transport prefixes from a reference string.
+fn strip_transport_prefix(s: &str) -> &str {
+    for prefix in TRANSPORT_PREFIXES {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            return rest;
+        }
+    }
+    s
+}
+
+/// Check whether a reference has a tag (`:` after the last `/`).
+fn ref_has_tag(r: &str) -> bool {
+    match r.rfind('/') {
+        Some(slash_pos) => r[slash_pos..].contains(':'),
+        None => r.contains(':'),
+    }
+}
+
+/// Resolve the base image reference from available sources.
+///
+/// Resolution chain (first match wins):
+/// 1. CLI override → `CliOverride`
+/// 2. UBlue metadata → `UniversalBlue`
+/// 3. bootc status ref → `BootcStatus`
+/// 4. Fedora Atomic desktop (variant in known set) → `FedoraAtomicDesktop`
+/// 5. os-release mapping with version clamping → `OsRelease`
+pub fn resolve_base_image(
+    os_release: &OsRelease,
+    ublue: Option<&UblueMetadata>,
+    bootc_status_ref: Option<&str>,
+    cli_override: Option<&str>,
+) -> Result<BaseImageResolution, ResolutionError> {
+    // 1. CLI override
+    if let Some(override_ref) = cli_override {
+        if !override_ref.is_empty() {
+            return Ok(BaseImageResolution {
+                image_ref: override_ref.to_string(),
+                strategy: ResolutionStrategy::CliOverride,
+            });
+        }
+    }
+
+    // 2. UBlue metadata
+    if let Some(ub) = ublue {
+        return resolve_ublue(ub);
+    }
+
+    // 3. bootc status
+    if let Some(bref) = bootc_status_ref {
+        if !bref.is_empty() {
+            return Ok(BaseImageResolution {
+                image_ref: bref.to_string(),
+                strategy: ResolutionStrategy::BootcStatus,
+            });
+        }
+    }
+
+    // 4. Fedora Atomic desktop
+    if os_release.id == "fedora" && !os_release.variant_id.is_empty() {
+        if FEDORA_ATOMIC_DESKTOP_VARIANTS.contains(&os_release.variant_id.as_str()) {
+            let image_ref = format!(
+                "quay.io/fedora-ostree-desktops/{}:{}",
+                os_release.variant_id, os_release.version_id
+            );
+            return Ok(BaseImageResolution {
+                image_ref,
+                strategy: ResolutionStrategy::FedoraAtomicDesktop,
+            });
+        }
+    }
+
+    // 5. os-release mapping with version clamping
+    resolve_from_os_release(os_release)
+}
+
+/// Resolve a UBlue metadata struct to a base image reference.
+fn resolve_ublue(ub: &UblueMetadata) -> Result<BaseImageResolution, ResolutionError> {
+    // Path A: image-ref present
+    if let Some(ref raw_ref) = ub.image_ref {
+        if !raw_ref.is_empty() {
+            let stripped = strip_transport_prefix(raw_ref);
+            if ref_has_tag(stripped) {
+                // Already tagged — use as-is
+                return Ok(BaseImageResolution {
+                    image_ref: stripped.to_string(),
+                    strategy: ResolutionStrategy::UniversalBlue,
+                });
+            }
+            // Tagless — need image-tag to combine
+            if let Some(ref tag) = ub.image_tag {
+                if !tag.is_empty() {
+                    return Ok(BaseImageResolution {
+                        image_ref: format!("{}:{}", stripped, tag),
+                        strategy: ResolutionStrategy::UniversalBlue,
+                    });
+                }
+            }
+            // Tagless ref without image-tag → fail closed
+            return Err(ResolutionError::MalformedUblueMetadata {
+                path: UBLUE_METADATA_PATH.to_string(),
+                reason: "image-ref has no tag and no image-tag field".to_string(),
+            });
+        }
+    }
+
+    // Path B: no image-ref — synthesize from vendor/name/tag
+    let vendor = ub.image_vendor.as_deref().unwrap_or("");
+    let name = ub.image_name.as_deref().unwrap_or("");
+    let tag = ub.image_tag.as_deref().unwrap_or("");
+
+    if !vendor.is_empty() && !name.is_empty() && !tag.is_empty() {
+        return Ok(BaseImageResolution {
+            image_ref: format!("ghcr.io/{}/{}:{}", vendor, name, tag),
+            strategy: ResolutionStrategy::UniversalBlue,
+        });
+    }
+
+    // Missing fields → fail closed
+    Err(ResolutionError::MalformedUblueMetadata {
+        path: UBLUE_METADATA_PATH.to_string(),
+        reason: "missing required fields for synthesis (need vendor, name, tag)".to_string(),
+    })
+}
+
+/// Map os-release fields to a base image with version clamping.
+fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution, ResolutionError> {
+    let id = os_release.id.as_str();
+    let version_id = os_release.version_id.as_str();
+    let major = version_id.split('.').next().unwrap_or("");
+
+    match id {
+        "rhel" => {
+            // Find the minimum version for this major
+            let effective = RHEL_BOOTC_MIN
+                .iter()
+                .find(|(maj, _)| *maj == major)
+                .map(|(_, min)| clamp_version(version_id, min))
+                .unwrap_or_else(|| version_id.to_string());
+            Ok(BaseImageResolution {
+                image_ref: format!(
+                    "registry.redhat.io/rhel{}/rhel-bootc:{}",
+                    major, effective
+                ),
+                strategy: ResolutionStrategy::OsRelease,
+            })
+        }
+        "centos" => Ok(BaseImageResolution {
+            image_ref: format!("quay.io/centos-bootc/centos-bootc:stream{}", major),
+            strategy: ResolutionStrategy::OsRelease,
+        }),
+        "fedora" => {
+            let effective = clamp_version(major, &FEDORA_BOOTC_MIN.to_string());
+            Ok(BaseImageResolution {
+                image_ref: format!("quay.io/fedora/fedora-bootc:{}", effective),
+                strategy: ResolutionStrategy::OsRelease,
+            })
+        }
+        _ => Err(ResolutionError::UnknownDistro {
+            id: id.to_string(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +570,330 @@ mod tests {
         assert_eq!(metadata.image_tag, Some("41".to_string()));
         assert_eq!(metadata.image_name, Some("base-main".to_string()));
         assert_eq!(metadata.image_vendor, Some("ublue-os".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // clamp_version tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn clamp_version_below_minimum() {
+        assert_eq!(clamp_version("9.4", "9.6"), "9.6");
+    }
+
+    #[test]
+    fn clamp_version_at_minimum() {
+        assert_eq!(clamp_version("9.6", "9.6"), "9.6");
+    }
+
+    #[test]
+    fn clamp_version_above_minimum() {
+        assert_eq!(clamp_version("9.8", "9.6"), "9.8");
+    }
+
+    #[test]
+    fn clamp_version_different_major() {
+        assert_eq!(clamp_version("10.0", "10.0"), "10.0");
+    }
+
+    #[test]
+    fn clamp_version_unparseable_returns_minimum() {
+        assert_eq!(clamp_version("abc", "9.6"), "9.6");
+    }
+
+    #[test]
+    fn clamp_version_empty_returns_minimum() {
+        assert_eq!(clamp_version("", "9.6"), "9.6");
+    }
+
+    #[test]
+    fn clamp_version_single_component() {
+        assert_eq!(clamp_version("40", "41"), "41");
+        assert_eq!(clamp_version("42", "41"), "42");
+    }
+
+    // -----------------------------------------------------------------------
+    // resolve_base_image tests
+    // -----------------------------------------------------------------------
+
+    fn make_os_release(id: &str, version_id: &str, variant_id: &str) -> OsRelease {
+        OsRelease {
+            id: id.to_string(),
+            version_id: version_id.to_string(),
+            variant_id: variant_id.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolution_cli_override_wins() {
+        let os = make_os_release("rhel", "9.4", "");
+        let result = resolve_base_image(&os, None, None, Some("my-custom:latest")).unwrap();
+        assert_eq!(result.image_ref, "my-custom:latest");
+        assert_eq!(result.strategy, ResolutionStrategy::CliOverride);
+    }
+
+    #[test]
+    fn resolution_ublue_transport_prefixed_tagless_ref_with_tag() {
+        let os = make_os_release("fedora", "41", "");
+        let ub = UblueMetadata {
+            image_ref: Some("ostree-image-signed:docker://ghcr.io/ublue-os/bazzite".to_string()),
+            image_tag: Some("stable".to_string()),
+            image_name: Some("bazzite".to_string()),
+            image_vendor: Some("ublue-os".to_string()),
+        };
+        let result = resolve_base_image(&os, Some(&ub), None, None).unwrap();
+        assert_eq!(result.image_ref, "ghcr.io/ublue-os/bazzite:stable");
+        assert_eq!(result.strategy, ResolutionStrategy::UniversalBlue);
+    }
+
+    #[test]
+    fn resolution_ublue_already_tagged_ref() {
+        let os = make_os_release("fedora", "41", "silverblue");
+        let ub = UblueMetadata {
+            image_ref: Some("ghcr.io/ublue-os/bazzite:stable".to_string()),
+            image_tag: None,
+            image_name: Some("bazzite".to_string()),
+            image_vendor: Some("ublue-os".to_string()),
+        };
+        let result = resolve_base_image(&os, Some(&ub), None, None).unwrap();
+        assert_eq!(result.image_ref, "ghcr.io/ublue-os/bazzite:stable");
+        assert_eq!(result.strategy, ResolutionStrategy::UniversalBlue);
+    }
+
+    #[test]
+    fn resolution_ublue_synthesis_fallback() {
+        let os = make_os_release("fedora", "40", "");
+        let ub = UblueMetadata {
+            image_ref: None,
+            image_tag: Some("40".to_string()),
+            image_name: Some("bazzite".to_string()),
+            image_vendor: Some("ublue-os".to_string()),
+        };
+        let result = resolve_base_image(&os, Some(&ub), None, None).unwrap();
+        assert_eq!(result.image_ref, "ghcr.io/ublue-os/bazzite:40");
+        assert_eq!(result.strategy, ResolutionStrategy::UniversalBlue);
+    }
+
+    #[test]
+    fn resolution_ublue_tagless_ref_no_image_tag_fails_closed() {
+        let os = make_os_release("fedora", "41", "");
+        let ub = UblueMetadata {
+            image_ref: Some("ghcr.io/ublue-os/bazzite".to_string()),
+            image_tag: None,
+            image_name: Some("bazzite".to_string()),
+            image_vendor: Some("ublue-os".to_string()),
+        };
+        let result = resolve_base_image(&os, Some(&ub), None, None);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ResolutionError::MalformedUblueMetadata { path, reason } => {
+                assert_eq!(path, UBLUE_METADATA_PATH);
+                assert!(reason.contains("no tag"));
+            }
+            other => panic!("expected MalformedUblueMetadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolution_ublue_malformed_metadata() {
+        let os = make_os_release("fedora", "41", "");
+        // No image-ref, no image-tag, missing vendor
+        let ub = UblueMetadata {
+            image_ref: None,
+            image_tag: None,
+            image_name: Some("bazzite".to_string()),
+            image_vendor: None,
+        };
+        let result = resolve_base_image(&os, Some(&ub), None, None);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ResolutionError::MalformedUblueMetadata { .. } => {}
+            other => panic!("expected MalformedUblueMetadata, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolution_bootc_status_ref() {
+        let os = make_os_release("fedora", "41", "");
+        let result =
+            resolve_base_image(&os, None, Some("quay.io/fedora/fedora-bootc:41"), None).unwrap();
+        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:41");
+        assert_eq!(result.strategy, ResolutionStrategy::BootcStatus);
+    }
+
+    #[test]
+    fn resolution_fedora_atomic_desktop_before_generic_fedora() {
+        let os = make_os_release("fedora", "41", "silverblue");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "quay.io/fedora-ostree-desktops/silverblue:41"
+        );
+        assert_eq!(result.strategy, ResolutionStrategy::FedoraAtomicDesktop);
+    }
+
+    #[test]
+    fn resolution_generic_fedora_no_variant() {
+        let os = make_os_release("fedora", "42", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:42");
+        assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
+    }
+
+    #[test]
+    fn resolution_centos_stream() {
+        let os = make_os_release("centos", "9", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "quay.io/centos-bootc/centos-bootc:stream9"
+        );
+        assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
+    }
+
+    #[test]
+    fn resolution_rhel() {
+        let os = make_os_release("rhel", "9.6", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "registry.redhat.io/rhel9/rhel-bootc:9.6"
+        );
+        assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
+    }
+
+    #[test]
+    fn resolution_rhel_version_floor_clamped() {
+        // RHEL 9.4 → clamped to 9.6
+        let os = make_os_release("rhel", "9.4", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "registry.redhat.io/rhel9/rhel-bootc:9.6"
+        );
+    }
+
+    #[test]
+    fn resolution_rhel_version_floor_at_minimum() {
+        // RHEL 9.6 → no clamping
+        let os = make_os_release("rhel", "9.6", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "registry.redhat.io/rhel9/rhel-bootc:9.6"
+        );
+    }
+
+    #[test]
+    fn resolution_rhel10_version_floor() {
+        // RHEL 10.0 → at floor, no clamping
+        let os = make_os_release("rhel", "10.0", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(
+            result.image_ref,
+            "registry.redhat.io/rhel10/rhel-bootc:10.0"
+        );
+    }
+
+    #[test]
+    fn resolution_fedora_version_floor_clamped() {
+        // Fedora 40 → clamped to 41
+        let os = make_os_release("fedora", "40", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:41");
+    }
+
+    #[test]
+    fn resolution_fedora_version_floor_above() {
+        // Fedora 42 → above floor, no clamping
+        let os = make_os_release("fedora", "42", "");
+        let result = resolve_base_image(&os, None, None, None).unwrap();
+        assert_eq!(result.image_ref, "quay.io/fedora/fedora-bootc:42");
+    }
+
+    #[test]
+    fn resolution_unknown_distro() {
+        let os = make_os_release("suse", "15.5", "");
+        let result = resolve_base_image(&os, None, None, None);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ResolutionError::UnknownDistro { id } => assert_eq!(id, "suse"),
+            other => panic!("expected UnknownDistro, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn resolution_all_seven_desktop_variants() {
+        let variants = [
+            "silverblue",
+            "kinoite",
+            "sway-atomic",
+            "budgie-atomic",
+            "cosmic-atomic",
+            "lxqt-atomic",
+            "xfce-atomic",
+        ];
+        for variant in &variants {
+            let os = make_os_release("fedora", "41", variant);
+            let result = resolve_base_image(&os, None, None, None).unwrap();
+            assert_eq!(
+                result.image_ref,
+                format!("quay.io/fedora-ostree-desktops/{}:41", variant),
+                "variant {} did not resolve correctly",
+                variant
+            );
+            assert_eq!(result.strategy, ResolutionStrategy::FedoraAtomicDesktop);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Transport prefix stripping
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn strip_transport_ostree_image_signed() {
+        assert_eq!(
+            strip_transport_prefix("ostree-image-signed:docker://ghcr.io/ublue-os/bazzite:stable"),
+            "ghcr.io/ublue-os/bazzite:stable"
+        );
+    }
+
+    #[test]
+    fn strip_transport_docker() {
+        assert_eq!(
+            strip_transport_prefix("docker://ghcr.io/ublue-os/bazzite:stable"),
+            "ghcr.io/ublue-os/bazzite:stable"
+        );
+    }
+
+    #[test]
+    fn strip_transport_containers_storage() {
+        assert_eq!(
+            strip_transport_prefix("containers-storage:localhost/myimage:latest"),
+            "localhost/myimage:latest"
+        );
+    }
+
+    #[test]
+    fn strip_transport_none() {
+        assert_eq!(
+            strip_transport_prefix("ghcr.io/ublue-os/bazzite:stable"),
+            "ghcr.io/ublue-os/bazzite:stable"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // ref_has_tag
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ref_has_tag_with_tag() {
+        assert!(ref_has_tag("ghcr.io/ublue-os/bazzite:stable"));
+    }
+
+    #[test]
+    fn ref_has_tag_without_tag() {
+        assert!(!ref_has_tag("ghcr.io/ublue-os/bazzite"));
     }
 }
