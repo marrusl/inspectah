@@ -6,6 +6,7 @@ use inspectah_core::types::config::ConfigFileKind;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
+use crate::baseline_summary::{derive_baseline_summary, BaselineSummary};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
@@ -204,6 +205,15 @@ impl RefineSession {
     /// release the lock before doing expensive export work.
     pub fn snapshot_projected(&self) -> InspectionSnapshot {
         self.project_snapshot()
+    }
+
+    /// Derive baseline summary from the current view's classified packages.
+    ///
+    /// Returns `None` when the snapshot has no `target_image` or `baseline`.
+    /// Counts reflect classification state, not triage state — they are
+    /// stable across user include/exclude operations.
+    pub fn baseline_summary(&self) -> Option<BaselineSummary> {
+        derive_baseline_summary(&self.original, &self.view().packages)
     }
 
     /// Valid section prefixes for viewed IDs.
