@@ -103,7 +103,7 @@ fn baseline_happy_path_extracts_packages_and_digest() {
     // Verify package fields.
     let bash = &data.packages["bash.x86_64"];
     assert_eq!(bash.name, "bash");
-    assert_eq!(bash.epoch, None); // epoch "0" maps to None
+    assert_eq!(bash.epoch, Some("0".to_string())); // epoch "0" kept as Some("0") to match host RPM parser
     assert_eq!(bash.version, "5.2.26");
     assert_eq!(bash.release, "3.el9");
     assert_eq!(bash.arch, "x86_64");

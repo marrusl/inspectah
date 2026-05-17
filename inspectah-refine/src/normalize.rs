@@ -109,6 +109,7 @@ pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
     for sc in &mut services.state_changes {
         if incompatible_units.contains(&sc.unit.as_str()) {
             sc.include = false;
+            sc.attention_reason = Some("service-image-mode-incompatible".to_string());
         }
     }
 

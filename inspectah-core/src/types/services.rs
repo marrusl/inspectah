@@ -15,6 +15,8 @@ pub struct ServiceStateChange {
     pub include: bool,
     pub owning_package: Option<String>,
     pub fleet: Option<FleetPrevalence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attention_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
