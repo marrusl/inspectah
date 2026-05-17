@@ -1088,10 +1088,10 @@ mod tests {
             assert_eq!(crontab_jobs[0].path, "etc/crontab");
 
             // One generated timer for the maintenance job
-            let gen = &section.generated_timer_units;
-            assert_eq!(gen.len(), 1);
-            assert_eq!(gen[0].cron_expr, "0 4 * * *");
-            assert!(gen[0].command.contains("daily-maintenance.sh"));
+            let generated = &section.generated_timer_units;
+            assert_eq!(generated.len(), 1);
+            assert_eq!(generated[0].cron_expr, "0 4 * * *");
+            assert!(generated[0].command.contains("daily-maintenance.sh"));
         } else {
             panic!("expected ScheduledTasks section");
         }

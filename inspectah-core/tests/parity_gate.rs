@@ -602,21 +602,21 @@ fn test_scheduled_tasks_field_coverage() {
         2,
         "provisional golden has 2 generated_timer_units"
     );
-    let gen = &section.generated_timer_units[0];
+    let timer = &section.generated_timer_units[0];
     assert!(
-        !gen.name.is_empty(),
+        !timer.name.is_empty(),
         "generated timer name must be populated"
     );
     assert!(
-        !gen.cron_expr.is_empty(),
+        !timer.cron_expr.is_empty(),
         "generated timer cron_expr must be populated"
     );
     assert!(
-        !gen.source_path.is_empty(),
+        !timer.source_path.is_empty(),
         "generated timer source_path must be populated"
     );
     assert!(
-        !gen.command.is_empty(),
+        !timer.command.is_empty(),
         "generated timer command must be populated"
     );
 }
