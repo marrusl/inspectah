@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -6,12 +6,12 @@ use inspectah_core::types::config::ConfigFileKind;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
-use crate::baseline_summary::{derive_baseline_summary, BaselineSummary};
+use crate::baseline_summary::{BaselineSummary, derive_baseline_summary};
 use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
-    AnnotatedOp, AttentionLevel, ChangesSummary, PackageTarget, RefineError,
-    RefinedView, RefineStats, RefinementOp, RepoProvenance,
+    AnnotatedOp, AttentionLevel, ChangesSummary, PackageTarget, RefineError, RefineStats,
+    RefinedView, RefinementOp, RepoProvenance,
 };
 
 pub struct RefineSession {
@@ -26,6 +26,10 @@ pub struct RefineSession {
     /// Format: "section:item_id" (e.g., "packages:httpd.x86_64").
     /// Non-serialized — excluded from tarball export.
     viewed: HashSet<String>,
+}
+
+fn canonical_package_id(name: &str, arch: &str) -> String {
+    format!("{name}.{arch}")
 }
 
 impl RefineSession {
@@ -167,9 +171,8 @@ impl RefineSession {
             }
         }
 
-        let repos_excluded: Vec<String> = self.excluded_sections_at(&projected)
-            .into_iter()
-            .collect();
+        let repos_excluded: Vec<String> =
+            self.excluded_sections_at(&projected).into_iter().collect();
 
         let is_dirty = !packages_included.is_empty()
             || !packages_excluded.is_empty()
@@ -271,11 +274,7 @@ impl RefineSession {
         &self.viewed
     }
 
-    pub fn export_tarball(
-        &self,
-        path: &Path,
-        expected_generation: u64,
-    ) -> Result<(), RefineError> {
+    pub fn export_tarball(&self, path: &Path, expected_generation: u64) -> Result<(), RefineError> {
         if expected_generation != self.generation {
             return Err(RefineError::StaleGeneration {
                 expected: expected_generation,
@@ -366,22 +365,18 @@ impl RefineSession {
                     .map(|e| e.include) // already included = noop
                     .unwrap_or(false)
             }
-            RefinementOp::ExcludeConfig { path } => {
-                projected
-                    .config
-                    .as_ref()
-                    .and_then(|c| c.files.iter().find(|e| e.path == path.to_string_lossy()))
-                    .map(|e| !e.include)
-                    .unwrap_or(false)
-            }
-            RefinementOp::IncludeConfig { path } => {
-                projected
-                    .config
-                    .as_ref()
-                    .and_then(|c| c.files.iter().find(|e| e.path == path.to_string_lossy()))
-                    .map(|e| e.include)
-                    .unwrap_or(false)
-            }
+            RefinementOp::ExcludeConfig { path } => projected
+                .config
+                .as_ref()
+                .and_then(|c| c.files.iter().find(|e| e.path == path.to_string_lossy()))
+                .map(|e| !e.include)
+                .unwrap_or(false),
+            RefinementOp::IncludeConfig { path } => projected
+                .config
+                .as_ref()
+                .and_then(|c| c.files.iter().find(|e| e.path == path.to_string_lossy()))
+                .map(|e| e.include)
+                .unwrap_or(false),
             RefinementOp::ExcludeRepo { section_id } => {
                 // Noop if the section is already in the excluded set
                 let excluded = self.excluded_sections_at(&projected);
@@ -402,28 +397,38 @@ impl RefineSession {
             match op {
                 RefinementOp::ExcludePackage(target) => {
                     if let Some(ref mut rpm) = snap.rpm {
-                        if let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e)) {
+                        if let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
+                        {
                             pkg.include = false;
                         }
                     }
                 }
                 RefinementOp::IncludePackage(target) => {
                     if let Some(ref mut rpm) = snap.rpm {
-                        if let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e)) {
+                        if let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
+                        {
                             pkg.include = true;
                         }
                     }
                 }
                 RefinementOp::ExcludeConfig { path } => {
                     if let Some(ref mut config) = snap.config {
-                        if let Some(entry) = config.files.iter_mut().find(|e| e.path == path.to_string_lossy()) {
+                        if let Some(entry) = config
+                            .files
+                            .iter_mut()
+                            .find(|e| e.path == path.to_string_lossy())
+                        {
                             entry.include = false;
                         }
                     }
                 }
                 RefinementOp::IncludeConfig { path } => {
                     if let Some(ref mut config) = snap.config {
-                        if let Some(entry) = config.files.iter_mut().find(|e| e.path == path.to_string_lossy()) {
+                        if let Some(entry) = config
+                            .files
+                            .iter_mut()
+                            .find(|e| e.path == path.to_string_lossy())
+                        {
                             entry.include = true;
                         }
                     }
@@ -442,13 +447,20 @@ impl RefineSession {
 
                         // 2. For repo files: exclude only if ALL sections
                         // defined in that file are now excluded
-                        if let Some(file_paths) = self.repo_index.repo_file_by_section.get(section_id) {
+                        if let Some(file_paths) =
+                            self.repo_index.repo_file_by_section.get(section_id)
+                        {
                             for file_path in file_paths {
-                                let all_sections_excluded = self.repo_index.repo_file_by_section.iter()
+                                let all_sections_excluded = self
+                                    .repo_index
+                                    .repo_file_by_section
+                                    .iter()
                                     .filter(|(_, paths)| paths.contains(file_path))
                                     .all(|(sid, _)| excluded_sections.contains(sid));
                                 if all_sections_excluded {
-                                    if let Some(rf) = rpm.repo_files.iter_mut().find(|r| r.path == *file_path) {
+                                    if let Some(rf) =
+                                        rpm.repo_files.iter_mut().find(|r| r.path == *file_path)
+                                    {
                                         rf.include = false;
                                     }
                                 }
@@ -457,13 +469,19 @@ impl RefineSession {
 
                         // 3. For GPG keys: exclude only if ALL sections
                         // that reference this key are excluded
-                        if let Some(key_paths) = self.repo_index.gpg_keys_by_section.get(section_id) {
+                        if let Some(key_paths) = self.repo_index.gpg_keys_by_section.get(section_id)
+                        {
                             for key_path in key_paths {
-                                if let Some(referencing_sections) = self.repo_index.sections_by_gpg_key.get(key_path) {
-                                    let all_excluded = referencing_sections.iter()
+                                if let Some(referencing_sections) =
+                                    self.repo_index.sections_by_gpg_key.get(key_path)
+                                {
+                                    let all_excluded = referencing_sections
+                                        .iter()
                                         .all(|sid| excluded_sections.contains(sid));
                                     if all_excluded {
-                                        if let Some(k) = rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path) {
+                                        if let Some(k) =
+                                            rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path)
+                                        {
                                             k.include = false;
                                         }
                                     }
@@ -482,18 +500,25 @@ impl RefineSession {
                         }
 
                         // 2. Re-enable repo files for this section
-                        if let Some(file_paths) = self.repo_index.repo_file_by_section.get(section_id) {
+                        if let Some(file_paths) =
+                            self.repo_index.repo_file_by_section.get(section_id)
+                        {
                             for file_path in file_paths {
-                                if let Some(rf) = rpm.repo_files.iter_mut().find(|r| r.path == *file_path) {
+                                if let Some(rf) =
+                                    rpm.repo_files.iter_mut().find(|r| r.path == *file_path)
+                                {
                                     rf.include = true;
                                 }
                             }
                         }
 
                         // 3. Re-enable GPG keys for this section
-                        if let Some(key_paths) = self.repo_index.gpg_keys_by_section.get(section_id) {
+                        if let Some(key_paths) = self.repo_index.gpg_keys_by_section.get(section_id)
+                        {
                             for key_path in key_paths {
-                                if let Some(k) = rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path) {
+                                if let Some(k) =
+                                    rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path)
+                                {
                                     k.include = true;
                                 }
                             }
@@ -534,16 +559,33 @@ impl RefineSession {
         // from the triage view because dnf resolves them automatically.
         // Packages the user explicitly excluded via ops remain visible so
         // the user can undo the exclusion.
-        let hidden_deps: HashSet<(&str, &str)> = self.original.rpm.as_ref()
+        let hidden_deps: HashSet<(&str, &str)> = self
+            .original
+            .rpm
+            .as_ref()
             .map(|r| {
-                r.packages_added.iter()
+                r.packages_added
+                    .iter()
                     .filter(|p| !p.include)
                     .map(|p| (p.name.as_str(), p.arch.as_str()))
                     .collect()
             })
             .unwrap_or_default();
 
-        let packages: Vec<_> = all_packages.into_iter()
+        let original_package_includes: HashMap<(&str, &str), bool> = self
+            .original
+            .rpm
+            .as_ref()
+            .map(|r| {
+                r.packages_added
+                    .iter()
+                    .map(|pkg| ((pkg.name.as_str(), pkg.arch.as_str()), pkg.include))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let packages: Vec<_> = all_packages
+            .into_iter()
             .filter(|p| {
                 // Only filter out packages that were normalized to include=false
                 // at construction AND are still false after ops AND are not
@@ -563,6 +605,37 @@ impl RefineSession {
             })
             .collect();
 
+        // Filter to leaf packages when authoritative leaf data is available for
+        // a single-host snapshot. Preserve NeedsReview packages and any package
+        // whose include state the operator explicitly changed so the view/stats
+        // stay honest.
+        let packages = if let Some(rpm) = projected.rpm.as_ref() {
+            let is_fleet_snapshot = rpm.packages_added.iter().any(|pkg| pkg.fleet.is_some());
+            if let Some(leaf_names) = rpm.leaf_packages.as_ref().filter(|_| !is_fleet_snapshot) {
+                let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
+                packages
+                    .into_iter()
+                    .filter(|pkg| {
+                        let package_id =
+                            canonical_package_id(pkg.entry.name.as_str(), pkg.entry.arch.as_str());
+                        let primary_level = pkg.attention.first().map(|t| t.level);
+                        let original_include = original_package_includes
+                            .get(&(pkg.entry.name.as_str(), pkg.entry.arch.as_str()))
+                            .copied()
+                            .unwrap_or(pkg.entry.include);
+
+                        leaf_set.contains(package_id.as_str())
+                            || matches!(primary_level, Some(AttentionLevel::NeedsReview))
+                            || pkg.entry.include != original_include
+                    })
+                    .collect()
+            } else {
+                packages
+            }
+        } else {
+            packages
+        };
+
         // Preview must use the SAME root derivation as export to guarantee
         // byte-identical Containerfile output. The config tree materializer
         // computes the actual directory structure (which includes repo files,
@@ -570,13 +643,12 @@ impl RefineSession {
         // to a tempdir, read the roots, render the Containerfile, then drop
         // the tempdir.
         let preview_dir = tempfile::tempdir().expect("tempdir for preview");
-        let materialized_roots =
-            inspectah_pipeline::render::configtree::write_config_tree(
-                &projected, preview_dir.path(),
-            )
-            .unwrap_or_default();
-        let containerfile_preview =
-            render_containerfile(&projected, Some(&materialized_roots));
+        let materialized_roots = inspectah_pipeline::render::configtree::write_config_tree(
+            &projected,
+            preview_dir.path(),
+        )
+        .unwrap_or_default();
+        let containerfile_preview = render_containerfile(&projected, Some(&materialized_roots));
         drop(preview_dir);
 
         let stats = RefineStats {
@@ -655,15 +727,13 @@ pub fn render_refine_export(
     snap: &InspectionSnapshot,
     tarball_path: &Path,
 ) -> Result<(), RefineError> {
-    let tempdir = tempfile::tempdir()
-        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+    let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
     let out = tempdir.path();
 
     // 1. Materialize config tree FIRST -- gives us materialized_roots,
     //    the renderer's single source of truth for COPY lines.
-    let materialized_roots =
-        inspectah_pipeline::render::configtree::write_config_tree(snap, out)
-            .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
+    let materialized_roots = inspectah_pipeline::render::configtree::write_config_tree(snap, out)
+        .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
 
     // 2. Materialize env-files (conditional)
     inspectah_pipeline::render::configtree::write_env_files(snap, out)
@@ -672,9 +742,16 @@ pub fn render_refine_export(
     // 2b. Remove any top-level artifacts outside the approved export contract.
     // write_config_tree() can emit drop-ins/, quadlet/, flatpak/ at root.
     let allowed_top_level: std::collections::HashSet<&str> = [
-        "config", "env-files", "schema",
-        "inspection-snapshot.json", "Containerfile", "audit-report.md",
-    ].iter().copied().collect();
+        "config",
+        "env-files",
+        "schema",
+        "inspection-snapshot.json",
+        "Containerfile",
+        "audit-report.md",
+    ]
+    .iter()
+    .copied()
+    .collect();
 
     for entry in std::fs::read_dir(out)? {
         let entry = entry?;
@@ -701,8 +778,8 @@ pub fn render_refine_export(
     std::fs::write(out.join("audit-report.md"), audit)?;
 
     // 5. inspection-snapshot.json (projected)
-    let snap_json = serde_json::to_string_pretty(snap)
-        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+    let snap_json =
+        serde_json::to_string_pretty(snap).map_err(|e| RefineError::TarballError(e.to_string()))?;
     std::fs::write(out.join("inspection-snapshot.json"), snap_json)?;
 
     // 6. schema/snapshot.schema.json (placeholder -- same as scan.rs)
@@ -734,7 +811,8 @@ fn create_flat_tarball(source_dir: &Path, tarball_path: &Path) -> Result<(), Ref
     paths.sort();
 
     for path in &paths {
-        let rel = path.strip_prefix(source_dir)
+        let rel = path
+            .strip_prefix(source_dir)
             .map_err(|e| RefineError::TarballError(e.to_string()))?;
         if path.is_dir() {
             tar.append_dir(rel, path)
@@ -745,6 +823,158 @@ fn create_flat_tarball(source_dir: &Path, tarball_path: &Path) -> Result<(), Ref
         }
     }
 
-    tar.finish().map_err(|e| RefineError::TarballError(e.to_string()))?;
+    tar.finish()
+        .map_err(|e| RefineError::TarballError(e.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+
+    /// Build a minimal snapshot suitable for RefineSession tests.
+    fn test_snapshot() -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: 15,
+            rpm: Some(RpmSection::default()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn view_filters_to_canonical_leaf_packages_when_available() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "i686".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["glibc.x86_64".into()]);
+        rpm.auto_packages = Some(vec!["glibc.i686".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // View should only contain the canonical leaf package.
+        assert_eq!(view.packages.len(), 1);
+        assert_eq!(view.packages[0].entry.name, "glibc");
+        assert_eq!(view.packages[0].entry.arch, "x86_64");
+    }
+
+    #[test]
+    fn view_shows_all_packages_when_leaf_data_unavailable() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "vim".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = None; // No leaf data
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // All packages visible (degraded mode)
+        assert_eq!(view.packages.len(), 2);
+        assert_eq!(view.stats.total_packages, 2);
+    }
+
+    #[test]
+    fn containerfile_preview_only_includes_leaf_packages() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "vim".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["vim.x86_64".into()]);
+        rpm.auto_packages = Some(vec!["glibc.x86_64".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // Containerfile should contain vim but not glibc
+        assert!(
+            view.containerfile_preview.contains("vim"),
+            "containerfile should contain leaf package 'vim'"
+        );
+        assert!(
+            !view.containerfile_preview.contains("glibc"),
+            "containerfile should NOT contain auto package 'glibc'"
+        );
+    }
+
+    #[test]
+    fn view_stats_respect_canonical_leaf_identity() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "i686".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["glibc.x86_64".into()]);
+        rpm.auto_packages = Some(vec!["glibc.i686".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // Stats should reflect only the matching canonical package identity.
+        assert_eq!(
+            view.stats.total_packages, 1,
+            "total_packages should be leaf count"
+        );
+        assert_eq!(
+            view.stats.included_packages, 1,
+            "included_packages should be leaf count"
+        );
+    }
 }

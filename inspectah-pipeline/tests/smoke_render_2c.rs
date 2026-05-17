@@ -493,7 +493,10 @@ fn audit_config_section() {
 fn audit_selinux_section() {
     let snap = snapshot_with_selinux();
     let md = audit::render_audit(&snap);
-    assert!(md.contains("## Security & Access Control"), "must contain Security & Access Control heading");
+    assert!(
+        md.contains("## Security & Access Control"),
+        "must contain Security & Access Control heading"
+    );
     assert!(md.contains("enforcing"), "must show SELinux mode");
     assert!(
         md.contains("Custom modules:"),

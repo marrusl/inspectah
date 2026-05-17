@@ -184,13 +184,7 @@ fn capture_image_digest(
     // Primary attempt.
     let primary = run_nsenter(
         executor,
-        &[
-            "podman",
-            "inspect",
-            "--format",
-            "{{.Digest}}",
-            image_ref,
-        ],
+        &["podman", "inspect", "--format", "{{.Digest}}", image_ref],
     );
     if primary.success() {
         let digest = primary.stdout.trim().to_string();
@@ -245,7 +239,7 @@ fn parse_nevra_output(output: &str) -> HashMap<String, BaselinePackageEntry> {
         let epoch = if epoch_raw == "(none)" || epoch_raw.is_empty() {
             None
         } else {
-            Some(epoch_raw.to_string())  // keeps "0" as Some("0")
+            Some(epoch_raw.to_string()) // keeps "0" as Some("0")
         };
         let version = parts[2].to_string();
         let release = parts[3].to_string();

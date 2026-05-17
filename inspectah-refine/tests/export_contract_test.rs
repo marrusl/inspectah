@@ -147,7 +147,10 @@ fn export_snapshot_reflects_refinements() {
         .iter()
         .find(|p| p.name == "httpd")
         .unwrap();
-    assert!(!httpd.include, "httpd must be excluded in exported snapshot");
+    assert!(
+        !httpd.include,
+        "httpd must be excluded in exported snapshot"
+    );
 
     let vim = snap
         .rpm
@@ -199,6 +202,99 @@ fn preview_export_containerfile_fidelity() {
         preview, exported,
         "preview and exported Containerfile must be byte-identical"
     );
+}
+
+#[test]
+fn preview_export_containerfile_preserves_non_leaf_manual_follow_up() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "local-tool".into(),
+                arch: "x86_64".into(),
+                state: PackageState::LocalInstall,
+                source_repo: String::new(),
+                include: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "mystery".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: String::new(),
+                include: false,
+                ..Default::default()
+            },
+        ],
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        auto_packages: Some(vec!["local-tool.x86_64".into(), "mystery.x86_64".into()]),
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let preview = session.view().containerfile_preview.clone();
+    let install_line = preview
+        .lines()
+        .find(|line| line.starts_with("RUN dnf install -y"))
+        .expect("preview must include an install line");
+
+    assert!(
+        install_line.contains("httpd") && !install_line.contains("local-tool"),
+        "preview must keep install line leaf-only, got: {install_line}"
+    );
+    assert!(
+        preview.contains("# === Manual Follow-up Required ==="),
+        "preview must retain manual follow-up section, got:\n{preview}"
+    );
+    for package in ["local-tool", "mystery"] {
+        assert!(
+            preview.contains(package),
+            "preview must mention {package}, got:\n{preview}"
+        );
+    }
+
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let extract_dir = tempdir.path().join("extract");
+    std::fs::create_dir(&extract_dir).unwrap();
+    let file = std::fs::File::open(&tarball_path).unwrap();
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+    archive.unpack(&extract_dir).unwrap();
+
+    let cf_path = walkdir::WalkDir::new(&extract_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .find(|e| e.file_name() == "Containerfile")
+        .expect("Containerfile must exist in export");
+
+    let exported = std::fs::read_to_string(cf_path.path()).unwrap();
+    assert_eq!(
+        preview, exported,
+        "preview and exported Containerfile must stay byte-identical"
+    );
+    assert!(
+        exported.contains("# === Manual Follow-up Required ==="),
+        "exported Containerfile must retain manual follow-up section, got:\n{exported}"
+    );
+    for package in ["local-tool", "mystery"] {
+        assert!(
+            exported.contains(package),
+            "exported Containerfile must mention {package}, got:\n{exported}"
+        );
+    }
 }
 
 #[test]
@@ -270,7 +366,9 @@ fn export_excludes_extra_config_tree_artifacts() {
     let session = RefineSession::new(snap);
     let tempdir = tempfile::tempdir().unwrap();
     let tarball_path = tempdir.path().join("output.tar.gz");
-    session.export_tarball(&tarball_path, session.generation()).unwrap();
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
 
     let files = tarball_file_set(&tarball_path);
 

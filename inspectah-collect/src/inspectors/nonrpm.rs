@@ -1348,12 +1348,16 @@ mod tests {
 
         let packages = scan_dist_info(&exec, "/opt/venv");
         assert_eq!(packages.len(), 2, "should find 2 dist-info packages");
-        assert!(packages
-            .iter()
-            .any(|p| p.name == "flask" && p.version == "2.3.3"));
-        assert!(packages
-            .iter()
-            .any(|p| p.name == "requests" && p.version == "2.31.0"));
+        assert!(
+            packages
+                .iter()
+                .any(|p| p.name == "flask" && p.version == "2.3.3")
+        );
+        assert!(
+            packages
+                .iter()
+                .any(|p| p.name == "requests" && p.version == "2.31.0")
+        );
     }
 
     // ---- Test 11: test_scan_npm_packages ----

@@ -108,7 +108,9 @@ fn parse_dnf_repo_lines(
         let line = line.trim();
         if let Some((name, repo)) = line.split_once(' ') {
             if name_set.contains(name) && !should_skip_repo(repo) {
-                repo_map.entry(name.to_string()).or_insert_with(|| repo.to_string());
+                repo_map
+                    .entry(name.to_string())
+                    .or_insert_with(|| repo.to_string());
             }
         }
     }
@@ -171,28 +173,51 @@ mod tests {
 
     #[test]
     fn test_populate_via_dnf_repoquery() {
-        let exec = MockExecutor::new().with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
-            ExecResult {
-                stdout: "bash baseos\n".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        ).with_command(
-            "dnf repoquery --installed --queryformat %{name} %{from_repo}\n glibc httpd",
-            ExecResult {
-                stdout: "glibc baseos\nhttpd appstream\n".into(),
-                exit_code: 0,
-                ..Default::default()
-            },
-        );
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n bash",
+                ExecResult {
+                    stdout: "bash baseos\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_command(
+                "dnf repoquery --installed --queryformat %{name} %{from_repo}\n glibc httpd",
+                ExecResult {
+                    stdout: "glibc baseos\nhttpd appstream\n".into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            );
 
         let mut packages = vec![pkg("bash"), pkg("glibc"), pkg("httpd")];
         populate_source_repos(&exec, &mut packages);
 
-        assert_eq!(packages.iter().find(|p| p.name == "bash").unwrap().source_repo, "baseos");
-        assert_eq!(packages.iter().find(|p| p.name == "glibc").unwrap().source_repo, "baseos");
-        assert_eq!(packages.iter().find(|p| p.name == "httpd").unwrap().source_repo, "appstream");
+        assert_eq!(
+            packages
+                .iter()
+                .find(|p| p.name == "bash")
+                .unwrap()
+                .source_repo,
+            "baseos"
+        );
+        assert_eq!(
+            packages
+                .iter()
+                .find(|p| p.name == "glibc")
+                .unwrap()
+                .source_repo,
+            "baseos"
+        );
+        assert_eq!(
+            packages
+                .iter()
+                .find(|p| p.name == "httpd")
+                .unwrap()
+                .source_repo,
+            "appstream"
+        );
     }
 
     #[test]
@@ -229,10 +254,7 @@ mod tests {
         let mut packages = vec![pkg("bash")];
         populate_source_repos(&exec, &mut packages);
 
-        assert_eq!(
-            packages[0].source_repo, "",
-            "empty repo should be skipped"
-        );
+        assert_eq!(packages[0].source_repo, "", "empty repo should be skipped");
     }
 
     #[test]
@@ -268,8 +290,22 @@ From repo   : appstream
         let mut packages = vec![pkg("bash"), pkg("httpd")];
         populate_source_repos(&exec, &mut packages);
 
-        assert_eq!(packages.iter().find(|p| p.name == "bash").unwrap().source_repo, "baseos");
-        assert_eq!(packages.iter().find(|p| p.name == "httpd").unwrap().source_repo, "appstream");
+        assert_eq!(
+            packages
+                .iter()
+                .find(|p| p.name == "bash")
+                .unwrap()
+                .source_repo,
+            "baseos"
+        );
+        assert_eq!(
+            packages
+                .iter()
+                .find(|p| p.name == "httpd")
+                .unwrap()
+                .source_repo,
+            "appstream"
+        );
     }
 
     #[test]

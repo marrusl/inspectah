@@ -170,8 +170,16 @@ pub struct RpmSection {
     pub dnf_history_removed: Vec<String>,
     #[serde(default)]
     pub version_changes: Vec<VersionChange>,
+    /// Canonical `name.arch` identities for authoritative leaf packages.
+    /// `None` means leaf classification was unavailable or degraded and
+    /// downstream consumers must treat the snapshot as "leaf truth unavailable."
     pub leaf_packages: Option<Vec<String>>,
+    /// Canonical `name.arch` identities for authoritative auto/transitive
+    /// packages. This must be `None` whenever `leaf_packages` is `None`.
     pub auto_packages: Option<Vec<String>>,
+    /// Maps authoritative leaf `name.arch` identities to their auto dependency
+    /// `name.arch` identities. When classification is unavailable or degraded,
+    /// this must serialize as an empty object.
     #[serde(default)]
     pub leaf_dep_tree: serde_json::Value,
     #[serde(default, deserialize_with = "crate::deserialize_null_default")]
@@ -275,5 +283,43 @@ mod tests {
         let json = serde_json::to_string_pretty(&section).unwrap();
         let parsed: RpmSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn test_rpm_section_leaf_metadata_preserves_canonical_package_ids() {
+        let section = RpmSection {
+            leaf_packages: Some(vec!["vim.x86_64".into()]),
+            auto_packages: Some(vec!["glibc.x86_64".into(), "ncurses.x86_64".into()]),
+            leaf_dep_tree: serde_json::json!({
+                "vim.x86_64": ["glibc.x86_64", "ncurses.x86_64"]
+            }),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&section).unwrap();
+        assert_eq!(json["leaf_packages"], serde_json::json!(["vim.x86_64"]));
+        assert_eq!(
+            json["auto_packages"],
+            serde_json::json!(["glibc.x86_64", "ncurses.x86_64"])
+        );
+        assert_eq!(
+            json["leaf_dep_tree"],
+            serde_json::json!({"vim.x86_64": ["glibc.x86_64", "ncurses.x86_64"]})
+        );
+    }
+
+    #[test]
+    fn test_rpm_section_leaf_metadata_serializes_unavailable_classification() {
+        let section = RpmSection {
+            leaf_packages: None,
+            auto_packages: None,
+            leaf_dep_tree: serde_json::json!({}),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&section).unwrap();
+        assert_eq!(json["leaf_packages"], serde_json::Value::Null);
+        assert_eq!(json["auto_packages"], serde_json::Value::Null);
+        assert_eq!(json["leaf_dep_tree"], serde_json::json!({}));
     }
 }

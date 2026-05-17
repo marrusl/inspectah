@@ -12,7 +12,7 @@ use inspectah_core::types::scheduled::{
     AtJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
 };
 use inspectah_core::types::selinux::SelinuxSection;
-use inspectah_pipeline::redaction::engine::{redact, RedactOptions};
+use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 
 // ===================================================================
 // Detection proofs — each surface produces a finding when planted

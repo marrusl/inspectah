@@ -30,7 +30,7 @@ use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
-use inspectah_pipeline::redaction::engine::{redact, RedactOptions};
+use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 use inspectah_pipeline::validate::validate;
@@ -260,7 +260,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
 fn read_ublue_metadata(executor: &dyn Executor) -> Result<Option<UblueMetadata>> {
     let content = match executor.read_file(Path::new("/usr/share/ublue-os/image-info.json")) {
         Ok(c) => c,
-        Err(_) => return Ok(None),  // file not found -> not a UBlue system
+        Err(_) => return Ok(None), // file not found -> not a UBlue system
     };
     // File exists — parse must succeed or fail closed
     let metadata: UblueMetadata = serde_json::from_str(&content)

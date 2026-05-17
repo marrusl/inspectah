@@ -12,35 +12,17 @@ impl IntoResponse for AppError {
                 StatusCode::UNPROCESSABLE_ENTITY,
                 format!("unknown target: {t}"),
             ),
-            RefineError::NothingToUndo => (
-                StatusCode::CONFLICT,
-                "nothing to undo".into(),
-            ),
-            RefineError::NothingToRedo => (
-                StatusCode::CONFLICT,
-                "nothing to redo".into(),
-            ),
+            RefineError::NothingToUndo => (StatusCode::CONFLICT, "nothing to undo".into()),
+            RefineError::NothingToRedo => (StatusCode::CONFLICT, "nothing to redo".into()),
             RefineError::StaleGeneration { expected, actual } => (
                 StatusCode::CONFLICT,
                 format!("stale generation: expected {expected}, got {actual}"),
             ),
-            RefineError::UntrustedSnapshot(msg) => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                msg.clone(),
-            ),
-            RefineError::ArchiveSafety(msg) => (
-                StatusCode::BAD_REQUEST,
-                msg.clone(),
-            ),
-            RefineError::BadRequest(msg) => (
-                StatusCode::BAD_REQUEST,
-                msg.clone(),
-            ),
+            RefineError::UntrustedSnapshot(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
+            RefineError::ArchiveSafety(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            RefineError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             // Internal errors — do not leak details
-            _ => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal error".into(),
-            ),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into()),
         };
 
         (status, Json(json!({ "error": message }))).into_response()

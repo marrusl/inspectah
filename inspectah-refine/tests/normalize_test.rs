@@ -129,16 +129,22 @@ use inspectah_refine::normalize::{normalize_config_defaults, normalize_package_d
 fn make_baseline(names: &[&str]) -> BaselineData {
     BaselineData {
         image_digest: "sha256:test".into(),
-        packages: names.iter().map(|n| {
-            let key = format!("{}.x86_64", n);
-            (key, BaselinePackageEntry {
-                name: n.to_string(),
-                epoch: Some("0".into()),
-                version: "1.0".into(),
-                release: "1.el9".into(),
-                arch: "x86_64".into(),
+        packages: names
+            .iter()
+            .map(|n| {
+                let key = format!("{}.x86_64", n);
+                (
+                    key,
+                    BaselinePackageEntry {
+                        name: n.to_string(),
+                        epoch: Some("0".into()),
+                        version: "1.0".into(),
+                        release: "1.el9".into(),
+                        arch: "x86_64".into(),
+                    },
+                )
             })
-        }).collect(),
+            .collect(),
         extracted_at: "2026-05-17T00:00:00Z".into(),
     }
 }
@@ -148,9 +154,12 @@ fn test_tier1_packages_include_true() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
-            name: "glibc".into(), arch: "x86_64".into(),
-            state: PackageState::Added, source_repo: "baseos".into(),
-            include: false, ..Default::default()
+            name: "glibc".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "baseos".into(),
+            include: false,
+            ..Default::default()
         }],
         ..Default::default()
     });
@@ -165,9 +174,12 @@ fn test_tier3_packages_include_false() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![PackageEntry {
-            name: "mystery".into(), arch: "x86_64".into(),
-            state: PackageState::LocalInstall, source_repo: "".into(),
-            include: true, ..Default::default()
+            name: "mystery".into(),
+            arch: "x86_64".into(),
+            state: PackageState::LocalInstall,
+            source_repo: "".into(),
+            include: true,
+            ..Default::default()
         }],
         ..Default::default()
     });
@@ -185,15 +197,25 @@ fn test_leaf_filtering_hides_non_leaf_tier2() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
-            PackageEntry { name: "httpd".into(), arch: "x86_64".into(),
-                state: PackageState::Added, source_repo: "appstream".into(),
-                include: true, ..Default::default() },
-            PackageEntry { name: "apr".into(), arch: "x86_64".into(),
-                state: PackageState::Added, source_repo: "appstream".into(),
-                include: true, ..Default::default() },
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
         ],
         baseline_package_names: None, // degraded mode -> Informational
-        leaf_packages: Some(vec!["httpd".into()]),
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
         ..Default::default()
     });
     let pkgs = compute_package_attention(&snap);
@@ -204,16 +226,71 @@ fn test_leaf_filtering_hides_non_leaf_tier2() {
 }
 
 #[test]
+fn test_leaf_defaults_do_not_leak_across_arches() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                include: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "i686".into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                include: false,
+                ..Default::default()
+            },
+        ],
+        baseline_package_names: None,
+        leaf_packages: Some(vec!["glibc.x86_64".into()]),
+        auto_packages: Some(vec!["glibc.i686".into()]),
+        leaf_dep_tree: serde_json::json!({}),
+        ..Default::default()
+    });
+
+    let pkgs = compute_package_attention(&snap);
+    normalize_package_defaults(&mut snap, &pkgs);
+
+    let rpm = snap.rpm.as_ref().unwrap();
+    assert!(
+        rpm.packages_added[0].include,
+        "x86_64 leaf must stay included"
+    );
+    assert!(
+        !rpm.packages_added[1].include,
+        "i686 auto package must stay excluded"
+    );
+}
+
+#[test]
 fn test_tier1_configs_include_false_not_copied() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
         files: vec![
-            ConfigFileEntry { path: "/etc/default.conf".into(),
-                kind: ConfigFileKind::RpmOwnedDefault, include: true, ..Default::default() },
-            ConfigFileEntry { path: "/etc/baseline.conf".into(),
-                kind: ConfigFileKind::BaselineMatch, include: true, ..Default::default() },
-            ConfigFileEntry { path: "/etc/custom.conf".into(),
-                kind: ConfigFileKind::Unowned, include: true, ..Default::default() },
+            ConfigFileEntry {
+                path: "/etc/default.conf".into(),
+                kind: ConfigFileKind::RpmOwnedDefault,
+                include: true,
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/baseline.conf".into(),
+                kind: ConfigFileKind::BaselineMatch,
+                include: true,
+                ..Default::default()
+            },
+            ConfigFileEntry {
+                path: "/etc/custom.conf".into(),
+                kind: ConfigFileKind::Unowned,
+                include: true,
+                ..Default::default()
+            },
         ],
     });
     let configs = compute_config_attention(&snap);
@@ -229,8 +306,10 @@ fn test_orphaned_configs_include_false() {
     let mut snap = InspectionSnapshot::new();
     snap.config = Some(ConfigSection {
         files: vec![ConfigFileEntry {
-            path: "/etc/old.conf".into(), kind: ConfigFileKind::Orphaned,
-            include: true, ..Default::default()
+            path: "/etc/old.conf".into(),
+            kind: ConfigFileKind::Orphaned,
+            include: true,
+            ..Default::default()
         }],
     });
     let configs = compute_config_attention(&snap);
@@ -244,19 +323,24 @@ fn test_tier2_leaf_fallback_when_no_leaf_data() {
     // With baseline present, user-added packages are now Routine (Tier 1).
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
-        packages_added: vec![
-            PackageEntry { name: "httpd".into(), arch: "x86_64".into(),
-                state: PackageState::Added, source_repo: "appstream".into(),
-                include: false, ..Default::default() },
-        ],
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "appstream".into(),
+            include: false,
+            ..Default::default()
+        }],
         baseline_package_names: None, // degraded mode -> Informational
-        leaf_packages: None, // no leaf data
+        leaf_packages: None,          // no leaf data
         ..Default::default()
     });
     let pkgs = compute_package_attention(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
-    assert!(snap.rpm.as_ref().unwrap().packages_added[0].include,
-        "without leaf data, all Tier 2 should be visible");
+    assert!(
+        snap.rpm.as_ref().unwrap().packages_added[0].include,
+        "without leaf data, all Tier 2 should be visible"
+    );
 }
 
 #[test]
@@ -266,14 +350,24 @@ fn test_user_added_with_baseline_is_routine_included() {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
-            PackageEntry { name: "httpd".into(), arch: "x86_64".into(),
-                state: PackageState::Added, source_repo: "appstream".into(),
-                include: false, ..Default::default() },
-            PackageEntry { name: "apr".into(), arch: "x86_64".into(),
-                state: PackageState::Added, source_repo: "appstream".into(),
-                include: false, ..Default::default() },
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: false,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: false,
+                ..Default::default()
+            },
         ],
-        leaf_packages: Some(vec!["httpd".into()]),
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
         ..Default::default()
     });
     // Empty baseline (no packages) — presence of baseline puts us in verified mode
@@ -281,6 +375,12 @@ fn test_user_added_with_baseline_is_routine_included() {
     let pkgs = compute_package_attention(&snap);
     normalize_package_defaults(&mut snap, &pkgs);
     let rpm = snap.rpm.as_ref().unwrap();
-    assert!(rpm.packages_added[0].include, "httpd: Routine, always included");
-    assert!(rpm.packages_added[1].include, "apr: also Routine with baseline, always included");
+    assert!(
+        rpm.packages_added[0].include,
+        "httpd: Routine, always included"
+    );
+    assert!(
+        rpm.packages_added[1].include,
+        "apr: also Routine with baseline, always included"
+    );
 }

@@ -952,12 +952,16 @@ redis_port_t                    tcp      6380\n";
         let section = extract_section(&result);
         // Only custom-compliance.rules should be included (audit.rules is RPM-owned)
         assert_eq!(section.audit_rules.len(), 1);
-        assert!(section.audit_rules[0]
-            .path
-            .contains("custom-compliance.rules"));
-        assert!(section.audit_rules[0]
-            .content
-            .contains("-w /etc/passwd -p wa -k identity"));
+        assert!(
+            section.audit_rules[0]
+                .path
+                .contains("custom-compliance.rules")
+        );
+        assert!(
+            section.audit_rules[0]
+                .content
+                .contains("-w /etc/passwd -p wa -k identity")
+        );
     }
 
     // ---- Test 13: test_audit_rules_custom_included ----
@@ -1046,9 +1050,11 @@ redis_port_t                    tcp      6380\n";
         // Only custom-app should be included (sshd is RPM-owned)
         assert_eq!(section.pam_configs.len(), 1);
         assert!(section.pam_configs[0].path.contains("custom-app"));
-        assert!(section.pam_configs[0]
-            .content
-            .contains("auth required pam_unix.so"));
+        assert!(
+            section.pam_configs[0]
+                .content
+                .contains("auth required pam_unix.so")
+        );
     }
 
     // ---- Test 15: test_pam_configs_custom_included ----
@@ -1085,9 +1091,11 @@ redis_port_t                    tcp      6380\n";
         assert_eq!(section.pam_configs[0].path, "etc/pam.d/custom-sshd");
         assert_eq!(section.pam_configs[1].path, "etc/pam.d/myapp-auth");
         // Content persisted
-        assert!(section.pam_configs[0]
-            .content
-            .contains("auth required pam_unix.so"));
+        assert!(
+            section.pam_configs[0]
+                .content
+                .contains("auth required pam_unix.so")
+        );
     }
 
     // ---- Test 16: test_fips_mode_enabled ----

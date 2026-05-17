@@ -127,9 +127,9 @@ impl Executor for RealExecutor {
                     // Timeout — kill the child, then join drain threads.
                     let _ = child.kill();
                     let _ = child.wait(); // reap
-                                          // Join threads so they don't leak (scoped threads
-                                          // require all spawned threads to finish before the
-                                          // scope exits).
+                    // Join threads so they don't leak (scoped threads
+                    // require all spawned threads to finish before the
+                    // scope exits).
                     let _ = stdout_thread.join();
                     let _ = stderr_thread.join();
                     ExecResult {

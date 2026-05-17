@@ -1145,42 +1145,63 @@ mod tests {
     #[test]
     fn va_digest_change_is_modified() {
         // S.5....T. — size and digest changed (content modification)
-        assert_eq!(classify_rpm_va_kind("S.5....T."), ConfigFileKind::RpmOwnedModified);
+        assert_eq!(
+            classify_rpm_va_kind("S.5....T."),
+            ConfigFileKind::RpmOwnedModified
+        );
     }
 
     #[test]
     fn va_size_only_is_modified() {
         // S........  — only size changed
-        assert_eq!(classify_rpm_va_kind("S........"), ConfigFileKind::RpmOwnedModified);
+        assert_eq!(
+            classify_rpm_va_kind("S........"),
+            ConfigFileKind::RpmOwnedModified
+        );
     }
 
     #[test]
     fn va_digest_only_is_modified() {
         // ..5......  — only digest changed
-        assert_eq!(classify_rpm_va_kind("..5......"), ConfigFileKind::RpmOwnedModified);
+        assert_eq!(
+            classify_rpm_va_kind("..5......"),
+            ConfigFileKind::RpmOwnedModified
+        );
     }
 
     #[test]
     fn va_mtime_only_is_default() {
         // .......T.  — only mtime changed (scriptlet-regenerated)
-        assert_eq!(classify_rpm_va_kind(".......T."), ConfigFileKind::RpmOwnedDefault);
+        assert_eq!(
+            classify_rpm_va_kind(".......T."),
+            ConfigFileKind::RpmOwnedDefault
+        );
     }
 
     #[test]
     fn va_mode_and_mtime_is_default() {
         // .M.....T.  — mode + mtime (metadata-only change)
-        assert_eq!(classify_rpm_va_kind(".M.....T."), ConfigFileKind::RpmOwnedDefault);
+        assert_eq!(
+            classify_rpm_va_kind(".M.....T."),
+            ConfigFileKind::RpmOwnedDefault
+        );
     }
 
     #[test]
     fn va_group_only_is_default() {
         // ......G..  — only group changed
-        assert_eq!(classify_rpm_va_kind("......G.."), ConfigFileKind::RpmOwnedDefault);
+        assert_eq!(
+            classify_rpm_va_kind("......G.."),
+            ConfigFileKind::RpmOwnedDefault
+        );
     }
 
     #[test]
     fn va_all_dots_is_default() {
         // .........  — all dots (no changes detected but listed)
-        assert_eq!(classify_rpm_va_kind("........."), ConfigFileKind::RpmOwnedDefault);
+        assert_eq!(
+            classify_rpm_va_kind("........."),
+            ConfigFileKind::RpmOwnedDefault
+        );
     }
 }
