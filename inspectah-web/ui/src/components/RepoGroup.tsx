@@ -17,6 +17,8 @@ export interface RepoGroupProps {
   revealItemId?: string;
   /** Item IDs in this group, for revealItemId matching */
   itemIds?: string[];
+  /** Roving tabindex value for the header row */
+  tabIndex?: number;
   onRepoToggle?: (sectionId: string, enabled: boolean) => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
   children: React.ReactNode;
@@ -30,6 +32,7 @@ export function RepoGroup({
   summaryText,
   revealItemId,
   itemIds,
+  tabIndex,
   onRepoToggle,
   onKeyDown,
   children,
@@ -62,6 +65,7 @@ export function RepoGroup({
         isExpanded={effectiveExpanded}
         infoCount={infoCount}
         summaryText={summaryText}
+        tabIndex={tabIndex}
         onToggle={onRepoToggle}
         onExpandToggle={handleExpandToggle}
         onKeyDown={onKeyDown}

@@ -543,6 +543,7 @@ export function DecisionList({
               return (ATTENTION_PRIORITY[aLevel] ?? 2) - (ATTENTION_PRIORITY[bLevel] ?? 2);
             });
 
+            const unknownHeaderIdx = flatItemIds.indexOf(`repo-header:${part.sectionId}`);
             return (
               <RepoGroup
                 key="__unknown__"
@@ -551,6 +552,7 @@ export function DecisionList({
                 forceExpanded={filterActive}
                 revealItemId={revealItemId}
                 itemIds={part.items.map(getItemId)}
+                tabIndex={unknownHeaderIdx === focusedIndex ? 0 : -1}
                 onRepoToggle={handleRepoToggle}
                 onKeyDown={handleRowKeyDown}
               >
@@ -606,6 +608,7 @@ export function DecisionList({
           // Disabled repos always start collapsed
           const defaultExpanded = isDisabled ? false : hasNeedsReview || hasInfo;
 
+          const headerIdx = flatItemIds.indexOf(`repo-header:${part.sectionId}`);
           return (
             <RepoGroup
               key={part.sectionId}
@@ -616,6 +619,7 @@ export function DecisionList({
               summaryText={summaryText}
               revealItemId={revealItemId}
               itemIds={part.items.map(getItemId)}
+              tabIndex={headerIdx === focusedIndex ? 0 : -1}
               onRepoToggle={handleRepoToggle}
               onKeyDown={handleRowKeyDown}
             >

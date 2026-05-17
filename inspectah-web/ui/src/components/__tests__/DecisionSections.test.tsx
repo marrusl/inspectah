@@ -2273,6 +2273,147 @@ describe("RepoGroupHeader updated labels", () => {
   });
 });
 
+// ---- Repo-first keyboard navigation tests ----
+
+describe("Repo-first keyboard navigation", () => {
+  const REPO_GROUPS: RepoGroupInfo[] = [
+    { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+    { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+  ];
+
+  it("repo headers are in the flat roving arrow-key sequence", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={REPO_GROUPS} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    const baseosHeader = screen.getByTestId("repo-group-baseos");
+    const epelHeader = screen.getByTestId("repo-group-epel");
+    expect(baseosHeader).toHaveAttribute("tabindex", "0");
+    // Non-focused headers should have tabindex -1
+    expect(epelHeader).toHaveAttribute("tabindex", "-1");
+    baseosHeader.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    const glibcRow = screen.getByTestId("decision-item-packages:glibc.x86_64");
+    expect(glibcRow).toHaveAttribute("tabindex", "0");
+    // After moving, baseos header should revert to -1
+    expect(baseosHeader).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("ArrowDown from last package in a repo jumps to next repo header", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={REPO_GROUPS} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    // Navigate via keyboard from baseos header → glibc → epel header
+    const baseosHeader = screen.getByTestId("repo-group-baseos");
+    baseosHeader.focus();
+    await userEvent.keyboard("{ArrowDown}"); // baseos header → glibc
+    const glibcRow = screen.getByTestId("decision-item-packages:glibc.x86_64");
+    expect(glibcRow).toHaveAttribute("tabindex", "0");
+    await userEvent.keyboard("{ArrowDown}"); // glibc → epel header
+    const epelHeader = screen.getByTestId("repo-group-epel");
+    expect(epelHeader).toHaveAttribute("tabindex", "0");
+    expect(glibcRow).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("skips collapsed repo group packages (only header in sequence)", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "htop", source_repo: "epel" }, [ROUTINE_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    const baseosHeader = screen.getByTestId("repo-group-baseos");
+    const glibcRow = screen.getByTestId("decision-item-packages:glibc.x86_64");
+    const epelHeader = screen.getByTestId("repo-group-epel");
+    baseosHeader.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(glibcRow).toHaveAttribute("tabindex", "0");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(epelHeader).toHaveAttribute("tabindex", "0");
+  });
+
+  it("Tab from a no-switch repo header does not dead-end", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    const baseosHeader = screen.getByTestId("repo-group-baseos");
+    baseosHeader.focus();
+    await userEvent.tab();
+    expect(document.activeElement).not.toBe(baseosHeader);
+  });
+
+  it("Space is inert on repo header row", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    const epelHeader = screen.getByTestId("repo-group-epel");
+    epelHeader.focus();
+    const expandedBefore = epelHeader.getAttribute("aria-expanded");
+    await userEvent.keyboard(" ");
+    expect(epelHeader.getAttribute("aria-expanded")).toBe(expandedBefore);
+  });
+
+  it("focus stays on repo header after expand/collapse/disable/re-enable", async () => {
+    const onViewUpdate = vi.fn().mockResolvedValue(undefined);
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    const { rerender } = render(
+      <DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={onViewUpdate} onMutationError={vi.fn()} />,
+    );
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    const epelHeader = screen.getByTestId("repo-group-epel");
+    epelHeader.focus();
+    expect(document.activeElement).toBe(epelHeader);
+    await userEvent.keyboard("{Enter}");
+    expect(document.activeElement).toBe(epelHeader);
+    await userEvent.keyboard("{Enter}");
+    expect(document.activeElement).toBe(epelHeader);
+  });
+
+  it("focus resets to first repo header after filter clear", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    const { rerender } = render(
+      <DecisionList items={items} sectionLabel="Packages" filterText="epel" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    rerender(
+      <DecisionList items={items} sectionLabel="Packages" filterText="" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    const baseosHeader = screen.getByTestId("repo-group-baseos");
+    expect(baseosHeader).toHaveAttribute("tabindex", "0");
+  });
+});
+
 // ---- AttentionSummary in MainContent tests ----
 
 describe("AttentionSummary in MainContent", () => {

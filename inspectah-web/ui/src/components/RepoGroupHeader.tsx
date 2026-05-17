@@ -14,6 +14,8 @@ export interface RepoGroupHeaderProps {
   infoCount?: number;
   /** Summary text like "No action needed" for all-routine repos */
   summaryText?: string;
+  /** Roving tabindex value — 0 when this header is the focused item, -1 otherwise */
+  tabIndex?: number;
   onToggle?: (sectionId: string, enabled: boolean) => void;
   onExpandToggle?: () => void;
   onKeyDown?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
@@ -42,6 +44,7 @@ export function RepoGroupHeader({
   isExpanded = false,
   infoCount,
   summaryText,
+  tabIndex = 0,
   onToggle,
   onExpandToggle,
   onKeyDown: onKeyDownProp,
@@ -85,7 +88,7 @@ export function RepoGroupHeader({
       role="row"
       aria-expanded={isExpanded}
       aria-controls={contentId}
-      tabIndex={0}
+      tabIndex={tabIndex}
       onKeyDown={handleKeyDown}
       className={`inspectah-repo-group-header${!enabled ? " inspectah-repo-group-header--disabled" : ""}`}
     >
