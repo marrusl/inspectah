@@ -12,7 +12,7 @@ use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystem
 use inspectah_core::types::rpm::{FileOwnershipEntry, PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_core::types::warnings::Warning;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// RPM query format string — matches Go's `%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}`.
 const RPM_QA_FORMAT: &str = "%{EPOCH}:%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}";
@@ -276,6 +276,25 @@ impl Inspector for RpmInspector {
             redaction_hints: Vec::new(),
         })
     }
+}
+
+/// Query `dnf repoquery --userinstalled` to get the set of user-explicitly-installed
+/// package names. Returns `None` if dnf is unavailable (non-zero exit).
+fn query_user_installed(exec: &dyn Executor) -> Option<HashSet<String>> {
+    let result = exec.run(
+        "dnf",
+        &["repoquery", "--userinstalled", "--queryformat", "%{name}\n"],
+    );
+    if !result.success() {
+        return None;
+    }
+    let names: HashSet<String> = result
+        .stdout
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    Some(names)
 }
 
 #[cfg(test)]
@@ -639,5 +658,58 @@ tzdata\t/usr/share/zoneinfo/UTC
             !output.warnings.iter().any(|w| w.message.contains("no baseline")),
             "should not warn about no baseline when baseline is provided"
         );
+    }
+
+    // --- query_user_installed tests ---
+
+    #[test]
+    fn query_user_installed_parses_dnf_output() {
+        let exec = MockExecutor::new().with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}\n",
+            ExecResult {
+                exit_code: 0,
+                stdout: "vim\nhtop\nnginx\n".into(),
+                stderr: String::new(),
+            },
+        );
+        let result = query_user_installed(&exec);
+        assert!(result.is_some());
+        let names = result.unwrap();
+        assert_eq!(names.len(), 3);
+        assert!(names.contains("vim"));
+        assert!(names.contains("htop"));
+        assert!(names.contains("nginx"));
+    }
+
+    #[test]
+    fn query_user_installed_returns_none_on_failure() {
+        let exec = MockExecutor::new().with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}\n",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        );
+        let result = query_user_installed(&exec);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn query_user_installed_skips_blank_lines() {
+        let exec = MockExecutor::new().with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}\n",
+            ExecResult {
+                exit_code: 0,
+                stdout: "\nvim\n\nhtop\n\n".into(),
+                stderr: String::new(),
+            },
+        );
+        let result = query_user_installed(&exec);
+        assert!(result.is_some());
+        let names = result.unwrap();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains("vim"));
+        assert!(names.contains("htop"));
     }
 }
