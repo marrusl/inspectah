@@ -563,6 +563,20 @@ impl RefineSession {
             })
             .collect();
 
+        // Filter to leaf packages when available (non-fleet snapshots only).
+        // When leaf_packages is Some, only show user-intent packages.
+        // When None, show all packages (graceful degradation).
+        let packages = if let Some(ref leaf_names) = projected.rpm.as_ref()
+            .and_then(|r| r.leaf_packages.as_ref())
+        {
+            let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
+            packages.into_iter()
+                .filter(|pkg| leaf_set.contains(pkg.entry.name.as_str()))
+                .collect()
+        } else {
+            packages
+        };
+
         // Preview must use the SAME root derivation as export to guarantee
         // byte-identical Containerfile output. The config tree materializer
         // computes the actual directory structure (which includes repo files,
@@ -747,4 +761,56 @@ fn create_flat_tarball(source_dir: &Path, tarball_path: &Path) -> Result<(), Ref
 
     tar.finish().map_err(|e| RefineError::TarballError(e.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+
+    /// Build a minimal snapshot suitable for RefineSession tests.
+    fn test_snapshot() -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: 15,
+            rpm: Some(RpmSection::default()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn view_filters_to_leaf_packages_when_available() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry { name: "vim".into(), include: true, ..Default::default() },
+            PackageEntry { name: "glibc".into(), include: true, ..Default::default() },
+            PackageEntry { name: "ncurses".into(), include: true, ..Default::default() },
+        ];
+        rpm.leaf_packages = Some(vec!["vim".into()]);
+        rpm.auto_packages = Some(vec!["glibc".into(), "ncurses".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // View should only contain the leaf package
+        assert_eq!(view.packages.len(), 1);
+        assert_eq!(view.packages[0].entry.name, "vim");
+    }
+
+    #[test]
+    fn view_shows_all_packages_when_leaf_data_unavailable() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry { name: "vim".into(), include: true, ..Default::default() },
+            PackageEntry { name: "glibc".into(), include: true, ..Default::default() },
+        ];
+        rpm.leaf_packages = None; // No leaf data
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // All packages visible (degraded mode)
+        assert_eq!(view.packages.len(), 2);
+    }
 }
