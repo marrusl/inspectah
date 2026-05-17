@@ -85,6 +85,9 @@ const MOCK_HEALTH = {
 };
 
 beforeEach(() => {
+  // jsdom does not implement scrollIntoView — stub it globally
+  Element.prototype.scrollIntoView = vi.fn();
+
   mockFetch.mockReset();
   vi.stubGlobal("fetch", mockFetch);
   mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
@@ -565,8 +568,8 @@ describe("Repo group header keyboard traversal", () => {
     const header = screen.getByTestId("repo-group-epel");
     // Header should be tabbable
     expect(header).toHaveAttribute("tabindex", "0");
-    // Header should have heading role
-    expect(header).toHaveAttribute("role", "heading");
+    // Header should have row role (repo group headers use role="row")
+    expect(header).toHaveAttribute("role", "row");
   });
 
   it("Enter on group header toggle fires onToggle", async () => {
@@ -616,5 +619,93 @@ describe("Repo group header keyboard traversal", () => {
     expect(toggle).toBeInTheDocument();
     // PF Switch renders an input — should be natively tabbable
     expect(toggle.tagName.toLowerCase()).toBe("input");
+  });
+});
+
+describe("App-level global search reveal and focus with repo-first grouping", () => {
+  // Override the default MOCK_VIEW to include repo_groups and routine packages
+  const REPO_FIRST_VIEW = {
+    packages: [
+      {
+        entry: { name: "httpd", epoch: "0", version: "2.4.57", release: "1.el9", arch: "x86_64", state: "added", include: true, source_repo: "appstream", fleet: null },
+        attention: [{ level: "needs_review", reason: "package_user_added", detail: "Not found in base image" }],
+      },
+      {
+        entry: { name: "glibc", epoch: "0", version: "2.34", release: "100.el9", arch: "x86_64", state: "unchanged", include: true, source_repo: "baseos", fleet: null },
+        attention: [{ level: "routine", reason: "package_baseline_match", detail: null }],
+      },
+      {
+        entry: { name: "bash", epoch: "0", version: "5.1.8", release: "9.el9", arch: "x86_64", state: "unchanged", include: true, source_repo: "baseos", fleet: null },
+        attention: [{ level: "routine", reason: "package_baseline_match", detail: null }],
+      },
+    ],
+    config_files: [],
+    containerfile_preview: "FROM ubi9\nRUN dnf install -y httpd",
+    stats: {
+      total_packages: 3, included_packages: 3, excluded_packages: 0,
+      total_configs: 0, included_configs: 0, package_managed_configs: 0, excluded_configs: 0,
+      needs_review_count: 1, ops_applied: 0, can_undo: false, can_redo: false, baseline_available: false,
+    },
+    generation: 1,
+    repo_groups: [
+      { section_id: "appstream", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 2, enabled: true },
+    ],
+  };
+
+  it("global search navigates to routine package inside collapsed repo, expands ancestors, and focuses target", async () => {
+    // Override fetch to return repo-first view data
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/view") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(REPO_FIRST_VIEW) });
+      }
+      if (url === "/api/snapshot/sections") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_SECTIONS) });
+      }
+      if (url === "/api/health") {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_HEALTH) });
+      }
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ ids: [] }) });
+      }
+      if (url === "/api/viewed" && opts?.method === "POST") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ error: "not found" }) });
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
+    });
+
+    // glibc is routine in baseos — collapsed. NOT visible yet.
+    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
+
+    // Type in global search to find glibc
+    const searchInput = screen.getByLabelText("Search all sections");
+    await userEvent.type(searchInput, "glibc");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("global-search-results")).toBeInTheDocument();
+    });
+
+    // Click the first search result (glibc) — uses index-based data-testid
+    const result = screen.getByTestId("global-search-result-0");
+    await userEvent.click(result);
+
+    // After navigation: baseos repo group and routine summary should expand
+    await waitFor(() => {
+      expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
+    });
+
+    const targetRow = screen.getByTestId("decision-item-packages:glibc.x86_64");
+    expect(targetRow).toBeInTheDocument();
+
+    // Focus should land on the target row via pendingFocusItemRef
+    await waitFor(() => {
+      expect(document.activeElement).toBe(targetRow);
+    });
   });
 });
