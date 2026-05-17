@@ -154,6 +154,7 @@ impl Inspector for ServicesInspector {
                         include: true,
                         owning_package: None,
                         fleet: None,
+                        attention_reason: None,
                     });
                 }
             }

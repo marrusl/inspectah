@@ -23,7 +23,10 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
         None => return Vec::new(),
     };
 
-    let baseline: Option<&[String]> = rpm.baseline_package_names.as_deref();
+    let baseline_names: Option<Vec<String>> = snap.baseline.as_ref().map(|b| {
+        b.packages.keys().cloned().collect()
+    });
+    let baseline: Option<&[String]> = baseline_names.as_deref();
 
     rpm.packages_added
         .iter()
@@ -81,7 +84,23 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
         };
     }
 
-    // Classify based on baseline availability and membership.
+    // Modified packages ALWAYS need review, even if in baseline.
+    if entry.state == PackageState::Modified {
+        return match baseline {
+            Some(_) => AttentionTag {
+                level: AttentionLevel::NeedsReview,
+                reason: AttentionReason::PackageVersionChanged,
+                detail: None,
+            },
+            None => AttentionTag {
+                level: AttentionLevel::Informational,
+                reason: AttentionReason::PackageProvenanceUnavailable,
+                detail: None,
+            },
+        };
+    }
+
+    // Classify based on baseline availability and membership (Added/BaseImageOnly only).
     match baseline {
         Some(names) if names.iter().any(|n| n == &entry.name) => {
             // In baseline with known repo — expected package, Tier 1.
@@ -92,20 +111,11 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
             }
         }
         Some(_) => {
-            // Not in baseline but has a known repo.
-            // Modified packages always need review (version changed).
-            // User-added packages from recognized repos are routine (auto-include).
-            match entry.state {
-                PackageState::Modified => AttentionTag {
-                    level: AttentionLevel::NeedsReview,
-                    reason: AttentionReason::PackageVersionChanged,
-                    detail: None,
-                },
-                _ => AttentionTag {
-                    level: AttentionLevel::Routine,
-                    reason: AttentionReason::PackageUserAdded,
-                    detail: None,
-                },
+            // Not in baseline but has a known repo — user-added, Tier 1.
+            AttentionTag {
+                level: AttentionLevel::Routine,
+                reason: AttentionReason::PackageUserAdded,
+                detail: None,
             }
         }
         None => {
@@ -191,6 +201,7 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
     use inspectah_core::types::rpm::RpmSection;
 
     /// Helper: build a minimal PackageEntry with the given state and source_repo.
@@ -203,18 +214,35 @@ mod tests {
         }
     }
 
-    /// Helper: build a snapshot with baseline_package_names and packages_added.
+    /// Helper: build a snapshot with baseline via snap.baseline (Phase 6) and packages_added.
     fn snap_with_baseline(
-        baseline: Option<Vec<String>>,
+        baseline_names: Option<Vec<String>>,
         packages: Vec<PackageEntry>,
     ) -> InspectionSnapshot {
+        let baseline = baseline_names.map(|names| {
+            let pkgs = names.into_iter().map(|n| {
+                let entry = BaselinePackageEntry {
+                    name: n.clone(),
+                    epoch: Some("0".to_string()),
+                    version: "1.0".to_string(),
+                    release: "1.el9".to_string(),
+                    arch: "x86_64".to_string(),
+                };
+                (n, entry)
+            }).collect();
+            BaselineData {
+                image_digest: "sha256:test".to_string(),
+                packages: pkgs,
+                extracted_at: "2026-01-01T00:00:00Z".to_string(),
+            }
+        });
         InspectionSnapshot {
             schema_version: 14,
             rpm: Some(RpmSection {
                 packages_added: packages,
-                baseline_package_names: baseline,
                 ..Default::default()
             }),
+            baseline,
             ..Default::default()
         }
     }
@@ -260,19 +288,16 @@ mod tests {
     }
 
     #[test]
-    fn verified_modified_recognized_repo_is_needs_review_version_changed() {
+    fn verified_modified_in_baseline_is_needs_review_version_changed() {
+        // Modified packages ALWAYS need review, even when in baseline.
         let snap = snap_with_baseline(
             Some(vec!["kernel".into()]),
             vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
         );
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
-        // Modified + not in baseline (name matches but classify_package checks baseline membership) —
-        // wait, "kernel" IS in baseline here. But Modified state with known repo from Some(_) branch
-        // should still produce NeedsReview/PackageVersionChanged when NOT in baseline.
-        // Let's test the case where it IS in baseline first — baseline match wins.
-        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
     }
 
     #[test]
@@ -321,6 +346,40 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
         assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
+
+    #[test]
+    fn snap_baseline_field_drives_verified_mode() {
+        // Verify that compute_package_attention reads snap.baseline (Phase 6),
+        // not rpm.baseline_package_names (Go compat).
+        use std::collections::HashMap;
+        let mut pkgs = HashMap::new();
+        pkgs.insert("glibc".to_string(), BaselinePackageEntry {
+            name: "glibc".to_string(),
+            epoch: Some("0".to_string()),
+            version: "2.34".to_string(),
+            release: "83.el9".to_string(),
+            arch: "x86_64".to_string(),
+        });
+        let snap = InspectionSnapshot {
+            schema_version: 14,
+            rpm: Some(RpmSection {
+                packages_added: vec![pkg("glibc", PackageState::Added, "rhel-9-baseos")],
+                // baseline_package_names NOT set — only snap.baseline
+                ..Default::default()
+            }),
+            baseline: Some(BaselineData {
+                image_digest: "sha256:abc".to_string(),
+                packages: pkgs,
+                extracted_at: "2026-01-01T00:00:00Z".to_string(),
+            }),
+            ..Default::default()
+        };
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        // Should be verified mode (Routine/BaselineMatch), not degraded
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
     }
 
     // -----------------------------------------------------------------------

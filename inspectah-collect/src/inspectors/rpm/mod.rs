@@ -207,9 +207,14 @@ impl Inspector for RpmInspector {
         // 5. Query file ownership for Wave 2 inspectors
         let file_ownership = self.query_file_ownership(exec);
 
-        // 6. Build warnings
+        // 6. Build baseline_package_names for Go snapshot backward compat
+        let baseline_package_names = ctx.baseline_data.map(|b| {
+            b.packages.keys().cloned().collect::<Vec<_>>()
+        });
+
+        // 7. Build warnings
         let mut warnings = Vec::new();
-        let no_baseline = baseline.is_empty();
+        let no_baseline = ctx.baseline_data.is_none();
         if no_baseline {
             warnings.push(Warning {
                 inspector: "rpm".into(),
@@ -227,7 +232,7 @@ impl Inspector for RpmInspector {
             });
         }
 
-        // 7. Build RpmSection
+        // 8. Build RpmSection
         let section = RpmSection {
             packages_added,
             base_image_only,
@@ -238,6 +243,7 @@ impl Inspector for RpmInspector {
             version_locks: supp.version_locks,
             file_ownership,
             no_baseline,
+            baseline_package_names,
             ..Default::default()
         };
 

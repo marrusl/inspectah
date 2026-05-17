@@ -242,10 +242,10 @@ fn parse_nevra_output(output: &str) -> HashMap<String, BaselinePackageEntry> {
 
         let name = parts[0].to_string();
         let epoch_raw = parts[1].trim();
-        let epoch = if epoch_raw == "0" || epoch_raw == "(none)" || epoch_raw.is_empty() {
+        let epoch = if epoch_raw == "(none)" || epoch_raw.is_empty() {
             None
         } else {
-            Some(epoch_raw.to_string())
+            Some(epoch_raw.to_string())  // keeps "0" as Some("0")
         };
         let version = parts[2].to_string();
         let release = parts[3].to_string();
@@ -320,8 +320,8 @@ mod tests {
         assert_eq!(pkgs.len(), 2);
         assert!(pkgs.contains_key("bash.x86_64"));
         assert!(pkgs.contains_key("coreutils.x86_64"));
-        // epoch "0" → None
-        assert_eq!(pkgs["bash.x86_64"].epoch, None);
+        // epoch "0" kept as Some("0") to match host RPM parser convention
+        assert_eq!(pkgs["bash.x86_64"].epoch, Some("0".to_string()));
     }
 
     #[test]

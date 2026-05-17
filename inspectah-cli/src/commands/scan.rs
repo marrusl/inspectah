@@ -118,7 +118,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     // Step 2: Resolve target image
     eprintln!("Resolving target image...");
 
-    let ublue_metadata = read_ublue_metadata(&executor);
+    let ublue_metadata = read_ublue_metadata(&executor)?;
     let bootc_ref = read_bootc_status_ref(&executor);
 
     let resolution_result = inspectah_core::baseline::resolve_base_image(
@@ -247,11 +247,16 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
 }
 
 /// Read Universal Blue metadata from the well-known path.
-fn read_ublue_metadata(executor: &dyn Executor) -> Option<UblueMetadata> {
-    let content = executor
-        .read_file(Path::new("/usr/share/ublue-os/image-info.json"))
-        .ok()?;
-    serde_json::from_str(&content).ok()
+/// Returns Ok(None) if file doesn't exist, Err if file exists but is malformed.
+fn read_ublue_metadata(executor: &dyn Executor) -> Result<Option<UblueMetadata>> {
+    let content = match executor.read_file(Path::new("/usr/share/ublue-os/image-info.json")) {
+        Ok(c) => c,
+        Err(_) => return Ok(None),  // file not found -> not a UBlue system
+    };
+    // File exists — parse must succeed or fail closed
+    let metadata: UblueMetadata = serde_json::from_str(&content)
+        .context("Universal Blue metadata at /usr/share/ublue-os/image-info.json is malformed")?;
+    Ok(Some(metadata))
 }
 
 /// Read the booted image ref from `bootc status --json`.
