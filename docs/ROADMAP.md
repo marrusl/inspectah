@@ -103,6 +103,10 @@ Bundle: leaf filter + user/group materialization + accumulated bug fixes since a
 
 Same refine crate, fleet aggregate session. Cross-host package prevalence analysis.
 
+### Pre-1.0 Compat Sweep (LOW — before 1.0)
+
+Audit and remove defensive backward-compatibility code added during the Rust rewrite. Before 1.0, old tarballs are not sacred — users re-scan. Remove: legacy snapshot field sniffing, dual-carrier fallbacks, serde(default) shims for fields that only existed in transitional schemas, and any "if old format, try X" branching. The goal is a clean codebase where every code path serves the current schema, not historical ones.
+
 ### CLI Cutover
 
 Rust binary becomes primary `inspectah` command. Go binary deprecated.
