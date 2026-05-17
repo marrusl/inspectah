@@ -63,13 +63,22 @@ repository" catch-all section, rendered last in the repo list.
 - Routine packages collapse to a summary line ("+ N routine") that is
   expandable to reveal individual packages.
 
-**Search/filter auto-expansion:** When the section search filter is active,
-repo groups containing matching packages auto-expand regardless of their
-default expansion state. Collapsed routine summaries within a repo also
-auto-expand if they contain matches. Disabled repos auto-expand if they
-contain matches (packages still shown read-only). When the filter is
-cleared, all groups return to their default expansion state. This
-preserves the current filter-driven expansion contract in the existing UI.
+**Reveal behavior:** Two paths can force a hidden package to become visible:
+
+1. **Search/filter:** When the section search filter is active, repo groups
+   containing matching packages auto-expand regardless of their default
+   expansion state. Collapsed routine summaries within a repo also
+   auto-expand if they contain matches. Disabled repos auto-expand if they
+   contain matches (packages still shown read-only). When the filter is
+   cleared, all groups return to their default expansion state.
+
+2. **Programmatic navigation** (e.g., global search "jump to package,"
+   keyboard shortcut to a specific item): If the target package is inside
+   a collapsed repo group or a collapsed routine summary, both the
+   containing repo group AND the nested routine summary auto-expand to
+   reveal the target. Focus lands on the target package row. This mirrors
+   the current UI's behavior where global search navigation force-expands
+   collapsed attention groups to reveal the target item.
 
 ### Attention Summary Counter
 
@@ -174,9 +183,14 @@ coexist in the undo history. The UI descriptions below reflect the
 
 **Re-enable** (`IncludeRepo { section_id }`):
 
-- All packages from that repo return to their default include state.
-- Like disable, this supersedes prior per-package ops without removing
-  them from history. Undo restores the pre-toggle state.
+- All packages from that repo have `include` set to `true` in the
+  current projection. This is an additive op on the layered stack — it
+  does not "restore defaults" or replay normalized state. It sets the
+  repo's packages to included as of this point in the op history.
+- Like disable, prior per-package ops remain in the undo stack. Undo of
+  the re-enable restores the disabled state (not the pre-disable state
+  with per-package decisions — that requires undoing back past the
+  original disable).
 - The repo group moves back to its position in the enabled third-party
   section and expands to its default state.
 - Focus stays on the repo header.
@@ -184,10 +198,17 @@ coexist in the undo history. The UI descriptions below reflect the
 **Counts:** Repo header package counts show the number of packages from
 that repo visible in the current view (i.e., rows the frontend renders
 for that `source_repo`). This is what the frontend can compute from the
-`ViewResponse` payload. Disabled repos show "N packages excluded" where
-N is the total package count for that repo. The stats bar's "triage
-remaining" and "packages included" counts use `RefineStats` as computed
-by the existing backend.
+`ViewResponse` payload.
+
+Disabled repos: the header shows "N packages excluded" where N is the
+count of packages with this `source_repo` in the `ViewResponse` that
+have `include: false`. This is a frontend-computable count from the same
+payload — not a backend-provided repo-total. If a disabled repo has
+packages that were already excluded by other means, the count reflects
+the actual `include: false` rows, not an idealized repo-total.
+
+The stats bar's "triage remaining" and "packages included" counts use
+`RefineStats` as computed by the existing backend.
 
 ### Disabled Repo State
 
@@ -361,32 +382,50 @@ change is entirely in how the React UI organizes and renders this data.
 - Toggle switch only rendered for non-distro repos with `verified` provenance.
 - Distro repos and `incomplete`/`unknown` provenance repos show no switch.
 - Disable emits `ExcludeRepo`, sets packages to `include: false`, collapses
-  and dims the group.
-- Re-enable emits `IncludeRepo`, resets to defaults, moves repo back to
-  enabled section, focus lands on repo header.
+  and dims the group, focus stays on repo header.
+- Re-enable emits `IncludeRepo`, sets repo packages to `include: true` in
+  current projection (additive op, not a default-restore), moves repo back
+  to enabled section, focus stays on repo header.
+- Undo of disable restores pre-disable state including per-package decisions.
+  Undo of re-enable restores disabled state (not pre-disable per-package
+  state — that requires undoing past the original disable).
 - Stats bar counts update correctly after toggle.
 
 ### Disabled Repo Behavior
 - Expanded disabled repo shows read-only package list.
 - Per-package toggles are hidden (not disabled) in disabled repos.
-- Re-enabling restores default toggles.
+- Re-enabling shows include/exclude toggles with all packages included.
+
+### Disabled Repo Counts
+- Disabled repo header shows "N packages excluded" where N is the count of
+  packages with this `source_repo` having `include: false` in the
+  `ViewResponse` — a frontend-computable count, not a backend repo-total.
 
 ### Attention Summary
 - Counter shows needs_review count and repo spread when > 0.
 - Shows informational count when needs_review is zero.
 - Shows "All actionable items reviewed" when both are zero.
 
-### Search and Filter
+### Reveal Behavior
 - Section search auto-expands repo groups containing matches.
 - Collapsed routine summaries auto-expand when containing matches.
-- Clearing filter restores default expansion state.
+- Disabled repos auto-expand on search match (read-only).
+- Programmatic navigation (global search jump) auto-expands both the
+  containing repo group and nested routine summary to reveal target.
+  Focus lands on target package row.
+- Clearing filter or navigation restores default expansion state.
 
 ### Keyboard and Accessibility
-- Arrow keys navigate between repo headers and package rows.
+- Repo header ROW is the roving-tabindex focus target.
+- Up/Down arrows move between repo headers and package rows in flat
+  sequence (collapsed repos skip to next header).
 - Enter on repo header toggles expand/collapse.
-- Space on toggle switch activates enable/disable.
-- Tab moves from header to switch to first package row.
-- ARIA attributes present on chevron, switch, and group container.
+- Tab from header reaches enable/disable switch (if present).
+- Space activates switch only when switch has focus (no-op on row).
+- Focus stays on repo header after expand, collapse, disable, re-enable.
+- ARIA: row has `role="row"` + `aria-expanded` + `aria-controls`; switch
+  has `role="switch"` + `aria-checked` + `aria-label`; group content has
+  `role="rowgroup"` + `aria-label`.
 
 ### Existing Behavior Preserved
 - Per-package include/exclude in enabled repos works unchanged.
