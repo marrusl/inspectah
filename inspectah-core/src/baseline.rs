@@ -434,6 +434,85 @@ fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution
     }
 }
 
+// ---------------------------------------------------------------------------
+// Image reference normalization
+// ---------------------------------------------------------------------------
+
+/// Shell metacharacters that are forbidden in container image references.
+const SHELL_METACHARACTERS: &[char] = &['$', '`', '|', ';', '&', '(', ')', '{', '}', '<', '>', '\n', '\r', '!', '#'];
+
+/// Normalize and validate a container image reference.
+///
+/// Validation rules (in order):
+/// 1. Non-empty, no whitespace, no shell metacharacters
+/// 2. Strip known transport prefixes
+/// 3. Reject localhost/ and post-strip containers-storage (local-only)
+/// 4. Must be fully qualified (registry hostname contains . or :)
+/// 5. If @ present → digest ref, preserve as-is
+/// 6. If tag present → preserve
+/// 7. No tag, no digest → append :latest
+///
+/// Returns a `NormalizedImageRef` guaranteed to be:
+/// - Non-empty
+/// - Free of invalid characters
+/// - Fully qualified (registry/namespace/image:tag or @digest)
+/// - Not a local-only reference
+pub fn normalize_image_ref(raw: &str) -> Result<NormalizedImageRef, NormalizationError> {
+    // 1. Non-empty
+    if raw.is_empty() {
+        return Err(NormalizationError::Empty);
+    }
+
+    // 1. No whitespace
+    if raw.chars().any(|c| c.is_whitespace()) {
+        return Err(NormalizationError::InvalidCharacters(raw.to_string()));
+    }
+
+    // 1. No shell metacharacters
+    if raw.chars().any(|c| SHELL_METACHARACTERS.contains(&c)) {
+        return Err(NormalizationError::InvalidCharacters(raw.to_string()));
+    }
+
+    // 2. Strip known transport prefixes
+    let working = strip_transport_prefix(raw);
+
+    // 3. Reject localhost/ without port (local-only)
+    if working.starts_with("localhost/") {
+        return Err(NormalizationError::LocalOnly(working.to_string()));
+    }
+
+    // 3. Reject post-strip containers-storage (local-only)
+    // containers-storage: prefix was stripped, but the ref itself is local
+    if raw.starts_with("containers-storage:") {
+        return Err(NormalizationError::LocalOnly(working.to_string()));
+    }
+
+    // 4. Must be fully qualified: first component (before first /) must contain . or :
+    // This validates it as a registry hostname, not a short name like "foo/bar:tag"
+    // If there's no '/', the ref is definitely not fully qualified
+    if !working.contains('/') {
+        return Err(NormalizationError::NotFullyQualified(working.to_string()));
+    }
+    let first_component = working.split('/').next().unwrap_or("");
+    if !first_component.contains('.') && !first_component.contains(':') {
+        return Err(NormalizationError::NotFullyQualified(working.to_string()));
+    }
+
+    // 5. If @ present → digest ref, preserve as-is
+    if working.contains('@') {
+        return Ok(NormalizedImageRef::from_validated(working.to_string()));
+    }
+
+    // 6. If tag present → preserve
+    if ref_has_tag(working) {
+        return Ok(NormalizedImageRef::from_validated(working.to_string()));
+    }
+
+    // 7. No tag, no digest → append :latest
+    let normalized = format!("{}:latest", working);
+    Ok(NormalizedImageRef::from_validated(normalized))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -895,5 +974,181 @@ mod tests {
     #[test]
     fn ref_has_tag_without_tag() {
         assert!(!ref_has_tag("ghcr.io/ublue-os/bazzite"));
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_image_ref tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn normalize_empty_ref() {
+        let result = normalize_image_ref("");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), NormalizationError::Empty);
+    }
+
+    #[test]
+    fn normalize_whitespace_rejected() {
+        let cases = vec![
+            " registry.redhat.io/rhel9/rhel-bootc:9.6",
+            "registry.redhat.io/rhel9/rhel-bootc:9.6 ",
+            "registry.redhat.io/rhel9/rhel-bootc :9.6",
+            "registry.redhat.io/rhel9 /rhel-bootc:9.6",
+        ];
+        for case in cases {
+            let result = normalize_image_ref(case);
+            assert!(result.is_err(), "should reject whitespace in: {}", case);
+            match result.unwrap_err() {
+                NormalizationError::InvalidCharacters(_) => {}
+                other => panic!("expected InvalidCharacters, got {:?}", other),
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_shell_metacharacters_rejected() {
+        let metacharacters = vec!["$", "`", "|", ";", "&", "(", ")", "{", "}", "<", ">", "\n", "!", "#"];
+        for mc in metacharacters {
+            let bad_ref = format!("registry.redhat.io/rhel9/rhel-bootc{}:9.6", mc);
+            let result = normalize_image_ref(&bad_ref);
+            assert!(
+                result.is_err(),
+                "should reject shell metacharacter '{}' in: {}",
+                mc,
+                bad_ref
+            );
+            match result.unwrap_err() {
+                NormalizationError::InvalidCharacters(_) => {}
+                other => panic!("expected InvalidCharacters for '{}', got {:?}", mc, other),
+            }
+        }
+    }
+
+    #[test]
+    fn normalize_shell_metacharacters_in_tag() {
+        let result = normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc:9.6;echo");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NormalizationError::InvalidCharacters(_) => {}
+            other => panic!("expected InvalidCharacters, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn normalize_strips_ostree_image_signed_prefix() {
+        let result = normalize_image_ref(
+            "ostree-image-signed:docker://registry.redhat.io/rhel9/rhel-bootc:9.6",
+        )
+        .unwrap();
+        assert_eq!(result.as_str(), "registry.redhat.io/rhel9/rhel-bootc:9.6");
+    }
+
+    #[test]
+    fn normalize_strips_docker_prefix() {
+        let result = normalize_image_ref("docker://quay.io/centos-bootc/centos-bootc:stream9").unwrap();
+        assert_eq!(result.as_str(), "quay.io/centos-bootc/centos-bootc:stream9");
+    }
+
+    #[test]
+    fn normalize_strips_containers_storage_prefix() {
+        // containers-storage is local-only → should be rejected AFTER stripping
+        let result = normalize_image_ref("containers-storage:localhost/myimage:latest");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NormalizationError::LocalOnly(_) => {}
+            other => panic!("expected LocalOnly, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn normalize_bare_ref_without_registry() {
+        // rhel-bootc:9.6 has no registry → not fully qualified
+        let result = normalize_image_ref("rhel-bootc:9.6");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NormalizationError::NotFullyQualified(_) => {}
+            other => panic!("expected NotFullyQualified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn normalize_namespace_only_ref() {
+        // foo/bar:tag has no dot or port in first component → not a registry
+        let result = normalize_image_ref("foo/bar:tag");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NormalizationError::NotFullyQualified(_) => {}
+            other => panic!("expected NotFullyQualified, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn normalize_registry_with_dot_accepted() {
+        let result = normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc:9.6").unwrap();
+        assert_eq!(result.as_str(), "registry.redhat.io/rhel9/rhel-bootc:9.6");
+    }
+
+    #[test]
+    fn normalize_registry_with_port_accepted() {
+        let result = normalize_image_ref("localhost:5000/myimage:latest").unwrap();
+        assert_eq!(result.as_str(), "localhost:5000/myimage:latest");
+    }
+
+    #[test]
+    fn normalize_localhost_without_port_rejected() {
+        let result = normalize_image_ref("localhost/foo:tag");
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NormalizationError::LocalOnly(_) => {}
+            other => panic!("expected LocalOnly, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn normalize_no_tag_no_digest_appends_latest() {
+        let result = normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc").unwrap();
+        assert_eq!(result.as_str(), "registry.redhat.io/rhel9/rhel-bootc:latest");
+    }
+
+    #[test]
+    fn normalize_digest_preserved() {
+        let result = normalize_image_ref(
+            "registry.redhat.io/rhel9/rhel-bootc@sha256:abc123def456",
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_str(),
+            "registry.redhat.io/rhel9/rhel-bootc@sha256:abc123def456"
+        );
+    }
+
+    #[test]
+    fn normalize_tag_preserved() {
+        let result = normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc:9.6").unwrap();
+        assert_eq!(result.as_str(), "registry.redhat.io/rhel9/rhel-bootc:9.6");
+    }
+
+    #[test]
+    fn normalize_digest_with_tag_preserves_both() {
+        let result = normalize_image_ref(
+            "registry.redhat.io/rhel9/rhel-bootc:9.6@sha256:abc123",
+        )
+        .unwrap();
+        assert_eq!(
+            result.as_str(),
+            "registry.redhat.io/rhel9/rhel-bootc:9.6@sha256:abc123"
+        );
+    }
+
+    #[test]
+    fn normalize_quay_io() {
+        let result = normalize_image_ref("quay.io/fedora/fedora-bootc:41").unwrap();
+        assert_eq!(result.as_str(), "quay.io/fedora/fedora-bootc:41");
+    }
+
+    #[test]
+    fn normalize_ghcr_io() {
+        let result = normalize_image_ref("ghcr.io/ublue-os/bazzite:stable").unwrap();
+        assert_eq!(result.as_str(), "ghcr.io/ublue-os/bazzite:stable");
     }
 }
