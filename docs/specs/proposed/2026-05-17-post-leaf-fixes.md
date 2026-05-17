@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 6** (2026-05-17): Simplifies no_baseline to single carrier. Legacy snapshot compat is not a concern (re-scan policy).
+>
 > **Revision 5** (2026-05-17): Fixes no_baseline carrier for legacy snapshot compatibility. Item 4 handler now uses `snap.no_baseline || rpm.no_baseline` as the authoritative no-baseline signal, covering both new snapshots and migrated legacy ones.
 >
 > **Revision 4** (2026-05-17): Addresses round 3 findings. Item 2 preserves drop-in truth for matched-preset units. Item 4 widens empty_reason to three states keyed off the authoritative `no_baseline` carrier.
@@ -1142,14 +1144,10 @@ pub struct ContextSection {
 The handler uses three distinct empty states keyed off authoritative
 snapshot carriers, not inferred from `baseline` field presence:
 
-- **`"no_baseline"`** -- keyed off
-  `snap.no_baseline || rpm.no_baseline`, the union of the two
-  no-baseline carriers. New snapshots set `RpmSection.no_baseline`
-  in the collector. Migrated legacy snapshots (schema_version <= 14)
-  set `InspectionSnapshot.no_baseline` via `migrate()` but leave
-  `rpm.no_baseline` at its serde default (`false`). The union covers
-  both paths. This is the authoritative signal, not
-  `baseline.is_none()` which could be absent for other reasons.
+- **`"no_baseline"`** -- keyed off `rpm.no_baseline`, set by the
+  collector when no baseline was available during classification.
+  This is the authoritative signal, not `baseline.is_none()` which
+  could be absent for other reasons.
 - **`"zero_drift"`** -- baseline was available (`no_baseline == false`),
   RPM data exists, but `version_changes` is empty. All packages match.
 - **`"data_unavailable"`** -- RPM section is missing (`snap.rpm` is
@@ -1162,14 +1160,9 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
     let mut items = Vec::new();
     let empty_reason;
 
-    // Union carrier: new snapshots set rpm.no_baseline in the collector;
-    // migrated legacy snapshots set snap.no_baseline via migrate() but
-    // leave rpm.no_baseline at serde default (false). Check both.
-    let snap_no_baseline = snap.no_baseline;
-
     match &snap.rpm {
-        Some(rpm) if snap_no_baseline || rpm.no_baseline => {
-            // Authoritative: either carrier recorded no baseline
+        Some(rpm) if rpm.no_baseline => {
+            // Authoritative: collector recorded no baseline
             empty_reason = Some("no_baseline".to_string());
         }
         Some(rpm) => {
@@ -1206,8 +1199,7 @@ export interface ContextSection {
   id: string;
   display_name: string;
   items: ContextItem[];
-  /** "no_baseline" keyed off snap.no_baseline || rpm.no_baseline
-   *  (union covers new snapshots and migrated legacy snapshots). */
+  /** "no_baseline" keyed off rpm.no_baseline from the collector. */
   empty_reason?: "zero_drift" | "no_baseline" | "data_unavailable" | null;
 }
 ```
@@ -1379,23 +1371,17 @@ interface PackageDetailProps {
 - Unit test: zero-drift empty state -- section with zero items and
   `empty_reason: "zero_drift"` shows
   `"All packages match the target baseline versions."`.
-- Unit test: no-baseline empty state (rpm carrier) -- `rpm.no_baseline
-  == true`, `snap.no_baseline == false` -> `empty_reason: "no_baseline"`.
-  Shows `"Version comparison requires a baseline. Run with --baseline to enable."`.
-- Unit test: no-baseline empty state (snap carrier / legacy) --
-  `snap.no_baseline == true`, `rpm.no_baseline == false` (migrated
-  legacy snapshot) -> `empty_reason: "no_baseline"`. Same copy.
+- Unit test: no-baseline empty state -- `rpm.no_baseline == true` ->
+  `empty_reason: "no_baseline"`. Shows
+  `"Version comparison requires a baseline. Run with --baseline to enable."`.
 - Unit test: data-unavailable empty state -- section with zero items
   and `empty_reason: "data_unavailable"` (RPM section missing) shows
   `"Version change data is not available for this snapshot."`.
 - Unit test: `normalize_version_changes` with `snap.rpm == None` ->
   `empty_reason` is `"data_unavailable"`, not `"no_baseline"`.
 - Unit test: `normalize_version_changes` with `rpm.no_baseline == true`
-  (new snapshot) -> `empty_reason` is `"no_baseline"` regardless of
-  whether `version_changes` is empty or populated.
-- Unit test: `normalize_version_changes` with `snap.no_baseline == true`
-  and `rpm.no_baseline == false` (migrated legacy snapshot) ->
-  `empty_reason` is `"no_baseline"` (union carrier).
+  -> `empty_reason` is `"no_baseline"` regardless of whether
+  `version_changes` is empty or populated.
 - Unit test: `normalize_version_changes` with `rpm.no_baseline == false`
   and empty `version_changes` -> `empty_reason` is `"zero_drift"`.
 - Unit test: section always present in sidebar (all three empty-state
