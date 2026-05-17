@@ -494,7 +494,7 @@ export function DecisionList({
             // Group items by source_repo
             const byRepo = new Map<string, DecisionItemKind[]>();
             for (const item of groupItems) {
-              const repo = item.type === "package" ? item.data.entry.source_repo : "__other__";
+              const repo = item.type === "package" ? item.data.entry.source_repo.toLowerCase() : "__other__";
               const list = byRepo.get(repo) ?? [];
               list.push(item);
               byRepo.set(repo, list);
