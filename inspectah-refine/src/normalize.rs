@@ -55,10 +55,15 @@ fn patch_array_includes(parent: &mut Value, array_key: &str) {
     }
 }
 
-/// Collect all dependency names from a leaf_dep_tree JSON value.
+/// Collect dependency names from a leaf_dep_tree JSON value, excluding
+/// packages that are themselves top-level keys in the tree.
 ///
 /// The tree is a JSON object `{ "leaf_name": ["dep1", "dep2", ...], ... }`.
-/// Returns a set of all dependency names across all leaves.
+/// A top-level key means the package was identified as a leaf in its own
+/// right (with its own dependency subtree). In fleet/merged snapshots a
+/// package can be both a leaf on one host and a dependency on another.
+/// Only names that appear exclusively as dependencies (not as top-level
+/// keys) should be subtracted from the leaf set.
 fn collect_dep_tree_names(tree: &serde_json::Value) -> std::collections::HashSet<&str> {
     let mut deps = std::collections::HashSet::new();
     if let serde_json::Value::Object(map) = tree {
@@ -71,6 +76,11 @@ fn collect_dep_tree_names(tree: &serde_json::Value) -> std::collections::HashSet
                 }
             }
         }
+        // Retain only deps that are NOT top-level keys. A top-level key
+        // means the package was independently identified as a leaf — it
+        // should stay in the leaf set even if another leaf lists it as a
+        // dependency.
+        deps.retain(|name| !map.contains_key(*name));
     }
     deps
 }
@@ -410,5 +420,88 @@ mod tests {
         assert!(!rpm.packages_added[1].include, "perl-Git should be excluded (dep of git)");
         // git-core is a dep of git — should be excluded
         assert!(!rpm.packages_added[2].include, "git-core should be excluded (dep of git)");
+    }
+
+    #[test]
+    fn fleet_leaf_also_dep_of_another_leaf_stays_included() {
+        // Fleet/merged scenario: perl-Git is a top-level leaf (user installed
+        // it directly on one host) AND appears as a dep of git. Because it has
+        // its own entry in leaf_dep_tree, it should NOT be subtracted.
+        use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+        use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedPackage};
+
+        let mut snap = InspectionSnapshot {
+            schema_version: 14,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "git".into(), arch: "x86_64".into(),
+                        state: PackageState::Added, source_repo: "appstream".into(),
+                        include: true, ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "perl-Git".into(), arch: "x86_64".into(),
+                        state: PackageState::Added, source_repo: "appstream".into(),
+                        include: true, ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "git-core".into(), arch: "x86_64".into(),
+                        state: PackageState::Added, source_repo: "appstream".into(),
+                        include: true, ..Default::default()
+                    },
+                ],
+                leaf_packages: Some(vec![
+                    "git".into(), "perl-Git".into(), "git-core".into(),
+                ]),
+                leaf_dep_tree: serde_json::json!({
+                    "git": ["perl-Git", "git-core"],
+                    "perl-Git": ["perl-libs"]
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let packages: Vec<RefinedPackage> = snap.rpm.as_ref().unwrap()
+            .packages_added.iter().map(|entry| {
+                RefinedPackage {
+                    entry: entry.clone(),
+                    attention: vec![AttentionTag {
+                        level: AttentionLevel::Informational,
+                        reason: AttentionReason::PackageProvenanceUnavailable,
+                        detail: None,
+                    }],
+                }
+            }).collect();
+
+        normalize_package_defaults(&mut snap, &packages);
+        let rpm = snap.rpm.as_ref().unwrap();
+
+        // git is a top-level leaf — included
+        assert!(rpm.packages_added[0].include, "git should be included (top-level leaf)");
+        // perl-Git is BOTH a dep of git AND a top-level leaf — stays included
+        assert!(rpm.packages_added[1].include,
+            "perl-Git should be included (top-level leaf, even though also a dep of git)");
+        // git-core is only a dep, not a top-level key — excluded
+        assert!(!rpm.packages_added[2].include,
+            "git-core should be excluded (dep only, not a top-level leaf)");
+    }
+
+    #[test]
+    fn collect_dep_tree_excludes_top_level_keys() {
+        // A dep that is also a top-level key should NOT appear in the
+        // returned set — it's a confirmed leaf.
+        let tree = serde_json::json!({
+            "git": ["perl-Git", "git-core"],
+            "perl-Git": ["perl-libs"]
+        });
+        let deps = super::collect_dep_tree_names(&tree);
+        // perl-libs and git-core are pure deps
+        assert!(deps.contains("perl-libs"));
+        assert!(deps.contains("git-core"));
+        // perl-Git is a top-level key — should NOT be in the dep set
+        assert!(!deps.contains("perl-Git"),
+            "perl-Git is a top-level key and should not be in the subtraction set");
+        assert_eq!(deps.len(), 2);
     }
 }
