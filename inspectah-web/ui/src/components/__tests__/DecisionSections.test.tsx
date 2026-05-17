@@ -1386,11 +1386,7 @@ describe("Repo group headers", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    // Expand the informational group (starts collapsed)
-    const infoToggle = screen.getByText(/Informational/);
-    await userEvent.click(infoToggle);
-
-    // Repo group headers should appear
+    // With repo-first grouping, repo group headers appear directly (no attention group)
     expect(screen.getByTestId("repo-group-appstream")).toBeInTheDocument();
     expect(screen.getByTestId("repo-group-epel")).toBeInTheDocument();
     // Distro repos show no label; non-distro shows "Third-party"
@@ -1415,10 +1411,7 @@ describe("Repo group headers", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    // Expand the informational group
-    const infoToggle = screen.getByText(/Informational/);
-    await userEvent.click(infoToggle);
-
+    // With repo-first grouping, headers are directly visible
     // Only the epel group should have a repo toggle (verified + third-party)
     expect(screen.getByRole("switch", { name: /toggle epel repo/i })).toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /toggle appstream repo/i })).not.toBeInTheDocument();
@@ -1439,10 +1432,7 @@ describe("Repo group headers", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    // Expand the informational group
-    const infoToggle = screen.getByText(/Informational/);
-    await userEvent.click(infoToggle);
-
+    // With repo-first grouping, headers are directly visible
     // All non-distro repos show "Third-party" regardless of provenance
     expect(screen.getByText("Third-party")).toBeInTheDocument();
     expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
@@ -1503,11 +1493,7 @@ describe("Repo group headers", () => {
       expect(mockFetch).toHaveBeenCalled();
     });
 
-    // Expand the informational group
-    const infoToggle = screen.getByText(/Informational/);
-    await user.click(infoToggle);
-
-    // Click the repo toggle to exclude epel
+    // With repo-first grouping, repo toggle is directly visible
     const repoToggle = screen.getByRole("switch", { name: /toggle epel repo/i });
     await user.click(repoToggle);
 
@@ -1759,6 +1745,245 @@ describe("Search auto-reveal for collapsed groups", () => {
 
     // The baseline summary should stay collapsed since revealItemId targets httpd, not glibc
     expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
+  });
+});
+
+// ---- Repo-first package grouping tests ----
+
+describe("Repo-first package grouping", () => {
+  const repoGroups: RepoGroupInfo[] = [
+    { section_id: "baseos", provenance: "verified" as const, is_distro: true, package_count: 2, enabled: true },
+    { section_id: "appstream", provenance: "verified" as const, is_distro: true, package_count: 1, enabled: true },
+    { section_id: "epel", provenance: "verified" as const, is_distro: false, package_count: 2, enabled: true },
+    { section_id: "custom", provenance: "incomplete" as const, is_distro: false, package_count: 1, enabled: true },
+    { section_id: "disabled-repo", provenance: "verified" as const, is_distro: false, package_count: 1, enabled: false },
+  ];
+
+  it("groups packages by repo instead of attention level", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "kernel", source_repo: "baseos" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [INFO_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // Repo group wrappers should exist
+    expect(screen.getByTestId("repo-group-wrapper-appstream")).toBeInTheDocument();
+    expect(screen.getByTestId("repo-group-wrapper-baseos")).toBeInTheDocument();
+    expect(screen.getByTestId("repo-group-wrapper-epel")).toBeInTheDocument();
+
+    // Attention groups should NOT exist
+    expect(screen.queryByTestId("attention-group-needs_review")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("attention-group-informational")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("attention-group-routine")).not.toBeInTheDocument();
+  });
+
+  it("orders repos: distro alpha, enabled third-party alpha, disabled, unknown last", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "epel-pkg", source_repo: "epel" }, [INFO_TAG]) },
+      { type: "package", data: makePkg({ name: "kernel", source_repo: "baseos" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "custom-pkg", source_repo: "custom" }, [INFO_TAG]) },
+      { type: "package", data: makePkg({ name: "disabled-pkg", source_repo: "disabled-repo" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "mystery", source_repo: "not-in-groups" }, [INFO_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const wrappers = screen.getAllByTestId(/^repo-group-wrapper-/);
+    // Order: distro alpha (appstream, baseos), enabled third-party alpha (custom, epel), disabled, unknown
+    expect(wrappers[0]).toHaveAttribute("data-testid", "repo-group-wrapper-appstream");
+    expect(wrappers[1]).toHaveAttribute("data-testid", "repo-group-wrapper-baseos");
+    expect(wrappers[2]).toHaveAttribute("data-testid", "repo-group-wrapper-custom");
+    expect(wrappers[3]).toHaveAttribute("data-testid", "repo-group-wrapper-epel");
+    expect(wrappers[4]).toHaveAttribute("data-testid", "repo-group-wrapper-disabled-repo");
+    expect(wrappers[5]).toHaveAttribute("data-testid", "repo-group-wrapper-__unknown__");
+  });
+
+  it("renders unknown-repo packages under 'Unknown repository' group last", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "mystery", source_repo: "not-in-groups" }, [INFO_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const wrappers = screen.getAllByTestId(/^repo-group-wrapper-/);
+    const lastWrapper = wrappers[wrappers.length - 1];
+    expect(lastWrapper).toHaveAttribute("data-testid", "repo-group-wrapper-__unknown__");
+  });
+
+  it("renders blank-source_repo packages in the unknown group", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "blank-pkg", source_repo: "" }, [INFO_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    const unknownWrapper = screen.getByTestId("repo-group-wrapper-__unknown__");
+    expect(unknownWrapper).toBeInTheDocument();
+  });
+
+  it("expands repos with needs_review packages by default", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // The needs_review package should be visible (group expanded)
+    expect(screen.getByTestId("decision-item-packages:httpd.x86_64")).toBeInTheDocument();
+  });
+
+  it("collapses all-routine repos by default", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "kernel", source_repo: "baseos" }, [ROUTINE_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // The routine package should NOT be visible (group collapsed)
+    expect(screen.queryByTestId("decision-item-packages:kernel.x86_64")).not.toBeInTheDocument();
+    // Should show "No action needed" summary
+    expect(screen.getByText("No action needed")).toBeInTheDocument();
+  });
+
+  it("shows '+ N routine' summary within expanded repos that have mixed attention", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "mod_ssl", source_repo: "appstream" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "mod_proxy", source_repo: "appstream" }, [ROUTINE_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // needs_review item should be visible
+    expect(screen.getByTestId("decision-item-packages:httpd.x86_64")).toBeInTheDocument();
+    // Routine items should be collapsed under "+ N routine" summary
+    expect(screen.getByText("+ 2 routine")).toBeInTheDocument();
+    // Routine items should NOT be visible by default
+    expect(screen.queryByTestId("decision-item-packages:mod_ssl.x86_64")).not.toBeInTheDocument();
+  });
+
+  it("sorts packages within repo: needs_review first, then informational, then routine", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "routine-pkg", source_repo: "appstream" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "review-pkg", source_repo: "appstream" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "info-pkg", source_repo: "appstream" }, [INFO_TAG]) },
+    ];
+
+    render(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+
+    // needs_review and informational should be visible (expanded due to needs_review)
+    // Filter to only DecisionItem rows (not repo group header rows)
+    const allRows = screen.getAllByRole("row");
+    const itemRows = allRows.filter((r) => r.getAttribute("data-testid")?.startsWith("decision-item-"));
+    // First item row should be the needs_review package
+    expect(itemRows[0]).toHaveAttribute("data-testid", "decision-item-packages:review-pkg.x86_64");
+    // Second item row should be the informational package
+    expect(itemRows[1]).toHaveAttribute("data-testid", "decision-item-packages:info-pkg.x86_64");
+    // Routine should be in the collapsed summary, not as a row
+    expect(screen.queryByTestId("decision-item-packages:routine-pkg.x86_64")).not.toBeInTheDocument();
+    expect(screen.getByText("+ 1 routine")).toBeInTheDocument();
   });
 });
 
