@@ -2,8 +2,10 @@ mod helpers;
 
 use std::path::PathBuf;
 
+use inspectah_core::baseline::BaselineData;
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
+use inspectah_core::types::fleet::FleetPrevalence;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{PackageTarget, RefineError, RefinementOp};
@@ -50,6 +52,22 @@ fn test_snapshot() -> InspectionSnapshot {
         }],
     });
     snap
+}
+
+fn empty_baseline() -> BaselineData {
+    BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-05-17T00:00:00Z".into(),
+    }
+}
+
+fn fleet(count: i32, total: i32, hosts: &[&str]) -> FleetPrevalence {
+    FleetPrevalence {
+        count,
+        total,
+        hosts: hosts.iter().map(|host| host.to_string()).collect(),
+    }
 }
 
 #[test]
@@ -418,7 +436,7 @@ fn test_non_leaf_tier2_excluded_from_view() {
             },
         ],
         baseline_package_names: None, // degraded mode -> Informational
-        leaf_packages: Some(vec!["httpd".into()]),
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
         ..Default::default()
     });
     let session = RefineSession::new(snap);
@@ -430,6 +448,254 @@ fn test_non_leaf_tier2_excluded_from_view() {
     assert!(
         !view.packages.iter().any(|p| p.entry.name == "apr"),
         "non-leaf Tier 2 package must be filtered from view"
+    );
+}
+
+#[test]
+fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "mystery".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: String::new(),
+                include: true,
+                ..Default::default()
+            },
+        ],
+        baseline_package_names: None,
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        auto_packages: Some(vec!["mystery.x86_64".into()]),
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let view = session.view();
+    let mystery = view
+        .packages
+        .iter()
+        .find(|pkg| pkg.entry.name == "mystery" && pkg.entry.arch == "x86_64")
+        .expect("needs-review package must stay visible");
+
+    assert!(!mystery.entry.include, "needs-review package stays excluded by default");
+    assert_eq!(view.stats.total_packages, 2);
+    assert_eq!(view.stats.included_packages, 1);
+    assert_eq!(view.stats.excluded_packages, 1);
+    assert_eq!(view.stats.needs_review_count, 1);
+}
+
+#[test]
+fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
+        baseline_package_names: None,
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        auto_packages: Some(vec!["apr.x86_64".into()]),
+        ..Default::default()
+    });
+
+    let mut session = RefineSession::new(snap);
+    assert!(
+        !session.view().packages.iter().any(|pkg| pkg.entry.name == "apr"),
+        "non-leaf package starts hidden"
+    );
+
+    session
+        .apply(RefinementOp::IncludePackage(PackageTarget {
+            name: "apr".into(),
+            arch: "x86_64".into(),
+        }))
+        .unwrap();
+
+    let apr = session
+        .view()
+        .packages
+        .iter()
+        .find(|pkg| pkg.entry.name == "apr" && pkg.entry.arch == "x86_64")
+        .expect("manually included non-leaf package must stay visible");
+    assert!(apr.entry.include);
+}
+
+#[test]
+fn test_leaf_data_unavailable_shows_all_packages_in_view() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
+        leaf_packages: None,
+        auto_packages: None,
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    assert_eq!(session.view().packages.len(), 2);
+    assert_eq!(session.view().stats.total_packages, 2);
+}
+
+#[test]
+fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                include: true,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                arch: "i686".into(),
+                state: PackageState::Added,
+                source_repo: "baseos".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
+        baseline_package_names: None,
+        leaf_packages: Some(vec!["glibc.x86_64".into()]),
+        auto_packages: Some(vec!["glibc.i686".into()]),
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let view = session.view();
+
+    assert_eq!(view.packages.len(), 1, "only the matching arch should remain visible");
+    assert_eq!(view.packages[0].entry.arch, "x86_64");
+    assert_eq!(view.stats.total_packages, 1);
+    assert_eq!(view.stats.included_packages, 1);
+    assert_eq!(view.stats.excluded_packages, 0);
+}
+
+#[test]
+fn test_fleet_snapshot_skips_leaf_only_filter() {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                fleet: Some(fleet(3, 5, &["host-a", "host-b", "host-c"])),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                fleet: Some(fleet(2, 5, &["host-d", "host-e"])),
+                ..Default::default()
+            },
+        ],
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        auto_packages: Some(vec!["apr.x86_64".into()]),
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let view = session.view();
+
+    assert_eq!(view.packages.len(), 2, "fleet snapshots should keep all packages visible");
+    assert!(view.packages.iter().any(|pkg| pkg.entry.name == "httpd"));
+    assert!(view.packages.iter().any(|pkg| pkg.entry.name == "apr"));
+}
+
+#[test]
+fn test_fleet_snapshot_preview_skips_leaf_only_filter() {
+    let mut snap = InspectionSnapshot::new();
+    snap.baseline = Some(empty_baseline());
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                fleet: Some(fleet(3, 5, &["host-a", "host-b", "host-c"])),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "apr".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                source_repo: "appstream".into(),
+                include: true,
+                fleet: Some(fleet(2, 5, &["host-d", "host-e"])),
+                ..Default::default()
+            },
+        ],
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        auto_packages: Some(vec!["apr.x86_64".into()]),
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let preview = &session.view().containerfile_preview;
+    let install_line = preview
+        .lines()
+        .find(|line| line.starts_with("RUN dnf install -y"))
+        .expect("fleet preview must include an install line");
+
+    assert!(
+        install_line.contains("httpd"),
+        "fleet preview must still include httpd, got: {install_line}"
+    );
+    assert!(
+        install_line.contains("apr"),
+        "fleet preview must not apply leaf-only filtering, got: {install_line}"
     );
 }
 

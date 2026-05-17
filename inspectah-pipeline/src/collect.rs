@@ -474,12 +474,14 @@ mod tests {
         assert_eq!(rpm.packages_added.len(), 2);
 
         // Warnings should include the no-baseline warning from RpmInspector
-        assert!(pipeline
-            .state
-            .snapshot
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("no baseline")));
+        assert!(
+            pipeline
+                .state
+                .snapshot
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("no baseline"))
+        );
     }
 
     #[test]
@@ -503,12 +505,14 @@ mod tests {
         assert!(pipeline.state.snapshot.rpm.is_none());
 
         // Should have an error warning about the failure
-        assert!(pipeline
-            .state
-            .snapshot
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("failed")));
+        assert!(
+            pipeline
+                .state
+                .snapshot
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("failed"))
+        );
     }
 
     #[test]
@@ -1144,9 +1148,11 @@ pam\t/etc/security/limits.conf
         assert_eq!(pam_pkg.name, "pam");
 
         // Unowned path should return None
-        assert!(rpm_state
-            .package_for_path(std::path::Path::new("/etc/custom/app.conf"))
-            .is_none());
+        assert!(
+            rpm_state
+                .package_for_path(std::path::Path::new("/etc/custom/app.conf"))
+                .is_none()
+        );
     }
 
     #[test]

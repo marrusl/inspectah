@@ -1,10 +1,15 @@
 use inspectah_refine::types::PackageTarget;
-use inspectah_refine::types::{RefinementOp, AnnotatedOp, AttentionLevel, AttentionReason, AttentionTag};
+use inspectah_refine::types::{
+    AnnotatedOp, AttentionLevel, AttentionReason, AttentionTag, RefinementOp,
+};
 use std::path::PathBuf;
 
 #[test]
 fn package_target_serde_roundtrip() {
-    let target = PackageTarget { name: "httpd".into(), arch: "x86_64".into() };
+    let target = PackageTarget {
+        name: "httpd".into(),
+        arch: "x86_64".into(),
+    };
     let json = serde_json::to_string(&target).unwrap();
     let parsed: PackageTarget = serde_json::from_str(&json).unwrap();
     assert_eq!(target, parsed);
@@ -12,13 +17,19 @@ fn package_target_serde_roundtrip() {
 
 #[test]
 fn package_target_display() {
-    let target = PackageTarget { name: "glibc".into(), arch: "i686".into() };
+    let target = PackageTarget {
+        name: "glibc".into(),
+        arch: "i686".into(),
+    };
     assert_eq!(format!("{target}"), "glibc.i686");
 }
 
 #[test]
 fn refinement_op_exclude_package_json() {
-    let op = RefinementOp::ExcludePackage(PackageTarget { name: "httpd".into(), arch: "x86_64".into() });
+    let op = RefinementOp::ExcludePackage(PackageTarget {
+        name: "httpd".into(),
+        arch: "x86_64".into(),
+    });
     let json = serde_json::to_string(&op).unwrap();
     assert!(json.contains(r#""op":"ExcludePackage""#));
     assert!(json.contains(r#""name":"httpd""#));
@@ -29,7 +40,9 @@ fn refinement_op_exclude_package_json() {
 
 #[test]
 fn refinement_op_exclude_config_json() {
-    let op = RefinementOp::ExcludeConfig { path: PathBuf::from("/etc/httpd/conf/httpd.conf") };
+    let op = RefinementOp::ExcludeConfig {
+        path: PathBuf::from("/etc/httpd/conf/httpd.conf"),
+    };
     let json = serde_json::to_string(&op).unwrap();
     let parsed: RefinementOp = serde_json::from_str(&json).unwrap();
     assert_eq!(op, parsed);
@@ -38,7 +51,10 @@ fn refinement_op_exclude_config_json() {
 #[test]
 fn annotated_op_json_flattens() {
     let aop = AnnotatedOp {
-        op: RefinementOp::ExcludePackage(PackageTarget { name: "vim".into(), arch: "x86_64".into() }),
+        op: RefinementOp::ExcludePackage(PackageTarget {
+            name: "vim".into(),
+            arch: "x86_64".into(),
+        }),
         active: true,
     };
     let json = serde_json::to_string(&aop).unwrap();

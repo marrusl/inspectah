@@ -216,8 +216,7 @@ mod tests {
 
     #[test]
     fn test_parse_multiple_gpg_keys() {
-        let content =
-            "[myrepo]\ngpgkey=file:///key1,file:///key2\n";
+        let content = "[myrepo]\ngpgkey=file:///key1,file:///key2\n";
         let sections = parse_repo_sections(content);
         assert_eq!(sections[0].gpg_key_paths.len(), 2);
         assert_eq!(sections[0].gpg_key_paths[0], "/key1");

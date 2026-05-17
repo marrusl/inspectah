@@ -410,10 +410,7 @@ fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution
                 .map(|(_, min)| clamp_version(version_id, min))
                 .unwrap_or_else(|| version_id.to_string());
             Ok(BaseImageResolution {
-                image_ref: format!(
-                    "registry.redhat.io/rhel{}/rhel-bootc:{}",
-                    major, effective
-                ),
+                image_ref: format!("registry.redhat.io/rhel{}/rhel-bootc:{}", major, effective),
                 strategy: ResolutionStrategy::OsRelease,
             })
         }
@@ -428,9 +425,7 @@ fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution
                 strategy: ResolutionStrategy::OsRelease,
             })
         }
-        _ => Err(ResolutionError::UnknownDistro {
-            id: id.to_string(),
-        }),
+        _ => Err(ResolutionError::UnknownDistro { id: id.to_string() }),
     }
 }
 
@@ -439,7 +434,9 @@ fn resolve_from_os_release(os_release: &OsRelease) -> Result<BaseImageResolution
 // ---------------------------------------------------------------------------
 
 /// Shell metacharacters that are forbidden in container image references.
-const SHELL_METACHARACTERS: &[char] = &['$', '`', '|', ';', '&', '(', ')', '{', '}', '<', '>', '\n', '\r', '!', '#'];
+const SHELL_METACHARACTERS: &[char] = &[
+    '$', '`', '|', ';', '&', '(', ')', '{', '}', '<', '>', '\n', '\r', '!', '#',
+];
 
 /// Normalize and validate a container image reference.
 ///
@@ -625,7 +622,10 @@ mod tests {
             "registry.redhat.io/rhel9/rhel-bootc:9.6".to_string(),
         );
 
-        assert_eq!(normalized.as_str(), "registry.redhat.io/rhel9/rhel-bootc:9.6");
+        assert_eq!(
+            normalized.as_str(),
+            "registry.redhat.io/rhel9/rhel-bootc:9.6"
+        );
         assert_eq!(
             format!("{}", normalized),
             "registry.redhat.io/rhel9/rhel-bootc:9.6"
@@ -835,10 +835,7 @@ mod tests {
     fn resolution_rhel() {
         let os = make_os_release("rhel", "9.6", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(
-            result.image_ref,
-            "registry.redhat.io/rhel9/rhel-bootc:9.6"
-        );
+        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
         assert_eq!(result.strategy, ResolutionStrategy::OsRelease);
     }
 
@@ -847,10 +844,7 @@ mod tests {
         // RHEL 9.4 → clamped to 9.6
         let os = make_os_release("rhel", "9.4", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(
-            result.image_ref,
-            "registry.redhat.io/rhel9/rhel-bootc:9.6"
-        );
+        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
     }
 
     #[test]
@@ -858,10 +852,7 @@ mod tests {
         // RHEL 9.6 → no clamping
         let os = make_os_release("rhel", "9.6", "");
         let result = resolve_base_image(&os, None, None, None).unwrap();
-        assert_eq!(
-            result.image_ref,
-            "registry.redhat.io/rhel9/rhel-bootc:9.6"
-        );
+        assert_eq!(result.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
     }
 
     #[test]
@@ -1007,7 +998,9 @@ mod tests {
 
     #[test]
     fn normalize_shell_metacharacters_rejected() {
-        let metacharacters = vec!["$", "`", "|", ";", "&", "(", ")", "{", "}", "<", ">", "\n", "!", "#"];
+        let metacharacters = vec![
+            "$", "`", "|", ";", "&", "(", ")", "{", "}", "<", ">", "\n", "!", "#",
+        ];
         for mc in metacharacters {
             let bad_ref = format!("registry.redhat.io/rhel9/rhel-bootc{}:9.6", mc);
             let result = normalize_image_ref(&bad_ref);
@@ -1045,7 +1038,8 @@ mod tests {
 
     #[test]
     fn normalize_strips_docker_prefix() {
-        let result = normalize_image_ref("docker://quay.io/centos-bootc/centos-bootc:stream9").unwrap();
+        let result =
+            normalize_image_ref("docker://quay.io/centos-bootc/centos-bootc:stream9").unwrap();
         assert_eq!(result.as_str(), "quay.io/centos-bootc/centos-bootc:stream9");
     }
 
@@ -1107,15 +1101,16 @@ mod tests {
     #[test]
     fn normalize_no_tag_no_digest_appends_latest() {
         let result = normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc").unwrap();
-        assert_eq!(result.as_str(), "registry.redhat.io/rhel9/rhel-bootc:latest");
+        assert_eq!(
+            result.as_str(),
+            "registry.redhat.io/rhel9/rhel-bootc:latest"
+        );
     }
 
     #[test]
     fn normalize_digest_preserved() {
-        let result = normalize_image_ref(
-            "registry.redhat.io/rhel9/rhel-bootc@sha256:abc123def456",
-        )
-        .unwrap();
+        let result =
+            normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc@sha256:abc123def456").unwrap();
         assert_eq!(
             result.as_str(),
             "registry.redhat.io/rhel9/rhel-bootc@sha256:abc123def456"
@@ -1130,10 +1125,8 @@ mod tests {
 
     #[test]
     fn normalize_digest_with_tag_preserves_both() {
-        let result = normalize_image_ref(
-            "registry.redhat.io/rhel9/rhel-bootc:9.6@sha256:abc123",
-        )
-        .unwrap();
+        let result =
+            normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc:9.6@sha256:abc123").unwrap();
         assert_eq!(
             result.as_str(),
             "registry.redhat.io/rhel9/rhel-bootc:9.6@sha256:abc123"
@@ -1162,10 +1155,22 @@ mod tests {
         let malformed_json = r#"{"not-a-field": 42, "garbage": true}"#;
         let metadata: UblueMetadata = serde_json::from_str(malformed_json).unwrap();
         // All fields should be None since none of the expected keys are present
-        assert!(metadata.image_ref.is_none(), "image_ref must be None for malformed JSON");
-        assert!(metadata.image_tag.is_none(), "image_tag must be None for malformed JSON");
-        assert!(metadata.image_name.is_none(), "image_name must be None for malformed JSON");
-        assert!(metadata.image_vendor.is_none(), "image_vendor must be None for malformed JSON");
+        assert!(
+            metadata.image_ref.is_none(),
+            "image_ref must be None for malformed JSON"
+        );
+        assert!(
+            metadata.image_tag.is_none(),
+            "image_tag must be None for malformed JSON"
+        );
+        assert!(
+            metadata.image_name.is_none(),
+            "image_name must be None for malformed JSON"
+        );
+        assert!(
+            metadata.image_vendor.is_none(),
+            "image_vendor must be None for malformed JSON"
+        );
     }
 
     #[test]
@@ -1187,7 +1192,10 @@ mod tests {
             image_vendor: None,
         };
         let result = resolve_base_image(&os, Some(&ub), None, None);
-        assert!(result.is_err(), "malformed UblueMetadata must produce an error");
+        assert!(
+            result.is_err(),
+            "malformed UblueMetadata must produce an error"
+        );
         match result.unwrap_err() {
             ResolutionError::MalformedUblueMetadata { .. } => {}
             other => panic!("expected MalformedUblueMetadata, got {:?}", other),

@@ -30,7 +30,7 @@ use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
-use inspectah_pipeline::redaction::engine::{redact, RedactOptions};
+use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render::{audit, containerfile, secrets};
 
 // ---------------------------------------------------------------------------

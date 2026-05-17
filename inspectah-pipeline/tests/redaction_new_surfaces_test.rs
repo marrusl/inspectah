@@ -8,7 +8,7 @@ use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection};
 use inspectah_core::types::redaction::{FindingKind, RedactionState};
 use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
 use inspectah_core::types::storage::{CredentialRef, FstabEntry, StorageSection};
-use inspectah_pipeline::redaction::engine::{redact, RedactOptions};
+use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 
 // ---------------------------------------------------------------------------
 // Test 1: Systemd drop-in with Environment= secret
