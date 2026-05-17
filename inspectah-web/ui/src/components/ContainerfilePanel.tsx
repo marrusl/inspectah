@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Button, Content, Skeleton } from "@patternfly/react-core";
 import { AngleDoubleRightIcon } from "@patternfly/react-icons";
 
@@ -9,12 +9,56 @@ export interface ContainerfilePanelProps {
   loading: boolean;
 }
 
+const DEFAULT_WIDTH = 340;
+const MIN_WIDTH = 200;
+const MAX_WIDTH_RATIO = 0.6; // 60% of viewport
+
 export function ContainerfilePanel({
   content,
   isOpen,
   onToggle,
   loading,
 }: ContainerfilePanelProps) {
+  const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(DEFAULT_WIDTH);
+
+  // Resize drag handlers
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = panelWidth;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  }, [panelWidth]);
+
+  useEffect(() => {
+    const handleDragMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      // Panel is on the right, so dragging left increases width
+      const delta = dragStartX.current - e.clientX;
+      const maxWidth = window.innerWidth * MAX_WIDTH_RATIO;
+      const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, dragStartWidth.current + delta));
+      setPanelWidth(newWidth);
+    };
+
+    const handleDragEnd = () => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.addEventListener("mousemove", handleDragMove);
+    document.addEventListener("mouseup", handleDragEnd);
+    return () => {
+      document.removeEventListener("mousemove", handleDragMove);
+      document.removeEventListener("mouseup", handleDragEnd);
+    };
+  }, []);
+
   // Dockerfile keywords for CSS-based highlighting
   const DOCKERFILE_KEYWORDS = useMemo(
     () =>
@@ -101,7 +145,16 @@ export function ContainerfilePanel({
       className="inspectah-cf-panel inspectah-cf-panel--open"
       role="complementary"
       aria-label="Containerfile preview"
+      style={{ flexBasis: `${panelWidth}px` }}
     >
+      {/* Resize drag handle */}
+      <div
+        className="inspectah-cf-panel__drag-handle"
+        onMouseDown={handleDragStart}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize Containerfile panel"
+      />
       <div className="inspectah-cf-panel__header">
         <Content component="h3">Containerfile</Content>
         <Button

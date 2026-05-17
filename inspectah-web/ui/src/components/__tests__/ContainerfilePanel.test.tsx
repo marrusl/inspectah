@@ -126,6 +126,37 @@ describe("ContainerfilePanel", () => {
     expect(svg).toBeTruthy();
   });
 
+  it("renders resize drag handle when open", () => {
+    render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={true}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    const handle = screen.getByRole("separator", {
+      name: /resize containerfile panel/i,
+    });
+    expect(handle).toBeInTheDocument();
+  });
+
+  it("does not render drag handle when collapsed", () => {
+    render(
+      <ContainerfilePanel
+        content={"FROM ubi9\n"}
+        isOpen={false}
+        onToggle={vi.fn()}
+        loading={false}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("separator", { name: /resize/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows context-sections footer note", () => {
     render(
       <ContainerfilePanel
