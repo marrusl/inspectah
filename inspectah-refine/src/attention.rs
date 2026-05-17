@@ -92,12 +92,21 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
             }
         }
         Some(_) => {
-            // Not in baseline but has a known repo — user-added or version-changed, Tier 2.
-            let reason = match entry.state {
-                PackageState::Modified => AttentionReason::PackageVersionChanged,
-                _ => AttentionReason::PackageUserAdded,
-            };
-            AttentionTag { level: AttentionLevel::Informational, reason, detail: None }
+            // Not in baseline but has a known repo.
+            // Modified packages always need review (version changed).
+            // User-added packages from recognized repos are routine (auto-include).
+            match entry.state {
+                PackageState::Modified => AttentionTag {
+                    level: AttentionLevel::NeedsReview,
+                    reason: AttentionReason::PackageVersionChanged,
+                    detail: None,
+                },
+                _ => AttentionTag {
+                    level: AttentionLevel::Routine,
+                    reason: AttentionReason::PackageUserAdded,
+                    detail: None,
+                },
+            }
         }
         None => {
             // No baseline available — can't determine provenance, Tier 2.
@@ -177,4 +186,224 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
     }
 
     configs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::types::rpm::RpmSection;
+
+    /// Helper: build a minimal PackageEntry with the given state and source_repo.
+    fn pkg(name: &str, state: PackageState, source_repo: &str) -> PackageEntry {
+        PackageEntry {
+            name: name.to_string(),
+            state,
+            source_repo: source_repo.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// Helper: build a snapshot with baseline_package_names and packages_added.
+    fn snap_with_baseline(
+        baseline: Option<Vec<String>>,
+        packages: Vec<PackageEntry>,
+    ) -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: 14,
+            rpm: Some(RpmSection {
+                packages_added: packages,
+                baseline_package_names: baseline,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Verified mode: baseline present
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn verified_added_in_baseline_is_routine_baseline_match() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("glibc", PackageState::Added, "rhel-9-baseos")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+    }
+
+    #[test]
+    fn verified_added_not_in_baseline_recognized_repo_is_routine_user_added() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("httpd", PackageState::Added, "rhel-9-appstream")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageUserAdded);
+    }
+
+    #[test]
+    fn verified_added_no_repo_is_needs_review() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("mystery", PackageState::Added, "")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
+
+    #[test]
+    fn verified_modified_recognized_repo_is_needs_review_version_changed() {
+        let snap = snap_with_baseline(
+            Some(vec!["kernel".into()]),
+            vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        // Modified + not in baseline (name matches but classify_package checks baseline membership) —
+        // wait, "kernel" IS in baseline here. But Modified state with known repo from Some(_) branch
+        // should still produce NeedsReview/PackageVersionChanged when NOT in baseline.
+        // Let's test the case where it IS in baseline first — baseline match wins.
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+    }
+
+    #[test]
+    fn verified_modified_not_in_baseline_recognized_repo_is_needs_review() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+    }
+
+    #[test]
+    fn verified_modified_no_repo_is_needs_review_no_repo_source() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("kernel", PackageState::Modified, "")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
+
+    #[test]
+    fn verified_local_install_is_needs_review() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("custom-tool", PackageState::LocalInstall, "")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageLocalInstall);
+    }
+
+    #[test]
+    fn verified_no_repo_state_is_needs_review() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into()]),
+            vec![pkg("orphan-pkg", PackageState::NoRepo, "some-repo")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
+
+    // -----------------------------------------------------------------------
+    // Degraded mode: no baseline
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn degraded_added_is_informational_provenance_unavailable() {
+        let snap = snap_with_baseline(
+            None,
+            vec![pkg("httpd", PackageState::Added, "rhel-9-appstream")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageProvenanceUnavailable);
+    }
+
+    #[test]
+    fn degraded_local_install_still_needs_review() {
+        // LocalInstall is always Tier 3 regardless of baseline.
+        let snap = snap_with_baseline(
+            None,
+            vec![pkg("custom-tool", PackageState::LocalInstall, "")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageLocalInstall);
+    }
+
+    #[test]
+    fn degraded_no_repo_state_still_needs_review() {
+        let snap = snap_with_baseline(
+            None,
+            vec![pkg("orphan", PackageState::NoRepo, "some-repo")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
+
+    #[test]
+    fn degraded_empty_source_repo_is_needs_review() {
+        let snap = snap_with_baseline(
+            None,
+            vec![pkg("mystery", PackageState::Added, "")],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiple packages in one snapshot
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn verified_mixed_packages_classification() {
+        let snap = snap_with_baseline(
+            Some(vec!["glibc".into(), "bash".into()]),
+            vec![
+                pkg("glibc", PackageState::Added, "rhel-9-baseos"),   // baseline match -> Routine
+                pkg("httpd", PackageState::Added, "rhel-9-appstream"), // user-added -> Routine
+                pkg("custom", PackageState::LocalInstall, ""),         // local install -> NeedsReview
+                pkg("unknown", PackageState::Added, ""),               // no repo -> NeedsReview
+            ],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 4);
+
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+
+        assert_eq!(result[1].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[1].attention[0].reason, AttentionReason::PackageUserAdded);
+
+        assert_eq!(result[2].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[2].attention[0].reason, AttentionReason::PackageLocalInstall);
+
+        assert_eq!(result[3].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[3].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
 }

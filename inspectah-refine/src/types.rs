@@ -55,6 +55,7 @@ pub enum AttentionReason {
     ConfigUnowned,
     ConfigOrphaned,
     SensitivePath,
+    ServiceImageModeIncompatible,
     Custom(String),
 }
 
