@@ -14,10 +14,16 @@ export function attentionLabelColor(
   }
 }
 
-/** Format an AttentionReason for display. */
-export function formatReasonText(reason: AttentionReason): string {
+/** Format an AttentionReason for display, optionally incorporating detail. */
+export function formatReasonText(reason: AttentionReason, detail?: string | null): string {
   if (typeof reason === "object" && "custom" in reason) {
     return reason.custom;
+  }
+  // Version changed: use detail to show direction when available
+  if (reason === "package_version_changed" && detail) {
+    const lower = detail.toLowerCase();
+    if (lower === "upgrade") return "Version Upgraded";
+    if (lower === "downgrade") return "Version Downgraded";
   }
   const map: Record<string, string> = {
     package_baseline_match: "Baseline",
