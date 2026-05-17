@@ -111,9 +111,9 @@ Each repo group has a header row containing:
 - **Chevron** (left edge) — disclosure control for expand/collapse. Click target
   for expansion.
 - **Repo name** (e.g., `appstream`, `epel`, `copr:inspectah`)
-- **Package count** — number of included packages in this repo. This is the
-  count of packages with `include: true`, matching how the existing stats bar
-  counts visible packages.
+- **Package count** — number of packages from this repo visible in the
+  current view (rows the frontend renders for this `source_repo` from the
+  `ViewResponse` payload).
 - **"Third-party" label** (non-distro repos only) — simple text label, no
   trust/verification claims. See Source Classification below.
 - **Enable/disable toggle** (toggleable repos only) — a switch control, not a
@@ -222,7 +222,8 @@ Disabled repos are visually distinct:
   entirely). The list is informational: "these are the packages you excluded
   by disabling this repo."
 - **No per-package actions** are available while the repo is disabled.
-  Re-enabling the repo restores the default toggles.
+  Re-enabling the repo shows toggles with all packages set to
+  `include: true` (additive op on the layered stack).
 
 ### Per-Package Actions
 
@@ -427,6 +428,10 @@ change is entirely in how the React UI organizes and renders this data.
 - Tab from header reaches enable/disable switch (if present).
 - Space activates switch only when switch has focus (no-op on row).
 - Focus stays on repo header after expand, collapse, disable, re-enable.
+- Tab from a repo header with no switch (distro or unverified repo) moves
+  focus to the first package row (if expanded) or next repo header (if
+  collapsed) — no dead Tab stop.
+- After search/filter clear, focus returns to the first repo header.
 - ARIA: row has `role="row"` + `aria-expanded` + `aria-controls`; switch
   has `role="switch"` + `aria-checked` + `aria-label`; group content has
   `role="rowgroup"` + `aria-label`.
