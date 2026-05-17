@@ -46,9 +46,11 @@ repository" catch-all section, rendered last in the repo list.
 - **Repos containing `needs_review` packages:** Expanded. Individual
   attention-requiring packages shown with their attention reason. Routine
   packages in the same repo collapse to a summary line ("+ N routine").
-- **Repos containing only `informational` packages (no `needs_review`):**
-  Collapsed. Expandable on click. The collapsed header shows the repo name,
-  count, and "N informational" to indicate non-routine content exists.
+- **Repos containing `informational` but no `needs_review`** (including
+  mixed informational + routine): Collapsed. Expandable on click. The
+  collapsed header shows the repo name, total count, and
+  "N informational" to signal non-routine content exists without forcing
+  the group open.
 - **All-routine repos:** Collapsed to a single line showing repo name, package
   count, and "No action needed." Expandable on click.
 - **Disabled repos:** Collapsed, dimmed. See Disabled Repo State below.
@@ -64,8 +66,10 @@ repository" catch-all section, rendered last in the repo list.
 **Search/filter auto-expansion:** When the section search filter is active,
 repo groups containing matching packages auto-expand regardless of their
 default expansion state. Collapsed routine summaries within a repo also
-auto-expand if they contain matches. This preserves the current filter-driven
-expansion contract in the existing UI.
+auto-expand if they contain matches. Disabled repos auto-expand if they
+contain matches (packages still shown read-only). When the filter is
+cleared, all groups return to their default expansion state. This
+preserves the current filter-driven expansion contract in the existing UI.
 
 ### Attention Summary Counter
 
@@ -153,23 +157,37 @@ behavior in `RepoGroupHeader.tsx` and the validation in
 
 ### Repo Enable/Disable Behavior
 
+The refine session uses a layered operation stack. Repo and package ops
+coexist in the undo history. The UI descriptions below reflect the
+*visible effect* of each operation, not the internal undo mechanics.
+
 **Disable** (`ExcludeRepo { section_id }`):
 
 - All packages from that repo have `include` set to `false`.
-- Per-package include/exclude decisions within the repo are discarded.
+- The repo-level op supersedes any prior per-package ops for packages in
+  this repo. Those per-package ops remain in the undo stack but their
+  effect is overridden. Undo of the repo toggle restores the pre-toggle
+  state, including any per-package decisions that were in effect.
 - The repo header moves to the disabled section of the list.
 - The repo group collapses and dims. See Disabled Repo State below.
-- `RefineStats` counts update — excluded packages remain in the view data
-  but with `include: false`. The stats bar's "triage remaining" and
-  "packages included" counts reflect this.
+- Focus stays on the repo header (now in disabled state).
 
 **Re-enable** (`IncludeRepo { section_id }`):
 
 - All packages from that repo return to their default include state.
-- Prior per-package decisions are NOT restored — re-enabling is a reset.
+- Like disable, this supersedes prior per-package ops without removing
+  them from history. Undo restores the pre-toggle state.
 - The repo group moves back to its position in the enabled third-party
   section and expands to its default state.
-- Focus moves to the re-enabled repo header.
+- Focus stays on the repo header.
+
+**Counts:** Repo header package counts show the number of packages from
+that repo visible in the current view (i.e., rows the frontend renders
+for that `source_repo`). This is what the frontend can compute from the
+`ViewResponse` payload. Disabled repos show "N packages excluded" where
+N is the total package count for that repo. The stats bar's "triage
+remaining" and "packages included" counts use `RefineStats` as computed
+by the existing backend.
 
 ### Disabled Repo State
 
@@ -193,23 +211,47 @@ implementation.
 
 ### Keyboard and Accessibility
 
-Repo headers participate in the existing roving-tabindex keyboard model:
+**Focus model:** The repo header ROW is the roving-tabindex focus target
+(not the chevron separately). This matches the existing package row
+pattern where the row is the focus target and actions are reached via
+Tab within the row.
 
-- **Arrow keys** move focus between repo headers and package rows within the
-  packages section.
-- **Enter** on a repo header toggles expand/collapse.
-- **Space** on the enable/disable switch toggles the repo (where available).
-  On repo headers without a switch, Space is a no-op.
-- **Tab** moves focus from the repo header to the enable/disable switch (when
-  present), then to the first package row within the group.
+**Roving focus (arrow keys):**
 
-ARIA attributes:
+- **Up/Down arrows** move between repo headers and package rows in a flat
+  sequence: repo header → its visible package rows → next repo header.
+- Collapsed repos have no package rows in the sequence — arrows skip
+  directly to the next repo header.
 
-- Repo header chevron: `aria-expanded`, `aria-controls` pointing to the
-  repo group content region.
+**Actions on a focused repo header:**
+
+- **Enter** — toggles expand/collapse of the repo group.
+- **Tab** — moves focus into the row, landing on the enable/disable switch
+  if present (non-distro verified repos). If no switch, Tab moves to the
+  first package row in the group (if expanded) or the next repo header
+  (if collapsed).
+- **Space** — no-op on the header row itself. Space activates the switch
+  only when the switch has focus (reached via Tab).
+
+**Actions on the enable/disable switch (reached via Tab from header):**
+
+- **Space** or **Enter** — toggles the repo enable/disable state.
+- **Shift+Tab** — returns focus to the repo header row.
+
+**Focus after state changes:**
+
+- **After expand/collapse:** Focus stays on the repo header.
+- **After disable:** Focus stays on the repo header (now dimmed).
+- **After re-enable:** Focus stays on the repo header.
+- **After search/filter clear:** Focus returns to the first repo header.
+
+**ARIA attributes:**
+
+- Repo header row: `role="row"`, `aria-expanded`, `aria-controls` pointing
+  to the repo group content region.
 - Enable/disable switch: `role="switch"`, `aria-checked`, `aria-label`
   including the repo name (e.g., "Disable epel repository").
-- Repo group content: `role="group"`, `aria-label` with repo name.
+- Repo group content: `role="rowgroup"`, `aria-label` with repo name.
 
 ### What This Replaces
 
