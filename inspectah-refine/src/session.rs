@@ -566,7 +566,7 @@ impl RefineSession {
         // Filter to leaf packages when available (non-fleet snapshots only).
         // When leaf_packages is Some, only show user-intent packages.
         // When None, show all packages (graceful degradation).
-        let packages = if let Some(ref leaf_names) = projected.rpm.as_ref()
+        let packages = if let Some(leaf_names) = projected.rpm.as_ref()
             .and_then(|r| r.leaf_packages.as_ref())
         {
             let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
@@ -843,5 +843,39 @@ mod tests {
             "containerfile should contain leaf package 'vim'");
         assert!(!view.containerfile_preview.contains("glibc"),
             "containerfile should NOT contain auto package 'glibc'");
+    }
+
+    #[test]
+    fn view_stats_reflect_leaf_filtered_count() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "vim".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "ncurses".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["vim".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // Stats should reflect only the leaf-filtered count
+        assert_eq!(view.stats.total_packages, 1, "total_packages should be leaf count");
+        assert_eq!(view.stats.included_packages, 1, "included_packages should be leaf count");
     }
 }
