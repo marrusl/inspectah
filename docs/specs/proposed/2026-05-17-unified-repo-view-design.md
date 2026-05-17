@@ -276,12 +276,16 @@ Tab within the row.
 
 ### Layout
 
-The three-column layout is: fixed sidebar | fluid content | right-justified
-Containerfile panel.
+The three-column layout applies to the entire app shell — all sections
+(Packages, Config Files, and every Context section), not just the repo
+view.
+
+Fixed sidebar | fluid content | right-justified Containerfile panel:
 
 - **Sidebar:** Fixed width (~200px), left edge. Section navigation. Unchanged.
 - **Content area:** Fluid, fills the space between sidebar and Containerfile
-  panel. This is where repo groups render.
+  panel. Renders repo groups in Packages, config list in Config Files,
+  context items in Context sections.
 - **Containerfile panel:** Right-justified against the browser window edge.
   Drag-to-resize handle on its left edge (already shipped in alpha.3,
   commit `e0c2408`). Min width 200px, max width 60% of viewport. On wide
