@@ -1,4 +1,4 @@
-use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+use inspectah_core::baseline::BaselineData;
 use inspectah_core::types::rpm::{RpmSection, PackageEntry, PackageState};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_refine::session::RefineSession;
