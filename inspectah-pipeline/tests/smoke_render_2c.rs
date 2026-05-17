@@ -493,7 +493,7 @@ fn audit_config_section() {
 fn audit_selinux_section() {
     let snap = snapshot_with_selinux();
     let md = audit::render_audit(&snap);
-    assert!(md.contains("## SELinux"), "must contain SELinux heading");
+    assert!(md.contains("## Security & Access Control"), "must contain Security & Access Control heading");
     assert!(md.contains("enforcing"), "must show SELinux mode");
     assert!(
         md.contains("Custom modules:"),
@@ -552,10 +552,10 @@ fn report_selinux_section() {
     let snap = snapshot_with_selinux();
     let html = report::render_report(&snap, &RenderContext { target: None });
     assert!(
-        html.contains("SELinux"),
-        "must contain SELinux summary card"
+        html.contains("Security"),
+        "must contain Security summary card"
     );
-    assert!(html.contains("enforcing"), "SELinux card must show mode");
+    assert!(html.contains("enforcing"), "security card must show mode");
 }
 
 #[test]

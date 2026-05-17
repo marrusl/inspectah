@@ -394,7 +394,7 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             || !sel.fcontext_rules.is_empty();
 
         if has_content {
-            lines.push("## SELinux".into());
+            lines.push("## Security & Access Control".into());
             lines.push(String::new());
             lines.push(format!("- **Mode:** {}", sel.mode));
             if !sel.custom_modules.is_empty() {

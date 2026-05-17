@@ -242,7 +242,7 @@ pub fn render_report(snap: &InspectionSnapshot, _context: &RenderContext) -> Str
     <div class="summary-card"><h3>Kernel/Boot Items</h3><div class="value">{kernelboot_count}</div></div>
     <div class="summary-card"><h3>Warnings</h3><div class="value">{warning_count}</div></div>
     <div class="summary-card"><h3>Scheduled Tasks</h3><div class="value">{scheduled_count}</div></div>
-    <div class="summary-card"><h3>SELinux</h3><div class="value">{selinux_mode_escaped}</div></div>
+    <div class="summary-card"><h3>Security</h3><div class="value">{selinux_mode_escaped}</div></div>
     <div class="summary-card"><h3>Non-RPM Items</h3><div class="value">{nonrpm_count}</div></div>
   </div>
 

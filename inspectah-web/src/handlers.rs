@@ -1317,7 +1317,7 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
 
     ContextSection {
         id: "selinux".to_string(),
-        display_name: "SELinux".to_string(),
+        display_name: "Security & Access Control".to_string(),
         items,
     }
 }

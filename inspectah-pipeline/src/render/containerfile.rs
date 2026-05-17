@@ -10,7 +10,7 @@
 //! 7. Containers (quadlet COPYs)
 //! 8. Users
 //! 9. Kernel/boot (kargs.d, sysctl, modules)
-//! 10. SELinux
+//! 10. Security & Access Control (SELinux, FIPS, PAM, audit)
 //! 11. Network (routes, hosts, proxy)
 //! 12. Secrets comments
 //! 13. Epilogue (tmpfiles, RUN bootc container lint)
@@ -139,7 +139,7 @@ pub fn render_containerfile(
     }
     lines.extend(kernel_boot_section_lines(snap));
 
-    // 10. SELinux
+    // 10. Security & Access Control
     if is_degraded(&snap.completeness, InspectorId::Selinux) {
         lines.push("# FIXME: selinux data may be incomplete (inspector returned degraded)".into());
     }
@@ -1177,7 +1177,7 @@ fn kernel_boot_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
-// --- SELinux section ---
+// --- Security & Access Control section ---
 
 fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let mut lines = Vec::new();
@@ -1197,7 +1197,7 @@ fn selinux_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         return lines;
     }
 
-    lines.push("# === SELinux Customizations ===".into());
+    lines.push("# === Security & Access Control ===".into());
 
     if !sel.custom_modules.is_empty() {
         lines.push(format!(
@@ -1438,7 +1438,7 @@ mod tests {
         // Verify section order: packages before services before selinux before epilogue
         let packages_pos = output.find("dnf install").unwrap();
         let services_pos = output.find("Service Enablement").unwrap();
-        let selinux_pos = output.find("SELinux").unwrap();
+        let selinux_pos = output.find("Security & Access Control").unwrap();
         let epilogue_pos = output.find("bootc container lint").unwrap();
 
         assert!(
