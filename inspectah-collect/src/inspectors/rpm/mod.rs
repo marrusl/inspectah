@@ -191,10 +191,33 @@ impl Inspector for RpmInspector {
         let baseline = self.build_baseline(ctx.baseline_data);
         let classified = classifier::classify_packages(&host_packages, &baseline);
 
-        // 3. Split classified packages into added / base_image_only
-        let (mut packages_added, base_image_only): (Vec<_>, Vec<_>) = classified
-            .into_iter()
-            .partition(|p| p.state != PackageState::BaseImageOnly);
+        // 3. All classified host packages go to packages_added
+        // (BaseImageOnly is no longer assigned to host packages by the classifier)
+        let mut packages_added = classified;
+
+        // 3a. Build base_image_only from baseline entries not found on host
+        let host_keys: std::collections::HashSet<String> = packages_added
+            .iter()
+            .map(|p| format!("{}.{}", p.name, p.arch))
+            .collect();
+        let base_image_only: Vec<PackageEntry> = match ctx.baseline_data {
+            Some(bl) => bl
+                .packages
+                .iter()
+                .filter(|(key, _)| !host_keys.contains(key.as_str()))
+                .map(|(_, bp)| PackageEntry {
+                    name: bp.name.clone(),
+                    epoch: bp.epoch.clone().unwrap_or_default(),
+                    version: bp.version.clone(),
+                    release: bp.release.clone(),
+                    arch: bp.arch.clone(),
+                    state: PackageState::BaseImageOnly,
+                    include: false,
+                    ..Default::default()
+                })
+                .collect(),
+            None => Vec::new(),
+        };
 
         // 3b. Source repo attribution per added package (matches Go Step 2b).
         if !packages_added.is_empty() {
@@ -544,9 +567,10 @@ tzdata\t/usr/share/zoneinfo/UTC
         use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 
         // Baseline has bash and vim-enhanced at specific versions
+        // Keys use name.arch format (matching real baseline extractor output)
         let mut packages = std::collections::HashMap::new();
         packages.insert(
-            "bash".to_string(),
+            "bash.x86_64".to_string(),
             BaselinePackageEntry {
                 name: "bash".to_string(),
                 epoch: Some("0".to_string()),
@@ -556,7 +580,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             },
         );
         packages.insert(
-            "vim-enhanced".to_string(),
+            "vim-enhanced.x86_64".to_string(),
             BaselinePackageEntry {
                 name: "vim-enhanced".to_string(),
                 epoch: Some("0".to_string()),
@@ -585,18 +609,21 @@ tzdata\t/usr/share/zoneinfo/UTC
         let output = RpmInspector::new().inspect(&ctx).unwrap();
 
         if let SectionData::Rpm(rpm) = &output.section {
-            // bash and vim-enhanced are in baseline with same EVR -> BaseImageOnly
-            assert_eq!(rpm.base_image_only.len(), 2);
-            let base_names: Vec<&str> = rpm.base_image_only.iter().map(|p| p.name.as_str()).collect();
-            assert!(base_names.contains(&"bash"));
-            assert!(base_names.contains(&"vim-enhanced"));
-
-            // httpd and tzdata are NOT in baseline -> Added
-            assert_eq!(rpm.packages_added.len(), 2);
+            // All host packages stay in packages_added (same-EVR = Added, not BaseImageOnly)
+            assert_eq!(rpm.packages_added.len(), 4);
             let added_names: Vec<&str> =
                 rpm.packages_added.iter().map(|p| p.name.as_str()).collect();
+            assert!(added_names.contains(&"bash"));
+            assert!(added_names.contains(&"vim-enhanced"));
             assert!(added_names.contains(&"httpd"));
             assert!(added_names.contains(&"tzdata"));
+
+            // base_image_only: baseline packages NOT on host — both baseline
+            // packages (bash, vim-enhanced) ARE on the host, so this is empty
+            assert!(
+                rpm.base_image_only.is_empty(),
+                "all baseline packages are on host, so base_image_only should be empty"
+            );
 
             // no_baseline should be false (we have baseline data)
             assert!(

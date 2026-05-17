@@ -102,7 +102,10 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
 
     // Classify based on baseline availability and membership (Added/BaseImageOnly only).
     match baseline {
-        Some(names) if names.iter().any(|n| n == &entry.name) => {
+        Some(names) if names.iter().any(|n| {
+            let entry_key = format!("{}.{}", entry.name, entry.arch);
+            n == &entry_key
+        }) => {
             // In baseline with known repo — expected package, Tier 1.
             AttentionTag {
                 level: AttentionLevel::Routine,
@@ -208,6 +211,7 @@ mod tests {
     fn pkg(name: &str, state: PackageState, source_repo: &str) -> PackageEntry {
         PackageEntry {
             name: name.to_string(),
+            arch: "x86_64".to_string(),
             state,
             source_repo: source_repo.to_string(),
             ..Default::default()
@@ -221,14 +225,15 @@ mod tests {
     ) -> InspectionSnapshot {
         let baseline = baseline_names.map(|names| {
             let pkgs = names.into_iter().map(|n| {
+                let key = format!("{}.x86_64", n);
                 let entry = BaselinePackageEntry {
-                    name: n.clone(),
+                    name: n,
                     epoch: Some("0".to_string()),
                     version: "1.0".to_string(),
                     release: "1.el9".to_string(),
                     arch: "x86_64".to_string(),
                 };
-                (n, entry)
+                (key, entry)
             }).collect();
             BaselineData {
                 image_digest: "sha256:test".to_string(),
@@ -354,7 +359,7 @@ mod tests {
         // not rpm.baseline_package_names (Go compat).
         use std::collections::HashMap;
         let mut pkgs = HashMap::new();
-        pkgs.insert("glibc".to_string(), BaselinePackageEntry {
+        pkgs.insert("glibc.x86_64".to_string(), BaselinePackageEntry {
             name: "glibc".to_string(),
             epoch: Some("0".to_string()),
             version: "2.34".to_string(),
