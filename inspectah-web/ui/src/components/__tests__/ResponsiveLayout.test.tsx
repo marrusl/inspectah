@@ -207,8 +207,8 @@ describe("StatsBar hamburger button", () => {
   });
 });
 
-describe("Repo group header responsive badge abbreviation", () => {
-  it("renders both full and abbreviated badges with correct aria-labels", async () => {
+describe("Repo group header classification label", () => {
+  it("renders 'Third-party' classification label for non-distro repos", async () => {
     const { RepoGroupHeader } = await import("../RepoGroupHeader");
 
     render(
@@ -222,25 +222,13 @@ describe("Repo group header responsive badge abbreviation", () => {
       />,
     );
 
-    // Both badge variants should exist in the DOM (CSS controls visibility)
-    const fullBadge = document.querySelector(".inspectah-repo-group-header__badge-full");
-    const abbrevBadge = document.querySelector(".inspectah-repo-group-header__badge-abbrev");
-    expect(fullBadge).toBeInTheDocument();
-    expect(abbrevBadge).toBeInTheDocument();
-
-    // Full badge shows "Third-party"
-    expect(fullBadge!.textContent).toContain("Third-party");
-    // Abbreviated badge shows "3P"
-    expect(abbrevBadge!.textContent).toContain("3P");
-
-    // Both badges carry aria-label for screen readers
-    const fullLabel = fullBadge!.querySelector("[aria-label]");
-    const abbrevLabel = abbrevBadge!.querySelector("[aria-label]");
-    expect(fullLabel).toHaveAttribute("aria-label", "Third-party");
-    expect(abbrevLabel).toHaveAttribute("aria-label", "Third-party");
+    // Non-distro repos show a classification label
+    const classification = document.querySelector(".inspectah-repo-group-header__classification");
+    expect(classification).toBeInTheDocument();
+    expect(classification!.textContent).toContain("Third-party");
   });
 
-  it("abbreviates distro badge to 'D' with aria-label='Distro'", async () => {
+  it("does not render classification label for distro repos", async () => {
     const { RepoGroupHeader } = await import("../RepoGroupHeader");
 
     render(
@@ -253,15 +241,12 @@ describe("Repo group header responsive badge abbreviation", () => {
       />,
     );
 
-    const abbrevBadge = document.querySelector(".inspectah-repo-group-header__badge-abbrev");
-    expect(abbrevBadge).toBeInTheDocument();
-    expect(abbrevBadge!.textContent).toContain("D");
-
-    const label = abbrevBadge!.querySelector("[aria-label]");
-    expect(label).toHaveAttribute("aria-label", "Distro");
+    // Distro repos have no classification label
+    const classification = document.querySelector(".inspectah-repo-group-header__classification");
+    expect(classification).not.toBeInTheDocument();
   });
 
-  it("header has tabindex=0 and role=heading for keyboard access", async () => {
+  it("header has tabindex=0 and role=row for keyboard access", async () => {
     const { RepoGroupHeader } = await import("../RepoGroupHeader");
 
     render(
@@ -276,8 +261,7 @@ describe("Repo group header responsive badge abbreviation", () => {
 
     const header = screen.getByTestId("repo-group-epel");
     expect(header).toHaveAttribute("tabindex", "0");
-    expect(header).toHaveAttribute("role", "heading");
-    expect(header).toHaveAttribute("aria-level", "3");
+    expect(header).toHaveAttribute("role", "row");
   });
 
   it("wraps toggle to second line via CSS class structure", async () => {
