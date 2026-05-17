@@ -2555,3 +2555,31 @@ describe("AttentionSummary in MainContent", () => {
     expect(screen.queryByTestId("attention-summary")).not.toBeInTheDocument();
   });
 });
+
+// ---- Config section unchanged after repo-first refactor ----
+
+describe("Config section unchanged after repo-first refactor", () => {
+  it("config section still uses attention-level grouping", () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/review.conf" }, [{ level: "needs_review", reason: "config_modified", detail: null }]),
+        makeConfig({ path: "/etc/info.conf" }, [{ level: "informational", reason: "config_unowned", detail: null }]),
+        makeConfig({ path: "/etc/routine.conf" }, [{ level: "routine", reason: "config_default", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+    // Config section should still render AttentionGroup, not RepoGroup
+    expect(screen.getByTestId("attention-group-needs_review")).toBeInTheDocument();
+    expect(screen.queryByTestId(/^repo-group-wrapper-/)).not.toBeInTheDocument();
+  });
+
+  it("config section does not show attention summary", () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({ path: "/etc/test.conf" }, [{ level: "needs_review", reason: "config_modified", detail: null }]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+    expect(screen.queryByTestId("attention-summary")).not.toBeInTheDocument();
+  });
+});
