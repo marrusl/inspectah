@@ -12,7 +12,8 @@
 | Phase 6: Base Image Selection & Cross-Distro | COMPLETE |
 | Alpha.3 Bug Fix Pass | COMPLETE |
 | Unified Repo View | SHIPPED (2026-05-17) |
-| Leaf Package Filter | PLAN APPROVED |
+| Leaf Package Filter | SHIPPED (2026-05-17) |
+| Post-Leaf Bug Fix Run | HIGH |
 
 ## Roadmap to CLI Cutover
 
@@ -31,7 +32,9 @@
     ↓
 ✅ Unified Repo View (11 commits, 300 tests, 2026-05-17)
     ↓
-⏳ Leaf Package Filter ← PLAN APPROVED
+✅ Leaf Package Filter (2026-05-17)
+    ↓
+⏳ Post-Leaf Bug Fix Run ← in progress
     ↓
 ⏳ User/Group Materialization ← brainstorm next
     ↓
@@ -46,13 +49,21 @@ Post-cutover: Architect v2, TUI, build command
 
 ## Upcoming Work
 
-### Leaf Package Filter (HIGH — plan approved)
+### Post-Leaf Bug Fix Run (HIGH — in progress)
 
-**Problem:** Containerfile `dnf install` line has ~477 packages. Should be ~20-50.
+**Status:** Leaf Package Filter shipped 2026-05-17. Testing revealed 4 issues:
 
-**Root cause:** Rust scanner doesn't run `dnf repoquery --userinstalled` to identify user-intent (leaf) packages. The Go code does this and filters to leaf-only.
+1. **Leaf classification quality (HIGH):** Base-install packages (kernel, dosfstools, efibootmgr, langpacks-en, lvm2, shim-aa64) show up as leaf packages on stock CentOS. `dnf repoquery --userinstalled` reports anaconda/kickstart packages as user-installed. Need additional filtering logic.
 
-**Fix:** Two-part — (1) port `classifyLeafAuto()` to Rust RPM inspector, (2) filter view + Containerfile to leaf-only. Plan at `docs/plans/2026-05-17-leaf-package-filter.md`.
+2. **Service classification noise (HIGH):** `systemctl enable/disable` lines too noisy on stock systems. Service diff isn't comparing against base image defaults properly.
+
+3. **Leaf dep-tree UI (MEDIUM):** `leaf_dep_tree` data exists in snapshot but web UI doesn't surface it. Users can't see what dependencies a leaf package pulls in.
+
+4. **Context tab (MEDIUM):** No way to view non-leaf packages, version changes, or full system picture. Need read-only "Context" tab showing all packages and version deltas. Requires Fern (UX) + Ember (product strategy) input before implementation.
+
+Items 1-3 are bug fixes. Item 4 is a new UI surface requiring design input first.
+
+**Note:** Leaf Package Filter shipped 2026-05-17. See `docs/plans/2026-05-17-leaf-package-filter.md` for implementation details.
 
 ### User/Group Materialization (HIGH — brainstorm next)
 
