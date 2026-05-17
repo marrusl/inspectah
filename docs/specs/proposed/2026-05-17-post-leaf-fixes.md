@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 8** (2026-05-17): Modified baseline packages now suppressed. Version drift surfaced in Version Changes (Item 4), not on the decision surface.
+>
 > **Revision 7** (2026-05-17): Simplifies empty-state derivation. No defensive compat code before 1.0.
 >
 > **Revision 6** (2026-05-17): Simplifies no_baseline to single carrier. Legacy snapshot compat is not a concern (re-scan policy).
@@ -96,11 +98,22 @@ is a separate mechanism.
    change to this contract.
 
 3. **Baseline-present `Modified` packages** -- a package that exists
-   in both the host and the baseline but with different versions has
-   intentional version drift. These must NOT be suppressed from the
-   leaf decision surface or from `RUN dnf install` output, because
-   the version difference may be work the operator needs to recreate
-   or consciously ignore.
+   in both the host and the baseline but with a different version is
+   also suppressed from the leaf decision surface and from
+   `RUN dnf install` output. Baseline presence proves the package
+   ships in the target image; version drift is informational context,
+   not a Containerfile action. The Version Changes section (Item 4)
+   surfaces version drift as read-only context for operator awareness.
+   If the scanned system has `podman-4.9.1` and the target base has
+   `podman-4.9.0`, putting `dnf install podman` in the Containerfile
+   is wrong -- the user didn't install podman, it was already in the
+   base. Minor downgrades from moving to the base image are
+   acceptable.
+   
+   **Future work:** Major/minor version guardrails (e.g.,
+   `podman 4.x -> 5.x`) may be added later to flag significant
+   version changes that warrant explicit user attention on the
+   decision surface.
 
 **New field: `baseline_suppressed`**
 
@@ -109,10 +122,12 @@ introduce a new `Vec<String>` field on `RpmSection`:
 
 ```rust
 /// Canonical `name.arch` identities for packages present in both the
-/// host's userinstalled set and the target baseline with matching
-/// version (i.e., `PackageState::Added` with identical EVR -- the
-/// classifier treats same-EVR baseline matches as `Added`, not
-/// `Modified`). These are suppressed from the leaf triage and install
+/// host's userinstalled set and the target baseline, regardless of
+/// version match. Covers both `PackageState::Added` (same EVR) and
+/// `PackageState::Modified` (different EVR). Baseline presence proves
+/// target-image membership -- version drift is surfaced in the
+/// Version Changes context section (Item 4), not on the decision
+/// surface. These are suppressed from the leaf triage and install
 /// surfaces but are NOT dependency-derived auto packages. `None` means
 /// no baseline was available for suppression.
 pub baseline_suppressed: Option<Vec<String>>,
@@ -145,14 +160,12 @@ fn classify_leaf_auto(
             let (suppressed, true_leaf): (Vec<_>, Vec<_>) = leaf_set
                 .into_iter()
                 .partition(|id| {
-                    // Suppress only baseline-matching Added entries
-                    // (same EVR as baseline). Modified packages have
-                    // version drift that must stay visible.
+                    // Suppress ALL baseline-present packages regardless
+                    // of state (Added or Modified). Baseline presence
+                    // proves target-image membership. Version drift is
+                    // surfaced in the Version Changes context section
+                    // (Item 4), not on the decision surface.
                     bl.packages.contains_key(id.as_str())
-                        && packages_added.iter().any(|p| {
-                            canonical_package_id(p) == **id
-                            && p.state == PackageState::Added
-                        })
                 });
 
             baseline_suppressed = suppressed.into_iter().cloned().collect();
@@ -173,9 +186,10 @@ fn classify_leaf_auto(
 
 - `inspectah-pipeline/src/render/containerfile.rs` -- the
   `RUN dnf install` line already filters through `leaf_packages`.
-  Baseline-suppressed packages are not in `leaf_packages` and thus
-  not in the install line. But `Modified` baseline packages remain
-  in `leaf_packages` because the suppression filter excluded them.
+  Baseline-suppressed packages (both `Added` and `Modified`) are not
+  in `leaf_packages` and thus not in the install line. Version drift
+  for `Modified` packages is surfaced in the Version Changes context
+  section (Item 4) instead.
 
 **Why `baseline_suppressed` instead of widening `auto_packages`:**
 The current contract uses `auto_packages` and `leaf_dep_tree` as
@@ -199,19 +213,28 @@ base-image packages without maintenance.
 ### Testing
 
 - Unit test: `classify_leaf_auto` with baseline containing kernel,
-  dosfstools at matching version -> these should appear in
-  `baseline_suppressed`, not in `leaf_packages` or `auto_packages`.
+  dosfstools at matching version (`Added` state) -> these should
+  appear in `baseline_suppressed`, not in `leaf_packages` or
+  `auto_packages`.
 - Unit test: baseline-present package with `Modified` state (version
-  drift) -> stays in `leaf_packages`, NOT suppressed.
+  drift) -> suppressed from `leaf_packages`, appears in
+  `baseline_suppressed`. Version drift is surfaced in the Version
+  Changes context section (Item 4), not on the decision surface.
 - Unit test: package in userinstalled but NOT in baseline -> stays
   in `leaf_packages`.
 - Unit test: no baseline available -> existing behavior unchanged,
   `baseline_suppressed` is `None`.
-- End-to-end: collect -> refine -> view: suppressed packages absent
-  from triage surface, `Modified` baseline packages still visible.
-- End-to-end: collect -> render -> containerfile: suppressed packages
-  absent from `RUN dnf install`, `Modified` baseline packages present.
+- End-to-end: collect -> refine -> view: all baseline-present
+  packages (both `Added` and `Modified`) absent from triage surface.
+  `Modified` package version drift visible in Version Changes
+  context section.
+- End-to-end: collect -> render -> containerfile: all
+  baseline-present packages absent from `RUN dnf install`. Version
+  drift visible in Version Changes section, not in install commands.
 - Regression: existing `classify_leaf_auto` tests must still pass.
+- Future: when major/minor version guardrails are implemented,
+  verify that significant version changes (e.g., `4.x -> 5.x`)
+  surface back on the decision surface with appropriate flagging.
 
 ---
 
@@ -1432,7 +1455,7 @@ Collector (Rust)
   |       |-- leaf_packages: Option<Vec<String>>
   |       |-- auto_packages: Option<Vec<String>>       [unchanged semantics]
   |       |-- leaf_dep_tree: serde_json::Value
-  |       +-- baseline_suppressed: Option<Vec<String>>  [Item 1 - NEW]
+  |       +-- baseline_suppressed: Option<Vec<String>>  [Item 1 - NEW, pairs with Item 4]
   +-- Services inspector -> state_changes, enabled/disabled, drop_ins,
   |                         preset_matched_units         [Item 2 - NEW]
 
@@ -1466,7 +1489,10 @@ Frontend (React)
 ### Dependency Order
 
 Items 1 and 2 are independent bug fixes with no cross-dependencies.
-Item 2 now includes a collector change (`preset_matched_units` on
+Item 1 now pairs with Item 4: baseline-present packages (both `Added`
+and `Modified`) are suppressed from the decision surface by Item 1,
+and their version drift is surfaced as read-only context by Item 4.
+Item 2 includes a collector change (`preset_matched_units` on
 `ServiceSection`) that must land before the handler change can use it.
 
 Item 3 (dep tree modal) depends only on `leaf_dep_tree` data already in
