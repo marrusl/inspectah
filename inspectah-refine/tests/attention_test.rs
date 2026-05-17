@@ -1,6 +1,6 @@
 use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
 use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection};
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::redaction::{RedactionHint, RedactionState, Confidence};
 use inspectah_refine::attention::compute_config_attention;
@@ -103,25 +103,48 @@ fn test_added_no_baseline_empty_repo_is_tier3() {
 }
 
 #[test]
-fn test_modified_in_baseline_is_needs_review_version_changed() {
-    // Modified packages ALWAYS need review, even when in baseline.
-    let snap = make_snap_with_package(
+fn test_modified_upgrade_in_baseline_is_routine() {
+    // Upgrades are normal maintenance — Routine.
+    let mut snap = make_snap_with_package(
         "glibc", PackageState::Modified, "baseos",
         Some(vec!["glibc".into()]),
     );
+    snap.rpm.as_mut().unwrap().version_changes.push(VersionChange {
+        name: "glibc".into(),
+        direction: VersionChangeDirection::Upgrade,
+        ..Default::default()
+    });
+    let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
+    assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+}
+
+#[test]
+fn test_modified_downgrade_in_baseline_is_needs_review() {
+    // Downgrades are unusual — NeedsReview.
+    let mut snap = make_snap_with_package(
+        "glibc", PackageState::Modified, "baseos",
+        Some(vec!["glibc".into()]),
+    );
+    snap.rpm.as_mut().unwrap().version_changes.push(VersionChange {
+        name: "glibc".into(),
+        direction: VersionChangeDirection::Downgrade,
+        ..Default::default()
+    });
     let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
     assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
 }
 
 #[test]
-fn test_modified_not_in_baseline_known_repo_is_needs_review_version_changed() {
+fn test_modified_no_version_change_entry_defaults_to_routine() {
+    // Modified with no matching VersionChange entry — defaults to Routine.
     let snap = make_snap_with_package(
         "httpd", PackageState::Modified, "appstream",
         Some(vec!["glibc".into()]),
     );
     let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
-    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
 }
 

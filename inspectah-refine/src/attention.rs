@@ -1,7 +1,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::rpm::{PackageEntry, PackageState};
+use inspectah_core::types::rpm::{PackageEntry, PackageState, VersionChange, VersionChangeDirection};
 use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedConfig, RefinedPackage};
 
 const SENSITIVE_PATHS: &[&str] = &[
@@ -31,7 +31,7 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
     rpm.packages_added
         .iter()
         .map(|entry| {
-            let tag = classify_package(entry, baseline);
+            let tag = classify_package(entry, baseline, &rpm.version_changes);
             let mut tags = vec![tag];
 
             if is_sensitive_path(&entry.name) {
@@ -55,7 +55,11 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
         .collect()
 }
 
-fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> AttentionTag {
+fn classify_package(
+    entry: &PackageEntry,
+    baseline: Option<&[String]>,
+    version_changes: &[VersionChange],
+) -> AttentionTag {
     // LocalInstall and NoRepo are always Tier 3, regardless of baseline or repo.
     match entry.state {
         PackageState::LocalInstall => {
@@ -84,14 +88,28 @@ fn classify_package(entry: &PackageEntry, baseline: Option<&[String]>) -> Attent
         };
     }
 
-    // Modified packages ALWAYS need review, even if in baseline.
+    // Modified packages: check version change direction.
+    // Upgrades are normal maintenance (Routine). Downgrades need review.
     if entry.state == PackageState::Modified {
         return match baseline {
-            Some(_) => AttentionTag {
-                level: AttentionLevel::NeedsReview,
-                reason: AttentionReason::PackageVersionChanged,
-                detail: None,
-            },
+            Some(_) => {
+                let is_downgrade = version_changes.iter().any(|vc| {
+                    vc.name == entry.name && vc.direction == VersionChangeDirection::Downgrade
+                });
+                if is_downgrade {
+                    AttentionTag {
+                        level: AttentionLevel::NeedsReview,
+                        reason: AttentionReason::PackageVersionChanged,
+                        detail: None,
+                    }
+                } else {
+                    AttentionTag {
+                        level: AttentionLevel::Routine,
+                        reason: AttentionReason::PackageVersionChanged,
+                        detail: None,
+                    }
+                }
+            }
             None => AttentionTag {
                 level: AttentionLevel::Informational,
                 reason: AttentionReason::PackageProvenanceUnavailable,
@@ -205,7 +223,7 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
 mod tests {
     use super::*;
     use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
-    use inspectah_core::types::rpm::RpmSection;
+    use inspectah_core::types::rpm::{RpmSection, VersionChange, VersionChangeDirection};
 
     /// Helper: build a minimal PackageEntry with the given state and source_repo.
     fn pkg(name: &str, state: PackageState, source_repo: &str) -> PackageEntry {
@@ -218,10 +236,28 @@ mod tests {
         }
     }
 
+    /// Helper: build a VersionChange with the given direction.
+    fn vc(name: &str, direction: VersionChangeDirection) -> VersionChange {
+        VersionChange {
+            name: name.to_string(),
+            direction,
+            ..Default::default()
+        }
+    }
+
     /// Helper: build a snapshot with baseline via snap.baseline (Phase 6) and packages_added.
     fn snap_with_baseline(
         baseline_names: Option<Vec<String>>,
         packages: Vec<PackageEntry>,
+    ) -> InspectionSnapshot {
+        snap_with_baseline_and_vc(baseline_names, packages, vec![])
+    }
+
+    /// Helper: build a snapshot with baseline, packages, and version changes.
+    fn snap_with_baseline_and_vc(
+        baseline_names: Option<Vec<String>>,
+        packages: Vec<PackageEntry>,
+        version_changes: Vec<VersionChange>,
     ) -> InspectionSnapshot {
         let baseline = baseline_names.map(|names| {
             let pkgs = names.into_iter().map(|n| {
@@ -245,6 +281,7 @@ mod tests {
             schema_version: 14,
             rpm: Some(RpmSection {
                 packages_added: packages,
+                version_changes,
                 ..Default::default()
             }),
             baseline,
@@ -293,11 +330,26 @@ mod tests {
     }
 
     #[test]
-    fn verified_modified_in_baseline_is_needs_review_version_changed() {
-        // Modified packages ALWAYS need review, even when in baseline.
-        let snap = snap_with_baseline(
+    fn verified_modified_upgrade_is_routine() {
+        // Upgrades are normal maintenance — Routine, not NeedsReview.
+        let snap = snap_with_baseline_and_vc(
             Some(vec!["kernel".into()]),
             vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
+            vec![vc("kernel", VersionChangeDirection::Upgrade)],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+    }
+
+    #[test]
+    fn verified_modified_downgrade_is_needs_review() {
+        // Downgrades are unusual — NeedsReview.
+        let snap = snap_with_baseline_and_vc(
+            Some(vec!["kernel".into()]),
+            vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
+            vec![vc("kernel", VersionChangeDirection::Downgrade)],
         );
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
@@ -306,14 +358,28 @@ mod tests {
     }
 
     #[test]
-    fn verified_modified_not_in_baseline_recognized_repo_is_needs_review() {
+    fn verified_modified_no_version_change_entry_defaults_to_routine() {
+        // Modified with no matching VersionChange entry (no downgrade found) — Routine.
         let snap = snap_with_baseline(
-            Some(vec!["glibc".into()]),
+            Some(vec!["kernel".into()]),
             vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
         );
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+    }
+
+    #[test]
+    fn verified_modified_not_in_baseline_upgrade_is_routine() {
+        let snap = snap_with_baseline_and_vc(
+            Some(vec!["glibc".into()]),
+            vec![pkg("kernel", PackageState::Modified, "rhel-9-baseos")],
+            vec![vc("kernel", VersionChangeDirection::Upgrade)],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
         assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
     }
 
