@@ -150,6 +150,29 @@ describe("Sidebar", () => {
     ).toBeTruthy();
   });
 
+  it("hides hostname line when hostname is empty", () => {
+    const emptyHostHealth: HealthResponse = {
+      ...MOCK_HEALTH,
+      host: { ...MOCK_HEALTH.host, hostname: "" },
+    };
+    render(
+      <Sidebar
+        activeSection="packages"
+        onSelect={vi.fn()}
+        stats={MOCK_STATS}
+        sections={MOCK_SECTIONS}
+        health={emptyHostHealth}
+      />,
+    );
+
+    // OS info should still render
+    expect(screen.getByText(/9\.4/)).toBeInTheDocument();
+    // No bold hostname element should be present
+    const hostBlock = document.querySelector(".inspectah-sidebar__host");
+    const strong = hostBlock?.querySelector("strong");
+    expect(strong).toBeNull();
+  });
+
   it("calls onSelect when a nav item is clicked", async () => {
     const onSelect = vi.fn();
     render(
