@@ -139,7 +139,33 @@ export function MainContent({
   if (activeSection === "packages") {
     const hasFilter = filterText.trim().length > 0;
     const noResults = hasFilter && filteredPackageItems.length === 0;
-    const baselineUnavailable = viewData?.stats.baseline_available === false;
+    const baselineSummary = viewData?.baseline_summary;
+
+    // Render verification banner
+    let banner: JSX.Element | null = null;
+    if (baselineSummary) {
+      // Verified mode: baseline comparison active
+      const digestPrefix = baselineSummary.image_digest.substring(0, 12);
+      banner = (
+        <Alert
+          variant="info"
+          isInline
+          title={`Baseline compared against ${baselineSummary.image_ref} (${digestPrefix}…) — ${baselineSummary.baseline_count} in base image, ${baselineSummary.user_added_count} user-installed, ${baselineSummary.review_count} require review`}
+          style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
+        />
+      );
+    } else {
+      // Degraded mode: baseline unavailable
+      banner = (
+        <Alert
+          variant="warning"
+          isInline
+          title="Baseline unavailable — all added packages shown as NeedsReview"
+          style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
+        />
+      );
+    }
+
     return (
       <PageSection>
         <Content>
@@ -159,14 +185,7 @@ export function MainContent({
             />
           </ToggleGroup>
         </div>
-        {baselineUnavailable && (
-          <Alert
-            variant="warning"
-            isInline
-            title="Baseline data unavailable — classification confidence reduced. All packages shown for review."
-            style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}
-          />
-        )}
+        {banner}
         {sectionSearchOpen && (
           <SectionSearch
             value={filterText}
