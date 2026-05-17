@@ -55,6 +55,26 @@ fn patch_array_includes(parent: &mut Value, array_key: &str) {
     }
 }
 
+/// Collect all dependency names from a leaf_dep_tree JSON value.
+///
+/// The tree is a JSON object `{ "leaf_name": ["dep1", "dep2", ...], ... }`.
+/// Returns a set of all dependency names across all leaves.
+fn collect_dep_tree_names(tree: &serde_json::Value) -> std::collections::HashSet<&str> {
+    let mut deps = std::collections::HashSet::new();
+    if let serde_json::Value::Object(map) = tree {
+        for (_leaf, dep_list) in map {
+            if let serde_json::Value::Array(arr) = dep_list {
+                for item in arr {
+                    if let serde_json::Value::String(name) = item {
+                        deps.insert(name.as_str());
+                    }
+                }
+            }
+        }
+    }
+    deps
+}
+
 /// Materialize tier-aware include defaults for packages.
 ///
 /// Baseline subtraction: Tier 1 (Routine/baseline match) packages are
@@ -73,7 +93,17 @@ pub fn normalize_package_defaults(
 
     let leaf_set: Option<std::collections::HashSet<&str>> = rpm.leaf_packages
         .as_ref()
-        .map(|lp| lp.iter().map(|s| s.as_str()).collect());
+        .map(|lp| {
+            let mut set: std::collections::HashSet<&str> =
+                lp.iter().map(|s| s.as_str()).collect();
+            // Exclude transitive dependencies of leaf packages.
+            // leaf_dep_tree maps each leaf name to an array of its dep names.
+            // Any package that appears as a dep of another leaf is not a
+            // true leaf — it was pulled in automatically.
+            let all_deps = collect_dep_tree_names(&rpm.leaf_dep_tree);
+            set.retain(|name| !all_deps.contains(*name));
+            set
+        });
 
     for (i, refined) in packages.iter().enumerate() {
         if i >= rpm.packages_added.len() { break; }
@@ -281,5 +311,104 @@ mod tests {
         normalize_incompatible_services(&mut snap);
         let services = snap.services.as_ref().unwrap();
         assert!(!services.state_changes[0].include);
+    }
+
+    #[test]
+    fn collect_dep_tree_empty() {
+        let tree = serde_json::json!({});
+        let deps = super::collect_dep_tree_names(&tree);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn collect_dep_tree_with_deps() {
+        let tree = serde_json::json!({
+            "git": ["git-core", "perl-Git", "perl-libs"],
+            "vim": ["vim-common", "gpm-libs"]
+        });
+        let deps = super::collect_dep_tree_names(&tree);
+        assert_eq!(deps.len(), 5);
+        assert!(deps.contains("git-core"));
+        assert!(deps.contains("perl-Git"));
+        assert!(deps.contains("perl-libs"));
+        assert!(deps.contains("vim-common"));
+        assert!(deps.contains("gpm-libs"));
+    }
+
+    #[test]
+    fn collect_dep_tree_skips_non_strings() {
+        let tree = serde_json::json!({
+            "vim": ["vim-common", 42, null]
+        });
+        let deps = super::collect_dep_tree_names(&tree);
+        assert_eq!(deps.len(), 1);
+        assert!(deps.contains("vim-common"));
+    }
+
+    #[test]
+    fn collect_dep_tree_null_value() {
+        let tree = serde_json::Value::Null;
+        let deps = super::collect_dep_tree_names(&tree);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn leaf_set_excludes_transitive_deps() {
+        use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+        use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedPackage};
+
+        let mut snap = InspectionSnapshot {
+            schema_version: 14,
+            rpm: Some(RpmSection {
+                packages_added: vec![
+                    PackageEntry {
+                        name: "git".into(), arch: "x86_64".into(),
+                        state: PackageState::Added, source_repo: "appstream".into(),
+                        include: true, ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "perl-Git".into(), arch: "x86_64".into(),
+                        state: PackageState::Added, source_repo: "appstream".into(),
+                        include: true, ..Default::default()
+                    },
+                    PackageEntry {
+                        name: "git-core".into(), arch: "x86_64".into(),
+                        state: PackageState::Added, source_repo: "appstream".into(),
+                        include: true, ..Default::default()
+                    },
+                ],
+                leaf_packages: Some(vec![
+                    "git".into(), "perl-Git".into(), "git-core".into(),
+                ]),
+                leaf_dep_tree: serde_json::json!({
+                    "git": ["perl-Git", "git-core"]
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        // All packages are Tier 2 (Informational) — no baseline
+        let packages: Vec<RefinedPackage> = snap.rpm.as_ref().unwrap()
+            .packages_added.iter().map(|entry| {
+                RefinedPackage {
+                    entry: entry.clone(),
+                    attention: vec![AttentionTag {
+                        level: AttentionLevel::Informational,
+                        reason: AttentionReason::PackageProvenanceUnavailable,
+                        detail: None,
+                    }],
+                }
+            }).collect();
+
+        normalize_package_defaults(&mut snap, &packages);
+        let rpm = snap.rpm.as_ref().unwrap();
+
+        // git is a true leaf — should be included
+        assert!(rpm.packages_added[0].include, "git should be included (true leaf)");
+        // perl-Git is a dep of git — should be excluded
+        assert!(!rpm.packages_added[1].include, "perl-Git should be excluded (dep of git)");
+        // git-core is a dep of git — should be excluded
+        assert!(!rpm.packages_added[2].include, "git-core should be excluded (dep of git)");
     }
 }
