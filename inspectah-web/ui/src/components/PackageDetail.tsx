@@ -50,7 +50,7 @@ export function PackageDetail({ pkg }: PackageDetailProps) {
               {pkg.attention.map((tag: AttentionTag, i: number) => (
                 <span key={i} style={{ marginRight: "var(--pf-t--global--spacer--sm)" }}>
                   <Label color={attentionLabelColor(tag.level)}>
-                    {formatReasonText(tag.reason)}
+                    {formatReasonText(tag.reason, tag.detail)}
                   </Label>
                   {tag.detail && (
                     <Content component="small" style={{ marginLeft: "var(--pf-t--global--spacer--xs)" }}>
