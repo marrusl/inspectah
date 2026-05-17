@@ -1,14 +1,15 @@
-//! `inspectah scan` subcommand — Phase 1 CLI surface.
+//! `inspectah scan` subcommand.
 //!
-//! Wires the full pipeline: detect source system -> create InspectionContext ->
-//! collect (RpmInspector) -> validate -> redact -> render_all -> create_tarball.
+//! Wires the full pipeline: detect source system -> resolve target image ->
+//! extract baseline -> collect (all inspectors) -> validate -> redact ->
+//! render_all -> create_tarball.
 //!
 //! With `--inspect-only`, writes the JSON snapshot and exits without producing
 //! a tarball or rendered artifacts.
 
 use anyhow::{Context, Result};
 use clap::Args;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use inspectah_collect::executor::real::RealExecutor;
 use inspectah_collect::inspectors::config::ConfigInspector;
@@ -22,6 +23,8 @@ use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
 use inspectah_collect::inspectors::users::UsersGroupsInspector;
+use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
+use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
 use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::os::OsRelease;
@@ -41,6 +44,14 @@ pub struct ScanArgs {
     /// Output file path (tarball) or directory (with --inspect-only)
     #[arg(long, short)]
     pub output: Option<PathBuf>,
+
+    /// Target base image for cross-distro conversion (e.g., registry.redhat.io/rhel9/rhel-bootc:9.6)
+    #[arg(long)]
+    pub base_image: Option<String>,
+
+    /// Skip baseline extraction (degraded classification mode)
+    #[arg(long)]
+    pub no_baseline: bool,
 }
 
 /// Detect the source system by reading /etc/os-release.
@@ -90,12 +101,65 @@ fn get_hostname(executor: &dyn inspectah_core::traits::executor::Executor) -> St
 }
 
 pub fn run_scan(args: &ScanArgs) -> Result<()> {
+    // Flag validation
+    if args.base_image.is_some() && args.no_baseline {
+        anyhow::bail!(
+            "Cannot specify both --base-image and --no-baseline. \
+             Use --base-image to set the target image, or --no-baseline to skip baseline extraction."
+        );
+    }
+
     let executor = RealExecutor::new();
 
     // Step 1: Detect source system
+    eprintln!("Detecting source system...");
     let source = detect_source_system(&executor).context("source system detection failed")?;
 
-    // Step 2: Collect — run all inspectors
+    // Step 2: Resolve target image
+    eprintln!("Resolving target image...");
+
+    let ublue_metadata = read_ublue_metadata(&executor);
+    let bootc_ref = read_bootc_status_ref(&executor);
+
+    let resolution_result = inspectah_core::baseline::resolve_base_image(
+        source.os_release(),
+        ublue_metadata.as_ref(),
+        bootc_ref.as_deref(),
+        args.base_image.as_deref(),
+    );
+
+    let (target_image, normalized_ref) = match resolution_result {
+        Ok(res) => {
+            let norm = inspectah_core::baseline::normalize_image_ref(&res.image_ref)
+                .context("image ref normalization failed")?;
+            eprintln!("  {} ({:?})", norm.as_str(), res.strategy);
+            let ti = TargetImageIdentity {
+                image_ref: norm.as_str().to_string(),
+                strategy: res.strategy,
+            };
+            (Some(ti), Some(norm))
+        }
+        Err(e) if args.no_baseline => {
+            eprintln!("  not found ({}), continuing without baseline", e);
+            (None, None)
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // Step 3: Extract baseline
+    let baseline_data = match (&normalized_ref, args.no_baseline) {
+        (Some(norm), false) => {
+            eprintln!("Pulling target image...");
+            let data = inspectah_collect::baseline::extract_baseline(&executor, norm)
+                .context("baseline extraction failed")?;
+            eprintln!("Extracting baseline... {} packages", data.packages.len());
+            Some(data)
+        }
+        _ => None,
+    };
+
+    // Step 4: Collect — run all inspectors
+    eprintln!("Scanning host...");
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ServicesInspector::new()),
@@ -109,13 +173,19 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(SelinuxInspector::new()),
         Box::new(NonRpmInspector::new()),
     ];
-    let collected = collect(&source, &executor, &inspectors, None);
+    let collected = collect(&source, &executor, &inspectors, baseline_data.as_ref());
+    eprintln!("Scanning host... done");
 
-    // Step 4: Validate
+    // Step 5: Validate
     let validated = validate(collected).context("snapshot validation failed")?;
 
-    // Step 5: Redact
+    // Step 6: Redact
     let mut snapshot = validated.state.snapshot;
+
+    // Set Phase 6 fields on snapshot
+    snapshot.target_image = target_image;
+    snapshot.baseline = baseline_data;
+    snapshot.no_baseline = args.no_baseline;
     redact(&mut snapshot, &RedactOptions::default());
 
     // If --inspect-only, write JSON and exit
@@ -139,7 +209,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Step 6: Render all artifacts to a temp directory
+    // Step 7: Render all artifacts to a temp directory
     let render_dir = tempfile::tempdir().context("failed to create temp directory")?;
 
     let render_context = RenderContext { target: None };
@@ -153,7 +223,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         r#"{"$schema":"http://json-schema.org/draft-07/schema#","title":"InspectionSnapshot","description":"Phase 7 placeholder","type":"object"}"#,
     )?;
 
-    // Step 7: Create tarball
+    // Step 8: Create tarball
     let hostname = get_hostname(&executor);
     let stamp = get_output_stamp(&hostname);
     let tarball_name = format!("{stamp}.tar.gz");
@@ -174,6 +244,31 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
 
     eprintln!("Output written to {}", tarball_path.display());
     Ok(())
+}
+
+/// Read Universal Blue metadata from the well-known path.
+fn read_ublue_metadata(executor: &dyn Executor) -> Option<UblueMetadata> {
+    let content = executor
+        .read_file(Path::new("/usr/share/ublue-os/image-info.json"))
+        .ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+/// Read the booted image ref from `bootc status --json`.
+fn read_bootc_status_ref(executor: &dyn Executor) -> Option<String> {
+    let result = executor.run("bootc", &["status", "--json"]);
+    if !result.success() {
+        return None;
+    }
+    // Parse status.booted.image.image.image
+    let val: serde_json::Value = serde_json::from_str(&result.stdout).ok()?;
+    val.get("status")?
+        .get("booted")?
+        .get("image")?
+        .get("image")?
+        .get("image")?
+        .as_str()
+        .map(String::from)
 }
 
 #[cfg(test)]
