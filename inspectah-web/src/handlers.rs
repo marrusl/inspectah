@@ -143,11 +143,12 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
     let changes = session.pending_changes();
     let excluded: BTreeSet<&str> = changes.repos_excluded.iter().map(|s| s.as_str()).collect();
 
-    // Count visible packages per source_repo
+    // Count visible packages per source_repo (lowercased for consistency
+    // with RepoIndex, which normalizes section IDs to lowercase).
     let mut repo_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for pkg in &view.packages {
-        let section = &pkg.entry.source_repo;
-        *repo_counts.entry(section.clone()).or_insert(0) += 1;
+        let section = pkg.entry.source_repo.to_lowercase();
+        *repo_counts.entry(section).or_insert(0) += 1;
     }
 
     // Also include repos known to the index but not visible (0-count)
