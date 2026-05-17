@@ -1819,4 +1819,76 @@ mod tests {
         assert!(epel_group.is_some(), "epel group should exist");
         assert!(!epel_group.unwrap().enabled, "epel group should be disabled");
     }
+
+    // -- Cross-section isolation: items must not leak between sections -----
+
+    #[test]
+    fn cross_section_no_contamination() {
+        use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+        use inspectah_core::types::users::UserGroupSection;
+        use inspectah_core::types::storage::{StorageSection, MountPoint};
+
+        let mut snap = empty_snapshot();
+
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "NetworkManager-wait-online.service".into(),
+                current_state: "enabled".into(),
+                default_state: "enable".into(),
+                action: "enable".into(),
+                include: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({"name": "mark", "uid": 1000})],
+            ..Default::default()
+        });
+
+        snap.storage = Some(StorageSection {
+            mount_points: vec![MountPoint {
+                target: "/".into(),
+                source: "/dev/mapper/cs-root".into(),
+                fstype: "xfs".into(),
+                options: "rw".into(),
+            }],
+            ..Default::default()
+        });
+
+        let sections = normalize_for_context(&snap);
+
+        for section in &sections {
+            match section.id.as_str() {
+                "services" => {
+                    assert!(section.items.iter().any(|i| i.id.contains("NetworkManager")));
+                    assert!(!section.items.iter().any(|i| i.id == "mark"),
+                        "services has user item leak");
+                    assert!(!section.items.iter().any(|i| i.id == "/"),
+                        "services has storage item leak");
+                }
+                "users_groups" => {
+                    assert!(section.items.iter().any(|i| i.id == "mark"));
+                    assert!(!section.items.iter().any(|i| i.id.contains("NetworkManager")),
+                        "users_groups has service item leak");
+                    assert!(!section.items.iter().any(|i| i.id == "/"),
+                        "users_groups has storage item leak");
+                }
+                "storage" => {
+                    assert!(section.items.iter().any(|i| i.id == "/"));
+                    assert!(!section.items.iter().any(|i| i.id.contains("NetworkManager")),
+                        "storage has service item leak");
+                    assert!(!section.items.iter().any(|i| i.id == "mark"),
+                        "storage has user item leak");
+                }
+                _ => {
+                    assert!(section.items.is_empty(),
+                        "{} should have no items but has: {:?}",
+                        section.id,
+                        section.items.iter().map(|i| &i.id).collect::<Vec<_>>());
+                }
+            }
+        }
+    }
 }
