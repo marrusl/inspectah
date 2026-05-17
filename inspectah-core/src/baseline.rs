@@ -1151,4 +1151,46 @@ mod tests {
         let result = normalize_image_ref("ghcr.io/ublue-os/bazzite:stable").unwrap();
         assert_eq!(result.as_str(), "ghcr.io/ublue-os/bazzite:stable");
     }
+
+    // -----------------------------------------------------------------------
+    // Step 8: UBlue fail-closed helper tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn malformed_ublue_json_deserializes_to_none_fields() {
+        // Malformed JSON at the UBlue metadata path: valid JSON but wrong shape
+        let malformed_json = r#"{"not-a-field": 42, "garbage": true}"#;
+        let metadata: UblueMetadata = serde_json::from_str(malformed_json).unwrap();
+        // All fields should be None since none of the expected keys are present
+        assert!(metadata.image_ref.is_none(), "image_ref must be None for malformed JSON");
+        assert!(metadata.image_tag.is_none(), "image_tag must be None for malformed JSON");
+        assert!(metadata.image_name.is_none(), "image_name must be None for malformed JSON");
+        assert!(metadata.image_vendor.is_none(), "image_vendor must be None for malformed JSON");
+    }
+
+    #[test]
+    fn invalid_ublue_json_produces_none() {
+        // Completely invalid JSON (not parseable)
+        let invalid_json = r#"not json at all {{{{"#;
+        let result: Result<UblueMetadata, _> = serde_json::from_str(invalid_json);
+        assert!(result.is_err(), "invalid JSON must produce a parse error");
+    }
+
+    #[test]
+    fn resolve_with_malformed_ublue_metadata_returns_error() {
+        let os = make_os_release("fedora", "41", "");
+        // UblueMetadata with all None fields — cannot synthesize a ref
+        let ub = UblueMetadata {
+            image_ref: None,
+            image_tag: None,
+            image_name: None,
+            image_vendor: None,
+        };
+        let result = resolve_base_image(&os, Some(&ub), None, None);
+        assert!(result.is_err(), "malformed UblueMetadata must produce an error");
+        match result.unwrap_err() {
+            ResolutionError::MalformedUblueMetadata { .. } => {}
+            other => panic!("expected MalformedUblueMetadata, got {:?}", other),
+        }
+    }
 }

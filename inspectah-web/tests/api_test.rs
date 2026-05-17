@@ -733,7 +733,7 @@ async fn health_extended_fields() {
     assert_eq!(host["os_version"], "9.4", "os_version uses version_id");
     assert_eq!(host["os_id"], "rhel");
     assert!(host.get("system_type").is_some());
-    assert_eq!(host["schema_version"], 14);
+    assert_eq!(host["schema_version"], 15);
     assert!(json.get("completeness").is_some());
 }
 
@@ -750,7 +750,7 @@ async fn health_minimal_snapshot() {
     assert_eq!(host["os_name"], "");
     assert_eq!(host["os_version"], "");
     assert_eq!(host["os_id"], "");
-    assert_eq!(host["schema_version"], 14);
+    assert_eq!(host["schema_version"], 15);
 }
 
 // --- normalize_for_context unit tests ---------------------------------------
