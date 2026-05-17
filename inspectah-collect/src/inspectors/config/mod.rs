@@ -115,9 +115,11 @@ impl Inspector for ConfigInspector {
 
             let content = read_config_content(exec, path, &mut degraded_reasons);
 
+            let kind = classify_rpm_va_kind(flags);
+
             section.files.push(ConfigFileEntry {
                 path: path.to_string(),
-                kind: ConfigFileKind::RpmOwnedModified,
+                kind,
                 category: classify_config_path(path),
                 content,
                 rpm_va_flags: Some(flags.to_string()),
@@ -212,6 +214,33 @@ impl Inspector for ConfigInspector {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Classify an RPM-verified config file as Modified or Default based on
+/// verification flags.
+///
+/// `rpm -Va` flags: `S.5....T.` where each position indicates a change:
+///   S=Size, M=Mode, 5=digest, D=Device, L=readLink, U=User, G=Group,
+///   T=mTime, P=caPabilities.
+///
+/// Files with content changes (digest `5` or size `S`) are genuinely
+/// modified. Files with only metadata changes (mtime, group, mode, etc.)
+/// are typically scriptlet-regenerated defaults that match the package's
+/// intended state — classified as RpmOwnedDefault so the attention system
+/// treats them as Routine instead of NeedsReview.
+fn classify_rpm_va_kind(flags: &str) -> ConfigFileKind {
+    let has_content_change = flags.chars().enumerate().any(|(i, c)| {
+        match i {
+            0 => c == 'S', // Size
+            2 => c == '5', // digest (MD5/SHA)
+            _ => false,
+        }
+    });
+    if has_content_change {
+        ConfigFileKind::RpmOwnedModified
+    } else {
+        ConfigFileKind::RpmOwnedDefault
+    }
+}
 
 /// Reads file content with size guard. Returns empty string on failure.
 fn read_config_content(
@@ -1109,5 +1138,49 @@ mod tests {
             }
             other => panic!("expected Failed error for None rpm_state, got: {other:?}"),
         }
+    }
+
+    // -- classify_rpm_va_kind tests -------------------------------------------
+
+    #[test]
+    fn va_digest_change_is_modified() {
+        // S.5....T. — size and digest changed (content modification)
+        assert_eq!(classify_rpm_va_kind("S.5....T."), ConfigFileKind::RpmOwnedModified);
+    }
+
+    #[test]
+    fn va_size_only_is_modified() {
+        // S........  — only size changed
+        assert_eq!(classify_rpm_va_kind("S........"), ConfigFileKind::RpmOwnedModified);
+    }
+
+    #[test]
+    fn va_digest_only_is_modified() {
+        // ..5......  — only digest changed
+        assert_eq!(classify_rpm_va_kind("..5......"), ConfigFileKind::RpmOwnedModified);
+    }
+
+    #[test]
+    fn va_mtime_only_is_default() {
+        // .......T.  — only mtime changed (scriptlet-regenerated)
+        assert_eq!(classify_rpm_va_kind(".......T."), ConfigFileKind::RpmOwnedDefault);
+    }
+
+    #[test]
+    fn va_mode_and_mtime_is_default() {
+        // .M.....T.  — mode + mtime (metadata-only change)
+        assert_eq!(classify_rpm_va_kind(".M.....T."), ConfigFileKind::RpmOwnedDefault);
+    }
+
+    #[test]
+    fn va_group_only_is_default() {
+        // ......G..  — only group changed
+        assert_eq!(classify_rpm_va_kind("......G.."), ConfigFileKind::RpmOwnedDefault);
+    }
+
+    #[test]
+    fn va_all_dots_is_default() {
+        // .........  — all dots (no changes detected but listed)
+        assert_eq!(classify_rpm_va_kind("........."), ConfigFileKind::RpmOwnedDefault);
     }
 }
