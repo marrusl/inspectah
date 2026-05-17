@@ -2272,3 +2272,46 @@ describe("RepoGroupHeader updated labels", () => {
     expect(onExpandToggle).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---- AttentionSummary in MainContent tests ----
+
+describe("AttentionSummary in MainContent", () => {
+  it("shows attention summary on packages section", () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ name: "httpd", source_repo: "epel" }, [NEEDS_REVIEW_TAG]),
+        makePkg({ name: "glibc", source_repo: "baseos" }, [ROUTINE_TAG]),
+      ],
+      repo_groups: [
+        { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+        { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+    expect(screen.getByTestId("attention-summary")).toBeInTheDocument();
+    expect(screen.getByText("1 package needs review across 1 repo")).toBeInTheDocument();
+  });
+
+  it("shows all-clear when no review items", () => {
+    const view = makeViewResponse({
+      packages: [
+        makePkg({ name: "glibc", source_repo: "baseos" }, [ROUTINE_TAG]),
+      ],
+      repo_groups: [
+        { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} viewData={view} />);
+    expect(screen.getByText("All actionable items reviewed")).toBeInTheDocument();
+  });
+
+  it("does not show attention summary on configs section", () => {
+    const view = makeViewResponse({
+      config_files: [
+        makeConfig({}, [NEEDS_REVIEW_TAG]),
+      ],
+    });
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
+    expect(screen.queryByTestId("attention-summary")).not.toBeInTheDocument();
+  });
+});
