@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 3** (2026-05-17): Addresses round 2 findings. Item 2 now includes collector carrier (Mark's decision). Item 4 empty state and field casing fixed. Section-jump keyboard contract added.
+>
 > **Revision 2** (2026-05-17): Addresses round 1 review findings. See review summary for context.
 
 ## Summary
@@ -100,9 +102,11 @@ introduce a new `Vec<String>` field on `RpmSection`:
 ```rust
 /// Canonical `name.arch` identities for packages present in both the
 /// host's userinstalled set and the target baseline with matching
-/// version (state: Unchanged). These are suppressed from the leaf
-/// triage and install surfaces but are NOT dependency-derived auto
-/// packages. `None` means no baseline was available for suppression.
+/// version (i.e., `PackageState::Added` with identical EVR -- the
+/// classifier treats same-EVR baseline matches as `Added`, not
+/// `Modified`). These are suppressed from the leaf triage and install
+/// surfaces but are NOT dependency-derived auto packages. `None` means
+/// no baseline was available for suppression.
 pub baseline_suppressed: Option<Vec<String>>,
 ```
 
@@ -250,37 +254,150 @@ known, preset unknown" context.
 
 ### Proposed Fix
 
-**Three-way contract in `normalize_services()`:**
+**Honest three-way contract via collector carrier + handler logic.**
 
-Replace the current all-or-nothing approach with a three-way split
-that preserves operator truth:
+The round 2 reviews identified that a handler-only approach cannot
+truthfully implement a three-way split. The current collector in
+`inspectah-collect/src/inspectors/services.rs` (step 4, lines ~120-170)
+calls `resolve_preset()` for each unit, but only records the result
+when the preset and current state **diverge** (pushing to
+`state_changes`). When a preset matches the current state, the match
+signal is silently discarded -- the unit still appears in
+`enabled_units` or `disabled_units` with no indication that a preset
+was consulted. The handler therefore cannot distinguish "preset matched"
+from "preset unknown" using the current wire data.
+
+**Mark's decision:** Ship the collector carrier now (not as a future
+refinement). The three-way contract must be honest from day one.
+
+**Three-way contract:**
 
 1. **Known divergence** (unit has a preset, current state differs) --
    render from `state_changes` with full context. Subtitle format:
    `"current_state -> action (diverges from preset: default_state)"`.
 
 2. **Known match** (unit has a preset, current state matches) --
-   suppress entirely. These are stock defaults. They are the entries
-   in `enabled_units`/`disabled_units` that would have a matching
-   preset but no `state_changes` entry because they are not divergent.
+   suppress entirely. These are stock defaults. The collector exports
+   them in the new `preset_matched_units` field so the handler can
+   distinguish them from preset-unknown units.
 
 3. **Preset unknown** (unit has no matching preset rule, but its
    current state is observed in `enabled_units`/`disabled_units`) --
    keep visible with explicit labeling. Subtitle format:
    `"enabled (no preset rule)"` or `"disabled (no preset rule)"`.
 
-**Implementation:**
+#### Collector Change
 
-The handler needs to know which units had a matching preset rule. Two
-approaches:
+**`inspectah-core/src/types/services.rs`:**
 
-**Option A (recommended): Compute the preset-known set in the handler.**
+Add a new field to `ServiceSection`:
 
-`normalize_services()` already has access to both `state_changes` and
-`enabled_units`/`disabled_units`. Build a set of unit names that appear
-in `state_changes` -- these are units where a preset was known and the
-state diverged. Then for `enabled_units`/`disabled_units`, classify
-each entry:
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ServiceSection {
+    #[serde(default)]
+    pub state_changes: Vec<ServiceStateChange>,
+    #[serde(default)]
+    pub enabled_units: Vec<String>,
+    #[serde(default)]
+    pub disabled_units: Vec<String>,
+    #[serde(default)]
+    pub drop_ins: Vec<SystemdDropIn>,
+    /// Units where `resolve_preset()` found a matching rule AND the
+    /// current enable/disable state matches the preset default.
+    /// These are stock defaults that can be safely suppressed from
+    /// the context UI. Empty when presets could not be read (degraded
+    /// mode). Existing snapshots without this field deserialize as
+    /// empty via `#[serde(default)]`.
+    #[serde(default)]
+    pub preset_matched_units: Vec<String>,
+}
+```
+
+**`inspectah-collect/src/inspectors/services.rs`:**
+
+In step 4 (the `for unit in &units` loop, lines ~120-170), the
+current code only pushes to `state_changes` when a preset diverges.
+Add a `preset_matched_units` accumulator that captures the match case:
+
+```rust
+        // 4. Compare state vs preset — build state_changes
+        let mut state_changes = Vec::new();
+        let mut enabled_units = Vec::new();
+        let mut disabled_units = Vec::new();
+        let mut preset_matched_units = Vec::new();  // NEW
+
+        for unit in &units {
+            if unit.unit.contains('@') || unit.state == "static" {
+                continue;
+            }
+
+            match unit.state.as_str() {
+                "enabled" => enabled_units.push(unit.unit.clone()),
+                "disabled" => disabled_units.push(unit.unit.clone()),
+                _ => {}
+            }
+
+            let default_state = resolve_preset(&unit.unit, &preset_rules);
+
+            if let Some(ref default) = default_state {
+                if *default != unit.state {
+                    // Divergence — existing behavior
+                    let action = if unit.state == "enabled" {
+                        "enable"
+                    } else {
+                        "disable"
+                    };
+                    state_changes.push(ServiceStateChange {
+                        unit: unit.unit.clone(),
+                        current_state: unit.state.clone(),
+                        default_state: default.clone(),
+                        action: action.into(),
+                        include: true,
+                        owning_package: None,
+                        fleet: None,
+                        attention_reason: None,
+                    });
+                } else {
+                    // Match — NEW: record so the handler can suppress
+                    preset_matched_units.push(unit.unit.clone());
+                }
+            }
+            // resolve_preset returned None → preset unknown, no action
+        }
+```
+
+Wire into `ServiceSection` construction at the end of `inspect()`:
+
+```rust
+        Ok(InspectorOutput {
+            section: SectionData::Services(ServiceSection {
+                state_changes,
+                enabled_units,
+                disabled_units,
+                drop_ins,
+                preset_matched_units,  // NEW
+            }),
+            // ...
+        })
+```
+
+**Backward compatibility:** The `#[serde(default)]` annotation on
+`preset_matched_units` means existing snapshot JSON (which lacks this
+field) deserializes with an empty vec. This gives handler-side
+behavior identical to "all non-divergent units are preset-unknown"
+-- the conservative fallback.
+
+**Degraded mode:** When `read_preset_rules()` fails and the inspector
+returns `Degraded`, `preset_matched_units` is empty (no preset truth
+available). The handler treats all units as preset-unknown, which
+is the correct conservative behavior.
+
+#### Handler Change
+
+**`inspectah-web/src/handlers.rs` -- `normalize_services()`:**
+
+The handler now has three sets to classify each unit:
 
 ```rust
 fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
@@ -291,6 +408,11 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
         // Units with known divergences (preset existed, state differs)
         let divergent_units: HashSet<&str> = svc.state_changes.iter()
             .map(|sc| sc.unit.as_str())
+            .collect();
+
+        // Units where preset matched (suppress from context UI)
+        let matched_units: HashSet<&str> = svc.preset_matched_units.iter()
+            .map(|u| u.as_str())
             .collect();
 
         // Render known divergences from state_changes
@@ -318,39 +440,37 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
         }
 
         // For enabled/disabled units NOT in state_changes:
-        // If we can determine a preset matched, suppress (known match).
-        // If no preset data exists, keep visible as preset-unknown.
-        //
-        // Heuristic: a unit in enabled_units/disabled_units that is NOT
-        // in divergent_units either matched its preset (suppress) or
-        // had no preset rule (keep). The collector does not currently
-        // export the preset-match set, so we use a conservative
-        // approach: units NOT in divergent_units are rendered with the
-        // "no preset rule" label. This errs on the side of visibility.
-        //
-        // Future refinement: the collector could export a
-        // `preset_matched_units` set to enable exact suppression.
+        // - If in preset_matched_units → suppress (known match)
+        // - Otherwise → keep visible as preset-unknown
         for unit in &svc.enabled_units {
-            if !divergent_units.contains(unit.as_str()) {
-                items.push(ContextItem {
-                    id: unit.clone(),
-                    title: unit.clone(),
-                    subtitle: Some("enabled (no preset rule)".into()),
-                    detail: None,
-                    searchable_text: format!("{} enabled", unit),
-                });
+            if divergent_units.contains(unit.as_str()) {
+                continue;  // already rendered from state_changes
             }
+            if matched_units.contains(unit.as_str()) {
+                continue;  // known match, suppress
+            }
+            items.push(ContextItem {
+                id: unit.clone(),
+                title: unit.clone(),
+                subtitle: Some("enabled (no preset rule)".into()),
+                detail: None,
+                searchable_text: format!("{} enabled", unit),
+            });
         }
         for unit in &svc.disabled_units {
-            if !divergent_units.contains(unit.as_str()) {
-                items.push(ContextItem {
-                    id: unit.clone(),
-                    title: unit.clone(),
-                    subtitle: Some("disabled (no preset rule)".into()),
-                    detail: None,
-                    searchable_text: format!("{} disabled", unit),
-                });
+            if divergent_units.contains(unit.as_str()) {
+                continue;
             }
+            if matched_units.contains(unit.as_str()) {
+                continue;
+            }
+            items.push(ContextItem {
+                id: unit.clone(),
+                title: unit.clone(),
+                subtitle: Some("disabled (no preset rule)".into()),
+                detail: None,
+                searchable_text: format!("{} disabled", unit),
+            });
         }
 
         // Standalone drop-ins (no state_change or enabled/disabled entry)
@@ -377,17 +497,6 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
 }
 ```
 
-**Option B (future refinement): Export preset-match truth from the
-collector.**
-
-Add a `preset_matched_units: Vec<String>` field to `ServiceSection`
-that lists units where a preset rule was found AND the current state
-matched. This lets the handler distinguish "preset matched, safe to
-suppress" from "no preset rule, keep visible" with certainty. This is
-architecturally cleaner but changes the collector contract. Defer to a
-follow-up if the conservative Option A produces too many
-preset-unknown items in practice.
-
 **UI labeling distinction:** The three-way contract is visible in the
 UI through subtitle text:
 - Divergence: `"enabled -> enable (diverges from preset: disabled)"`
@@ -399,14 +508,34 @@ default noise that dominated the old rendering.
 
 ### Testing
 
-- Unit test: `normalize_services` with 5 state_changes, 80
-  enabled_units, 30 disabled_units -> output should contain the 5
-  divergences plus any enabled/disabled units NOT covered by
-  state_changes (labeled as preset-unknown), plus standalone drop-ins.
-- Unit test: enabled unit that IS in state_changes -> appears once (as
+**Collector (`preset_matched_units` carrier):**
+- Unit test: unit with `state: "enabled"` and matching preset
+  `"enable"` -> appears in `preset_matched_units`, NOT in
+  `state_changes`.
+- Unit test: unit with `state: "disabled"` and matching preset
+  `"disable"` -> appears in `preset_matched_units`.
+- Unit test: unit with `state: "enabled"` and divergent preset
+  `"disable"` -> appears in `state_changes`, NOT in
+  `preset_matched_units`.
+- Unit test: unit with no matching preset rule -> absent from both
+  `state_changes` and `preset_matched_units`.
+- Unit test: degraded mode (preset files unreadable) ->
+  `preset_matched_units` is empty.
+- Backward compat: deserialize snapshot JSON without
+  `preset_matched_units` field -> empty vec (serde default).
+
+**Handler (`normalize_services` three-way split):**
+- Unit test: `normalize_services` with 5 `state_changes`,
+  40 `preset_matched_units`, 30 remaining enabled/disabled units
+  -> output should contain the 5 divergences plus the 30
+  preset-unknown units, NOT the 40 matched units.
+- Unit test: enabled unit in `state_changes` -> appears once (as
   the divergence item), not twice.
-- Unit test: enabled unit NOT in state_changes -> appears with
-  "enabled (no preset rule)" subtitle.
+- Unit test: enabled unit in `preset_matched_units` -> suppressed,
+  does not appear in output.
+- Unit test: enabled unit NOT in `state_changes` AND NOT in
+  `preset_matched_units` -> appears with
+  `"enabled (no preset rule)"` subtitle.
 - Unit test: subtitle text for divergence items includes both current
   state and preset default.
 - Integration: verify Services section count in the sidebar drops
@@ -840,17 +969,24 @@ drift on different architectures.
 
 ### Frontend Changes
 
+**Field casing convention:** The existing project convention is
+snake_case on the wire (Rust serde defaults, no `rename_all`) and
+snake_case in TypeScript types (matching `api/types.ts` where fields
+like `source_repo`, `fleet`, `diff_against_rpm`, `display_name` are
+all snake_case). The `VersionChangeEntry` type follows this convention.
+
 **`api/types.ts`:**
 
 ```typescript
-/** Typed version change from the ViewResponse */
+/** Typed version change from the ViewResponse.
+ *  Field names are snake_case matching Rust serde output. */
 export interface VersionChangeEntry {
   name: string;
   arch: string;
-  hostVersion: string;
-  baseVersion: string;
-  hostEpoch: string;
-  baseEpoch: string;
+  host_version: string;
+  base_version: string;
+  host_epoch: string;
+  base_epoch: string;
   direction: "upgrade" | "downgrade";
 }
 
@@ -877,7 +1013,8 @@ const CONTEXT_SECTIONS = [
 
 **`components/MainContent.tsx`:**
 
-Add `"version_changes"` to `SECTION_LABELS`:
+Add `"version_changes"` to `SECTION_LABELS` and to the
+`contextSectionIds` array:
 
 ```typescript
 const SECTION_LABELS: Record<string, string> = {
@@ -886,23 +1023,185 @@ const SECTION_LABELS: Record<string, string> = {
 };
 ```
 
-No routing changes needed -- `MainContent` already renders any
-non-decision section via `ContextList` when a matching section exists
-in the `sections` array.
+```typescript
+const contextSectionIds = [
+  "services",
+  "version_changes",  // new -- must match Sidebar order
+  "containers",
+  // ... rest unchanged
+];
+```
 
-**Empty state:** The Version Changes section must distinguish two
-states:
-- **Zero drift:** Baseline is available but no packages have version
-  differences. Display: `"All packages match the target baseline
-  versions."` (positive signal -- no action needed).
-- **No baseline:** Baseline data was not available during collection.
-  Display: `"Version comparison requires a baseline. Configure a
-  baseline image to see version drift."` (actionable -- tells the
-  user what to do).
+The existing routing logic in `MainContent` handles context sections
+uniformly: when `contextSectionIds.includes(activeSection)`, it finds
+the section in the `sections` array and renders via `ContextList`.
+When the section is not found, it falls back to
+`"Section data not available."`. This fallback behavior is
+insufficient for `version_changes` because it cannot distinguish
+zero-drift from no-baseline. The empty-state contract below replaces
+it for this section.
 
-The handler signals "no baseline" by omitting the section entirely
-from `normalize_for_context()` when `snap.baseline` is `None`. "Zero
-drift" is a section with zero items.
+#### Empty-State Contract
+
+The handler **always emits** the `version_changes` section from
+`normalize_for_context()`, regardless of whether a baseline exists or
+whether there are version changes. The section carries a typed
+`empty_reason` field that the frontend uses to render section-specific
+empty-state copy.
+
+**Wire contract:**
+
+The `ContextSection` struct gains an optional `empty_reason` field:
+
+```rust
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ContextSection {
+    pub id: String,
+    pub display_name: String,
+    pub items: Vec<ContextItem>,
+    /// Present only on sections that need custom empty-state copy.
+    /// `None` when items is non-empty (normal rendering).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub empty_reason: Option<String>,
+}
+```
+
+**Handler behavior in `normalize_version_changes()`:**
+
+```rust
+fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
+    let mut items = Vec::new();
+    let empty_reason;
+
+    if snap.baseline.is_none() && snap.rpm.as_ref()
+        .map_or(true, |r| r.version_changes.is_empty())
+    {
+        // No baseline was available during collection
+        empty_reason = Some("no_baseline".to_string());
+    } else if let Some(rpm) = &snap.rpm {
+        for vc in &rpm.version_changes {
+            // ... existing ContextItem construction ...
+            items.push(/* ... */);
+        }
+        if items.is_empty() {
+            // Baseline existed but all packages match
+            empty_reason = Some("zero_drift".to_string());
+        } else {
+            empty_reason = None;
+        }
+    } else {
+        empty_reason = Some("no_baseline".to_string());
+    }
+
+    ContextSection {
+        id: "version_changes".to_string(),
+        display_name: "Version Changes".to_string(),
+        items,
+        empty_reason,
+    }
+}
+```
+
+**TypeScript type update:**
+
+```typescript
+export interface ContextSection {
+  id: string;
+  display_name: string;
+  items: ContextItem[];
+  empty_reason?: "zero_drift" | "no_baseline" | null;
+}
+```
+
+**Frontend rendering in `MainContent.tsx`:**
+
+When `activeSection` is `"version_changes"` and the section has zero
+items, check `section.empty_reason` before falling through to
+`ContextList` (which would show the generic
+`"No Version Changes data in this snapshot"` message):
+
+```typescript
+if (activeSection === "version_changes" && section.items.length === 0) {
+  const copy = section.empty_reason === "no_baseline"
+    ? "Version comparison requires a baseline. Run with --baseline to enable."
+    : "All packages match the target baseline versions.";
+  return (
+    <PageSection>
+      <Content><h2>{label}</h2></Content>
+      <EmptyState
+        titleText={copy}
+        icon={CubesIcon}
+        headingLevel="h3"
+      />
+    </PageSection>
+  );
+}
+```
+
+This check runs before the `ContextList` render path, so zero-item
+sections with a typed reason get custom copy while all other sections
+keep the existing generic empty state from `ContextList`.
+
+**Sidebar behavior:** The `version_changes` entry is always present
+in the static `CONTEXT_SECTIONS` array. Its badge count reflects
+`section.items.length` (zero for both empty-state cases). This is
+consistent: the section is always navigable, and when selected, the
+main content area shows the appropriate explanation.
+
+#### Section-Jump Keyboard Contract
+
+The current `useKeyboard.ts` hook maps keys `1-9` to sections in the
+`SECTION_IDS` array (display order):
+
+```typescript
+// Current SECTION_IDS (11 entries, keys 1-9 reach first 9):
+const SECTION_IDS = [
+  "packages",          // 1
+  "configs",           // 2
+  "services",          // 3
+  "containers",        // 4
+  "users_groups",      // 5
+  "network",           // 6
+  "storage",           // 7
+  "scheduled_tasks",   // 8
+  "non_rpm_software",  // 9
+  "kernel_boot",       // (no key -- already beyond 9)
+  "selinux",           // (no key -- already beyond 9)
+];
+```
+
+`version_changes` is inserted after `"services"` (position index 3)
+to match the sidebar order. This shifts `"containers"` from key `4`
+to key `5`, and cascades through the rest. The mapping becomes:
+
+```typescript
+const SECTION_IDS = [
+  "packages",          // 1
+  "configs",           // 2
+  "services",          // 3
+  "version_changes",   // 4  (NEW)
+  "containers",        // 5  (was 4)
+  "users_groups",      // 6  (was 5)
+  "network",           // 7  (was 6)
+  "storage",           // 8  (was 7)
+  "scheduled_tasks",   // 9  (was 8)
+  "non_rpm_software",  // (was 9 -- loses key reachability)
+  "kernel_boot",       // (no key)
+  "selinux",           // (no key)
+];
+```
+
+**Trade-off:** `non_rpm_software` loses its `9` key binding. This is
+acceptable because:
+- The section is low-traffic (typically 0-5 items)
+- `kernel_boot` and `selinux` were already unreachable via number keys
+- The alternative (expanding beyond `1-9` to `0` or modifier keys)
+  would break the intuitive single-digit model
+
+**`ShortcutOverlay.tsx`:** The overlay currently documents `1-9` as
+`"Jump to section by index"`. This description remains accurate since
+the model is still `1-9` mapped to the first 9 entries in
+`SECTION_IDS`. No change needed to the overlay text itself.
 
 **Section-local search/filter:** For the expected 20-80 row range of
 version changes, the existing `ContextList` search behavior (global
@@ -974,15 +1273,32 @@ interface PackageDetailProps {
 **Frontend:**
 - Unit test: Version Changes section renders in sidebar with correct
   count.
-- Unit test: empty state shows "All packages match" when section
-  exists with zero items.
-- Unit test: section is absent from sidebar when no baseline (section
-  not emitted by handler).
+- Unit test: zero-drift empty state -- section with zero items and
+  `empty_reason: "zero_drift"` shows
+  `"All packages match the target baseline versions."`.
+- Unit test: no-baseline empty state -- section with zero items and
+  `empty_reason: "no_baseline"` shows
+  `"Version comparison requires a baseline. Run with --baseline to enable."`.
+- Unit test: section always present in sidebar (both empty-state cases
+  show with badge count 0, normal case shows item count).
 - Unit test: `PackageDetail` shows base version and direction when
   `versionChange` prop is provided.
 - Unit test: `PackageDetail` omits version info when prop is null.
 - Unit test: multiarch -- `glibc.x86_64` and `glibc.i686` render as
   distinct rows with visible `name.arch` identity.
+- Unit test: `VersionChangeEntry` fields use snake_case matching Rust
+  serde output (`host_version`, `base_version`, `host_epoch`,
+  `base_epoch`).
+
+**Section-jump keyboard regression:**
+- Unit test: `SECTION_IDS` array in `useKeyboard.ts` contains
+  `"version_changes"` at index 3 (key `4`).
+- Unit test: key `4` navigates to Version Changes section.
+- Unit test: key `5` navigates to Containers (shifted from key `4`).
+- Unit test: key `9` navigates to Scheduled Tasks (shifted from
+  key `8`).
+- Unit test: `ShortcutOverlay` still documents `1-9` as
+  `"Jump to section by index"`.
 
 ---
 
@@ -1001,8 +1317,8 @@ Collector (Rust)
   |       |-- auto_packages: Option<Vec<String>>       [unchanged semantics]
   |       |-- leaf_dep_tree: serde_json::Value
   |       +-- baseline_suppressed: Option<Vec<String>>  [Item 1 - NEW]
-  +-- Services inspector -> state_changes, enabled/disabled, drop_ins
-                                                        [unchanged]
+  +-- Services inspector -> state_changes, enabled/disabled, drop_ins,
+  |                         preset_matched_units         [Item 2 - NEW]
 
 Web Handler (Rust)
   |-- /api/view
@@ -1010,7 +1326,9 @@ Web Handler (Rust)
   |   +-- version_changes: Vec<VersionChangeEntry>      [Item 4 typed carrier]
   |-- /api/snapshot/sections
   |   |-- normalize_services() -> three-way contract    [Item 2]
+  |   |   (uses preset_matched_units from collector)
   |   +-- normalize_version_changes() -> new section    [Item 4]
+  |       (always emitted, with empty_reason for empty states)
   +-- unchanged endpoints
 
 Refine (Rust, existing consumers affected by Item 4)
@@ -1032,6 +1350,8 @@ Frontend (React)
 ### Dependency Order
 
 Items 1 and 2 are independent bug fixes with no cross-dependencies.
+Item 2 now includes a collector change (`preset_matched_units` on
+`ServiceSection`) that must land before the handler change can use it.
 
 Item 3 (dep tree modal) depends only on `leaf_dep_tree` data already in
 the snapshot -- no collector changes needed. Requires the fleet scope
@@ -1044,7 +1364,7 @@ backend change (classifier + handler) ships first; the frontend follows.
 before the frontend work begins.**
 
 Recommended implementation order:
-1. Item 2 (service noise fix) -- smallest change, immediate UX win
+1. Item 2 (service noise fix) -- collector carrier + handler change
 2. Item 1 (leaf classification) -- bug fix, needs baseline threading
    and new `baseline_suppressed` field
 3. Item 4 backend (classifier + handler + cross-surface proof) --
@@ -1057,9 +1377,11 @@ Recommended implementation order:
 | Endpoint | Change | Breaking? |
 |---|---|---|
 | `/api/view` | Add `leaf_dep_tree` field (fleet-gated) | No (additive) |
-| `/api/view` | Add `version_changes` typed array | No (additive) |
-| `/api/snapshot/sections` | Add `version_changes` section; three-way services contract | No (additive + reduction) |
+| `/api/view` | Add `version_changes` typed array (snake_case fields) | No (additive) |
+| `/api/snapshot/sections` | Add `version_changes` section (always emitted, with `empty_reason`); three-way services contract | No (additive + reduction) |
+| `/api/snapshot/sections` | `ContextSection` gains optional `empty_reason` field | No (additive, `skip_serializing_if`) |
 | Snapshot JSON | `version_changes` populated instead of empty | No (field already in schema) |
 | Snapshot JSON | New `baseline_suppressed` field on `RpmSection` | No (additive, `Option`) |
+| Snapshot JSON | New `preset_matched_units` field on `ServiceSection` | No (additive, `serde(default)`) |
 | Refine | `needs_review_count` may change for downgraded packages | Behavioral (correct) |
 | Audit | "Version Changes" table appears when field populated | Behavioral (correct) |
