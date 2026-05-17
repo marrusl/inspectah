@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 7** (2026-05-17): Simplifies empty-state derivation. No defensive compat code before 1.0.
+>
 > **Revision 6** (2026-05-17): Simplifies no_baseline to single carrier. Legacy snapshot compat is not a concern (re-scan policy).
 >
 > **Revision 5** (2026-05-17): Fixes no_baseline carrier for legacy snapshot compatibility. Item 4 handler now uses `snap.no_baseline || rpm.no_baseline` as the authoritative no-baseline signal, covering both new snapshots and migrated legacy ones.
@@ -1141,19 +1143,27 @@ pub struct ContextSection {
 
 **Handler behavior in `normalize_version_changes()`:**
 
-The handler uses three distinct empty states keyed off authoritative
-snapshot carriers, not inferred from `baseline` field presence:
+The handler derives the empty-state reason from the actual data
+present in the snapshot. No dedicated boolean carrier needed -- the
+handler checks two things:
 
-- **`"no_baseline"`** -- keyed off `rpm.no_baseline`, set by the
-  collector when no baseline was available during classification.
-  This is the authoritative signal, not `baseline.is_none()` which
-  could be absent for other reasons.
-- **`"zero_drift"`** -- baseline was available (`no_baseline == false`),
-  RPM data exists, but `version_changes` is empty. All packages match.
-- **`"data_unavailable"`** -- RPM section is missing (`snap.rpm` is
-  `None`) or the RPM section exists but `no_baseline` is false and no
-  version change data is present despite baseline availability. Generic
-  fallback for data gaps.
+1. Does `version_changes` have items? If yes, render them (no empty state).
+2. If empty, was a baseline provided to the scan? The presence of
+   `baseline_summary` in the view data (or equivalently, the `baseline`
+   field on `InspectionSnapshot`) is the direct signal. If a baseline
+   exists, the empty list means zero drift. If no baseline exists,
+   version comparison was not possible.
+
+Three empty states:
+
+- **`"no_baseline"`** -- `snap.rpm` exists but no baseline was
+  provided to the scan (`snap.baseline.is_none()`). Version
+  comparison requires a baseline.
+- **`"zero_drift"`** -- a baseline was provided
+  (`snap.baseline.is_some()`), RPM data exists, but
+  `version_changes` is empty. All packages match.
+- **`"data_unavailable"`** -- RPM section is missing entirely
+  (`snap.rpm` is `None`). Generic fallback.
 
 ```rust
 fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
@@ -1161,24 +1171,23 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
     let empty_reason;
 
     match &snap.rpm {
-        Some(rpm) if rpm.no_baseline => {
-            // Authoritative: collector recorded no baseline
-            empty_reason = Some("no_baseline".to_string());
-        }
         Some(rpm) => {
             for vc in &rpm.version_changes {
                 // ... existing ContextItem construction ...
                 items.push(/* ... */);
             }
-            if items.is_empty() {
-                // Baseline existed, RPM data exists, no version drift
+            if !items.is_empty() {
+                empty_reason = None;
+            } else if snap.baseline.is_some() {
+                // Baseline was provided, no version drift found
                 empty_reason = Some("zero_drift".to_string());
             } else {
-                empty_reason = None;
+                // No baseline provided — cannot compare versions
+                empty_reason = Some("no_baseline".to_string());
             }
         }
         None => {
-            // RPM section entirely missing — cannot determine version state
+            // RPM section entirely missing
             empty_reason = Some("data_unavailable".to_string());
         }
     }
@@ -1199,7 +1208,9 @@ export interface ContextSection {
   id: string;
   display_name: string;
   items: ContextItem[];
-  /** "no_baseline" keyed off rpm.no_baseline from the collector. */
+  /** Derived from actual data: "no_baseline" when snap.baseline is
+   *  absent, "zero_drift" when baseline exists but version_changes
+   *  is empty, "data_unavailable" when RPM section is missing. */
   empty_reason?: "zero_drift" | "no_baseline" | "data_unavailable" | null;
 }
 ```
@@ -1368,22 +1379,22 @@ interface PackageDetailProps {
 **Frontend:**
 - Unit test: Version Changes section renders in sidebar with correct
   count.
-- Unit test: zero-drift empty state -- section with zero items and
-  `empty_reason: "zero_drift"` shows
+- Unit test: zero-drift empty state -- section with zero items,
+  `snap.baseline` present, `empty_reason: "zero_drift"` shows
   `"All packages match the target baseline versions."`.
-- Unit test: no-baseline empty state -- `rpm.no_baseline == true` ->
+- Unit test: no-baseline empty state -- `snap.baseline` absent ->
   `empty_reason: "no_baseline"`. Shows
   `"Version comparison requires a baseline. Run with --baseline to enable."`.
-- Unit test: data-unavailable empty state -- section with zero items
-  and `empty_reason: "data_unavailable"` (RPM section missing) shows
+- Unit test: data-unavailable empty state -- `snap.rpm` is `None` ->
+  `empty_reason: "data_unavailable"` shows
   `"Version change data is not available for this snapshot."`.
+- Unit test: `normalize_version_changes` with `snap.rpm` present,
+  `snap.baseline` present, empty `version_changes` ->
+  `empty_reason` is `"zero_drift"`.
+- Unit test: `normalize_version_changes` with `snap.rpm` present,
+  `snap.baseline` absent -> `empty_reason` is `"no_baseline"`.
 - Unit test: `normalize_version_changes` with `snap.rpm == None` ->
-  `empty_reason` is `"data_unavailable"`, not `"no_baseline"`.
-- Unit test: `normalize_version_changes` with `rpm.no_baseline == true`
-  -> `empty_reason` is `"no_baseline"` regardless of whether
-  `version_changes` is empty or populated.
-- Unit test: `normalize_version_changes` with `rpm.no_baseline == false`
-  and empty `version_changes` -> `empty_reason` is `"zero_drift"`.
+  `empty_reason` is `"data_unavailable"`.
 - Unit test: section always present in sidebar (all three empty-state
   cases show with badge count 0, normal case shows item count).
 - Unit test: `PackageDetail` shows base version and direction when
