@@ -111,6 +111,7 @@ fn test_modified_upgrade_in_baseline_is_routine() {
     );
     snap.rpm.as_mut().unwrap().version_changes.push(VersionChange {
         name: "glibc".into(),
+        arch: "x86_64".into(),
         direction: VersionChangeDirection::Upgrade,
         ..Default::default()
     });
@@ -129,6 +130,7 @@ fn test_modified_downgrade_in_baseline_is_needs_review() {
     );
     snap.rpm.as_mut().unwrap().version_changes.push(VersionChange {
         name: "glibc".into(),
+        arch: "x86_64".into(),
         direction: VersionChangeDirection::Downgrade,
         ..Default::default()
     });

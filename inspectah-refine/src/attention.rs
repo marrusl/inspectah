@@ -94,7 +94,9 @@ fn classify_package(
         return match baseline {
             Some(_) => {
                 let is_downgrade = version_changes.iter().any(|vc| {
-                    vc.name == entry.name && vc.direction == VersionChangeDirection::Downgrade
+                    vc.name == entry.name
+                        && vc.arch == entry.arch
+                        && vc.direction == VersionChangeDirection::Downgrade
                 });
                 if is_downgrade {
                     AttentionTag {
@@ -240,7 +242,29 @@ mod tests {
     fn vc(name: &str, direction: VersionChangeDirection) -> VersionChange {
         VersionChange {
             name: name.to_string(),
+            arch: "x86_64".to_string(),
             direction,
+            ..Default::default()
+        }
+    }
+
+    /// Helper: build a VersionChange with a specific architecture.
+    fn vc_arch(name: &str, arch: &str, direction: VersionChangeDirection) -> VersionChange {
+        VersionChange {
+            name: name.to_string(),
+            arch: arch.to_string(),
+            direction,
+            ..Default::default()
+        }
+    }
+
+    /// Helper: build a PackageEntry with a specific architecture.
+    fn pkg_arch(name: &str, arch: &str, state: PackageState, source_repo: &str) -> PackageEntry {
+        PackageEntry {
+            name: name.to_string(),
+            arch: arch.to_string(),
+            state,
+            source_repo: source_repo.to_string(),
             ..Default::default()
         }
     }
@@ -535,5 +559,38 @@ mod tests {
 
         assert_eq!(result[3].attention[0].level, AttentionLevel::NeedsReview);
         assert_eq!(result[3].attention[0].reason, AttentionReason::PackageNoRepoSource);
+    }
+
+    // -----------------------------------------------------------------------
+    // Multiarch: version direction must respect architecture
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn multiarch_downgrade_only_affects_matching_arch() {
+        // openssl.x86_64 upgraded, openssl.i686 downgraded.
+        // Each arch should get its own correct attention level.
+        let snap = snap_with_baseline_and_vc(
+            Some(vec!["openssl".into()]),
+            vec![
+                pkg_arch("openssl", "x86_64", PackageState::Modified, "rhel-9-baseos"),
+                pkg_arch("openssl", "i686", PackageState::Modified, "rhel-9-baseos"),
+            ],
+            vec![
+                vc_arch("openssl", "x86_64", VersionChangeDirection::Upgrade),
+                vc_arch("openssl", "i686", VersionChangeDirection::Downgrade),
+            ],
+        );
+        let result = compute_package_attention(&snap);
+        assert_eq!(result.len(), 2);
+
+        // x86_64 was upgraded — should be Routine
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(result[0].attention[0].detail.as_deref(), Some("Upgrade"));
+
+        // i686 was downgraded — should be NeedsReview
+        assert_eq!(result[1].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[1].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(result[1].attention[0].detail.as_deref(), Some("Downgrade"));
     }
 }
