@@ -596,10 +596,19 @@ export function DecisionList({
             ? { ...repo, package_count: headerPackageCount }
             : repo;
 
-          // Determine filter-expansion: only groups containing matching items
-          const groupFilterExpanded = filterActive && part.items.length > 0;
-          // Routine summary filter expansion: only if routine items exist in filtered set
-          const routineFilterExpanded = filterActive && part.routine.length > 0;
+          // Match-scoped filter expansion: only expand this group if it contains matching items
+          const filterQ = filterText.trim().toLowerCase();
+          const groupHasMatch = filterQ.length > 0 && part.items.some((item) => {
+            if (item.type !== "package") return false;
+            const e = item.data.entry;
+            return `${e.name} ${e.arch} ${e.version} ${e.source_repo}`.toLowerCase().includes(filterQ);
+          });
+          // Match-scoped routine expansion: only expand routine summary if it contains matching packages
+          const routineHasMatch = filterQ.length > 0 && part.routine.some((item) => {
+            if (item.type !== "package") return false;
+            const e = item.data.entry;
+            return `${e.name} ${e.arch} ${e.version} ${e.source_repo}`.toLowerCase().includes(filterQ);
+          });
 
           // Determine display props for header
           const infoCount = !hasNeedsReview && hasInfo ? part.informational.length : undefined;
@@ -614,7 +623,7 @@ export function DecisionList({
               key={part.sectionId}
               repo={effectiveRg}
               defaultExpanded={defaultExpanded}
-              forceExpanded={groupFilterExpanded}
+              forceExpanded={groupHasMatch}
               infoCount={infoCount}
               summaryText={summaryText}
               revealItemId={revealItemId}
@@ -667,7 +676,7 @@ export function DecisionList({
               {part.routine.length > 0 && (
                 <RoutineSummary
                   items={part.routine}
-                  forceExpanded={routineFilterExpanded}
+                  forceExpanded={routineHasMatch}
                   revealItemId={revealItemId}
                   onToggleInclude={isDisabled ? undefined : handleToggle}
                   onMarkViewed={markAsViewed}

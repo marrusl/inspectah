@@ -2414,6 +2414,105 @@ describe("Repo-first keyboard navigation", () => {
   });
 });
 
+// ---- Repo-first filter and reveal tests ----
+
+describe("Repo-first filter and reveal", () => {
+  it("auto-expands only matching repo groups when filter is active", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "htop", source_repo: "epel" }, [ROUTINE_TAG]) },
+    ];
+    const { rerender } = render(
+      <DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    // glibc visible (needs_review repo expanded), htop not (routine repo collapsed)
+    expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
+    expect(screen.queryByText("htop.x86_64")).not.toBeInTheDocument();
+    // Filter for htop — only epel repo should force-expand
+    rerender(
+      <DecisionList items={items} sectionLabel="Packages" filterText="htop" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    expect(screen.getByText("htop.x86_64")).toBeInTheDocument();
+  });
+
+  it("non-matching repo groups do NOT force-expand when filter is active", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "custom", provenance: "incomplete", is_distro: false, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "baseos-pkg", source_repo: "baseos" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "custom-pkg", source_repo: "custom" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(
+      <DecisionList items={items} sectionLabel="Packages" filterText="custom" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    // custom-pkg matches filter, its repo (custom) has needs_review so it's expanded
+    expect(screen.getByText("custom-pkg.x86_64")).toBeInTheDocument();
+    // baseos-pkg does NOT match filter, and baseos is all-routine so stays collapsed
+    expect(screen.queryByText("baseos-pkg.x86_64")).not.toBeInTheDocument();
+  });
+
+  it("auto-expands disabled repos when filter matches their packages", async () => {
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "htop", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
+    ];
+    const { rerender } = render(
+      <DecisionList items={items} sectionLabel="Packages" repoGroups={[{ section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false }]} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    // Disabled repo starts collapsed
+    expect(screen.queryByText("htop.x86_64")).not.toBeInTheDocument();
+    // Filter matches — disabled repo should force-expand
+    rerender(
+      <DecisionList items={items} sectionLabel="Packages" filterText="htop" repoGroups={[{ section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false }]} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    expect(screen.getByText("htop.x86_64")).toBeInTheDocument();
+  });
+
+  it("two-ancestor reveal: revealItemId expands both repo group and routine summary", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 2, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "glibc", source_repo: "baseos" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "bash", source_repo: "baseos" }, [ROUTINE_TAG]) },
+    ];
+    render(
+      <DecisionList items={items} sectionLabel="Packages" revealItemId="packages:glibc.x86_64" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    // Both repo group and routine summary should auto-expand to reveal glibc
+    expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
+    expect(screen.getByTestId("decision-item-packages:glibc.x86_64")).toBeInTheDocument();
+  });
+
+  it("DecisionList-level revealItemId expands routine summary to reveal target", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 3, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "httpd", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "htop", source_repo: "epel" }, [ROUTINE_TAG]) },
+      { type: "package", data: makePkg({ name: "jq", source_repo: "epel" }, [ROUTINE_TAG]) },
+    ];
+    render(
+      <DecisionList items={items} sectionLabel="Packages" revealItemId="packages:htop.x86_64" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />,
+    );
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    // httpd is needs_review so repo is expanded by default, but htop is routine (collapsed)
+    // revealItemId should expand the routine summary to show htop
+    expect(screen.getByText("htop.x86_64")).toBeInTheDocument();
+    expect(screen.getByTestId("decision-item-packages:htop.x86_64")).toBeInTheDocument();
+  });
+});
+
 // ---- AttentionSummary in MainContent tests ----
 
 describe("AttentionSummary in MainContent", () => {
