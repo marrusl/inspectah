@@ -1,3 +1,4 @@
+pub mod baseline;
 pub mod normalize;
 pub mod pipeline;
 pub mod snapshot;
