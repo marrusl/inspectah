@@ -117,6 +117,7 @@ fn test_modified_upgrade_in_baseline_is_routine() {
     let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
     assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+    assert_eq!(pkgs[0].attention[0].detail.as_deref(), Some("Upgrade"));
 }
 
 #[test]
@@ -134,6 +135,7 @@ fn test_modified_downgrade_in_baseline_is_needs_review() {
     let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
     assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+    assert_eq!(pkgs[0].attention[0].detail.as_deref(), Some("Downgrade"));
 }
 
 #[test]

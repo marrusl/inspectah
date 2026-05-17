@@ -100,13 +100,13 @@ fn classify_package(
                     AttentionTag {
                         level: AttentionLevel::NeedsReview,
                         reason: AttentionReason::PackageVersionChanged,
-                        detail: None,
+                        detail: Some("Downgrade".to_string()),
                     }
                 } else {
                     AttentionTag {
                         level: AttentionLevel::Routine,
                         reason: AttentionReason::PackageVersionChanged,
-                        detail: None,
+                        detail: Some("Upgrade".to_string()),
                     }
                 }
             }
