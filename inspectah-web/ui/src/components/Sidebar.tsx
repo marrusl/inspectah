@@ -131,9 +131,11 @@ export function Sidebar({
       <div className="inspectah-sidebar__host">
         {health ? (
           <>
-            <Content component="p">
-              <strong>{health.host.hostname}</strong>
-            </Content>
+            {health.host.hostname && (
+              <Content component="p">
+                <strong>{health.host.hostname}</strong>
+              </Content>
+            )}
             <Content component="small">
               {health.host.os_name} {health.host.os_version}
             </Content>
