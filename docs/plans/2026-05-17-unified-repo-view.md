@@ -1552,7 +1552,7 @@ This is a significant refactor of `DecisionList.tsx`. The key changes:
 3. Determine expansion defaults per repo based on attention content
 4. Render RepoGroup components with RoutineSummary for routine packages
 5. Keep the existing attention-first path for configs (when `repoGroups` is empty)
-6. Packages with `source_repo` not in `repoGroupMap` (or blank/missing) render under an "Unknown repository" group at the bottom
+6. Packages with `source_repo` not in `repoGroupMap` (or blank/missing) are ALL routed to the single `__unknown__` key during the grouping phase, then rendered as one "Unknown repository" group at the bottom. There is one code path for all unmapped repos, not a separate branch.
 7. Filter expansion is **match-scoped**: only groups containing matching packages get `forceExpanded`
 
 Replace the render body (the IIFE block) in `DecisionList.tsx` with two branches:
@@ -1569,16 +1569,22 @@ Replace the IIFE render block with:
       {repoGroups.length > 0 ? (
         // Repo-first grouping for packages
         (() => {
-          // Group items by source_repo
+          // Group items by source_repo.
+          // ALL unmapped repos (blank, missing, OR nonblank-but-not-in-repoGroupMap)
+          // route to the single "__unknown__" catch-all key.
           const byRepo = new Map<string, DecisionItemKind[]>();
           for (const item of items) {
             const rawRepo = item.type === "package"
               ? item.data.entry.source_repo
               : "";
-            // Blank or missing source_repo goes to unknown group
-            const repo = rawRepo && rawRepo.trim() !== ""
+            const normalised = rawRepo && rawRepo.trim() !== ""
               ? rawRepo.toLowerCase()
               : "__unknown__";
+            // If the normalised key is not blank but also not in repoGroupMap,
+            // it is an unmapped repo — route to the catch-all.
+            const repo = normalised !== "__unknown__" && !repoGroupMap.has(normalised)
+              ? "__unknown__"
+              : normalised;
             const list = byRepo.get(repo) ?? [];
             list.push(item);
             byRepo.set(repo, list);
@@ -1660,53 +1666,9 @@ Replace the IIFE render block with:
               );
             }
 
-            const rg = repoGroupMap.get(repo);
-            if (!rg) {
-              // Repo key exists in items but not in repoGroupMap — treat as unknown
-              // This shouldn't happen with the __unknown__ handling above,
-              // but guard against mismatch between items and repoGroups
-              const unknownItemIds = repoItems.map((item) => getItemId(item));
-              const syntheticRg: RepoGroupInfo = {
-                section_id: repo,
-                provenance: "unknown",
-                is_distro: false,
-                package_count: repoItems.length,
-                enabled: true,
-              };
-              return (
-                <RepoGroup
-                  key={repo}
-                  repo={syntheticRg}
-                  defaultExpanded={true}
-                  revealItemId={revealItemId}
-                  itemIds={unknownItemIds}
-                  onRepoToggle={handleRepoToggle}
-                >
-                  {repoItems.map((item) => {
-                    runningRowIndex++;
-                    const id = getItemId(item);
-                    const level = item.data.attention.length > 0
-                      ? highestAttention(item.data.attention)
-                      : "routine";
-                    const flatIdx = flatItemIds.indexOf(id);
-                    return (
-                      <DecisionItem
-                        key={id}
-                        item={item}
-                        level={level}
-                        rowIndex={runningRowIndex}
-                        isViewed={viewedIds.has(id)}
-                        isPending={mutation.isPending}
-                        tabIndex={flatIdx === focusedIndex ? 0 : -1}
-                        onToggleInclude={handleToggle}
-                        onMarkViewed={markAsViewed}
-                        onKeyDown={handleRowKeyDown}
-                      />
-                    );
-                  })}
-                </RepoGroup>
-              );
-            }
+            // All unmapped repos are already routed to "__unknown__" during grouping,
+            // so repoGroupMap.get(repo) is guaranteed to succeed for non-unknown keys.
+            const rg = repoGroupMap.get(repo)!;
 
             // Sort items within repo by attention priority
             const LEVEL_ORDER: Record<string, number> = {
@@ -1945,11 +1907,16 @@ Also update the `flatItemIds` computation to account for repo-first grouping whe
       // Repo headers use "repo-header:<section_id>" as their flat ID.
       const filterQ = filterText.trim().toLowerCase();
 
-      // Group items by source_repo
+      // Group items by source_repo.
+      // ALL unmapped repos (blank, missing, OR nonblank-but-not-in-repoGroupMap)
+      // route to the single "__unknown__" catch-all key — same logic as the render path.
       const byRepo = new Map<string, DecisionItemKind[]>();
       for (const item of items) {
         const rawRepo = item.type === "package" ? item.data.entry.source_repo : "";
-        const repo = rawRepo && rawRepo.trim() !== "" ? rawRepo.toLowerCase() : "__unknown__";
+        const normalised = rawRepo && rawRepo.trim() !== "" ? rawRepo.toLowerCase() : "__unknown__";
+        const repo = normalised !== "__unknown__" && !repoGroupMap.has(normalised)
+          ? "__unknown__"
+          : normalised;
         const list = byRepo.get(repo) ?? [];
         list.push(item);
         byRepo.set(repo, list);
@@ -1969,7 +1936,7 @@ Also update the `flatItemIds` computation to account for repo-first grouping whe
 
       for (const repo of repoOrder) {
         const rg = repoGroupMap.get(repo);
-        const sectionId = repo === "__unknown__" ? "unknown" : (rg?.section_id ?? repo);
+        const sectionId = repo === "__unknown__" ? "unknown" : rg!.section_id;
 
         // Repo header is in the flat sequence
         ids.push(`repo-header:${sectionId}`);
@@ -2591,6 +2558,7 @@ describe("Repo-first keyboard navigation", () => {
   });
 
   it("focus stays on repo header after expand/collapse/disable/re-enable", async () => {
+    const onViewUpdate = vi.fn().mockResolvedValue(undefined);
     const repoGroups: RepoGroupInfo[] = [
       { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: true },
     ];
@@ -2599,12 +2567,12 @@ describe("Repo-first keyboard navigation", () => {
       { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
     ];
 
-    render(
+    const { rerender } = render(
       <DecisionList
         items={items}
         sectionLabel="Packages"
         repoGroups={repoGroups}
-        onViewUpdate={vi.fn()}
+        onViewUpdate={onViewUpdate}
         onMutationError={vi.fn()}
       />,
     );
@@ -2624,6 +2592,39 @@ describe("Repo-first keyboard navigation", () => {
     // Toggle collapse
     await userEvent.keyboard("{Enter}");
     expect(document.activeElement).toBe(epelHeader);
+
+    // Disable the repo via the toggle switch
+    const toggle = screen.getByRole("switch", { name: /toggle epel repo/i });
+    await userEvent.click(toggle);
+    // Re-render with the repo now disabled (simulating the mutation response)
+    rerender(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={[{ ...repoGroups[0], enabled: false }]}
+        onViewUpdate={onViewUpdate}
+        onMutationError={vi.fn()}
+      />,
+    );
+    // Focus should still be on the header after disable
+    const epelHeaderAfterDisable = screen.getByTestId("repo-group-epel");
+    epelHeaderAfterDisable.focus();
+    expect(document.activeElement).toBe(epelHeaderAfterDisable);
+
+    // Re-enable the repo
+    rerender(
+      <DecisionList
+        items={items}
+        sectionLabel="Packages"
+        repoGroups={repoGroups}
+        onViewUpdate={onViewUpdate}
+        onMutationError={vi.fn()}
+      />,
+    );
+    // Focus should still be on the header after re-enable
+    const epelHeaderAfterEnable = screen.getByTestId("repo-group-epel");
+    epelHeaderAfterEnable.focus();
+    expect(document.activeElement).toBe(epelHeaderAfterEnable);
   });
 
   it("focus resets to first repo header after filter clear", async () => {
@@ -2721,6 +2722,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 **Files:**
 - Modify: `inspectah-web/ui/src/components/DecisionList.tsx`
 - Modify: `inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx`
+- Modify: `inspectah-web/ui/src/components/__tests__/FocusAndNavigation.test.tsx` (App-level reveal/focus integration test)
 
 Per spec: when section search filter is active, auto-expand **only matching** repo groups and routine summaries (match-scoped, not global). When `revealItemId` targets a package in a collapsed repo, auto-expand that repo. When the target is inside a routine summary inside a repo group (two-ancestor reveal), both the repo and the routine summary must expand, and focus must land on the target row.
 
@@ -2884,15 +2886,13 @@ describe("Repo-first filter and reveal", () => {
     expect(targetRow).toBeInTheDocument();
   });
 
-  it("exercises the real App-level global search jump path", async () => {
-    // This test verifies the full chain:
-    // GlobalSearch -> App.handleNavigateFromGlobalSearch -> setRevealItemId -> setActiveSection ->
-    // MainContent -> DecisionList revealItemId -> RepoGroup auto-expand -> RoutineSummary auto-expand ->
-    // App useEffect finds decision-item-* element and focuses it
-
-    // We test at the DecisionList level with revealItemId (the interface between App and DecisionList).
-    // The App.tsx useEffect that calls pendingFocusItemRef.current and querySelector is tested by
-    // existing global search integration tests.
+  it("DecisionList-level revealItemId expands routine summary to reveal target", async () => {
+    // This test verifies the DecisionList-level half of the reveal contract:
+    // when revealItemId targets a routine package inside a collapsed routine summary,
+    // both the repo group and the routine summary expand to make the target visible.
+    //
+    // The App-level half (GlobalSearch -> App -> pendingFocusItemRef -> focus landing)
+    // is tested separately in FocusAndNavigation.test.tsx below.
 
     const repoGroups: RepoGroupInfo[] = [
       { section_id: "epel", provenance: "verified", is_distro: false, package_count: 3, enabled: true },
@@ -2962,12 +2962,184 @@ describe("Repo-first filter and reveal", () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **Step 2: Write real App-level reveal/focus integration test**
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx vitest run src/components/__tests__/DecisionSections.test.tsx --reporter=verbose 2>&1 | grep -A2 "Repo-first filter"`
-Expected: FAIL (or some PASS if Task 5's match-scoped logic already handles these)
+Add to `FocusAndNavigation.test.tsx` — a new describe block that exercises the REAL `GlobalSearch -> App -> MainContent -> DecisionList` package-jump path, including `pendingFocusItemRef` and focus landing on the target row. This requires a mock view with populated `repo_groups` so the packages section uses repo-first grouping.
 
-- [ ] **Step 3: Verify filter and reveal implementation**
+```typescript
+describe("App-level global search reveal and focus with repo-first grouping", () => {
+  // Override the default MOCK_VIEW to include repo_groups and routine packages
+  // so the packages section renders repo-first with collapsed routine summaries.
+  const REPO_FIRST_VIEW = {
+    packages: [
+      {
+        entry: {
+          name: "httpd",
+          epoch: "0",
+          version: "2.4.57",
+          release: "1.el9",
+          arch: "x86_64",
+          state: "added",
+          include: true,
+          source_repo: "appstream",
+          fleet: null,
+        },
+        attention: [
+          { level: "needs_review", reason: "package_user_added", detail: "Not found in base image" },
+        ],
+      },
+      {
+        entry: {
+          name: "glibc",
+          epoch: "0",
+          version: "2.34",
+          release: "100.el9",
+          arch: "x86_64",
+          state: "unchanged",
+          include: true,
+          source_repo: "baseos",
+          fleet: null,
+        },
+        attention: [
+          { level: "routine", reason: "package_baseline_match", detail: null },
+        ],
+      },
+      {
+        entry: {
+          name: "bash",
+          epoch: "0",
+          version: "5.1.8",
+          release: "9.el9",
+          arch: "x86_64",
+          state: "unchanged",
+          include: true,
+          source_repo: "baseos",
+          fleet: null,
+        },
+        attention: [
+          { level: "routine", reason: "package_baseline_match", detail: null },
+        ],
+      },
+    ],
+    config_files: [],
+    containerfile_preview: "FROM ubi9\nRUN dnf install -y httpd",
+    stats: {
+      total_packages: 3,
+      included_packages: 3,
+      excluded_packages: 0,
+      total_configs: 0,
+      included_configs: 0,
+      package_managed_configs: 0,
+      excluded_configs: 0,
+      needs_review_count: 1,
+      ops_applied: 0,
+      can_undo: false,
+      can_redo: false,
+      baseline_available: false,
+    },
+    generation: 1,
+    repo_groups: [
+      { section_id: "appstream", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 2, enabled: true },
+    ],
+  };
+
+  it("global search navigates to routine package inside collapsed repo, expands ancestors, and focuses target", async () => {
+    // This test exercises the real end-to-end path:
+    // 1. User types in GlobalSearch
+    // 2. GlobalSearch calls onNavigate(sectionId, itemId)
+    // 3. App.handleNavigateFromGlobalSearch sets pendingFocusItemRef, revealItemId, activeSection
+    // 4. MainContent passes revealItemId to DecisionList
+    // 5. DecisionList/RepoGroup/RoutineSummary auto-expand the collapsed repo + routine summary
+    // 6. App.tsx useEffect finds the decision-item-* element and focuses it
+
+    // Override fetch to return repo-first view data
+    mockFetch.mockImplementation((url: string, opts?: RequestInit) => {
+      if (url === "/api/view") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(REPO_FIRST_VIEW),
+        });
+      }
+      if (url === "/api/snapshot/sections") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_SECTIONS),
+        });
+      }
+      if (url === "/api/health") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(MOCK_HEALTH),
+        });
+      }
+      if (url === "/api/viewed" && (!opts || opts.method === "GET")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ ids: [] }),
+        });
+      }
+      if (url === "/api/viewed" && opts?.method === "POST") {
+        return Promise.resolve({ ok: true, status: 204 });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: "not found" }),
+      });
+    });
+
+    render(<App />);
+
+    // Wait for the app to load with repo-first data
+    await waitFor(() => {
+      // httpd is needs_review in appstream — should be visible (repo expanded)
+      expect(screen.getByText("httpd.x86_64")).toBeInTheDocument();
+    });
+
+    // glibc is routine in baseos — baseos is all-routine, so it's collapsed.
+    // glibc should NOT be visible yet.
+    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
+
+    // Type in global search to find glibc (routine package in collapsed repo)
+    const searchInput = screen.getByLabelText("Search all sections");
+    await userEvent.type(searchInput, "glibc");
+
+    // Wait for search results
+    await waitFor(() => {
+      expect(screen.getByTestId("global-search-results")).toBeInTheDocument();
+    });
+
+    // Click the glibc result to trigger navigation
+    const result = screen.getByTestId("global-search-result-packages:glibc.x86_64");
+    await userEvent.click(result);
+
+    // After navigation:
+    // 1. The baseos repo group should expand (it was collapsed because all-routine)
+    await waitFor(() => {
+      expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
+    });
+
+    // 2. The target decision-item row should exist
+    const targetRow = screen.getByTestId("decision-item-packages:glibc.x86_64");
+    expect(targetRow).toBeInTheDocument();
+
+    // 3. Focus should land on the target row via App.tsx pendingFocusItemRef useEffect
+    await waitFor(() => {
+      expect(document.activeElement).toBe(targetRow);
+    });
+  });
+});
+```
+
+Note: This test renders the real `<App />` component (same pattern as the existing `FocusAndNavigation.test.tsx` tests) and exercises the full chain through the real components. The `data-testid="global-search-result-*"` selector assumes GlobalSearch result items have this testid pattern (verify against `GlobalSearch.tsx` during implementation; adjust the selector if the actual testid differs).
+
+- [ ] **Step 3: Run tests to verify they fail**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx vitest run src/components/__tests__/DecisionSections.test.tsx src/components/__tests__/FocusAndNavigation.test.tsx --reporter=verbose 2>&1 | grep -A2 -E "Repo-first filter|App-level global search"`
+Expected: FAIL (DecisionList-level tests may pass if Task 5's logic handles them; the App-level test in FocusAndNavigation.test.tsx will fail until the full reveal/focus path is wired)
+
+- [ ] **Step 4: Verify filter and reveal implementation**
 
 Task 5 already implements match-scoped filter expansion (`groupHasMatch` and `routineHasMatch` per repo group). Task 3's RepoGroup already handles `revealItemId` with `itemIds` for auto-expansion. Task 4's RoutineSummary already handles `revealItemId` for auto-expansion.
 
@@ -2976,23 +3148,27 @@ The two-ancestor reveal path works because:
 2. RoutineSummary receives `revealItemId` — if the target is in its items, it auto-expands
 3. App.tsx's `useEffect` finds the `decision-item-*` element and focuses it
 
-If any test fails, adjust the `revealItemId` prop passing or the `useEffect` trigger conditions.
+The App-level integration test in `FocusAndNavigation.test.tsx` proves the full chain end-to-end: GlobalSearch result click -> `handleNavigateFromGlobalSearch` -> `pendingFocusItemRef` + `revealItemId` -> repo expansion + routine summary expansion -> target row visible -> focus lands on target row.
 
-- [ ] **Step 4: Run tests to verify they pass**
+If any test fails, adjust the `revealItemId` prop passing, the `useEffect` trigger conditions, or the GlobalSearch result testid selector.
 
-Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx vitest run src/components/__tests__/DecisionSections.test.tsx`
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx vitest run src/components/__tests__/DecisionSections.test.tsx src/components/__tests__/FocusAndNavigation.test.tsx`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-cd /Users/mrussell/Work/bootc-migration/inspectah && git add inspectah-web/ui/src/components/DecisionList.tsx inspectah-web/ui/src/components/RepoGroup.tsx inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx && git commit -m "feat(web): match-scoped filter and two-ancestor reveal
+cd /Users/mrussell/Work/bootc-migration/inspectah && git add inspectah-web/ui/src/components/DecisionList.tsx inspectah-web/ui/src/components/RepoGroup.tsx inspectah-web/ui/src/components/__tests__/DecisionSections.test.tsx inspectah-web/ui/src/components/__tests__/FocusAndNavigation.test.tsx && git commit -m "feat(web): match-scoped filter and two-ancestor reveal with App-level proof
 
 Search filter expands only repo groups containing matching packages.
 Non-matching groups stay in their default expansion state.
 RevealItemId triggers two-ancestor expansion: repo group + routine
 summary both expand to reveal the target row.
 Disabled repos also expand when filter matches their packages.
+App-level integration test proves the full GlobalSearch -> App ->
+MainContent -> DecisionList -> focus-on-target chain end-to-end.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -3116,7 +3292,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 | Spec Section | Task | Notes |
 |---|---|---|
 | Package Organization (repo-first grouping) | Task 5 | |
-| Unknown repository catch-all group | Task 5 | Packages with blank/missing/unmapped source_repo grouped under "Unknown repository" last |
+| Unknown repository catch-all group | Task 5 | ALL unmapped repos (blank, missing, nonblank-not-in-repoGroupMap) route to single `__unknown__` key during grouping — one code path, not two |
 | Repo Group Display Rules (expansion defaults) | Task 5 | |
 | Attention Summary Counter (3 text states) | Task 2, Task 7 | |
 | Repo Headers (chevron, classification labels) | Task 1 | |
@@ -3137,7 +3313,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 | Keyboard: focus resets to first repo header after filter clear | Task 8 | |
 | Filter expansion is match-scoped (only matching groups expand) | Task 5, Task 9 | Not global forceExpanded on all groups |
 | Reveal: two-ancestor path (repo group + routine summary) | Task 9 | |
-| Reveal: focus lands on target row | Task 9 | Via App.tsx pendingFocusItemRef useEffect |
+| Reveal: focus lands on target row | Task 9 | Real App-level integration test in FocusAndNavigation.test.tsx exercises full GlobalSearch -> App -> MainContent -> DecisionList -> focus chain |
 | Layout (app-shell, Containerfile panel) | Not modified | This plan does not touch app-shell layout. CSS scoped to .inspectah-repo-group-header only. |
 | What This Replaces (attention-tier view removed for packages) | Task 5 | |
 | What This Keeps (configs unchanged, AttentionGroup kept) | Task 10, Task 11 | AttentionGroup + ExpandableSection import preserved |
@@ -3148,7 +3324,7 @@ Assisted-by: Claude Code (Opus 4.6)"
 | Testing: Disabled Repo Behavior | Task 6 | |
 | Testing: Disabled Repo Counts (visible rows, not backend) | Task 6 | |
 | Testing: Attention Summary | Task 2 | |
-| Testing: Reveal Behavior | Task 9 | |
+| Testing: Reveal Behavior | Task 9 | DecisionList-level in DecisionSections.test.tsx + App-level in FocusAndNavigation.test.tsx |
 | Testing: Keyboard and Accessibility | Task 8 | |
 | Testing: Existing Behavior Preserved | Task 10 | |
 
@@ -3161,6 +3337,9 @@ Assisted-by: Claude Code (Opus 4.6)"
 | 3. Disabled count truth regression | Fixed | Task 6: count from visible items.filter(include: false), not repo_groups.package_count; collapse reason is "disabled" |
 | 4. RoutineSummary strips decision behavior | Fixed | Task 4: expanded state renders real DecisionItem components with toggle, viewed-state, mutation, focus targets |
 | 5. Missing structural coverage | Fixed | Task 5: "Unknown repository" catch-all group; Layout row removed from self-review (not modified by this plan) |
+| 6. Task 9 overclaims App-level proof (round 2) | Fixed | Task 9: DecisionList-level test honestly scoped; real App-level integration test added to FocusAndNavigation.test.tsx exercising full GlobalSearch -> App -> MainContent -> DecisionList -> focus-on-target chain |
+| 7. Unknown-repo catch-all code path contradiction (round 2) | Fixed | Task 5: ALL unmapped repos (blank, missing, nonblank-not-in-repoGroupMap) routed to `__unknown__` during grouping phase; dead `if (!rg)` synthetic-repo branch removed; one code path matches prose/tests |
+| 8. Task 8 test proof gap for disable/re-enable (round 2, minor) | Fixed | Task 8: "focus stays on repo header after expand/collapse/disable/re-enable" test body extended to cover disable and re-enable via rerender with toggled enabled state |
 
 ### Low-priority fix
 
