@@ -1351,15 +1351,17 @@ describe("Tier-aware card treatment", () => {
       ],
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
-    expect(screen.getByText(/baseline unavailable/i)).toBeInTheDocument();
+    // Banner text contains "baseline unavailable"; badge text is inside a collapsed group.
+    // Match the banner specifically.
+    expect(screen.getByText(/all added packages shown as NeedsReview/i)).toBeInTheDocument();
   });
 
-  it("shows baseline unavailable banner when baseline_available is false", () => {
+  it("shows baseline unavailable banner when baseline_summary is absent", () => {
     const view = makeViewResponse({
       stats: { baseline_available: false },
     });
     render(<MainContent {...defaultMainContentProps} viewData={view} />);
-    expect(screen.getByText(/classification confidence reduced/i)).toBeInTheDocument();
+    expect(screen.getByText(/baseline unavailable/i)).toBeInTheDocument();
   });
 });
 
@@ -1624,104 +1626,19 @@ describe("Config kind grouping", () => {
   });
 });
 
-// ---- Decision/Full view toggle tests ----
+// ---- View mode removal tests ----
 
-describe("Decision/Full view toggle", () => {
-  it("renders Decision/Full toggle with Decisions active by default", () => {
+describe("No Decision/Full toggle", () => {
+  it("does not render Decision/Full toggle on packages section", () => {
     render(<MainContent {...defaultMainContentProps} viewData={makeViewResponse()} />);
-    const toggle = screen.getByRole("button", { name: /decisions/i });
-    expect(toggle).toHaveAttribute("aria-pressed", "true");
-  });
-
-  it("Full view expands Tier 1 baseline packages", async () => {
-    const view = makeViewResponse({
-      packages: [
-        makePkg(
-          { name: "glibc", source_repo: "baseos" },
-          [{ level: "routine", reason: "package_baseline_match", detail: null }],
-        ),
-      ],
-    });
-    render(<MainContent {...defaultMainContentProps} viewData={view} />);
-
-    // In Decisions mode, glibc is inside collapsed summary
-    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
-
-    // Switch to Full mode
-    const fullBtn = screen.getByRole("button", { name: /full/i });
-    await userEvent.click(fullBtn);
-
-    // Tier 1 items should now be visible
-    expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
-  });
-
-  it("Full view expands Tier 1 managed configs", async () => {
-    const view = makeViewResponse({
-      config_files: [
-        makeConfig(
-          { path: "/etc/default.conf", kind: "rpm_owned_default" },
-          [{ level: "routine", reason: "config_default", detail: null }],
-        ),
-      ],
-    });
-    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />);
-
-    // In Decisions mode, config is inside collapsed summary
-    expect(screen.queryByText("/etc/default.conf")).not.toBeInTheDocument();
-
-    // Switch to Full mode
-    const fullBtn = screen.getByRole("button", { name: /full/i });
-    await userEvent.click(fullBtn);
-
-    // Tier 1 config should now be visible
-    expect(screen.getByText("/etc/default.conf")).toBeInTheDocument();
-  });
-
-  it("switching back to Decisions re-collapses Tier 1 items", async () => {
-    const view = makeViewResponse({
-      packages: [
-        makePkg(
-          { name: "glibc", source_repo: "baseos" },
-          [{ level: "routine", reason: "package_baseline_match", detail: null }],
-        ),
-      ],
-    });
-    render(<MainContent {...defaultMainContentProps} viewData={view} />);
-
-    // Switch to Full
-    const fullBtn = screen.getByRole("button", { name: /full/i });
-    await userEvent.click(fullBtn);
-    expect(screen.getByText("glibc.x86_64")).toBeInTheDocument();
-
-    // Switch back to Decisions
-    const decisionsBtn = screen.getByRole("button", { name: /decisions/i });
-    await userEvent.click(decisionsBtn);
-    expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
-  });
-
-  it("toggle is visible on both packages and configs sections", () => {
-    const view = makeViewResponse();
-    const { rerender } = render(
-      <MainContent {...defaultMainContentProps} activeSection="packages" viewData={view} />,
-    );
-    expect(screen.getByRole("button", { name: /decisions/i })).toBeInTheDocument();
-
-    rerender(
-      <MainContent {...defaultMainContentProps} activeSection="configs" viewData={view} />,
-    );
-    expect(screen.getByRole("button", { name: /decisions/i })).toBeInTheDocument();
-  });
-
-  it("toggle is NOT visible on context sections", () => {
-    render(
-      <MainContent
-        {...defaultMainContentProps}
-        activeSection="services"
-        viewData={makeViewResponse()}
-        sections={[{ id: "services", display_name: "Services", items: [] }]}
-      />,
-    );
     expect(screen.queryByRole("button", { name: /decisions/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /full/i })).not.toBeInTheDocument();
+  });
+
+  it("does not render Decision/Full toggle on configs section", () => {
+    render(<MainContent {...defaultMainContentProps} activeSection="configs" viewData={makeViewResponse()} />);
+    expect(screen.queryByRole("button", { name: /decisions/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /full/i })).not.toBeInTheDocument();
   });
 });
 

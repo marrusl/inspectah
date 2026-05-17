@@ -7,16 +7,12 @@ import {
   EmptyStateBody,
   Button,
   Alert,
-  ToggleGroup,
-  ToggleGroupItem,
 } from "@patternfly/react-core";
 import type { ViewResponse, RefinedPackage, RefinedConfig, ContextSection } from "../api/types";
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
 import { SectionSearch } from "./SectionSearch";
-
-export type ViewMode = "decisions" | "full";
 
 /** Section ID to human-readable label. */
 const SECTION_LABELS: Record<string, string> = {
@@ -73,7 +69,6 @@ export function MainContent({
 }: MainContentProps) {
   const label = SECTION_LABELS[activeSection] ?? activeSection;
   const [filterText, setFilterText] = useState("");
-  const [viewMode, setViewMode] = useState<ViewMode>("decisions");
 
   // Clear stale filter when switching sections or when global search navigates within same section
   useEffect(() => {
@@ -171,20 +166,6 @@ export function MainContent({
         <Content>
           <h2>{label}</h2>
         </Content>
-        <div style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}>
-          <ToggleGroup aria-label="View mode">
-            <ToggleGroupItem
-              text="Decisions"
-              isSelected={viewMode === "decisions"}
-              onChange={() => setViewMode("decisions")}
-            />
-            <ToggleGroupItem
-              text="Full"
-              isSelected={viewMode === "full"}
-              onChange={() => setViewMode("full")}
-            />
-          </ToggleGroup>
-        </div>
         {banner}
         {sectionSearchOpen && (
           <SectionSearch
@@ -210,7 +191,6 @@ export function MainContent({
             filterText={filterText}
             repoGroups={viewData?.repo_groups ?? []}
             revealItemId={revealItemId}
-            viewMode={viewMode}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
             onViewedChange={onViewedChange}
@@ -228,20 +208,6 @@ export function MainContent({
         <Content>
           <h2>{label}</h2>
         </Content>
-        <div style={{ marginBottom: "var(--pf-t--global--spacer--md)" }}>
-          <ToggleGroup aria-label="View mode">
-            <ToggleGroupItem
-              text="Decisions"
-              isSelected={viewMode === "decisions"}
-              onChange={() => setViewMode("decisions")}
-            />
-            <ToggleGroupItem
-              text="Full"
-              isSelected={viewMode === "full"}
-              onChange={() => setViewMode("full")}
-            />
-          </ToggleGroup>
-        </div>
         {sectionSearchOpen && (
           <SectionSearch
             value={filterText}
@@ -265,7 +231,6 @@ export function MainContent({
             sectionLabel="Config Files"
             filterText={filterText}
             revealItemId={revealItemId}
-            viewMode={viewMode}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}
             onViewedChange={onViewedChange}
