@@ -27,7 +27,7 @@ const SECTION_LABELS: Record<string, string> = {
   scheduled_tasks: "Scheduled Tasks",
   non_rpm_software: "Non-RPM Software",
   kernel_boot: "Kernel & Boot",
-  selinux: "SELinux",
+  selinux: "Security & Access Control",
 };
 
 export interface GlobalSearchProps {

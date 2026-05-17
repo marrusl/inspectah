@@ -28,7 +28,7 @@ const MOCK_SECTIONS: ContextSection[] = [
   { id: "scheduled_tasks", display_name: "Scheduled Tasks", items: [] },
   { id: "non_rpm_software", display_name: "Non-RPM Software", items: [] },
   { id: "kernel_boot", display_name: "Kernel & Boot", items: [] },
-  { id: "selinux", display_name: "SELinux", items: [] },
+  { id: "selinux", display_name: "Security & Access Control", items: [] },
 ];
 
 const MOCK_HEALTH: HealthResponse = {
@@ -67,7 +67,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("Scheduled Tasks")).toBeInTheDocument();
     expect(screen.getByText("Non-RPM Software")).toBeInTheDocument();
     expect(screen.getByText("Kernel & Boot")).toBeInTheDocument();
-    expect(screen.getByText("SELinux")).toBeInTheDocument();
+    expect(screen.getByText("Security & Access Control")).toBeInTheDocument();
   });
 
   it("shows package and config counts from stats", () => {
