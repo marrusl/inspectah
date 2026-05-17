@@ -4,8 +4,15 @@
 
 Replace the current attention-tier triage view with a unified repo-grouped view
 where packages are organized by source repository. Attention-requiring packages
-bubble to the top within each repo group. Repo-level enable/disable toggles
-allow bulk exclusion of entire repositories from the Containerfile output.
+bubble to the top within each repo group. Third-party repos have enable/disable
+toggles for bulk exclusion from the Containerfile output.
+
+This is a **frontend-only change**. No new API endpoints and no backend
+behavioral changes. The existing `/api/view` response already provides all
+needed data (`packages` with `source_repo` and attention data, `repo_groups`
+with provenance and enabled state). The refine session's existing
+`ExcludeRepo`/`IncludeRepo` operations, toggle eligibility rules, and
+`RefineStats` computation are used as-is.
 
 ## Motivation
 
@@ -29,16 +36,36 @@ Packages are grouped by source repository (`source_repo` field). Within each
 repo group, packages are sorted by attention level — NeedsReview first, then
 Informational, then Routine.
 
-**Repo group display rules:**
+Packages with blank or missing `source_repo` are grouped under an "Unknown
+repository" catch-all section, rendered last in the repo list.
 
-- **Repos with attention items:** Expanded by default. Attention-requiring
-  packages shown individually with their attention reason (e.g., "Version
-  Downgraded"). Routine packages in the same repo collapse to a summary line
-  ("+ 128 routine").
+### Repo Group Display Rules
+
+**Expansion defaults (in order of specificity):**
+
+- **Repos containing `needs_review` packages:** Expanded. Individual
+  attention-requiring packages shown with their attention reason. Routine
+  packages in the same repo collapse to a summary line ("+ N routine").
+- **Repos containing only `informational` packages (no `needs_review`):**
+  Collapsed. Expandable on click. The collapsed header shows the repo name,
+  count, and "N informational" to indicate non-routine content exists.
 - **All-routine repos:** Collapsed to a single line showing repo name, package
-  count, and "All routine — no action needed." Expandable on click.
-- **Disabled repos:** Dimmed, struck-through name, collapsed to "N packages
-  excluded from Containerfile." Expandable to see what's excluded.
+  count, and "No action needed." Expandable on click.
+- **Disabled repos:** Collapsed, dimmed. See Disabled Repo State below.
+
+**Within an expanded repo group:**
+
+- NeedsReview packages appear first, each shown individually with attention
+  reason and include/exclude toggle.
+- Informational packages appear next, each shown individually.
+- Routine packages collapse to a summary line ("+ N routine") that is
+  expandable to reveal individual packages.
+
+**Search/filter auto-expansion:** When the section search filter is active,
+repo groups containing matching packages auto-expand regardless of their
+default expansion state. Collapsed routine summaries within a repo also
+auto-expand if they contain matches. This preserves the current filter-driven
+expansion contract in the existing UI.
 
 ### Attention Summary Counter
 
@@ -49,60 +76,140 @@ signal without scanning each group:
 3 packages need review across 2 repos
 ```
 
-When the count is zero: "All packages routine — no review needed."
+When needs_review count is zero but informational items exist:
 
-This replaces the need for a separate triage view. The user gets the global
-attention signal at the top and the per-repo breakdown below.
+```
+No packages flagged for review · 12 informational across 3 repos
+```
+
+When all packages are routine:
+
+```
+All actionable items reviewed
+```
+
+This matches the existing `StatsBar` completion language rather than
+overclaiming that everything is "routine."
 
 ### Repo Headers
 
-Each repo group has a header showing:
+Each repo group has a header row containing:
 
+- **Chevron** (left edge) — disclosure control for expand/collapse. Click target
+  for expansion.
 - **Repo name** (e.g., `appstream`, `epel`, `copr:inspectah`)
-- **Package count** (e.g., "130 packages")
-- **Enable/disable toggle** — green "enabled" / red "disabled" badge, clickable
-- **Provenance indicator** (third-party repos only):
-  - "verified" — GPG keys match known signing keys
-  - "incomplete" — partial GPG verification (some keys matched)
-  - "unknown" — no GPG verification or unknown keys
+- **Package count** — number of included packages in this repo. This is the
+  count of packages with `include: true`, matching how the existing stats bar
+  counts visible packages.
+- **"Third-party" label** (non-distro repos only) — simple text label, no
+  trust/verification claims. See Source Classification below.
+- **Enable/disable toggle** (toggleable repos only) — a switch control, not a
+  badge. Only rendered for repos that meet the backend's toggle preconditions.
+  See Repo Toggle Eligibility below.
 
-**Distro repos** (baseos, appstream, crb, fedora, updates, anaconda) get no
-provenance badge — they are trusted by definition. Detection uses the existing
-`DISTRO_REPOS` constant in `repo_index.rs`, which already covers both RHEL and
-Fedora.
+**Control separation:** The chevron controls expand/collapse. The switch
+controls enable/disable. These are separate controls with separate click
+targets. The repo name and count are display-only (not clickable).
 
-**Third-party repos** (EPEL, COPRs, vendor repos) show the provenance badge on
-the repo header. Individual packages within third-party repos do NOT get
-per-package "third party" badges — the repo grouping makes this redundant.
+### Source Classification
+
+Repos are classified into two categories based on the existing
+`DISTRO_REPOS` constant in `repo_index.rs`. This is a policy heuristic based
+on section-ID matching, not a cryptographic trust assertion.
+
+- **Distro-origin repos** (baseos, appstream, crb, fedora, updates, anaconda):
+  No label. These are the platform repos from the base distribution. They are
+  always included (non-toggleable).
+- **Third-party repos** (EPEL, COPRs, vendor repos, everything not in
+  `DISTRO_REPOS`): Labeled "Third-party" on the repo header. The label
+  communicates source classification, not verification status.
+
+The backend `RepoProvenance` field (`verified`, `incomplete`, `unknown`) is
+retained in the data model for edge-case detection (e.g., packages referencing
+a repo with no matching repo-file stanza), but is **not surfaced as a UI
+badge**. On a functioning system with working `dnf update`, repo provenance
+issues are already caught at the package-management layer.
 
 ### Repo Header Ordering
 
-Repos are sorted in the following order:
+1. Distro-origin repos (sorted alphabetically)
+2. Enabled third-party repos (sorted alphabetically)
+3. Disabled third-party repos (sorted alphabetically)
+4. Unknown repository (catch-all, always last)
 
-1. Distro repos first (sorted alphabetically)
-2. Third-party verified repos (sorted alphabetically)
-3. Third-party unverified/unknown repos (sorted alphabetically)
-4. Disabled repos last (within their original category)
+### Repo Toggle Eligibility
 
-### Repo Enable/Disable Toggle
+Not all repos are toggleable. The UI renders the enable/disable switch **only**
+for repos that meet the backend's existing preconditions:
 
-Clicking the enable/disable badge on a repo header toggles the entire repo:
+- `is_distro == false` — distro-origin repos are non-toggleable
+- `provenance == "verified"` — the repo section ID was found in a parsed repo
+  file on the source system
 
-- **Disable:** Emits `ExcludeRepo { section_id }`. All packages from that repo
-  are excluded from the Containerfile and triage counts. Any per-package
-  include/exclude decisions within the repo are discarded.
-- **Re-enable:** Emits `IncludeRepo { section_id }`. All packages from that
-  repo return to their default include state. Prior per-package decisions are
-  NOT restored — re-enabling is a reset to defaults.
+Repos that fail either condition (distro repos, repos with `incomplete` or
+`unknown` provenance) show no toggle control. This matches the existing
+behavior in `RepoGroupHeader.tsx` and the validation in
+`RefineSession::apply_op()`.
 
-This matches the existing `ExcludeRepo`/`IncludeRepo` operation semantics in
-the refine session.
+### Repo Enable/Disable Behavior
+
+**Disable** (`ExcludeRepo { section_id }`):
+
+- All packages from that repo have `include` set to `false`.
+- Per-package include/exclude decisions within the repo are discarded.
+- The repo header moves to the disabled section of the list.
+- The repo group collapses and dims. See Disabled Repo State below.
+- `RefineStats` counts update — excluded packages remain in the view data
+  but with `include: false`. The stats bar's "triage remaining" and
+  "packages included" counts reflect this.
+
+**Re-enable** (`IncludeRepo { section_id }`):
+
+- All packages from that repo return to their default include state.
+- Prior per-package decisions are NOT restored — re-enabling is a reset.
+- The repo group moves back to its position in the enabled third-party
+  section and expands to its default state.
+- Focus moves to the re-enabled repo header.
+
+### Disabled Repo State
+
+Disabled repos are visually distinct:
+
+- **Header:** Dimmed text, struck-through repo name, package count shows
+  "N packages excluded." The enable/disable switch shows "disabled" state.
+- **Collapsed by default.** Expandable for inspection.
+- **When expanded:** Packages are shown in a read-only list. Per-package
+  include/exclude toggles are **hidden** (not disabled/grayed — hidden
+  entirely). The list is informational: "these are the packages you excluded
+  by disabling this repo."
+- **No per-package actions** are available while the repo is disabled.
+  Re-enabling the repo restores the default toggles.
 
 ### Per-Package Actions
 
-Within an enabled repo, individual packages can still be included/excluded using
-the existing per-package toggles. This is unchanged from the current
+Within an enabled repo, individual packages can still be included/excluded
+using the existing per-package toggles. This is unchanged from the current
 implementation.
+
+### Keyboard and Accessibility
+
+Repo headers participate in the existing roving-tabindex keyboard model:
+
+- **Arrow keys** move focus between repo headers and package rows within the
+  packages section.
+- **Enter** on a repo header toggles expand/collapse.
+- **Space** on the enable/disable switch toggles the repo (where available).
+  On repo headers without a switch, Space is a no-op.
+- **Tab** moves focus from the repo header to the enable/disable switch (when
+  present), then to the first package row within the group.
+
+ARIA attributes:
+
+- Repo header chevron: `aria-expanded`, `aria-controls` pointing to the
+  repo group content region.
+- Enable/disable switch: `role="switch"`, `aria-checked`, `aria-label`
+  including the repo name (e.g., "Disable epel repository").
+- Repo group content: `role="group"`, `aria-label` with repo name.
 
 ### What This Replaces
 
@@ -119,11 +226,14 @@ implementation.
 - **Attention levels** (NeedsReview, Informational, Routine) — still computed
   by the attention model, still determine sort order within repo groups, still
   shown as visual indicators on individual packages.
-- **Per-package include/exclude** — unchanged.
+- **Per-package include/exclude** — unchanged within enabled repos.
 - **Config Files section** — unchanged. Config files are not repo-grouped.
 - **Context sections** — unchanged (Services, Network, Storage, etc.).
-- **Containerfile preview** — reflects repo enable/disable decisions.
-- **Stats bar** — package/config counts, triage remaining.
+- **Containerfile preview** — reflects repo enable/disable decisions. Note:
+  `ExcludeRepo` only drops a repo file or GPG key from the Containerfile when
+  all sections sharing that artifact are excluded (existing backend behavior).
+- **Stats bar** — package/config counts, triage remaining. Counts reflect
+  `include` state as computed by the existing `RefineStats`.
 
 ## Data Flow
 
@@ -137,44 +247,88 @@ Snapshot → RefineSession → RepoIndex (packages_by_repo)
                          renders with repo headers + toggles
 ```
 
-No new API endpoints needed. The existing `/api/view` response already contains
-both `packages` (with `source_repo` and attention data) and `repo_groups` (with
-provenance and enabled state). The change is entirely in how the React UI
-organizes and renders this data.
+No new API endpoints. The existing `/api/view` response already contains both
+`packages` (with `source_repo` and attention data per package) and `repo_groups`
+(with `is_distro`, `provenance`, `package_count`, and `enabled` per repo). The
+change is entirely in how the React UI organizes and renders this data.
 
 ## Components Affected
 
 ### Modified
 
 - **`DecisionList.tsx`** — Primary change. Currently renders packages in
-  `AttentionGroup` components (grouped by attention level). Needs to render in
-  repo groups instead, with attention bubbling within each group. The existing
+  `AttentionGroup` components (grouped by attention level). Refactored to
+  render in repo groups with attention bubbling within each group. The existing
   informational-tier repo sub-grouping logic (lines ~478-514) provides a
-  starting pattern.
-- **`AttentionGroup.tsx`** — May be repurposed or replaced. The collapsible
-  group pattern is reusable but the "attention level as primary axis" framing
-  changes.
-- **`RepoGroupHeader.tsx`** — Already exists. Needs provenance badge and
-  enable/disable toggle.
-- **`StatsBar.tsx`** or `MainContent.tsx` — Add the attention summary counter.
+  starting pattern. Mutation plumbing, viewed-state tracking, and filter-driven
+  expansion are preserved but re-wired to the repo-first structure.
+- **`AttentionGroup.tsx`** — Replaced by a generic `RepoGroup` collapsible
+  component. The attention-tier-specific colors and labels move to per-package
+  indicators rather than group-level styling.
+- **`RepoGroupHeader.tsx`** — Already exists. Updated to use "Third-party"
+  label instead of provenance badges. Toggle control unchanged (already
+  correctly scoped to eligible repos).
+- **`StatsBar.tsx`** or `MainContent.tsx` — Add the attention summary counter
+  line. Match existing stats bar completion language.
 
 ### Unchanged
 
-- **`ContainerfilePanel.tsx`** — Reflects decisions, doesn't need to know about
-  grouping.
+- **`ContainerfilePanel.tsx`** — Reflects decisions, doesn't need to know
+  about grouping.
 - **`Sidebar.tsx`** — Section navigation unchanged.
 - **`attentionUtils.ts`** — Attention reason formatting unchanged.
-- **Backend (Rust)** — No changes needed. All data already served.
+- **Backend (Rust)** — No changes. Session validation, `ExcludeRepo`/
+  `IncludeRepo` semantics, `RefineStats` computation, `RepoIndex`,
+  `RepoProvenance`, and Containerfile rendering all used as-is.
 
 ## Testing
 
-- Repo groups render with correct packages.
-- Attention items appear first within each repo group.
-- All-routine repos collapse to summary line.
-- Repo enable/disable toggle emits correct operation and updates UI.
-- Re-enabling a repo resets per-package decisions.
-- Disabled repos appear dimmed at bottom of list.
-- Attention summary counter updates on repo toggle.
-- Per-package include/exclude still works within enabled repos.
-- Distro repos show no provenance badge; third-party repos do.
-- Fedora repos (`fedora`, `updates`) recognized as distro repos.
+### Repo Group Rendering
+- Packages grouped by `source_repo`, sorted by attention within groups.
+- Packages with blank `source_repo` appear in "Unknown repository" group.
+- Distro repos appear first, then enabled third-party, then disabled, then
+  unknown.
+
+### Expansion Defaults
+- Repos with `needs_review` items start expanded.
+- Repos with only `informational` items start collapsed.
+- All-routine repos start collapsed with summary line.
+- Disabled repos start collapsed and dimmed.
+- Routine summary within an expanded repo is collapsed by default.
+
+### Repo Toggle
+- Toggle switch only rendered for non-distro repos with `verified` provenance.
+- Distro repos and `incomplete`/`unknown` provenance repos show no switch.
+- Disable emits `ExcludeRepo`, sets packages to `include: false`, collapses
+  and dims the group.
+- Re-enable emits `IncludeRepo`, resets to defaults, moves repo back to
+  enabled section, focus lands on repo header.
+- Stats bar counts update correctly after toggle.
+
+### Disabled Repo Behavior
+- Expanded disabled repo shows read-only package list.
+- Per-package toggles are hidden (not disabled) in disabled repos.
+- Re-enabling restores default toggles.
+
+### Attention Summary
+- Counter shows needs_review count and repo spread when > 0.
+- Shows informational count when needs_review is zero.
+- Shows "All actionable items reviewed" when both are zero.
+
+### Search and Filter
+- Section search auto-expands repo groups containing matches.
+- Collapsed routine summaries auto-expand when containing matches.
+- Clearing filter restores default expansion state.
+
+### Keyboard and Accessibility
+- Arrow keys navigate between repo headers and package rows.
+- Enter on repo header toggles expand/collapse.
+- Space on toggle switch activates enable/disable.
+- Tab moves from header to switch to first package row.
+- ARIA attributes present on chevron, switch, and group container.
+
+### Existing Behavior Preserved
+- Per-package include/exclude in enabled repos works unchanged.
+- Containerfile preview reflects repo and package decisions.
+- Config Files section rendering unchanged.
+- Context sections rendering unchanged.
