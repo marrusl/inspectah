@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 4** (2026-05-17): Addresses round 3 findings. Item 2 preserves drop-in truth for matched-preset units. Item 4 widens empty_reason to three states keyed off the authoritative `no_baseline` carrier.
+>
 > **Revision 3** (2026-05-17): Addresses round 2 findings. Item 2 now includes collector carrier (Mark's decision). Item 4 empty state and field casing fixed. Section-jump keyboard contract added.
 >
 > **Revision 2** (2026-05-17): Addresses round 1 review findings. See review summary for context.
@@ -115,7 +117,7 @@ pub baseline_suppressed: Option<Vec<String>>,
 The suppression filter runs inside `classify_leaf_auto()` using
 `ctx.baseline_data` (the authoritative baseline, not the compat
 `baseline_package_names` field). It applies only to packages whose
-classification state is NOT `Modified`:
+classification state is `Added` (baseline-matching, same EVR):
 
 ```rust
 fn classify_leaf_auto(
@@ -137,13 +139,13 @@ fn classify_leaf_auto(
             let (suppressed, true_leaf): (Vec<_>, Vec<_>) = leaf_set
                 .into_iter()
                 .partition(|id| {
-                    // Suppress only when the baseline has this package
-                    // AND the host version matches (not Modified).
-                    // Modified packages have version drift that matters.
+                    // Suppress only baseline-matching Added entries
+                    // (same EVR as baseline). Modified packages have
+                    // version drift that must stay visible.
                     bl.packages.contains_key(id.as_str())
                         && packages_added.iter().any(|p| {
                             canonical_package_id(p) == **id
-                            && p.state != PackageState::Modified
+                            && p.state == PackageState::Added
                         })
                 });
 
@@ -439,15 +441,45 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             });
         }
 
+        // Build drop-in lookup for non-divergent units (divergent
+        // units already have drop-ins folded into their state_changes
+        // rendering above).
+        let dropin_by_unit: HashMap<&str, Vec<&SystemdDropIn>> = {
+            let mut map: HashMap<&str, Vec<&SystemdDropIn>> = HashMap::new();
+            for di in &svc.drop_ins {
+                if !divergent_units.contains(di.unit.as_str()) {
+                    map.entry(di.unit.as_str()).or_default().push(di);
+                }
+            }
+            map
+        };
+
         // For enabled/disabled units NOT in state_changes:
-        // - If in preset_matched_units → suppress (known match)
+        // - If in preset_matched_units AND has no drop-in → suppress
+        // - If in preset_matched_units AND has a drop-in → keep visible
+        //   with drop-in context (the override is operator truth that
+        //   must not become invisible)
         // - Otherwise → keep visible as preset-unknown
         for unit in &svc.enabled_units {
             if divergent_units.contains(unit.as_str()) {
                 continue;  // already rendered from state_changes
             }
             if matched_units.contains(unit.as_str()) {
-                continue;  // known match, suppress
+                // Matched preset — but check for drop-in overrides
+                if let Some(drops) = dropin_by_unit.get(unit.as_str()) {
+                    let drop_detail = drops.iter()
+                        .map(|d| format!("{}: {}", d.path, d.content))
+                        .collect::<Vec<_>>()
+                        .join("\n---\n");
+                    items.push(ContextItem {
+                        id: unit.clone(),
+                        title: unit.clone(),
+                        subtitle: Some("enabled (matches preset, has drop-in override)".into()),
+                        detail: Some(drop_detail),
+                        searchable_text: format!("{} enabled drop-in", unit),
+                    });
+                }
+                continue;  // no drop-in → suppress
             }
             items.push(ContextItem {
                 id: unit.clone(),
@@ -462,6 +494,19 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 continue;
             }
             if matched_units.contains(unit.as_str()) {
+                if let Some(drops) = dropin_by_unit.get(unit.as_str()) {
+                    let drop_detail = drops.iter()
+                        .map(|d| format!("{}: {}", d.path, d.content))
+                        .collect::<Vec<_>>()
+                        .join("\n---\n");
+                    items.push(ContextItem {
+                        id: unit.clone(),
+                        title: unit.clone(),
+                        subtitle: Some("disabled (matches preset, has drop-in override)".into()),
+                        detail: Some(drop_detail),
+                        searchable_text: format!("{} disabled drop-in", unit),
+                    });
+                }
                 continue;
             }
             items.push(ContextItem {
@@ -473,11 +518,15 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             });
         }
 
-        // Standalone drop-ins (no state_change or enabled/disabled entry)
+        // Standalone drop-ins (unit has no state_change, no
+        // enabled/disabled entry, and was not already rendered above)
+        let enabled_disabled_set: HashSet<&str> = svc.enabled_units.iter()
+            .chain(svc.disabled_units.iter())
+            .map(|u| u.as_str())
+            .collect();
         for di in &svc.drop_ins {
             if !divergent_units.contains(di.unit.as_str())
-                && !svc.enabled_units.contains(&di.unit)
-                && !svc.disabled_units.contains(&di.unit)
+                && !enabled_disabled_set.contains(di.unit.as_str())
             {
                 items.push(ContextItem {
                     id: di.unit.clone(),
@@ -497,14 +546,29 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
 }
 ```
 
-**UI labeling distinction:** The three-way contract is visible in the
-UI through subtitle text:
+**UI labeling distinction:** The contract is visible in the UI through
+subtitle text:
 - Divergence: `"enabled -> enable (diverges from preset: disabled)"`
 - Preset unknown: `"enabled (no preset rule)"`
-- Match: not rendered (suppressed)
+- Match with drop-in: `"enabled (matches preset, has drop-in override)"`
+  (rendered with drop-in detail folded in)
+- Match without drop-in: not rendered (suppressed)
 
-This preserves truthful operator context while eliminating the stock-
-default noise that dominated the old rendering.
+This preserves truthful operator context -- including drop-in overrides
+that modify runtime behavior even when enablement matches preset --
+while eliminating the stock-default noise that dominated the old
+rendering.
+
+**Legacy-snapshot fallback:** Older snapshots without the
+`preset_matched_units` field deserialize with an empty vec via
+`#[serde(default)]`. The handler treats all non-divergent
+enabled/disabled units as preset-unknown, which is conservative for
+visibility. This means legacy snapshots may label units as
+`"no preset rule"` even when the older collector did consult a
+matching preset but discarded the match signal. This mislabel risk is
+accepted for legacy data -- the alternative (hiding units that might
+actually be operator-relevant) is worse. Newly collected snapshots
+carry the full truth via `preset_matched_units`.
 
 ### Testing
 
@@ -531,8 +595,13 @@ default noise that dominated the old rendering.
   preset-unknown units, NOT the 40 matched units.
 - Unit test: enabled unit in `state_changes` -> appears once (as
   the divergence item), not twice.
-- Unit test: enabled unit in `preset_matched_units` -> suppressed,
-  does not appear in output.
+- Unit test: enabled unit in `preset_matched_units` with no drop-in
+  -> suppressed, does not appear in output.
+- Unit test: enabled unit in `preset_matched_units` with a drop-in
+  override -> remains visible with subtitle
+  `"enabled (matches preset, has drop-in override)"` and drop-in
+  detail in the item. (Regression: a real drop-in override must
+  never become invisible just because enablement matches preset.)
 - Unit test: enabled unit NOT in `state_changes` AND NOT in
   `preset_matched_units` -> appears with
   `"enabled (no preset rule)"` subtitle.
@@ -1068,29 +1137,46 @@ pub struct ContextSection {
 
 **Handler behavior in `normalize_version_changes()`:**
 
+The handler uses three distinct empty states keyed off authoritative
+snapshot carriers, not inferred from `baseline` field presence:
+
+- **`"no_baseline"`** -- keyed off `RpmSection.no_baseline == true`,
+  the dedicated carrier that the collector sets when no baseline was
+  available. This is the authoritative signal, not `baseline.is_none()`
+  which could be absent for other reasons.
+- **`"zero_drift"`** -- baseline was available (`no_baseline == false`),
+  RPM data exists, but `version_changes` is empty. All packages match.
+- **`"data_unavailable"`** -- RPM section is missing (`snap.rpm` is
+  `None`) or the RPM section exists but `no_baseline` is false and no
+  version change data is present despite baseline availability. Generic
+  fallback for data gaps.
+
 ```rust
 fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
     let mut items = Vec::new();
     let empty_reason;
 
-    if snap.baseline.is_none() && snap.rpm.as_ref()
-        .map_or(true, |r| r.version_changes.is_empty())
-    {
-        // No baseline was available during collection
-        empty_reason = Some("no_baseline".to_string());
-    } else if let Some(rpm) = &snap.rpm {
-        for vc in &rpm.version_changes {
-            // ... existing ContextItem construction ...
-            items.push(/* ... */);
+    match &snap.rpm {
+        Some(rpm) if rpm.no_baseline => {
+            // Authoritative: collector explicitly recorded no baseline
+            empty_reason = Some("no_baseline".to_string());
         }
-        if items.is_empty() {
-            // Baseline existed but all packages match
-            empty_reason = Some("zero_drift".to_string());
-        } else {
-            empty_reason = None;
+        Some(rpm) => {
+            for vc in &rpm.version_changes {
+                // ... existing ContextItem construction ...
+                items.push(/* ... */);
+            }
+            if items.is_empty() {
+                // Baseline existed, RPM data exists, no version drift
+                empty_reason = Some("zero_drift".to_string());
+            } else {
+                empty_reason = None;
+            }
         }
-    } else {
-        empty_reason = Some("no_baseline".to_string());
+        None => {
+            // RPM section entirely missing — cannot determine version state
+            empty_reason = Some("data_unavailable".to_string());
+        }
     }
 
     ContextSection {
@@ -1109,7 +1195,7 @@ export interface ContextSection {
   id: string;
   display_name: string;
   items: ContextItem[];
-  empty_reason?: "zero_drift" | "no_baseline" | null;
+  empty_reason?: "zero_drift" | "no_baseline" | "data_unavailable" | null;
 }
 ```
 
@@ -1122,9 +1208,13 @@ items, check `section.empty_reason` before falling through to
 
 ```typescript
 if (activeSection === "version_changes" && section.items.length === 0) {
-  const copy = section.empty_reason === "no_baseline"
-    ? "Version comparison requires a baseline. Run with --baseline to enable."
-    : "All packages match the target baseline versions.";
+  const copyMap: Record<string, string> = {
+    no_baseline: "Version comparison requires a baseline. Run with --baseline to enable.",
+    zero_drift: "All packages match the target baseline versions.",
+    data_unavailable: "Version change data is not available for this snapshot.",
+  };
+  const copy = copyMap[section.empty_reason ?? "data_unavailable"]
+    ?? copyMap.data_unavailable;
   return (
     <PageSection>
       <Content><h2>{label}</h2></Content>
@@ -1277,10 +1367,21 @@ interface PackageDetailProps {
   `empty_reason: "zero_drift"` shows
   `"All packages match the target baseline versions."`.
 - Unit test: no-baseline empty state -- section with zero items and
-  `empty_reason: "no_baseline"` shows
+  `empty_reason: "no_baseline"` (keyed off `RpmSection.no_baseline ==
+  true`) shows
   `"Version comparison requires a baseline. Run with --baseline to enable."`.
-- Unit test: section always present in sidebar (both empty-state cases
-  show with badge count 0, normal case shows item count).
+- Unit test: data-unavailable empty state -- section with zero items
+  and `empty_reason: "data_unavailable"` (RPM section missing) shows
+  `"Version change data is not available for this snapshot."`.
+- Unit test: `normalize_version_changes` with `snap.rpm == None` ->
+  `empty_reason` is `"data_unavailable"`, not `"no_baseline"`.
+- Unit test: `normalize_version_changes` with `rpm.no_baseline == true`
+  -> `empty_reason` is `"no_baseline"` regardless of whether
+  `version_changes` is empty or populated.
+- Unit test: `normalize_version_changes` with `rpm.no_baseline == false`
+  and empty `version_changes` -> `empty_reason` is `"zero_drift"`.
+- Unit test: section always present in sidebar (all three empty-state
+  cases show with badge count 0, normal case shows item count).
 - Unit test: `PackageDetail` shows base version and direction when
   `versionChange` prop is provided.
 - Unit test: `PackageDetail` omits version info when prop is null.
@@ -1379,7 +1480,7 @@ Recommended implementation order:
 | `/api/view` | Add `leaf_dep_tree` field (fleet-gated) | No (additive) |
 | `/api/view` | Add `version_changes` typed array (snake_case fields) | No (additive) |
 | `/api/snapshot/sections` | Add `version_changes` section (always emitted, with `empty_reason`); three-way services contract | No (additive + reduction) |
-| `/api/snapshot/sections` | `ContextSection` gains optional `empty_reason` field | No (additive, `skip_serializing_if`) |
+| `/api/snapshot/sections` | `ContextSection` gains optional `empty_reason` field (`"zero_drift"` / `"no_baseline"` / `"data_unavailable"`) | No (additive, `skip_serializing_if`) |
 | Snapshot JSON | `version_changes` populated instead of empty | No (field already in schema) |
 | Snapshot JSON | New `baseline_suppressed` field on `RpmSection` | No (additive, `Option`) |
 | Snapshot JSON | New `preset_matched_units` field on `ServiceSection` | No (additive, `serde(default)`) |
