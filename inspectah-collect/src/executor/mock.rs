@@ -2,6 +2,7 @@ use inspectah_core::traits::executor::{ExecResult, Executor};
 use std::collections::HashMap;
 use std::io;
 use std::path::Path;
+use std::sync::Mutex;
 
 pub struct MockExecutor {
     commands: HashMap<String, ExecResult>,
@@ -21,6 +22,12 @@ pub struct MockExecutor {
     /// `read_file` is called. Lets tests distinguish PermissionDenied
     /// from NotFound without registering actual file content.
     file_errors: HashMap<String, io::ErrorKind>,
+    /// Prefix-based command matching. After exact-match lookup fails,
+    /// `run()` checks if the full command string starts with any
+    /// registered prefix.
+    prefix_commands: HashMap<String, ExecResult>,
+    /// Records every `run()` call in order (full cmd + args joined).
+    command_log: Mutex<Vec<String>>,
 }
 
 impl MockExecutor {
@@ -33,6 +40,8 @@ impl MockExecutor {
             timeout_commands: HashMap::new(),
             dir_errors: HashMap::new(),
             file_errors: HashMap::new(),
+            prefix_commands: HashMap::new(),
+            command_log: Mutex::new(Vec::new()),
         }
     }
 }
@@ -93,6 +102,19 @@ impl MockExecutor {
         self.file_errors.insert(path.to_string(), error_kind);
         self
     }
+
+    /// Register a prefix→result mapping. In `run()`, after checking
+    /// exact match, any command whose full string starts with this
+    /// prefix will return the given result.
+    pub fn with_command_prefix(mut self, prefix: &str, result: ExecResult) -> Self {
+        self.prefix_commands.insert(prefix.to_string(), result);
+        self
+    }
+
+    /// Returns the ordered log of all commands executed via `run()`.
+    pub fn command_log(&self) -> Vec<String> {
+        self.command_log.lock().unwrap().clone()
+    }
 }
 
 impl Executor for MockExecutor {
@@ -103,6 +125,9 @@ impl Executor for MockExecutor {
             format!("{} {}", cmd, args.join(" "))
         };
 
+        // Record every command invocation.
+        self.command_log.lock().unwrap().push(key.clone());
+
         // Check for simulated timeout before normal command lookup.
         if let Some(duration) = self.timeout_commands.get(&key) {
             return ExecResult {
@@ -112,14 +137,23 @@ impl Executor for MockExecutor {
             };
         }
 
-        self.commands
-            .get(&key)
-            .cloned()
-            .unwrap_or_else(|| ExecResult {
-                stderr: format!("command not found: {key}"),
-                exit_code: 127,
-                ..Default::default()
-            })
+        // Exact match first.
+        if let Some(result) = self.commands.get(&key) {
+            return result.clone();
+        }
+
+        // Prefix match fallback.
+        for (prefix, result) in &self.prefix_commands {
+            if key.starts_with(prefix.as_str()) {
+                return result.clone();
+            }
+        }
+
+        ExecResult {
+            stderr: format!("command not found: {key}"),
+            exit_code: 127,
+            ..Default::default()
+        }
     }
 
     fn read_file(&self, path: &Path) -> io::Result<String> {
