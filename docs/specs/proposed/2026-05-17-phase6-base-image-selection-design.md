@@ -66,7 +66,16 @@ If the metadata file exists but is malformed (missing required fields, unparseab
 |----|------------------------|
 | `fedora` | `quay.io/fedora/fedora-bootc:{VERSION_ID}` |
 | `centos` | `quay.io/centos-bootc/centos-bootc:stream{MAJOR}` |
-| `rhel` | `registry.redhat.io/rhel{MAJOR}/rhel-bootc:{VERSION_ID}` |
+| `rhel` | `registry.redhat.io/rhel{MAJOR}/rhel-bootc:{VERSION_ID}` (see RHEL version floor below) |
+
+**Version floors:** Bootc base images are not available for all distro versions. The resolution chain clamps to the minimum supported version:
+
+| Distro | Floor | Behavior |
+|--------|-------|----------|
+| RHEL 9 | 9.6 | RHEL 9.0–9.5 → target `rhel9/rhel-bootc:9.6` |
+| RHEL 10 | 10.0 | No clamping needed (bootc from 10.0) |
+| Fedora | 41 | Fedora 40 and below → target `fedora-bootc:41`. No bootc image exists before F41. |
+| CentOS Stream | (major only) | Maps by major version (`stream9`, `stream10`), no minor clamping |
 
 Unknown `ID` values produce `None` — the pipeline aborts with a clear error.
 
