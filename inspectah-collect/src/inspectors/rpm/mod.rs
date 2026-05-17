@@ -297,6 +297,91 @@ fn query_user_installed(exec: &dyn Executor) -> Option<HashSet<String>> {
     Some(names)
 }
 
+/// Build a dependency graph from `dnf repoquery --requires --resolve --recursive --installed`.
+/// For each package in `added_names`, queries its transitive dependencies and filters to
+/// only those also in `added_names`. Returns `(depends_on, ok)` where `ok` is false if
+/// dnf is unavailable.
+fn classify_deps_dnf(
+    exec: &dyn Executor,
+    added_names: &HashSet<String>,
+) -> (HashMap<String, HashSet<String>>, bool) {
+    if added_names.is_empty() {
+        return (HashMap::new(), true);
+    }
+
+    let mut name_list: Vec<&String> = added_names.iter().collect();
+    name_list.sort();
+
+    // Probe with first package to check if dnf is available.
+    let first = name_list[0];
+    let probe = exec.run(
+        "dnf",
+        &[
+            "repoquery",
+            "--requires",
+            "--resolve",
+            "--recursive",
+            "--installed",
+            "--queryformat",
+            "%{name}\n",
+            first,
+        ],
+    );
+    if !probe.success() {
+        return (HashMap::new(), false);
+    }
+
+    let mut depends_on: HashMap<String, HashSet<String>> = HashMap::new();
+    for name in added_names {
+        depends_on.insert(name.clone(), HashSet::new());
+    }
+
+    // Parse first result.
+    parse_dnf_deps(&probe.stdout, first, added_names, &mut depends_on);
+
+    // Query remaining packages.
+    for pkg_name in &name_list[1..] {
+        let result = exec.run(
+            "dnf",
+            &[
+                "repoquery",
+                "--requires",
+                "--resolve",
+                "--recursive",
+                "--installed",
+                "--queryformat",
+                "%{name}\n",
+                pkg_name,
+            ],
+        );
+        if result.success() {
+            parse_dnf_deps(&result.stdout, pkg_name, added_names, &mut depends_on);
+        }
+    }
+
+    (depends_on, true)
+}
+
+/// Parse dnf dependency output lines and record which added packages `pkg_name` depends on.
+fn parse_dnf_deps(
+    stdout: &str,
+    pkg_name: &str,
+    added_names: &HashSet<String>,
+    depends_on: &mut HashMap<String, HashSet<String>>,
+) {
+    for line in stdout.lines() {
+        let dep = line.trim();
+        if dep.is_empty() || dep == pkg_name {
+            continue;
+        }
+        if added_names.contains(dep) {
+            if let Some(deps) = depends_on.get_mut(pkg_name) {
+                deps.insert(dep.to_string());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -693,6 +778,57 @@ tzdata\t/usr/share/zoneinfo/UTC
         );
         let result = query_user_installed(&exec);
         assert!(result.is_none());
+    }
+
+    // --- classify_deps_dnf tests ---
+
+    #[test]
+    fn classify_deps_dnf_builds_graph() {
+        // vim depends on glibc (which is also in added_names) and ncurses (not in added_names)
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n vim",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc\nncurses\n".into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added_names: HashSet<String> = ["vim", "glibc"].iter().map(|s| s.to_string()).collect();
+        let (deps, ok) = classify_deps_dnf(&exec, &added_names);
+        assert!(ok);
+        // vim depends on glibc (glibc is in added_names)
+        assert!(deps.get("vim").unwrap().contains("glibc"));
+        // ncurses is NOT in added_names, so not tracked
+        assert!(!deps.get("vim").unwrap().contains("ncurses"));
+    }
+
+    #[test]
+    fn classify_deps_dnf_returns_false_on_failure() {
+        // sorted order: glibc comes first, probe fails
+        let exec = MockExecutor::new().with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        );
+
+        let added_names: HashSet<String> =
+            ["vim", "glibc"].iter().map(|s| s.to_string()).collect();
+        let (deps, ok) = classify_deps_dnf(&exec, &added_names);
+        assert!(!ok);
+        assert!(deps.is_empty());
     }
 
     #[test]
