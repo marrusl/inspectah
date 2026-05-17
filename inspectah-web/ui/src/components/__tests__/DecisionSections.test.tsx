@@ -2380,7 +2380,7 @@ describe("Repo-first keyboard navigation", () => {
     const items: DecisionItemKind[] = [
       { type: "package", data: makePkg({ name: "epel-release", source_repo: "epel" }, [NEEDS_REVIEW_TAG]) },
     ];
-    const { rerender } = render(
+    render(
       <DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={onViewUpdate} onMutationError={vi.fn()} />,
     );
     await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });

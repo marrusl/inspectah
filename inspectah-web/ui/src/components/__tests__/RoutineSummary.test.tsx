@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RoutineSummary } from "../RoutineSummary";
 import type { DecisionItemKind } from "../DecisionItem";
-import type { RefinedPackage, AttentionTag } from "../../api/types";
+import type { AttentionTag } from "../../api/types";
 
 // Mock fetch for useViewed
 const mockFetch = vi.fn();

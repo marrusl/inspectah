@@ -1,8 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import type { RepoGroupInfo } from "../api/types";
 import { RepoGroupHeader } from "./RepoGroupHeader";
-import { itemId as getItemId } from "./DecisionItem";
-import type { DecisionItemKind } from "./DecisionItem";
 
 export interface RepoGroupProps {
   repo: RepoGroupInfo;
