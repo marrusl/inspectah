@@ -813,4 +813,35 @@ mod tests {
         // All packages visible (degraded mode)
         assert_eq!(view.packages.len(), 2);
     }
+
+    #[test]
+    fn containerfile_preview_only_includes_leaf_packages() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "vim".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "glibc".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["vim".into()]);
+        rpm.auto_packages = Some(vec!["glibc".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // Containerfile should contain vim but not glibc
+        assert!(view.containerfile_preview.contains("vim"),
+            "containerfile should contain leaf package 'vim'");
+        assert!(!view.containerfile_preview.contains("glibc"),
+            "containerfile should NOT contain auto package 'glibc'");
+    }
 }
