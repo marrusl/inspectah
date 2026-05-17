@@ -46,16 +46,40 @@ impl RpmInspector {
         parser::parse_rpm_qa(&result.stdout)
     }
 
-    /// Build baseline lookup from the source system context.
-    /// For Phase 1: baseline is empty (no baseline = all Added).
-    /// Full baseline subtraction from booted_image is Phase 2+.
+    /// Build baseline lookup from extracted baseline data.
+    ///
+    /// Converts `BaselinePackageEntry` (core types) to the classifier's
+    /// `PackageEntry` format, keyed by `name.arch` for O(1) lookup.
+    ///
+    /// When `baseline` is `None`, returns an empty HashMap (all packages
+    /// classified as Added — preserves Phase 1 behavior).
     fn build_baseline(
         &self,
-        _source: &SourceSystem,
-        _rpm_state: Option<&inspectah_core::traits::inspector::RpmState>,
+        baseline: Option<&inspectah_core::baseline::BaselineData>,
     ) -> HashMap<String, PackageEntry> {
-        // Phase 1: no baseline subtraction
-        HashMap::new()
+        let baseline = match baseline {
+            Some(b) => b,
+            None => return HashMap::new(),
+        };
+
+        baseline
+            .packages
+            .values()
+            .map(|bp| {
+                let key = format!("{}.{}", bp.name, bp.arch);
+                let pkg = PackageEntry {
+                    name: bp.name.clone(),
+                    epoch: bp.epoch.clone().unwrap_or_default(),
+                    version: bp.version.clone(),
+                    release: bp.release.clone(),
+                    arch: bp.arch.clone(),
+                    state: PackageState::BaseImageOnly,
+                    include: false,
+                    ..Default::default()
+                };
+                (key, pkg)
+            })
+            .collect()
     }
 
     /// Query file ownership for all installed packages.
@@ -164,7 +188,7 @@ impl Inspector for RpmInspector {
         }
 
         // 2. Build baseline and classify
-        let baseline = self.build_baseline(ctx.source_system, ctx.rpm_state);
+        let baseline = self.build_baseline(ctx.baseline_data);
         let classified = classifier::classify_packages(&host_packages, &baseline);
 
         // 3. Split classified packages into added / base_image_only
@@ -330,6 +354,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let output = RpmInspector::new().inspect(&ctx).unwrap();
         if let SectionData::Rpm(rpm) = &output.section {
@@ -409,6 +434,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let output = RpmInspector::new().inspect(&ctx).unwrap();
         if let SectionData::Rpm(rpm) = &output.section {
@@ -435,8 +461,150 @@ tzdata\t/usr/share/zoneinfo/UTC
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let result = RpmInspector::new().inspect(&ctx);
         assert!(matches!(result, Err(InspectorError::Failed { .. })));
+    }
+
+    // --- build_baseline tests ---
+
+    #[test]
+    fn test_build_baseline_none_returns_empty() {
+        let inspector = RpmInspector::new();
+        let result = inspector.build_baseline(None);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_build_baseline_converts_baseline_data() {
+        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+
+        let mut packages = std::collections::HashMap::new();
+        packages.insert(
+            "bash".to_string(),
+            BaselinePackageEntry {
+                name: "bash".to_string(),
+                epoch: Some("0".to_string()),
+                version: "5.2.26".to_string(),
+                release: "3.el9".to_string(),
+                arch: "x86_64".to_string(),
+            },
+        );
+        packages.insert(
+            "kernel".to_string(),
+            BaselinePackageEntry {
+                name: "kernel".to_string(),
+                epoch: None,
+                version: "5.14.0".to_string(),
+                release: "503.el9".to_string(),
+                arch: "x86_64".to_string(),
+            },
+        );
+
+        let baseline_data = BaselineData {
+            image_digest: "sha256:abc123".to_string(),
+            packages,
+            extracted_at: "2026-05-17T00:00:00Z".to_string(),
+        };
+
+        let inspector = RpmInspector::new();
+        let result = inspector.build_baseline(Some(&baseline_data));
+
+        assert_eq!(result.len(), 2);
+
+        // bash keyed by name.arch
+        let bash = result.get("bash.x86_64").expect("bash.x86_64 should exist");
+        assert_eq!(bash.name, "bash");
+        assert_eq!(bash.epoch, "0");
+        assert_eq!(bash.version, "5.2.26");
+        assert_eq!(bash.release, "3.el9");
+        assert_eq!(bash.state, PackageState::BaseImageOnly);
+        assert!(!bash.include);
+
+        // kernel with None epoch -> empty string
+        let kernel = result
+            .get("kernel.x86_64")
+            .expect("kernel.x86_64 should exist");
+        assert_eq!(kernel.name, "kernel");
+        assert_eq!(kernel.epoch, "");
+        assert_eq!(kernel.version, "5.14.0");
+        assert_eq!(kernel.state, PackageState::BaseImageOnly);
+        assert!(!kernel.include);
+    }
+
+    #[test]
+    fn test_rpm_inspector_with_baseline_classifies_correctly() {
+        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+
+        // Baseline has bash and vim-enhanced at specific versions
+        let mut packages = std::collections::HashMap::new();
+        packages.insert(
+            "bash".to_string(),
+            BaselinePackageEntry {
+                name: "bash".to_string(),
+                epoch: Some("0".to_string()),
+                version: "5.2.26".to_string(),
+                release: "3.el9".to_string(),
+                arch: "x86_64".to_string(),
+            },
+        );
+        packages.insert(
+            "vim-enhanced".to_string(),
+            BaselinePackageEntry {
+                name: "vim-enhanced".to_string(),
+                epoch: Some("0".to_string()),
+                version: "9.0.1592".to_string(),
+                release: "1.el9".to_string(),
+                arch: "x86_64".to_string(),
+            },
+        );
+
+        let baseline_data = BaselineData {
+            image_digest: "sha256:abc123".to_string(),
+            packages,
+            extracted_at: "2026-05-17T00:00:00Z".to_string(),
+        };
+
+        let exec = build_rpm_mock_executor();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: Some(&baseline_data),
+        };
+        let output = RpmInspector::new().inspect(&ctx).unwrap();
+
+        if let SectionData::Rpm(rpm) = &output.section {
+            // bash and vim-enhanced are in baseline with same EVR -> BaseImageOnly
+            assert_eq!(rpm.base_image_only.len(), 2);
+            let base_names: Vec<&str> = rpm.base_image_only.iter().map(|p| p.name.as_str()).collect();
+            assert!(base_names.contains(&"bash"));
+            assert!(base_names.contains(&"vim-enhanced"));
+
+            // httpd and tzdata are NOT in baseline -> Added
+            assert_eq!(rpm.packages_added.len(), 2);
+            let added_names: Vec<&str> =
+                rpm.packages_added.iter().map(|p| p.name.as_str()).collect();
+            assert!(added_names.contains(&"httpd"));
+            assert!(added_names.contains(&"tzdata"));
+
+            // no_baseline should be false (we have baseline data)
+            assert!(
+                !rpm.no_baseline,
+                "no_baseline should be false when baseline is provided"
+            );
+        } else {
+            panic!("expected SectionData::Rpm");
+        }
+
+        // Should NOT have the no-baseline warning
+        assert!(
+            !output.warnings.iter().any(|w| w.message.contains("no baseline")),
+            "should not warn about no baseline when baseline is provided"
+        );
     }
 }

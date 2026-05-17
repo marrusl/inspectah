@@ -105,6 +105,7 @@ fn test_network_inspector_happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = NetworkInspector::new().inspect(&ctx);
@@ -205,6 +206,7 @@ fn test_network_inspector_nm_not_found() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = NetworkInspector::new()
@@ -257,6 +259,7 @@ fn test_network_inspector_degraded_permissions() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = NetworkInspector::new().inspect(&ctx);
@@ -286,6 +289,7 @@ fn test_network_inspector_json_roundtrip() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = NetworkInspector::new().inspect(&ctx);

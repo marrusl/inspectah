@@ -558,6 +558,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -586,6 +587,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -613,6 +615,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -634,6 +637,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -693,6 +697,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -730,6 +735,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -805,6 +811,7 @@ ftpd_full_access               (off  ,   off)  Allow ftpd full access\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -864,6 +871,7 @@ SELinux fcontext                                   type               Context\n\
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -937,6 +945,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -984,6 +993,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -1028,6 +1038,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -1064,6 +1075,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -1100,6 +1112,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -1129,6 +1142,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -1150,6 +1164,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -1177,6 +1192,7 @@ redis_port_t                    tcp      6380\n";
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);

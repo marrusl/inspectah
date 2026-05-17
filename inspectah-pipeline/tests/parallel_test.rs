@@ -195,7 +195,7 @@ fn independent_inspectors_run_concurrently() {
     ];
 
     let start = Instant::now();
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let elapsed = start.elapsed();
 
     // All three sections must be populated
@@ -246,6 +246,7 @@ fn rpm_state_flows_to_dependent_inspectors() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     // A dependent inspector can access rpm_state through the context
@@ -272,7 +273,7 @@ fn rpm_failure_propagates() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     // Services should succeed
     assert!(
@@ -321,7 +322,7 @@ fn inspector_panic_contained() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     // Non-panicking inspectors must succeed
     assert!(
@@ -369,7 +370,7 @@ fn orchestrator_skips_inapplicable() {
     // Since Inspector requires ownership via Box, we use AtomicU32 inside the inspector.
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(PackageOnlyInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     // No sections should be populated (PackageOnly inspector was skipped)
     assert!(
@@ -437,7 +438,7 @@ fn three_wave_model_rpm_runs_in_wave1() {
     let source = package_based_source();
     let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     // Wave 1 proof: RPM inspector ran and produced section data
     assert!(
@@ -495,7 +496,7 @@ fn three_wave_model_enriched_context_api_path() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     // Both inspectors ran in Wave 1
     assert!(
@@ -521,6 +522,7 @@ fn three_wave_model_enriched_context_api_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&extracted_state),
+        baseline_data: None,
     };
     assert!(enriched_ctx.rpm_state.is_some());
     assert!(

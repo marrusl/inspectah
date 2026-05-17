@@ -76,6 +76,7 @@ fn happy_path_state_changes() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new().inspect(&ctx).unwrap();
@@ -187,6 +188,7 @@ fn preset_first_match_wins() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new().inspect(&ctx).unwrap();
@@ -233,6 +235,7 @@ fn preset_glob_matching() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new().inspect(&ctx).unwrap();
@@ -261,6 +264,7 @@ fn dropin_files_collected() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new().inspect(&ctx).unwrap();
@@ -288,6 +292,7 @@ fn systemctl_missing_returns_degraded() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = ServicesInspector::new().inspect(&ctx);
@@ -329,6 +334,7 @@ fn unreadable_preset_returns_degraded_not_ok() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = ServicesInspector::new().inspect(&ctx);
@@ -376,6 +382,7 @@ fn empty_system_returns_empty_section() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new().inspect(&ctx).unwrap();
@@ -424,6 +431,7 @@ fn dropin_with_secret_produces_redaction_hint() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new().inspect(&ctx).unwrap();
@@ -449,6 +457,7 @@ fn services_snapshot() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new().inspect(&ctx).unwrap();

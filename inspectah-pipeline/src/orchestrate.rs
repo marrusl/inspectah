@@ -40,7 +40,7 @@ pub fn run_pipeline(
     hostname: &str,
 ) -> Result<(InspectionSnapshot, std::path::PathBuf), PipelineError> {
     // Collect
-    let collected = collect(source, executor, inspectors);
+    let collected = collect(source, executor, inspectors, None);
 
     // Validate
     let validated = validate(collected)?;

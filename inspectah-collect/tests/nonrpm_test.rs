@@ -153,6 +153,7 @@ fn test_nonrpm_inspector_happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = NonRpmInspector::new()
@@ -216,6 +217,7 @@ fn test_nonrpm_inspector_empty_system() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = NonRpmInspector::new()
@@ -258,6 +260,7 @@ fn test_nonrpm_inspector_degraded_no_readelf() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let result = NonRpmInspector::new().inspect(&ctx);
@@ -309,6 +312,7 @@ fn test_nonrpm_inspector_json_roundtrip() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = NonRpmInspector::new()
@@ -346,6 +350,7 @@ fn test_nonrpm_ignores_rpm_state() {
         source_system: &source,
         executor: &exec_a,
         rpm_state: Some(&rpm_state_a),
+        baseline_data: None,
     };
 
     let output_a = NonRpmInspector::new()
@@ -369,6 +374,7 @@ fn test_nonrpm_ignores_rpm_state() {
         source_system: &source,
         executor: &exec_b,
         rpm_state: Some(&rpm_state_b),
+        baseline_data: None,
     };
 
     let output_b = NonRpmInspector::new()

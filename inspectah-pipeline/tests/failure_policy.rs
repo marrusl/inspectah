@@ -351,7 +351,7 @@ fn all_success_produces_complete() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     assert_eq!(
         pipeline.state.snapshot.completeness,
@@ -374,7 +374,7 @@ fn one_degraded_produces_partial() {
         Box::new(DegradedServicesInspector),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     match &pipeline.state.snapshot.completeness {
         Completeness::Partial {
@@ -409,7 +409,7 @@ fn one_failed_produces_incomplete() {
         Box::new(FailedServicesInspector),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     match &pipeline.state.snapshot.completeness {
         Completeness::Incomplete {
@@ -455,7 +455,7 @@ fn panicking_inspector_produces_failed_status() {
         }),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
 
     // Non-panicking inspectors must succeed
     assert!(
@@ -610,7 +610,7 @@ fn test_scheduled_permission_denied_degraded() {
         Box::new(ScheduledTasksInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -651,7 +651,7 @@ fn test_scheduled_not_found_silent() {
         Box::new(ScheduledTasksInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let snapshot = &pipeline.state.snapshot;
 
     assert!(
@@ -694,6 +694,7 @@ fn test_config_rpm_va_failure_degraded() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let result = inspector.inspect(&ctx);
@@ -731,7 +732,7 @@ fn test_config_etc_permission_denied_degraded() {
         Box::new(ConfigInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -808,7 +809,7 @@ fn test_selinux_semanage_unavailable_degraded() {
         Box::new(SelinuxInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -890,7 +891,7 @@ fn test_selinux_audit_permission_denied_degraded() {
         Box::new(SelinuxInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -942,7 +943,7 @@ fn test_nonrpm_readelf_unavailable_degraded() {
         Box::new(NonRpmInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let snapshot = &pipeline.state.snapshot;
 
     match &snapshot.completeness {
@@ -997,7 +998,7 @@ fn test_nonrpm_scan_dir_not_found_silent() {
         Box::new(NonRpmInspector::new()),
     ];
 
-    let pipeline = collect(&source, &exec, &inspectors);
+    let pipeline = collect(&source, &exec, &inspectors, None);
     let snapshot = &pipeline.state.snapshot;
 
     assert!(
@@ -1041,6 +1042,7 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -1066,6 +1068,7 @@ fn test_wave2_rpm_unavailable_fails_all_dependents() {
             source_system: &source,
             executor: &exec,
             rpm_state: Some(&empty_rpm_state),
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);

@@ -708,6 +708,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let inspector = UsersGroupsInspector::with_options(UserGroupOptions {
             strategy_override: Some("useradd".to_string()),
@@ -739,6 +740,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let inspector = UsersGroupsInspector::with_options(UserGroupOptions {
             strategy_override: Some("kickstart".to_string()),
@@ -935,6 +937,7 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let result = UsersGroupsInspector::new().inspect(&ctx);
 
@@ -961,6 +964,7 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let result = UsersGroupsInspector::new().inspect(&ctx);
 
@@ -1258,6 +1262,7 @@ nobody:x:65534:
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let result = UsersGroupsInspector::new().inspect(&ctx);
 
@@ -1280,6 +1285,7 @@ nobody:x:65534:
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
         let result = UsersGroupsInspector::new().inspect(&ctx);
 

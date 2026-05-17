@@ -130,6 +130,7 @@ fn test_selinux_inspector_happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = SelinuxInspector::new()
@@ -261,6 +262,7 @@ fn test_selinux_inspector_disabled() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     // When semanage fails, it falls back to sysfs booleans.
@@ -318,6 +320,7 @@ fn test_selinux_inspector_degraded_no_semanage() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let result = SelinuxInspector::new().inspect(&ctx);
@@ -355,6 +358,7 @@ fn test_selinux_inspector_json_roundtrip() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = SelinuxInspector::new()

@@ -605,6 +605,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -637,6 +638,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -670,6 +672,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);
@@ -703,6 +706,7 @@ mod tests {
             source_system: &source,
             executor: &exec,
             rpm_state: None,
+            baseline_data: None,
         };
 
         let result = inspector.inspect(&ctx);

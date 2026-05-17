@@ -109,7 +109,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(SelinuxInspector::new()),
         Box::new(NonRpmInspector::new()),
     ];
-    let collected = collect(&source, &executor, &inspectors);
+    let collected = collect(&source, &executor, &inspectors, None);
 
     // Step 4: Validate
     let validated = validate(collected).context("snapshot validation failed")?;

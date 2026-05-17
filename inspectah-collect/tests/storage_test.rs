@@ -60,6 +60,7 @@ fn happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = StorageInspector::new().inspect(&ctx).unwrap();
@@ -115,6 +116,7 @@ fn credential_detection() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = StorageInspector::new().inspect(&ctx).unwrap();
@@ -161,6 +163,7 @@ fn findmnt_failure_returns_degraded() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = StorageInspector::new().inspect(&ctx);
@@ -205,6 +208,7 @@ fn malformed_findmnt_json() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = StorageInspector::new().inspect(&ctx);
@@ -238,6 +242,7 @@ fn fstab_unreadable_returns_failed() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = StorageInspector::new().inspect(&ctx);
@@ -273,6 +278,7 @@ fn lvm_not_available() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = StorageInspector::new().inspect(&ctx).unwrap();
@@ -308,6 +314,7 @@ fn empty_fstab() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = StorageInspector::new().inspect(&ctx).unwrap();
@@ -340,6 +347,7 @@ fn storage_snapshot() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = StorageInspector::new().inspect(&ctx).unwrap();
