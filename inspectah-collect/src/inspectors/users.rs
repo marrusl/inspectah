@@ -119,7 +119,7 @@ impl Inspector for UsersGroupsInspector {
                     _ => "sysusers".to_string(),
                 },
             };
-            if let serde_json::Value::Object(ref mut map) = user {
+            if let serde_json::Value::Object(map) = user {
                 map.insert(
                     "classification".to_string(),
                     serde_json::Value::String(classification),
@@ -575,7 +575,7 @@ fn assign_group_strategies(section: &mut UserGroupSection, override_strategy: &O
                 "sysusers".to_string()
             }
         };
-        if let serde_json::Value::Object(ref mut map) = group {
+        if let serde_json::Value::Object(map) = group {
             map.insert("strategy".to_string(), serde_json::Value::String(strategy));
         }
     }
