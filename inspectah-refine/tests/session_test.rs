@@ -394,6 +394,9 @@ fn mark_viewed_rejects_cfg_prefix() {
 
 #[test]
 fn test_non_leaf_tier2_excluded_from_view() {
+    // Use degraded mode (no baseline) to produce Tier 2 (Informational)
+    // packages. With baseline present, user-added packages from recognized
+    // repos are now Routine (Tier 1) and always included.
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
@@ -414,7 +417,7 @@ fn test_non_leaf_tier2_excluded_from_view() {
                 ..Default::default()
             },
         ],
-        baseline_package_names: Some(vec![]),
+        baseline_package_names: None, // degraded mode -> Informational
         leaf_packages: Some(vec!["httpd".into()]),
         ..Default::default()
     });

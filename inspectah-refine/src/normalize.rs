@@ -1,3 +1,4 @@
+use inspectah_core::baseline::INCOMPATIBLE_SERVICES;
 use inspectah_core::snapshot::{migrate, InspectionSnapshot};
 use crate::types::{AttentionLevel, RefineError, RefinedConfig, RefinedPackage};
 use serde_json::Value;
@@ -27,6 +28,7 @@ pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError
         .map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
 
     migrate(&mut snap);
+    normalize_incompatible_services(&mut snap);
 
     Ok(snap)
 }
@@ -91,6 +93,28 @@ pub fn normalize_package_defaults(
     }
 }
 
+/// Exclude systemd services incompatible with immutable /usr.
+///
+/// Walks `services.state_changes` and sets `include = false` on units
+/// listed in `INCOMPATIBLE_SERVICES`. Also removes those units from
+/// `services.enabled_units`.
+pub fn normalize_incompatible_services(snapshot: &mut InspectionSnapshot) {
+    let services = match snapshot.services.as_mut() {
+        Some(s) => s,
+        None => return,
+    };
+
+    let incompatible_units: Vec<&str> = INCOMPATIBLE_SERVICES.iter().map(|e| e.unit).collect();
+
+    for sc in &mut services.state_changes {
+        if incompatible_units.contains(&sc.unit.as_str()) {
+            sc.include = false;
+        }
+    }
+
+    services.enabled_units.retain(|u| !incompatible_units.contains(&u.as_str()));
+}
+
 /// Materialize tier-aware include defaults for config files.
 ///
 /// Baseline subtraction: Tier 1 (Routine) configs — RpmOwnedDefault
@@ -126,5 +150,135 @@ pub fn normalize_config_defaults(
                 config.files[i].include = true;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+
+    /// Helper: build a snapshot with a ServiceSection.
+    fn snap_with_services(
+        state_changes: Vec<ServiceStateChange>,
+        enabled_units: Vec<String>,
+    ) -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: 14,
+            services: Some(ServiceSection {
+                state_changes,
+                enabled_units,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn sc(unit: &str, include: bool) -> ServiceStateChange {
+        ServiceStateChange {
+            unit: unit.to_string(),
+            current_state: "enabled".to_string(),
+            default_state: "disabled".to_string(),
+            action: "enable".to_string(),
+            include,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn incompatible_service_flagged_include_false() {
+        let mut snap = snap_with_services(
+            vec![sc("dnf-makecache.service", true)],
+            vec![],
+        );
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        assert!(!services.state_changes[0].include);
+    }
+
+    #[test]
+    fn compatible_service_not_flagged() {
+        let mut snap = snap_with_services(
+            vec![sc("httpd.service", true)],
+            vec![],
+        );
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        assert!(services.state_changes[0].include);
+    }
+
+    #[test]
+    fn incompatible_service_removed_from_enabled_units() {
+        let mut snap = snap_with_services(
+            vec![],
+            vec![
+                "dnf-makecache.service".into(),
+                "httpd.service".into(),
+                "packagekit.service".into(),
+            ],
+        );
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        assert_eq!(services.enabled_units, vec!["httpd.service".to_string()]);
+    }
+
+    #[test]
+    fn all_incompatible_services_flagged() {
+        let mut snap = snap_with_services(
+            vec![
+                sc("dnf-makecache.service", true),
+                sc("dnf-makecache.timer", true),
+                sc("packagekit.service", true),
+                sc("packagekit-offline-update.service", true),
+                sc("httpd.service", true),
+                sc("sshd.service", true),
+            ],
+            vec![
+                "dnf-makecache.service".into(),
+                "dnf-makecache.timer".into(),
+                "packagekit.service".into(),
+                "packagekit-offline-update.service".into(),
+                "httpd.service".into(),
+                "sshd.service".into(),
+            ],
+        );
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+
+        // state_changes: incompatible ones excluded, compatible ones untouched
+        assert!(!services.state_changes[0].include); // dnf-makecache.service
+        assert!(!services.state_changes[1].include); // dnf-makecache.timer
+        assert!(!services.state_changes[2].include); // packagekit.service
+        assert!(!services.state_changes[3].include); // packagekit-offline-update.service
+        assert!(services.state_changes[4].include);  // httpd.service
+        assert!(services.state_changes[5].include);  // sshd.service
+
+        // enabled_units: only compatible ones remain
+        assert_eq!(
+            services.enabled_units,
+            vec!["httpd.service".to_string(), "sshd.service".to_string()]
+        );
+    }
+
+    #[test]
+    fn no_services_section_is_noop() {
+        let mut snap = InspectionSnapshot {
+            schema_version: 14,
+            ..Default::default()
+        };
+        // Should not panic.
+        normalize_incompatible_services(&mut snap);
+        assert!(snap.services.is_none());
+    }
+
+    #[test]
+    fn already_excluded_service_stays_excluded() {
+        let mut snap = snap_with_services(
+            vec![sc("dnf-makecache.service", false)],
+            vec![],
+        );
+        normalize_incompatible_services(&mut snap);
+        let services = snap.services.as_ref().unwrap();
+        assert!(!services.state_changes[0].include);
     }
 }

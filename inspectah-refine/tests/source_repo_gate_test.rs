@@ -62,9 +62,10 @@ fn test_source_repo_proof_rust_collector_path() {
     let session = RefineSession::new(snap);
     let view = session.view();
 
-    // Packages with source_repo should have Informational (Tier 2) attention
+    // Packages with source_repo and baseline present should be Routine (Tier 1)
+    // — user-added from recognized repos are auto-included.
     let httpd = view.packages.iter().find(|p| p.entry.name == "httpd").unwrap();
-    assert_eq!(httpd.attention[0].level, AttentionLevel::Informational);
+    assert_eq!(httpd.attention[0].level, AttentionLevel::Routine);
     assert!(!httpd.entry.source_repo.is_empty());
 
     // Local install with empty source_repo should be NeedsReview (Tier 3)

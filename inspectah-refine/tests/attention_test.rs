@@ -47,13 +47,13 @@ fn test_added_baseline_match_is_tier1() {
 }
 
 #[test]
-fn test_added_not_in_baseline_known_repo_is_tier2() {
+fn test_added_not_in_baseline_known_repo_is_routine_user_added() {
     let snap = make_snap_with_package(
         "httpd", PackageState::Added, "appstream",
         Some(vec!["glibc".into()]),
     );
     let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
-    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Informational);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Routine);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageUserAdded);
 }
 
@@ -96,13 +96,13 @@ fn test_modified_baseline_match_is_tier1() {
 }
 
 #[test]
-fn test_modified_not_in_baseline_known_repo_is_version_changed() {
+fn test_modified_not_in_baseline_known_repo_is_needs_review_version_changed() {
     let snap = make_snap_with_package(
         "httpd", PackageState::Modified, "appstream",
         Some(vec!["glibc".into()]),
     );
     let pkgs = inspectah_refine::attention::compute_package_attention(&snap);
-    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::Informational);
+    assert_eq!(pkgs[0].attention[0].level, AttentionLevel::NeedsReview);
     assert_eq!(pkgs[0].attention[0].reason, AttentionReason::PackageVersionChanged);
 }
 

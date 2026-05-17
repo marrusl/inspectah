@@ -159,6 +159,10 @@ fn test_tier3_packages_include_false() {
 
 #[test]
 fn test_leaf_filtering_hides_non_leaf_tier2() {
+    // Leaf filtering applies to Tier 2 (Informational) packages.
+    // With baseline present, user-added packages from recognized repos are
+    // now Routine (Tier 1), so we use degraded mode (no baseline) to get
+    // Informational/ProvenanceUnavailable classification for leaf filtering.
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
@@ -169,7 +173,7 @@ fn test_leaf_filtering_hides_non_leaf_tier2() {
                 state: PackageState::Added, source_repo: "appstream".into(),
                 include: true, ..Default::default() },
         ],
-        baseline_package_names: Some(vec![]),
+        baseline_package_names: None, // degraded mode -> Informational
         leaf_packages: Some(vec!["httpd".into()]),
         ..Default::default()
     });
@@ -217,6 +221,8 @@ fn test_orphaned_configs_include_false() {
 
 #[test]
 fn test_tier2_leaf_fallback_when_no_leaf_data() {
+    // Use degraded mode (no baseline) to produce Tier 2 (Informational).
+    // With baseline present, user-added packages are now Routine (Tier 1).
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
         packages_added: vec![
@@ -224,7 +230,7 @@ fn test_tier2_leaf_fallback_when_no_leaf_data() {
                 state: PackageState::Added, source_repo: "appstream".into(),
                 include: false, ..Default::default() },
         ],
-        baseline_package_names: Some(vec![]),
+        baseline_package_names: None, // degraded mode -> Informational
         leaf_packages: None, // no leaf data
         ..Default::default()
     });
@@ -232,4 +238,29 @@ fn test_tier2_leaf_fallback_when_no_leaf_data() {
     normalize_package_defaults(&mut snap, &pkgs);
     assert!(snap.rpm.as_ref().unwrap().packages_added[0].include,
         "without leaf data, all Tier 2 should be visible");
+}
+
+#[test]
+fn test_user_added_with_baseline_is_routine_included() {
+    // With baseline present, user-added packages from recognized repos
+    // are Routine (Tier 1) and always included, regardless of leaf status.
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![
+            PackageEntry { name: "httpd".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: false, ..Default::default() },
+            PackageEntry { name: "apr".into(), arch: "x86_64".into(),
+                state: PackageState::Added, source_repo: "appstream".into(),
+                include: false, ..Default::default() },
+        ],
+        baseline_package_names: Some(vec![]),
+        leaf_packages: Some(vec!["httpd".into()]),
+        ..Default::default()
+    });
+    let pkgs = compute_package_attention(&snap);
+    normalize_package_defaults(&mut snap, &pkgs);
+    let rpm = snap.rpm.as_ref().unwrap();
+    assert!(rpm.packages_added[0].include, "httpd: Routine, always included");
+    assert!(rpm.packages_added[1].include, "apr: also Routine with baseline, always included");
 }
