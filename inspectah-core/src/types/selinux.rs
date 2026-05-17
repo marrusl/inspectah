@@ -14,7 +14,7 @@ pub struct SelinuxPortLabel {
     pub fleet: Option<FleetPrevalence>,
 }
 
-/// A file that the SELinux inspector carries forward for materialization
+/// A file that the security inspector carries forward for materialization
 /// in the config tree (audit rules, PAM configs).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CarryForwardFile {
@@ -26,6 +26,10 @@ pub struct CarryForwardFile {
     pub content: String,
 }
 
+/// Security & access control section (SELinux, FIPS, PAM, audit rules).
+///
+/// Display name: "Security & Access Control". The JSON key remains
+/// `"selinux"` for backward compatibility with existing snapshots.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SelinuxSection {
     #[serde(default)]
