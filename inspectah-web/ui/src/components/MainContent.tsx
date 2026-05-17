@@ -13,6 +13,8 @@ import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
 import { SectionSearch } from "./SectionSearch";
+import { AttentionSummary } from "./AttentionSummary";
+import { highestAttention } from "./attentionUtils";
 
 /** Section ID to human-readable label. */
 const SECTION_LABELS: Record<string, string> = {
@@ -136,6 +138,26 @@ export function MainContent({
     const noResults = hasFilter && filteredPackageItems.length === 0;
     const baselineSummary = viewData?.baseline_summary;
 
+    // Compute attention counts for AttentionSummary
+    const needsReviewPkgs = packageItems.filter(
+      (item) => item.data.attention.length > 0 &&
+        highestAttention(item.data.attention) === "needs_review",
+    );
+    const infoPkgs = packageItems.filter(
+      (item) => item.data.attention.length > 0 &&
+        highestAttention(item.data.attention) === "informational",
+    );
+    const needsReviewRepos = new Set(
+      needsReviewPkgs
+        .filter((item) => item.type === "package")
+        .map((item) => (item.data as any).entry.source_repo),
+    );
+    const infoRepos = new Set(
+      infoPkgs
+        .filter((item) => item.type === "package")
+        .map((item) => (item.data as any).entry.source_repo),
+    );
+
     // Render verification banner
     let banner: JSX.Element | null = null;
     if (baselineSummary) {
@@ -167,6 +189,12 @@ export function MainContent({
           <h2>{label}</h2>
         </Content>
         {banner}
+        <AttentionSummary
+          needsReviewCount={needsReviewPkgs.length}
+          needsReviewRepoCount={needsReviewRepos.size}
+          infoCount={infoPkgs.length}
+          infoRepoCount={infoRepos.size}
+        />
         {sectionSearchOpen && (
           <SectionSearch
             value={filterText}
