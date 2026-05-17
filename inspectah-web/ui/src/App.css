@@ -270,19 +270,35 @@
   margin-left: auto;
 }
 
-/* Badge abbreviation: full visible by default, abbreviated hidden */
-.inspectah-repo-group-header__badge-abbrev {
-  display: none;
+.inspectah-repo-group-header__chevron {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
-/* Responsive: abbreviate badges below 768px */
-@media (max-width: 767px) {
-  .inspectah-repo-group-header__badge-full {
-    display: none;
-  }
-  .inspectah-repo-group-header__badge-abbrev {
-    display: inline;
-  }
+.inspectah-repo-group-header__classification {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--body--sm);
+  font-style: italic;
+}
+
+.inspectah-repo-group-header__info-count {
+  color: var(--pf-t--global--color--status--info--default);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-repo-group-header__summary {
+  color: var(--pf-t--global--text--color--subtle);
+  font-size: var(--pf-t--global--font--size--body--sm);
+}
+
+.inspectah-repo-group-header--disabled {
+  opacity: 0.6;
+}
+
+.inspectah-repo-group-header--disabled .inspectah-repo-group-header__label {
+  text-decoration: line-through;
 }
 
 /* Responsive: repo group header wraps toggle to second line below 1024px */
