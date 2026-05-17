@@ -17,6 +17,48 @@ fn is_sensitive_path(path: &str) -> bool {
     SENSITIVE_PATHS.iter().any(|s| path.starts_with(s))
 }
 
+/// Well-known OS-default path prefixes in sensitive directories.
+///
+/// Files at these paths are delivered by standard RPM packages (ca-certificates,
+/// openssh-server, pam, openssl, fwupd, nss-tools, etc.) as regular files, not
+/// `%config`. The config inspector classifies them as `Unowned` because they
+/// aren't tracked by `rpm -Vc`, but on a stock system they are package defaults.
+///
+/// Suppresses the SensitivePath promotion (Informational -> NeedsReview) so
+/// these stock files don't flood the NeedsReview tier on unmodified systems.
+const OS_DEFAULT_SENSITIVE_PREFIXES: &[&str] = &[
+    // ca-certificates, p11-kit-trust
+    "/etc/pki/ca-trust/",
+    // centos-stream-release, redhat-release
+    "/etc/pki/rpm-gpg/",
+    // fwupd
+    "/etc/pki/fwupd/",
+    "/etc/pki/fwupd-metadata/",
+    // nss-softokn, nss-tools
+    "/etc/pki/nssdb/",
+    // openssl
+    "/etc/ssl/",
+    // pam
+    "/etc/security/",
+    // openssh-server, openssh-clients
+    "/etc/ssh/ssh_config.d/",
+    "/etc/ssh/sshd_config.d/",
+];
+
+/// Exact paths that are OS defaults in sensitive directories.
+const OS_DEFAULT_SENSITIVE_EXACT: &[&str] = &[
+    "/etc/ssh/moduli",
+    "/etc/ssh/ssh_config",
+];
+
+/// Returns true when the path is a well-known OS default inside a sensitive
+/// directory. These files should NOT be promoted from Informational to
+/// NeedsReview by the sensitive-path overlay.
+fn is_os_default_sensitive(path: &str) -> bool {
+    OS_DEFAULT_SENSITIVE_PREFIXES.iter().any(|p| path.starts_with(p))
+        || OS_DEFAULT_SENSITIVE_EXACT.contains(&path)
+}
+
 pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackage> {
     let rpm = match &snap.rpm {
         Some(r) => r,
@@ -192,7 +234,12 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
             let mut tags = vec![tag];
             // Sensitive path overlay: promote Tier 2 -> Tier 3.
             // Tier 1 is NOT promoted (base image ships these files).
-            if is_sensitive_path(&entry.path) && tags[0].level == AttentionLevel::Informational {
+            // OS-default files in sensitive directories are also NOT promoted —
+            // they are stock package contents, not meaningful user customizations.
+            if is_sensitive_path(&entry.path)
+                && tags[0].level == AttentionLevel::Informational
+                && !is_os_default_sensitive(&entry.path)
+            {
                 tags.push(AttentionTag {
                     level: AttentionLevel::NeedsReview,
                     reason: AttentionReason::SensitivePath,
@@ -592,5 +639,148 @@ mod tests {
         assert_eq!(result[1].attention[0].level, AttentionLevel::NeedsReview);
         assert_eq!(result[1].attention[0].reason, AttentionReason::PackageVersionChanged);
         assert_eq!(result[1].attention[0].detail.as_deref(), Some("Downgrade"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Config attention: OS-default sensitive path suppression
+    // -----------------------------------------------------------------------
+
+    use inspectah_core::types::config::{ConfigCategory, ConfigFileEntry, ConfigSection};
+
+    fn config_entry(path: &str, kind: ConfigFileKind) -> ConfigFileEntry {
+        ConfigFileEntry {
+            path: path.to_string(),
+            kind,
+            category: ConfigCategory::default(),
+            include: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn os_default_pki_rpm_gpg_stays_informational() {
+        let snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    config_entry("/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial", ConfigFileKind::Unowned),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = compute_config_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::ConfigUnowned);
+    }
+
+    #[test]
+    fn os_default_security_pam_stays_informational() {
+        let snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    config_entry("/etc/security/limits.conf", ConfigFileKind::Unowned),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = compute_config_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+    }
+
+    #[test]
+    fn os_default_ssl_stays_informational() {
+        let snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    config_entry("/etc/ssl/openssl.cnf", ConfigFileKind::Unowned),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = compute_config_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+    }
+
+    #[test]
+    fn os_default_ssh_moduli_stays_informational() {
+        let snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    config_entry("/etc/ssh/moduli", ConfigFileKind::Unowned),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = compute_config_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+    }
+
+    #[test]
+    fn non_default_sensitive_path_still_promoted() {
+        // /etc/shadow is sensitive but NOT in the OS-default list — should promote.
+        let snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    config_entry("/etc/shadow", ConfigFileKind::Unowned),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = compute_config_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention.len(), 2, "SensitivePath promotion applied");
+        assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
+        assert_eq!(result[0].attention[1].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[1].reason, AttentionReason::SensitivePath);
+    }
+
+    #[test]
+    fn rpm_modified_in_sensitive_path_still_needs_review() {
+        // RpmOwnedModified is already NeedsReview — not affected by the overlay.
+        let snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    config_entry("/etc/ssh/sshd_config", ConfigFileKind::RpmOwnedModified),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = compute_config_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention.len(), 1);
+        assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
+        assert_eq!(result[0].attention[0].reason, AttentionReason::ConfigModified);
+    }
+
+    #[test]
+    fn unknown_pki_subdir_still_promoted() {
+        // A file in /etc/pki/ that is NOT in a known OS-default subdir should
+        // still be promoted. /etc/pki/tls/custom.pem is not under any allowlisted prefix.
+        let snap = InspectionSnapshot {
+            config: Some(ConfigSection {
+                files: vec![
+                    config_entry("/etc/pki/tls/custom.pem", ConfigFileKind::Unowned),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let result = compute_config_attention(&snap);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].attention.len(), 2, "SensitivePath promotion applied");
+        assert_eq!(result[0].attention[1].level, AttentionLevel::NeedsReview);
     }
 }
