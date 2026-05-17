@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 2** (2026-05-17): Addresses round 1 review findings. See review summary for context.
+
 ## Summary
 
 Four items from the roadmap, shipped as one batch. Two are bug fixes in
@@ -36,7 +38,7 @@ On stock CentOS/RHEL systems, `dnf repoquery --userinstalled` reports
 anaconda/kickstart-installed base packages as user-installed. Packages
 like `kernel`, `dosfstools`, `efibootmgr`, `langpacks-en`, `lvm2`, and
 `shim-aa64` appear as leaf packages even though the user never
-explicitly installed them — the installer did.
+explicitly installed them -- the installer did.
 
 This inflates the leaf package count and forces users to triage packages
 they have no intention of carrying forward.
@@ -51,7 +53,7 @@ installed this" from "anaconda/kickstart marked this during initial
 system provisioning."
 
 The Go implementation at `cmd/inspectah/internal/inspector/rpm.go` has
-the same gap — neither codebase filters anaconda artifacts from the
+the same gap -- neither codebase filters anaconda artifacts from the
 userinstalled set.
 
 The graph-based fallback (used when `--userinstalled` has no overlap
@@ -62,28 +64,60 @@ based on dependency relationships, not install provenance.
 
 Add a post-filter step in `classify_leaf_auto()` after the
 userinstalled intersection, before the leaf/auto split. The filter
-demotes packages from leaf to auto when they match base-install
-heuristics.
+**suppresses** baseline-present packages from the leaf triage and
+install surfaces without altering `auto_packages` semantics.
 
-**Heuristic: baseline-present packages are not leaf.**
+**Key design principle:** Baseline presence proves target-image
+membership, not dependency causality. The fix must NOT overload
+`auto_packages` with baseline-membership semantics. `auto_packages`
+remains strictly "dependency-derived/transitive packages" as defined
+in `inspectah-core/src/types/rpm.rs`. Baseline-provided suppression
+is a separate mechanism.
 
-When baseline data is available (the common case after phase 6 ships),
-any package in the `--userinstalled` set that also exists in the
-baseline with `state: Added` (same name.arch, same or different
-version) should be demoted to auto. The reasoning: if the base image
-already contains the package, the user did not add it — the installer
-or image builder did.
+**Three concerns, kept separate:**
 
-This requires threading `baseline_package_names` (already computed at
-line ~260 in the RPM inspector) into `classify_leaf_auto()`.
+1. **Baseline-provided suppression** -- packages whose `name.arch`
+   exists in the target baseline should not appear in leaf-only
+   triage/install surfaces. This is the primary noise reduction.
+
+2. **Dependency-derived `auto_packages` / `leaf_dep_tree`** -- these
+   remain truthful: a package is `auto` only when the dependency graph
+   proves it is a transitive dependency of another added package. No
+   change to this contract.
+
+3. **Baseline-present `Modified` packages** -- a package that exists
+   in both the host and the baseline but with different versions has
+   intentional version drift. These must NOT be suppressed from the
+   leaf decision surface or from `RUN dnf install` output, because
+   the version difference may be work the operator needs to recreate
+   or consciously ignore.
+
+**New field: `baseline_suppressed`**
+
+Instead of demoting baseline-present packages into `auto_packages`,
+introduce a new `Vec<String>` field on `RpmSection`:
+
+```rust
+/// Canonical `name.arch` identities for packages present in both the
+/// host's userinstalled set and the target baseline with matching
+/// version (state: Unchanged). These are suppressed from the leaf
+/// triage and install surfaces but are NOT dependency-derived auto
+/// packages. `None` means no baseline was available for suppression.
+pub baseline_suppressed: Option<Vec<String>>,
+```
 
 **Implementation sketch:**
+
+The suppression filter runs inside `classify_leaf_auto()` using
+`ctx.baseline_data` (the authoritative baseline, not the compat
+`baseline_package_names` field). It applies only to packages whose
+classification state is NOT `Modified`:
 
 ```rust
 fn classify_leaf_auto(
     exec: &dyn Executor,
     packages_added: &[PackageEntry],
-    baseline_names: &HashSet<String>,  // new parameter
+    baseline: Option<&BaselineData>,  // from ctx.baseline_data
 ) -> LeafClassification {
     let added_ids: HashSet<String> = packages_added.iter()
         .map(canonical_package_id).collect();
@@ -92,28 +126,57 @@ fn classify_leaf_auto(
     // ... existing dependency graph logic ...
 
     // After computing initial leaf/auto split from userinstalled:
-    if let Some(ref ui) = user_installed {
+    let mut baseline_suppressed = Vec::new();
+    if let (Some(ref ui), Some(bl)) = (&user_installed, baseline) {
         let leaf_set: HashSet<&String> = ui.intersection(&added_ids).collect();
         if !leaf_set.is_empty() {
-            // Demote baseline-present packages from leaf to auto.
-            // If a package exists in the base image, anaconda/kickstart
-            // put it there, not the user.
-            let (demoted, true_leaf): (Vec<_>, Vec<_>) = leaf_set
+            let (suppressed, true_leaf): (Vec<_>, Vec<_>) = leaf_set
                 .into_iter()
-                .partition(|id| baseline_names.contains(*id));
+                .partition(|id| {
+                    // Suppress only when the baseline has this package
+                    // AND the host version matches (not Modified).
+                    // Modified packages have version drift that matters.
+                    bl.packages.contains_key(id.as_str())
+                        && packages_added.iter().any(|p| {
+                            canonical_package_id(p) == **id
+                            && p.state != PackageState::Modified
+                        })
+                });
 
-            // demoted → auto, true_leaf → leaf
+            baseline_suppressed = suppressed.into_iter().cloned().collect();
+            // true_leaf -> leaf_packages
+            // auto classification unchanged -- only dep-graph-derived
         }
     }
-    // ... rest unchanged ...
+    // ... rest produces LeafClassification with new baseline_suppressed field
 }
 ```
 
+**Downstream consumers of `baseline_suppressed`:**
+
+- `inspectah-refine/src/session.rs` -- the leaf filter (line ~the
+  `is_fleet_snapshot` block) adds `baseline_suppressed` identities
+  to the filter set alongside `auto_packages` when computing the
+  visible package list. This keeps them out of the triage surface.
+
+- `inspectah-pipeline/src/render/containerfile.rs` -- the
+  `RUN dnf install` line already filters through `leaf_packages`.
+  Baseline-suppressed packages are not in `leaf_packages` and thus
+  not in the install line. But `Modified` baseline packages remain
+  in `leaf_packages` because the suppression filter excluded them.
+
+**Why `baseline_suppressed` instead of widening `auto_packages`:**
+The current contract uses `auto_packages` and `leaf_dep_tree` as
+paired fields: `leaf_dep_tree` maps each leaf to its auto deps. If
+`auto_packages` gained non-dep-derived entries, `leaf_dep_tree` would
+become inconsistent (no leaf would claim those packages as deps). A
+separate field keeps both contracts truthful.
+
 **No-baseline fallback:** When no baseline is available, the filter
-cannot apply. The graph-based fallback already handles this case
-reasonably well — packages depended on by other packages become auto
-regardless of their userinstalled status. Accept the noise in the
-no-baseline case; it self-corrects once baseline scanning is configured.
+cannot apply and `baseline_suppressed` is `None`. The graph-based
+fallback already handles this case reasonably well. Accept the noise
+in the no-baseline case; it self-corrects once baseline scanning is
+configured.
 
 **Why not a static blocklist?** A hardcoded list of known
 anaconda/kickstart packages (kernel, dosfstools, etc.) is fragile
@@ -124,9 +187,18 @@ base-image packages without maintenance.
 ### Testing
 
 - Unit test: `classify_leaf_auto` with baseline containing kernel,
-  dosfstools → these should appear in auto, not leaf.
-- Unit test: package in userinstalled but NOT in baseline → stays leaf.
-- Unit test: no baseline available → existing behavior unchanged.
+  dosfstools at matching version -> these should appear in
+  `baseline_suppressed`, not in `leaf_packages` or `auto_packages`.
+- Unit test: baseline-present package with `Modified` state (version
+  drift) -> stays in `leaf_packages`, NOT suppressed.
+- Unit test: package in userinstalled but NOT in baseline -> stays
+  in `leaf_packages`.
+- Unit test: no baseline available -> existing behavior unchanged,
+  `baseline_suppressed` is `None`.
+- End-to-end: collect -> refine -> view: suppressed packages absent
+  from triage surface, `Modified` baseline packages still visible.
+- End-to-end: collect -> render -> containerfile: suppressed packages
+  absent from `RUN dnf install`, `Modified` baseline packages present.
 - Regression: existing `classify_leaf_auto` tests must still pass.
 
 ---
@@ -156,63 +228,193 @@ know what to `systemctl enable/disable`), not for the context UI.
 
 The web handler `normalize_services()` in `inspectah-web/src/handlers.rs`
 (line 366) renders ALL three lists into `ContextItem`s:
-1. `state_changes` → items with "current_state → action" subtitle (correct — these are divergences)
-2. `enabled_units` → items with "enabled" subtitle (noisy — includes stock defaults)
-3. `disabled_units` → items with "disabled" subtitle (noisy — includes stock defaults)
+1. `state_changes` -> items with "current_state -> action" subtitle (correct -- these are divergences)
+2. `enabled_units` -> items with "enabled" subtitle (noisy -- includes stock defaults)
+3. `disabled_units` -> items with "disabled" subtitle (noisy -- includes stock defaults)
 
 The result is that items 2 and 3 dwarf item 1, and most of them are
 services that match their preset defaults exactly.
 
+**Critical nuance the original spec missed:** The current collector
+does NOT support the claim that "anything outside `state_changes` is
+by definition matching its preset." In
+`inspectah-collect/src/inspectors/services.rs`, `state_changes` is
+only emitted when a matching preset rule is known AND the current state
+diverges. Units with no preset rule get no `state_changes` entry at all.
+The collector tests (`inspectah-collect/tests/services_test.rs`) confirm
+this: `httpd.service`, `libvirtd.service`, and `cups.service` are absent
+from `state_changes` because preset truth is unavailable, while
+`enabled_units` / `disabled_units` still carry their observed current
+state. So removing those loops entirely would erase "current state
+known, preset unknown" context.
+
 ### Proposed Fix
 
-**Option A (recommended): Filter in the web handler.**
+**Three-way contract in `normalize_services()`:**
 
-Modify `normalize_services()` to skip `enabled_units` and
-`disabled_units` entries that also appear in `state_changes`. A unit
-that diverges from its preset already has a `ServiceStateChange` entry
-with full context (current state, default state, action). Showing it
-again as a bare "enabled" or "disabled" item adds noise.
+Replace the current all-or-nothing approach with a three-way split
+that preserves operator truth:
 
-Additionally, suppress units whose state matches their preset default
-entirely. Since the inspector already computed divergences, the
-remaining enabled/disabled entries that are NOT in `state_changes` are
-by definition matching their presets. They can be suppressed from the
-context view.
+1. **Known divergence** (unit has a preset, current state differs) --
+   render from `state_changes` with full context. Subtitle format:
+   `"current_state -> action (diverges from preset: default_state)"`.
 
-**Concrete change to `normalize_services()`:**
+2. **Known match** (unit has a preset, current state matches) --
+   suppress entirely. These are stock defaults. They are the entries
+   in `enabled_units`/`disabled_units` that would have a matching
+   preset but no `state_changes` entry because they are not divergent.
 
-Remove the `enabled_units` and `disabled_units` rendering loops
-entirely. The `state_changes` loop already captures every unit that
-diverges from its preset. The flat enabled/disabled lists serve the
-Containerfile renderer, not the context UI. Their data is still in
-the snapshot for renderers that need it.
+3. **Preset unknown** (unit has no matching preset rule, but its
+   current state is observed in `enabled_units`/`disabled_units`) --
+   keep visible with explicit labeling. Subtitle format:
+   `"enabled (no preset rule)"` or `"disabled (no preset rule)"`.
 
-After this change, the Services section shows:
-- Units that diverge from presets (from `state_changes`)
-- Drop-in overrides (from `drop_ins`)
-- Nothing else — stock defaults are suppressed
+**Implementation:**
 
-**Option B (alternative): Filter in the collector.**
+The handler needs to know which units had a matching preset rule. Two
+approaches:
 
-Add a `non_divergent_enabled` / `non_divergent_disabled` split in the
-inspector itself, so `enabled_units` only contains units whose
-enable state diverges from their preset. This is architecturally
-cleaner but higher-risk because it changes the collector contract and
-may affect Containerfile rendering which consumes these lists.
+**Option A (recommended): Compute the preset-known set in the handler.**
 
-**Recommendation:** Option A. The web handler is the presentation layer.
-The collector contract stays stable, renderers keep full unit lists, and
-the context view shows only meaningful divergences.
+`normalize_services()` already has access to both `state_changes` and
+`enabled_units`/`disabled_units`. Build a set of unit names that appear
+in `state_changes` -- these are units where a preset was known and the
+state diverged. Then for `enabled_units`/`disabled_units`, classify
+each entry:
+
+```rust
+fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
+    let mut items = Vec::new();
+    if let Some(svc) = &snap.services {
+        let dropin_by_unit: HashMap<&str, Vec<&str>> = /* existing logic */;
+
+        // Units with known divergences (preset existed, state differs)
+        let divergent_units: HashSet<&str> = svc.state_changes.iter()
+            .map(|sc| sc.unit.as_str())
+            .collect();
+
+        // Render known divergences from state_changes
+        for sc in &svc.state_changes {
+            let dropins = dropin_by_unit.get(sc.unit.as_str());
+            let mut detail_parts = vec![
+                format!("Default: {}", sc.default_state),
+            ];
+            if let Some(drops) = dropins {
+                detail_parts.push(format!("Drop-ins: {}", drops.join(", ")));
+            }
+            items.push(ContextItem {
+                id: sc.unit.clone(),
+                title: sc.unit.clone(),
+                subtitle: Some(format!(
+                    "{} -> {} (diverges from preset: {})",
+                    sc.current_state, sc.action, sc.default_state
+                )),
+                detail: Some(detail_parts.join("\n")),
+                searchable_text: format!(
+                    "{} {} {} {}", sc.unit, sc.current_state,
+                    sc.default_state, sc.action
+                ),
+            });
+        }
+
+        // For enabled/disabled units NOT in state_changes:
+        // If we can determine a preset matched, suppress (known match).
+        // If no preset data exists, keep visible as preset-unknown.
+        //
+        // Heuristic: a unit in enabled_units/disabled_units that is NOT
+        // in divergent_units either matched its preset (suppress) or
+        // had no preset rule (keep). The collector does not currently
+        // export the preset-match set, so we use a conservative
+        // approach: units NOT in divergent_units are rendered with the
+        // "no preset rule" label. This errs on the side of visibility.
+        //
+        // Future refinement: the collector could export a
+        // `preset_matched_units` set to enable exact suppression.
+        for unit in &svc.enabled_units {
+            if !divergent_units.contains(unit.as_str()) {
+                items.push(ContextItem {
+                    id: unit.clone(),
+                    title: unit.clone(),
+                    subtitle: Some("enabled (no preset rule)".into()),
+                    detail: None,
+                    searchable_text: format!("{} enabled", unit),
+                });
+            }
+        }
+        for unit in &svc.disabled_units {
+            if !divergent_units.contains(unit.as_str()) {
+                items.push(ContextItem {
+                    id: unit.clone(),
+                    title: unit.clone(),
+                    subtitle: Some("disabled (no preset rule)".into()),
+                    detail: None,
+                    searchable_text: format!("{} disabled", unit),
+                });
+            }
+        }
+
+        // Standalone drop-ins (no state_change or enabled/disabled entry)
+        for di in &svc.drop_ins {
+            if !divergent_units.contains(di.unit.as_str())
+                && !svc.enabled_units.contains(&di.unit)
+                && !svc.disabled_units.contains(&di.unit)
+            {
+                items.push(ContextItem {
+                    id: di.unit.clone(),
+                    title: di.unit.clone(),
+                    subtitle: Some("drop-in override".into()),
+                    detail: Some(format!("Path: {}", di.path)),
+                    searchable_text: format!("{} drop-in {}", di.unit, di.path),
+                });
+            }
+        }
+    }
+    ContextSection {
+        id: "services".to_string(),
+        display_name: "Services".to_string(),
+        items,
+    }
+}
+```
+
+**Option B (future refinement): Export preset-match truth from the
+collector.**
+
+Add a `preset_matched_units: Vec<String>` field to `ServiceSection`
+that lists units where a preset rule was found AND the current state
+matched. This lets the handler distinguish "preset matched, safe to
+suppress" from "no preset rule, keep visible" with certainty. This is
+architecturally cleaner but changes the collector contract. Defer to a
+follow-up if the conservative Option A produces too many
+preset-unknown items in practice.
+
+**UI labeling distinction:** The three-way contract is visible in the
+UI through subtitle text:
+- Divergence: `"enabled -> enable (diverges from preset: disabled)"`
+- Preset unknown: `"enabled (no preset rule)"`
+- Match: not rendered (suppressed)
+
+This preserves truthful operator context while eliminating the stock-
+default noise that dominated the old rendering.
 
 ### Testing
 
 - Unit test: `normalize_services` with 5 state_changes, 80
-  enabled_units, 30 disabled_units → output should contain only the 5
-  state_changes plus any standalone drop-ins.
-- Unit test: enabled unit that IS in state_changes → should appear once
-  (as the state_change item), not twice.
-- Integration: verify Services section count in the sidebar drops from
-  ~110 to ~5-15 on a stock CentOS snapshot.
+  enabled_units, 30 disabled_units -> output should contain the 5
+  divergences plus any enabled/disabled units NOT covered by
+  state_changes (labeled as preset-unknown), plus standalone drop-ins.
+- Unit test: enabled unit that IS in state_changes -> appears once (as
+  the divergence item), not twice.
+- Unit test: enabled unit NOT in state_changes -> appears with
+  "enabled (no preset rule)" subtitle.
+- Unit test: subtitle text for divergence items includes both current
+  state and preset default.
+- Integration: verify Services section count in the sidebar drops
+  significantly on a stock CentOS snapshot (from ~110 to the number of
+  divergences + preset-unknown units).
+- Regression: verify that the full `enabled_units` and
+  `disabled_units` data is still present in the raw snapshot for
+  Containerfile renderer consumption.
 
 ---
 
@@ -220,7 +422,7 @@ the context view shows only meaningful divergences.
 
 ### Problem
 
-The snapshot already contains `leaf_dep_tree` data — a map from each
+The snapshot already contains `leaf_dep_tree` data -- a map from each
 leaf package to its transitive auto-dependency list. This data is
 computed during collection but never surfaced in the web UI. Users
 triaging leaf packages cannot see what other packages each leaf pulls
@@ -230,8 +432,82 @@ in, which matters for deciding whether to carry it forward.
 
 **Dependencies go in a modal popup, accessible via a button on the leaf
 package card.** Not inline on the card, not a separate sidebar section.
-A per-leaf modal that shows the transitive dependency tree from
+A per-leaf modal that shows the flat dependency list from
 `leaf_dep_tree`.
+
+**This is a flat dependency list, not a nested tree.** The
+`leaf_dep_tree` data maps each leaf package to its list of transitive
+auto-dependencies. The modal shows this as a flat, sorted list of
+`name.arch` identities. No tree visualization, no nesting.
+
+### Scope Guard
+
+**The modal inherits the existing single-host / non-fleet scope guard.**
+
+Current codebase already treats leaf truth as single-host-only:
+- `inspectah-refine/src/session.rs` skips leaf-only package filtering
+  when any RPM package carries fleet prevalence (`pkg.fleet.is_some()`).
+- `inspectah-pipeline/src/render/containerfile.rs` applies the same
+  guard for preview/export rendering.
+
+The dependency modal must apply the same rule. When the snapshot is a
+fleet/merged snapshot (any package has `fleet` data), the "View
+Dependencies" button is not rendered and `leaf_dep_tree` is not
+included in the `ViewResponse`.
+
+**Implementation:** The `ViewResponse` construction in the web handler
+already has access to the projected snapshot. Gate `leaf_dep_tree`
+inclusion on the same `is_fleet_snapshot` check:
+
+```rust
+let is_fleet = projected.rpm.as_ref()
+    .map_or(false, |rpm| rpm.packages_added.iter().any(|p| p.fleet.is_some()));
+
+let leaf_dep_tree = if is_fleet {
+    HashMap::new()  // empty = modal not available
+} else {
+    // deserialize from serde_json::Value
+    parse_leaf_dep_tree(&projected.rpm)
+};
+```
+
+### Accessibility Contract
+
+This is the **first interactive control inside `PackageDetail`** --
+the detail pane is currently read-only. Adding a triggerable button
+changes the focus model and requires explicit accessibility behavior.
+
+**Keyboard reachability:** When a package row has focus and the user
+opens the detail pane (existing `Enter`/expand behavior), `Tab` from
+the detail pane content must reach the "View Dependencies" button.
+The button is the only focusable element in the detail pane, so a
+single `Tab` press from the detail content reaches it.
+
+**Modal focus management:**
+- **Trigger:** `Enter` or `Space` on the "View Dependencies" button
+  opens the modal.
+- **Initial focus:** The modal's close button (PatternFly `Modal`
+  default behavior -- `FocusTrap` places initial focus on the first
+  focusable element, which is the close "X" button).
+- **Focus trap:** PatternFly `Modal` provides `FocusTrap` by default.
+  `Tab` cycles within the modal (close button -> dependency list ->
+  close button). `Shift+Tab` cycles in reverse.
+- **Close:** `Escape` or close button dismisses the modal.
+- **Focus return:** On close, focus returns to the "View Dependencies"
+  button that triggered the modal. PatternFly `Modal` handles this
+  via `onClose` callback + `appendTo` behavior. The implementation
+  must verify this works correctly in the `PackageDetail` context.
+
+**Long-list behavior:** When the dependency list exceeds the modal's
+viewport height, the list container scrolls. Use PatternFly's
+`Modal` body with `overflow-y: auto`. No virtualization needed for
+the expected list sizes (typically 5-50 dependencies, worst case a
+few hundred).
+
+**Visible `name.arch` identity:** Each dependency in the list renders
+the full `name.arch` format (e.g., `glibc.x86_64`), not just the
+package name. This is consistent with the package identity model used
+throughout the triage surface and avoids ambiguity on multilib hosts.
 
 ### Frontend Specification
 
@@ -242,44 +518,47 @@ A PatternFly `Modal` triggered by a "View Dependencies" button on the
 1. The package is a leaf package (its canonical `name.arch` ID exists in
    the `leaf_dep_tree` keys).
 2. The dependency list is non-empty.
+3. The snapshot is not a fleet/merged snapshot (enforced by
+   `leaf_dep_tree` being empty in the `ViewResponse` for fleet data).
 
 Modal contents:
-- Title: "Dependencies: {package name}"
-- Body: sorted list of dependency package names (from `leaf_dep_tree[name.arch]`)
-- Each dependency rendered as a simple text item showing name and arch
-  (split from canonical `name.arch` format).
-- Count in the modal header: "(N dependencies)"
-- Close button (standard PatternFly modal dismiss).
+- Title: `"Dependencies: {name}.{arch}"` (full `name.arch` identity)
+- Body: sorted flat list of dependency `name.arch` identities
+- Each dependency rendered as a read-only list item showing full
+  `name.arch` (e.g., `glibc.x86_64`, `ncurses-libs.x86_64`)
+- Count in the modal header: `"(N dependencies)"`
+- Close button (standard PatternFly modal dismiss)
+- List container with `overflow-y: auto` for long lists
+- ARIA: `aria-label="Dependency list for {name}.{arch}"`
 
 **Modified component: `PackageDetail.tsx`**
 
 Add a "View Dependencies (N)" button below the existing
 DescriptionList. The button is a PatternFly `Button` variant="link"
-that opens the `DependencyModal`.
+that opens the `DependencyModal`. The button must be focusable via
+`Tab` from the detail pane content.
 
 **Data flow:**
 
 The `leaf_dep_tree` data is already in the snapshot JSON. It needs to
 be:
-1. Included in the `/api/view` response (or a new lightweight endpoint).
+1. Included in the `/api/view` response (gated by fleet check).
 2. Available to `PackageDetail` via props.
 
 **Option A (recommended):** Add `leaf_dep_tree` to the `ViewResponse`
 type. The refine session already has access to the snapshot's RPM
 section. The web handler maps it through as a
 `Record<string, string[]>` alongside the existing `packages` and
-`config_files` arrays.
-
-**Option B:** Separate `/api/snapshot/leaf-deps` endpoint. Unnecessary
-given the data is small (typically <50 entries, each a short list of
-package names).
+`config_files` arrays, gated by the fleet scope check.
 
 ### Backend Changes
 
 **`inspectah-web/src/handlers.rs`:**
 - Add `leaf_dep_tree: HashMap<String, Vec<String>>` to the view
-  response struct (or a wrapper). The raw `serde_json::Value` from
-  `RpmSection.leaf_dep_tree` needs to be deserialized into a typed map.
+  response struct. The raw `serde_json::Value` from
+  `RpmSection.leaf_dep_tree` is deserialized into a typed map.
+- Gate inclusion on the same fleet check used by session.rs leaf
+  filtering: if any package has `fleet` data, return empty map.
 
 **`inspectah-refine/src/session.rs`:**
 - Expose `leaf_dep_tree()` method on `RefineSession` that returns the
@@ -292,7 +571,7 @@ package names).
 /** Added to ViewResponse */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
-  leaf_dep_tree: Record<string, string[]>;  // new
+  leaf_dep_tree: Record<string, string[]>;  // new, empty for fleet
 }
 ```
 
@@ -300,8 +579,7 @@ export interface ViewResponse extends RefinedView {
 ```typescript
 export interface DependencyModalProps {
   packageId: string;       // canonical name.arch
-  packageName: string;     // display name
-  deps: string[];          // sorted dependency list
+  deps: string[];          // sorted dependency list (name.arch format)
   isOpen: boolean;
   onClose: () => void;
 }
@@ -309,15 +587,26 @@ export interface DependencyModalProps {
 
 **`components/PackageDetail.tsx`:** Add optional `leafDeps` prop.
 When present and non-empty, render "View Dependencies (N)" button.
+Button receives `tabIndex={0}` and proper `aria-label`.
 
 ### Testing
 
-- Unit test: `DependencyModal` renders sorted dependency list.
+- Unit test: `DependencyModal` renders sorted dependency list with
+  full `name.arch` identity.
+- Unit test: `DependencyModal` long list (50+ items) scrolls within
+  modal body.
 - Unit test: `PackageDetail` shows button when `leafDeps` is non-empty,
   hides it when empty or absent.
 - Unit test: `PackageDetail` does not show button for non-leaf packages
   (leafDeps not provided).
-- Backend: verify `/api/view` response includes `leaf_dep_tree` field.
+- Unit test: keyboard flow -- `Tab` reaches button, `Enter` opens
+  modal, `Escape` closes, focus returns to button.
+- Unit test: modal initial focus is on close button (PatternFly
+  FocusTrap default).
+- Backend: verify `/api/view` response includes `leaf_dep_tree` for
+  single-host snapshots, empty map for fleet/merged snapshots.
+- Backend: verify fleet scope guard matches the existing
+  `is_fleet_snapshot` logic in session.rs.
 
 ---
 
@@ -337,20 +626,47 @@ EVR against baseline EVR for each `Modified` package), but the Rust
 port uses `..Default::default()` which leaves `version_changes` as an
 empty vec.
 
+### Cross-Surface Contract
+
+**This is not just a new UI feature.** Populating `version_changes` in
+the collector is a cross-surface contract change that affects three
+existing consumers:
+
+1. **`inspectah-refine/src/attention.rs`** -- already consumes
+   `rpm.version_changes` to classify modified packages as upgrade vs
+   downgrade. Upgrades stay `Routine`; downgrades become `NeedsReview`.
+   Currently, with `version_changes` empty, all `Modified` packages
+   default to upgrade-like attention. Once the collector populates
+   this field, downgrades will shift to `NeedsReview`, changing
+   `needs_review_count` and package grouping on the triage surface.
+
+2. **`inspectah-pipeline/src/render/audit.rs`** -- already renders a
+   "Version Changes" markdown table (columns: Package, Host Version,
+   Base Version, Direction) whenever `version_changes` is non-empty.
+   Once populated, audit exports will include this table.
+
+3. **New: `inspectah-web/src/handlers.rs`** -- the new Context section
+   and `PackageDetail` supplement described below.
+
+The spec must prove that all three consumers produce correct output
+after the collector starts emitting real data.
+
 ### Design Decisions
 
 1. **A new "Version Changes" sidebar section under the Context group.**
-   Uses the existing `ContextList`/`ContextItem` pattern. Read-only.
+   This is a separate read-only Context section (decided -- Ember and
+   Fern debated integrated vs. separate placement; Mark chose separate).
    Shows packages where the running system has a different version than
    the base image.
 
-2. **Version info in the leaf package card detail.** Users triaging leaf
-   packages can see version information without navigating away. This is
-   supplementary detail on the card, not an organizing principle.
+2. **A typed `VersionChange` carrier for the web/UI boundary.**
+   The frontend needs structured data, not parsed subtitle strings.
+   The handler emits `ContextItem`s for the sidebar list, but
+   `PackageDetail` receives a typed struct for version-change display.
+   These are two distinct render paths from the same underlying data.
 
 3. **The Packages decision section stays leaf-only.** No toggle, no
-   "All Packages" view. The Decisions/Full toggle was deliberately
-   removed during the unified-repo-view refactor.
+   "All Packages" view.
 
 ### Backend Changes
 
@@ -400,9 +716,14 @@ Wire the `version_changes` from `ClassificationResult` into the
 
 **`inspectah-web/src/handlers.rs`:**
 
-Add a `normalize_version_changes()` function (following the pattern of
-`normalize_services()`, `normalize_network()`, etc.) that maps
-`RpmSection.version_changes` to a `ContextSection`:
+Two render paths from `version_changes`:
+
+**Path 1: Context section (sidebar list)**
+
+Add a `normalize_version_changes()` function that maps
+`RpmSection.version_changes` to a `ContextSection` with
+`ContextItem`s. These items use `name.arch` visible identity and
+epoch-aware rendering:
 
 ```rust
 fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
@@ -415,16 +736,19 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
             };
             items.push(ContextItem {
                 id: format!("{}.{}", vc.name, vc.arch),
-                title: vc.name.clone(),
+                title: format!("{}.{}", vc.name, vc.arch),  // name.arch visible identity
                 subtitle: Some(format!(
                     "{} -> {} ({})",
-                    vc.base_version, vc.host_version, direction_label
+                    format_evr(&vc.base_epoch, &vc.base_version),
+                    format_evr(&vc.host_epoch, &vc.host_version),
+                    direction_label
                 )),
                 detail: None,
                 searchable_text: format!(
-                    "{} {} {} {} {}",
+                    "{} {} {} {} {} {}",
                     vc.name, vc.arch, vc.base_version,
-                    vc.host_version, direction_label
+                    vc.host_version, direction_label,
+                    format!("{}.{}", vc.name, vc.arch)
                 ),
             });
         }
@@ -437,23 +761,106 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
 }
 ```
 
-Add the new section to the `normalize_for_context()` return vec.
-Position it after "Services" — version changes are high-signal context
-that relates to the packages decision surface.
+**Path 2: Typed carrier for `PackageDetail`**
 
-**Sections cache invalidation:** The `OnceLock<Vec<ContextSection>>`
-in `AppState` (line 23 of handlers.rs) is initialized once. Since
-version changes come from the snapshot (immutable during a session),
-this is fine — the cache captures the correct data on first access.
+Add a `version_changes` field to the `ViewResponse` that carries
+structured data for the frontend, separate from the `ContextItem`
+display strings:
+
+```rust
+/// Wire-format version change for the frontend typed API.
+#[derive(Serialize)]
+pub struct VersionChangeEntry {
+    pub name: String,
+    pub arch: String,
+    pub host_version: String,
+    pub base_version: String,
+    pub host_epoch: String,
+    pub base_epoch: String,
+    pub direction: String,  // "upgrade" | "downgrade"
+}
+```
+
+The `ViewResponse` gains:
+```rust
+pub version_changes: Vec<VersionChangeEntry>,
+```
+
+This lets `PackageDetail` look up version-change data by `name.arch`
+without parsing subtitle strings from `ContextItem`.
+
+Add the new context section to `normalize_for_context()`. Position
+after "Services".
+
+**Epoch-aware rendering:**
+
+The `format_evr` helper renders epoch only when it is meaningful:
+
+```rust
+fn format_evr(epoch: &str, version_release: &str) -> String {
+    let epoch_num: u32 = epoch.parse().unwrap_or(0);
+    if epoch_num > 0 {
+        format!("{}:{}", epoch, version_release)
+    } else {
+        version_release.to_string()
+    }
+}
+```
+
+**Cross-epoch change detection:** When the epoch changes between
+host and base (even if version-release is identical), the rendered
+display must show both epochs to avoid the misleading
+`1.2-3 -> 1.2-3 (upgrade)` appearance. The `format_evr` function
+handles this: if either epoch is > 0, it is included in the display.
+Supplementary rule: if `host_epoch != base_epoch`, always show both
+epochs regardless of their numeric value:
+
+```rust
+fn format_evr_pair(
+    host_epoch: &str, host_vr: &str,
+    base_epoch: &str, base_vr: &str,
+) -> (String, String) {
+    let show_epoch = host_epoch != base_epoch
+        || host_epoch.parse::<u32>().unwrap_or(0) > 0
+        || base_epoch.parse::<u32>().unwrap_or(0) > 0;
+    if show_epoch {
+        (format!("{}:{}", base_epoch, base_vr),
+         format!("{}:{}", host_epoch, host_vr))
+    } else {
+        (base_vr.to_string(), host_vr.to_string())
+    }
+}
+```
+
+**Multiarch `name.arch` visible identity:** Both the Context section
+rows and the `PackageDetail` supplement display `name.arch` (e.g.,
+`glibc.x86_64`, `glibc.i686`). This prevents ambiguous rows on
+multilib hosts where the same package name may have different version
+drift on different architectures.
 
 ### Frontend Changes
 
 **`api/types.ts`:**
 
-No new types needed. The `ContextSection` and `ContextItem` interfaces
-already cover the wire format. The `VersionChangeDirection` type is
-not needed on the frontend — the direction is encoded in the subtitle
-string.
+```typescript
+/** Typed version change from the ViewResponse */
+export interface VersionChangeEntry {
+  name: string;
+  arch: string;
+  hostVersion: string;
+  baseVersion: string;
+  hostEpoch: string;
+  baseEpoch: string;
+  direction: "upgrade" | "downgrade";
+}
+
+/** Added to ViewResponse */
+export interface ViewResponse extends RefinedView {
+  repo_groups: RepoGroupInfo[];
+  leaf_dep_tree: Record<string, string[]>;
+  version_changes: VersionChangeEntry[];  // new typed carrier
+}
+```
 
 **`components/Sidebar.tsx`:**
 
@@ -479,48 +886,103 @@ const SECTION_LABELS: Record<string, string> = {
 };
 ```
 
-No routing changes needed — `MainContent` already renders any
+No routing changes needed -- `MainContent` already renders any
 non-decision section via `ContextList` when a matching section exists
 in the `sections` array.
+
+**Empty state:** The Version Changes section must distinguish two
+states:
+- **Zero drift:** Baseline is available but no packages have version
+  differences. Display: `"All packages match the target baseline
+  versions."` (positive signal -- no action needed).
+- **No baseline:** Baseline data was not available during collection.
+  Display: `"Version comparison requires a baseline. Configure a
+  baseline image to see version drift."` (actionable -- tells the
+  user what to do).
+
+The handler signals "no baseline" by omitting the section entirely
+from `normalize_for_context()` when `snap.baseline` is `None`. "Zero
+drift" is a section with zero items.
+
+**Section-local search/filter:** For the expected 20-80 row range of
+version changes, the existing `ContextList` search behavior (global
+`searchable_text` matching) is sufficient. The `searchable_text`
+field includes `name`, `arch`, `name.arch`, both versions, and the
+direction label, so users can find entries by any of these terms.
+
+No additional section-local filter control is needed in this slice.
+If the list regularly exceeds 80 rows in practice, a follow-up can
+add direction-based filtering (show upgrades only / downgrades only).
 
 **`components/PackageDetail.tsx`:**
 
 Add version info to the detail card for packages with
-`state: "modified"`. Display base version and change direction below
-the existing NEVRA and State fields.
+`state: "modified"`. The parent component looks up the package's
+`name.arch` in the typed `version_changes` array from `ViewResponse`
+and passes a `VersionChangeEntry` (or null) as a prop.
 
-This requires either:
-- Passing the `version_changes` data as a lookup prop to
-  `PackageDetail`, or
-- Including base version info directly in the `PackageEntry` type (a
-  larger change).
+Display below the existing NEVRA and State fields:
+- Label: "Base Version"
+- Value: epoch-aware formatted base version
+- Label: "Direction"
+- Value: "Upgrade" or "Downgrade" with appropriate visual indicator
 
-**Recommended approach:** Pass a `versionChange` prop of type
-`VersionChangeInfo | null` to `PackageDetail`:
+The `PackageDetail` component receives this as a typed prop, NOT by
+parsing `ContextItem` subtitle strings:
 
 ```typescript
-interface VersionChangeInfo {
-  baseVersion: string;
-  direction: string;  // "upgrade" | "downgrade"
+interface PackageDetailProps {
+  // ... existing props ...
+  versionChange?: VersionChangeEntry | null;
 }
 ```
 
-The parent (`DecisionItem` or `DecisionList`) looks up the package's
-`name.arch` in the `version_changes` context data and passes it down.
-
 ### Testing
 
-- Backend unit test: `classify_packages` with baseline that has
-  different EVR → `version_changes` populated with correct direction.
-- Backend unit test: same EVR → no version change entry.
-- Backend unit test: `normalize_version_changes` produces correct
-  ContextSection with subtitle format.
-- Frontend unit test: Version Changes section renders in sidebar with
-  correct count.
-- Frontend unit test: `PackageDetail` shows base version when
+**Collector (cross-surface contract proof):**
+- Unit test: `classify_packages` with baseline that has different EVR
+  -> `version_changes` populated with correct direction.
+- Unit test: same EVR -> no version change entry.
+- Unit test: epoch-only change (same version-release, different epoch)
+  -> `version_changes` entry with correct direction.
+- Unit test: multiarch -- same package name, different arches with
+  different version drift -> separate `VersionChange` entries for each.
+
+**Refine attention (cross-surface proof):**
+- Unit test: `classify_package` in `attention.rs` with populated
+  `version_changes` containing a downgrade -> package gets
+  `NeedsReview` attention.
+- Unit test: populated `version_changes` with upgrade -> package stays
+  `Routine`.
+- End-to-end: collect with real baseline -> refine -> verify
+  `needs_review_count` increases for downgraded packages vs. the
+  current behavior (empty `version_changes` defaults to routine).
+
+**Audit export (cross-surface proof):**
+- Unit test: `render_audit` with populated `version_changes` ->
+  output contains "Version Changes" table with correct columns.
+- Unit test: empty `version_changes` -> no "Version Changes" table
+  in audit output (existing behavior preserved).
+
+**Web handler:**
+- Unit test: `normalize_version_changes` produces `ContextSection`
+  with `name.arch` in title and epoch-aware subtitle.
+- Unit test: epoch-only change renders both epochs in subtitle to
+  avoid ambiguous `1.2-3 -> 1.2-3 (upgrade)`.
+- Unit test: `ViewResponse` includes typed `version_changes` array.
+
+**Frontend:**
+- Unit test: Version Changes section renders in sidebar with correct
+  count.
+- Unit test: empty state shows "All packages match" when section
+  exists with zero items.
+- Unit test: section is absent from sidebar when no baseline (section
+  not emitted by handler).
+- Unit test: `PackageDetail` shows base version and direction when
   `versionChange` prop is provided.
-- Frontend unit test: `PackageDetail` omits version info when prop is
-  null.
+- Unit test: `PackageDetail` omits version info when prop is null.
+- Unit test: multiarch -- `glibc.x86_64` and `glibc.i686` render as
+  distinct rows with visible `name.arch` identity.
 
 ---
 
@@ -530,24 +992,41 @@ The parent (`DecisionItem` or `DecisionList`) looks up the package's
 
 ```
 Collector (Rust)
-  ├─ RPM inspector
-  │   ├─ classify_packages() → version_changes  [Item 4 backend]
-  │   └─ classify_leaf_auto() → filtered leaf_packages  [Item 1]
-  └─ Services inspector → state_changes, enabled/disabled, drop_ins
-                                                          [unchanged]
+  |-- RPM inspector
+  |   |-- classify_packages() -> ClassificationResult
+  |   |   |-- packages: Vec<PackageEntry>
+  |   |   +-- version_changes: Vec<VersionChange>      [Item 4 backend]
+  |   +-- classify_leaf_auto() -> LeafClassification
+  |       |-- leaf_packages: Option<Vec<String>>
+  |       |-- auto_packages: Option<Vec<String>>       [unchanged semantics]
+  |       |-- leaf_dep_tree: serde_json::Value
+  |       +-- baseline_suppressed: Option<Vec<String>>  [Item 1 - NEW]
+  +-- Services inspector -> state_changes, enabled/disabled, drop_ins
+                                                        [unchanged]
 
 Web Handler (Rust)
-  ├─ /api/view → includes leaf_dep_tree  [Item 3 backend]
-  ├─ /api/snapshot/sections
-  │   ├─ normalize_services() → suppresses non-divergent units  [Item 2]
-  │   └─ normalize_version_changes() → new section  [Item 4 backend]
-  └─ unchanged endpoints
+  |-- /api/view
+  |   |-- leaf_dep_tree (gated by fleet check)          [Item 3]
+  |   +-- version_changes: Vec<VersionChangeEntry>      [Item 4 typed carrier]
+  |-- /api/snapshot/sections
+  |   |-- normalize_services() -> three-way contract    [Item 2]
+  |   +-- normalize_version_changes() -> new section    [Item 4]
+  +-- unchanged endpoints
+
+Refine (Rust, existing consumers affected by Item 4)
+  |-- attention.rs: version_changes -> upgrade/downgrade attention
+  +-- session.rs: baseline_suppressed added to leaf filter set  [Item 1]
+
+Pipeline (Rust, existing consumer affected by Item 4)
+  +-- audit.rs: version_changes -> "Version Changes" table
 
 Frontend (React)
-  ├─ Sidebar → adds "Version Changes" entry  [Item 4]
-  ├─ MainContent → routes version_changes to ContextList  [Item 4]
-  ├─ PackageDetail → "View Dependencies" button + version info  [Items 3, 4]
-  └─ DependencyModal → new component  [Item 3]
+  |-- Sidebar -> adds "Version Changes" entry             [Item 4]
+  |-- MainContent -> routes version_changes to ContextList [Item 4]
+  |-- PackageDetail
+  |   |-- "View Dependencies" button (fleet-gated)        [Item 3]
+  |   +-- version info from typed VersionChangeEntry      [Item 4]
+  +-- DependencyModal -> new component (a11y contract)     [Item 3]
 ```
 
 ### Dependency Order
@@ -555,23 +1034,32 @@ Frontend (React)
 Items 1 and 2 are independent bug fixes with no cross-dependencies.
 
 Item 3 (dep tree modal) depends only on `leaf_dep_tree` data already in
-the snapshot — no collector changes needed.
+the snapshot -- no collector changes needed. Requires the fleet scope
+guard in the handler.
 
-Item 4 (version changes) has a backend prerequisite: the Rust classifier
-must populate `version_changes` before the frontend can render them.
-The backend change (classifier + handler) ships first; the frontend
-follows.
+Item 4 (version changes) is a cross-surface contract change. The
+collector change affects attention.rs and audit.rs immediately. The
+backend change (classifier + handler) ships first; the frontend follows.
+**Critical: the attention and audit behavior changes must be verified
+before the frontend work begins.**
 
 Recommended implementation order:
-1. Item 2 (service noise fix) — smallest change, immediate UX win
-2. Item 1 (leaf classification) — bug fix, needs baseline threading
-3. Item 3 (dep tree modal) — frontend-only, no backend prerequisite
-4. Item 4 (version changes) — backend then frontend
+1. Item 2 (service noise fix) -- smallest change, immediate UX win
+2. Item 1 (leaf classification) -- bug fix, needs baseline threading
+   and new `baseline_suppressed` field
+3. Item 4 backend (classifier + handler + cross-surface proof) --
+   verify attention and audit behavior before frontend
+4. Item 3 (dep tree modal) -- frontend, needs fleet scope guard
+5. Item 4 frontend (sidebar section + PackageDetail supplement)
 
 ### API Contract Changes
 
 | Endpoint | Change | Breaking? |
 |---|---|---|
-| `/api/view` | Add `leaf_dep_tree` field | No (additive) |
-| `/api/snapshot/sections` | Add `version_changes` section; reduce services item count | No (additive + reduction) |
+| `/api/view` | Add `leaf_dep_tree` field (fleet-gated) | No (additive) |
+| `/api/view` | Add `version_changes` typed array | No (additive) |
+| `/api/snapshot/sections` | Add `version_changes` section; three-way services contract | No (additive + reduction) |
 | Snapshot JSON | `version_changes` populated instead of empty | No (field already in schema) |
+| Snapshot JSON | New `baseline_suppressed` field on `RpmSection` | No (additive, `Option`) |
+| Refine | `needs_review_count` may change for downgraded packages | Behavioral (correct) |
+| Audit | "Version Changes" table appears when field populated | Behavioral (correct) |
