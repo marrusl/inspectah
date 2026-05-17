@@ -114,6 +114,15 @@ export interface RefinedConfig {
   attention: AttentionTag[];
 }
 
+export interface BaselineSummary {
+  image_ref: string;
+  image_digest: string;
+  strategy: string;
+  baseline_count: number;
+  user_added_count: number;
+  review_count: number;
+}
+
 export interface RefineStats {
   total_packages: number;
   included_packages: number;
@@ -126,6 +135,7 @@ export interface RefineStats {
   ops_applied: number;
   can_undo: boolean;
   can_redo: boolean;
+  /** @deprecated Use baseline_summary instead. Kept for backward compatibility. */
   baseline_available: boolean;
 }
 
@@ -135,6 +145,7 @@ export interface RefinedView {
   containerfile_preview: string;
   stats: RefineStats;
   generation: number;
+  baseline_summary?: BaselineSummary;
 }
 
 /**
