@@ -67,7 +67,29 @@ Items 1-3 are bug fixes. Item 4 is a new UI surface requiring design input first
 
 ### User/Group Materialization (HIGH — brainstorm next)
 
-sysusers classification model, multi-strategy output (sysusers.d, useradd, kickstart). Brainstorm after leaf filter ships.
+Produce actionable output for migrating system and human accounts to image mode.
+
+**Three output buckets:**
+- **sysusers_ready** — passes all criteria, has a corresponding RPM with upstream sysusers.d snippet. Just ensure the package is in the bootc image.
+- **sysusers_candidate** — passes criteria but no upstream snippet. inspectah generates a proposed snippet.
+- **needs_review** — fails one or more criteria. Human user or customized service account needing migration planning.
+
+**Composite sysusers-eligible predicate (all five must pass):**
+1. UID < SYS_UID_MAX (usually 999, check /etc/login.defs)
+2. Shell in {nologin, false, sync, halt, shutdown}
+3. Home NOT in /home/*
+4. Password locked/empty in shadow (!! or *)
+5. Not in {root, nobody}
+
+**Strategy overrides in refine UI:** Each account can be switched between sysusers (default for system accounts), kickstart/blueprint TOML, or useradd (with warning about secrets in image layers). Dual output: produce BOTH kickstart AND blueprint TOML for selected accounts.
+
+**Open design question:** useradd strategy needs password hashes from shadow, but the redaction engine strips them at scan time. Three options: collect-time opt-in flag, re-read at export time, or accept the gap with a warning.
+
+**Edge cases:** group-only entries (supplementary memberships via `m` lines), UID/GID stability for persistent volume owners, non-RPM-sourced accounts (Docker, Ansible, manual useradd), reserved-but-unused accounts (already in setup's basic.conf).
+
+**Classification explainability:** Each account includes a plain-language explanation of WHY it was classified that way, not just the bucket.
+
+**Brainstorm team:** Fern (interaction design for override toggles), Collins (which strategy fits which account types in image mode). Full pre-spec details in PKA project memory.
 
 ### Package Group Detection (MEDIUM — future)
 
