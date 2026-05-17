@@ -89,6 +89,7 @@ fn test_users_inspector_happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = UsersGroupsInspector::new().inspect(&ctx);
@@ -166,6 +167,7 @@ fn test_users_inspector_shadow_strips_hashes() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = UsersGroupsInspector::new().inspect(&ctx);
@@ -211,6 +213,7 @@ fn test_users_inspector_gshadow_strips_passwords() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = UsersGroupsInspector::new().inspect(&ctx);
@@ -248,6 +251,7 @@ fn test_users_inspector_two_strategy_autodetect() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = UsersGroupsInspector::new().inspect(&ctx);
@@ -315,6 +319,7 @@ fn test_users_inspector_group_strategy_follows_user() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = UsersGroupsInspector::new().inspect(&ctx);
@@ -358,6 +363,7 @@ fn test_users_inspector_degraded_shadow() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = UsersGroupsInspector::new().inspect(&ctx);
@@ -394,6 +400,7 @@ fn test_users_inspector_json_roundtrip() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = UsersGroupsInspector::new().inspect(&ctx);

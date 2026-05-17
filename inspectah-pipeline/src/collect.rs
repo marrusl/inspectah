@@ -1,3 +1,4 @@
+use inspectah_core::baseline::BaselineData;
 use inspectah_core::pipeline::{Collected, Pipeline};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::executor::Executor;
@@ -24,6 +25,7 @@ pub fn collect(
     source: &SourceSystem,
     executor: &dyn Executor,
     inspectors: &[Box<dyn Inspector>],
+    baseline: Option<&BaselineData>,
 ) -> Pipeline<Collected> {
     let mut snapshot = InspectionSnapshot::new();
     let mut failed: Vec<InspectorId> = Vec::new();
@@ -78,6 +80,7 @@ pub fn collect(
         source_system: source,
         executor,
         rpm_state: None,
+        baseline_data: baseline,
     };
 
     // Wave 1: parallel execution via std::thread::scope.
@@ -120,6 +123,7 @@ pub fn collect(
             source_system: source,
             executor,
             rpm_state: wave2_rpm_state,
+            baseline_data: baseline,
         };
 
         // Wave 2 does not mutate rpm_state — it only reads it.
@@ -462,7 +466,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         // Pipeline produced a Collected state with rpm data
         assert!(pipeline.state.snapshot.rpm.is_some());
@@ -493,7 +497,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         // rpm section should be None (failed)
         assert!(pipeline.state.snapshot.rpm.is_none());
@@ -514,7 +518,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         // RPM routed correctly
         assert!(pipeline.state.snapshot.rpm.is_some());
@@ -532,7 +536,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
         let snap = &pipeline.state.snapshot;
 
         // os_release must be populated from the source system
@@ -574,7 +578,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
         let snap = &pipeline.state.snapshot;
 
         // os_release and system_type still set
@@ -603,7 +607,7 @@ mod tests {
             os_release: test_os_release(),
         };
         let inspectors: Vec<Box<dyn Inspector>> = vec![Box::new(RpmInspector::new())];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         assert_eq!(
             pipeline.state.snapshot.completeness,
@@ -620,7 +624,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(FailingInspector)];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         match &pipeline.state.snapshot.completeness {
             Completeness::Incomplete {
@@ -646,7 +650,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(DegradedInspector)];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         // Partial data should be routed
         assert!(
@@ -677,7 +681,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(SkippedInspector)];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         assert_eq!(
             pipeline.state.snapshot.completeness,
@@ -698,7 +702,7 @@ mod tests {
             Box::new(DegradedInspector),
             Box::new(SkippedInspector),
         ];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         match &pipeline.state.snapshot.completeness {
             Completeness::Incomplete {
@@ -776,7 +780,7 @@ mod tests {
         };
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(HintingInspector)];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         assert_eq!(
             pipeline.state.snapshot.redaction_hints.len(),
@@ -801,7 +805,7 @@ mod tests {
             Box::new(RpmInspector::new()),
             Box::new(DegradedWithHintsInspector),
         ];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         assert_eq!(
             pipeline.state.snapshot.redaction_hints.len(),
@@ -907,7 +911,7 @@ mod tests {
         let (probe, flag) = Wave2ProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         // The probe should have been called (it's a Wave 2 inspector)
         let received = flag.lock().unwrap();
@@ -942,7 +946,7 @@ mod tests {
         let (probe, flag) = Wave2ProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let _pipeline = collect(&source, &exec, &inspectors);
+        let _pipeline = collect(&source, &exec, &inspectors, None);
 
         // The probe should have received None (RPM failed)
         let received = flag.lock().unwrap();
@@ -964,7 +968,7 @@ mod tests {
         let (probe, _flag) = Wave2ProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         // RPM section should be present with packages
         let rpm = pipeline.state.snapshot.rpm.as_ref().unwrap();
@@ -1074,7 +1078,7 @@ pam\t/etc/security/limits.conf
         let (probe, captured) = OwnershipProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let pipeline = collect(&source, &exec, &inspectors);
+        let pipeline = collect(&source, &exec, &inspectors, None);
 
         // RPM section should contain file_ownership data
         let rpm = pipeline
@@ -1191,7 +1195,7 @@ bash\t/etc/profile.d/bash_completion.sh
         let (probe, captured) = OwnershipProbeInspector::new();
         let inspectors: Vec<Box<dyn Inspector>> =
             vec![Box::new(RpmInspector::new()), Box::new(probe)];
-        let _pipeline = collect(&source, &exec, &inspectors);
+        let _pipeline = collect(&source, &exec, &inspectors, None);
 
         let rpm_state = captured
             .lock()

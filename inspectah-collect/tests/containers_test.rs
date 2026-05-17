@@ -131,6 +131,7 @@ fn test_containers_inspector_happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = ContainersInspector::new().inspect(&ctx);
@@ -221,6 +222,7 @@ fn test_containers_inspector_empty_system() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = ContainersInspector::new().inspect(&ctx);
@@ -293,6 +295,7 @@ fn test_containers_inspector_degraded_podman() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = ContainersInspector::new().inspect(&ctx);
@@ -324,6 +327,7 @@ fn test_containers_inspector_json_roundtrip() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = ContainersInspector::new().inspect(&ctx);

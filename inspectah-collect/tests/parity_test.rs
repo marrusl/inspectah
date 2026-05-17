@@ -172,6 +172,7 @@ fn test_services_inspector_correctness() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = ServicesInspector::new()
@@ -229,6 +230,7 @@ fn test_storage_inspector_vs_golden() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = StorageInspector::new()
@@ -289,6 +291,7 @@ fn test_kernelboot_inspector_correctness() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new()

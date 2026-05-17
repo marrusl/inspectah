@@ -1,3 +1,4 @@
+use crate::baseline::BaselineData;
 use crate::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use crate::types::redaction::RedactionHint;
 use crate::types::rpm::{EnabledModuleStream, PackageEntry, RpmVaEntry};
@@ -20,6 +21,7 @@ pub struct InspectionContext<'a> {
     pub source_system: &'a SourceSystem,
     pub executor: &'a dyn crate::traits::executor::Executor,
     pub rpm_state: Option<&'a RpmState>,
+    pub baseline_data: Option<&'a BaselineData>,
 }
 
 /// Read-only RPM state provided to non-RPM inspectors during two-phase collection.

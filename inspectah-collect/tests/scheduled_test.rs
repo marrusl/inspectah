@@ -88,6 +88,7 @@ fn test_scheduled_inspector_happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = ScheduledTasksInspector::new()
@@ -177,6 +178,7 @@ fn test_scheduled_inspector_cron_not_found() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = ScheduledTasksInspector::new()
@@ -209,6 +211,7 @@ fn test_scheduled_inspector_degraded_permissions() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let result = ScheduledTasksInspector::new().inspect(&ctx);
@@ -258,6 +261,7 @@ fn test_reboot_entry_no_fake_timer() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = ScheduledTasksInspector::new()
@@ -326,6 +330,7 @@ fn test_scheduled_inspector_json_roundtrip() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = ScheduledTasksInspector::new()

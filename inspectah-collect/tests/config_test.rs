@@ -183,6 +183,7 @@ fn test_config_inspector_happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = ConfigInspector::new()
@@ -262,6 +263,7 @@ fn test_config_inspector_no_etc() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = ConfigInspector::new()
@@ -290,6 +292,7 @@ fn test_config_inspector_degraded_permissions() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let result = ConfigInspector::new().inspect(&ctx);
@@ -322,6 +325,7 @@ fn test_config_inspector_json_roundtrip() {
         source_system: &source,
         executor: &exec,
         rpm_state: Some(&rpm_state),
+        baseline_data: None,
     };
 
     let output = ConfigInspector::new()

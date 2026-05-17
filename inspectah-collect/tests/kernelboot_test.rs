@@ -107,6 +107,7 @@ fn happy_path() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new().inspect(&ctx).unwrap();
@@ -156,6 +157,7 @@ fn sysctl_three_way_diff() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new().inspect(&ctx).unwrap();
@@ -227,6 +229,7 @@ fn lsmod_failure_returns_degraded() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = KernelbootInspector::new().inspect(&ctx);
@@ -282,6 +285,7 @@ fn partial_failure_dracut_unreadable() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let result = KernelbootInspector::new().inspect(&ctx);
@@ -337,6 +341,7 @@ fn tuned_not_installed() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new().inspect(&ctx).unwrap();
@@ -385,6 +390,7 @@ fn config_snippet_with_secret() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new().inspect(&ctx).unwrap();
@@ -437,6 +443,7 @@ fn cmdline_with_password() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new().inspect(&ctx).unwrap();
@@ -482,6 +489,7 @@ fn empty_system() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new().inspect(&ctx).unwrap();
@@ -517,6 +525,7 @@ fn kernelboot_snapshot() {
         source_system: &source,
         executor: &exec,
         rpm_state: None,
+        baseline_data: None,
     };
 
     let output = KernelbootInspector::new().inspect(&ctx).unwrap();
