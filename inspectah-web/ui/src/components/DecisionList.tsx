@@ -581,9 +581,18 @@ export function DecisionList({
           }
 
           const repo = part.repo!;
+          const isDisabled = !repo.enabled;
           const hasNeedsReview = part.needsReview.length > 0;
           const hasInfo = part.informational.length > 0;
           const allRoutine = !hasNeedsReview && !hasInfo;
+
+          // For disabled repos, count visible include:false rows instead of backend package_count
+          const headerPackageCount = isDisabled
+            ? part.items.filter((item) => item.type === "package" && !item.data.entry.include).length
+            : repo.package_count;
+          const effectiveRg = isDisabled
+            ? { ...repo, package_count: headerPackageCount }
+            : repo;
 
           // Determine filter-expansion: only groups containing matching items
           const groupFilterExpanded = filterActive && part.items.length > 0;
@@ -592,13 +601,16 @@ export function DecisionList({
 
           // Determine display props for header
           const infoCount = !hasNeedsReview && hasInfo ? part.informational.length : undefined;
-          const summaryText = allRoutine ? "No action needed" : undefined;
+          const summaryText = allRoutine && !isDisabled ? "No action needed" : undefined;
+
+          // Disabled repos always start collapsed
+          const defaultExpanded = isDisabled ? false : hasNeedsReview || hasInfo;
 
           return (
             <RepoGroup
               key={part.sectionId}
-              repo={repo}
-              defaultExpanded={hasNeedsReview || hasInfo}
+              repo={effectiveRg}
+              defaultExpanded={defaultExpanded}
               forceExpanded={groupFilterExpanded}
               infoCount={infoCount}
               summaryText={summaryText}
@@ -621,7 +633,7 @@ export function DecisionList({
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
-                    onToggleInclude={handleToggle}
+                    onToggleInclude={isDisabled ? undefined : handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
                   />
@@ -641,7 +653,7 @@ export function DecisionList({
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
-                    onToggleInclude={handleToggle}
+                    onToggleInclude={isDisabled ? undefined : handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
                   />
@@ -653,7 +665,7 @@ export function DecisionList({
                   items={part.routine}
                   forceExpanded={routineFilterExpanded}
                   revealItemId={revealItemId}
-                  onToggleInclude={handleToggle}
+                  onToggleInclude={isDisabled ? undefined : handleToggle}
                   onMarkViewed={markAsViewed}
                   viewedIds={viewedIds}
                   isPending={mutation.isPending}

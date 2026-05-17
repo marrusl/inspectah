@@ -1987,6 +1987,67 @@ describe("Repo-first package grouping", () => {
   });
 });
 
+// ---- Disabled repo behavior tests ----
+
+describe("Disabled repo behavior", () => {
+  it("disabled repos sort after enabled repos", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false },
+      { section_id: "baseos", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "epel-pkg", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "baseos-pkg", source_repo: "baseos" }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    const wrappers = screen.getAllByTestId(/^repo-group-wrapper-/);
+    expect(wrappers[0]).toHaveAttribute("data-testid", "repo-group-wrapper-baseos");
+    expect(wrappers[1]).toHaveAttribute("data-testid", "repo-group-wrapper-epel");
+  });
+
+  it("disabled repo header count matches visible include:false rows, not backend package_count", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 10, enabled: false },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
+      { type: "package", data: makePkg({ name: "pkg2", source_repo: "epel", include: false }, [ROUTINE_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    expect(screen.getByText(/2 packages excluded/)).toBeInTheDocument();
+    expect(screen.queryByText(/10 packages excluded/)).not.toBeInTheDocument();
+  });
+
+  it("disabled repos start collapsed because they are disabled", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    expect(screen.queryByText("pkg1.x86_64")).not.toBeInTheDocument();
+  });
+
+  it("hides per-package toggles in disabled repos when expanded", async () => {
+    const repoGroups: RepoGroupInfo[] = [
+      { section_id: "epel", provenance: "verified", is_distro: false, package_count: 1, enabled: false },
+    ];
+    const items: DecisionItemKind[] = [
+      { type: "package", data: makePkg({ name: "pkg1", source_repo: "epel", include: false }, [NEEDS_REVIEW_TAG]) },
+    ];
+    render(<DecisionList items={items} sectionLabel="Packages" repoGroups={repoGroups} onViewUpdate={vi.fn()} onMutationError={vi.fn()} />);
+    await waitFor(() => { expect(mockFetch).toHaveBeenCalled(); });
+    const chevron = screen.getByTestId("repo-group-epel").querySelector(".inspectah-repo-group-header__chevron")!;
+    await userEvent.click(chevron as HTMLElement);
+    expect(screen.getByText("pkg1.x86_64")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /toggle pkg1/i })).not.toBeInTheDocument();
+  });
+});
+
 // ---- Updated RepoGroupHeader tests ----
 
 describe("RepoGroupHeader updated labels", () => {

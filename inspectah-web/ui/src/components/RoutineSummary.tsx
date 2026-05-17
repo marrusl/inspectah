@@ -12,7 +12,7 @@ export interface RoutineSummaryProps {
   /** When set, auto-expands if this item ID is in the list */
   revealItemId?: string;
   /** Callback for include/exclude toggle on expanded items */
-  onToggleInclude: (op: RefinementOp) => void;
+  onToggleInclude?: (op: RefinementOp) => void;
   /** Callback for marking items as viewed */
   onMarkViewed: (id: string) => void;
   /** Set of already-viewed item IDs */

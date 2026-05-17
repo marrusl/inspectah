@@ -26,7 +26,7 @@ export interface DecisionItemProps {
   isViewed: boolean;
   isPending: boolean;
   tabIndex?: number;
-  onToggleInclude: (op: RefinementOp) => void;
+  onToggleInclude?: (op: RefinementOp) => void;
   onMarkViewed: (id: string) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
 }
@@ -82,6 +82,7 @@ export function DecisionItem({
   const showUnviewedDot = isNeedsReview && !isViewed;
 
   const handleToggle = useCallback(() => {
+    if (!onToggleInclude) return;
     const op = buildToggleOp(item);
     onToggleInclude(op);
     onMarkViewed(id);
@@ -138,16 +139,18 @@ export function DecisionItem({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
-            <Switch
-              id={`switch-${id}`}
-              label={included ? "Include" : "Exclude"}
-              isChecked={included}
-              onChange={handleToggle}
-              isDisabled={isPending}
-              aria-label={`Toggle ${name}`}
-            />
-          </div>
+          {onToggleInclude && (
+            <div role="gridcell" style={{ flexShrink: 0 }}>
+              <Switch
+                id={`switch-${id}`}
+                label={included ? "Include" : "Exclude"}
+                isChecked={included}
+                onChange={handleToggle}
+                isDisabled={isPending}
+                aria-label={`Toggle ${name}`}
+              />
+            </div>
+          )}
           <div role="gridcell" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
             {showUnviewedDot && (
               <span
@@ -232,16 +235,18 @@ export function DecisionItem({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "var(--pf-t--global--spacer--sm)" }}>
-          <div role="gridcell" style={{ flexShrink: 0 }}>
-            <Switch
-              id={`switch-${id}`}
-              label={included ? "Include" : "Exclude"}
-              isChecked={included}
-              onChange={handleToggle}
-              isDisabled={isPending}
-              aria-label={`Toggle ${name}`}
-            />
-          </div>
+          {onToggleInclude && (
+            <div role="gridcell" style={{ flexShrink: 0 }}>
+              <Switch
+                id={`switch-${id}`}
+                label={included ? "Include" : "Exclude"}
+                isChecked={included}
+                onChange={handleToggle}
+                isDisabled={isPending}
+                aria-label={`Toggle ${name}`}
+              />
+            </div>
+          )}
           <div role="gridcell" style={{ flex: 1, minWidth: 0 }}>
             <span>{name}</span>
           </div>
@@ -303,16 +308,18 @@ export function DecisionItem({
         borderBottom: "1px solid var(--pf-t--global--border--color--default)",
       }}
     >
-      <div role="gridcell" style={{ flexShrink: 0 }}>
-        <Switch
-          id={`switch-${id}`}
-          label={included ? "Include" : "Exclude"}
-          isChecked={included}
-          onChange={handleToggle}
-          isDisabled={isPending}
-          aria-label={`Toggle ${name}`}
-        />
-      </div>
+      {onToggleInclude && (
+        <div role="gridcell" style={{ flexShrink: 0 }}>
+          <Switch
+            id={`switch-${id}`}
+            label={included ? "Include" : "Exclude"}
+            isChecked={included}
+            onChange={handleToggle}
+            isDisabled={isPending}
+            aria-label={`Toggle ${name}`}
+          />
+        </div>
+      )}
       <div role="gridcell" style={{ flex: 1, minWidth: 0 }}>
         <span>{name}</span>
       </div>
