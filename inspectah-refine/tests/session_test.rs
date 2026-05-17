@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{PackageTarget, RefineError, RefinementOp};
 
@@ -663,4 +663,67 @@ fn test_exclude_repo_undo_redo() {
     session.redo().unwrap();
     assert!(!session.view().packages.iter()
         .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+}
+
+#[test]
+fn test_exclude_repo_case_insensitive() {
+    // Build a snapshot where packages have source_repo in mixed case ("Epel-Testing")
+    // but ExcludeRepo uses lowercase ("epel-testing"). The exclude must still match.
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "Epel-Testing".into(), // Mixed case
+            include: true,
+            ..Default::default()
+        }],
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/epel-testing.repo".into(),
+            content: "[epel-testing]\nname=EPEL Testing\n".into(),
+            include: true,
+            ..Default::default()
+        }],
+        baseline_package_names: Some(vec![]),
+        ..Default::default()
+    });
+    let mut session = RefineSession::new(snap);
+    // ExcludeRepo with lowercase section_id (as the UI sends after RepoIndex lowercasing)
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel-testing".into() }).unwrap();
+    let projected = session.snapshot_projected();
+    let httpd = projected.rpm.as_ref().unwrap().packages_added.iter()
+        .find(|p| p.name == "httpd").unwrap();
+    assert!(!httpd.include, "ExcludeRepo must match case-insensitively");
+}
+
+#[test]
+fn test_include_repo_case_insensitive() {
+    // Verify IncludeRepo also works case-insensitively after an ExcludeRepo
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "nginx".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "Epel-Testing".into(),
+            include: true,
+            ..Default::default()
+        }],
+        repo_files: vec![RepoFile {
+            path: "/etc/yum.repos.d/epel-testing.repo".into(),
+            content: "[epel-testing]\nname=EPEL Testing\ngpgcheck=1\ngpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-EPEL\n".into(),
+            include: true,
+            ..Default::default()
+        }],
+        baseline_package_names: Some(vec![]),
+        ..Default::default()
+    });
+    let mut session = RefineSession::new(snap);
+    session.apply(RefinementOp::ExcludeRepo { section_id: "epel-testing".into() }).unwrap();
+    session.apply(RefinementOp::IncludeRepo { section_id: "epel-testing".into() }).unwrap();
+    let projected = session.snapshot_projected();
+    let nginx = projected.rpm.as_ref().unwrap().packages_added.iter()
+        .find(|p| p.name == "nginx").unwrap();
+    assert!(nginx.include, "IncludeRepo must match case-insensitively after ExcludeRepo");
 }

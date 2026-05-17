@@ -423,9 +423,9 @@ impl RefineSession {
                     let excluded_sections = self.excluded_sections_at(&snap);
 
                     if let Some(ref mut rpm) = snap.rpm {
-                        // 1. Exclude all packages from this repo
+                        // 1. Exclude all packages from this repo (case-insensitive)
                         for pkg in &mut rpm.packages_added {
-                            if pkg.source_repo == *section_id {
+                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
                                 pkg.include = false;
                             }
                         }
@@ -464,9 +464,9 @@ impl RefineSession {
                 }
                 RefinementOp::IncludeRepo { section_id } => {
                     if let Some(ref mut rpm) = snap.rpm {
-                        // 1. Include all packages from this repo
+                        // 1. Include all packages from this repo (case-insensitive)
                         for pkg in &mut rpm.packages_added {
-                            if pkg.source_repo == *section_id {
+                            if pkg.source_repo.eq_ignore_ascii_case(section_id) {
                                 pkg.include = true;
                             }
                         }
