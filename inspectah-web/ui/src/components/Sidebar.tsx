@@ -27,7 +27,7 @@ const CONTEXT_SECTIONS = [
   { id: "scheduled_tasks", label: "Scheduled Tasks" },
   { id: "non_rpm_software", label: "Non-RPM Software" },
   { id: "kernel_boot", label: "Kernel & Boot" },
-  { id: "selinux", label: "SELinux" },
+  { id: "selinux", label: "Security & Access Control" },
 ];
 
 export interface SidebarProps {
