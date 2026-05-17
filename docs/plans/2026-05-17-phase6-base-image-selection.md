@@ -41,7 +41,7 @@ When `target_image` is `null` (resolution failed in `--no-baseline` mode), the C
 | File | Responsibility |
 |------|---------------|
 | `inspectah-core/src/baseline.rs` | `BaseImageResolution`, `ResolutionStrategy`, `NormalizedImageRef`, `BaselineData`, `BaselinePackageEntry`, `TargetImageIdentity`, `IncompatibleServiceEntry`, `UblueMetadata`, `resolve_base_image()`, `normalize_image_ref()`, `clamp_version()`, version floor constants, incompatible services constant |
-| `inspectah-collect/src/baseline.rs` | `extract_baseline()` — nsenter + podman orchestration with entrypoint override, container lifecycle, NEVRA parsing, repository-side digest capture |
+| `inspectah-collect/src/baseline.rs` | `extract_baseline()` — nsenter + podman orchestration with entrypoint override, container lifecycle, NEVRA parsing, repository-side digest capture. Returns `BaselineData` (digest + packages + timestamp, no ref — ref lives in `TargetImageIdentity`) |
 | `inspectah-collect/tests/baseline_test.rs` | Extraction tests: NEVRA parsing, exact `--entrypoint`/`--network none` arg assertion, command ordering proof, cleanup across all failure points, mixed-arch baseline keys, digest capture from image (not container) |
 | `inspectah-refine/src/baseline_summary.rs` | `BaselineSummary` derivation from classification counts (not mutable `include` state) |
 
@@ -78,8 +78,10 @@ Create `inspectah-core/src/baseline.rs` with all types from the spec:
 - `BaseImageResolution` struct (raw `image_ref` + `strategy`)
 - `NormalizedImageRef` struct (private `ref_string` field, `from_validated()` constructor, `as_str()` accessor, `Display` impl)
 - `BaselinePackageEntry` struct (name, epoch, version, release, arch)
-- `BaselineData` struct (resolution, normalized_ref, image_digest, packages HashMap, extracted_at)
-- `TargetImageIdentity` struct — stores the **normalized** ref string + strategy. This is what gets persisted in the snapshot.
+- `BaselineData` struct (image_digest, packages HashMap, extracted_at). **No `normalized_ref` field** — the canonical ref lives in `TargetImageIdentity` only, avoiding a second carrier.
+- `TargetImageIdentity` struct — stores the **normalized** ref string + strategy. This is the single authoritative image identity field in the snapshot. `BaselineData` does not duplicate it.
+
+**Invariant:** `target_image.image_ref` is the one canonical ref. `BaselineData` carries extraction results (digest, packages, timestamp) but not the ref itself. When baseline data is present, `target_image` is always also present — the legal state table enforces this.
 - `IncompatibleServiceEntry` struct (unit, reason) and `INCOMPATIBLE_SERVICES` constant (4 entries)
 - `UblueMetadata` struct with serde rename for `image-ref`, `image-tag`, `image-name`, `image-vendor`
 - Version floor constants:
@@ -223,7 +225,7 @@ git commit -m "feat(core): add ref normalization with registry hostname validati
 - `target_image.image_ref` stores the **normalized** ref (this is verified by setting it from `NormalizedImageRef.as_str()` and asserting it back)
 - Degraded snapshot: `target_image` present, `baseline` null, `no_baseline = true` — roundtrips
 - Degraded snapshot with null `target_image`: both null, `no_baseline = true` — roundtrips
-- **Pre-Phase-6 migration:** snapshot with `schema_version: 14` and no `target_image`/`baseline`/`no_baseline` fields deserializes via `serde(default)`, then `migrate()` sets `schema_version = 15`. Result: `target_image = None`, `baseline = None`, `no_baseline = false` (serde default). The refine layer interprets missing `target_image` + missing `baseline` + `no_baseline = false` as a legacy snapshot and enters degraded mode for display.
+- **Pre-Phase-6 migration:** snapshot with `schema_version: 14` and no `target_image`/`baseline`/`no_baseline` fields deserializes via `serde(default)` (all `None`/`false`), then `migrate()` sets `schema_version = 15` AND sets `no_baseline = true`. This is explicit: a legacy snapshot has no baseline data, so `no_baseline = true` is the honest state. No refine-layer heuristic needed.
 
 - [ ] **Step 2: Add fields to `InspectionSnapshot`**
 
@@ -241,7 +243,20 @@ pub baseline: Option<crate::baseline::BaselineData>,
 pub no_baseline: bool,
 ```
 
-Migration: `serde(default)` handles missing fields. `migrate()` bumps version to 15. No special migration logic needed — the defaults produce a valid legacy state.
+Migration: `serde(default)` handles missing fields (all `None`/`false`). `migrate()` bumps version to 15 AND sets `no_baseline = true` when `baseline` is `None` and `no_baseline` is `false` (the serde default for a pre-Phase-6 snapshot). This ensures legacy snapshots enter degraded mode explicitly, not via refine-layer heuristics.
+
+```rust
+pub fn migrate(snap: &mut InspectionSnapshot) {
+    if snap.schema_version >= SCHEMA_VERSION {
+        return;
+    }
+    // v14→v15: legacy snapshots have no baseline data — mark explicitly
+    if snap.schema_version <= 14 && snap.baseline.is_none() && !snap.no_baseline {
+        snap.no_baseline = true;
+    }
+    snap.schema_version = SCHEMA_VERSION;
+}
+```
 
 - [ ] **Step 3: Run tests**
 
@@ -275,9 +290,9 @@ git commit -m "feat(core): add target_image and baseline to snapshot, bump schem
 
 In `inspectah-collect/tests/baseline_test.rs`:
 
-**Happy path:** Mock executor returns success for pull → create → start → exec (NEVRA output) → rm. Verify packages parsed correctly, digest captured.
+**Happy path:** Mock executor returns success for pull → create → start → exec (NEVRA output) → rm, plus a separate image inspect for digest. `extract_baseline` takes `&NormalizedImageRef` (not the full resolution struct — the ref is the only thing needed for podman commands). Verify packages parsed correctly, digest captured.
 
-**Command ordering proof:** Assert the exact sequence: pull, create, start, exec (rpm -qa), rm. `podman inspect` for digest runs SEPARATELY on the image (not the container) — assert this is a `podman inspect <image_ref>` call, not `podman inspect <container>`.
+**Command ordering proof:** Assert the exact sequence: pull, create, start, exec (rpm -qa), rm. `podman inspect` for digest runs SEPARATELY on the IMAGE object (not the container) — assert this is a `podman inspect <image_ref>` call, not `podman inspect <container>`.
 
 **Exact arg assertion:** Verify the `podman create` command includes:
 - `--entrypoint` with `["sleep", "infinity"]`
@@ -329,24 +344,32 @@ git commit -m "feat(collect): baseline extraction with entrypoint override, dige
 
 **Files:**
 - Modify: `inspectah-collect/src/inspectors/rpm/classifier.rs`
+- Modify: `inspectah-collect/src/inspectors/rpm/mod.rs`
+- Modify: `inspectah-pipeline/src/collect.rs`
+
+**Typed handoff boundary:** `BaselineData` flows from the CLI into the collect pipeline via `inspectah-pipeline/src/collect.rs`'s `collect()` function, which already accepts configuration and the executor. Add `baseline: Option<&BaselineData>` to `collect()`'s parameters. `collect()` passes `baseline.map(|b| &b.packages)` to the RPM inspector. The RPM inspector (`inspectah-collect/src/inspectors/rpm/mod.rs`) passes it to the classifier (`classifier.rs`). This is the same pattern used for `source_repos` threading.
 
 - [ ] **Step 1: Write classifier tests with baseline data**
 
-Test that when `BaselineData` is provided to the RPM classifier:
-- A package present in `BaselineData.packages` (by `name.arch` key) gets `PackageState::Added` with `include: true` (baseline match — the refine layer will assign attention)
-- A package in `BaselineData.packages` with a different version gets `PackageState::Modified`
-- A package NOT in `BaselineData.packages` but from a recognized repo keeps `PackageState::Added`
-- The `base_image_only` partition is populated from `BaselineData.packages` entries not found on the host
-- Without `BaselineData`, behavior is identical to Phase 5 (no regression)
+Test that when `baseline_packages: Option<&HashMap<String, BaselinePackageEntry>>` is provided to the RPM classifier:
+- A package present in baseline (by `name.arch` key) with same EVR gets `PackageState::Added` with `include: true`
+- A package in baseline with different EVR gets `PackageState::Modified`
+- A package NOT in baseline but from a recognized repo keeps `PackageState::Added`
+- The `base_image_only` partition is populated from baseline entries not found on the host
+- Without baseline (`None`), behavior is identical to Phase 5 (no regression)
 
 - [ ] **Step 2: Wire `BaselineData` into the classifier**
 
-The RPM classifier currently assigns `PackageState` based on host-only data. Add an optional `baseline_packages: Option<&HashMap<String, BaselinePackageEntry>>` parameter. When present:
+The RPM classifier currently assigns `PackageState` based on host-only data. Add `baseline_packages: Option<&HashMap<String, BaselinePackageEntry>>` to the classify function. When present:
 - Check each host package against baseline by `name.arch` key
-- If present with same EVR → `PackageState::Added` (the attention layer handles the rest)
+- If present with same EVR → `PackageState::Added`
 - If present with different EVR → `PackageState::Modified`
 - Populate `base_image_only` from baseline entries not found on host
 - When `None`, existing Phase 5 behavior unchanged
+
+- [ ] **Step 3: Thread through the collect pipeline**
+
+Update `inspectah-pipeline/src/collect.rs`'s `collect()` to accept `baseline: Option<&BaselineData>` and pass `baseline.map(|b| &b.packages)` to the RPM inspector. Update `inspectah-collect/src/inspectors/rpm/mod.rs`'s `inspect()` to accept and forward the baseline packages map.
 
 This ensures the snapshot's `packages_added` vs `base_image_only` partition reflects baseline truth at collection time, not just at attention-assignment time.
 
@@ -482,7 +505,13 @@ Add test: create a `BaselineSummary`, apply include/exclude ops to the session, 
 
 `RefineSession::baseline_summary()` delegates to `derive_baseline_summary()`.
 
-`ViewResponse` gains `baseline_summary: Option<BaselineSummary>`. Web handler calls `session.baseline_summary()` — does NOT derive independently.
+`ViewResponse` gains `baseline_summary: Option<BaselineSummary>`. Web handler calls `session.baseline_summary()` — does NOT derive independently. If the existing `ViewResponse` or web frontend has a separate `baseline_available` boolean or similar signal, **retire it** and replace all reads with `baseline_summary.is_some()`. One signal, one truth path.
+
+**Incompatible service carrier:** The normalized `ServiceStateChange` entry carries `include: false` + `attention_reason: "service-image-mode-incompatible"` + `reason: "..."` as serialized fields. This is the single carrier for all surfaces:
+- Containerfile renderer reads `include == false` to exclude from `systemctl enable`
+- Web UI reads `attention_reason` to render the incompatible badge
+- Export tarball reads the same projected snapshot that preview uses
+No surface re-derives incompatibility from the constant list independently — all read the already-normalized entry.
 
 - [ ] **Step 5: Run tests**
 
@@ -521,42 +550,41 @@ pub no_baseline: bool,
 
 - [ ] **Step 3: Wire resolution + extraction + progress**
 
-```
+```rust
 // 1. Resolve
 eprintln!("Resolving target image...");
-let resolution = resolve_base_image(&os_release, ublue.as_ref(), bootc_ref.as_deref(), args.base_image.as_deref());
+let resolution_result = resolve_base_image(
+    &os_release, ublue.as_ref(), bootc_ref.as_deref(), args.base_image.as_deref(),
+);
 
-// 2. Handle resolution result
-let (target_image, normalized) = match resolution {
+// 2. Handle resolution result — produce target_image and normalized ref
+let (target_image, normalized_ref) = match resolution_result {
     Ok(res) => {
         let norm = normalize_image_ref(&res.image_ref)?;
-        eprintln!("Resolving target image... {} ({})", norm.as_str(), /* strategy */);
+        eprintln!("  {} ({})", norm.as_str(), res.strategy_label());
         let ti = TargetImageIdentity {
             image_ref: norm.as_str().to_string(),  // NORMALIZED ref persisted
-            strategy: res.strategy.clone(),
+            strategy: res.strategy,
         };
         (Some(ti), Some(norm))
     }
-    Err(e) => {
-        if args.no_baseline {
-            eprintln!("Resolving target image... not found ({}), continuing without baseline", e);
-            (None, None)  // target_image = null, FROM will be omitted
-        } else {
-            return Err(e.into());  // fail fast in normal mode
-        }
+    Err(e) if args.no_baseline => {
+        eprintln!("  not found ({}), continuing without baseline", e);
+        (None, None)  // target_image = null, FROM will be omitted
     }
+    Err(e) => return Err(e.into()),  // fail fast in normal mode
 };
 
-// 3. Extract (only if not --no-baseline and resolution succeeded)
-let baseline_data = if !args.no_baseline {
-    let norm = normalized.as_ref().unwrap();
-    eprintln!("Pulling target image...");
-    let data = extract_baseline(&executor, resolution.as_ref().unwrap(), norm)?;
-    eprintln!("Pulling target image... done");
-    eprintln!("Extracting baseline... {} packages", data.packages.len());
-    Some(data)
-} else {
-    None
+// 3. Extract baseline (only when baseline mode is active and resolution succeeded)
+let baseline_data = match (&normalized_ref, args.no_baseline) {
+    (Some(norm), false) => {
+        eprintln!("Pulling target image...");
+        let data = extract_baseline(&executor, norm)?;
+        eprintln!("Pulling target image... done");
+        eprintln!("Extracting baseline... {} packages", data.packages.len());
+        Some(data)
+    }
+    _ => None,
 };
 
 // 4. Set snapshot fields
@@ -565,7 +593,11 @@ snapshot.baseline = baseline_data;
 snapshot.no_baseline = args.no_baseline;
 ```
 
-Key: resolution failure in `--no-baseline` mode sets `target_image = None` (not swallowed with `.ok()`). The result is explicit: no target image → FROM omitted.
+Key design points:
+- `resolution_result` is consumed once in the match — no lingering borrows
+- `extract_baseline` takes `&NormalizedImageRef` (not the resolution struct — the ref is the only thing it needs)
+- Resolution failure in `--no-baseline` mode sets `target_image = None` explicitly
+- Normal mode resolution failure aborts immediately
 
 - [ ] **Step 4: Add progress output for host scan**
 
@@ -595,11 +627,30 @@ git commit -m "feat(cli): add --base-image and --no-baseline with normalized-ref
 ## Task 10: Web UI Verification Banner
 
 **Files:**
-- Modify: `inspectah-web/frontend/src/` (banner component)
+- Modify: `inspectah-web/ui/src/api/types.ts` — add `BaselineSummary` TypeScript type and add field to `ViewResponse` type
+- Modify: `inspectah-web/ui/src/components/MainContent.tsx` — render the verification/degraded banner in the packages section header
+- Modify: `inspectah-web/ui/src/hooks/useView.ts` — thread `baseline_summary` from API response if not already handled by the generic `ViewResponse` type
 
-- [ ] **Step 1: Add banner rendering**
+If an existing `baseline_available` boolean or similar signal exists in `types.ts` or `useView.ts`, **retire it** — all consumers switch to `baseline_summary != null`. One signal.
 
-In the Packages section header, read `baseline_summary` from API response:
+- [ ] **Step 1: Add `BaselineSummary` type to `types.ts`**
+
+```typescript
+export interface BaselineSummary {
+  image_ref: string;
+  image_digest: string;
+  strategy: string;
+  baseline_count: number;
+  user_added_count: number;
+  review_count: number;
+}
+```
+
+Add `baseline_summary?: BaselineSummary` to the existing `ViewResponse` interface.
+
+- [ ] **Step 2: Add banner rendering in `MainContent.tsx`**
+
+In the Packages section header, read `baseline_summary` from view data:
 
 ```tsx
 {viewData.baseline_summary ? (
@@ -616,14 +667,14 @@ In the Packages section header, read `baseline_summary` from API response:
 )}
 ```
 
-- [ ] **Step 2: Test in browser**
+- [ ] **Step 3: Test in browser**
 
-Start dev server, verify both banner states, verify no UI regressions.
+Start dev server (`cd inspectah-web/ui && npm run dev`), verify both banner states, verify no UI regressions.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add inspectah-web/frontend/src/
+git add inspectah-web/ui/src/
 git commit -m "feat(web): verification banner for baseline comparison status"
 ```
 
