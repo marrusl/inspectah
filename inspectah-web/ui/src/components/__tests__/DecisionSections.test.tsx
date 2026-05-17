@@ -8,6 +8,7 @@ import { PackageDetail } from "../PackageDetail";
 import { ConfigDetail } from "../ConfigDetail";
 import { DecisionList } from "../DecisionList";
 import { MainContent } from "../MainContent";
+import { RepoGroupHeader } from "../RepoGroupHeader";
 import type {
   RefinedPackage,
   RefinedConfig,
@@ -1392,8 +1393,8 @@ describe("Repo group headers", () => {
     // Repo group headers should appear
     expect(screen.getByTestId("repo-group-appstream")).toBeInTheDocument();
     expect(screen.getByTestId("repo-group-epel")).toBeInTheDocument();
-    // Badge labels
-    expect(screen.getByText("Distro")).toBeInTheDocument();
+    // Distro repos show no label; non-distro shows "Third-party"
+    expect(screen.queryByText("Distro")).not.toBeInTheDocument();
     expect(screen.getByText("Third-party")).toBeInTheDocument();
   });
 
@@ -1442,7 +1443,9 @@ describe("Repo group headers", () => {
     const infoToggle = screen.getByText(/Informational/);
     await userEvent.click(infoToggle);
 
-    expect(screen.getByText("Unverified")).toBeInTheDocument();
+    // All non-distro repos show "Third-party" regardless of provenance
+    expect(screen.getByText("Third-party")).toBeInTheDocument();
+    expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
     expect(screen.queryByRole("switch", { name: /toggle custom repo/i })).not.toBeInTheDocument();
   });
 
@@ -1756,5 +1759,230 @@ describe("Search auto-reveal for collapsed groups", () => {
 
     // The baseline summary should stay collapsed since revealItemId targets httpd, not glibc
     expect(screen.queryByText("glibc.x86_64")).not.toBeInTheDocument();
+  });
+});
+
+// ---- Updated RepoGroupHeader tests ----
+
+describe("RepoGroupHeader updated labels", () => {
+  it("shows no label for distro repos", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="baseos"
+        provenance="verified"
+        isDistro={true}
+        packageCount={50}
+        enabled={true}
+      />,
+    );
+    expect(screen.queryByText("Distro")).not.toBeInTheDocument();
+    expect(screen.queryByText("D")).not.toBeInTheDocument();
+    expect(screen.queryByText("Third-party")).not.toBeInTheDocument();
+    expect(screen.getByText("baseos")).toBeInTheDocument();
+  });
+
+  it("shows 'Third-party' text for verified non-distro repos", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+      />,
+    );
+    expect(screen.getByText("Third-party")).toBeInTheDocument();
+    expect(screen.getByText("epel")).toBeInTheDocument();
+  });
+
+  it("shows 'Third-party' text for incomplete-provenance non-distro repos", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="custom"
+        provenance="incomplete"
+        isDistro={false}
+        packageCount={3}
+        enabled={true}
+      />,
+    );
+    expect(screen.getByText("Third-party")).toBeInTheDocument();
+    expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
+    expect(screen.getByText("custom")).toBeInTheDocument();
+  });
+
+  it("shows 'Third-party' text for unknown-provenance non-distro repos", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="mystery"
+        provenance="unknown"
+        isDistro={false}
+        packageCount={2}
+        enabled={true}
+      />,
+    );
+    expect(screen.getByText("Third-party")).toBeInTheDocument();
+    expect(screen.getByText("mystery")).toBeInTheDocument();
+  });
+
+  it("only shows toggle switch for verified non-distro repos", () => {
+    const { rerender } = render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("switch", { name: /toggle epel repo/i })).toBeInTheDocument();
+
+    rerender(
+      <RepoGroupHeader
+        sectionId="custom"
+        provenance="incomplete"
+        isDistro={false}
+        packageCount={3}
+        enabled={true}
+        onToggle={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+
+  it("renders chevron icon", () => {
+    const { container } = render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+        isExpanded={false}
+      />,
+    );
+    expect(container.querySelector("svg")).toBeTruthy();
+  });
+
+  it("uses role='row' with aria-expanded and aria-controls", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+        isExpanded={true}
+      />,
+    );
+    const header = screen.getByTestId("repo-group-epel");
+    expect(header).toHaveAttribute("role", "row");
+    expect(header).toHaveAttribute("aria-expanded", "true");
+    expect(header).toHaveAttribute("aria-controls", "repo-group-content-epel");
+  });
+
+  it("shows struck-through name and dimmed text for disabled repos", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={false}
+      />,
+    );
+    const label = screen.getByText("epel");
+    expect(label.style.textDecoration).toBe("line-through");
+    expect(label.style.opacity).toBe("0.6");
+  });
+
+  it("shows informational count in header when provided", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="appstream"
+        provenance="verified"
+        isDistro={true}
+        packageCount={20}
+        enabled={true}
+        infoCount={3}
+      />,
+    );
+    expect(screen.getByText("3 informational")).toBeInTheDocument();
+  });
+
+  it("shows 'No action needed' for all-routine repos", () => {
+    render(
+      <RepoGroupHeader
+        sectionId="baseos"
+        provenance="verified"
+        isDistro={true}
+        packageCount={50}
+        enabled={true}
+        summaryText="No action needed"
+      />,
+    );
+    expect(screen.getByText("No action needed")).toBeInTheDocument();
+  });
+
+  it("Enter on header triggers onExpandToggle, not switch toggle", async () => {
+    const onExpandToggle = vi.fn();
+    const onToggle = vi.fn();
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+        isExpanded={false}
+        onExpandToggle={onExpandToggle}
+        onToggle={onToggle}
+      />,
+    );
+    const header = screen.getByTestId("repo-group-epel");
+    header.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(onExpandToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("Space on header row is a no-op (does not toggle expand or switch)", async () => {
+    const onExpandToggle = vi.fn();
+    const onToggle = vi.fn();
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+        isExpanded={false}
+        onExpandToggle={onExpandToggle}
+        onToggle={onToggle}
+      />,
+    );
+    const header = screen.getByTestId("repo-group-epel");
+    header.focus();
+    await userEvent.keyboard(" ");
+    expect(onExpandToggle).not.toHaveBeenCalled();
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("chevron click triggers onExpandToggle", async () => {
+    const onExpandToggle = vi.fn();
+    render(
+      <RepoGroupHeader
+        sectionId="epel"
+        provenance="verified"
+        isDistro={false}
+        packageCount={5}
+        enabled={true}
+        isExpanded={false}
+        onExpandToggle={onExpandToggle}
+      />,
+    );
+    const chevron = screen.getByTestId("repo-group-epel").querySelector(".inspectah-repo-group-header__chevron")!;
+    await userEvent.click(chevron as HTMLElement);
+    expect(onExpandToggle).toHaveBeenCalledTimes(1);
   });
 });
