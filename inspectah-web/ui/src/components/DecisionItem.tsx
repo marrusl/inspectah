@@ -168,7 +168,7 @@ export function DecisionItem({
           <div role="gridcell" style={{ flexShrink: 0 }}>
             {topReason && (
               <Label color={attentionLabelColor(topAttention)}>
-                {formatReasonText(topReason.reason)}
+                {formatReasonText(topReason.reason, topReason.detail)}
               </Label>
             )}
           </div>
@@ -211,7 +211,7 @@ export function DecisionItem({
       : topReason?.reason === "package_user_added" && item.type === "package"
         ? (item.data as RefinedPackage).entry.source_repo || "Unknown"
         : topReason
-          ? formatReasonText(topReason.reason)
+          ? formatReasonText(topReason.reason, topReason.detail)
           : null;
 
     return (
@@ -296,6 +296,7 @@ export function DecisionItem({
       data-expanded={isExpanded ? "true" : "false"}
       style={{
         display: "flex",
+        flexWrap: "wrap",
         alignItems: "center",
         gap: "var(--pf-t--global--spacer--sm)",
         padding: "var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--md)",
