@@ -19,7 +19,8 @@ import { ApiError } from "../api/types";
 import { useMutation } from "../hooks/useMutation";
 import { useViewed } from "../hooks/useViewed";
 import { AttentionGroup } from "./AttentionGroup";
-import { RepoGroupHeader } from "./RepoGroupHeader";
+import { RepoGroup } from "./RepoGroup";
+import { RoutineSummary } from "./RoutineSummary";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
 import { highestAttention } from "./attentionUtils";
@@ -193,6 +194,24 @@ function ConfigManagedSummary({ count, items, revealItemId, filterActive = false
 /** Attention reasons that indicate a config is package-managed (Tier 1). */
 const CONFIG_MANAGED_REASONS = new Set(["config_default", "config_baseline_match"]);
 
+/** Priority ordering for attention levels within a repo group. */
+const ATTENTION_PRIORITY: Record<string, number> = {
+  needs_review: 0,
+  informational: 1,
+  routine: 2,
+};
+
+interface RepoPartition {
+  sectionId: string;
+  repo: RepoGroupInfo | undefined;
+  items: DecisionItemKind[];
+  needsReview: DecisionItemKind[];
+  informational: DecisionItemKind[];
+  routine: DecisionItemKind[];
+  hasNeedsReview: boolean;
+  isUnknown: boolean;
+}
+
 export interface DecisionListProps {
   items: DecisionItemKind[];
   sectionLabel: string;
@@ -208,11 +227,13 @@ export interface DecisionListProps {
   onViewedChange?: () => void;
 }
 
+const EMPTY_REPO_GROUPS: RepoGroupInfo[] = [];
+
 export function DecisionList({
   items,
   sectionLabel,
   filterText = "",
-  repoGroups = [],
+  repoGroups = EMPTY_REPO_GROUPS,
   revealItemId,
   onViewUpdate,
   onMutationError,
@@ -310,10 +331,90 @@ export function DecisionList({
     "routine",
   ];
 
+  // Build repo partitions when repo-first grouping is active
+  const repoPartitions = useMemo((): RepoPartition[] => {
+    if (repoGroups.length === 0) return [];
+
+    // Group items by source_repo
+    const byRepo = new Map<string, DecisionItemKind[]>();
+    for (const item of items) {
+      const rawRepo = item.type === "package" ? item.data.entry.source_repo : "";
+      const repoKey = rawRepo && repoGroupMap.has(rawRepo.toLowerCase())
+        ? rawRepo.toLowerCase()
+        : "__unknown__";
+      const list = byRepo.get(repoKey) ?? [];
+      list.push(item);
+      byRepo.set(repoKey, list);
+    }
+
+    // Build partition objects
+    const partitions: RepoPartition[] = [];
+    for (const [key, repoItems] of byRepo.entries()) {
+      const rg = key === "__unknown__" ? undefined : repoGroupMap.get(key);
+      const needsReview: DecisionItemKind[] = [];
+      const informational: DecisionItemKind[] = [];
+      const routine: DecisionItemKind[] = [];
+
+      for (const item of repoItems) {
+        const level = item.data.attention.length > 0
+          ? highestAttention(item.data.attention)
+          : "routine";
+        if (level === "needs_review") needsReview.push(item);
+        else if (level === "informational") informational.push(item);
+        else routine.push(item);
+      }
+
+      partitions.push({
+        sectionId: key,
+        repo: rg,
+        items: repoItems,
+        needsReview,
+        informational,
+        routine,
+        hasNeedsReview: needsReview.length > 0,
+        isUnknown: key === "__unknown__",
+      });
+    }
+
+    // Sort: distro alpha → enabled third-party alpha → disabled → unknown last
+    partitions.sort((a, b) => {
+      const rankA = a.isUnknown ? 4 : a.repo?.is_distro ? 0 : !a.repo?.enabled ? 3 : 1;
+      const rankB = b.isUnknown ? 4 : b.repo?.is_distro ? 0 : !b.repo?.enabled ? 3 : 1;
+      if (rankA !== rankB) return rankA - rankB;
+      return a.sectionId.localeCompare(b.sectionId);
+    });
+
+    return partitions;
+  }, [items, repoGroups, repoGroupMap]);
+
   // Build flat ordered list of item IDs for roving tabindex.
   // Exclude items inside collapsed Tier 1 summaries so j/k skips them.
   const summariesCollapsed = !filterText.trim();
   const flatItemIds = useMemo(() => {
+    // Repo-first path: include repo headers + visible items
+    if (repoGroups.length > 0) {
+      const ids: string[] = [];
+      for (const part of repoPartitions) {
+        ids.push(`repo-header:${part.sectionId}`);
+        if (part.isUnknown) {
+          // Unknown group: all items always shown
+          for (const item of part.items) {
+            ids.push(getItemId(item));
+          }
+        } else {
+          // needs_review + informational always in sequence
+          for (const item of part.needsReview) ids.push(getItemId(item));
+          for (const item of part.informational) ids.push(getItemId(item));
+          // Routine items excluded from flat sequence unless filter matches them
+          if (filterText.trim()) {
+            for (const item of part.routine) ids.push(getItemId(item));
+          }
+        }
+      }
+      return ids;
+    }
+
+    // Attention-first path (configs): existing logic
     const ids: string[] = [];
     for (const level of levels) {
       const groupItems = grouped[level];
@@ -340,7 +441,7 @@ export function DecisionList({
     }
     return ids;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, summariesCollapsed]);
+  }, [items, summariesCollapsed, repoGroups, repoPartitions, filterText]);
 
   const [focusedIndex, setFocusedIndex] = useState(0);
 
@@ -373,9 +474,17 @@ export function DecisionList({
       if (nextIndex !== null) {
         setFocusedIndex(nextIndex);
         const targetId = flatItemIds[nextIndex];
-        const el = document.querySelector(
-          `[data-testid="decision-item-${targetId}"]`,
-        ) as HTMLElement | null;
+        let el: HTMLElement | null;
+        if (targetId.startsWith("repo-header:")) {
+          const sectionId = targetId.slice("repo-header:".length);
+          el = document.querySelector(
+            `[data-testid="repo-group-${sectionId}"]`,
+          ) as HTMLElement | null;
+        } else {
+          el = document.querySelector(
+            `[data-testid="decision-item-${targetId}"]`,
+          ) as HTMLElement | null;
+        }
         el?.focus();
       }
     },
@@ -412,7 +521,155 @@ export function DecisionList({
         </AlertGroup>
       )}
 
-      {(() => {
+      {/* Repo-first grouping when repoGroups are provided (packages section) */}
+      {repoGroups.length > 0 && (() => {
+        let runningRowIndex = 0;
+        const filterActive = filterText.trim().length > 0;
+
+        return repoPartitions.map((part) => {
+          // For unknown group: always expanded, show all items individually
+          if (part.isUnknown) {
+            const unknownRepo: RepoGroupInfo = {
+              section_id: "__unknown__",
+              provenance: "unknown",
+              is_distro: false,
+              package_count: part.items.length,
+              enabled: true,
+            };
+            // Sort items within unknown group by attention priority
+            const sortedItems = [...part.items].sort((a, b) => {
+              const aLevel = a.data.attention.length > 0 ? highestAttention(a.data.attention) : "routine";
+              const bLevel = b.data.attention.length > 0 ? highestAttention(b.data.attention) : "routine";
+              return (ATTENTION_PRIORITY[aLevel] ?? 2) - (ATTENTION_PRIORITY[bLevel] ?? 2);
+            });
+
+            return (
+              <RepoGroup
+                key="__unknown__"
+                repo={unknownRepo}
+                defaultExpanded={true}
+                forceExpanded={filterActive}
+                revealItemId={revealItemId}
+                itemIds={part.items.map(getItemId)}
+                onRepoToggle={handleRepoToggle}
+                onKeyDown={handleRowKeyDown}
+              >
+                {sortedItems.map((item) => {
+                  runningRowIndex++;
+                  const id = getItemId(item);
+                  const level = item.data.attention.length > 0
+                    ? highestAttention(item.data.attention)
+                    : "routine";
+                  const flatIdx = flatItemIds.indexOf(id);
+                  return (
+                    <DecisionItem
+                      key={id}
+                      item={item}
+                      level={level}
+                      rowIndex={runningRowIndex}
+                      isViewed={viewedIds.has(id)}
+                      isPending={mutation.isPending}
+                      tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                      onToggleInclude={handleToggle}
+                      onMarkViewed={markAsViewed}
+                      onKeyDown={handleRowKeyDown}
+                    />
+                  );
+                })}
+              </RepoGroup>
+            );
+          }
+
+          const repo = part.repo!;
+          const hasNeedsReview = part.needsReview.length > 0;
+          const hasInfo = part.informational.length > 0;
+          const allRoutine = !hasNeedsReview && !hasInfo;
+
+          // Determine filter-expansion: only groups containing matching items
+          const groupFilterExpanded = filterActive && part.items.length > 0;
+          // Routine summary filter expansion: only if routine items exist in filtered set
+          const routineFilterExpanded = filterActive && part.routine.length > 0;
+
+          // Determine display props for header
+          const infoCount = !hasNeedsReview && hasInfo ? part.informational.length : undefined;
+          const summaryText = allRoutine ? "No action needed" : undefined;
+
+          return (
+            <RepoGroup
+              key={part.sectionId}
+              repo={repo}
+              defaultExpanded={hasNeedsReview || hasInfo}
+              forceExpanded={groupFilterExpanded}
+              infoCount={infoCount}
+              summaryText={summaryText}
+              revealItemId={revealItemId}
+              itemIds={part.items.map(getItemId)}
+              onRepoToggle={handleRepoToggle}
+              onKeyDown={handleRowKeyDown}
+            >
+              {/* needs_review items: rendered as full DecisionItem rows */}
+              {part.needsReview.map((item) => {
+                runningRowIndex++;
+                const id = getItemId(item);
+                const flatIdx = flatItemIds.indexOf(id);
+                return (
+                  <DecisionItem
+                    key={id}
+                    item={item}
+                    level="needs_review"
+                    rowIndex={runningRowIndex}
+                    isViewed={viewedIds.has(id)}
+                    isPending={mutation.isPending}
+                    tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                    onToggleInclude={handleToggle}
+                    onMarkViewed={markAsViewed}
+                    onKeyDown={handleRowKeyDown}
+                  />
+                );
+              })}
+              {/* informational items: rendered as full DecisionItem rows */}
+              {part.informational.map((item) => {
+                runningRowIndex++;
+                const id = getItemId(item);
+                const flatIdx = flatItemIds.indexOf(id);
+                return (
+                  <DecisionItem
+                    key={id}
+                    item={item}
+                    level="informational"
+                    rowIndex={runningRowIndex}
+                    isViewed={viewedIds.has(id)}
+                    isPending={mutation.isPending}
+                    tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                    onToggleInclude={handleToggle}
+                    onMarkViewed={markAsViewed}
+                    onKeyDown={handleRowKeyDown}
+                  />
+                );
+              })}
+              {/* routine items: collapsed as RoutineSummary */}
+              {part.routine.length > 0 && (
+                <RoutineSummary
+                  items={part.routine}
+                  forceExpanded={routineFilterExpanded}
+                  revealItemId={revealItemId}
+                  onToggleInclude={handleToggle}
+                  onMarkViewed={markAsViewed}
+                  viewedIds={viewedIds}
+                  isPending={mutation.isPending}
+                  onKeyDown={handleRowKeyDown}
+                  startRowIndex={runningRowIndex + 1}
+                  flatItemIds={flatItemIds}
+                  focusedIndex={focusedIndex}
+                />
+              )}
+            </RepoGroup>
+          );
+        });
+      })()}
+
+      {/* Attention-first grouping when no repoGroups (configs section) */}
+      {repoGroups.length === 0 && (() => {
         let runningRowIndex = 0;
         return levels.map((level) => {
           const groupItems = grouped[level];
@@ -469,68 +726,6 @@ export function DecisionList({
                       onMarkViewed={markAsViewed}
                       onKeyDown={handleRowKeyDown}
                     />
-                  );
-                })}
-              </AttentionGroup>
-            );
-          }
-
-          // Informational tier: sub-group by source_repo when repo_groups available
-          if (level === "informational" && repoGroups.length > 0) {
-            // Group items by source_repo
-            const byRepo = new Map<string, DecisionItemKind[]>();
-            for (const item of groupItems) {
-              const repo = item.type === "package" ? item.data.entry.source_repo.toLowerCase() : "__other__";
-              const list = byRepo.get(repo) ?? [];
-              list.push(item);
-              byRepo.set(repo, list);
-            }
-            // Order repos: distro first, then verified third-party, then unverified/unknown
-            const repoOrder = [...byRepo.keys()].sort((a, b) => {
-              const rgA = repoGroupMap.get(a);
-              const rgB = repoGroupMap.get(b);
-              const rankA = rgA?.is_distro ? 0 : rgA?.provenance === "verified" ? 1 : 2;
-              const rankB = rgB?.is_distro ? 0 : rgB?.provenance === "verified" ? 1 : 2;
-              return rankA - rankB;
-            });
-
-            return (
-              <AttentionGroup key={level} level={level} count={groupItems.length} forceExpanded={forceExpanded}>
-                {repoOrder.map((repo) => {
-                  const repoItems = byRepo.get(repo) ?? [];
-                  const rg = repoGroupMap.get(repo);
-                  return (
-                    <div key={repo}>
-                      {rg && (
-                        <RepoGroupHeader
-                          sectionId={rg.section_id}
-                          provenance={rg.provenance}
-                          isDistro={rg.is_distro}
-                          packageCount={repoItems.length}
-                          enabled={rg.enabled}
-                          onToggle={handleRepoToggle}
-                        />
-                      )}
-                      {repoItems.map((item) => {
-                        runningRowIndex++;
-                        const id = getItemId(item);
-                        const flatIdx = flatItemIds.indexOf(id);
-                        return (
-                          <DecisionItem
-                            key={id}
-                            item={item}
-                            level={level}
-                            rowIndex={runningRowIndex}
-                            isViewed={viewedIds.has(id)}
-                            isPending={mutation.isPending}
-                            tabIndex={flatIdx === focusedIndex ? 0 : -1}
-                            onToggleInclude={handleToggle}
-                            onMarkViewed={markAsViewed}
-                            onKeyDown={handleRowKeyDown}
-                          />
-                        );
-                      })}
-                    </div>
                   );
                 })}
               </AttentionGroup>
