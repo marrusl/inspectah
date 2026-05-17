@@ -2,6 +2,7 @@ pub mod classifier;
 pub mod modules;
 pub mod parser;
 pub mod repos;
+pub mod source_repos;
 
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
@@ -167,9 +168,14 @@ impl Inspector for RpmInspector {
         let classified = classifier::classify_packages(&host_packages, &baseline);
 
         // 3. Split classified packages into added / base_image_only
-        let (packages_added, base_image_only): (Vec<_>, Vec<_>) = classified
+        let (mut packages_added, base_image_only): (Vec<_>, Vec<_>) = classified
             .into_iter()
             .partition(|p| p.state != PackageState::BaseImageOnly);
+
+        // 3b. Source repo attribution per added package (matches Go Step 2b).
+        if !packages_added.is_empty() {
+            source_repos::populate_source_repos(exec, &mut packages_added);
+        }
 
         // 4. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
