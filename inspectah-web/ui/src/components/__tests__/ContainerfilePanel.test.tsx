@@ -108,7 +108,7 @@ describe("ContainerfilePanel", () => {
     expect(onToggle).toHaveBeenCalled();
   });
 
-  it("uses left-pointing icon when open (collapse direction)", () => {
+  it("uses right-pointing icon when open (collapse direction)", () => {
     render(
       <ContainerfilePanel
         content={"FROM ubi9\n"}
@@ -119,7 +119,7 @@ describe("ContainerfilePanel", () => {
     );
 
     const collapseBtn = screen.getByLabelText("Collapse Containerfile panel");
-    // AngleDoubleLeftIcon renders an SVG — verify aria-label direction
+    // AngleDoubleRightIcon renders an SVG — verify aria-label direction
     expect(collapseBtn).toBeInTheDocument();
     // The button should contain an SVG (the icon)
     const svg = collapseBtn.querySelector("svg");
