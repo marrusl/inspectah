@@ -224,18 +224,22 @@ impl Inspector for RpmInspector {
             source_repos::populate_source_repos(exec, &mut packages_added);
         }
 
-        // 4. Collect supplementary data
+        // 4. Classify leaf vs auto packages
+        let (leaf_packages, auto_packages, leaf_dep_tree) =
+            classify_leaf_auto(exec, &packages_added);
+
+        // 5. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
 
-        // 5. Query file ownership for Wave 2 inspectors
+        // 6. Query file ownership for Wave 2 inspectors
         let file_ownership = self.query_file_ownership(exec);
 
-        // 6. Build baseline_package_names for Go snapshot backward compat
+        // 7. Build baseline_package_names for Go snapshot backward compat
         let baseline_package_names = ctx.baseline_data.map(|b| {
             b.packages.keys().cloned().collect::<Vec<_>>()
         });
 
-        // 7. Build warnings
+        // 8. Build warnings
         let mut warnings = Vec::new();
         let no_baseline = ctx.baseline_data.is_none();
         if no_baseline {
@@ -255,7 +259,7 @@ impl Inspector for RpmInspector {
             });
         }
 
-        // 8. Build RpmSection
+        // 9. Build RpmSection
         let section = RpmSection {
             packages_added,
             base_image_only,
@@ -267,6 +271,9 @@ impl Inspector for RpmInspector {
             file_ownership,
             no_baseline,
             baseline_package_names,
+            leaf_packages: Some(leaf_packages),
+            auto_packages: Some(auto_packages),
+            leaf_dep_tree,
             ..Default::default()
         };
 
@@ -360,6 +367,89 @@ fn classify_deps_dnf(
     }
 
     (depends_on, true)
+}
+
+/// Classify `packages_added` into leaf (user-intent) and auto (transitive dependency) sets.
+/// Uses `query_user_installed()` to identify explicitly installed packages, falling back to
+/// graph-based classification when dnf --userinstalled is unavailable or returns no intersection
+/// with the added set. Builds a per-leaf dependency tree for the snapshot.
+fn classify_leaf_auto(
+    exec: &dyn Executor,
+    packages_added: &[PackageEntry],
+) -> (Vec<String>, Vec<String>, serde_json::Value) {
+    let added_names: HashSet<String> = packages_added.iter().map(|p| p.name.clone()).collect();
+
+    let user_installed = query_user_installed(exec);
+    let (depends_on, _transitive) = classify_deps_dnf(exec, &added_names);
+
+    let (mut leaf, mut auto): (Vec<String>, Vec<String>) = if let Some(ref ui) = user_installed {
+        let leaf_set: HashSet<&String> = ui.intersection(&added_names).collect();
+        if leaf_set.is_empty() && !added_names.is_empty() {
+            // Fallback to graph-based when userinstalled has no overlap with added
+            graph_based_split(&added_names, &depends_on)
+        } else {
+            let mut l = Vec::new();
+            let mut a = Vec::new();
+            for name in &added_names {
+                if leaf_set.contains(name) {
+                    l.push(name.clone());
+                } else {
+                    a.push(name.clone());
+                }
+            }
+            (l, a)
+        }
+    } else {
+        graph_based_split(&added_names, &depends_on)
+    };
+
+    leaf.sort();
+    auto.sort();
+
+    // Build per-leaf dep tree: for each leaf, list its auto dependencies.
+    let auto_set: HashSet<&str> = auto.iter().map(|s| s.as_str()).collect();
+    let mut dep_tree = serde_json::Map::new();
+    for lf in &leaf {
+        let mut filtered: Vec<String> = depends_on
+            .get(lf)
+            .map(|deps| {
+                deps.iter()
+                    .filter(|d| auto_set.contains(d.as_str()))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        filtered.sort();
+        dep_tree.insert(lf.clone(), serde_json::json!(filtered));
+    }
+
+    (leaf, auto, serde_json::Value::Object(dep_tree))
+}
+
+/// Graph-based fallback: packages depended on by other added packages are auto;
+/// packages not depended on by anything are leaf.
+fn graph_based_split(
+    added_names: &HashSet<String>,
+    depends_on: &HashMap<String, HashSet<String>>,
+) -> (Vec<String>, Vec<String>) {
+    let mut depended_on: HashSet<String> = HashSet::new();
+    for deps in depends_on.values() {
+        for dep in deps {
+            if added_names.contains(dep) {
+                depended_on.insert(dep.clone());
+            }
+        }
+    }
+    let mut leaf = Vec::new();
+    let mut auto = Vec::new();
+    for name in added_names {
+        if depended_on.contains(name) {
+            auto.push(name.clone());
+        } else {
+            leaf.push(name.clone());
+        }
+    }
+    (leaf, auto)
 }
 
 /// Parse dnf dependency output lines and record which added packages `pkg_name` depends on.
@@ -778,6 +868,96 @@ tzdata\t/usr/share/zoneinfo/UTC
         );
         let result = query_user_installed(&exec);
         assert!(result.is_none());
+    }
+
+    // --- classify_leaf_auto tests ---
+
+    fn make_test_entry(name: &str) -> PackageEntry {
+        PackageEntry {
+            name: name.to_string(),
+            ..PackageEntry::default()
+        }
+    }
+
+    #[test]
+    fn classify_leaf_auto_splits_by_user_installed() {
+        let exec = MockExecutor::new()
+            // dnf --userinstalled returns vim (but not glibc)
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "vim\nsome-other-pkg\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            // dependency queries: vim depends on glibc
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n vim",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc\n".into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added = vec![make_test_entry("vim"), make_test_entry("glibc")];
+
+        let (leaf, auto, dep_tree) = classify_leaf_auto(&exec, &added);
+
+        assert_eq!(leaf, vec!["vim".to_string()]);
+        assert_eq!(auto, vec!["glibc".to_string()]);
+        // dep_tree: vim -> [glibc]
+        let vim_deps = dep_tree.get("vim").unwrap().as_array().unwrap();
+        assert_eq!(vim_deps.len(), 1);
+        assert_eq!(vim_deps[0].as_str().unwrap(), "glibc");
+    }
+
+    #[test]
+    fn classify_leaf_auto_falls_back_to_graph_when_userinstalled_empty() {
+        let exec = MockExecutor::new()
+            // dnf --userinstalled returns empty (intersection with added is empty)
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "unrelated-pkg\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            // dependency queries: vim depends on glibc
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n vim",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc\n".into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added = vec![make_test_entry("vim"), make_test_entry("glibc")];
+
+        let (leaf, auto, _dep_tree) = classify_leaf_auto(&exec, &added);
+
+        // Graph-based: glibc is depended on by vim, so it's auto. vim is leaf.
+        assert_eq!(leaf, vec!["vim".to_string()]);
+        assert_eq!(auto, vec!["glibc".to_string()]);
     }
 
     // --- classify_deps_dnf tests ---
