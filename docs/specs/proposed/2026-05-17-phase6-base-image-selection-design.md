@@ -385,7 +385,7 @@ The banner appears in the Packages section header, same location as Phase 5's de
 - **Auth:** "Authentication failed for registry.redhat.io — run `podman login registry.redhat.io` on the host first, or use --no-baseline to skip"
 - **Network:** "Cannot reach registry.redhat.io — check network connectivity or use --no-baseline to skip"
 - **Unknown distro:** "No bootc base image found for this system (ID=ubuntu). Use --base-image to specify manually or --no-baseline to skip"
-- **Malformed UBlue metadata:** "Universal Blue metadata found at /usr/lib/ublue-os/image-info.json but could not be parsed — use --base-image to override"
+- **Malformed UBlue metadata:** "Universal Blue metadata found at /usr/share/ublue-os/image-info.json but could not be parsed — use --base-image to override"
 
 Each error suggests the fix and always mentions `--no-baseline` as the escape hatch.
 
