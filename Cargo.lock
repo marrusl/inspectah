@@ -833,6 +833,7 @@ dependencies = [
  "inspectah-pipeline",
  "inspectah-refine",
  "inspectah-web",
+ "libc",
  "open",
  "reqwest",
  "serde_json",

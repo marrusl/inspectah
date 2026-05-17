@@ -101,6 +101,15 @@ fn get_hostname(executor: &dyn inspectah_core::traits::executor::Executor) -> St
 }
 
 pub fn run_scan(args: &ScanArgs) -> Result<()> {
+    // Require root: scanning reads system state that needs elevated privileges.
+    // SAFETY: geteuid() is a simple syscall with no preconditions or invariants.
+    let euid = unsafe { libc::geteuid() };
+    if euid != 0 {
+        eprintln!("Error: inspectah scan requires root privileges.");
+        eprintln!("Run with: sudo inspectah scan [options]");
+        std::process::exit(1);
+    }
+
     // Flag validation
     if args.base_image.is_some() && args.no_baseline {
         anyhow::bail!(
