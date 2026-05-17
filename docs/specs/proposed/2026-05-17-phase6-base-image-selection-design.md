@@ -1,9 +1,10 @@
 # Phase 6: Base Image Selection & Baseline Extraction
 
-**Status:** Proposed (revision 2)
+**Status:** Proposed (revision 3)
 **Author:** Mark Russell (with team input from Collins, Ember, Fern, Tang)
 **Date:** 2026-05-17
-**Review round 1:** 2026-05-16 — request-changes from Collins, Tang, Thorn, Slate. This revision addresses all four cross-lane blockers.
+**Review round 1:** 2026-05-16 — request-changes from Collins, Tang, Thorn, Slate. Revision 2 addressed all four cross-lane blockers.
+**Review round 2:** 2026-05-16 — request-changes from Collins, Tang. This revision addresses the three remaining blockers: UBlue metadata path/tag, repository-side digest, and degraded-mode persisted resolution.
 
 ## Problem
 
@@ -42,14 +43,22 @@ New `baseline` module in `inspectah-core`. Pure logic, no I/O — fully testable
 | Priority | Strategy | Source | Example output |
 |----------|----------|--------|---------------|
 | 1 | CLI override | `--base-image` flag | Whatever the user provides |
-| 2 | Universal Blue | `/usr/lib/ublue-os/image-info.json` | `image-ref` field, or synthesized from vendor/name/tag |
+| 2 | Universal Blue | `/usr/share/ublue-os/image-info.json` | `image-ref` + `image-tag` combined, or synthesized from vendor/name/tag |
 | 3 | bootc status | `bootc status --json` | `status.booted.image.image.image` |
 | 4 | Fedora Atomic desktop | `/etc/os-release` VARIANT_ID ∈ known set | `quay.io/fedora-ostree-desktops/{variant}:{VERSION_ID}` |
 | 5 | os-release mapping | `/etc/os-release` ID + VERSION_ID | See distro table below |
 
 **Precedence fix (round 1 blocker 1):** Strategy 4 (Fedora Atomic desktop) is checked BEFORE the generic os-release mapping (strategy 5). On Silverblue, `ID=fedora` and `VARIANT_ID=silverblue` are both present. The round 1 spec had os-release (generic) at priority 4 and desktop at priority 5, which meant `ID=fedora` matched first and the desktop-variant table was unreachable. The corrected order ensures Silverblue/Kinoite/Sway Atomic/etc. resolve to their desktop-specific images.
 
-**Universal Blue metadata fix (round 1 blocker 1):** The correct metadata path is `/usr/lib/ublue-os/image-info.json` (not `/usr/lib/image-info.json`). The `image-ref` field in UBlue metadata may contain an `ostree-image-signed:docker://` transport prefix. The resolution function strips known transport prefixes to produce a bare OCI reference suitable for `podman pull`. If the metadata file exists but is malformed (missing `image-name`, missing `image-vendor`, unparseable JSON), resolution **fails closed** — returns an error rather than silently falling through to strategy 3+. The operator sees: "Universal Blue metadata found but unreadable — use --base-image to override."
+**Universal Blue metadata fix (round 1 blocker 1, round 2 blocker 1):** The correct metadata path is `/usr/share/ublue-os/image-info.json` (matching current inspectah Go resolver/tests and current UBlue build metadata). Current UBlue metadata uses a transport-prefixed, tagless `image-ref` (e.g., `ostree-image-signed:docker://ghcr.io/ublue-os/bazzite`) with the effective tag carried separately in `image-tag` (e.g., `stable`). The UBlue resolution rule:
+
+1. Read `image-ref` and strip known transport prefixes (`ostree-image-signed:docker://`, `docker://`).
+2. If the stripped ref has no tag component (no `:`), combine it with the `image-tag` field: `{stripped_ref}:{image_tag}`.
+3. If `image-ref` already contains a tag, use it as-is after stripping.
+4. If `image-ref` is absent but `image-vendor`, `image-name`, and `image-tag` are all present, synthesize: `ghcr.io/{image-vendor}/{image-name}:{image-tag}`.
+5. Pass the result to the canonical normalization gate (section 1a).
+
+If the metadata file exists but is malformed (missing required fields, unparseable JSON), resolution **fails closed** — returns an error rather than silently falling through to strategy 3+. The operator sees: "Universal Blue metadata found but unreadable — use --base-image to override."
 
 **Distro mapping table (strategy 5):**
 
@@ -63,7 +72,9 @@ Unknown `ID` values produce `None` — the pipeline aborts with a clear error.
 
 **Fedora Atomic desktop variants (strategy 4):**
 
-silverblue, kinoite, sway-atomic, budgie-atomic, lxqt-atomic, xfce-atomic, cosmic-atomic → `quay.io/fedora-ostree-desktops/{variant}:{VERSION_ID}`
+Current active variants: silverblue, kinoite, sway-atomic, budgie-atomic, cosmic-atomic → `quay.io/fedora-ostree-desktops/{variant}:{VERSION_ID}`
+
+Historical variants retained for older source systems: lxqt-atomic, xfce-atomic → same pattern. These are no longer actively published but may exist on systems that were installed when they were current.
 
 **Return type:**
 
@@ -122,7 +133,7 @@ New `baseline` module in `inspectah-collect`. Uses the existing `Executor` trait
 2. **Create container without starting:** `nsenter ... podman create --name inspectah-baseline-<timestamp> --entrypoint '["sleep", "infinity"]' --network none <normalized_ref>`. This overrides the image's `ENTRYPOINT`/`CMD` so no image-supplied code executes. `--network none` prevents network access during the query phase.
 3. **Start container:** `nsenter ... podman start <container>`.
 4. **Extract packages:** `nsenter ... podman exec <container> rpm -qa --queryformat '%{NAME}\t%{EPOCH}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n'`. Parse into a `HashMap<String, BaselinePackageEntry>` keyed by `name.arch`.
-5. **Capture image identity:** `nsenter ... podman inspect --format '{{.Id}}' <normalized_ref>`. Records the pulled image digest for snapshot persistence.
+5. **Capture image identity:** `nsenter ... podman inspect --format '{{.Digest}}' <normalized_ref>`. Records the repository-side manifest digest (e.g., `sha256:abc123...`) — this is the remote object identity, not the local storage ID (`.Id`). If `.Digest` is empty (can happen with locally-built images), fall back to the matching entry in `.RepoDigests` for the normalized ref's registry/repo. The persisted value must answer "which exact remote object was this baseline compared against?"
 6. **Cleanup:** `nsenter ... podman rm -f <container>`. Always runs (drop guard on the container name — cleanup executes even if steps 3-5 fail or the process is interrupted).
 
 **Entrypoint override rationale (round 1 blocker 4):** The round 1 spec used `podman run ... sleep infinity`, which still executes the image's `ENTRYPOINT` before `sleep`. `podman create --entrypoint '["sleep", "infinity"]'` replaces the entrypoint entirely, so no image-supplied code runs. Combined with `--network none`, the extraction container cannot execute arbitrary code or make network calls.
@@ -153,14 +164,22 @@ struct BaselinePackageEntry {
 
 **nsenter rationale:** `systemd-run` was evaluated and rejected. It requires the host's D-Bus socket bind-mounted into the container plus D-Bus auth — trading one privilege requirement for two, with no security benefit. `nsenter -t 1` is the canonical pattern used by toolbox, cri-o debugging containers, and Red Hat's own privileged container tools. It requires only the capabilities inspectah already has for host inspection.
 
-**Snapshot persistence (round 1 blocker 2):** The snapshot schema must persist enough identity to reconstruct the baseline context in later refine sessions without re-pulling. Schema fields:
+**Snapshot persistence (round 1 blocker 2, round 2 blocker 3):** The snapshot schema must persist enough identity to reconstruct the baseline context in later refine sessions without re-pulling. Additionally, the resolved target image must survive independently of baseline extraction so that `--no-baseline` snapshots can still produce correct FROM lines on reopen/export.
+
+**Schema fields — two independent concerns:**
+
+1. **`target_image`** (top-level, independent of baseline): The resolved target image identity. Persisted even in degraded mode so the Containerfile FROM line is correct on reopen/export.
+
+2. **`baseline`** (present only when extraction was performed): Full baseline extraction data.
 
 ```json
 {
-  "baseline": {
+  "target_image": {
     "image_ref": "registry.redhat.io/rhel9/rhel-bootc:9.6",
+    "strategy": "os-release"
+  },
+  "baseline": {
     "image_digest": "sha256:abc123...",
-    "strategy": "os-release",
     "packages": {
       "bash.x86_64": { "epoch": "0", "version": "5.2.26", "release": "3.el9", "arch": "x86_64" },
       "...": "..."
@@ -171,14 +190,18 @@ struct BaselinePackageEntry {
 }
 ```
 
-**Legal snapshot states (round 1 blocker 2):**
+**Legal snapshot states (round 1 blocker 2, round 2 blocker 3):**
 
-| `baseline` | `no_baseline` | Meaning | Valid? |
-|-----------|--------------|---------|--------|
-| Present | `false` | Verified baseline — accurate classification | Yes |
-| `null` | `true` | Explicit degraded mode via `--no-baseline` | Yes |
-| `null` | `false` | Resolution/extraction failed (pipeline aborted) | No — pipeline never produces this |
-| Present | `true` | Contradictory — baseline data with degraded flag | No — rejected at scan time |
+| `target_image` | `baseline` | `no_baseline` | Meaning | Valid? |
+|----------------|-----------|--------------|---------|--------|
+| Present | Present | `false` | Full verified baseline — accurate classification, correct FROM | Yes |
+| Present | `null` | `true` | Resolution succeeded, extraction skipped (`--no-baseline`) — correct FROM, degraded classification | Yes |
+| `null` | `null` | `true` | Resolution failed + `--no-baseline` — FROM omitted with comment, degraded classification | Yes |
+| `null` | `null` | `false` | Resolution/extraction failed (pipeline aborted) | No — pipeline never produces this |
+| Present | Present | `true` | Contradictory — baseline data with degraded flag | No — rejected at scan time |
+| `null` | Present | any | Contradictory — baseline without resolution | No — impossible |
+
+**Migration rule for pre-Phase-6 snapshots:** Snapshots that lack `target_image`, `baseline`, and `no_baseline` fields are treated as: `target_image = null`, `baseline = null`, `no_baseline = true`. This enters degraded mode with FROM omitted. The schema version distinguishes pre-Phase-6 from post-Phase-6 snapshots.
 
 The authoritative baseline identity key across all paths is `name.arch`. NEVRA data is available for version-drift classification but the membership test (in-baseline vs. not-in-baseline) uses `name.arch`.
 
@@ -345,8 +368,8 @@ The banner appears in the Packages section header, same location as Phase 5's de
 
 **Image resolution is separate from baseline extraction (round 1 blocker 3).** This split matters for degraded mode:
 
-- `--no-baseline`: skips baseline extraction (no image pull, no package comparison), BUT still resolves the target image ref for the dynamic FROM line. The Containerfile gets a correct `FROM` based on auto-detection or `--base-image`, even without baseline data. This prevents the degraded path from falling back to a hardcoded FROM.
-- If resolution itself fails in `--no-baseline` mode (unknown distro, no bootc status): the Containerfile FROM line is omitted entirely with a comment: `# FROM line omitted — target image could not be determined. Use --base-image to specify.`
+- `--no-baseline`: skips baseline extraction (no image pull, no package comparison), BUT still resolves the target image ref for the dynamic FROM line. The resolved ref is persisted in `target_image` — this survives reopen/export so the Containerfile FROM line is correct even in reopened degraded sessions. This prevents the degraded path from falling back to a hardcoded FROM.
+- If resolution itself fails in `--no-baseline` mode (unknown distro, no bootc status): `target_image` is `null`, and the Containerfile FROM line is omitted entirely with a comment: `# FROM line omitted — target image could not be determined. Use --base-image to specify.` This state also persists correctly on reopen/export.
 
 **Flag combinations:**
 
@@ -371,7 +394,7 @@ Each error suggests the fix and always mentions `--no-baseline` as the escape ha
 ### Unit tests (inspectah-core)
 
 - **Resolution chain precedence:** Fedora with `VARIANT_ID=silverblue` resolves to desktop image, not generic fedora-bootc. Test all 5 strategies in isolation and in combination.
-- **UBlue metadata:** Valid `image-ref` field, `ostree-image-signed:docker://` prefix stripping, malformed JSON fails closed, missing file falls through.
+- **UBlue metadata:** Valid `image-ref` + `image-tag` combination (transport-prefixed tagless ref combined with separate tag), `ostree-image-signed:docker://` prefix stripping, tagged `image-ref` used as-is, synthesis fallback from vendor/name/tag, malformed JSON fails closed, missing file falls through. Path is `/usr/share/ublue-os/image-info.json`.
 - **Ref normalization:** Transport prefix stripping, bare refs rejected, shell metacharacters rejected, digest preservation, tag defaulting.
 - **Distro mapping:** All supported distros + edge cases (unknown ID, missing VERSION_ID, empty strings).
 - **Classification matrix:** Every cell in the exhaustive matrix from section 4 — all `PackageState` variants × repo provenance × baseline mode. This is the contract-proof gate.
@@ -399,12 +422,13 @@ Each error suggests the fix and always mentions `--no-baseline` as the escape ha
 - **Session state materialization:** `BaselineData` from snapshot is materialized into refine session state. Reopened sessions reconstruct `BaselineSummary` from persisted baseline.
 - **Preview/export parity (round 1 blocker 4):** The Containerfile preview and the exported tarball Containerfile are derived from the same projected snapshot. Test that both agree on FROM line, package list, and service enablement.
 - **Degraded mode replay:** A snapshot with `no_baseline: true` reopens correctly in degraded mode with appropriate banner and classification.
+- **Degraded FROM persistence (round 2 blocker 3):** A `--no-baseline` snapshot with resolved `target_image` preserves the correct FROM line after reopen/export. A `--no-baseline` snapshot with `target_image = null` preserves the FROM-omission comment after reopen/export.
 
 ### Integration tests
 
 - **End-to-end with mock executor:** Full pipeline from resolution through render, verified and degraded modes.
 - **Snapshot round-trip:** `BaselineData` with full NEVRA serializes/deserializes correctly. Reopened session produces identical classification and banner.
-- **Schema backward compatibility:** Snapshots from Phase 5 (no baseline fields) deserialize correctly and enter degraded mode automatically.
+- **Schema backward compatibility:** Snapshots from Phase 5 (no baseline fields) deserialize correctly and enter degraded mode automatically. Specifically: missing `target_image`/`baseline`/`no_baseline` fields map to `target_image = null`, `baseline = null`, `no_baseline = true` per the migration rule.
 
 ### Manual validation
 
