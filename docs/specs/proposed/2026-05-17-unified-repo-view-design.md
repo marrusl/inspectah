@@ -253,6 +253,25 @@ Tab within the row.
   including the repo name (e.g., "Disable epel repository").
 - Repo group content: `role="rowgroup"`, `aria-label` with repo name.
 
+### Layout
+
+The three-column layout is: fixed sidebar | fluid content | right-justified
+Containerfile panel.
+
+- **Sidebar:** Fixed width (~200px), left edge. Section navigation. Unchanged.
+- **Content area:** Fluid, fills the space between sidebar and Containerfile
+  panel. This is where repo groups render.
+- **Containerfile panel:** Right-justified against the browser window edge.
+  Drag-to-resize handle on its left edge (already shipped in alpha.3,
+  commit `e0c2408`). Min width 200px, max width 60% of viewport. On wide
+  screens, the user drags the panel wider for a comfortable code view while
+  the content area remains usable.
+
+The key behavior: the Containerfile panel anchors to the right edge of the
+viewport, not to the right edge of the content area. On a wide monitor,
+expanding the panel pushes into the content area (which is fluid and
+reflows), not into empty space.
+
 ### What This Replaces
 
 - **Attention-tier triage view:** Replaced by repo-grouped view with attention
