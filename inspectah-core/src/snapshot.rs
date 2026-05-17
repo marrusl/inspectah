@@ -17,7 +17,7 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 14;
+pub const SCHEMA_VERSION: u32 = 15;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -54,6 +54,16 @@ pub struct InspectionSnapshot {
     /// Artifact completeness based on inspector failure state.
     #[serde(default)]
     pub completeness: Completeness,
+    /// Identity of the target image being inspected (canonical ref + resolution strategy).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_image: Option<crate::baseline::TargetImageIdentity>,
+    /// Baseline package data resolved from the target image's base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<crate::baseline::BaselineData>,
+    /// True if baseline resolution was attempted but failed or is unavailable.
+    /// Distinguishes "no baseline" from "baseline not yet attempted".
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub no_baseline: bool,
 }
 
 impl InspectionSnapshot {
@@ -80,12 +90,15 @@ impl InspectionSnapshot {
 ///
 /// v12 -> v13: no structural changes needed, just field defaults
 /// v13 -> v14: no structural changes needed, serde(default) handles missing fields
+/// v14 -> v15: legacy snapshots have no baseline data — mark explicitly
 pub fn migrate(snap: &mut InspectionSnapshot) {
     if snap.schema_version >= SCHEMA_VERSION {
         return;
     }
-    // Structural compatibility is handled by serde(default) on all fields.
-    // Bump version to current.
+    // v14→v15: legacy snapshots have no baseline data — mark explicitly
+    if snap.schema_version <= 14 && snap.baseline.is_none() && !snap.no_baseline {
+        snap.no_baseline = true;
+    }
     snap.schema_version = SCHEMA_VERSION;
 }
 
@@ -102,6 +115,9 @@ pub enum SnapshotError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::baseline::{
+        BaselineData, BaselinePackageEntry, ResolutionStrategy, TargetImageIdentity,
+    };
     use crate::types::rpm::{PackageEntry, PackageState};
     use crate::types::warnings::WarningSeverity;
 
@@ -231,5 +247,119 @@ mod tests {
         let mut snap = InspectionSnapshot::load(json).unwrap();
         migrate(&mut snap);
         assert_eq!(snap.schema_version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn test_snapshot_with_target_image_and_baseline() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: "quay.io/fedora/fedora-bootc:41".to_string(),
+            strategy: ResolutionStrategy::OsRelease,
+        });
+
+        let mut packages = std::collections::HashMap::new();
+        packages.insert(
+            "systemd".to_string(),
+            BaselinePackageEntry {
+                name: "systemd".to_string(),
+                epoch: Some("0".to_string()),
+                version: "256.7".to_string(),
+                release: "1.fc41".to_string(),
+                arch: "x86_64".to_string(),
+            },
+        );
+
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:abc123def456".to_string(),
+            packages,
+            extracted_at: "2026-05-16T12:00:00Z".to_string(),
+        });
+
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.target_image.is_some());
+        assert_eq!(
+            parsed.target_image.as_ref().unwrap().image_ref,
+            "quay.io/fedora/fedora-bootc:41"
+        );
+        assert!(parsed.baseline.is_some());
+        assert_eq!(parsed.baseline.as_ref().unwrap().packages.len(), 1);
+        assert!(!parsed.no_baseline);
+    }
+
+    #[test]
+    fn test_target_image_stores_normalized_ref() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: "quay.io/fedora/fedora-bootc:41".to_string(),
+            strategy: ResolutionStrategy::OsRelease,
+        });
+
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            parsed.target_image.unwrap().image_ref,
+            "quay.io/fedora/fedora-bootc:41"
+        );
+    }
+
+    #[test]
+    fn test_degraded_snapshot_target_image_present_no_baseline() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(TargetImageIdentity {
+            image_ref: "quay.io/fedora/fedora-bootc:41".to_string(),
+            strategy: ResolutionStrategy::OsRelease,
+        });
+        snap.baseline = None;
+        snap.no_baseline = true;
+
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.target_image.is_some());
+        assert!(parsed.baseline.is_none());
+        assert!(parsed.no_baseline);
+    }
+
+    #[test]
+    fn test_degraded_snapshot_both_null() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = None;
+        snap.baseline = None;
+        snap.no_baseline = true;
+
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.target_image.is_none());
+        assert!(parsed.baseline.is_none());
+        assert!(parsed.no_baseline);
+    }
+
+    #[test]
+    fn test_v14_migration_sets_no_baseline() {
+        // Pre-Phase-6 snapshot: schema_version 14, no baseline fields
+        let json = r#"{
+            "schema_version": 14,
+            "meta": {},
+            "system_type": "package-mode",
+            "preflight": {"status": "ok"},
+            "warnings": [],
+            "redactions": []
+        }"#;
+
+        let mut snap = InspectionSnapshot::load(json).unwrap();
+        assert_eq!(snap.schema_version, 14);
+        assert!(snap.target_image.is_none());
+        assert!(snap.baseline.is_none());
+        assert!(!snap.no_baseline); // serde(default) gives false
+
+        // Migrate to v15
+        migrate(&mut snap);
+
+        assert_eq!(snap.schema_version, 15);
+        assert!(snap.no_baseline); // Migration explicitly sets this to true
     }
 }
