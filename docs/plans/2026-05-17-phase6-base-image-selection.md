@@ -6,7 +6,7 @@
 
 **Architecture:** New `baseline` modules in `inspectah-core` (pure resolution/normalization logic) and `inspectah-collect` (image pull + extraction via nsenter). Snapshot schema adds top-level `target_image` and `baseline` fields independent of `RpmSection`. Classification matrix in `inspectah-refine` upgraded with exhaustive `PackageState × baseline mode` coverage. `inspectah-refine` is the canonical owner of derived baseline summary. Pipeline order: resolve → normalize ref → pull + extract → scan host.
 
-**Tech Stack:** Rust (edition 2021), serde/serde_json for schema, clap for CLI, axum for web API, existing `Executor` trait for host commands. Workspace version `0.8.0-alpha.1`, current `SCHEMA_VERSION = 14` (bumps to 15).
+**Tech Stack:** Rust (edition 2024), serde/serde_json for schema, clap for CLI, axum for web API, existing `Executor` trait for host commands. Workspace version `0.8.0-alpha.1`, current `SCHEMA_VERSION = 14` (bumps to 15).
 
 **Spec:** `docs/specs/proposed/2026-05-17-phase6-base-image-selection-design.md` (revision 3, approved round 3)
 
