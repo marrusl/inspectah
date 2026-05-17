@@ -4,13 +4,33 @@
 
 **Goal:** Replace hardcoded Containerfile FROM with auto-detected/overridable base image, extract real baseline packages from the target image, and upgrade classification to use accurate baseline data.
 
-**Architecture:** New `baseline` modules in `inspectah-core` (pure resolution/normalization logic) and `inspectah-collect` (image pull + extraction via nsenter). Snapshot schema adds top-level `target_image` and `baseline` fields independent of `RpmSection`. Classification matrix in `inspectah-refine` upgraded with exhaustive `PackageState × baseline mode` coverage. `inspectah-refine` is the canonical owner of derived baseline summary. Pipeline order: resolve → normalize ref → pull + extract → scan host.
+**Architecture:** New `baseline` modules in `inspectah-core` (pure resolution/normalization logic) and `inspectah-collect` (image pull + extraction via nsenter). Snapshot schema adds top-level `target_image` and `baseline` fields independent of `RpmSection`. Classification matrix in `inspectah-refine` upgraded with exhaustive `PackageState × baseline mode` coverage. Collect-side RPM classifier updated so `PackageState` assignment uses baseline data at collection time. `inspectah-refine` is the canonical owner of derived baseline summary. Pipeline order: resolve → normalize ref → pull + extract → scan host.
 
 **Tech Stack:** Rust (edition 2024), serde/serde_json for schema, clap for CLI, axum for web API, existing `Executor` trait for host commands. Workspace version `0.8.0-alpha.1`, current `SCHEMA_VERSION = 14` (bumps to 15).
 
 **Spec:** `docs/specs/proposed/2026-05-17-phase6-base-image-selection-design.md` (revision 3, approved round 3)
 
 **Execution:** SDD cadence — Tang implements, Thorn code quality review.
+
+**Plan revision 2:** Addresses round 1 plan review blockers: canonical normalized-ref persistence, no hardcoded FROM fallback, correct digest source, collect-side classifier seam, stronger normalization validation, and expanded proof gates. Also adds version floor clamping (RHEL 9.6, Fedora 41).
+
+---
+
+## Canonical Target-Image Truth Contract
+
+**One identity flows through the entire system.** Resolution produces a raw ref. Normalization validates and canonicalizes it. The **normalized** ref is what gets persisted into `target_image`, used for `podman pull`, rendered in the Containerfile FROM, shown in the banner, and reconstructed on reopen/export. No surface may use the raw resolved ref after normalization.
+
+```
+resolve_base_image() → raw ref
+    → normalize_image_ref() → NormalizedImageRef
+        → persisted in snapshot.target_image.image_ref ← single source of truth
+        → used by podman pull
+        → used by Containerfile FROM
+        → used by BaselineSummary banner
+        → used by reopen/export
+```
+
+When `target_image` is `null` (resolution failed in `--no-baseline` mode), the Containerfile emits an omission comment. No hardcoded fallback. Ever.
 
 ---
 
@@ -20,26 +40,27 @@
 
 | File | Responsibility |
 |------|---------------|
-| `inspectah-core/src/baseline.rs` | `BaseImageResolution`, `ResolutionStrategy`, `NormalizedImageRef`, `BaselineData`, `BaselinePackageEntry`, `IncompatibleServiceEntry`, `resolve_base_image()`, `normalize_image_ref()`, incompatible services constant |
-| `inspectah-collect/src/baseline.rs` | `extract_baseline()` — nsenter + podman orchestration with entrypoint override, container lifecycle, NEVRA parsing |
-| `inspectah-collect/tests/baseline_test.rs` | Extraction tests with mock executor: NEVRA parsing, command ordering, cleanup on failure, mixed-arch |
-| `inspectah-refine/src/baseline_summary.rs` | `BaselineSummary` derivation from refine session state |
+| `inspectah-core/src/baseline.rs` | `BaseImageResolution`, `ResolutionStrategy`, `NormalizedImageRef`, `BaselineData`, `BaselinePackageEntry`, `TargetImageIdentity`, `IncompatibleServiceEntry`, `UblueMetadata`, `resolve_base_image()`, `normalize_image_ref()`, `clamp_version()`, version floor constants, incompatible services constant |
+| `inspectah-collect/src/baseline.rs` | `extract_baseline()` — nsenter + podman orchestration with entrypoint override, container lifecycle, NEVRA parsing, repository-side digest capture |
+| `inspectah-collect/tests/baseline_test.rs` | Extraction tests: NEVRA parsing, exact `--entrypoint`/`--network none` arg assertion, command ordering proof, cleanup across all failure points, mixed-arch baseline keys, digest capture from image (not container) |
+| `inspectah-refine/src/baseline_summary.rs` | `BaselineSummary` derivation from classification counts (not mutable `include` state) |
 
 ### Modified files
 
 | File | Changes |
 |------|---------|
 | `inspectah-core/src/lib.rs` | Add `pub mod baseline;` |
-| `inspectah-core/src/snapshot.rs` | Add `target_image` and `baseline` fields to `InspectionSnapshot`, bump `SCHEMA_VERSION` to 15, update `migrate()` |
+| `inspectah-core/src/snapshot.rs` | Add `target_image` and `baseline` to `InspectionSnapshot`, bump `SCHEMA_VERSION` to 15, migration maps missing fields to degraded mode (`no_baseline = true`) |
 | `inspectah-collect/src/lib.rs` | Add `pub mod baseline;` |
-| `inspectah-collect/src/executor/mock.rs` | Add command-order recording (`Vec<String>`) for proof seam |
+| `inspectah-collect/src/executor/mock.rs` | Add command-log recording (`Vec<String>`) and `with_command_prefix()` for flexible matching |
+| `inspectah-collect/src/inspectors/rpm/classifier.rs` | Wire `BaselineData` into `PackageState` assignment so `packages_added` vs `base_image_only` partitioning is baseline-aware at collection time |
 | `inspectah-refine/src/lib.rs` | Add `pub mod baseline_summary;` |
-| `inspectah-refine/src/attention.rs` | Add `PackageUserAdded` → Routine, `PackageVersionChanged` → NeedsReview, `ServiceImageModeIncompatible` attention reasons; update classification with exhaustive matrix |
-| `inspectah-refine/src/normalize.rs` | Baseline-aware service filtering (incompatible service exclusion) |
-| `inspectah-refine/src/session.rs` | Materialize `BaselineData` into session, derive `BaselineSummary` |
-| `inspectah-pipeline/src/render/containerfile.rs` | Replace `base_image_from_snapshot()` to read `target_image` field, remove hardcoded fallback |
-| `inspectah-cli/src/commands/scan.rs` | Add `--base-image` and `--no-baseline` flags, wire resolution + extraction before host scan, progress output |
-| `inspectah-web/src/handlers.rs` | Add `baseline_summary` to `ViewResponse`, serialize from `RefineSession` |
+| `inspectah-refine/src/attention.rs` | Add baseline-aware attention reasons, exhaustive classification matrix |
+| `inspectah-refine/src/normalize.rs` | Incompatible service filtering — one authoritative post-normalization representation |
+| `inspectah-refine/src/session.rs` | Materialize `BaselineData`, derive `BaselineSummary` from original classification counts |
+| `inspectah-pipeline/src/render/containerfile.rs` | Replace `base_image_from_snapshot()`: read `target_image.image_ref` (normalized), no hardcoded fallback, omission comment when null |
+| `inspectah-cli/src/commands/scan.rs` | `--base-image` and `--no-baseline` flags (mutually exclusive), resolution + extraction before host scan, progress output. Resolution failure in `--no-baseline` produces `target_image = null`, not swallowed with `.ok()` |
+| `inspectah-web/src/handlers.rs` | Add `baseline_summary` to `ViewResponse`, serialized from `RefineSession` (not derived by web layer) |
 
 ---
 
@@ -49,206 +70,44 @@
 - Create: `inspectah-core/src/baseline.rs`
 - Modify: `inspectah-core/src/lib.rs`
 
-- [ ] **Step 1: Write type definition tests**
+- [ ] **Step 1: Write types, version floor constants, incompatible services constant, and tests**
 
-In `inspectah-core/src/baseline.rs`, add the module with types and inline tests:
+Create `inspectah-core/src/baseline.rs` with all types from the spec:
 
-```rust
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+- `ResolutionStrategy` enum (5 variants, `#[serde(rename_all = "kebab-case")]`)
+- `BaseImageResolution` struct (raw `image_ref` + `strategy`)
+- `NormalizedImageRef` struct (private `ref_string` field, `from_validated()` constructor, `as_str()` accessor, `Display` impl)
+- `BaselinePackageEntry` struct (name, epoch, version, release, arch)
+- `BaselineData` struct (resolution, normalized_ref, image_digest, packages HashMap, extracted_at)
+- `TargetImageIdentity` struct — stores the **normalized** ref string + strategy. This is what gets persisted in the snapshot.
+- `IncompatibleServiceEntry` struct (unit, reason) and `INCOMPATIBLE_SERVICES` constant (4 entries)
+- `UblueMetadata` struct with serde rename for `image-ref`, `image-tag`, `image-name`, `image-vendor`
+- Version floor constants:
+  ```rust
+  pub const RHEL_BOOTC_MIN: &[(&str, &str)] = &[("9", "9.6"), ("10", "10.0")];
+  pub const FEDORA_BOOTC_MIN: u32 = 41;
+  ```
+- Error types: `ResolutionError`, `NormalizationError`
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ResolutionStrategy {
-    CliOverride,
-    UniversalBlue,
-    BootcStatus,
-    FedoraAtomicDesktop,
-    OsRelease,
-}
+Tests:
+- `BaselineData` serde roundtrip with NEVRA
+- `ResolutionStrategy` serde produces kebab-case (`"os-release"`, `"cli-override"`, `"fedora-atomic-desktop"`)
+- `TargetImageIdentity` roundtrip
+- `INCOMPATIBLE_SERVICES` has exactly 4 entries with expected unit names
+- Version floor constants are correct
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BaseImageResolution {
-    pub image_ref: String,
-    pub strategy: ResolutionStrategy,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NormalizedImageRef {
-    ref_string: String,
-}
-
-impl NormalizedImageRef {
-    pub fn as_str(&self) -> &str {
-        &self.ref_string
-    }
-}
-
-impl std::fmt::Display for NormalizedImageRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.ref_string)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BaselinePackageEntry {
-    pub name: String,
-    #[serde(default)]
-    pub epoch: Option<String>,
-    pub version: String,
-    pub release: String,
-    pub arch: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BaselineData {
-    pub resolution: BaseImageResolution,
-    pub normalized_ref: NormalizedImageRef,
-    pub image_digest: String,
-    pub packages: HashMap<String, BaselinePackageEntry>,
-    pub extracted_at: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TargetImageIdentity {
-    pub image_ref: String,
-    pub strategy: ResolutionStrategy,
-}
-
-pub struct IncompatibleServiceEntry {
-    pub unit: &'static str,
-    pub reason: &'static str,
-}
-
-pub const INCOMPATIBLE_SERVICES: &[IncompatibleServiceEntry] = &[
-    IncompatibleServiceEntry {
-        unit: "dnf-makecache.service",
-        reason: "package-manager service incompatible with immutable /usr",
-    },
-    IncompatibleServiceEntry {
-        unit: "dnf-makecache.timer",
-        reason: "package-manager timer incompatible with immutable /usr",
-    },
-    IncompatibleServiceEntry {
-        unit: "packagekit.service",
-        reason: "package-manager service incompatible with immutable /usr",
-    },
-    IncompatibleServiceEntry {
-        unit: "packagekit-offline-update.service",
-        reason: "package-manager service incompatible with immutable /usr",
-    },
-];
-
-#[derive(Debug, thiserror::Error)]
-pub enum ResolutionError {
-    #[error("Universal Blue metadata at {path} is malformed: {reason}")]
-    MalformedUblueMetadata { path: String, reason: String },
-    #[error("no bootc base image mapping for OS ID={id}")]
-    UnknownDistro { id: String },
-    #[error("base image resolution failed: {0}")]
-    NoResolution(String),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum NormalizationError {
-    #[error("image ref is empty")]
-    Empty,
-    #[error("image ref contains invalid characters: {0}")]
-    InvalidCharacters(String),
-    #[error("image ref must be fully qualified with a registry component: {0}")]
-    NotFullyQualified(String),
-    #[error("local-only image ref not supported for baseline extraction: {0}")]
-    LocalOnly(String),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn baseline_data_roundtrip() {
-        let data = BaselineData {
-            resolution: BaseImageResolution {
-                image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-                strategy: ResolutionStrategy::OsRelease,
-            },
-            normalized_ref: NormalizedImageRef {
-                ref_string: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-            },
-            image_digest: "sha256:abc123".into(),
-            packages: HashMap::from([(
-                "bash.x86_64".into(),
-                BaselinePackageEntry {
-                    name: "bash".into(),
-                    epoch: Some("0".into()),
-                    version: "5.2.26".into(),
-                    release: "3.el9".into(),
-                    arch: "x86_64".into(),
-                },
-            )]),
-            extracted_at: "2026-05-17T01:00:00Z".into(),
-        };
-        let json = serde_json::to_string(&data).unwrap();
-        let parsed: BaselineData = serde_json::from_str(&json).unwrap();
-        assert_eq!(data, parsed);
-    }
-
-    #[test]
-    fn resolution_strategy_serde() {
-        assert_eq!(
-            serde_json::to_string(&ResolutionStrategy::OsRelease).unwrap(),
-            "\"os-release\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ResolutionStrategy::CliOverride).unwrap(),
-            "\"cli-override\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ResolutionStrategy::FedoraAtomicDesktop).unwrap(),
-            "\"fedora-atomic-desktop\""
-        );
-    }
-
-    #[test]
-    fn incompatible_services_list() {
-        let units: Vec<&str> = INCOMPATIBLE_SERVICES.iter().map(|s| s.unit).collect();
-        assert!(units.contains(&"dnf-makecache.service"));
-        assert!(units.contains(&"dnf-makecache.timer"));
-        assert!(units.contains(&"packagekit.service"));
-        assert!(units.contains(&"packagekit-offline-update.service"));
-        assert_eq!(units.len(), 4);
-    }
-
-    #[test]
-    fn target_image_identity_roundtrip() {
-        let ti = TargetImageIdentity {
-            image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-            strategy: ResolutionStrategy::OsRelease,
-        };
-        let json = serde_json::to_string(&ti).unwrap();
-        let parsed: TargetImageIdentity = serde_json::from_str(&json).unwrap();
-        assert_eq!(ti, parsed);
-    }
-}
-```
-
-- [ ] **Step 2: Add module to lib.rs**
-
-In `inspectah-core/src/lib.rs`, add:
-```rust
-pub mod baseline;
-```
+- [ ] **Step 2: Add `pub mod baseline;` to `inspectah-core/src/lib.rs`**
 
 - [ ] **Step 3: Run tests**
 
 Run: `cargo test -p inspectah-core -- baseline`
-Expected: all 4 tests pass.
+Expected: all pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add inspectah-core/src/baseline.rs inspectah-core/src/lib.rs
-git commit -m "feat(core): add Phase 6 baseline types and incompatible services constant"
+git commit -m "feat(core): add Phase 6 baseline types, version floors, and incompatible services constant"
 ```
 
 ---
@@ -260,326 +119,52 @@ git commit -m "feat(core): add Phase 6 baseline types and incompatible services 
 
 - [ ] **Step 1: Write resolution tests**
 
-Add to the `tests` module in `inspectah-core/src/baseline.rs`:
+Test every path in the resolution chain:
 
-```rust
-use super::*;
-use crate::types::os::OsRelease;
+- CLI override wins over all other strategies
+- UBlue with transport-prefixed tagless `image-ref` + separate `image-tag` → combined ref
+- UBlue with already-tagged `image-ref` → used as-is
+- UBlue synthesis fallback (no `image-ref`, has vendor/name/tag)
+- UBlue tagless ref without `image-tag` → fail closed (not fall through)
+- UBlue malformed metadata → `ResolutionError::MalformedUblueMetadata`
+- bootc status ref → `ResolutionStrategy::BootcStatus`
+- Fedora Atomic desktop (`VARIANT_ID=silverblue`) resolves BEFORE generic Fedora
+- Generic Fedora (no variant) → `fedora-bootc`
+- CentOS Stream → `centos-bootc:stream{MAJOR}`
+- RHEL → `rhel{MAJOR}/rhel-bootc:{VERSION_ID}`
+- **RHEL version floor:** RHEL 9.4 → clamped to `rhel-bootc:9.6`
+- **RHEL version floor:** RHEL 9.6 → `rhel-bootc:9.6` (no change)
+- **RHEL version floor:** RHEL 10.0 → `rhel-bootc:10.0` (at floor)
+- **Fedora version floor:** Fedora 40 → clamped to `fedora-bootc:41`
+- **Fedora version floor:** Fedora 42 → `fedora-bootc:42` (above floor)
+- Unknown distro → `ResolutionError::UnknownDistro`
+- All 7 desktop variants resolve correctly
 
-fn os_release(id: &str, version_id: &str, variant_id: &str) -> OsRelease {
-    OsRelease {
-        id: id.into(),
-        version_id: version_id.into(),
-        variant_id: variant_id.into(),
-        ..Default::default()
-    }
-}
+- [ ] **Step 2: Implement `clamp_version()` and `resolve_base_image()`**
 
-#[test]
-fn resolve_cli_override_wins() {
-    let os = os_release("fedora", "41", "silverblue");
-    let result = resolve_base_image(
-        &os,
-        None,  // no ublue
-        None,  // no bootc status
-        Some("registry.example.com/custom:latest"),
-    );
-    let res = result.unwrap();
-    assert_eq!(res.strategy, ResolutionStrategy::CliOverride);
-    assert_eq!(res.image_ref, "registry.example.com/custom:latest");
-}
+Port `clampVersion()` from Go: compare dot-separated integer components, return max(version, minimum).
 
-#[test]
-fn resolve_fedora_atomic_before_generic_fedora() {
-    let os = os_release("fedora", "41", "silverblue");
-    let result = resolve_base_image(&os, None, None, None);
-    let res = result.unwrap();
-    assert_eq!(res.strategy, ResolutionStrategy::FedoraAtomicDesktop);
-    assert_eq!(res.image_ref, "quay.io/fedora-ostree-desktops/silverblue:41");
-}
+Resolution chain:
+1. CLI override → `CliOverride`
+2. UBlue: strip transport prefix, combine with `image-tag` if tagless, fail closed on malformed → `UniversalBlue`
+3. bootc status → `BootcStatus`
+4. Fedora Atomic desktop (variant in known set) → `FedoraAtomicDesktop`
+5. os-release mapping with version clamping → `OsRelease`
 
-#[test]
-fn resolve_generic_fedora_no_variant() {
-    let os = os_release("fedora", "41", "");
-    let result = resolve_base_image(&os, None, None, None);
-    let res = result.unwrap();
-    assert_eq!(res.strategy, ResolutionStrategy::OsRelease);
-    assert_eq!(res.image_ref, "quay.io/fedora/fedora-bootc:41");
-}
+UBlue metadata path: `/usr/share/ublue-os/image-info.json`
 
-#[test]
-fn resolve_centos_stream() {
-    let os = os_release("centos", "9", "");
-    let result = resolve_base_image(&os, None, None, None);
-    let res = result.unwrap();
-    assert_eq!(res.image_ref, "quay.io/centos-bootc/centos-bootc:stream9");
-}
+Transport prefix stripping: `ostree-image-signed:docker://`, `docker://`, `containers-storage:`
 
-#[test]
-fn resolve_rhel() {
-    let os = os_release("rhel", "9.6", "");
-    let result = resolve_base_image(&os, None, None, None);
-    let res = result.unwrap();
-    assert_eq!(res.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.6");
-}
-
-#[test]
-fn resolve_unknown_distro_fails() {
-    let os = os_release("ubuntu", "24.04", "");
-    let result = resolve_base_image(&os, None, None, None);
-    assert!(result.is_err());
-}
-
-#[test]
-fn resolve_bootc_status_before_os_release() {
-    let os = os_release("rhel", "9.6", "");
-    let bootc_ref = Some("registry.redhat.io/rhel9/rhel-bootc:9.6");
-    let result = resolve_base_image(&os, None, bootc_ref, None);
-    let res = result.unwrap();
-    assert_eq!(res.strategy, ResolutionStrategy::BootcStatus);
-}
-
-#[test]
-fn resolve_ublue_tagless_ref_combined_with_tag() {
-    let ublue = UblueMetadata {
-        image_ref: Some("ostree-image-signed:docker://ghcr.io/ublue-os/bazzite".into()),
-        image_tag: Some("stable".into()),
-        image_name: Some("bazzite".into()),
-        image_vendor: Some("ublue-os".into()),
-    };
-    let os = os_release("fedora", "41", "");
-    let result = resolve_base_image(&os, Some(&ublue), None, None);
-    let res = result.unwrap();
-    assert_eq!(res.strategy, ResolutionStrategy::UniversalBlue);
-    assert_eq!(res.image_ref, "ghcr.io/ublue-os/bazzite:stable");
-}
-
-#[test]
-fn resolve_ublue_tagged_ref_used_as_is() {
-    let ublue = UblueMetadata {
-        image_ref: Some("ghcr.io/ublue-os/bazzite:40".into()),
-        image_tag: Some("stable".into()),
-        image_name: None,
-        image_vendor: None,
-    };
-    let os = os_release("fedora", "41", "");
-    let result = resolve_base_image(&os, Some(&ublue), None, None);
-    let res = result.unwrap();
-    assert_eq!(res.image_ref, "ghcr.io/ublue-os/bazzite:40");
-}
-
-#[test]
-fn resolve_ublue_synthesis_fallback() {
-    let ublue = UblueMetadata {
-        image_ref: None,
-        image_tag: Some("stable".into()),
-        image_name: Some("bazzite".into()),
-        image_vendor: Some("ublue-os".into()),
-    };
-    let os = os_release("fedora", "41", "");
-    let result = resolve_base_image(&os, Some(&ublue), None, None);
-    let res = result.unwrap();
-    assert_eq!(res.image_ref, "ghcr.io/ublue-os/bazzite:stable");
-}
-
-#[test]
-fn resolve_ublue_tagless_no_image_tag_fails() {
-    let ublue = UblueMetadata {
-        image_ref: Some("ostree-image-signed:docker://ghcr.io/ublue-os/bazzite".into()),
-        image_tag: None,
-        image_name: None,
-        image_vendor: None,
-    };
-    let os = os_release("fedora", "41", "");
-    let result = resolve_base_image(&os, Some(&ublue), None, None);
-    assert!(result.is_err());
-}
-
-#[test]
-fn resolve_all_known_desktop_variants() {
-    for variant in &["silverblue", "kinoite", "sway-atomic", "budgie-atomic",
-                      "cosmic-atomic", "lxqt-atomic", "xfce-atomic"] {
-        let os = os_release("fedora", "41", variant);
-        let result = resolve_base_image(&os, None, None, None);
-        let res = result.unwrap();
-        assert_eq!(res.strategy, ResolutionStrategy::FedoraAtomicDesktop);
-        assert!(res.image_ref.contains(variant));
-    }
-}
-```
-
-- [ ] **Step 2: Run tests — verify they fail**
-
-Run: `cargo test -p inspectah-core -- resolve`
-Expected: FAIL — `resolve_base_image` and `UblueMetadata` not defined.
-
-- [ ] **Step 3: Implement resolution chain**
-
-Add to `inspectah-core/src/baseline.rs` (above `#[cfg(test)]`):
-
-```rust
-use crate::types::os::OsRelease;
-
-const FEDORA_ATOMIC_DESKTOPS: &[&str] = &[
-    "silverblue", "kinoite", "sway-atomic", "budgie-atomic",
-    "cosmic-atomic", "lxqt-atomic", "xfce-atomic",
-];
-
-const TRANSPORT_PREFIXES: &[&str] = &[
-    "ostree-image-signed:docker://",
-    "docker://",
-    "containers-storage:",
-];
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct UblueMetadata {
-    #[serde(rename = "image-ref")]
-    pub image_ref: Option<String>,
-    #[serde(rename = "image-tag")]
-    pub image_tag: Option<String>,
-    #[serde(rename = "image-name")]
-    pub image_name: Option<String>,
-    #[serde(rename = "image-vendor")]
-    pub image_vendor: Option<String>,
-}
-
-fn strip_transport_prefix(raw: &str) -> &str {
-    for prefix in TRANSPORT_PREFIXES {
-        if let Some(stripped) = raw.strip_prefix(prefix) {
-            return stripped;
-        }
-    }
-    raw
-}
-
-fn has_tag(image_ref: &str) -> bool {
-    // A ref has a tag if there's a colon after the last slash
-    match image_ref.rfind('/') {
-        Some(slash_pos) => image_ref[slash_pos..].contains(':'),
-        None => image_ref.contains(':'),
-    }
-}
-
-fn resolve_ublue(ublue: &UblueMetadata) -> Result<BaseImageResolution, ResolutionError> {
-    if let Some(ref raw_ref) = ublue.image_ref {
-        let stripped = strip_transport_prefix(raw_ref);
-        let resolved = if has_tag(stripped) {
-            stripped.to_string()
-        } else {
-            match &ublue.image_tag {
-                Some(tag) if !tag.is_empty() => format!("{stripped}:{tag}"),
-                _ => {
-                    return Err(ResolutionError::MalformedUblueMetadata {
-                        path: "/usr/share/ublue-os/image-info.json".into(),
-                        reason: "image-ref is tagless and no image-tag provided".into(),
-                    });
-                }
-            }
-        };
-        return Ok(BaseImageResolution {
-            image_ref: resolved,
-            strategy: ResolutionStrategy::UniversalBlue,
-        });
-    }
-
-    match (&ublue.image_vendor, &ublue.image_name, &ublue.image_tag) {
-        (Some(vendor), Some(name), Some(tag))
-            if !vendor.is_empty() && !name.is_empty() && !tag.is_empty() =>
-        {
-            Ok(BaseImageResolution {
-                image_ref: format!("ghcr.io/{vendor}/{name}:{tag}"),
-                strategy: ResolutionStrategy::UniversalBlue,
-            })
-        }
-        _ => Err(ResolutionError::MalformedUblueMetadata {
-            path: "/usr/share/ublue-os/image-info.json".into(),
-            reason: "missing required fields for synthesis (need image-vendor, image-name, image-tag)".into(),
-        }),
-    }
-}
-
-pub fn resolve_base_image(
-    os_release: &OsRelease,
-    ublue: Option<&UblueMetadata>,
-    bootc_status_ref: Option<&str>,
-    cli_override: Option<&str>,
-) -> Result<BaseImageResolution, ResolutionError> {
-    // 1. CLI override
-    if let Some(image_ref) = cli_override {
-        return Ok(BaseImageResolution {
-            image_ref: image_ref.to_string(),
-            strategy: ResolutionStrategy::CliOverride,
-        });
-    }
-
-    // 2. Universal Blue
-    if let Some(ublue) = ublue {
-        return resolve_ublue(ublue);
-    }
-
-    // 3. bootc status
-    if let Some(ref_str) = bootc_status_ref {
-        if !ref_str.is_empty() {
-            return Ok(BaseImageResolution {
-                image_ref: strip_transport_prefix(ref_str).to_string(),
-                strategy: ResolutionStrategy::BootcStatus,
-            });
-        }
-    }
-
-    // 4. Fedora Atomic desktop (BEFORE generic os-release)
-    if os_release.id == "fedora" {
-        if FEDORA_ATOMIC_DESKTOPS.contains(&os_release.variant_id.as_str()) {
-            return Ok(BaseImageResolution {
-                image_ref: format!(
-                    "quay.io/fedora-ostree-desktops/{}:{}",
-                    os_release.variant_id, os_release.version_id
-                ),
-                strategy: ResolutionStrategy::FedoraAtomicDesktop,
-            });
-        }
-    }
-
-    // 5. Generic os-release mapping
-    let major = os_release
-        .version_id
-        .split('.')
-        .next()
-        .unwrap_or(&os_release.version_id);
-
-    match os_release.id.as_str() {
-        "fedora" => Ok(BaseImageResolution {
-            image_ref: format!("quay.io/fedora/fedora-bootc:{}", os_release.version_id),
-            strategy: ResolutionStrategy::OsRelease,
-        }),
-        "centos" => Ok(BaseImageResolution {
-            image_ref: format!("quay.io/centos-bootc/centos-bootc:stream{major}"),
-            strategy: ResolutionStrategy::OsRelease,
-        }),
-        "rhel" => Ok(BaseImageResolution {
-            image_ref: format!(
-                "registry.redhat.io/rhel{major}/rhel-bootc:{}",
-                os_release.version_id
-            ),
-            strategy: ResolutionStrategy::OsRelease,
-        }),
-        _ => Err(ResolutionError::UnknownDistro {
-            id: os_release.id.clone(),
-        }),
-    }
-}
-```
-
-- [ ] **Step 4: Run tests — verify they pass**
+- [ ] **Step 3: Run tests**
 
 Run: `cargo test -p inspectah-core -- baseline`
-Expected: all tests pass.
+Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add inspectah-core/src/baseline.rs
-git commit -m "feat(core): implement base image resolution chain with UBlue and Fedora Atomic support"
+git commit -m "feat(core): implement resolution chain with UBlue, Fedora Atomic, and version floor clamping"
 ```
 
 ---
@@ -591,130 +176,38 @@ git commit -m "feat(core): implement base image resolution chain with UBlue and 
 
 - [ ] **Step 1: Write normalization tests**
 
-Add to `tests` module in `inspectah-core/src/baseline.rs`:
+- Transport prefix stripping (all 3 prefixes)
+- Empty ref → `NormalizationError::Empty`
+- Whitespace / shell metacharacters → `NormalizationError::InvalidCharacters`
+- Bare ref without registry (`rhel-bootc:9.6`) → `NormalizationError::NotFullyQualified`
+- **Registry hostname validation:** `foo/bar:tag` (no dot in first component) → `NotFullyQualified`. `registry.redhat.io/rhel9/rhel-bootc:9.6` (dot in first component) → accepted. `localhost/foo:tag` → `NormalizationError::LocalOnly`.
+- No tag, no digest → appends `:latest`
+- Digest preserved (`@sha256:...`)
+- Tag preserved (`:9.6`)
 
-```rust
-#[test]
-fn normalize_strips_transport_prefix() {
-    let result = normalize_image_ref("ostree-image-signed:docker://ghcr.io/ublue-os/bazzite:stable").unwrap();
-    assert_eq!(result.as_str(), "ghcr.io/ublue-os/bazzite:stable");
-}
+- [ ] **Step 2: Implement `normalize_image_ref()`**
 
-#[test]
-fn normalize_rejects_empty() {
-    assert!(normalize_image_ref("").is_err());
-}
+Validation rules:
+1. Non-empty, no whitespace/metacharacters
+2. Strip transport prefixes
+3. Reject `localhost/` and `containers-storage:` (local-only)
+4. **Must be fully qualified:** first path component (before first `/`) must contain a `.` or a `:` (port) — this validates it as a registry hostname, not a namespace-only short name
+5. If `@` present → digest ref, preserve as-is
+6. If tag present → preserve
+7. No tag, no digest → append `:latest`
 
-#[test]
-fn normalize_rejects_whitespace() {
-    assert!(normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc:9.6 ; rm -rf /").is_err());
-}
+Return `NormalizedImageRef` (validated, pullable).
 
-#[test]
-fn normalize_rejects_bare_ref() {
-    assert!(normalize_image_ref("rhel-bootc:9.6").is_err());
-}
-
-#[test]
-fn normalize_appends_latest_when_no_tag() {
-    let result = normalize_image_ref("registry.redhat.io/rhel9/rhel-bootc").unwrap();
-    assert_eq!(result.as_str(), "registry.redhat.io/rhel9/rhel-bootc:latest");
-}
-
-#[test]
-fn normalize_preserves_digest() {
-    let input = "registry.redhat.io/rhel9/rhel-bootc@sha256:abc123";
-    let result = normalize_image_ref(input).unwrap();
-    assert_eq!(result.as_str(), input);
-}
-
-#[test]
-fn normalize_preserves_tag() {
-    let input = "registry.redhat.io/rhel9/rhel-bootc:9.6";
-    let result = normalize_image_ref(input).unwrap();
-    assert_eq!(result.as_str(), input);
-}
-
-#[test]
-fn normalize_rejects_localhost() {
-    assert!(normalize_image_ref("localhost/myimage:latest").is_err());
-}
-
-#[test]
-fn normalize_rejects_containers_storage() {
-    assert!(normalize_image_ref("containers-storage:myimage:latest").is_err());
-}
-
-#[test]
-fn normalize_rejects_shell_metacharacters() {
-    assert!(normalize_image_ref("registry.example.com/image:$(whoami)").is_err());
-}
-```
-
-- [ ] **Step 2: Run tests — verify they fail**
+- [ ] **Step 3: Run tests**
 
 Run: `cargo test -p inspectah-core -- normalize_`
-Expected: FAIL — `normalize_image_ref` not defined.
+Expected: all pass.
 
-- [ ] **Step 3: Implement normalize_image_ref**
-
-Add to `inspectah-core/src/baseline.rs`:
-
-```rust
-const SHELL_METACHARACTERS: &[char] = &['$', '`', '|', ';', '&', '(', ')', '{', '}', '<', '>',
-                                         '\n', '\r', '!', '#'];
-
-pub fn normalize_image_ref(raw: &str) -> Result<NormalizedImageRef, NormalizationError> {
-    if raw.is_empty() {
-        return Err(NormalizationError::Empty);
-    }
-
-    let stripped = strip_transport_prefix(raw);
-
-    if stripped.contains(char::is_whitespace) || stripped.contains(SHELL_METACHARACTERS.as_slice()) {
-        return Err(NormalizationError::InvalidCharacters(raw.into()));
-    }
-
-    if stripped.starts_with("localhost/") || stripped.starts_with("containers-storage:") {
-        return Err(NormalizationError::LocalOnly(raw.into()));
-    }
-
-    // Must contain at least one slash (registry/repo)
-    if !stripped.contains('/') {
-        return Err(NormalizationError::NotFullyQualified(raw.into()));
-    }
-
-    // If it has a digest (@sha256:), preserve as-is
-    if stripped.contains('@') {
-        return Ok(NormalizedImageRef {
-            ref_string: stripped.to_string(),
-        });
-    }
-
-    // If it has a tag (colon after last slash), preserve
-    if has_tag(stripped) {
-        return Ok(NormalizedImageRef {
-            ref_string: stripped.to_string(),
-        });
-    }
-
-    // No tag, no digest — append :latest
-    Ok(NormalizedImageRef {
-        ref_string: format!("{stripped}:latest"),
-    })
-}
-```
-
-- [ ] **Step 4: Run tests — verify they pass**
-
-Run: `cargo test -p inspectah-core -- baseline`
-Expected: all tests pass.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add inspectah-core/src/baseline.rs
-git commit -m "feat(core): add ref normalization gate with transport stripping and validation"
+git commit -m "feat(core): add ref normalization with registry hostname validation"
 ```
 
 ---
@@ -726,162 +219,45 @@ git commit -m "feat(core): add ref normalization gate with transport stripping a
 
 - [ ] **Step 1: Write schema tests**
 
-Add to the existing `tests` module in `inspectah-core/src/snapshot.rs`:
+- Snapshot with `target_image` + `baseline` roundtrips correctly
+- `target_image.image_ref` stores the **normalized** ref (this is verified by setting it from `NormalizedImageRef.as_str()` and asserting it back)
+- Degraded snapshot: `target_image` present, `baseline` null, `no_baseline = true` — roundtrips
+- Degraded snapshot with null `target_image`: both null, `no_baseline = true` — roundtrips
+- **Pre-Phase-6 migration:** snapshot with `schema_version: 14` and no `target_image`/`baseline`/`no_baseline` fields deserializes via `serde(default)`, then `migrate()` sets `schema_version = 15`. Result: `target_image = None`, `baseline = None`, `no_baseline = false` (serde default). The refine layer interprets missing `target_image` + missing `baseline` + `no_baseline = false` as a legacy snapshot and enters degraded mode for display.
 
-```rust
-use crate::baseline::{
-    BaseImageResolution, BaselineData, BaselinePackageEntry,
-    NormalizedImageRef, ResolutionStrategy, TargetImageIdentity,
-};
-
-#[test]
-fn snapshot_with_target_image_roundtrip() {
-    let mut snap = InspectionSnapshot::new();
-    snap.target_image = Some(TargetImageIdentity {
-        image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-        strategy: ResolutionStrategy::OsRelease,
-    });
-    let json = serde_json::to_string(&snap).unwrap();
-    let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
-    assert!(parsed.target_image.is_some());
-    assert_eq!(
-        parsed.target_image.unwrap().image_ref,
-        "registry.redhat.io/rhel9/rhel-bootc:9.6"
-    );
-}
-
-#[test]
-fn snapshot_with_baseline_roundtrip() {
-    let mut snap = InspectionSnapshot::new();
-    snap.target_image = Some(TargetImageIdentity {
-        image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-        strategy: ResolutionStrategy::OsRelease,
-    });
-    snap.baseline = Some(BaselineData {
-        resolution: BaseImageResolution {
-            image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-            strategy: ResolutionStrategy::OsRelease,
-        },
-        normalized_ref: NormalizedImageRef::from_validated(
-            "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-        ),
-        image_digest: "sha256:abc123".into(),
-        packages: std::collections::HashMap::from([(
-            "bash.x86_64".into(),
-            BaselinePackageEntry {
-                name: "bash".into(),
-                epoch: Some("0".into()),
-                version: "5.2.26".into(),
-                release: "3.el9".into(),
-                arch: "x86_64".into(),
-            },
-        )]),
-        extracted_at: "2026-05-17T01:00:00Z".into(),
-    });
-    let json = serde_json::to_string(&snap).unwrap();
-    let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
-    assert!(parsed.baseline.is_some());
-    assert_eq!(parsed.baseline.unwrap().packages.len(), 1);
-}
-
-#[test]
-fn degraded_snapshot_no_baseline() {
-    let mut snap = InspectionSnapshot::new();
-    snap.target_image = Some(TargetImageIdentity {
-        image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-        strategy: ResolutionStrategy::OsRelease,
-    });
-    snap.no_baseline = true;
-    assert!(snap.baseline.is_none());
-    assert!(snap.target_image.is_some());
-    let json = serde_json::to_string(&snap).unwrap();
-    let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
-    assert!(parsed.no_baseline);
-    assert!(parsed.target_image.is_some());
-}
-
-#[test]
-fn pre_phase6_snapshot_migration() {
-    // Simulate a Phase 5 snapshot (no target_image/baseline/no_baseline fields)
-    let json = r#"{
-        "schema_version": 14,
-        "meta": {},
-        "system_type": "package-mode",
-        "preflight": {"status": "ok"},
-        "warnings": [],
-        "redactions": []
-    }"#;
-    let mut snap: InspectionSnapshot = serde_json::from_str(json).unwrap();
-    migrate(&mut snap);
-    assert_eq!(snap.schema_version, 15);
-    assert!(snap.target_image.is_none());
-    assert!(snap.baseline.is_none());
-    // Pre-Phase-6 snapshots with no fields default to no_baseline=false
-    // (serde default). The refine layer treats missing baseline + no_baseline=false
-    // the same as degraded mode for display purposes.
-}
-```
-
-- [ ] **Step 2: Run tests — verify they fail**
-
-Run: `cargo test -p inspectah-core -- snapshot`
-Expected: FAIL — `target_image` and `baseline` fields not on `InspectionSnapshot`.
-
-- [ ] **Step 3: Add fields to InspectionSnapshot and update migration**
-
-In `inspectah-core/src/snapshot.rs`, add fields to the struct and bump the version:
+- [ ] **Step 2: Add fields to `InspectionSnapshot`**
 
 ```rust
 pub const SCHEMA_VERSION: u32 = 15;
 ```
 
-Add to `InspectionSnapshot` struct (after `completeness`):
-
+Add after `completeness`:
 ```rust
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_image: Option<crate::baseline::TargetImageIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub baseline: Option<crate::baseline::BaselineData>,
-    #[serde(default, skip_serializing_if = "crate::is_false")]
-    pub no_baseline: bool,
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub target_image: Option<crate::baseline::TargetImageIdentity>,
+#[serde(default, skip_serializing_if = "Option::is_none")]
+pub baseline: Option<crate::baseline::BaselineData>,
+#[serde(default, skip_serializing_if = "crate::is_false")]
+pub no_baseline: bool,
 ```
 
-Add `NormalizedImageRef::from_validated` constructor (in `baseline.rs`):
+Migration: `serde(default)` handles missing fields. `migrate()` bumps version to 15. No special migration logic needed — the defaults produce a valid legacy state.
 
-```rust
-impl NormalizedImageRef {
-    pub fn from_validated(ref_string: String) -> Self {
-        Self { ref_string }
-    }
-}
-```
-
-Update `migrate()` to handle v14→v15:
-
-```rust
-pub fn migrate(snap: &mut InspectionSnapshot) {
-    if snap.schema_version >= SCHEMA_VERSION {
-        return;
-    }
-    snap.schema_version = SCHEMA_VERSION;
-}
-```
-
-- [ ] **Step 4: Run tests — verify they pass**
+- [ ] **Step 3: Run tests**
 
 Run: `cargo test -p inspectah-core`
-Expected: all tests pass (including existing ones — serde(default) handles missing fields).
+Expected: all pass (existing tests unaffected — new fields default to None/false).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add inspectah-core/src/snapshot.rs inspectah-core/src/baseline.rs
-git commit -m "feat(core): add target_image and baseline to snapshot schema, bump to v15"
+git add inspectah-core/src/snapshot.rs
+git commit -m "feat(core): add target_image and baseline to snapshot, bump schema to v15"
 ```
 
 ---
 
-## Task 5: Mock Executor Order Recording + Baseline Extraction
+## Task 5: Mock Executor Enhancements + Baseline Extraction
 
 **Files:**
 - Modify: `inspectah-collect/src/executor/mock.rs`
@@ -889,224 +265,106 @@ git commit -m "feat(core): add target_image and baseline to snapshot schema, bum
 - Modify: `inspectah-collect/src/lib.rs`
 - Create: `inspectah-collect/tests/baseline_test.rs`
 
-- [ ] **Step 1: Add order recording to MockExecutor**
+- [ ] **Step 1: Add command-log recording and prefix matching to MockExecutor**
 
-In `inspectah-collect/src/executor/mock.rs`, add a `command_log` field:
+- `command_log: Mutex<Vec<String>>` — records every `run()` call in order
+- `command_log(&self) -> Vec<String>` accessor
+- `with_command_prefix(prefix, result)` — matches when command starts with prefix (for flexible arg matching)
 
-```rust
-use std::sync::Mutex;
+- [ ] **Step 2: Write extraction tests**
 
-pub struct MockExecutor {
-    // ... existing fields ...
-    command_log: Mutex<Vec<String>>,
-}
-```
+In `inspectah-collect/tests/baseline_test.rs`:
 
-Initialize in `new()`:
-```rust
-command_log: Mutex::new(Vec::new()),
-```
+**Happy path:** Mock executor returns success for pull → create → start → exec (NEVRA output) → rm. Verify packages parsed correctly, digest captured.
 
-Record in `run()`:
-```rust
-fn run(&self, cmd: &str, args: &[&str]) -> ExecResult {
-    let full_cmd = format!("{} {}", cmd, args.join(" "));
-    self.command_log.lock().unwrap().push(full_cmd.clone());
-    // ... existing lookup logic ...
-}
-```
+**Command ordering proof:** Assert the exact sequence: pull, create, start, exec (rpm -qa), rm. `podman inspect` for digest runs SEPARATELY on the image (not the container) — assert this is a `podman inspect <image_ref>` call, not `podman inspect <container>`.
 
-Add accessor:
-```rust
-pub fn command_log(&self) -> Vec<String> {
-    self.command_log.lock().unwrap().clone()
-}
-```
+**Exact arg assertion:** Verify the `podman create` command includes:
+- `--entrypoint` with `["sleep", "infinity"]`
+- `--network none`
+- `--name inspectah-baseline-*`
 
-- [ ] **Step 2: Write baseline extraction tests**
+**Cleanup on failure at each step:**
+- Pull fails → no container to clean up, error returned
+- Create fails → no container to clean up, error returned
+- Start fails → `podman rm -f` runs, error returned
+- Exec fails → `podman rm -f` runs, error returned
 
-Create `inspectah-collect/tests/baseline_test.rs`:
+**Digest capture:** `podman inspect --format '{{.Digest}}' <image_ref>` on the IMAGE object, not the container. When `.Digest` is empty, fall back to `podman inspect --format '{{index .RepoDigests 0}}' <image_ref>` and extract the digest portion after `@`.
 
-```rust
-use inspectah_collect::baseline::extract_baseline;
-use inspectah_collect::executor::mock::MockExecutor;
-use inspectah_core::baseline::{NormalizedImageRef, ResolutionStrategy, BaseImageResolution};
-use inspectah_core::traits::executor::ExecResult;
+**Mixed-arch baseline:** When extracting from an aarch64 image on an x86_64 host, verify package keys use the IMAGE's architecture (`bash.aarch64`), not the host's.
 
-fn mock_rpm_qa_output() -> String {
-    "bash\t0\t5.2.26\t3.el9\tx86_64\n\
-     coreutils\t0\t9.1\t13.el9\tx86_64\n\
-     glibc\t0\t2.34\t83.el9\tx86_64\n"
-        .to_string()
-}
+- [ ] **Step 3: Implement `extract_baseline()`**
 
-fn success(stdout: &str) -> ExecResult {
-    ExecResult {
-        stdout: stdout.to_string(),
-        stderr: String::new(),
-        exit_code: 0,
-    }
-}
+Create `inspectah-collect/src/baseline.rs`:
 
-fn failure(stderr: &str) -> ExecResult {
-    ExecResult {
-        stdout: String::new(),
-        stderr: stderr.to_string(),
-        exit_code: 1,
-    }
-}
+Extraction sequence:
+1. `nsenter ... podman pull <normalized_ref>`
+2. `nsenter ... podman create --name inspectah-baseline-<ts> --entrypoint '["sleep", "infinity"]' --network none <normalized_ref>`
+3. `nsenter ... podman start <container>`
+4. `nsenter ... podman exec <container> rpm -qa --queryformat '%{NAME}\t%{EPOCH}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n'`
+5. `nsenter ... podman rm -f <container>` (drop guard — runs on all exit paths)
+6. SEPARATELY: `nsenter ... podman inspect --format '{{.Digest}}' <normalized_ref>` on the IMAGE. Fallback: `podman inspect --format '{{index .RepoDigests 0}}' <normalized_ref>`.
 
-#[test]
-fn extract_baseline_happy_path() {
-    let image_ref = "registry.redhat.io/rhel9/rhel-bootc:9.6";
-    let executor = MockExecutor::new()
-        .with_command(
-            &format!("nsenter -t 1 -m -u -i -n -- podman pull {image_ref}"),
-            success(""),
-        )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman create",
-            success("container-id-123"),
-        )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman start",
-            success(""),
-        )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman exec",
-            success(&mock_rpm_qa_output()),
-        )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman inspect",
-            success("sha256:abc123def456"),
-        )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman rm",
-            success(""),
-        );
+Key: digest is queried from the IMAGE object, not the temporary container. The container is cleaned up before or after; digest capture is independent.
 
-    let resolution = BaseImageResolution {
-        image_ref: image_ref.into(),
-        strategy: ResolutionStrategy::OsRelease,
-    };
-    let normalized = NormalizedImageRef::from_validated(image_ref.into());
-
-    let result = extract_baseline(&executor, &resolution, &normalized).unwrap();
-    assert_eq!(result.packages.len(), 3);
-    assert!(result.packages.contains_key("bash.x86_64"));
-    assert_eq!(result.packages["bash.x86_64"].version, "5.2.26");
-    assert_eq!(result.image_digest, "sha256:abc123def456");
-}
-
-#[test]
-fn extract_baseline_command_order() {
-    // Same setup as happy path, verify order
-    let image_ref = "registry.redhat.io/rhel9/rhel-bootc:9.6";
-    let executor = MockExecutor::new()
-        .with_command(
-            &format!("nsenter -t 1 -m -u -i -n -- podman pull {image_ref}"),
-            success(""),
-        )
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman create", success("cid"))
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman start", success(""))
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman exec", success(&mock_rpm_qa_output()))
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman inspect", success("sha256:abc"))
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm", success(""));
-
-    let resolution = BaseImageResolution {
-        image_ref: image_ref.into(),
-        strategy: ResolutionStrategy::OsRelease,
-    };
-    let normalized = NormalizedImageRef::from_validated(image_ref.into());
-
-    let _ = extract_baseline(&executor, &resolution, &normalized).unwrap();
-
-    let log = executor.command_log();
-    assert!(log[0].contains("podman pull"), "first: pull");
-    assert!(log[1].contains("podman create"), "second: create");
-    assert!(log[2].contains("podman start"), "third: start");
-    assert!(log[3].contains("podman exec"), "fourth: exec (rpm -qa)");
-    assert!(log[4].contains("podman inspect"), "fifth: inspect (digest)");
-    assert!(log[5].contains("podman rm"), "last: cleanup");
-}
-
-#[test]
-fn extract_baseline_cleanup_on_pull_failure() {
-    let image_ref = "registry.redhat.io/rhel9/rhel-bootc:9.6";
-    let executor = MockExecutor::new()
-        .with_command(
-            &format!("nsenter -t 1 -m -u -i -n -- podman pull {image_ref}"),
-            failure("unauthorized: authentication required"),
-        );
-
-    let resolution = BaseImageResolution {
-        image_ref: image_ref.into(),
-        strategy: ResolutionStrategy::OsRelease,
-    };
-    let normalized = NormalizedImageRef::from_validated(image_ref.into());
-
-    let result = extract_baseline(&executor, &resolution, &normalized);
-    assert!(result.is_err());
-    let err = result.unwrap_err().to_string();
-    assert!(err.contains("Authentication") || err.contains("pull"));
-}
-
-#[test]
-fn extract_baseline_cleanup_on_exec_failure() {
-    let image_ref = "registry.redhat.io/rhel9/rhel-bootc:9.6";
-    let executor = MockExecutor::new()
-        .with_command(
-            &format!("nsenter -t 1 -m -u -i -n -- podman pull {image_ref}"),
-            success(""),
-        )
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman create", success("cid"))
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman start", success(""))
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman exec", failure("rpm not found"))
-        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm", success(""));
-
-    let resolution = BaseImageResolution {
-        image_ref: image_ref.into(),
-        strategy: ResolutionStrategy::OsRelease,
-    };
-    let normalized = NormalizedImageRef::from_validated(image_ref.into());
-
-    let result = extract_baseline(&executor, &resolution, &normalized);
-    assert!(result.is_err());
-
-    let log = executor.command_log();
-    assert!(log.last().unwrap().contains("podman rm"), "cleanup must run even on exec failure");
-}
-```
-
-- [ ] **Step 3: Implement extract_baseline**
-
-Create `inspectah-collect/src/baseline.rs` and wire up in `lib.rs`. The implementation follows the spec: nsenter prefix, podman create with --entrypoint override and --network none, NEVRA extraction, digest capture via `.Digest`, cleanup guard.
-
-Key implementation points:
-- Container name: `inspectah-baseline-{unix_timestamp}`
-- `--entrypoint '["sleep", "infinity"]'` on `podman create`
-- `--network none` on `podman create`
-- `rpm -qa --queryformat '%{NAME}\t%{EPOCH}\t%{VERSION}\t%{RELEASE}\t%{ARCH}\n'`
-- `podman inspect --format '{{.Digest}}'` for repository-side digest
-- Drop guard struct that runs `podman rm -f` on drop
-- `MockExecutor` needs `with_command_prefix` for flexible matching (new addition alongside order recording)
+Container cleanup uses a drop guard struct that holds the container name and executor reference, ensuring `podman rm -f` runs even on panic.
 
 - [ ] **Step 4: Run tests**
 
 Run: `cargo test -p inspectah-collect -- baseline`
-Expected: all tests pass.
+Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add inspectah-collect/src/baseline.rs inspectah-collect/src/lib.rs \
        inspectah-collect/src/executor/mock.rs inspectah-collect/tests/baseline_test.rs
-git commit -m "feat(collect): implement baseline extraction with entrypoint override and order proof"
+git commit -m "feat(collect): baseline extraction with entrypoint override, digest from image, order proof"
 ```
 
 ---
 
-## Task 6: Package Classification Matrix + Service Flagging
+## Task 6: Collect-Side RPM Classifier Update
+
+**Files:**
+- Modify: `inspectah-collect/src/inspectors/rpm/classifier.rs`
+
+- [ ] **Step 1: Write classifier tests with baseline data**
+
+Test that when `BaselineData` is provided to the RPM classifier:
+- A package present in `BaselineData.packages` (by `name.arch` key) gets `PackageState::Added` with `include: true` (baseline match — the refine layer will assign attention)
+- A package in `BaselineData.packages` with a different version gets `PackageState::Modified`
+- A package NOT in `BaselineData.packages` but from a recognized repo keeps `PackageState::Added`
+- The `base_image_only` partition is populated from `BaselineData.packages` entries not found on the host
+- Without `BaselineData`, behavior is identical to Phase 5 (no regression)
+
+- [ ] **Step 2: Wire `BaselineData` into the classifier**
+
+The RPM classifier currently assigns `PackageState` based on host-only data. Add an optional `baseline_packages: Option<&HashMap<String, BaselinePackageEntry>>` parameter. When present:
+- Check each host package against baseline by `name.arch` key
+- If present with same EVR → `PackageState::Added` (the attention layer handles the rest)
+- If present with different EVR → `PackageState::Modified`
+- Populate `base_image_only` from baseline entries not found on host
+- When `None`, existing Phase 5 behavior unchanged
+
+This ensures the snapshot's `packages_added` vs `base_image_only` partition reflects baseline truth at collection time, not just at attention-assignment time.
+
+- [ ] **Step 3: Run tests**
+
+Run: `cargo test -p inspectah-collect -- rpm`
+Expected: all pass (new + existing).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add inspectah-collect/src/inspectors/rpm/classifier.rs
+git commit -m "feat(collect): wire baseline data into RPM classifier for accurate PackageState partitioning"
+```
+
+---
+
+## Task 7: Package Classification Matrix + Service Flagging
 
 **Files:**
 - Modify: `inspectah-refine/src/attention.rs`
@@ -1114,56 +372,49 @@ git commit -m "feat(collect): implement baseline extraction with entrypoint over
 
 - [ ] **Step 1: Write exhaustive classification tests**
 
-Add to or create tests in `inspectah-refine/src/attention.rs` covering every cell of the spec's exhaustive matrix (section 4). Each test asserts the correct `AttentionLevel` and `AttentionReason` for a specific `PackageState × provenance × baseline mode` combination. 14 cells total from the matrix.
+Every cell of the spec's section 4 matrix. 14 cells across `PackageState × provenance × baseline mode`:
 
-Key assertions:
-- `Added` + recognized repo + in baseline → `Routine` / `PackageBaselineMatch`
-- `Added` + recognized repo + NOT in baseline → `Routine` / `PackageUserAdded`
-- `Added` + no repo → `NeedsReview` / `PackageNoRepoSource` (critical)
-- `Modified` + recognized repo + in baseline → `NeedsReview` / `PackageVersionChanged`
-- `Modified` + no repo → `NeedsReview` / `PackageNoRepoSource` (critical)
-- `LocalInstall` → `NeedsReview` / `PackageNoRepoSource` (critical)
-- `NoRepo` → `NeedsReview` / `PackageNoRepoSource` (critical)
-- `BaseImageOnly` → not rendered
-- All `Added` in degraded mode → `NeedsReview` / `PackageProvenanceUnavailable`
+| PackageState | Repo provenance | Verified mode | Degraded mode |
+|---|---|---|---|
+| Added + recognized + in baseline | → Routine / BaselineMatch | → NeedsReview / ProvenanceUnavailable |
+| Added + recognized + NOT in baseline | → Routine / UserAdded | → NeedsReview / ProvenanceUnavailable |
+| Added + no repo | → NeedsReview(critical) / NoRepoSource | → same |
+| Modified + recognized + in baseline | → NeedsReview / VersionChanged | → NeedsReview / ProvenanceUnavailable |
+| Modified + recognized + NOT in baseline | → NeedsReview / VersionChanged | → NeedsReview / ProvenanceUnavailable |
+| Modified + no repo | → NeedsReview(critical) / NoRepoSource | → same |
+| LocalInstall | → NeedsReview(critical) / NoRepoSource | → same |
+| NoRepo | → NeedsReview(critical) / NoRepoSource | → same |
+| BaseImageOnly | → not rendered | → n/a |
 
-- [ ] **Step 2: Write incompatible service flagging tests**
+- [ ] **Step 2: Write service flagging tests**
 
-Add to `inspectah-refine/src/normalize.rs`:
-- Test that `dnf-makecache.service` in `state_changes` gets `include: false` + `ServiceImageModeIncompatible` reason
-- Test that `httpd.service` is NOT flagged
-- Test that flagged services are removed from `enabled_units`
-- Test that UI, preview, and export all see the same normalized state
+One authoritative post-normalization representation:
+- `dnf-makecache.service` in `state_changes` → `include: false`, `attention_reason: ServiceImageModeIncompatible`, reason text from `INCOMPATIBLE_SERVICES`
+- `httpd.service` → NOT flagged
+- Flagged services removed from `enabled_units`
+- **Surface agreement:** same normalized state consumed by UI, Containerfile preview, and export. Test that all three surfaces agree on a fixture with incompatible services.
 
-- [ ] **Step 3: Implement classification and flagging**
+- [ ] **Step 3: Implement classification and service flagging**
 
-Add new `AttentionReason` variants to the enum in `attention.rs`:
-- `PackageBaselineMatch`
-- `PackageUserAdded`
-- `PackageVersionChanged`
-- `PackageProvenanceUnavailable`
-- `PackageNoRepoSource`
-- `ServiceImageModeIncompatible`
+Add attention reason variants. Update classification to accept `Option<&BaselineData>`. Service flagging reads from `INCOMPATIBLE_SERVICES` constant (core), sets `include: false` + reason on matched services, removes from `enabled_units`.
 
-Update the classification function to accept `Option<&BaselineData>` and implement the exhaustive matrix.
-
-In `normalize.rs`, add incompatible service filtering that reads from `INCOMPATIBLE_SERVICES` in core and modifies `ServiceSection` state changes.
+Wire-level mapping: "Tier 3 (Critical)" is `NeedsReview` with a `severity: critical` flag, NOT a new `AttentionLevel` variant. Counts and completion key off `AttentionLevel`.
 
 - [ ] **Step 4: Run tests**
 
 Run: `cargo test -p inspectah-refine`
-Expected: all tests pass.
+Expected: all pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add inspectah-refine/src/attention.rs inspectah-refine/src/normalize.rs
-git commit -m "feat(refine): exhaustive classification matrix and incompatible service flagging"
+git commit -m "feat(refine): exhaustive baseline-aware classification matrix and service flagging"
 ```
 
 ---
 
-## Task 7: Containerfile Dynamic FROM + BaselineSummary
+## Task 8: Containerfile Dynamic FROM + BaselineSummary + ViewResponse
 
 **Files:**
 - Modify: `inspectah-pipeline/src/render/containerfile.rs`
@@ -1174,76 +425,40 @@ git commit -m "feat(refine): exhaustive classification matrix and incompatible s
 
 - [ ] **Step 1: Write FROM line tests**
 
-In `inspectah-pipeline/src/render/containerfile.rs`, update `base_image_from_snapshot` tests:
+- `target_image` present → FROM uses `target_image.image_ref` (the normalized value)
+- `target_image` present + `no_baseline = true` → same FROM (degraded still has correct FROM)
+- `target_image` null + `no_baseline = true` → FROM omitted with comment: `# FROM line omitted — target image could not be determined. Use --base-image to specify.`
+- **No hardcoded fallback.** Remove the `"registry.redhat.io/rhel9/rhel-bootc:9.4"` string entirely.
+- Legacy Go snapshots with `rpm.base_image` set → still use that value (backward compat for Go-generated snapshots only, not Phase 6 Rust output)
+
+- [ ] **Step 2: Update `base_image_from_snapshot()`**
 
 ```rust
-#[test]
-fn from_line_uses_target_image() {
-    let mut snap = InspectionSnapshot::new();
-    snap.target_image = Some(TargetImageIdentity {
-        image_ref: "registry.redhat.io/rhel9/rhel-bootc:9.6".into(),
-        strategy: ResolutionStrategy::OsRelease,
-    });
-    assert_eq!(
-        base_image_from_snapshot(&snap),
-        "registry.redhat.io/rhel9/rhel-bootc:9.6"
-    );
-}
-
-#[test]
-fn from_line_degraded_with_target_image() {
-    let mut snap = InspectionSnapshot::new();
-    snap.target_image = Some(TargetImageIdentity {
-        image_ref: "quay.io/centos-bootc/centos-bootc:stream9".into(),
-        strategy: ResolutionStrategy::OsRelease,
-    });
-    snap.no_baseline = true;
-    // Even in degraded mode, FROM uses the resolved target
-    assert_eq!(
-        base_image_from_snapshot(&snap),
-        "quay.io/centos-bootc/centos-bootc:stream9"
-    );
-}
-
-#[test]
-fn from_line_no_target_image_omitted() {
-    let snap = InspectionSnapshot::new();
-    // No target_image, no rpm.base_image — falls back to legacy or omission
-    let result = base_image_from_snapshot(&snap);
-    // Legacy: still returns hardcoded fallback for backward compat with Go snapshots
-    assert!(!result.is_empty());
-}
-```
-
-- [ ] **Step 2: Update base_image_from_snapshot**
-
-```rust
-pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> String {
-    // Phase 6: prefer top-level target_image
+pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> Option<String> {
+    // Phase 6: prefer top-level target_image (stores normalized ref)
     if let Some(ref ti) = snap.target_image {
-        return ti.image_ref.clone();
+        return Some(ti.image_ref.clone());
     }
-    // Backward compat: fall back to rpm.base_image (Go snapshots)
+    // Backward compat: Go-generated snapshots with rpm.base_image
     if let Some(rpm) = &snap.rpm {
         if let Some(ref base) = rpm.base_image {
             if !base.is_empty() {
-                return base.clone();
+                return Some(base.clone());
             }
         }
     }
-    "registry.redhat.io/rhel9/rhel-bootc:9.4".to_string()
+    // No target image resolved — caller decides (omission comment or error)
+    None
 }
 ```
 
-- [ ] **Step 3: Implement BaselineSummary**
+Return type changes from `String` to `Option<String>`. Callers handle `None` with the omission comment. **No hardcoded fallback.**
+
+- [ ] **Step 3: Implement `BaselineSummary`**
 
 Create `inspectah-refine/src/baseline_summary.rs`:
 
 ```rust
-use serde::{Deserialize, Serialize};
-use inspectah_core::snapshot::InspectionSnapshot;
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BaselineSummary {
     pub image_ref: String,
     pub image_digest: String,
@@ -1252,73 +467,26 @@ pub struct BaselineSummary {
     pub user_added_count: usize,
     pub review_count: usize,
 }
-
-pub fn derive_baseline_summary(snap: &InspectionSnapshot) -> Option<BaselineSummary> {
-    let baseline = snap.baseline.as_ref()?;
-    let target = snap.target_image.as_ref()?;
-
-    // Counts are derived from classification results on the snapshot's packages
-    // (filled by the classification pass in attention.rs)
-    let baseline_count = baseline.packages.len();
-
-    // user_added_count and review_count come from the classified packages
-    // in snap.rpm.packages_added — count by attention_reason
-    let (mut user_added, mut review) = (0usize, 0usize);
-    if let Some(ref rpm) = snap.rpm {
-        for pkg in &rpm.packages_added {
-            // Classification sets include=true for auto-included,
-            // leaves include=false for NeedsReview
-            if pkg.include && !baseline.packages.contains_key(
-                &format!("{}.{}", pkg.name, pkg.arch)
-            ) {
-                user_added += 1;
-            }
-            if !pkg.include {
-                review += 1;
-            }
-        }
-    }
-
-    Some(BaselineSummary {
-        image_ref: target.image_ref.clone(),
-        image_digest: baseline.image_digest.clone(),
-        strategy: serde_json::to_string(&target.strategy)
-            .unwrap_or_default()
-            .trim_matches('"')
-            .to_string(),
-        baseline_count,
-        user_added_count: user_added,
-        review_count: review,
-    })
-}
 ```
+
+**Count authority:** `baseline_count`, `user_added_count`, and `review_count` are derived from the **original classification result** (attention reasons assigned during normalization), NOT from mutable `include` booleans. This means:
+- `baseline_count` = number of packages with `PackageBaselineMatch` reason
+- `user_added_count` = number of packages with `PackageUserAdded` reason
+- `review_count` = number of packages with `NeedsReview` attention level
+
+These counts do NOT change when the user includes/excludes packages during refine. They reflect the classification state, not the triage state.
+
+Add test: create a `BaselineSummary`, apply include/exclude ops to the session, re-derive summary — counts must be identical.
 
 - [ ] **Step 4: Wire into RefineSession and ViewResponse**
 
-In `inspectah-refine/src/session.rs`, add a method:
-```rust
-pub fn baseline_summary(&self) -> Option<BaselineSummary> {
-    derive_baseline_summary(&self.snapshot)
-}
-```
+`RefineSession::baseline_summary()` delegates to `derive_baseline_summary()`.
 
-In `inspectah-web/src/handlers.rs`, add to `ViewResponse`:
-```rust
-pub baseline_summary: Option<BaselineSummary>,
-```
-
-Update `build_view_response`:
-```rust
-ViewResponse {
-    view,
-    repo_groups,
-    baseline_summary: session.baseline_summary(),
-}
-```
+`ViewResponse` gains `baseline_summary: Option<BaselineSummary>`. Web handler calls `session.baseline_summary()` — does NOT derive independently.
 
 - [ ] **Step 5: Run tests**
 
-Run: `cargo test -p inspectah-pipeline -- containerfile && cargo test -p inspectah-refine -- baseline_summary && cargo test -p inspectah-web`
+Run: `cargo test -p inspectah-pipeline -- containerfile && cargo test -p inspectah-refine -- baseline_summary`
 Expected: all pass.
 
 - [ ] **Step 6: Commit**
@@ -1327,76 +495,63 @@ Expected: all pass.
 git add inspectah-pipeline/src/render/containerfile.rs \
        inspectah-refine/src/baseline_summary.rs inspectah-refine/src/lib.rs \
        inspectah-refine/src/session.rs inspectah-web/src/handlers.rs
-git commit -m "feat(render): dynamic FROM from target_image, BaselineSummary in ViewResponse"
+git commit -m "feat(render): dynamic FROM from normalized target_image, BaselineSummary with stable counts"
 ```
 
 ---
 
-## Task 8: CLI Integration
+## Task 9: CLI Integration
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/scan.rs`
 
 - [ ] **Step 1: Add CLI flags**
 
-Add to `ScanArgs`:
-
 ```rust
-/// Target base image for cross-distro conversion
 #[arg(long)]
 pub base_image: Option<String>,
 
-/// Skip baseline extraction (degraded classification mode)
 #[arg(long)]
 pub no_baseline: bool,
 ```
 
-- [ ] **Step 2: Add flag validation**
+- [ ] **Step 2: Flag validation**
 
-In the `run` function, before any pipeline work:
+`--base-image` + `--no-baseline` together → error.
 
-```rust
-if args.base_image.is_some() && args.no_baseline {
-    anyhow::bail!(
-        "Cannot specify both --base-image and --no-baseline. \
-         Use --base-image to set the target image, or --no-baseline to skip baseline extraction."
-    );
-}
+- [ ] **Step 3: Wire resolution + extraction + progress**
+
 ```
-
-- [ ] **Step 3: Wire resolution + extraction into pipeline**
-
-Before the existing `collect()` call, add:
-
-```rust
-// --- Phase 6: resolve target image ---
+// 1. Resolve
 eprintln!("Resolving target image...");
-let ublue_metadata = read_ublue_metadata(&executor);
-let bootc_ref = read_bootc_status_ref(&executor);
-let resolution = if args.no_baseline {
-    // Still resolve for FROM line, but don't extract
-    resolve_base_image(&os_release, ublue_metadata.as_ref(), bootc_ref.as_deref(), args.base_image.as_deref())
-        .ok()
-} else {
-    Some(resolve_base_image(
-        &os_release,
-        ublue_metadata.as_ref(),
-        bootc_ref.as_deref(),
-        args.base_image.as_deref(),
-    )?)
+let resolution = resolve_base_image(&os_release, ublue.as_ref(), bootc_ref.as_deref(), args.base_image.as_deref());
+
+// 2. Handle resolution result
+let (target_image, normalized) = match resolution {
+    Ok(res) => {
+        let norm = normalize_image_ref(&res.image_ref)?;
+        eprintln!("Resolving target image... {} ({})", norm.as_str(), /* strategy */);
+        let ti = TargetImageIdentity {
+            image_ref: norm.as_str().to_string(),  // NORMALIZED ref persisted
+            strategy: res.strategy.clone(),
+        };
+        (Some(ti), Some(norm))
+    }
+    Err(e) => {
+        if args.no_baseline {
+            eprintln!("Resolving target image... not found ({}), continuing without baseline", e);
+            (None, None)  // target_image = null, FROM will be omitted
+        } else {
+            return Err(e.into());  // fail fast in normal mode
+        }
+    }
 };
 
-if let Some(ref res) = resolution {
-    eprintln!("Resolving target image... {} ({})", res.image_ref,
-        serde_json::to_string(&res.strategy).unwrap_or_default().trim_matches('"'));
-}
-
+// 3. Extract (only if not --no-baseline and resolution succeeded)
 let baseline_data = if !args.no_baseline {
-    let res = resolution.as_ref().unwrap();
-    let normalized = normalize_image_ref(&res.image_ref)?;
-    eprintln!("Normalizing image reference... ok");
+    let norm = normalized.as_ref().unwrap();
     eprintln!("Pulling target image...");
-    let data = extract_baseline(&executor, res, &normalized)?;
+    let data = extract_baseline(&executor, resolution.as_ref().unwrap(), norm)?;
     eprintln!("Pulling target image... done");
     eprintln!("Extracting baseline... {} packages", data.packages.len());
     Some(data)
@@ -1404,61 +559,47 @@ let baseline_data = if !args.no_baseline {
     None
 };
 
-// Set snapshot fields
-if let Some(ref res) = resolution {
-    snapshot.target_image = Some(TargetImageIdentity {
-        image_ref: res.image_ref.clone(),
-        strategy: res.strategy.clone(),
-    });
-}
-if let Some(ref data) = baseline_data {
-    snapshot.baseline = Some(data.clone());
-}
+// 4. Set snapshot fields
+snapshot.target_image = target_image;
+snapshot.baseline = baseline_data;
 snapshot.no_baseline = args.no_baseline;
 ```
 
-Add helper functions for reading UBlue metadata and bootc status from the executor (read_file for `/usr/share/ublue-os/image-info.json`, executor.run for `bootc status --json`).
+Key: resolution failure in `--no-baseline` mode sets `target_image = None` (not swallowed with `.ok()`). The result is explicit: no target image → FROM omitted.
 
 - [ ] **Step 4: Add progress output for host scan**
 
-Wrap inspector calls with `[N/11]` stderr output:
+`[N/11]` stderr counting around inspector calls.
 
-```rust
-let inspectors: Vec<(&str, Box<dyn Inspector>)> = vec![
-    ("RPM packages", Box::new(RpmInspector::new())),
-    ("Services", Box::new(ServicesInspector::new())),
-    // ... etc
-];
+- [ ] **Step 5: Add UBlue metadata and bootc status reader helpers**
 
-for (i, (name, inspector)) in inspectors.iter().enumerate() {
-    eprint!("\r  [{}/{}] {}", i + 1, inspectors.len(), name);
-    // ... run inspector ...
-}
-eprintln!();
-```
+Read `/usr/share/ublue-os/image-info.json` via executor → parse as `UblueMetadata`.
+Read `bootc status --json` via executor → extract `status.booted.image.image.image`.
 
-- [ ] **Step 5: Run tests**
+**UBlue fail-closed test:** Add a test (here or in core) that malformed JSON at the metadata path produces an error, not a silent fallthrough.
+
+- [ ] **Step 6: Run tests**
 
 Run: `cargo test -p inspectah-cli`
-Expected: compilation succeeds, existing tests pass. (CLI integration tests are manual.)
+Expected: compilation succeeds, existing tests pass.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add inspectah-cli/src/commands/scan.rs
-git commit -m "feat(cli): add --base-image and --no-baseline flags with progress output"
+git commit -m "feat(cli): add --base-image and --no-baseline with normalized-ref persistence and progress"
 ```
 
 ---
 
-## Task 9: Web UI Verification Banner
+## Task 10: Web UI Verification Banner
 
 **Files:**
-- Modify: `inspectah-web/frontend/src/App.tsx` (or equivalent banner component)
+- Modify: `inspectah-web/frontend/src/` (banner component)
 
 - [ ] **Step 1: Add banner rendering**
 
-In the Packages section header area, read `baseline_summary` from the API response:
+In the Packages section header, read `baseline_summary` from API response:
 
 ```tsx
 {viewData.baseline_summary ? (
@@ -1477,56 +618,64 @@ In the Packages section header area, read `baseline_summary` from the API respon
 
 - [ ] **Step 2: Test in browser**
 
-Start the dev server, load a scan with baseline data, verify:
-- Banner shows with correct image ref, digest prefix, and counts
-- Degraded mode shows warning banner
-- Existing UI functionality is not regressed
+Start dev server, verify both banner states, verify no UI regressions.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add inspectah-web/frontend/src/
-git commit -m "feat(web): add verification banner for baseline comparison status"
+git commit -m "feat(web): verification banner for baseline comparison status"
 ```
 
 ---
 
-## Task 10: Integration Tests and Round-Trip Proofs
+## Task 11: Integration Tests and Round-Trip Proofs
 
 **Files:**
-- Modify/create: `inspectah-refine/tests/` or inline tests
-- Modify: existing integration test files
+- Create/modify tests across crates
 
-- [ ] **Step 1: Snapshot round-trip test**
+- [ ] **Step 1: Snapshot round-trip with NEVRA**
 
-Test that `BaselineData` with full NEVRA serializes → deserializes → produces identical classification and `BaselineSummary`.
+`BaselineData` with full NEVRA serializes → deserializes → produces identical classification and `BaselineSummary`.
 
-- [ ] **Step 2: Degraded FROM persistence test**
+- [ ] **Step 2: Degraded FROM persistence (target_image present)**
 
-Test that a `--no-baseline` snapshot with resolved `target_image` preserves the correct FROM line after export and reimport (the round 2 blocker 3 proof).
+`--no-baseline` snapshot with resolved `target_image` → export → reimport → FROM line uses the persisted normalized ref.
 
-- [ ] **Step 3: Pre-Phase-6 migration test**
+- [ ] **Step 3: Degraded FROM persistence (target_image null)**
 
-Test that a Phase 5 snapshot (schema v14, no `target_image`/`baseline` fields) deserializes and migrates to v15 with correct defaults.
+`--no-baseline` snapshot where resolution failed → `target_image = null` → export → reimport → FROM omission comment preserved.
 
-- [ ] **Step 4: Service surface agreement test**
+- [ ] **Step 4: Pre-Phase-6 migration**
 
-Test that an incompatible service is:
+Phase 5 snapshot (schema v14, no new fields) → deserializes with defaults → migrates to v15 → refine layer enters degraded mode.
+
+- [ ] **Step 5: Service surface agreement**
+
+Incompatible service is:
 - Excluded from `enabled_units` in Containerfile render
-- Flagged with badge in service state changes
+- Flagged with reason badge in service `state_changes`
 - Absent from export tarball enabled units
 
 All three surfaces read from the same normalized state.
 
-- [ ] **Step 5: Preview/export parity test**
+- [ ] **Step 6: Preview/export parity**
 
-Test that the Containerfile preview and the exported tarball Containerfile agree on FROM line, package list, and service enablement.
+Containerfile preview and exported tarball Containerfile agree on FROM line, package list, and service enablement.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: BaselineSummary count stability**
+
+Create session → derive summary → apply include/exclude ops → re-derive summary → counts identical (counts reflect classification, not triage state).
+
+- [ ] **Step 8: UBlue fail-closed helper test**
+
+Malformed `/usr/share/ublue-os/image-info.json` → resolution error, not silent fallthrough to os-release strategy.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add inspectah-refine/tests/ inspectah-pipeline/src/render/containerfile.rs
-git commit -m "test: integration tests for baseline round-trip, degraded FROM, and surface agreement"
+git add inspectah-refine/tests/ inspectah-core/tests/ inspectah-pipeline/
+git commit -m "test: integration proofs — round-trip, degraded replay, surface agreement, count stability"
 ```
 
 ---
@@ -1535,15 +684,16 @@ git commit -m "test: integration tests for baseline round-trip, degraded FROM, a
 
 | Task | Crate | What |
 |------|-------|------|
-| 1 | core | Baseline types, incompatible services constant |
-| 2 | core | Resolution chain (5 strategies, UBlue tag combination) |
-| 3 | core | Ref normalization gate |
+| 1 | core | Baseline types, version floors, incompatible services constant |
+| 2 | core | Resolution chain (5 strategies, UBlue, version clamping) |
+| 3 | core | Ref normalization gate (registry hostname validation) |
 | 4 | core | Snapshot schema v15 (target_image, baseline, migration) |
-| 5 | collect | Baseline extraction (nsenter, entrypoint override, order proof) |
-| 6 | refine | Exhaustive classification matrix + service flagging |
-| 7 | pipeline + refine + web | Dynamic FROM, BaselineSummary, ViewResponse |
-| 8 | cli | --base-image, --no-baseline, progress output |
-| 9 | web | Verification banner component |
-| 10 | cross-crate | Integration tests and round-trip proofs |
+| 5 | collect | Baseline extraction (entrypoint override, digest from image, order proof) |
+| 6 | collect | RPM classifier seam (baseline-aware PackageState assignment) |
+| 7 | refine | Exhaustive classification matrix + service flagging |
+| 8 | pipeline + refine + web | Dynamic FROM (no fallback), BaselineSummary (stable counts), ViewResponse |
+| 9 | cli | --base-image, --no-baseline (no .ok() swallowing), progress output |
+| 10 | web | Verification banner component |
+| 11 | cross-crate | Integration proofs — round-trip, degraded replay, surface agreement |
 
-Tasks 1-4 are pure types/logic with no I/O — can be developed and tested without a VM. Task 5 requires MockExecutor enhancements. Tasks 6-7 are the core behavior changes. Task 8 wires everything together. Tasks 9-10 are polish and proof.
+Tasks 1–4 are pure types/logic. Task 5 requires MockExecutor enhancements. Task 6 wires baseline into collection. Tasks 7–8 are the core behavior changes. Task 9 integrates everything. Tasks 10–11 are UI and proof.
