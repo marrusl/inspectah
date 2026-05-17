@@ -1138,9 +1138,11 @@ mod tests {
             assert_eq!(section.generated_timer_units.len(), 2);
             assert_eq!(section.generated_timer_units[0].cron_expr, "*/15 * * * *");
             assert_eq!(section.generated_timer_units[1].cron_expr, "@reboot");
-            assert!(section.generated_timer_units[0]
-                .command
-                .contains("check-health.sh"));
+            assert!(
+                section.generated_timer_units[0]
+                    .command
+                    .contains("check-health.sh")
+            );
 
             // @reboot entry must NOT have a timer with a fake OnCalendar
             let reboot_unit = &section.generated_timer_units[1];

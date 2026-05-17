@@ -603,10 +603,11 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(dir
-            .path()
-            .join("config/etc/pki/rpm-gpg/RPM-GPG-KEY-test")
-            .exists());
+        assert!(
+            dir.path()
+                .join("config/etc/pki/rpm-gpg/RPM-GPG-KEY-test")
+                .exists()
+        );
     }
 
     #[test]
@@ -635,26 +636,31 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
 
-        assert!(dir
-            .path()
-            .join("config/etc/modules-load.d/custom.conf")
-            .exists());
-        assert!(dir
-            .path()
-            .join("config/etc/modprobe.d/blacklist.conf")
-            .exists());
-        assert!(dir
-            .path()
-            .join("config/etc/dracut.conf.d/custom.conf")
-            .exists());
-        assert!(dir
-            .path()
-            .join("config/etc/tuned/my-profile/tuned.conf")
-            .exists());
-        assert!(dir
-            .path()
-            .join("config/usr/lib/bootc/kargs.d/inspectah-migrated.toml")
-            .exists());
+        assert!(
+            dir.path()
+                .join("config/etc/modules-load.d/custom.conf")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("config/etc/modprobe.d/blacklist.conf")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("config/etc/dracut.conf.d/custom.conf")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("config/etc/tuned/my-profile/tuned.conf")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("config/usr/lib/bootc/kargs.d/inspectah-migrated.toml")
+                .exists()
+        );
 
         let kargs = std::fs::read_to_string(
             dir.path()
@@ -683,14 +689,16 @@ mod tests {
         write_config_tree(&snap, dir.path()).unwrap();
 
         // Must exist in both config/ and drop-ins/
-        assert!(dir
-            .path()
-            .join("config/etc/systemd/system/httpd.service.d/override.conf")
-            .exists());
-        assert!(dir
-            .path()
-            .join("drop-ins/etc/systemd/system/httpd.service.d/override.conf")
-            .exists());
+        assert!(
+            dir.path()
+                .join("config/etc/systemd/system/httpd.service.d/override.conf")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("drop-ins/etc/systemd/system/httpd.service.d/override.conf")
+                .exists()
+        );
 
         // Content must match
         let config_content = std::fs::read_to_string(
@@ -721,14 +729,16 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(dir
-            .path()
-            .join("config/etc/systemd/system/backup.timer")
-            .exists());
-        assert!(dir
-            .path()
-            .join("config/etc/systemd/system/backup.service")
-            .exists());
+        assert!(
+            dir.path()
+                .join("config/etc/systemd/system/backup.timer")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("config/etc/systemd/system/backup.service")
+                .exists()
+        );
     }
 
     #[test]
@@ -746,14 +756,16 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(dir
-            .path()
-            .join("config/etc/systemd/system/myjob.timer")
-            .exists());
-        assert!(dir
-            .path()
-            .join("config/etc/systemd/system/myjob.service")
-            .exists());
+        assert!(
+            dir.path()
+                .join("config/etc/systemd/system/myjob.timer")
+                .exists()
+        );
+        assert!(
+            dir.path()
+                .join("config/etc/systemd/system/myjob.service")
+                .exists()
+        );
     }
 
     #[test]
@@ -795,10 +807,11 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_env_files(&snap, dir.path()).unwrap();
-        assert!(dir
-            .path()
-            .join("env-files/etc/environment.d/99-custom.conf")
-            .exists());
+        assert!(
+            dir.path()
+                .join("env-files/etc/environment.d/99-custom.conf")
+                .exists()
+        );
         let content = std::fs::read_to_string(
             dir.path()
                 .join("env-files/etc/environment.d/99-custom.conf"),
@@ -822,10 +835,11 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(dir
-            .path()
-            .join("config/etc/firewalld/zones/public.xml")
-            .exists());
+        assert!(
+            dir.path()
+                .join("config/etc/firewalld/zones/public.xml")
+                .exists()
+        );
     }
 
     #[test]
@@ -865,10 +879,11 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(!dir
-            .path()
-            .join("config/etc/NetworkManager/system-connections/eth0.nmconnection")
-            .exists());
+        assert!(
+            !dir.path()
+                .join("config/etc/NetworkManager/system-connections/eth0.nmconnection")
+                .exists()
+        );
     }
 
     #[test]
@@ -884,10 +899,11 @@ mod tests {
         });
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
-        assert!(!dir
-            .path()
-            .join("config/etc/containers/systemd/myapp.container")
-            .exists());
+        assert!(
+            !dir.path()
+                .join("config/etc/containers/systemd/myapp.container")
+                .exists()
+        );
     }
 
     // Path safety tests
@@ -1011,10 +1027,11 @@ mod tests {
         let dir = TempDir::new().unwrap();
         write_config_tree(&snap, dir.path()).unwrap();
         // Empty content should not be materialized
-        assert!(!dir
-            .path()
-            .join("config/etc/audit/rules.d/empty.rules")
-            .exists());
+        assert!(
+            !dir.path()
+                .join("config/etc/audit/rules.d/empty.rules")
+                .exists()
+        );
         // Empty path should not be materialized
         assert!(!dir.path().join("config/etc/pam.d").exists());
     }

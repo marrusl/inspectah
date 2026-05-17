@@ -10,7 +10,9 @@ fn attention_reason_custom_serialization() {
 
 #[test]
 fn test_exclude_repo_op_roundtrip() {
-    let op = RefinementOp::ExcludeRepo { section_id: "epel".into() };
+    let op = RefinementOp::ExcludeRepo {
+        section_id: "epel".into(),
+    };
     let json = serde_json::to_string(&op).unwrap();
     let parsed: RefinementOp = serde_json::from_str(&json).unwrap();
     assert_eq!(op, parsed);
@@ -36,7 +38,11 @@ fn test_new_attention_reasons_roundtrip() {
 
 #[test]
 fn test_repo_provenance_roundtrip() {
-    for prov in &[RepoProvenance::Verified, RepoProvenance::Incomplete, RepoProvenance::Unknown] {
+    for prov in &[
+        RepoProvenance::Verified,
+        RepoProvenance::Incomplete,
+        RepoProvenance::Unknown,
+    ] {
         let json = serde_json::to_string(prov).unwrap();
         let parsed: RepoProvenance = serde_json::from_str(&json).unwrap();
         assert_eq!(*prov, parsed);

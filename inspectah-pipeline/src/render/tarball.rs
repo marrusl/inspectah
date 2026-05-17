@@ -2,8 +2,8 @@
 //!
 //! Mirrors Go `CreateTarball` with added path safety validation.
 
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use regex::Regex;
 use std::path::Path;
 use std::sync::LazyLock;

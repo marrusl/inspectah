@@ -4,7 +4,7 @@
 //! including happy path, command ordering, cleanup behavior,
 //! digest capture, and mixed-arch keying.
 
-use inspectah_collect::baseline::{extract_baseline, ExtractionError};
+use inspectah_collect::baseline::{ExtractionError, extract_baseline};
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_core::baseline::NormalizedImageRef;
 use inspectah_core::traits::executor::ExecResult;
@@ -48,10 +48,7 @@ fn happy_mock() -> MockExecutor {
     MockExecutor::new()
         // pull
         .with_command_prefix(
-            &format!(
-                "nsenter -t 1 -m -u -i -n -- podman pull {}",
-                TEST_IMAGE
-            ),
+            &format!("nsenter -t 1 -m -u -i -n -- podman pull {}", TEST_IMAGE),
             ok_result(),
         )
         // create — use prefix because container name includes timestamp
@@ -118,7 +115,11 @@ fn baseline_command_ordering() {
     assert!(result.is_ok());
 
     let log = mock.command_log();
-    assert!(log.len() >= 6, "expected at least 6 commands, got {}", log.len());
+    assert!(
+        log.len() >= 6,
+        "expected at least 6 commands, got {}",
+        log.len()
+    );
 
     // Verify ordering: pull, create, start, exec, rm, inspect.
     assert!(
@@ -203,10 +204,7 @@ fn baseline_pull_fails_no_rm_attempted() {
 #[test]
 fn baseline_create_fails_no_rm_attempted() {
     let mock = MockExecutor::new()
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman pull",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
             fail_result("create failed: quota exceeded"),
@@ -231,10 +229,7 @@ fn baseline_create_fails_no_rm_attempted() {
 #[test]
 fn baseline_start_fails_rm_runs() {
     let mock = MockExecutor::new()
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman pull",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
             ok_with_stdout("ctr-id\n"),
@@ -243,10 +238,7 @@ fn baseline_start_fails_rm_runs() {
             "nsenter -t 1 -m -u -i -n -- podman start",
             fail_result("start failed: OCI runtime error"),
         )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman rm -f",
-            ok_result(),
-        );
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm -f", ok_result());
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
     let result = extract_baseline(&mock, &normalized);
@@ -267,26 +259,17 @@ fn baseline_start_fails_rm_runs() {
 #[test]
 fn baseline_exec_fails_rm_runs() {
     let mock = MockExecutor::new()
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman pull",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
             ok_with_stdout("ctr-id\n"),
         )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman start",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman start", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman exec",
             fail_result("exec failed: rpm not found"),
         )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman rm -f",
-            ok_result(),
-        );
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm -f", ok_result());
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
     let result = extract_baseline(&mock, &normalized);
@@ -364,26 +347,17 @@ glibc\t0\t2.34\t83.el9\taarch64
 ";
 
     let mock = MockExecutor::new()
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman pull",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman pull", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman create",
             ok_with_stdout("ctr-id\n"),
         )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman start",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman start", ok_result())
         .with_command_prefix(
             "nsenter -t 1 -m -u -i -n -- podman exec",
             ok_with_stdout(mixed_output),
         )
-        .with_command_prefix(
-            "nsenter -t 1 -m -u -i -n -- podman rm -f",
-            ok_result(),
-        )
+        .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm -f", ok_result())
         .with_command(
             &format!(
                 "nsenter -t 1 -m -u -i -n -- podman inspect --format {{{{.Digest}}}} {}",

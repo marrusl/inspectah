@@ -144,9 +144,11 @@ fn happy_path_state_changes() {
 
     // Verify enabled/disabled lists are populated
     assert!(section.enabled_units.contains(&"sshd.service".to_string()));
-    assert!(section
-        .enabled_units
-        .contains(&"auditd.service".to_string()));
+    assert!(
+        section
+            .enabled_units
+            .contains(&"auditd.service".to_string())
+    );
     assert!(section.disabled_units.contains(&"cups.service".to_string()));
     assert!(section.disabled_units.contains(&"gdm.service".to_string()));
 }

@@ -939,9 +939,11 @@ mod tests {
         assert_eq!(section.firewall_direct_rules[0].table, "filter");
         assert_eq!(section.firewall_direct_rules[0].chain, "INPUT");
         assert_eq!(section.firewall_direct_rules[0].priority, "0");
-        assert!(section.firewall_direct_rules[0]
-            .args
-            .contains("--dport 9090"));
+        assert!(
+            section.firewall_direct_rules[0]
+                .args
+                .contains("--dport 9090")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1029,8 +1031,7 @@ mod tests {
 
     #[test]
     fn resolv_provenance_systemd() {
-        let content =
-            "# This is /run/systemd/resolve/stub-resolv.conf managed by systemd-resolved(8).\nnameserver 127.0.0.53\n";
+        let content = "# This is /run/systemd/resolve/stub-resolv.conf managed by systemd-resolved(8).\nnameserver 127.0.0.53\n";
         let exec = MockExecutor::new().with_file("/etc/resolv.conf", content);
         let result = detect_resolv_provenance(&exec);
         assert_eq!(result, "systemd-resolved");

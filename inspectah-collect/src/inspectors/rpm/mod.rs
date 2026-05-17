@@ -29,6 +29,43 @@ struct SupplementaryData {
     rpm_va: Vec<inspectah_core::types::rpm::RpmVaEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct LeafClassification {
+    leaf_packages: Option<Vec<String>>,
+    auto_packages: Option<Vec<String>>,
+    leaf_dep_tree: serde_json::Value,
+}
+
+impl LeafClassification {
+    fn authoritative(
+        leaf_packages: Vec<String>,
+        auto_packages: Vec<String>,
+        leaf_dep_tree: serde_json::Value,
+    ) -> Self {
+        Self {
+            leaf_packages: Some(leaf_packages),
+            auto_packages: Some(auto_packages),
+            leaf_dep_tree,
+        }
+    }
+
+    fn unavailable() -> Self {
+        Self {
+            leaf_packages: None,
+            auto_packages: None,
+            leaf_dep_tree: empty_leaf_dep_tree(),
+        }
+    }
+}
+
+fn empty_leaf_dep_tree() -> serde_json::Value {
+    serde_json::Value::Object(serde_json::Map::new())
+}
+
+fn canonical_package_id(pkg: &PackageEntry) -> String {
+    format!("{}.{}", pkg.name, pkg.arch)
+}
+
 pub struct RpmInspector;
 
 impl RpmInspector {
@@ -225,8 +262,7 @@ impl Inspector for RpmInspector {
         }
 
         // 4. Classify leaf vs auto packages
-        let (leaf_packages, auto_packages, leaf_dep_tree) =
-            classify_leaf_auto(exec, &packages_added);
+        let leaf_classification = classify_leaf_auto(exec, &packages_added);
 
         // 5. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
@@ -235,9 +271,9 @@ impl Inspector for RpmInspector {
         let file_ownership = self.query_file_ownership(exec);
 
         // 7. Build baseline_package_names for Go snapshot backward compat
-        let baseline_package_names = ctx.baseline_data.map(|b| {
-            b.packages.keys().cloned().collect::<Vec<_>>()
-        });
+        let baseline_package_names = ctx
+            .baseline_data
+            .map(|b| b.packages.keys().cloned().collect::<Vec<_>>());
 
         // 8. Build warnings
         let mut warnings = Vec::new();
@@ -271,9 +307,9 @@ impl Inspector for RpmInspector {
             file_ownership,
             no_baseline,
             baseline_package_names,
-            leaf_packages: Some(leaf_packages),
-            auto_packages: Some(auto_packages),
-            leaf_dep_tree,
+            leaf_packages: leaf_classification.leaf_packages,
+            auto_packages: leaf_classification.auto_packages,
+            leaf_dep_tree: leaf_classification.leaf_dep_tree,
             ..Default::default()
         };
 
@@ -285,12 +321,18 @@ impl Inspector for RpmInspector {
     }
 }
 
-/// Query `dnf repoquery --userinstalled` to get the set of user-explicitly-installed
-/// package names. Returns `None` if dnf is unavailable (non-zero exit).
+/// Query `dnf repoquery --userinstalled` to get canonical `name.arch`
+/// identities for explicitly installed packages. Returns `None` if dnf is
+/// unavailable (non-zero exit).
 fn query_user_installed(exec: &dyn Executor) -> Option<HashSet<String>> {
     let result = exec.run(
         "dnf",
-        &["repoquery", "--userinstalled", "--queryformat", "%{name}\n"],
+        &[
+            "repoquery",
+            "--userinstalled",
+            "--queryformat",
+            "%{name}.%{arch}\n",
+        ],
     );
     if !result.success() {
         return None;
@@ -305,22 +347,22 @@ fn query_user_installed(exec: &dyn Executor) -> Option<HashSet<String>> {
 }
 
 /// Build a dependency graph from `dnf repoquery --requires --resolve --recursive --installed`.
-/// For each package in `added_names`, queries its transitive dependencies and filters to
-/// only those also in `added_names`. Returns `(depends_on, ok)` where `ok` is false if
-/// dnf is unavailable.
+/// For each package in `added_ids`, queries its transitive dependencies as canonical
+/// `name.arch` identities and filters to only those also in `added_ids`.
+/// Returns `None` if dnf is unavailable or any package query fails after the initial probe.
 fn classify_deps_dnf(
     exec: &dyn Executor,
-    added_names: &HashSet<String>,
-) -> (HashMap<String, HashSet<String>>, bool) {
-    if added_names.is_empty() {
-        return (HashMap::new(), true);
+    added_ids: &HashSet<String>,
+) -> Option<HashMap<String, HashSet<String>>> {
+    if added_ids.is_empty() {
+        return Some(HashMap::new());
     }
 
-    let mut name_list: Vec<&String> = added_names.iter().collect();
-    name_list.sort();
+    let mut package_ids: Vec<&String> = added_ids.iter().collect();
+    package_ids.sort();
 
     // Probe with first package to check if dnf is available.
-    let first = name_list[0];
+    let first = package_ids[0];
     let probe = exec.run(
         "dnf",
         &[
@@ -330,24 +372,24 @@ fn classify_deps_dnf(
             "--recursive",
             "--installed",
             "--queryformat",
-            "%{name}\n",
+            "%{name}.%{arch}\n",
             first,
         ],
     );
     if !probe.success() {
-        return (HashMap::new(), false);
+        return None;
     }
 
     let mut depends_on: HashMap<String, HashSet<String>> = HashMap::new();
-    for name in added_names {
-        depends_on.insert(name.clone(), HashSet::new());
+    for package_id in added_ids {
+        depends_on.insert(package_id.clone(), HashSet::new());
     }
 
     // Parse first result.
-    parse_dnf_deps(&probe.stdout, first, added_names, &mut depends_on);
+    parse_dnf_deps(&probe.stdout, first, added_ids, &mut depends_on);
 
     // Query remaining packages.
-    for pkg_name in &name_list[1..] {
+    for package_id in &package_ids[1..] {
         let result = exec.run(
             "dnf",
             &[
@@ -357,50 +399,50 @@ fn classify_deps_dnf(
                 "--recursive",
                 "--installed",
                 "--queryformat",
-                "%{name}\n",
-                pkg_name,
+                "%{name}.%{arch}\n",
+                package_id,
             ],
         );
-        if result.success() {
-            parse_dnf_deps(&result.stdout, pkg_name, added_names, &mut depends_on);
+        if !result.success() {
+            return None;
         }
+        parse_dnf_deps(&result.stdout, package_id, added_ids, &mut depends_on);
     }
 
-    (depends_on, true)
+    Some(depends_on)
 }
 
-/// Classify `packages_added` into leaf (user-intent) and auto (transitive dependency) sets.
-/// Uses `query_user_installed()` to identify explicitly installed packages, falling back to
-/// graph-based classification when dnf --userinstalled is unavailable or returns no intersection
-/// with the added set. Builds a per-leaf dependency tree for the snapshot.
-fn classify_leaf_auto(
-    exec: &dyn Executor,
-    packages_added: &[PackageEntry],
-) -> (Vec<String>, Vec<String>, serde_json::Value) {
-    let added_names: HashSet<String> = packages_added.iter().map(|p| p.name.clone()).collect();
+/// Classify `packages_added` into leaf (user-intent) and auto (transitive dependency)
+/// sets using canonical `name.arch` identities. If dependency classification is
+/// unavailable or incomplete, returns explicit degraded-mode metadata instead of
+/// successful-looking fallback data.
+fn classify_leaf_auto(exec: &dyn Executor, packages_added: &[PackageEntry]) -> LeafClassification {
+    let added_ids: HashSet<String> = packages_added.iter().map(canonical_package_id).collect();
 
     let user_installed = query_user_installed(exec);
-    let (depends_on, _transitive) = classify_deps_dnf(exec, &added_names);
+    let Some(depends_on) = classify_deps_dnf(exec, &added_ids) else {
+        return LeafClassification::unavailable();
+    };
 
     let (mut leaf, mut auto): (Vec<String>, Vec<String>) = if let Some(ref ui) = user_installed {
-        let leaf_set: HashSet<&String> = ui.intersection(&added_names).collect();
-        if leaf_set.is_empty() && !added_names.is_empty() {
+        let leaf_set: HashSet<&String> = ui.intersection(&added_ids).collect();
+        if leaf_set.is_empty() && !added_ids.is_empty() {
             // Fallback to graph-based when userinstalled has no overlap with added
-            graph_based_split(&added_names, &depends_on)
+            graph_based_split(&added_ids, &depends_on)
         } else {
             let mut l = Vec::new();
             let mut a = Vec::new();
-            for name in &added_names {
-                if leaf_set.contains(name) {
-                    l.push(name.clone());
+            for package_id in &added_ids {
+                if leaf_set.contains(package_id) {
+                    l.push(package_id.clone());
                 } else {
-                    a.push(name.clone());
+                    a.push(package_id.clone());
                 }
             }
             (l, a)
         }
     } else {
-        graph_based_split(&added_names, &depends_on)
+        graph_based_split(&added_ids, &depends_on)
     };
 
     leaf.sort();
@@ -423,49 +465,50 @@ fn classify_leaf_auto(
         dep_tree.insert(lf.clone(), serde_json::json!(filtered));
     }
 
-    (leaf, auto, serde_json::Value::Object(dep_tree))
+    LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree))
 }
 
-/// Graph-based fallback: packages depended on by other added packages are auto;
-/// packages not depended on by anything are leaf.
+/// Graph-based fallback: package identities depended on by other added packages are
+/// auto; package identities not depended on by anything are leaf.
 fn graph_based_split(
-    added_names: &HashSet<String>,
+    added_ids: &HashSet<String>,
     depends_on: &HashMap<String, HashSet<String>>,
 ) -> (Vec<String>, Vec<String>) {
     let mut depended_on: HashSet<String> = HashSet::new();
     for deps in depends_on.values() {
         for dep in deps {
-            if added_names.contains(dep) {
+            if added_ids.contains(dep) {
                 depended_on.insert(dep.clone());
             }
         }
     }
     let mut leaf = Vec::new();
     let mut auto = Vec::new();
-    for name in added_names {
-        if depended_on.contains(name) {
-            auto.push(name.clone());
+    for package_id in added_ids {
+        if depended_on.contains(package_id) {
+            auto.push(package_id.clone());
         } else {
-            leaf.push(name.clone());
+            leaf.push(package_id.clone());
         }
     }
     (leaf, auto)
 }
 
-/// Parse dnf dependency output lines and record which added packages `pkg_name` depends on.
+/// Parse dnf dependency output lines and record which added package identity
+/// `package_id` depends on.
 fn parse_dnf_deps(
     stdout: &str,
-    pkg_name: &str,
-    added_names: &HashSet<String>,
+    package_id: &str,
+    added_ids: &HashSet<String>,
     depends_on: &mut HashMap<String, HashSet<String>>,
 ) {
     for line in stdout.lines() {
         let dep = line.trim();
-        if dep.is_empty() || dep == pkg_name {
+        if dep.is_empty() || dep == package_id {
             continue;
         }
-        if added_names.contains(dep) {
-            if let Some(deps) = depends_on.get_mut(pkg_name) {
+        if added_ids.contains(dep) {
+            if let Some(deps) = depends_on.get_mut(package_id) {
                 deps.insert(dep.to_string());
             }
         }
@@ -558,12 +601,16 @@ tzdata\t/usr/share/zoneinfo/UTC
     fn test_rpm_inspector_trait() {
         let inspector = RpmInspector::new();
         assert_eq!(inspector.id(), InspectorId::Rpm);
-        assert!(inspector
-            .applicable_to()
-            .contains(&SourceSystemKind::PackageBased));
-        assert!(inspector
-            .applicable_to()
-            .contains(&SourceSystemKind::RpmOstree));
+        assert!(
+            inspector
+                .applicable_to()
+                .contains(&SourceSystemKind::PackageBased)
+        );
+        assert!(
+            inspector
+                .applicable_to()
+                .contains(&SourceSystemKind::RpmOstree)
+        );
         assert!(inspector.applicable_to().contains(&SourceSystemKind::Bootc));
     }
 
@@ -595,10 +642,11 @@ tzdata\t/usr/share/zoneinfo/UTC
             assert!(!names.contains(&"gpg-pubkey")); // filtered
 
             // All classified as Added
-            assert!(rpm
-                .packages_added
-                .iter()
-                .all(|p| p.state == PackageState::Added));
+            assert!(
+                rpm.packages_added
+                    .iter()
+                    .all(|p| p.state == PackageState::Added)
+            );
 
             // Supplementary data
             assert_eq!(rpm.repo_files.len(), 2);
@@ -631,10 +679,12 @@ tzdata\t/usr/share/zoneinfo/UTC
         }
 
         // Should have a no-baseline warning
-        assert!(output
-            .warnings
-            .iter()
-            .any(|w| w.message.contains("no baseline")));
+        assert!(
+            output
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("no baseline"))
+        );
     }
 
     #[test]
@@ -830,7 +880,10 @@ tzdata\t/usr/share/zoneinfo/UTC
 
         // Should NOT have the no-baseline warning
         assert!(
-            !output.warnings.iter().any(|w| w.message.contains("no baseline")),
+            !output
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("no baseline")),
             "should not warn about no baseline when baseline is provided"
         );
     }
@@ -838,12 +891,12 @@ tzdata\t/usr/share/zoneinfo/UTC
     // --- query_user_installed tests ---
 
     #[test]
-    fn query_user_installed_parses_dnf_output() {
+    fn query_user_installed_parses_canonical_ids() {
         let exec = MockExecutor::new().with_command(
-            "dnf repoquery --userinstalled --queryformat %{name}\n",
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
             ExecResult {
+                stdout: "vim.x86_64\nhtop.noarch\nnginx.aarch64\n".into(),
                 exit_code: 0,
-                stdout: "vim\nhtop\nnginx\n".into(),
                 stderr: String::new(),
             },
         );
@@ -851,15 +904,15 @@ tzdata\t/usr/share/zoneinfo/UTC
         assert!(result.is_some());
         let names = result.unwrap();
         assert_eq!(names.len(), 3);
-        assert!(names.contains("vim"));
-        assert!(names.contains("htop"));
-        assert!(names.contains("nginx"));
+        assert!(names.contains("vim.x86_64"));
+        assert!(names.contains("htop.noarch"));
+        assert!(names.contains("nginx.aarch64"));
     }
 
     #[test]
     fn query_user_installed_returns_none_on_failure() {
         let exec = MockExecutor::new().with_command(
-            "dnf repoquery --userinstalled --queryformat %{name}\n",
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
             ExecResult {
                 exit_code: 1,
                 stdout: String::new(),
@@ -872,28 +925,38 @@ tzdata\t/usr/share/zoneinfo/UTC
 
     // --- classify_leaf_auto tests ---
 
-    fn make_test_entry(name: &str) -> PackageEntry {
+    fn build_leaf_classification_executor(rpm_qa_output: &str) -> MockExecutor {
+        build_rpm_mock_executor().with_command(
+            &format!("rpm -qa --queryformat {}\n", RPM_QA_FORMAT),
+            ExecResult {
+                stdout: rpm_qa_output.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn make_test_entry(name: &str, arch: &str) -> PackageEntry {
         PackageEntry {
             name: name.to_string(),
+            arch: arch.to_string(),
             ..PackageEntry::default()
         }
     }
 
     #[test]
-    fn classify_leaf_auto_splits_by_user_installed() {
+    fn classify_leaf_auto_uses_canonical_name_arch_identity() {
         let exec = MockExecutor::new()
-            // dnf --userinstalled returns vim (but not glibc)
             .with_command(
-                "dnf repoquery --userinstalled --queryformat %{name}\n",
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
                 ExecResult {
                     exit_code: 0,
-                    stdout: "vim\nsome-other-pkg\n".into(),
+                    stdout: "vim.x86_64\nsome-other-pkg.x86_64\n".into(),
                     stderr: String::new(),
                 },
             )
-            // dependency queries: vim depends on glibc
             .with_command(
-                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
                 ExecResult {
                     exit_code: 0,
                     stdout: "".into(),
@@ -901,41 +964,52 @@ tzdata\t/usr/share/zoneinfo/UTC
                 },
             )
             .with_command(
-                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n vim",
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
                 ExecResult {
                     exit_code: 0,
-                    stdout: "glibc\n".into(),
+                    stdout: "glibc.x86_64\n".into(),
                     stderr: String::new(),
                 },
             );
 
-        let added = vec![make_test_entry("vim"), make_test_entry("glibc")];
+        let added = vec![
+            make_test_entry("vim", "x86_64"),
+            make_test_entry("glibc", "x86_64"),
+        ];
 
-        let (leaf, auto, dep_tree) = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added);
 
-        assert_eq!(leaf, vec!["vim".to_string()]);
-        assert_eq!(auto, vec!["glibc".to_string()]);
-        // dep_tree: vim -> [glibc]
-        let vim_deps = dep_tree.get("vim").unwrap().as_array().unwrap();
+        assert_eq!(
+            classification.leaf_packages,
+            Some(vec!["vim.x86_64".to_string()])
+        );
+        assert_eq!(
+            classification.auto_packages,
+            Some(vec!["glibc.x86_64".to_string()])
+        );
+        let vim_deps = classification
+            .leaf_dep_tree
+            .get("vim.x86_64")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert_eq!(vim_deps.len(), 1);
-        assert_eq!(vim_deps[0].as_str().unwrap(), "glibc");
+        assert_eq!(vim_deps[0].as_str().unwrap(), "glibc.x86_64");
     }
 
     #[test]
-    fn classify_leaf_auto_falls_back_to_graph_when_userinstalled_empty() {
+    fn classify_leaf_auto_falls_back_to_graph_when_userinstalled_has_no_overlap() {
         let exec = MockExecutor::new()
-            // dnf --userinstalled returns empty (intersection with added is empty)
             .with_command(
-                "dnf repoquery --userinstalled --queryformat %{name}\n",
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
                 ExecResult {
                     exit_code: 0,
-                    stdout: "unrelated-pkg\n".into(),
+                    stdout: "unrelated-pkg.x86_64\n".into(),
                     stderr: String::new(),
                 },
             )
-            // dependency queries: vim depends on glibc
             .with_command(
-                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
                 ExecResult {
                     exit_code: 0,
                     stdout: "".into(),
@@ -943,60 +1017,53 @@ tzdata\t/usr/share/zoneinfo/UTC
                 },
             )
             .with_command(
-                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n vim",
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
                 ExecResult {
                     exit_code: 0,
-                    stdout: "glibc\n".into(),
+                    stdout: "glibc.x86_64\n".into(),
                     stderr: String::new(),
                 },
             );
 
-        let added = vec![make_test_entry("vim"), make_test_entry("glibc")];
+        let added = vec![
+            make_test_entry("vim", "x86_64"),
+            make_test_entry("glibc", "x86_64"),
+        ];
 
-        let (leaf, auto, _dep_tree) = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added);
 
-        // Graph-based: glibc is depended on by vim, so it's auto. vim is leaf.
-        assert_eq!(leaf, vec!["vim".to_string()]);
-        assert_eq!(auto, vec!["glibc".to_string()]);
-    }
-
-    // --- classify_deps_dnf tests ---
-
-    #[test]
-    fn classify_deps_dnf_builds_graph() {
-        // vim depends on glibc (which is also in added_names) and ncurses (not in added_names)
-        let exec = MockExecutor::new()
-            .with_command(
-                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
-                ExecResult {
-                    exit_code: 0,
-                    stdout: "".into(),
-                    stderr: String::new(),
-                },
-            )
-            .with_command(
-                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n vim",
-                ExecResult {
-                    exit_code: 0,
-                    stdout: "glibc\nncurses\n".into(),
-                    stderr: String::new(),
-                },
-            );
-
-        let added_names: HashSet<String> = ["vim", "glibc"].iter().map(|s| s.to_string()).collect();
-        let (deps, ok) = classify_deps_dnf(&exec, &added_names);
-        assert!(ok);
-        // vim depends on glibc (glibc is in added_names)
-        assert!(deps.get("vim").unwrap().contains("glibc"));
-        // ncurses is NOT in added_names, so not tracked
-        assert!(!deps.get("vim").unwrap().contains("ncurses"));
+        assert_eq!(
+            classification.leaf_packages,
+            Some(vec!["vim.x86_64".to_string()])
+        );
+        assert_eq!(
+            classification.auto_packages,
+            Some(vec!["glibc.x86_64".to_string()])
+        );
+        assert_eq!(
+            classification.leaf_dep_tree,
+            serde_json::json!({"vim.x86_64": ["glibc.x86_64"]})
+        );
     }
 
     #[test]
-    fn classify_deps_dnf_returns_false_on_failure() {
-        // sorted order: glibc comes first, probe fails
-        let exec = MockExecutor::new().with_command(
-            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}\n glibc",
+    fn rpm_inspector_marks_leaf_classification_unavailable_on_total_dnf_failure() {
+        let exec = build_leaf_classification_executor(
+            "\
+0:glibc-2.34-100.el9.x86_64
+0:vim-9.0.1592-1.el9.x86_64
+",
+        )
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
             ExecResult {
                 exit_code: 1,
                 stdout: String::new(),
@@ -1004,20 +1071,194 @@ tzdata\t/usr/share/zoneinfo/UTC
             },
         );
 
-        let added_names: HashSet<String> =
-            ["vim", "glibc"].iter().map(|s| s.to_string()).collect();
-        let (deps, ok) = classify_deps_dnf(&exec, &added_names);
-        assert!(!ok);
-        assert!(deps.is_empty());
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+
+        assert_eq!(rpm.leaf_packages, None);
+        assert_eq!(rpm.auto_packages, None);
+        assert_eq!(rpm.leaf_dep_tree, serde_json::json!({}));
+    }
+
+    #[test]
+    fn rpm_inspector_marks_leaf_classification_unavailable_on_late_repoquery_failure() {
+        let exec = build_leaf_classification_executor(
+            "\
+0:glibc-2.34-100.el9.x86_64
+0:vim-9.0.1592-1.el9.x86_64
+",
+        )
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ExecResult {
+                exit_code: 0,
+                stdout: "vim.x86_64\n".into(),
+                stderr: String::new(),
+            },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+            ExecResult {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "repoquery failed".into(),
+            },
+        );
+
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+
+        assert_eq!(rpm.leaf_packages, None);
+        assert_eq!(rpm.auto_packages, None);
+        assert_eq!(rpm.leaf_dep_tree, serde_json::json!({}));
+    }
+
+    #[test]
+    fn classify_leaf_auto_keeps_multiarch_packages_distinct() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "openssl.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n openssl.i686",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n openssl.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added = vec![
+            make_test_entry("openssl", "x86_64"),
+            make_test_entry("openssl", "i686"),
+            make_test_entry("glibc", "x86_64"),
+        ];
+
+        let classification = classify_leaf_auto(&exec, &added);
+
+        assert_eq!(
+            classification.leaf_packages,
+            Some(vec!["openssl.x86_64".to_string()])
+        );
+        assert_eq!(
+            classification.auto_packages,
+            Some(vec!["glibc.x86_64".to_string(), "openssl.i686".to_string()])
+        );
+        assert_eq!(
+            classification.leaf_dep_tree,
+            serde_json::json!({"openssl.x86_64": []})
+        );
+    }
+
+    // --- classify_deps_dnf tests ---
+
+    #[test]
+    fn classify_deps_dnf_builds_arch_aware_graph() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc.x86_64\nncurses.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added_names: HashSet<String> = ["vim.x86_64", "glibc.x86_64"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let deps = classify_deps_dnf(&exec, &added_names).expect("graph should be available");
+        assert!(deps.get("vim.x86_64").unwrap().contains("glibc.x86_64"));
+        assert!(!deps.get("vim.x86_64").unwrap().contains("ncurses.x86_64"));
+    }
+
+    #[test]
+    fn classify_deps_dnf_returns_none_on_failure() {
+        let exec = MockExecutor::new().with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        );
+
+        let added_names: HashSet<String> = ["vim.x86_64", "glibc.x86_64"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let deps = classify_deps_dnf(&exec, &added_names);
+        assert!(deps.is_none());
     }
 
     #[test]
     fn query_user_installed_skips_blank_lines() {
         let exec = MockExecutor::new().with_command(
-            "dnf repoquery --userinstalled --queryformat %{name}\n",
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
             ExecResult {
                 exit_code: 0,
-                stdout: "\nvim\n\nhtop\n\n".into(),
+                stdout: "\nvim.x86_64\n\nhtop.noarch\n\n".into(),
                 stderr: String::new(),
             },
         );
@@ -1025,7 +1266,7 @@ tzdata\t/usr/share/zoneinfo/UTC
         assert!(result.is_some());
         let names = result.unwrap();
         assert_eq!(names.len(), 2);
-        assert!(names.contains("vim"));
-        assert!(names.contains("htop"));
+        assert!(names.contains("vim.x86_64"));
+        assert!(names.contains("htop.noarch"));
     }
 }

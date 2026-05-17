@@ -1123,15 +1123,19 @@ nobody:x:65534:
         assert_eq!(section.sudoers_rules.len(), 3);
         assert!(section.sudoers_rules.iter().any(|r| r.contains("root")));
         assert!(section.sudoers_rules.iter().any(|r| r.contains("%wheel")));
-        assert!(section
-            .sudoers_rules
-            .iter()
-            .any(|r| r.starts_with("#includedir")));
+        assert!(
+            section
+                .sudoers_rules
+                .iter()
+                .any(|r| r.starts_with("#includedir"))
+        );
         // Defaults and comments should be excluded.
-        assert!(!section
-            .sudoers_rules
-            .iter()
-            .any(|r| r.starts_with("Defaults")));
+        assert!(
+            !section
+                .sudoers_rules
+                .iter()
+                .any(|r| r.starts_with("Defaults"))
+        );
     }
 
     #[test]

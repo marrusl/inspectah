@@ -183,8 +183,17 @@ mod tests {
         let summary2 = session.baseline_summary();
         assert!(summary2.is_some());
         let s2 = summary2.unwrap();
-        assert_eq!(s1.baseline_count, s2.baseline_count, "baseline_count must be stable");
-        assert_eq!(s1.user_added_count, s2.user_added_count, "user_added_count must be stable");
-        assert_eq!(s1.review_count, s2.review_count, "review_count must be stable");
+        assert_eq!(
+            s1.baseline_count, s2.baseline_count,
+            "baseline_count must be stable"
+        );
+        assert_eq!(
+            s1.user_added_count, s2.user_added_count,
+            "user_added_count must be stable"
+        );
+        assert_eq!(
+            s1.review_count, s2.review_count,
+            "review_count must be stable"
+        );
     }
 }

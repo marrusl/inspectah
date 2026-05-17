@@ -98,14 +98,18 @@ fn test_repo_index_provenance_verified() {
 #[test]
 fn test_repo_index_provenance_incomplete() {
     let mut snap = make_snap_with_repos();
-    snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
-        name: "custom-pkg".into(),
-        arch: "x86_64".into(),
-        state: PackageState::Added,
-        source_repo: "custom-internal".into(),
-        include: true,
-        ..Default::default()
-    });
+    snap.rpm
+        .as_mut()
+        .unwrap()
+        .packages_added
+        .push(PackageEntry {
+            name: "custom-pkg".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "custom-internal".into(),
+            include: true,
+            ..Default::default()
+        });
     let index = RepoIndex::build(&snap);
     assert_eq!(
         index.provenance("custom-internal"),

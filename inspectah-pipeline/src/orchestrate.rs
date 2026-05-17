@@ -11,7 +11,7 @@ use inspectah_core::traits::renderer::RenderContext;
 use inspectah_core::types::system::SourceSystem;
 
 use crate::collect::collect;
-use crate::redaction::engine::{redact, RedactOptions};
+use crate::redaction::engine::{RedactOptions, redact};
 use crate::render;
 use crate::render::tarball::{create_tarball, get_output_stamp};
 use crate::validate::validate;

@@ -1,5 +1,5 @@
 use inspectah_core::pipeline::{Collected, Pipeline, Validated};
-use inspectah_core::snapshot::{migrate, SCHEMA_VERSION};
+use inspectah_core::snapshot::{SCHEMA_VERSION, migrate};
 
 /// Errors from schema validation.
 #[derive(Debug, thiserror::Error)]

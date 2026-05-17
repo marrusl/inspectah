@@ -54,9 +54,7 @@ pub fn run_refine(args: &RefineArgs) -> anyhow::Result<()> {
     };
 
     if is_dirty_on_exit {
-        eprintln!(
-            "Warning: unsaved changes. Use POST /api/tarball to export before stopping."
-        );
+        eprintln!("Warning: unsaved changes. Use POST /api/tarball to export before stopping.");
     }
 
     Ok(())

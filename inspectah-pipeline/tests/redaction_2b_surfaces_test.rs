@@ -9,7 +9,7 @@ use inspectah_core::types::containers::{ContainerSection, RunningContainer};
 use inspectah_core::types::network::{NetworkSection, ProxyEntry};
 use inspectah_core::types::redaction::{Confidence, FindingKind, RedactionState};
 use inspectah_core::types::users::UserGroupSection;
-use inspectah_pipeline::redaction::engine::{redact, RedactOptions};
+use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 
 // ---------------------------------------------------------------------------
 // Test 1: Proxy URL with password masked inline

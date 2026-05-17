@@ -5,7 +5,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_refine::baseline_summary::BaselineSummary;
-use inspectah_refine::repo_index::{RepoIndex, DISTRO_REPOS};
+use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance};
 use serde::{Deserialize, Serialize};
@@ -136,7 +136,11 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
     let view = session.view().clone();
     let repo_groups = build_repo_groups(session);
     let baseline_summary = session.baseline_summary();
-    ViewResponse { view, repo_groups, baseline_summary }
+    ViewResponse {
+        view,
+        repo_groups,
+        baseline_summary,
+    }
 }
 
 /// Build `RepoGroupInfo` entries from the session's repo index and current view.
@@ -148,7 +152,8 @@ fn build_repo_groups(session: &RefineSession) -> Vec<RepoGroupInfo> {
 
     // Count visible packages per source_repo (lowercased for consistency
     // with RepoIndex, which normalizes section IDs to lowercase).
-    let mut repo_counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut repo_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     for pkg in &view.packages {
         let section = pkg.entry.source_repo.to_lowercase();
         *repo_counts.entry(section).or_insert(0) += 1;
@@ -204,7 +209,9 @@ pub async fn apply_op(
     })?;
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
-    Ok(Json(serde_json::to_value(&build_view_response(&session)).unwrap()))
+    Ok(Json(
+        serde_json::to_value(&build_view_response(&session)).unwrap(),
+    ))
 }
 
 pub async fn undo(
@@ -219,7 +226,9 @@ pub async fn undo(
     })?;
     let mut session = state.session.lock().unwrap();
     session.undo().map_err(AppError)?;
-    Ok(Json(serde_json::to_value(&build_view_response(&session)).unwrap()))
+    Ok(Json(
+        serde_json::to_value(&build_view_response(&session)).unwrap(),
+    ))
 }
 
 pub async fn redo(
@@ -234,7 +243,9 @@ pub async fn redo(
     })?;
     let mut session = state.session.lock().unwrap();
     session.redo().map_err(AppError)?;
-    Ok(Json(serde_json::to_value(&build_view_response(&session)).unwrap()))
+    Ok(Json(
+        serde_json::to_value(&build_view_response(&session)).unwrap(),
+    ))
 }
 
 pub async fn get_ops(State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -360,8 +371,11 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
         let mut dropin_by_unit: std::collections::HashMap<&str, Vec<&str>> =
             std::collections::HashMap::new();
         let mut standalone_dropins = Vec::new();
-        let state_change_units: std::collections::HashSet<&str> =
-            svc.state_changes.iter().map(|sc| sc.unit.as_str()).collect();
+        let state_change_units: std::collections::HashSet<&str> = svc
+            .state_changes
+            .iter()
+            .map(|sc| sc.unit.as_str())
+            .collect();
 
         for d in &svc.drop_ins {
             if state_change_units.contains(d.unit.as_str()) {
@@ -469,8 +483,7 @@ fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| cf.path.clone());
-            let service_names: Vec<&str> =
-                cf.images.iter().map(|s| s.service.as_str()).collect();
+            let service_names: Vec<&str> = cf.images.iter().map(|s| s.service.as_str()).collect();
             let subtitle = service_names.join(", ");
             let mut search = format!("{} {}", cf.path, service_names.join(" "));
             // Append image refs for searchability (spec: ComposeService.image → searchable_text)
@@ -566,10 +579,7 @@ fn normalize_users_groups(snap: &InspectionSnapshot) -> ContextSection {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let uid = user
-                .get("uid")
-                .map(|v| v.to_string())
-                .unwrap_or_default();
+            let uid = user.get("uid").map(|v| v.to_string()).unwrap_or_default();
 
             // Build detail from sudoers + SSH keys
             let mut detail_parts = Vec::new();
@@ -627,10 +637,7 @@ fn normalize_users_groups(snap: &InspectionSnapshot) -> ContextSection {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let gid = group
-                .get("gid")
-                .map(|v| v.to_string())
-                .unwrap_or_default();
+            let gid = group.get("gid").map(|v| v.to_string()).unwrap_or_default();
 
             items.push(ContextItem {
                 id: name.clone(),
@@ -834,10 +841,7 @@ fn normalize_storage(snap: &InspectionSnapshot) -> ContextSection {
                 title: vd.path.clone(),
                 subtitle: Some(format!("~{}", vd.size_estimate)),
                 detail: Some(vd.recommendation.clone()),
-                searchable_text: format!(
-                    "{} {} {}",
-                    vd.path, vd.size_estimate, vd.recommendation
-                ),
+                searchable_text: format!("{} {} {}", vd.path, vd.size_estimate, vd.recommendation),
             });
         }
 
@@ -848,10 +852,7 @@ fn normalize_storage(snap: &InspectionSnapshot) -> ContextSection {
                 title: cr.credential_path.clone(),
                 subtitle: Some(format!("mount: {}", cr.mount_point)),
                 detail: Some(cr.source.clone()),
-                searchable_text: format!(
-                    "{} {} {}",
-                    cr.credential_path, cr.mount_point, cr.source
-                ),
+                searchable_text: format!("{} {} {}", cr.credential_path, cr.mount_point, cr.source),
             });
         }
     }
@@ -978,10 +979,7 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
                 Some(item.path.clone())
             };
 
-            let mut search = format!(
-                "{} {} {} {}",
-                item.name, item.path, item.method, item.lang
-            );
+            let mut search = format!("{} {} {} {}", item.name, item.path, item.method, item.lang);
             if !item.version.is_empty() {
                 search.push(' ');
                 search.push_str(&item.version);
@@ -1095,15 +1093,9 @@ fn normalize_kernel_boot(snap: &InspectionSnapshot) -> ContextSection {
             items.push(ContextItem {
                 id: so.key.clone(),
                 title: so.key.clone(),
-                subtitle: Some(format!(
-                    "\"{}\" (default: \"{}\")",
-                    so.runtime, so.default
-                )),
+                subtitle: Some(format!("\"{}\" (default: \"{}\")", so.runtime, so.default)),
                 detail: Some(so.source.clone()),
-                searchable_text: format!(
-                    "{} {} {} {}",
-                    so.key, so.runtime, so.default, so.source
-                ),
+                searchable_text: format!("{} {} {} {}", so.key, so.runtime, so.default, so.source),
             });
         }
 
@@ -1627,10 +1619,7 @@ mod tests {
             .expect("distro_repos should be an array");
 
         assert!(!distro_repos.is_empty(), "distro_repos should not be empty");
-        let repo_strs: Vec<&str> = distro_repos
-            .iter()
-            .map(|v| v.as_str().unwrap())
-            .collect();
+        let repo_strs: Vec<&str> = distro_repos.iter().map(|v| v.as_str().unwrap()).collect();
         assert!(repo_strs.contains(&"baseos"));
         assert!(repo_strs.contains(&"appstream"));
     }
@@ -1669,8 +1658,9 @@ mod tests {
             ],
             repo_files: vec![RepoFile {
                 path: "/etc/yum.repos.d/redhat.repo".into(),
-                content: "[appstream]\nname=AppStream\ngpgcheck=1\n[baseos]\nname=BaseOS\ngpgcheck=1"
-                    .into(),
+                content:
+                    "[appstream]\nname=AppStream\ngpgcheck=1\n[baseos]\nname=BaseOS\ngpgcheck=1"
+                        .into(),
                 ..Default::default()
             }],
             ..Default::default()
@@ -1817,7 +1807,10 @@ mod tests {
         let groups = build_repo_groups(&session);
         let epel_group = groups.iter().find(|g| g.section_id == "epel");
         assert!(epel_group.is_some(), "epel group should exist");
-        assert!(!epel_group.unwrap().enabled, "epel group should be disabled");
+        assert!(
+            !epel_group.unwrap().enabled,
+            "epel group should be disabled"
+        );
     }
 
     // -- Cross-section isolation: items must not leak between sections -----
@@ -1825,8 +1818,8 @@ mod tests {
     #[test]
     fn cross_section_no_contamination() {
         use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
+        use inspectah_core::types::storage::{MountPoint, StorageSection};
         use inspectah_core::types::users::UserGroupSection;
-        use inspectah_core::types::storage::{StorageSection, MountPoint};
 
         let mut snap = empty_snapshot();
 
@@ -1862,31 +1855,56 @@ mod tests {
         for section in &sections {
             match section.id.as_str() {
                 "services" => {
-                    assert!(section.items.iter().any(|i| i.id.contains("NetworkManager")));
-                    assert!(!section.items.iter().any(|i| i.id == "mark"),
-                        "services has user item leak");
-                    assert!(!section.items.iter().any(|i| i.id == "/"),
-                        "services has storage item leak");
+                    assert!(
+                        section
+                            .items
+                            .iter()
+                            .any(|i| i.id.contains("NetworkManager"))
+                    );
+                    assert!(
+                        !section.items.iter().any(|i| i.id == "mark"),
+                        "services has user item leak"
+                    );
+                    assert!(
+                        !section.items.iter().any(|i| i.id == "/"),
+                        "services has storage item leak"
+                    );
                 }
                 "users_groups" => {
                     assert!(section.items.iter().any(|i| i.id == "mark"));
-                    assert!(!section.items.iter().any(|i| i.id.contains("NetworkManager")),
-                        "users_groups has service item leak");
-                    assert!(!section.items.iter().any(|i| i.id == "/"),
-                        "users_groups has storage item leak");
+                    assert!(
+                        !section
+                            .items
+                            .iter()
+                            .any(|i| i.id.contains("NetworkManager")),
+                        "users_groups has service item leak"
+                    );
+                    assert!(
+                        !section.items.iter().any(|i| i.id == "/"),
+                        "users_groups has storage item leak"
+                    );
                 }
                 "storage" => {
                     assert!(section.items.iter().any(|i| i.id == "/"));
-                    assert!(!section.items.iter().any(|i| i.id.contains("NetworkManager")),
-                        "storage has service item leak");
-                    assert!(!section.items.iter().any(|i| i.id == "mark"),
-                        "storage has user item leak");
+                    assert!(
+                        !section
+                            .items
+                            .iter()
+                            .any(|i| i.id.contains("NetworkManager")),
+                        "storage has service item leak"
+                    );
+                    assert!(
+                        !section.items.iter().any(|i| i.id == "mark"),
+                        "storage has user item leak"
+                    );
                 }
                 _ => {
-                    assert!(section.items.is_empty(),
+                    assert!(
+                        section.items.is_empty(),
                         "{} should have no items but has: {:?}",
                         section.id,
-                        section.items.iter().map(|i| &i.id).collect::<Vec<_>>());
+                        section.items.iter().map(|i| &i.id).collect::<Vec<_>>()
+                    );
                 }
             }
         }

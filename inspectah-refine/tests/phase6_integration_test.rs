@@ -9,12 +9,12 @@ use std::collections::HashMap;
 use inspectah_core::baseline::{
     BaselineData, BaselinePackageEntry, ResolutionStrategy, TargetImageIdentity,
 };
-use inspectah_core::snapshot::{migrate, InspectionSnapshot, SCHEMA_VERSION};
+use inspectah_core::snapshot::{InspectionSnapshot, SCHEMA_VERSION, migrate};
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
 use inspectah_pipeline::render::containerfile::{base_image_from_snapshot, render_containerfile};
-use inspectah_refine::session::RefineSession;
 use inspectah_refine::normalize::load_for_refine;
+use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{PackageTarget, RefinementOp};
 
 // ---------------------------------------------------------------------------
@@ -145,7 +145,10 @@ fn degraded_target_image_present_cross_crate() {
 
     // Cross-crate call: pipeline's base_image_from_snapshot
     let base = base_image_from_snapshot(&parsed);
-    assert!(base.is_some(), "degraded with target_image must return Some");
+    assert!(
+        base.is_some(),
+        "degraded with target_image must return Some"
+    );
     assert_eq!(base.unwrap(), "quay.io/fedora/fedora-bootc:41");
 }
 
@@ -165,7 +168,10 @@ fn degraded_target_image_null_cross_crate() {
 
     // Cross-crate call: pipeline's base_image_from_snapshot
     let base = base_image_from_snapshot(&parsed);
-    assert!(base.is_none(), "degraded without target_image must return None");
+    assert!(
+        base.is_none(),
+        "degraded without target_image must return None"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +199,10 @@ fn pre_phase6_migration_cross_crate() {
     // Migrate
     migrate(&mut snap);
 
-    assert_eq!(snap.schema_version, 15, "schema_version must be 15 after migration");
+    assert_eq!(
+        snap.schema_version, 15,
+        "schema_version must be 15 after migration"
+    );
     assert!(snap.target_image.is_none(), "target_image must remain None");
     assert!(snap.baseline.is_none(), "baseline must remain None");
     assert!(snap.no_baseline, "no_baseline must be set by migration");
@@ -231,10 +240,7 @@ fn service_surface_agreement() {
                 ..Default::default()
             },
         ],
-        enabled_units: vec![
-            "dnf-makecache.service".into(),
-            "httpd.service".into(),
-        ],
+        enabled_units: vec!["dnf-makecache.service".into(), "httpd.service".into()],
         ..Default::default()
     });
 
@@ -250,7 +256,10 @@ fn service_surface_agreement() {
         .iter()
         .find(|sc| sc.unit == "dnf-makecache.service")
         .expect("dnf-makecache.service must be in state_changes");
-    assert!(!dnf_sc.include, "dnf-makecache.service must have include=false after normalization");
+    assert!(
+        !dnf_sc.include,
+        "dnf-makecache.service must have include=false after normalization"
+    );
 
     // httpd.service stays included
     let httpd_sc = services
@@ -262,13 +271,17 @@ fn service_surface_agreement() {
 
     // dnf-makecache.service must NOT be in enabled_units
     assert!(
-        !services.enabled_units.contains(&"dnf-makecache.service".to_string()),
+        !services
+            .enabled_units
+            .contains(&"dnf-makecache.service".to_string()),
         "dnf-makecache.service must be removed from enabled_units"
     );
 
     // httpd.service should remain in enabled_units
     assert!(
-        services.enabled_units.contains(&"httpd.service".to_string()),
+        services
+            .enabled_units
+            .contains(&"httpd.service".to_string()),
         "httpd.service must remain in enabled_units"
     );
 
@@ -310,7 +323,8 @@ fn preview_export_from_line_parity() {
     // The preview in the cached view should also contain the FROM line
     let view = session.view();
     assert!(
-        view.containerfile_preview.contains("FROM registry.redhat.io/rhel9/rhel-bootc:9.6"),
+        view.containerfile_preview
+            .contains("FROM registry.redhat.io/rhel9/rhel-bootc:9.6"),
         "Preview Containerfile FROM line must match target_image.image_ref"
     );
 }
@@ -327,7 +341,10 @@ fn baseline_summary_count_stability() {
 
     // Get initial summary
     let summary1 = session.baseline_summary();
-    assert!(summary1.is_some(), "baseline_summary must return Some when baseline is present");
+    assert!(
+        summary1.is_some(),
+        "baseline_summary must return Some when baseline is present"
+    );
     let s1 = summary1.unwrap();
 
     // Apply an exclude operation on httpd

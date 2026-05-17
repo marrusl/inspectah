@@ -215,15 +215,21 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(state
-            .owned_paths()
-            .contains(&PathBuf::from("/etc/httpd/conf/httpd.conf")));
-        assert!(!state
-            .owned_paths()
-            .contains(&PathBuf::from("/usr/bin/httpd")));
-        assert!(!state
-            .owned_paths()
-            .contains(&PathBuf::from("/var/log/httpd/access.log")));
+        assert!(
+            state
+                .owned_paths()
+                .contains(&PathBuf::from("/etc/httpd/conf/httpd.conf"))
+        );
+        assert!(
+            !state
+                .owned_paths()
+                .contains(&PathBuf::from("/usr/bin/httpd"))
+        );
+        assert!(
+            !state
+                .owned_paths()
+                .contains(&PathBuf::from("/var/log/httpd/access.log"))
+        );
     }
 
     #[test]
@@ -255,9 +261,11 @@ mod tests {
     #[test]
     fn test_rpm_state_package_for_path_unknown() {
         let state = build_test_rpm_state();
-        assert!(state
-            .package_for_path(Path::new("/etc/nonexistent"))
-            .is_none());
+        assert!(
+            state
+                .package_for_path(Path::new("/etc/nonexistent"))
+                .is_none()
+        );
     }
 
     #[test]
