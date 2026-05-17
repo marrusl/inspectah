@@ -36,7 +36,8 @@ fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
     let f = std::fs::File::create(&tarball_path).unwrap();
     let gz = flate2::write::GzEncoder::new(f, flate2::Compression::default());
     let mut tar = tar::Builder::new(gz);
-    tar.append_path_with_name(&snap_path, "inspection-snapshot.json").unwrap();
+    tar.append_path_with_name(&snap_path, "inspection-snapshot.json")
+        .unwrap();
     tar.finish().unwrap();
     drop(tar);
     tarball_path
@@ -70,7 +71,11 @@ async fn refine_server_lifecycle() {
     let base = format!("http://{addr}");
 
     // 1. Health check
-    let resp = client.get(format!("{base}/api/health")).send().await.unwrap();
+    let resp = client
+        .get(format!("{base}/api/health"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(body["status"], "ok");
@@ -119,7 +124,11 @@ async fn refine_server_lifecycle() {
     assert_eq!(resp.status(), 200);
 
     // 6. Changes
-    let resp = client.get(format!("{base}/api/changes")).send().await.unwrap();
+    let resp = client
+        .get(format!("{base}/api/changes"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(resp.status(), 200);
     let changes: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(changes["is_dirty"], true);

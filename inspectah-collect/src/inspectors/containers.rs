@@ -453,7 +453,7 @@ fn extract_compose_images(content: &str) -> ComposeParseResult {
             return ComposeParseResult {
                 services: results,
                 had_anomalies: true,
-            }
+            };
         }
     };
 

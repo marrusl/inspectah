@@ -18,6 +18,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::os::SystemType;
+use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::redaction::RedactionKind;
 
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
@@ -194,6 +195,62 @@ pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> Option<String> {
 
 // --- Packages section ---
 
+fn canonical_package_id(name: &str, arch: &str) -> String {
+    format!("{name}.{arch}")
+}
+
+fn package_display_name(pkg: &PackageEntry) -> String {
+    if pkg.arch.is_empty() {
+        pkg.name.clone()
+    } else {
+        canonical_package_id(&pkg.name, &pkg.arch)
+    }
+}
+
+fn package_state_label(pkg: &PackageEntry) -> String {
+    serde_json::to_string(&pkg.state)
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string()
+}
+
+fn manual_follow_up_line(pkg: &PackageEntry) -> Option<String> {
+    match pkg.state {
+        inspectah_core::types::rpm::PackageState::LocalInstall => Some(format!(
+            "# TODO: '{}' was installed locally (state: {}) — provide a .rpm or custom repo.",
+            package_display_name(pkg),
+            package_state_label(pkg)
+        )),
+        inspectah_core::types::rpm::PackageState::NoRepo => Some(format!(
+            "# TODO: '{}' has no repository source (state: {}) — provide a .rpm or custom repo.",
+            package_display_name(pkg),
+            package_state_label(pkg)
+        )),
+        _ if pkg.source_repo.is_empty() => Some(format!(
+            "# TODO: '{}' has no recorded repository source — verify how to reinstall it in the image.",
+            package_display_name(pkg)
+        )),
+        _ => None,
+    }
+}
+
+fn install_name_for_package(
+    pkg: &PackageEntry,
+    duplicate_name_counts: &std::collections::HashMap<String, usize>,
+) -> String {
+    if duplicate_name_counts
+        .get(&pkg.name)
+        .copied()
+        .unwrap_or_default()
+        > 1
+        && !pkg.arch.is_empty()
+    {
+        canonical_package_id(&pkg.name, &pkg.arch)
+    } else {
+        pkg.name.clone()
+    }
+}
+
 fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<String> {
     let mut lines = Vec::new();
 
@@ -349,74 +406,49 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
     let mut install_names = Vec::new();
     let mut todo_lines = Vec::new();
 
-    // Build set of excluded package names
-    let excluded_pkgs: std::collections::HashSet<&str> = rpm
-        .packages_added
-        .iter()
-        .filter(|p| !p.include)
-        .map(|p| p.name.as_str())
-        .collect();
-
-    let unreachable: std::collections::HashSet<&str> = rpm
-        .packages_added
-        .iter()
-        .filter(|p| {
-            matches!(
-                p.state,
-                inspectah_core::types::rpm::PackageState::LocalInstall
-                    | inspectah_core::types::rpm::PackageState::NoRepo
-            )
-        })
-        .map(|p| p.name.as_str())
-        .collect();
-
-    if let Some(ref leaf_packages) = rpm.leaf_packages {
-        for name in leaf_packages {
-            if excluded_pkgs.contains(name.as_str()) {
-                continue;
-            }
-            if sanitize_shell_value(name).is_some() {
-                if unreachable.contains(name.as_str()) {
-                    let state = unreachable_state(snap, name);
-                    todo_lines.push(format!(
-                        "# TODO: '{}' was installed locally (state: {}) \
-                         — no repository source. Provide a .rpm or custom repo.",
-                        name, state
-                    ));
-                    continue;
-                }
-                install_names.push(name.clone());
-            }
+    for pkg in &rpm.packages_added {
+        if let Some(line) = manual_follow_up_line(pkg) {
+            todo_lines.push(line);
         }
-    } else {
-        for pkg in &rpm.packages_added {
-            if pkg.include && sanitize_shell_value(&pkg.name).is_some() {
-                if matches!(
-                    pkg.state,
-                    inspectah_core::types::rpm::PackageState::LocalInstall
-                        | inspectah_core::types::rpm::PackageState::NoRepo
-                ) {
-                    let state = serde_json::to_string(&pkg.state)
-                        .unwrap_or_default()
-                        .trim_matches('"')
-                        .to_string();
-                    todo_lines.push(format!(
-                        "# TODO: '{}' was installed locally (state: {}) \
-                         — no repository source. Provide a .rpm or custom repo.",
-                        pkg.name, state
-                    ));
-                    continue;
-                }
-                install_names.push(pkg.name.clone());
-            }
+    }
+
+    let is_fleet_snapshot = rpm.packages_added.iter().any(|pkg| pkg.fleet.is_some());
+    let leaf_filter: Option<std::collections::HashSet<String>> = rpm
+        .leaf_packages
+        .as_ref()
+        .filter(|_| !is_fleet_snapshot)
+        .map(|leaf_packages| leaf_packages.iter().cloned().collect());
+
+    let installable_packages: Vec<&PackageEntry> = rpm
+        .packages_added
+        .iter()
+        .filter(|pkg| pkg.include)
+        .filter(|pkg| manual_follow_up_line(pkg).is_none())
+        .filter(|pkg| {
+            leaf_filter.as_ref().is_none_or(|leaf_ids| {
+                leaf_ids.contains(&canonical_package_id(&pkg.name, &pkg.arch))
+            })
+        })
+        .collect();
+
+    let duplicate_name_counts: std::collections::HashMap<String, usize> = installable_packages
+        .iter()
+        .fold(std::collections::HashMap::new(), |mut counts, pkg| {
+            *counts.entry(pkg.name.clone()).or_insert(0) += 1;
+            counts
+        });
+
+    for pkg in installable_packages {
+        let install_name = install_name_for_package(pkg, &duplicate_name_counts);
+        if sanitize_shell_value(&install_name).is_some() {
+            install_names.push(install_name);
         }
     }
 
     if !install_names.is_empty() {
         install_names.sort();
         lines.push(format!("# === Packages ({}) ===", install_names.len()));
-        let dnf_suffix =
-            " && dnf clean all && rm -rf /var/cache/dnf /var/lib/dnf/history* /var/log/dnf* /var/log/hawkey.log /var/log/rhsm";
+        let dnf_suffix = " && dnf clean all && rm -rf /var/cache/dnf /var/lib/dnf/history* /var/log/dnf* /var/log/hawkey.log /var/log/rhsm";
         if install_names.len() <= 10 {
             lines.push(format!(
                 "RUN dnf install -y {}{}",
@@ -476,20 +508,6 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
     }
 
     lines
-}
-
-fn unreachable_state(snap: &InspectionSnapshot, name: &str) -> String {
-    if let Some(rpm) = &snap.rpm {
-        for pkg in &rpm.packages_added {
-            if pkg.name == name {
-                return serde_json::to_string(&pkg.state)
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string();
-            }
-        }
-    }
-    "unknown".to_string()
 }
 
 // --- Services section ---
@@ -1393,7 +1411,9 @@ mod tests {
                 .iter()
                 .map(|n| PackageEntry {
                     name: n.to_string(),
+                    arch: "x86_64".into(),
                     state: PackageState::Added,
+                    source_repo: "appstream".into(),
                     include: true,
                     ..Default::default()
                 })
@@ -1418,6 +1438,128 @@ mod tests {
         );
         assert!(output.contains("httpd"), "must contain httpd");
         assert!(output.contains("vim-enhanced"), "must contain vim-enhanced");
+    }
+
+    #[test]
+    fn test_containerfile_leaf_packages_use_canonical_ids_but_render_package_names() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "i686".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: false,
+                    ..Default::default()
+                },
+            ],
+            leaf_packages: Some(vec!["httpd.x86_64".into()]),
+            auto_packages: Some(vec!["httpd.i686".into()]),
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None);
+        let install_line = output
+            .lines()
+            .find(|line| line.starts_with("RUN dnf install -y"))
+            .expect("install line must be present");
+
+        assert!(
+            install_line.split_whitespace().any(|token| token == "httpd"),
+            "install line must render package names, got: {install_line}"
+        );
+        assert!(
+            !install_line.contains("httpd.x86_64"),
+            "install line must not leak canonical leaf identity, got: {install_line}"
+        );
+        assert!(
+            !install_line.contains("httpd.i686"),
+            "install line must not install the non-leaf arch, got: {install_line}"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_non_leaf_manual_follow_up_survives_leaf_filter() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            packages_added: vec![
+                PackageEntry {
+                    name: "httpd".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: "appstream".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "local-tool".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::LocalInstall,
+                    source_repo: String::new(),
+                    include: false,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "orphan-pkg".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::NoRepo,
+                    source_repo: String::new(),
+                    include: false,
+                    ..Default::default()
+                },
+                PackageEntry {
+                    name: "mystery".into(),
+                    arch: "x86_64".into(),
+                    state: PackageState::Added,
+                    source_repo: String::new(),
+                    include: false,
+                    ..Default::default()
+                },
+            ],
+            leaf_packages: Some(vec!["httpd.x86_64".into()]),
+            auto_packages: Some(vec![
+                "local-tool.x86_64".into(),
+                "orphan-pkg.x86_64".into(),
+                "mystery.x86_64".into(),
+            ]),
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None);
+        let install_line = output
+            .lines()
+            .find(|line| line.starts_with("RUN dnf install -y"))
+            .expect("install line must be present");
+
+        assert!(
+            install_line.contains("httpd"),
+            "leaf package must stay on the install line, got: {install_line}"
+        );
+        assert!(
+            !install_line.contains("local-tool")
+                && !install_line.contains("orphan-pkg")
+                && !install_line.contains("mystery"),
+            "non-leaf unresolved packages must stay off the install line, got: {install_line}"
+        );
+        assert!(
+            output.contains("# === Manual Follow-up Required ==="),
+            "manual follow-up section must be present, got:\n{output}"
+        );
+        for package in ["local-tool", "orphan-pkg", "mystery"] {
+            assert!(
+                output.contains(package),
+                "manual follow-up must mention {package}, got:\n{output}"
+            );
+        }
     }
 
     #[test]
@@ -1976,7 +2118,10 @@ mod tests {
     fn test_from_omitted_when_no_target_image() {
         let snap = InspectionSnapshot::new();
         let result = base_image_from_snapshot(&snap);
-        assert!(result.is_none(), "no target_image or rpm.base_image must return None");
+        assert!(
+            result.is_none(),
+            "no target_image or rpm.base_image must return None"
+        );
         let output = render_containerfile(&snap, None);
         assert!(
             output.contains("# FROM line omitted"),
@@ -2010,7 +2155,10 @@ mod tests {
             ..Default::default()
         });
         let result = base_image_from_snapshot(&snap);
-        assert!(result.is_none(), "no hardcoded fallback when rpm.base_image is None");
+        assert!(
+            result.is_none(),
+            "no hardcoded fallback when rpm.base_image is None"
+        );
     }
 
     #[test]

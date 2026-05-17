@@ -1,17 +1,16 @@
-use std::path::Path;
-use inspectah_core::snapshot::InspectionSnapshot;
-use inspectah_core::types::redaction::RedactionState;
 use crate::normalize::load_for_refine;
 use crate::session::RefineSession;
 use crate::types::RefineError;
+use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::redaction::RedactionState;
+use std::path::Path;
 
 const MAX_UNPACKED_SIZE: u64 = 512 * 1024 * 1024; // 512 MiB
 const MAX_FILE_COUNT: usize = 10_000;
 const MAX_SINGLE_FILE: u64 = 256 * 1024 * 1024; // 256 MiB
 
 pub fn from_tarball(path: &Path) -> Result<RefineSession, RefineError> {
-    let tempdir = tempfile::tempdir()
-        .map_err(|e| RefineError::TarballError(e.to_string()))?;
+    let tempdir = tempfile::tempdir().map_err(|e| RefineError::TarballError(e.to_string()))?;
 
     // Extract with safety checks
     extract_safe(path, tempdir.path())?;
@@ -47,17 +46,17 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
     let mut total_size: u64 = 0;
     let mut file_count: usize = 0;
 
-    for entry_result in archive.entries()
-        .map_err(|e| RefineError::TarballError(e.to_string()))? {
-
-        let mut entry = entry_result
-            .map_err(|e| RefineError::TarballError(e.to_string()))?;
+    for entry_result in archive
+        .entries()
+        .map_err(|e| RefineError::TarballError(e.to_string()))?
+    {
+        let mut entry = entry_result.map_err(|e| RefineError::TarballError(e.to_string()))?;
 
         file_count += 1;
         if file_count > MAX_FILE_COUNT {
-            return Err(RefineError::ArchiveSafety(
-                format!("archive exceeds {MAX_FILE_COUNT} entry limit"),
-            ));
+            return Err(RefineError::ArchiveSafety(format!(
+                "archive exceeds {MAX_FILE_COUNT} entry limit"
+            )));
         }
 
         let path = entry
@@ -68,40 +67,51 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
         // Path traversal check
         for component in path.components() {
             if let std::path::Component::ParentDir = component {
-                return Err(RefineError::ArchiveSafety(
-                    format!("path traversal: {}", path.display()),
-                ));
+                return Err(RefineError::ArchiveSafety(format!(
+                    "path traversal: {}",
+                    path.display()
+                )));
             }
         }
         if path.is_absolute() {
-            return Err(RefineError::ArchiveSafety(
-                format!("path traversal: absolute path {}", path.display()),
-            ));
+            return Err(RefineError::ArchiveSafety(format!(
+                "path traversal: absolute path {}",
+                path.display()
+            )));
         }
 
         // Entry type check
         let entry_type = entry.header().entry_type();
-        if !matches!(entry_type, tar::EntryType::Regular | tar::EntryType::Directory) {
-            return Err(RefineError::ArchiveSafety(
-                format!("unsupported entry type: {:?} for {}", entry_type, path.display()),
-            ));
+        if !matches!(
+            entry_type,
+            tar::EntryType::Regular | tar::EntryType::Directory
+        ) {
+            return Err(RefineError::ArchiveSafety(format!(
+                "unsupported entry type: {:?} for {}",
+                entry_type,
+                path.display()
+            )));
         }
 
         // Single file size check
-        let size = entry.header().size()
+        let size = entry
+            .header()
+            .size()
             .map_err(|e| RefineError::TarballError(e.to_string()))?;
         if size > MAX_SINGLE_FILE {
-            return Err(RefineError::ArchiveSafety(
-                format!("single file exceeds {} MiB", MAX_SINGLE_FILE / (1024 * 1024)),
-            ));
+            return Err(RefineError::ArchiveSafety(format!(
+                "single file exceeds {} MiB",
+                MAX_SINGLE_FILE / (1024 * 1024)
+            )));
         }
 
         // Total size check
         total_size += size;
         if total_size > MAX_UNPACKED_SIZE {
-            return Err(RefineError::ArchiveSafety(
-                format!("archive exceeds {} MiB unpacked limit", MAX_UNPACKED_SIZE / (1024 * 1024)),
-            ));
+            return Err(RefineError::ArchiveSafety(format!(
+                "archive exceeds {} MiB unpacked limit",
+                MAX_UNPACKED_SIZE / (1024 * 1024)
+            )));
         }
 
         entry
@@ -114,9 +124,7 @@ fn extract_safe(tarball_path: &Path, dest: &Path) -> Result<(), RefineError> {
 
 fn flatten_if_needed(dir: &Path) -> Result<std::path::PathBuf, RefineError> {
     // Check if extraction produced a single subdirectory
-    let entries: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let entries: Vec<_> = std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
 
     if entries.len() == 1 && entries[0].file_type().map(|t| t.is_dir()).unwrap_or(false) {
         let subdir = entries[0].path();

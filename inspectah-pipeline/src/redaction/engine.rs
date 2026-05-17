@@ -9,22 +9,22 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use crate::redaction::patterns::{scan_shadow, PATTERNS};
+use crate::redaction::patterns::{PATTERNS, scan_shadow};
 
 /// Paths that are known false-positive sources for credential scanning.
 /// Files under these prefixes use keywords like "password", "auth", and
 /// "credential" as PAM module type tokens — not actual secrets.
 /// Listed WITHOUT a leading slash — the check handles both absolute
 /// (`/etc/pam.d/...`) and relative (`etc/pam.d/...`) forms.
-const REDACTION_ALLOWLIST: &[&str] = &[
-    "etc/pam.d/",
-];
+const REDACTION_ALLOWLIST: &[&str] = &["etc/pam.d/"];
 
 /// Returns true if `path` matches a known false-positive prefix.
 /// Handles both absolute and relative path forms.
 fn is_allowlisted_path(path: &str) -> bool {
     let normalized = path.strip_prefix('/').unwrap_or(path);
-    REDACTION_ALLOWLIST.iter().any(|prefix| normalized.starts_with(prefix))
+    REDACTION_ALLOWLIST
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix))
 }
 
 /// Compiled regex for proxy credential masking.
@@ -1426,9 +1426,7 @@ mod tests {
         );
         match &snapshot.redaction_state {
             Some(RedactionState::FullyRedacted { .. }) => {}
-            other => panic!(
-                "expected FullyRedacted when only hint is allowlisted, got {other:?}"
-            ),
+            other => panic!("expected FullyRedacted when only hint is allowlisted, got {other:?}"),
         }
     }
 

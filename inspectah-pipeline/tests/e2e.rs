@@ -15,7 +15,7 @@ use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::orchestrate::run_pipeline;
-use inspectah_pipeline::redaction::engine::{redact, RedactOptions};
+use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render;
 use inspectah_pipeline::render::tarball::{create_tarball, list_tarball_entries};
 use inspectah_pipeline::validate::validate;

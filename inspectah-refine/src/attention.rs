@@ -1,8 +1,10 @@
+use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedConfig, RefinedPackage};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::rpm::{PackageEntry, PackageState, VersionChange, VersionChangeDirection};
-use crate::types::{AttentionLevel, AttentionReason, AttentionTag, RefinedConfig, RefinedPackage};
+use inspectah_core::types::rpm::{
+    PackageEntry, PackageState, VersionChange, VersionChangeDirection,
+};
 
 const SENSITIVE_PATHS: &[&str] = &[
     "/etc/shadow",
@@ -46,16 +48,15 @@ const OS_DEFAULT_SENSITIVE_PREFIXES: &[&str] = &[
 ];
 
 /// Exact paths that are OS defaults in sensitive directories.
-const OS_DEFAULT_SENSITIVE_EXACT: &[&str] = &[
-    "/etc/ssh/moduli",
-    "/etc/ssh/ssh_config",
-];
+const OS_DEFAULT_SENSITIVE_EXACT: &[&str] = &["/etc/ssh/moduli", "/etc/ssh/ssh_config"];
 
 /// Returns true when the path is a well-known OS default inside a sensitive
 /// directory. These files should NOT be promoted from Informational to
 /// NeedsReview by the sensitive-path overlay.
 fn is_os_default_sensitive(path: &str) -> bool {
-    OS_DEFAULT_SENSITIVE_PREFIXES.iter().any(|p| path.starts_with(p))
+    OS_DEFAULT_SENSITIVE_PREFIXES
+        .iter()
+        .any(|p| path.starts_with(p))
         || OS_DEFAULT_SENSITIVE_EXACT.contains(&path)
 }
 
@@ -65,9 +66,10 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
         None => return Vec::new(),
     };
 
-    let baseline_names: Option<Vec<String>> = snap.baseline.as_ref().map(|b| {
-        b.packages.keys().cloned().collect()
-    });
+    let baseline_names: Option<Vec<String>> = snap
+        .baseline
+        .as_ref()
+        .map(|b| b.packages.keys().cloned().collect());
     let baseline: Option<&[String]> = baseline_names.as_deref();
 
     rpm.packages_added
@@ -92,7 +94,10 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
                 }
             }
 
-            RefinedPackage { entry: entry.clone(), attention: tags }
+            RefinedPackage {
+                entry: entry.clone(),
+                attention: tags,
+            }
         })
         .collect()
 }
@@ -164,10 +169,12 @@ fn classify_package(
 
     // Classify based on baseline availability and membership (Added/BaseImageOnly only).
     match baseline {
-        Some(names) if names.iter().any(|n| {
-            let entry_key = format!("{}.{}", entry.name, entry.arch);
-            n == &entry_key
-        }) => {
+        Some(names)
+            if names.iter().any(|n| {
+                let entry_key = format!("{}.{}", entry.name, entry.arch);
+                n == &entry_key
+            }) =>
+        {
             // In baseline with known repo — expected package, Tier 1.
             AttentionTag {
                 level: AttentionLevel::Routine,
@@ -200,7 +207,8 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
         None => return Vec::new(),
     };
 
-    let mut configs: Vec<RefinedConfig> = config.files
+    let mut configs: Vec<RefinedConfig> = config
+        .files
         .iter()
         .map(|entry| {
             let tag = match entry.kind {
@@ -247,13 +255,20 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
                 });
             }
 
-            RefinedConfig { entry: entry.clone(), attention: tags }
+            RefinedConfig {
+                entry: entry.clone(),
+                attention: tags,
+            }
         })
         .collect();
 
     // Surface unresolved redaction hints as needs-review tags on matching
     // config files. Only applies when the snapshot is PartiallyRedacted.
-    if let Some(RedactionState::PartiallyRedacted { ref unresolved_hints, .. }) = snap.redaction_state {
+    if let Some(RedactionState::PartiallyRedacted {
+        ref unresolved_hints,
+        ..
+    }) = snap.redaction_state
+    {
         for hint in unresolved_hints {
             if let Some(cfg) = configs.iter_mut().find(|c| c.entry.path == hint.path) {
                 cfg.attention.push(AttentionTag {
@@ -331,17 +346,20 @@ mod tests {
         version_changes: Vec<VersionChange>,
     ) -> InspectionSnapshot {
         let baseline = baseline_names.map(|names| {
-            let pkgs = names.into_iter().map(|n| {
-                let key = format!("{}.x86_64", n);
-                let entry = BaselinePackageEntry {
-                    name: n,
-                    epoch: Some("0".to_string()),
-                    version: "1.0".to_string(),
-                    release: "1.el9".to_string(),
-                    arch: "x86_64".to_string(),
-                };
-                (key, entry)
-            }).collect();
+            let pkgs = names
+                .into_iter()
+                .map(|n| {
+                    let key = format!("{}.x86_64", n);
+                    let entry = BaselinePackageEntry {
+                        name: n,
+                        epoch: Some("0".to_string()),
+                        version: "1.0".to_string(),
+                        release: "1.el9".to_string(),
+                        arch: "x86_64".to_string(),
+                    };
+                    (key, entry)
+                })
+                .collect();
             BaselineData {
                 image_digest: "sha256:test".to_string(),
                 packages: pkgs,
@@ -373,7 +391,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageBaselineMatch
+        );
     }
 
     #[test]
@@ -385,7 +406,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageUserAdded);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageUserAdded
+        );
     }
 
     #[test]
@@ -397,7 +421,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -411,7 +438,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -425,7 +455,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -438,7 +471,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -451,7 +487,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageVersionChanged
+        );
     }
 
     #[test]
@@ -463,7 +502,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -475,7 +517,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageLocalInstall);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageLocalInstall
+        );
     }
 
     #[test]
@@ -487,7 +532,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
     }
 
     #[test]
@@ -496,13 +544,16 @@ mod tests {
         // not rpm.baseline_package_names (Go compat).
         use std::collections::HashMap;
         let mut pkgs = HashMap::new();
-        pkgs.insert("glibc.x86_64".to_string(), BaselinePackageEntry {
-            name: "glibc".to_string(),
-            epoch: Some("0".to_string()),
-            version: "2.34".to_string(),
-            release: "83.el9".to_string(),
-            arch: "x86_64".to_string(),
-        });
+        pkgs.insert(
+            "glibc.x86_64".to_string(),
+            BaselinePackageEntry {
+                name: "glibc".to_string(),
+                epoch: Some("0".to_string()),
+                version: "2.34".to_string(),
+                release: "83.el9".to_string(),
+                arch: "x86_64".to_string(),
+            },
+        );
         let snap = InspectionSnapshot {
             schema_version: 14,
             rpm: Some(RpmSection {
@@ -521,7 +572,10 @@ mod tests {
         assert_eq!(result.len(), 1);
         // Should be verified mode (Routine/BaselineMatch), not degraded
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageBaselineMatch
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -537,7 +591,10 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageProvenanceUnavailable);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageProvenanceUnavailable
+        );
     }
 
     #[test]
@@ -550,31 +607,34 @@ mod tests {
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageLocalInstall);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageLocalInstall
+        );
     }
 
     #[test]
     fn degraded_no_repo_state_still_needs_review() {
-        let snap = snap_with_baseline(
-            None,
-            vec![pkg("orphan", PackageState::NoRepo, "some-repo")],
-        );
+        let snap = snap_with_baseline(None, vec![pkg("orphan", PackageState::NoRepo, "some-repo")]);
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
     }
 
     #[test]
     fn degraded_empty_source_repo_is_needs_review() {
-        let snap = snap_with_baseline(
-            None,
-            vec![pkg("mystery", PackageState::Added, "")],
-        );
+        let snap = snap_with_baseline(None, vec![pkg("mystery", PackageState::Added, "")]);
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageNoRepoSource);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -586,26 +646,38 @@ mod tests {
         let snap = snap_with_baseline(
             Some(vec!["glibc".into(), "bash".into()]),
             vec![
-                pkg("glibc", PackageState::Added, "rhel-9-baseos"),   // baseline match -> Routine
+                pkg("glibc", PackageState::Added, "rhel-9-baseos"), // baseline match -> Routine
                 pkg("httpd", PackageState::Added, "rhel-9-appstream"), // user-added -> Routine
-                pkg("custom", PackageState::LocalInstall, ""),         // local install -> NeedsReview
-                pkg("unknown", PackageState::Added, ""),               // no repo -> NeedsReview
+                pkg("custom", PackageState::LocalInstall, ""),      // local install -> NeedsReview
+                pkg("unknown", PackageState::Added, ""),            // no repo -> NeedsReview
             ],
         );
         let result = compute_package_attention(&snap);
         assert_eq!(result.len(), 4);
 
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageBaselineMatch);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageBaselineMatch
+        );
 
         assert_eq!(result[1].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[1].attention[0].reason, AttentionReason::PackageUserAdded);
+        assert_eq!(
+            result[1].attention[0].reason,
+            AttentionReason::PackageUserAdded
+        );
 
         assert_eq!(result[2].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[2].attention[0].reason, AttentionReason::PackageLocalInstall);
+        assert_eq!(
+            result[2].attention[0].reason,
+            AttentionReason::PackageLocalInstall
+        );
 
         assert_eq!(result[3].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[3].attention[0].reason, AttentionReason::PackageNoRepoSource);
+        assert_eq!(
+            result[3].attention[0].reason,
+            AttentionReason::PackageNoRepoSource
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -632,12 +704,18 @@ mod tests {
 
         // x86_64 was upgraded — should be Routine
         assert_eq!(result[0].attention[0].level, AttentionLevel::Routine);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::PackageVersionChanged
+        );
         assert_eq!(result[0].attention[0].detail.as_deref(), Some("Upgrade"));
 
         // i686 was downgraded — should be NeedsReview
         assert_eq!(result[1].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[1].attention[0].reason, AttentionReason::PackageVersionChanged);
+        assert_eq!(
+            result[1].attention[0].reason,
+            AttentionReason::PackageVersionChanged
+        );
         assert_eq!(result[1].attention[0].detail.as_deref(), Some("Downgrade"));
     }
 
@@ -661,9 +739,10 @@ mod tests {
     fn os_default_pki_rpm_gpg_stays_informational() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
-                files: vec![
-                    config_entry("/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial", ConfigFileKind::Unowned),
-                ],
+                files: vec![config_entry(
+                    "/etc/pki/rpm-gpg/RPM-GPG-KEY-centosofficial",
+                    ConfigFileKind::Unowned,
+                )],
                 ..Default::default()
             }),
             ..Default::default()
@@ -672,16 +751,20 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention.len(), 1, "no SensitivePath promotion");
         assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::ConfigUnowned);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::ConfigUnowned
+        );
     }
 
     #[test]
     fn os_default_security_pam_stays_informational() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
-                files: vec![
-                    config_entry("/etc/security/limits.conf", ConfigFileKind::Unowned),
-                ],
+                files: vec![config_entry(
+                    "/etc/security/limits.conf",
+                    ConfigFileKind::Unowned,
+                )],
                 ..Default::default()
             }),
             ..Default::default()
@@ -696,9 +779,10 @@ mod tests {
     fn os_default_ssl_stays_informational() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
-                files: vec![
-                    config_entry("/etc/ssl/openssl.cnf", ConfigFileKind::Unowned),
-                ],
+                files: vec![config_entry(
+                    "/etc/ssl/openssl.cnf",
+                    ConfigFileKind::Unowned,
+                )],
                 ..Default::default()
             }),
             ..Default::default()
@@ -713,9 +797,7 @@ mod tests {
     fn os_default_ssh_moduli_stays_informational() {
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
-                files: vec![
-                    config_entry("/etc/ssh/moduli", ConfigFileKind::Unowned),
-                ],
+                files: vec![config_entry("/etc/ssh/moduli", ConfigFileKind::Unowned)],
                 ..Default::default()
             }),
             ..Default::default()
@@ -731,19 +813,24 @@ mod tests {
         // /etc/shadow is sensitive but NOT in the OS-default list — should promote.
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
-                files: vec![
-                    config_entry("/etc/shadow", ConfigFileKind::Unowned),
-                ],
+                files: vec![config_entry("/etc/shadow", ConfigFileKind::Unowned)],
                 ..Default::default()
             }),
             ..Default::default()
         };
         let result = compute_config_attention(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention.len(), 2, "SensitivePath promotion applied");
+        assert_eq!(
+            result[0].attention.len(),
+            2,
+            "SensitivePath promotion applied"
+        );
         assert_eq!(result[0].attention[0].level, AttentionLevel::Informational);
         assert_eq!(result[0].attention[1].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[1].reason, AttentionReason::SensitivePath);
+        assert_eq!(
+            result[0].attention[1].reason,
+            AttentionReason::SensitivePath
+        );
     }
 
     #[test]
@@ -751,9 +838,10 @@ mod tests {
         // RpmOwnedModified is already NeedsReview — not affected by the overlay.
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
-                files: vec![
-                    config_entry("/etc/ssh/sshd_config", ConfigFileKind::RpmOwnedModified),
-                ],
+                files: vec![config_entry(
+                    "/etc/ssh/sshd_config",
+                    ConfigFileKind::RpmOwnedModified,
+                )],
                 ..Default::default()
             }),
             ..Default::default()
@@ -762,7 +850,10 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].attention.len(), 1);
         assert_eq!(result[0].attention[0].level, AttentionLevel::NeedsReview);
-        assert_eq!(result[0].attention[0].reason, AttentionReason::ConfigModified);
+        assert_eq!(
+            result[0].attention[0].reason,
+            AttentionReason::ConfigModified
+        );
     }
 
     #[test]
@@ -771,16 +862,21 @@ mod tests {
         // still be promoted. /etc/pki/tls/custom.pem is not under any allowlisted prefix.
         let snap = InspectionSnapshot {
             config: Some(ConfigSection {
-                files: vec![
-                    config_entry("/etc/pki/tls/custom.pem", ConfigFileKind::Unowned),
-                ],
+                files: vec![config_entry(
+                    "/etc/pki/tls/custom.pem",
+                    ConfigFileKind::Unowned,
+                )],
                 ..Default::default()
             }),
             ..Default::default()
         };
         let result = compute_config_attention(&snap);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].attention.len(), 2, "SensitivePath promotion applied");
+        assert_eq!(
+            result[0].attention.len(),
+            2,
+            "SensitivePath promotion applied"
+        );
         assert_eq!(result[0].attention[1].level, AttentionLevel::NeedsReview);
     }
 }

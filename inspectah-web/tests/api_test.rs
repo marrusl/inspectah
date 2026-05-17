@@ -2,13 +2,15 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use inspectah_core::snapshot::InspectionSnapshot;
+use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
 use inspectah_core::types::containers::{
     ComposeFile, ComposeService, ContainerSection, FlatpakApp, QuadletUnit, RunningContainer,
 };
-use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSection};
-use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::kernelboot::{ConfigSnippet, KernelBootSection, SysctlOverride};
-use inspectah_core::types::network::{FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry};
+use inspectah_core::types::network::{
+    FirewallDirectRule, FirewallZone, NMConnection, NetworkSection, ProxyEntry,
+};
+use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTimer};
@@ -17,22 +19,20 @@ use inspectah_core::types::services::{ServiceSection, ServiceStateChange, System
 use inspectah_core::types::storage::{FstabEntry, StorageSection};
 use inspectah_core::types::users::UserGroupSection;
 use inspectah_refine::session::RefineSession;
-use inspectah_web::handlers::{normalize_for_context, AppState};
+use inspectah_web::handlers::{AppState, normalize_for_context};
 use std::sync::{Arc, Mutex, OnceLock};
 use tower::ServiceExt;
 
 fn test_state() -> Arc<AppState> {
     let mut snap = InspectionSnapshot::new();
     snap.rpm = Some(RpmSection {
-        packages_added: vec![
-            PackageEntry {
-                name: "httpd".into(),
-                arch: "x86_64".into(),
-                state: PackageState::Added,
-                include: true,
-                ..Default::default()
-            },
-        ],
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            include: true,
+            ..Default::default()
+        }],
         ..Default::default()
     });
     snap.config = Some(ConfigSection {
@@ -56,12 +56,7 @@ fn app(state: Arc<AppState>) -> axum::Router {
 async fn get_json(app: &axum::Router, path: &str) -> (StatusCode, serde_json::Value) {
     let response = app
         .clone()
-        .oneshot(
-            Request::builder()
-                .uri(path)
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
         .await
         .unwrap();
     let status = response.status();
@@ -201,12 +196,8 @@ async fn changes_returns_summary() {
 #[tokio::test]
 async fn tarball_with_stale_generation_returns_409() {
     let app = app(test_state());
-    let (status, json) = post_json(
-        &app,
-        "/api/tarball",
-        serde_json::json!({"generation": 999}),
-    )
-    .await;
+    let (status, json) =
+        post_json(&app, "/api/tarball", serde_json::json!({"generation": 999})).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(json["error"].as_str().unwrap().contains("stale generation"));
 }
@@ -264,7 +255,10 @@ async fn apply_malformed_json_returns_400_json() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json.get("error").is_some(), "error response must be JSON with 'error' field");
+    assert!(
+        json.get("error").is_some(),
+        "error response must be JSON with 'error' field"
+    );
 }
 
 #[tokio::test]
@@ -555,10 +549,7 @@ async fn sections_returns_nine_sections() {
     let sections = json.as_array().expect("sections is an array");
     assert_eq!(sections.len(), 9, "exactly 9 context sections");
 
-    let ids: Vec<&str> = sections
-        .iter()
-        .filter_map(|s| s["id"].as_str())
-        .collect();
+    let ids: Vec<&str> = sections.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(ids.contains(&"services"));
     assert!(ids.contains(&"containers"));
     assert!(ids.contains(&"users_groups"));
@@ -726,8 +717,7 @@ async fn health_extended_fields() {
     let host = json.get("host").expect("health must have 'host' object");
     assert_eq!(host["hostname"], "testhost.example.com");
     assert_eq!(
-        host["os_name"],
-        "Red Hat Enterprise Linux 9.4 (Plow)",
+        host["os_name"], "Red Hat Enterprise Linux 9.4 (Plow)",
         "os_name uses pretty_name"
     );
     assert_eq!(host["os_version"], "9.4", "os_version uses version_id");
@@ -799,11 +789,22 @@ fn normalize_containers_maps_all_types() {
     assert_eq!(ctr.items.len(), 4, "quadlet + compose + running + flatpak");
 
     // QuadletUnit
-    let quadlet = ctr.items.iter().find(|i| i.id == "myapp.container").unwrap();
-    assert_eq!(quadlet.subtitle.as_deref(), Some("quay.io/myorg/myapp:latest"));
+    let quadlet = ctr
+        .items
+        .iter()
+        .find(|i| i.id == "myapp.container")
+        .unwrap();
+    assert_eq!(
+        quadlet.subtitle.as_deref(),
+        Some("quay.io/myorg/myapp:latest")
+    );
 
     // ComposeFile
-    let compose = ctr.items.iter().find(|i| i.id == "/opt/compose/docker-compose.yml").unwrap();
+    let compose = ctr
+        .items
+        .iter()
+        .find(|i| i.id == "/opt/compose/docker-compose.yml")
+        .unwrap();
     assert_eq!(compose.title, "docker-compose.yml");
 
     // RunningContainer
@@ -853,11 +854,7 @@ fn normalize_network_maps_connections_and_firewall() {
     );
 
     // FirewallDirectRule
-    let direct = net
-        .items
-        .iter()
-        .find(|i| i.id == "ipv4:INPUT:0")
-        .unwrap();
+    let direct = net.items.iter().find(|i| i.id == "ipv4:INPUT:0").unwrap();
     assert_eq!(direct.title, "INPUT");
 
     // hosts_additions
@@ -896,7 +893,11 @@ fn normalize_scheduled_tasks_maps_cron_and_timers() {
 
     assert_eq!(sched.items.len(), 2, "1 cron + 1 timer");
 
-    let cron = sched.items.iter().find(|i| i.id == "/etc/cron.d/backup").unwrap();
+    let cron = sched
+        .items
+        .iter()
+        .find(|i| i.id == "/etc/cron.d/backup")
+        .unwrap();
     assert_eq!(cron.title, "backup");
 
     let timer = sched
@@ -941,11 +942,7 @@ fn normalize_kernel_boot_maps_cmdline_and_sysctl() {
     assert_eq!(cmdline.title, "Kernel cmdline");
     assert!(cmdline.detail.as_ref().unwrap().contains("quiet"));
 
-    let sysctl = kb
-        .items
-        .iter()
-        .find(|i| i.id == "kernel.sysrq")
-        .unwrap();
+    let sysctl = kb.items.iter().find(|i| i.id == "kernel.sysrq").unwrap();
     assert!(sysctl.subtitle.as_ref().unwrap().contains("16"));
 
     let modload = kb

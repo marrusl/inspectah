@@ -2,13 +2,13 @@ pub mod assets;
 pub mod error;
 pub mod handlers;
 
-use axum::routing::{get, post};
 use axum::Router;
-use handlers::AppState;
-use tower_http::cors::{AllowOrigin, CorsLayer};
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::IntoResponse;
+use axum::routing::{get, post};
+use handlers::AppState;
 use std::sync::Arc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 /// Middleware that rejects POST requests with a mismatched Origin header.
 ///
@@ -32,7 +32,8 @@ async fn origin_guard(
                 return (
                     StatusCode::FORBIDDEN,
                     axum::response::Json(serde_json::json!({"error": "origin not allowed"})),
-                ).into_response();
+                )
+                    .into_response();
             }
         }
     }
@@ -60,7 +61,10 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .route("/api/changes", get(handlers::get_changes))
         .route("/api/tarball", post(handlers::export_tarball))
         .route("/api/snapshot/sections", get(handlers::get_sections))
-        .route("/api/viewed", get(handlers::get_viewed).post(handlers::mark_viewed))
+        .route(
+            "/api/viewed",
+            get(handlers::get_viewed).post(handlers::mark_viewed),
+        )
         .layer(cors)
         .layer(axum::middleware::from_fn(move |req, next| {
             origin_guard(served.clone(), req, next)
