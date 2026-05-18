@@ -548,10 +548,11 @@ async fn sections_returns_nine_sections() {
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().expect("sections is an array");
-    assert_eq!(sections.len(), 9, "exactly 9 context sections");
+    assert_eq!(sections.len(), 10, "exactly 10 context sections");
 
     let ids: Vec<&str> = sections.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(ids.contains(&"services"));
+    assert!(ids.contains(&"version_changes"));
     assert!(ids.contains(&"containers"));
     assert!(ids.contains(&"users_groups"));
     assert!(ids.contains(&"network"));
@@ -615,7 +616,7 @@ async fn sections_empty_snapshot_returns_empty_items() {
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().unwrap();
-    assert_eq!(sections.len(), 9);
+    assert_eq!(sections.len(), 10);
     for section in sections {
         let items = section["items"].as_array().unwrap();
         assert!(
@@ -1016,10 +1017,11 @@ fn normalize_non_rpm_empty_section() {
 fn normalize_for_context_section_count_and_ids() {
     let snap = rich_snapshot();
     let sections = normalize_for_context(&snap);
-    assert_eq!(sections.len(), 9, "exactly 9 context sections");
+    assert_eq!(sections.len(), 10, "exactly 10 context sections");
 
     let expected_ids = [
         "services",
+        "version_changes",
         "containers",
         "users_groups",
         "network",
