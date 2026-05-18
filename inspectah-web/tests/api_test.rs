@@ -548,13 +548,13 @@ async fn sections_returns_nine_sections() {
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().expect("sections is an array");
-    assert_eq!(sections.len(), 10, "exactly 10 context sections");
+    // Users & groups moved to ViewResponse — 9 sections remain.
+    assert_eq!(sections.len(), 9, "exactly 9 context sections");
 
     let ids: Vec<&str> = sections.iter().filter_map(|s| s["id"].as_str()).collect();
     assert!(ids.contains(&"services"));
     assert!(ids.contains(&"version_changes"));
     assert!(ids.contains(&"containers"));
-    assert!(ids.contains(&"users_groups"));
     assert!(ids.contains(&"network"));
     assert!(ids.contains(&"storage"));
     assert!(ids.contains(&"scheduled_tasks"));
@@ -616,7 +616,8 @@ async fn sections_empty_snapshot_returns_empty_items() {
     assert_eq!(status, StatusCode::OK);
 
     let sections = json.as_array().unwrap();
-    assert_eq!(sections.len(), 10);
+    // Users & groups moved to ViewResponse — 9 sections remain.
+    assert_eq!(sections.len(), 9);
     for section in sections {
         let items = section["items"].as_array().unwrap();
         assert!(
@@ -828,22 +829,14 @@ fn normalize_containers_maps_all_types() {
 }
 
 #[test]
-fn normalize_users_groups_extracts_json_fields() {
+fn normalize_for_context_excludes_users_groups() {
+    // Users & groups data moved to ViewResponse.users_groups_decisions.
     let snap = rich_snapshot();
     let sections = normalize_for_context(&snap);
-    let ug = sections.iter().find(|s| s.id == "users_groups").unwrap();
-
-    assert_eq!(ug.items.len(), 2, "1 user + 1 group");
-
-    let user = ug.items.iter().find(|i| i.id == "admin").unwrap();
-    assert_eq!(user.subtitle.as_deref(), Some("uid:1000"));
     assert!(
-        user.detail.as_ref().unwrap().contains("sudoers"),
-        "admin user should have sudoers detail"
+        sections.iter().all(|s| s.id != "users_groups"),
+        "users_groups section should no longer appear in normalize_for_context"
     );
-
-    let group = ug.items.iter().find(|i| i.id == "wheel").unwrap();
-    assert_eq!(group.subtitle.as_deref(), Some("gid:10"));
 }
 
 #[test]
@@ -1021,13 +1014,13 @@ fn normalize_non_rpm_empty_section() {
 fn normalize_for_context_section_count_and_ids() {
     let snap = rich_snapshot();
     let sections = normalize_for_context(&snap);
-    assert_eq!(sections.len(), 10, "exactly 10 context sections");
+    // Users & groups moved to ViewResponse — 9 sections remain.
+    assert_eq!(sections.len(), 9, "exactly 9 context sections");
 
     let expected_ids = [
         "services",
         "version_changes",
         "containers",
-        "users_groups",
         "network",
         "storage",
         "scheduled_tasks",

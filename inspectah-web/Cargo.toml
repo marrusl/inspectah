@@ -7,6 +7,7 @@ build = "build.rs"
 
 [dependencies]
 inspectah-core = { path = "../inspectah-core" }
+inspectah-pipeline = { path = "../inspectah-pipeline" }
 inspectah-refine = { path = "../inspectah-refine" }
 axum = "0.8"
 tower-http = { version = "0.6", features = ["cors"] }
