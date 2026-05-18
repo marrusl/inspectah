@@ -377,6 +377,7 @@ fn rich_snapshot() -> InspectionSnapshot {
         ],
         enabled_units: vec!["sshd.service".into()],
         disabled_units: vec!["cups.service".into()],
+        preset_matched_units: Vec::new(),
     });
 
     snap.containers = Some(ContainerSection {

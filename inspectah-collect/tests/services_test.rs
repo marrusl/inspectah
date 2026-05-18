@@ -470,3 +470,138 @@ fn services_snapshot() {
 
     insta::assert_json_snapshot!(section);
 }
+
+// ── Test 8: preset_matched_units population ────────────────────────
+
+#[test]
+fn preset_matched_units_captures_matches() {
+    let exec = full_mock();
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected SectionData::Services, got {:?}", other),
+    };
+
+    // Units where state matches preset should be in preset_matched_units
+    let matched = &section.preset_matched_units;
+
+    // auditd: enabled=enabled → match
+    assert!(
+        matched.contains(&"auditd.service".to_string()),
+        "auditd.service should be in preset_matched_units (enabled=enabled)"
+    );
+
+    // chronyd: enabled=enabled → match
+    assert!(
+        matched.contains(&"chronyd.service".to_string()),
+        "chronyd.service should be in preset_matched_units (enabled=enabled)"
+    );
+
+    // firewalld: enabled=enabled → match
+    assert!(
+        matched.contains(&"firewalld.service".to_string()),
+        "firewalld.service should be in preset_matched_units (enabled=enabled)"
+    );
+
+    // kdump: enabled=enabled → match
+    assert!(
+        matched.contains(&"kdump.service".to_string()),
+        "kdump.service should be in preset_matched_units (enabled=enabled)"
+    );
+
+    // NetworkManager: enabled=enabled → match
+    assert!(
+        matched.contains(&"NetworkManager.service".to_string()),
+        "NetworkManager.service should be in preset_matched_units (enabled=enabled)"
+    );
+
+    // sshd: enabled=enabled → match
+    assert!(
+        matched.contains(&"sshd.service".to_string()),
+        "sshd.service should be in preset_matched_units (enabled=enabled)"
+    );
+
+    // tuned: enabled=enabled → match
+    assert!(
+        matched.contains(&"tuned.service".to_string()),
+        "tuned.service should be in preset_matched_units (enabled=enabled)"
+    );
+
+    // Units with divergence should NOT be in preset_matched_units
+    assert!(
+        !matched.contains(&"bluetooth.service".to_string()),
+        "bluetooth.service should NOT be in preset_matched_units (enabled≠disabled)"
+    );
+
+    assert!(
+        !matched.contains(&"gdm.service".to_string()),
+        "gdm.service should NOT be in preset_matched_units (disabled≠enabled)"
+    );
+
+    // Units with no preset should NOT be in preset_matched_units
+    assert!(
+        !matched.contains(&"httpd.service".to_string()),
+        "httpd.service should NOT be in preset_matched_units (no preset rule)"
+    );
+
+    assert!(
+        !matched.contains(&"libvirtd.service".to_string()),
+        "libvirtd.service should NOT be in preset_matched_units (no preset rule)"
+    );
+
+    // cups has no preset but is disabled - should NOT be in preset_matched_units
+    // (we can only determine matches when a preset rule exists)
+    assert!(
+        !matched.contains(&"cups.service".to_string()),
+        "cups.service should NOT be in preset_matched_units (no preset rule)"
+    );
+}
+
+#[test]
+fn preset_matched_units_empty_when_no_preset_rules() {
+    // Mock with systemctl output but no preset files (empty directory)
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: SYSTEMCTL_FIXTURE.into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec![]); // Empty preset dir
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected SectionData::Services, got {:?}", other),
+    };
+
+    // With no preset rules, we cannot determine matches
+    assert!(
+        section.preset_matched_units.is_empty(),
+        "preset_matched_units should be empty when no preset rules exist"
+    );
+
+    // And we cannot determine divergences either
+    assert!(
+        section.state_changes.is_empty(),
+        "state_changes should be empty when no preset rules exist"
+    );
+}

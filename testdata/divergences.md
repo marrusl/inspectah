@@ -51,6 +51,14 @@ Any difference NOT listed here fails CI.
 - Reason: Fleet field on SystemdDropIn struct. Only surfaces when drop_ins are populated.
 - Disposition: permanent — Rust-era enhancement
 
+### preset_matched_units (Rust-only field)
+- Go: field absent
+- Rust: `"preset_matched_units": []` or populated array
+- Path: `$.preset_matched_units`
+- Reason: Rust captures units where the current enable/disable state matches the systemd preset default. This data enables the three-way services contract (base defaults, preset matches, user divergences). Go includes all units in state_changes with action="unchanged"; Rust segregates matches into this field.
+- Disposition: permanent — Rust-era enhancement for three-way services contract
+- Approval: approved-by-spec
+
 ## Storage Section
 
 ### include on fstab_entries (Rust serialization difference)
