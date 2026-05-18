@@ -21,6 +21,8 @@ pub mod safety;
 pub mod secrets;
 pub mod tarball;
 
+pub mod users;
+
 pub mod baseline_fmt;
 
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -68,6 +70,22 @@ pub fn render_all(
     // 6. kickstart-suggestion.ks
     let ks = kickstart::render_kickstart(snap);
     std::fs::write(output_dir.join("kickstart-suggestion.ks"), ks)?;
+
+    // 6b. inspectah-users.ks — user/group kickstart fragment
+    let users_ks = users::render_kickstart(snap);
+    if !users_ks.is_empty() {
+        std::fs::write(output_dir.join("inspectah-users.ks"), users_ks)?;
+    }
+
+    // 6c. inspectah-users.toml — user/group blueprint TOML fragment
+    let users_toml = users::render_blueprint_toml(snap);
+    if !users_toml.is_empty() {
+        std::fs::write(output_dir.join("inspectah-users.toml"), users_toml)?;
+    }
+
+    // 6d. users/ — SSH key staging
+    users::stage_ssh_keys(snap, output_dir)
+        .map_err(|e| RenderError::Failed(format!("stage SSH keys: {e}")))?;
 
     // 7. inspection-snapshot.json
     let json = serde_json::to_string_pretty(snap)

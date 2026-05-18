@@ -130,7 +130,7 @@ pub fn render_containerfile(
             "# FIXME: users_groups data may be incomplete (inspector returned degraded)".into(),
         );
     }
-    lines.extend(users_section_lines(snap));
+    lines.extend(super::users::render_containerfile_users(snap));
 
     // 9. Kernel/boot
     if is_degraded(&snap.completeness, InspectorId::KernelBoot) {
@@ -1066,81 +1066,7 @@ fn non_rpm_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     lines
 }
 
-// --- Users section ---
-
-fn users_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let mut lines = Vec::new();
-    let ug = match &snap.users_groups {
-        Some(u) => u,
-        None => return lines,
-    };
-
-    let included_users: Vec<_> = ug
-        .users
-        .iter()
-        .filter(|u| u.get("include").and_then(|v| v.as_bool()).unwrap_or(true))
-        .collect();
-
-    if included_users.is_empty() {
-        return lines;
-    }
-
-    lines.push("# === Users and Groups ===".into());
-
-    let mut sysusers_count = 0;
-    let mut useradd_users = Vec::new();
-    let mut blueprint_count = 0;
-    let mut kickstart_count = 0;
-
-    for u in &included_users {
-        let strategy = u
-            .get("strategy")
-            .and_then(|v| v.as_str())
-            .unwrap_or("useradd");
-        match strategy {
-            "sysusers" => sysusers_count += 1,
-            "blueprint" => blueprint_count += 1,
-            "kickstart" => kickstart_count += 1,
-            _ => useradd_users.push(*u),
-        }
-    }
-
-    if sysusers_count > 0 {
-        lines.push(format!("# systemd-sysusers entries ({sysusers_count}):"));
-        lines.push("# These are system users created via sysusers.d drop-ins in config/.".into());
-    }
-
-    if !useradd_users.is_empty() {
-        lines.push(format!("# useradd users ({}):", useradd_users.len()));
-        for u in &useradd_users {
-            let name = u.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            let uid = u.get("uid").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            if !name.is_empty() && sanitize_shell_value(name).is_some() {
-                if uid > 0.0 {
-                    lines.push(format!("RUN useradd -u {} {}", uid as u32, name));
-                } else {
-                    lines.push(format!("RUN useradd {}", name));
-                }
-            }
-        }
-    }
-
-    if blueprint_count > 0 {
-        lines.push(format!(
-            "# FIXME: {} user(s) with blueprint strategy — provision via image builder blueprint",
-            blueprint_count
-        ));
-    }
-    if kickstart_count > 0 {
-        lines.push(format!(
-            "# FIXME: {} user(s) with kickstart strategy — see kickstart.ks",
-            kickstart_count
-        ));
-    }
-
-    lines.push(String::new());
-    lines
-}
+// Users section — delegated to render::users::render_containerfile_users()
 
 // --- Kernel/Boot section ---
 
