@@ -194,8 +194,10 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
                             &mut callback,
                         )
                     };
-                    // Clear viewport on both success and failure before propagating.
-                    pull_progress::viewport_cleanup();
+                    // Only clear viewport if lines were actually rendered.
+                    if ring_pos > 0 {
+                        pull_progress::viewport_cleanup();
+                    }
                     result.context("baseline extraction failed")?
                 } else {
                     // Narrow terminal — fall back to non-TTY
