@@ -335,14 +335,19 @@ impl Executor for RealExecutor {
             };
 
             if timed_out {
+                let mut full_stderr = stderr_lines.join("\n");
+                if !full_stderr.is_empty() {
+                    full_stderr.push('\n');
+                }
+                full_stderr.push_str(&format!(
+                    "command timed out after {}s: {} {}",
+                    pull_timeout.as_secs(),
+                    cmd,
+                    args.join(" ")
+                ));
                 ExecResult {
                     stdout,
-                    stderr: format!(
-                        "command timed out after {}s: {} {}",
-                        pull_timeout.as_secs(),
-                        cmd,
-                        args.join(" ")
-                    ),
+                    stderr: full_stderr,
                     exit_code: -1,
                 }
             } else {

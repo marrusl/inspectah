@@ -25,6 +25,9 @@ pub fn strip_ansi(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
+        if c == '\r' {
+            continue;
+        }
         if c == '\x1b' {
             // CSI: \x1b[ ... <letter>
             if chars.peek() == Some(&'[') {
@@ -240,6 +243,11 @@ mod tests {
     #[test]
     fn strip_ansi_no_escape() {
         assert_eq!(strip_ansi("plain text"), "plain text");
+    }
+
+    #[test]
+    fn strip_ansi_carriage_return() {
+        assert_eq!(strip_ansi("progress\rdone"), "progressdone");
     }
 
     #[test]
