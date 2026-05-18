@@ -24,10 +24,15 @@ install-time seeding into the image.
 
 ### Authoritative vs. advisory artifacts
 
-Kickstart (`inspectah-users.ks`) and Blueprint TOML (`inspectah-users.toml`)
-are the **authoritative** provisioning artifacts. They faithfully represent
-all in-scope account state: identity, credentials, SSH keys, and group
-memberships. They are always generated and always included in the tarball.
+Kickstart (`inspectah-users.ks`) is the **authoritative** provisioning
+artifact. It faithfully represents all in-scope account state: identity,
+credentials, multiple SSH keys, and group memberships. Blueprint TOML
+(`inspectah-users.toml`) is **authoritative for identity and credentials**
+but **lossy for SSH keys** — it carries at most one key per user due to
+the `key` field's single-string constraint. For users with multiple SSH
+keys, full fidelity requires the kickstart artifact or the staged
+`authorized_keys` file. Both are always generated and always included in
+the tarball.
 
 Containerfile useradd directives are **install-time seeding** — an optional
 alternative for operators who want user accounts baked into the image rather
@@ -127,10 +132,16 @@ Groups in the human GID range (1000–60000) are collected alongside users:
 }
 ```
 
-The `source` field classifies groups:
-- `custom` — GID 1000+ and not owned by a known package. Always materialized.
+The `source` field classifies groups using GID range alone (no package-
+ownership lookup required):
+- `custom` — GID 1000+. Always materialized in output artifacts.
 - `system` — GID < 1000 (wheel, docker, etc.). Assumed to exist via packages.
   Referenced in supplementary membership lists but not materialized.
+
+This classification is derivable entirely from the current scan data. Smarter
+ownership-based classification (e.g., distinguishing RPM-created human-range
+groups from manually-created ones) is deferred to the package-ownership
+correlation future work item.
 
 ## Classification Model
 
@@ -171,11 +182,18 @@ Any shell not in this set maps to `non-interactive`. This matches the existing
 
 ## Sensitive Snapshot Contract
 
-When either `--preserve-password-hashes` or `--preserve-ssh-keys` is used,
-the snapshot enters **sensitive mode**. This changes the trust model of
-inspectah artifacts.
+A refine session is in **sensitive mode** when any of these conditions hold:
 
-### Snapshot metadata
+1. The snapshot was scanned with `--preserve-password-hashes`
+2. The snapshot was scanned with `--preserve-ssh-keys`
+3. Any user has an active `NewPassword(...)` decision (refine-time credential)
+
+Condition 3 means a normal (non-sensitive) snapshot becomes sensitive the
+moment an operator sets a new password in the UI. This is fail-closed: every
+path that introduces credential material into artifacts triggers the same
+trust-model change.
+
+### Snapshot metadata (scan-time)
 
 ```json
 {
@@ -185,34 +203,54 @@ inspectah artifacts.
 }
 ```
 
+### Session-level sensitivity (refine-time)
+
+The refine session tracks a computed `session_is_sensitive` flag that is
+`true` when the snapshot metadata signals sensitivity OR any user decision
+introduces credential material. This flag governs export gating and preview
+redaction regardless of how the sensitive state was reached.
+
 ### Redaction state
 
-A new `redaction_state` variant `PartiallyRedacted` indicates that the
+A new `redaction_state` variant `SensitiveRetained` indicates that the
 snapshot has been through the redaction engine but intentionally retains
-specific credential material. This is distinct from `FullyRedacted` (normal
-safe-by-default) and `Unredacted` (never processed).
+specific credential material by operator choice. This is distinct from:
+- `FullyRedacted` — normal safe-by-default (no secrets survive)
+- `PartiallyRedacted { unresolved_count, unresolved_hints }` — existing
+  variant meaning the redaction engine found potential secrets it could not
+  fully resolve (attention/review surface, not intentional retention)
+- `Unredacted` — never processed
+
+The distinction matters: `PartiallyRedacted` triggers `NeedsReview`
+attention. `SensitiveRetained` does not — the operator made a deliberate
+choice. Both carry credential material, but the provenance and response
+are different.
 
 ### Export gating
 
-Sensitive tarballs require explicit operator acknowledgment before export:
+Sensitive exports require explicit operator acknowledgment. The gate fires
+for any sensitive session, whether the sensitivity comes from scan-time
+flags or refine-time password decisions.
 
 - **Scan export:** The CLI prints a warning and requires `--acknowledge-sensitive`
   or interactive confirmation before writing the tarball.
-- **Refine export:** The export API returns a gating response requiring
-  acknowledgment. The UI shows a sensitivity banner with the specific
-  sensitive content types (passwords, SSH keys) before allowing download.
+- **Refine export:** The export endpoint returns HTTP 428 (Precondition
+  Required) with a `sensitivity_summary` body listing the specific sensitive
+  content types. The UI shows a sensitivity banner with acknowledgment
+  checkbox before allowing download. A subsequent request with
+  `X-Acknowledge-Sensitive: true` completes the export.
 - **Re-import:** Sensitive tarballs can be imported into refine. The session
   displays a persistent sensitivity banner indicating the snapshot contains
-  credential material. `redaction_state: PartiallyRedacted` is preserved
+  credential material. `redaction_state: SensitiveRetained` is preserved
   through import.
 
 ### Preview safety
 
-Preserved password hashes and full SSH key content are **redacted by default**
-in all preview surfaces (artifact viewer, user cards, Containerfile preview).
-A per-value reveal toggle allows the operator to view sensitive values
-explicitly. Reveal state is ephemeral — it resets on page navigation or
-session reload, never persisted.
+Password hashes (preserved or newly set) and full SSH key content are
+**redacted by default** in all preview surfaces (artifact viewer, user cards,
+Containerfile preview). A per-value reveal toggle allows the operator to view
+sensitive values explicitly. Reveal state is ephemeral — it resets on page
+navigation or session reload, never persisted.
 
 Detailed preview/reveal interaction patterns, focus/close behavior, and
 accessibility contract are deferred to the companion backlog item
@@ -296,11 +334,14 @@ migration."*
 
 ### Keyboard navigation
 
-Tab through cards, arrow keys within strategy selector, Enter to
-expand/collapse password/SSH sections, Escape to collapse and return focus
-to the card header. Focus trap within expanded sections. Standard form
-controls throughout. ARIA: cards are `role="region"` with `aria-label`
-including the username; strategy selector is a `radiogroup`.
+Deferred to a dedicated UX pass
+(`workflow/backlog/2026-05-18-inspectah-user-group-ux-hardening.md`). The
+pass must resolve: card-to-card vs. control-to-control focus model, Escape
+behavior from nested inputs, focus restoration after artifact viewer closes,
+whether `/` search filters users the same way as package/config sections,
+and compatibility with the existing decision-list roving-focus shell
+(`j/k`, arrow nav, `useKeyboard()`). ARIA semantics (card regions, radio
+groups, expand/collapse announcements) are part of the same pass.
 
 ## Refine State and API Contract
 
@@ -331,6 +372,39 @@ User decisions participate in the existing op pipeline: undo/redo,
 generation tracking, and stale-generation protection apply the same way
 as package/config ops.
 
+### Persistence model: projected snapshot state
+
+User decisions are persisted by **projecting into snapshot fields**, not by
+serializing an op-log sidecar. This matches the current refine export model
+where `render_refine_export()` writes a projected `inspection-snapshot.json`
+and `from_tarball()` reconstructs a clean session from the snapshot alone.
+
+When a user strategy or password decision is applied:
+1. The op is recorded in the in-memory op log (for undo/redo).
+2. The view is recomputed from the projected snapshot state.
+3. On export, user decisions are written as fields in the snapshot's
+   `users_groups` section (e.g., `"containerfile_strategy": "useradd"`,
+   `"password_choice": "preserve"`). No separate decisions file.
+4. On re-import via `from_tarball()`, the session starts clean with user
+   decisions already reflected in the snapshot fields. No op replay.
+
+This avoids introducing a new export artifact or changing the re-import
+contract.
+
+### Live web state and cache invalidation
+
+The current web app serves `users_groups` through the immutable cached
+sections path (`AppState.sections_cache` in `inspectah-web/src/handlers.rs`).
+As a promoted decision section, `users_groups` must move to the mutable
+view path:
+
+- User strategy/password ops invalidate the `RefinedView` cache (same as
+  package ops today).
+- The `ViewResponse` gains a `users_groups_decisions` field carrying per-user
+  strategy, password choice state, and sensitivity flags.
+- `fetchView()` / `useView()` in the UI pick up user decisions from the
+  same reactive path as package decisions.
+
 ### API operations
 
 | Endpoint                       | Method | Body                                       |
@@ -338,9 +412,12 @@ as package/config ops.
 | `/api/user-strategy`           | POST   | `{ "username": "alice", "strategy": "useradd" }` |
 | `/api/user-password`           | POST   | `{ "username": "alice", "choice": "preserve" }` or `{ "username": "alice", "choice": "new", "hash": "$6$..." }` |
 | `/api/user-preview`            | GET    | Returns rendered `inspectah-users.ks` and `inspectah-users.toml` content |
+| `/api/export`                  | POST   | Existing endpoint. Returns HTTP 428 if `session_is_sensitive` and `X-Acknowledge-Sensitive` header is absent. |
 
-All endpoints return the updated `ViewResponse` with the Users & Groups
-section reflecting the new state, consistent with how package ops work today.
+Strategy and password endpoints return the updated `ViewResponse` with the
+Users & Groups section reflecting the new state. The `user-password` endpoint
+with `choice: "new"` also updates `session_is_sensitive` to `true`,
+triggering sensitive-mode behavior for all subsequent previews and exports.
 
 ### Export contract
 
@@ -353,14 +430,10 @@ These are added to the approved export file set in
 tested: the content returned by `/api/user-preview` must match the content
 written to the export tarball byte-for-byte.
 
-When the snapshot is in sensitive mode and the user has selected "Keep existing"
-or "Set new" password, the exported KS/TOML contain credential material. The
-export gating contract (see Sensitive Snapshot Contract) applies.
-
-User decisions survive export/re-import through the refine tarball. The op
-log is serialized alongside the snapshot in the export, and
-`from_tarball()` reconstructs user decisions the same way it reconstructs
-package/config decisions today.
+When `session_is_sensitive` is `true` (from preserved scan-time credentials
+OR refine-time new passwords), export gating applies (see Sensitive Snapshot
+Contract). The gate fires regardless of how credential material was
+introduced.
 
 ## Output Artifact Generation
 
@@ -415,8 +488,11 @@ RUN useradd -u 1000 -g 1000 -G wheel,docker,developers ...
   supplementary membership lists (`-G wheel,docker`). Assumed to exist via
   their owning packages.
 - **Collision policy:** If a custom group's GID conflicts with an existing
-  group in the base image (detectable when base image data is available),
-  warn at refine time. Same treatment as UID collisions.
+  group in the base image, warn at refine time. Same treatment as UID
+  collisions. Note: base-image user/group data is not currently extracted
+  by the base-image seam (`BaselineData` carries package metadata only).
+  Collision detection is conditional on that seam being extended — until
+  then, collisions are caught at build time, not refine time.
 - **Shared groups:** When multiple users share a custom group, the group is
   materialized once. All users reference it. No per-user duplication.
 - **Primary group creation:** `groupadd` for the primary group is always
@@ -489,10 +565,18 @@ RUN echo 'alice:$6$rounds=5000$salt$hash...' | chpasswd -e
 
 **SSH key block** (conditional — only when keys captured):
 ```dockerfile
+RUN install -d -m 700 -o alice -g alice /home/alice/.ssh
 COPY config/home/alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys
 RUN chown alice:alice /home/alice/.ssh/authorized_keys && \
     chmod 600 /home/alice/.ssh/authorized_keys
 ```
+
+The `.ssh` directory is created with `install -d -m 700` to guarantee correct
+ownership and `0700` mode in a single idempotent command. This matters because
+OpenSSH refuses key-based login when directory permissions are wrong, and
+`/home` is commonly machine-local persistent state via `/home -> /var/home`
+in image mode — this Containerfile path is install-time seeding into mutable
+state, not immutable `/usr` content.
 
 SSH keys use `COPY` with a generated `authorized_keys` file staged in the
 tarball's `config/` tree, not shell `echo` chains. This is lossless and
@@ -503,16 +587,35 @@ no trailing whitespace, newline-terminated. See SSH key staging below.
 
 When `--preserve-ssh-keys` is active, a generated `authorized_keys` file is
 created per user in the tarball at `config/home/<username>/.ssh/authorized_keys`.
+
+This staging path is separate from the existing `config/` copy pipeline used
+by the config section. Config-section files are staged under `config/etc/` and
+handled by a shared COPY/ownership pipeline. SSH key files are staged under
+`config/home/` and emitted by the user materialization renderer, not the
+config renderer. The two paths do not overlap — there is no collision risk.
+
 This file:
 - Contains one key per line in standard OpenSSH format
 - Is newline-terminated (no trailing blank lines)
 - Is referenced by `COPY` in the Containerfile (useradd strategy)
 - Is referenced by `sshkey` directives in kickstart (one per key)
 - Is referenced by the `key` field in blueprint TOML (first key only;
-  comment notes the limitation)
+  see SSH key fidelity below)
 
 This staging approach is lossless: keys are written once to a file and
 consumed by reference, avoiding shell escaping issues entirely.
+
+### SSH key fidelity per format
+
+Blueprint TOML's `key` field accepts a single string. For users with one key,
+TOML is fully faithful. For users with multiple keys:
+- `inspectah-users.toml` carries only the first key and includes a TOML
+  comment: `# Additional keys in inspectah-users.ks and config/home/<user>/.ssh/authorized_keys`
+- `inspectah-users.ks` carries all keys (one `sshkey` directive per key)
+- The staged `authorized_keys` file carries all keys
+
+The format capability matrix reflects this: TOML's SSH row is marked
+`single` to distinguish it from kickstart's `multi`.
 
 ### Containerfile ordering
 
@@ -540,7 +643,7 @@ permission breakage.
 | Shell, home           | Yes                  | Yes                | Yes                      |
 | Supplementary groups  | Yes (`--groups`)     | Yes (`groups`)     | Yes (`-G`)               |
 | Password hash         | Yes (`--iscrypted`)  | Yes (`password`)   | Yes (`chpasswd -e`)      |
-| SSH public keys       | Yes (`sshkey`, multi)| Yes (`key`, single)| Yes (`COPY authorized_keys`) |
+| SSH public keys       | Yes (`sshkey`, all keys) | Yes (`key`, first key only) | Yes (`COPY authorized_keys`, all keys) |
 | Custom groups         | Yes (`group --name`) | Yes (`[[customizations.group]]`) | Yes (`groupadd`) |
 
 ### Credential format contract
@@ -573,9 +676,11 @@ must choose which UID wins.
 ### UID/GID collision with base image
 
 If a source host user's UID or a custom group's GID collides with an
-account in the selected base image (detectable when base image data is
-available), warn at refine time. Unlikely in the 1000–60000 range but
-possible.
+account in the selected base image, warn at refine time. Unlikely in the
+1000–60000 range but possible. Note: the current `BaselineData` seam
+carries package metadata only, not user/group data from the base image.
+Collision detection requires extending this seam (future work). Until then,
+UID/GID collisions are caught at image build time, not refine time.
 
 ### Group name/GID conflicts
 
@@ -691,6 +796,35 @@ Individual review files:
 - `marks-inbox/reviews/2026-05-18-inspectah-user-group-materialization-design-tang-review.md`
 - `marks-inbox/reviews/2026-05-18-inspectah-user-group-materialization-design-thorn-review.md`
 
+### Round 2 review (2026-05-18)
+
+Team verdict: request changes, but close. Residual items addressed in this
+revision:
+
+1. **NewPassword escapes sensitive gate** — resolved by making any active
+   `NewPassword(...)` trigger `session_is_sensitive`, same gating as
+   preserved hashes (Press, Thorn).
+2. **PartiallyRedacted overloaded** — resolved by introducing
+   `SensitiveRetained` as a distinct variant from `PartiallyRedacted`
+   (Collins).
+3. **Refine live state not repo-real** — resolved by specifying projected
+   snapshot persistence, cache invalidation via mutable view path, and
+   HTTP 428 gated export flow (Tang, Thorn).
+4. **SSH .ssh directory contract** — resolved by adding `install -d -m 700`
+   and noting the `/home -> /var/home` persistent-state boundary (Collins).
+5. **TOML overclaimed for multi-key** — resolved by narrowing TOML to
+   "authoritative for identity/credentials, lossy for SSH keys" and adding
+   explicit SSH key fidelity section (Thorn, Press).
+6. **Keyboard/focus under-specified** — deferred to dedicated UX backlog
+   item with explicit scope list (Fern).
+7. **Group provenance depends on undeclared seams** — resolved by simplifying
+   `source` to GID-range-only classification and making base-image collision
+   detection conditional on future seam extension (Thorn).
+
+Individual round-2 review files:
+- `marks-inbox/reviews/2026-05-18-inspectah-user-group-materialization-design-*-review-round2.md`
+
 Related backlog items:
 - `workflow/backlog/2026-05-18-inspectah-user-group-contract-hardening.md`
 - `workflow/backlog/2026-05-18-inspectah-user-group-sensitive-export-hardening.md`
+- `workflow/backlog/2026-05-18-inspectah-user-group-ux-hardening.md`
