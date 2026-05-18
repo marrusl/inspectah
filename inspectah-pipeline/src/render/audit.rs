@@ -577,7 +577,7 @@ mod tests {
             base_version: "5.2.26-3.el9".into(),
             host_epoch: String::new(),
             base_epoch: String::new(),
-            direction: VersionChangeDirection::Upgrade,
+            direction: VersionChangeDirection::Downgrade,
         }];
         snap.rpm = Some(rpm);
         let report = render_audit(&snap);
