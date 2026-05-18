@@ -493,7 +493,9 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+    use inspectah_core::types::rpm::{
+        PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
+    };
 
     fn test_snapshot() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
@@ -562,5 +564,32 @@ mod tests {
             !md.contains("Incomplete Sections"),
             "complete status must not produce Incomplete Sections"
         );
+    }
+
+    #[test]
+    fn test_audit_renders_version_changes_table_when_populated() {
+        let mut snap = InspectionSnapshot::default();
+        let mut rpm = RpmSection::default();
+        rpm.version_changes = vec![VersionChange {
+            name: "bash".into(),
+            arch: "x86_64".into(),
+            host_version: "5.2.26-4.el9".into(),
+            base_version: "5.2.26-3.el9".into(),
+            host_epoch: String::new(),
+            base_epoch: String::new(),
+            direction: VersionChangeDirection::Upgrade,
+        }];
+        snap.rpm = Some(rpm);
+        let report = render_audit(&snap);
+        assert!(report.contains("Version Changes"));
+        assert!(report.contains("bash"));
+    }
+
+    #[test]
+    fn test_audit_omits_version_changes_table_when_empty() {
+        let mut snap = InspectionSnapshot::default();
+        snap.rpm = Some(RpmSection::default());
+        let report = render_audit(&snap);
+        assert!(!report.contains("Version Changes"));
     }
 }

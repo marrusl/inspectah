@@ -4,6 +4,7 @@ use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
@@ -60,6 +61,18 @@ pub struct ViewResponse {
     pub view: RefinedView,
     pub repo_groups: Vec<RepoGroupInfo>,
     pub baseline_summary: Option<BaselineSummary>,
+    pub version_changes: Vec<VersionChangeEntry>,
+}
+
+#[derive(Serialize)]
+pub struct VersionChangeEntry {
+    pub name: String,
+    pub arch: String,
+    pub host_version: String,
+    pub base_version: String,
+    pub host_epoch: String,
+    pub base_epoch: String,
+    pub direction: String,
 }
 
 // -- Viewed tracking request body -----------------------------------------
@@ -138,10 +151,36 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
     let view = session.view().clone();
     let repo_groups = build_repo_groups(session);
     let baseline_summary = session.baseline_summary();
+    let version_changes: Vec<VersionChangeEntry> = session
+        .snapshot()
+        .rpm
+        .as_ref()
+        .map(|rpm| {
+            rpm.version_changes
+                .iter()
+                .map(|vc| {
+                    let dir = match vc.direction {
+                        VersionChangeDirection::Upgrade => "upgrade",
+                        VersionChangeDirection::Downgrade => "downgrade",
+                    };
+                    VersionChangeEntry {
+                        name: vc.name.clone(),
+                        arch: vc.arch.clone(),
+                        host_version: vc.host_version.clone(),
+                        base_version: vc.base_version.clone(),
+                        host_epoch: vc.host_epoch.clone(),
+                        base_epoch: vc.base_epoch.clone(),
+                        direction: dir.to_string(),
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     ViewResponse {
         view,
         repo_groups,
         baseline_summary,
+        version_changes,
     }
 }
 
@@ -349,11 +388,12 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
 // -- normalize_for_context ------------------------------------------------
 
 /// Map an `InspectionSnapshot` to presentation-layer `ContextSection`s.
-/// Produces 9 sections matching the spec. Sections that are `None` in the
+/// Produces 10 sections matching the spec. Sections that are `None` in the
 /// snapshot produce a `ContextSection` with an empty `items` vec.
 pub fn normalize_for_context(snap: &InspectionSnapshot) -> Vec<ContextSection> {
     vec![
         normalize_services(snap),
+        normalize_version_changes(snap),
         normalize_containers(snap),
         normalize_users_groups(snap),
         normalize_network(snap),
@@ -363,6 +403,112 @@ pub fn normalize_for_context(snap: &InspectionSnapshot) -> Vec<ContextSection> {
         normalize_kernel_boot(snap),
         normalize_selinux(snap),
     ]
+}
+
+/// Format an epoch-version pair for display. Both sides of a version change
+/// are formatted together so that epoch prefixes appear only when they carry
+/// information (i.e. when at least one side has a non-zero epoch).
+fn format_evr_pair(
+    base_epoch: &str,
+    base_version: &str,
+    host_epoch: &str,
+    host_version: &str,
+) -> (String, String) {
+    fn norm(e: &str) -> &str {
+        if e.is_empty() { "0" } else { e }
+    }
+    let base_norm = norm(base_epoch);
+    let host_norm = norm(host_epoch);
+    let show_epoch = base_norm != host_norm || base_norm != "0";
+
+    let fmt = |epoch: &str, version: &str| -> String {
+        if show_epoch {
+            let e = if epoch.is_empty() { "0" } else { epoch };
+            format!("{}:{}", e, version)
+        } else {
+            version.to_string()
+        }
+    };
+
+    (fmt(base_epoch, base_version), fmt(host_epoch, host_version))
+}
+
+fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
+    // Three-state empty reason:
+    // - "no_baseline"       — rpm section exists, but no baseline data
+    // - "zero_drift"        — baseline exists, but no version changes detected
+    // - "data_unavailable"  — no rpm section at all
+    let rpm = match &snap.rpm {
+        None => {
+            return ContextSection {
+                id: "version_changes".to_string(),
+                display_name: "Version Changes".to_string(),
+                items: Vec::new(),
+                empty_reason: Some("data_unavailable".to_string()),
+            };
+        }
+        Some(rpm) => rpm,
+    };
+
+    if rpm.version_changes.is_empty() {
+        let reason = if snap.baseline.is_some() {
+            "zero_drift"
+        } else {
+            "no_baseline"
+        };
+        return ContextSection {
+            id: "version_changes".to_string(),
+            display_name: "Version Changes".to_string(),
+            items: Vec::new(),
+            empty_reason: Some(reason.to_string()),
+        };
+    }
+
+    // Partition into downgrades and upgrades; downgrades sort first.
+    let mut downgrades: Vec<&VersionChange> = Vec::new();
+    let mut upgrades: Vec<&VersionChange> = Vec::new();
+    for vc in &rpm.version_changes {
+        match vc.direction {
+            VersionChangeDirection::Downgrade => downgrades.push(vc),
+            VersionChangeDirection::Upgrade => upgrades.push(vc),
+        }
+    }
+
+    let mut items = Vec::new();
+    for vc in downgrades.iter().chain(upgrades.iter()) {
+        let (base_fmt, host_fmt) = format_evr_pair(
+            &vc.base_epoch,
+            &vc.base_version,
+            &vc.host_epoch,
+            &vc.host_version,
+        );
+        let dir_label = match vc.direction {
+            VersionChangeDirection::Downgrade => "downgrade",
+            VersionChangeDirection::Upgrade => "upgrade",
+        };
+        let prefix = match vc.direction {
+            VersionChangeDirection::Downgrade => "\u{25BC} ",
+            VersionChangeDirection::Upgrade => "",
+        };
+        let title = format!("{}{}.{}", prefix, vc.name, vc.arch);
+        let subtitle = format!("{} \u{2192} {} ({})", base_fmt, host_fmt, dir_label);
+        let searchable = format!("{} {} {}", vc.name, vc.arch, dir_label);
+
+        items.push(ContextItem {
+            id: format!("{}.{}", vc.name, vc.arch),
+            title,
+            subtitle: Some(subtitle),
+            detail: None,
+            searchable_text: searchable,
+        });
+    }
+
+    ContextSection {
+        id: "version_changes".to_string(),
+        display_name: "Version Changes".to_string(),
+        items,
+        empty_reason: None,
+    }
 }
 
 fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
@@ -1382,7 +1528,10 @@ mod tests {
         ComposeFile, ComposeService, ContainerSection, RunningContainer,
     };
     use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
-    use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
+    use inspectah_core::baseline::BaselineData;
+    use inspectah_core::types::rpm::{
+        PackageEntry, PackageState, RepoFile, RpmSection, VersionChange, VersionChangeDirection,
+    };
     use inspectah_core::types::selinux::SelinuxSection;
     use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 
@@ -2086,5 +2235,201 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("no preset rule"));
+    }
+
+    // -- normalize_version_changes tests --------------------------------------
+
+    #[test]
+    fn test_normalize_version_changes_downgrades_first() {
+        let mut snap = empty_snapshot();
+        let mut rpm = RpmSection::default();
+        rpm.version_changes = vec![
+            VersionChange {
+                name: "openssl".into(),
+                arch: "x86_64".into(),
+                host_version: "3.1.2-1.el9".into(),
+                base_version: "3.1.1-1.el9".into(),
+                host_epoch: String::new(),
+                base_epoch: String::new(),
+                direction: VersionChangeDirection::Upgrade,
+            },
+            VersionChange {
+                name: "curl".into(),
+                arch: "x86_64".into(),
+                host_version: "8.0.1-1.el9".into(),
+                base_version: "8.1.0-1.el9".into(),
+                host_epoch: String::new(),
+                base_epoch: String::new(),
+                direction: VersionChangeDirection::Downgrade,
+            },
+        ];
+        snap.rpm = Some(rpm);
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let section = normalize_version_changes(&snap);
+        assert_eq!(section.items.len(), 2);
+        // Downgrade sorts first
+        assert!(
+            section.items[0].title.starts_with('\u{25BC}'),
+            "first item should be downgrade with ▼ prefix"
+        );
+        assert!(section.items[0].title.contains("curl"));
+        assert!(section.items[1].title.contains("openssl"));
+        assert!(
+            !section.items[1].title.starts_with('\u{25BC}'),
+            "upgrade should not have ▼ prefix"
+        );
+    }
+
+    #[test]
+    fn test_normalize_version_changes_epoch_aware_subtitle() {
+        let mut snap = empty_snapshot();
+        let mut rpm = RpmSection::default();
+        rpm.version_changes = vec![VersionChange {
+            name: "bash".into(),
+            arch: "x86_64".into(),
+            host_version: "5.2.26-3.el9".into(),
+            base_version: "5.2.26-3.el9".into(),
+            host_epoch: "0".into(),
+            base_epoch: "1".into(),
+            direction: VersionChangeDirection::Downgrade,
+        }];
+        snap.rpm = Some(rpm);
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let section = normalize_version_changes(&snap);
+        let subtitle = section.items[0].subtitle.as_ref().unwrap();
+        assert!(
+            subtitle.contains("1:"),
+            "subtitle should show epoch prefix '1:' — got: {}",
+            subtitle
+        );
+        assert!(
+            subtitle.contains("0:"),
+            "subtitle should show epoch prefix '0:' — got: {}",
+            subtitle
+        );
+    }
+
+    #[test]
+    fn test_normalize_version_changes_epoch_only_same_evr() {
+        // epoch "2" vs "1" with identical version-release
+        let mut snap = empty_snapshot();
+        let mut rpm = RpmSection::default();
+        rpm.version_changes = vec![VersionChange {
+            name: "glibc".into(),
+            arch: "x86_64".into(),
+            host_version: "2.34-100.el9".into(),
+            base_version: "2.34-100.el9".into(),
+            host_epoch: "2".into(),
+            base_epoch: "1".into(),
+            direction: VersionChangeDirection::Upgrade,
+        }];
+        snap.rpm = Some(rpm);
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let section = normalize_version_changes(&snap);
+        let subtitle = section.items[0].subtitle.as_ref().unwrap();
+        assert!(
+            subtitle.contains("1:2.34-100.el9"),
+            "base side should show epoch — got: {}",
+            subtitle
+        );
+        assert!(
+            subtitle.contains("2:2.34-100.el9"),
+            "host side should show epoch — got: {}",
+            subtitle
+        );
+    }
+
+    #[test]
+    fn test_normalize_version_changes_empty_vs_zero_epoch_normalized() {
+        // epoch "0" vs "" with different versions — both normalize to "0",
+        // so no epoch prefix should appear
+        let mut snap = empty_snapshot();
+        let mut rpm = RpmSection::default();
+        rpm.version_changes = vec![VersionChange {
+            name: "zlib".into(),
+            arch: "x86_64".into(),
+            host_version: "1.2.12-1.el9".into(),
+            base_version: "1.2.11-1.el9".into(),
+            host_epoch: String::new(),
+            base_epoch: "0".into(),
+            direction: VersionChangeDirection::Upgrade,
+        }];
+        snap.rpm = Some(rpm);
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let section = normalize_version_changes(&snap);
+        let subtitle = section.items[0].subtitle.as_ref().unwrap();
+        assert!(
+            !subtitle.contains(':'),
+            "no epoch prefix when both sides normalize to 0 — got: {}",
+            subtitle
+        );
+    }
+
+    #[test]
+    fn test_normalize_version_changes_no_baseline() {
+        let mut snap = empty_snapshot();
+        snap.rpm = Some(RpmSection::default());
+        // No baseline set — snap.baseline is None by default
+
+        let section = normalize_version_changes(&snap);
+        assert!(section.items.is_empty());
+        assert_eq!(
+            section.empty_reason.as_deref(),
+            Some("no_baseline"),
+            "empty rpm with no baseline should give no_baseline reason"
+        );
+    }
+
+    #[test]
+    fn test_normalize_version_changes_zero_drift() {
+        let mut snap = empty_snapshot();
+        snap.rpm = Some(RpmSection::default());
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let section = normalize_version_changes(&snap);
+        assert!(section.items.is_empty());
+        assert_eq!(
+            section.empty_reason.as_deref(),
+            Some("zero_drift"),
+            "empty version_changes with baseline should give zero_drift reason"
+        );
+    }
+
+    #[test]
+    fn test_normalize_version_changes_no_rpm() {
+        let snap = empty_snapshot();
+        // snap.rpm is None by default
+
+        let section = normalize_version_changes(&snap);
+        assert!(section.items.is_empty());
+        assert_eq!(
+            section.empty_reason.as_deref(),
+            Some("data_unavailable"),
+            "no rpm section should give data_unavailable reason"
+        );
     }
 }
