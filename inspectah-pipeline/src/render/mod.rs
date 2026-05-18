@@ -21,6 +21,8 @@ pub mod safety;
 pub mod secrets;
 pub mod tarball;
 
+pub mod baseline_fmt;
+
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::{RenderContext, RenderError};
 use std::path::Path;
