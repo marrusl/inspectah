@@ -27,6 +27,8 @@
     --rose-dim: rgba(251,113,133,0.12);
     --red: #ef4444;
     --red-dim: rgba(239,68,68,0.15);
+    --blue: #60a5fa;
+    --blue-dim: rgba(96,165,250,0.12);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -34,34 +36,55 @@
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     overflow: hidden;
+    margin: 0;
+    padding: 0;
     width: 100vw;
     height: 100vh;
   }
-  header {
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--border);
+  svg {
+    width: 100vw;
+    height: 100vh;
+    display: block;
+  }
+  .title-overlay {
+    position: fixed;
+    top: 16px;
+    left: 24px;
+    z-index: 10;
     display: flex;
     align-items: center;
     gap: 16px;
     background: var(--surface);
-    position: relative;
-    z-index: 10;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
   }
-  header h1 {
+  .title-overlay h1 {
     font-size: 18px;
     font-weight: 600;
     color: var(--teal);
   }
-  header span {
+  .title-overlay span {
     font-size: 13px;
     color: var(--text-dim);
   }
   .legend {
-    margin-left: auto;
+    position: fixed;
+    bottom: 50px;
+    right: 24px;
+    z-index: 10;
     display: flex;
-    gap: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
     font-size: 12px;
     color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    max-width: 400px;
   }
   .legend-item {
     display: flex;
@@ -72,18 +95,6 @@
     width: 10px;
     height: 10px;
     border-radius: 50%;
-  }
-  #diagram {
-    width: 100vw;
-    height: calc(100vh - 57px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  #diagram svg {
-    width: 100%;
-    height: 100%;
-    display: block;
   }
   .tooltip {
     position: absolute;
@@ -118,20 +129,21 @@
 </style>
 </head>
 <body>
-<header>
+<div class="title-overlay">
   <h1>inspectah</h1>
   <span>Conceptual Pipeline — Package Mode to Image Mode Migration</span>
-  <div class="legend">
-    <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div>Input</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--teal)"></div>Processing</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--amber)"></div>Data</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div>Security</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--purple)"></div>Output</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--cyan)"></div>Interactive</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--rose)"></div>Fleet/Architect</div>
-  </div>
-</header>
-<div id="diagram"></div>
+</div>
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div>Input</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--teal)"></div>Processing</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--amber)"></div>Data</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div>Security</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--purple)"></div>Output</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--cyan)"></div>Interactive</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--blue)"></div>Build</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--rose)"></div>Fleet/Architect</div>
+</div>
+<svg id="svg"></svg>
 <div class="tooltip" id="tooltip"></div>
 <div class="hint">Click a stage to expand details. Scroll to zoom. Drag to pan.</div>
 
@@ -214,6 +226,15 @@ const stages = [
     ]
   },
   {
+    id: 'build', label: 'Build', color: 'blue',
+    desc: 'inspectah-build companion script builds the bootc image from inspectah output. Handles automatic RHEL subscription cert injection for non-RHEL build hosts. Includes --validate mode that runs podman build to catch missing deps, broken COPY paths, and syntax errors before human review.',
+    children: [
+      { label: 'Cert Injection', desc: 'Automatic RHEL subscription cert injection for non-RHEL build hosts' },
+      { label: 'podman build', desc: 'Builds the bootc image from the generated Containerfile' },
+      { label: '--validate mode', desc: 'Dry-run podman build to catch missing deps, broken COPY paths, syntax errors' },
+    ]
+  },
+  {
     id: 'fleet', label: 'Fleet', color: 'rose',
     desc: 'Aggregates snapshots from multiple hosts, merges with prevalence thresholds, produces unified output.',
     children: [
@@ -240,15 +261,15 @@ const stageColors = {
   red:    { fill: 'var(--red-dim)',    stroke: 'var(--red)',    text: 'var(--red)' },
   purple: { fill: 'var(--purple-dim)', stroke: 'var(--purple)', text: 'var(--purple)' },
   cyan:   { fill: 'var(--cyan-dim)',   stroke: 'var(--cyan)',   text: 'var(--cyan)' },
+  blue:   { fill: 'var(--blue-dim)',   stroke: 'var(--blue)',   text: 'var(--blue)' },
   rose:   { fill: 'var(--rose-dim)',   stroke: 'var(--rose)',   text: 'var(--rose)' },
 };
 
 let width = window.innerWidth;
-let height = window.innerHeight - 57;
+let height = window.innerHeight;
 const tooltip = d3.select('#tooltip');
 
-const svg = d3.select('#diagram')
-  .append('svg');
+const svg = d3.select('#svg');
 
 const defs = svg.append('defs');
 
@@ -264,6 +285,19 @@ defs.append('marker')
   .append('path')
   .attr('d', 'M0,0 L10,3.5 L0,7 Z')
   .attr('fill', '#2a3a5c');
+
+// Return-arrow marker (for Fleet->Refine loop)
+defs.append('marker')
+  .attr('id', 'arrowhead-loop')
+  .attr('viewBox', '0 0 10 7')
+  .attr('refX', 10)
+  .attr('refY', 3.5)
+  .attr('markerWidth', 8)
+  .attr('markerHeight', 6)
+  .attr('orient', 'auto')
+  .append('path')
+  .attr('d', 'M0,0 L10,3.5 L0,7 Z')
+  .attr('fill', 'var(--amber)');
 
 // Glow filter
 const filter = defs.append('filter').attr('id', 'glow');
@@ -285,7 +319,7 @@ const nodeW = 140;
 const nodeH = 60;
 const gapX = 60;
 const startX = 80;
-const centerY = height / 2;
+const centerY = 300; // fixed coordinate in diagram space; centering handled by zoom transform
 
 // Expanded state tracking
 const expanded = {};
@@ -341,6 +375,71 @@ function render() {
     animateDot();
   }
 
+  // Draw Fleet -> Refine return arrow (loop path)
+  const fleetIdx = stages.findIndex(s => s.id === 'fleet');
+  const refineIdx = stages.findIndex(s => s.id === 'refine');
+  if (fleetIdx >= 0 && refineIdx >= 0) {
+    const fleetX = getNodeX(fleetIdx);
+    const refineX = getNodeX(refineIdx);
+
+    // Arc below the main flow
+    const arcStartX = fleetX + nodeW / 2;
+    const arcStartY = centerY + nodeH / 2;
+    const arcEndX = refineX + nodeW / 2;
+    const arcEndY = centerY + nodeH / 2;
+    const arcDrop = 90; // how far below the main line the arc dips
+
+    const loopId = 'flow-loop-fleet-refine';
+    g.append('path')
+      .attr('id', loopId)
+      .attr('d', `M${arcStartX},${arcStartY} C${arcStartX},${arcStartY + arcDrop} ${arcEndX},${arcEndY + arcDrop} ${arcEndX},${arcEndY}`)
+      .attr('fill', 'none')
+      .attr('stroke', 'var(--amber)')
+      .attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', '8,5')
+      .attr('opacity', 0.7)
+      .attr('marker-end', 'url(#arrowhead-loop)');
+
+    // Label on the loop
+    const labelX = (arcStartX + arcEndX) / 2;
+    const labelY = centerY + nodeH / 2 + arcDrop - 8;
+    g.append('text')
+      .attr('x', labelX)
+      .attr('y', labelY)
+      .attr('text-anchor', 'middle')
+      .attr('fill', 'var(--amber)')
+      .attr('font-size', '10px')
+      .attr('font-weight', 500)
+      .attr('opacity', 0.8)
+      .text('aggregate → refine loop');
+
+    // Animated dot on loop path
+    const loopDot = g.append('circle')
+      .attr('r', 3)
+      .attr('fill', 'var(--amber)')
+      .attr('opacity', 0);
+
+    function animateLoopDot() {
+      const path = document.getElementById(loopId);
+      if (!path) return;
+      const len = path.getTotalLength();
+      loopDot.attr('opacity', 0.7)
+        .transition()
+        .duration(3000)
+        .delay(1500)
+        .ease(d3.easeLinear)
+        .attrTween('transform', function() {
+          return function(t) {
+            const p = path.getPointAtLength(t * len);
+            return `translate(${p.x},${p.y})`;
+          };
+        })
+        .attr('opacity', 0)
+        .on('end', animateLoopDot);
+    }
+    animateLoopDot();
+  }
+
   // Draw stage nodes
   stages.forEach((stage, i) => {
     const x = getNodeX(i);
@@ -385,7 +484,7 @@ function render() {
         .text(isExpanded ? '▲ collapse' : '▼ expand');
     }
 
-    // Highlight effect
+    // Highlight effect for snapshot
     if (stage.id === 'snapshot') {
       rect.attr('stroke-width', 2.5)
         .attr('filter', 'url(#glow)');
@@ -414,14 +513,14 @@ function render() {
         .attr('fill', colors.text)
         .attr('font-size', '14px')
         .attr('opacity', 0.9)
-        .text('\u{1F6E1}');  // shield emoji
+        .text('\u{1F6E1}');
     }
 
     // Hover tooltip
     group
       .on('mouseover', (event) => {
         rect.transition().duration(150)
-          .attr('stroke-width', isExpanded ? 2.5 : 2.5)
+          .attr('stroke-width', 2.5)
           .attr('filter', 'url(#glow)');
         tooltip.style('opacity', 1)
           .html(`<strong>${stage.label}</strong><br>${stage.desc}`);
@@ -531,15 +630,26 @@ render();
 
 function centerView() {
   width = window.innerWidth;
-  height = window.innerHeight - 57;
+  height = window.innerHeight;
 
+  // Calculate bounding box of the diagram content
   const totalW = getNodeX(stages.length - 1) + nodeW + startX;
-  const contentH = nodeH + 400; // account for expanded children
-  const scaleX = width / totalW;
+  const contentMinX = startX - 20;
+  const contentMaxX = getNodeX(stages.length - 1) + nodeW + 20;
+  const contentMinY = centerY - nodeH / 2 - 40;
+  const contentMaxY = centerY + nodeH / 2 + 120; // account for loop arc
+  const contentW = contentMaxX - contentMinX;
+  const contentH = contentMaxY - contentMinY;
+  const contentCenterX = contentMinX + contentW / 2;
+  const contentCenterY = contentMinY + contentH / 2;
+
+  const scaleX = width / contentW;
   const scaleY = height / contentH;
-  const initScale = Math.min(scaleX, scaleY, 1.2) * 0.9;
-  const initX = (width - totalW * initScale) / 2;
-  const initY = (height - contentH * initScale) / 2;
+  const initScale = Math.min(scaleX, scaleY, 1.2) * 0.85;
+
+  const initX = width / 2 - contentCenterX * initScale;
+  const initY = height / 2 - contentCenterY * initScale;
+
   svg.call(zoom.transform, d3.zoomIdentity.translate(initX, initY).scale(initScale));
 }
 
@@ -547,7 +657,7 @@ centerView();
 
 window.addEventListener('resize', () => {
   width = window.innerWidth;
-  height = window.innerHeight - 57;
+  height = window.innerHeight;
   centerView();
 });
 </script>

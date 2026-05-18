@@ -33,42 +33,50 @@
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     overflow: hidden;
+    margin: 0;
+    padding: 0;
     width: 100vw;
     height: 100vh;
   }
-  header {
-    padding: 16px 24px;
-    border-bottom: 1px solid var(--border);
+  svg {
+    width: 100vw;
+    height: 100vh;
+    display: block;
+  }
+  .title-overlay {
+    position: fixed;
+    top: 16px;
+    left: 24px;
+    z-index: 10;
     display: flex;
     align-items: center;
     gap: 16px;
     background: var(--surface);
-    position: relative;
-    z-index: 10;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 20px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
   }
-  header h1 { font-size: 18px; font-weight: 600; color: var(--foundation); }
-  header span { font-size: 13px; color: var(--text-dim); }
+  .title-overlay h1 { font-size: 18px; font-weight: 600; color: var(--foundation); }
+  .title-overlay span { font-size: 13px; color: var(--text-dim); }
   .legend {
-    margin-left: auto;
+    position: fixed;
+    bottom: 50px;
+    right: 24px;
+    z-index: 10;
     display: flex;
-    gap: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
     font-size: 12px;
     color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
   }
   .legend-item { display: flex; align-items: center; gap: 6px; }
   .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
-  #diagram {
-    width: 100vw;
-    height: calc(100vh - 57px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  #diagram svg {
-    width: 100%;
-    height: 100%;
-    display: block;
-  }
   .tooltip {
     position: absolute;
     background: var(--surface);
@@ -102,18 +110,18 @@
 </style>
 </head>
 <body>
-<header>
+<div class="title-overlay">
   <h1>inspectah</h1>
   <span>Rust Workspace Architecture — 6 Crates</span>
-  <div class="legend">
-    <div class="legend-item"><div class="legend-dot" style="background:var(--foundation)"></div>Foundation</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--collection)"></div>Collection</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--processing)"></div>Processing</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--presentation)"></div>Presentation</div>
-    <div class="legend-item"><div class="legend-dot" style="background:var(--entry)"></div>Entry Point</div>
-  </div>
-</header>
-<div id="diagram"></div>
+</div>
+<div class="legend">
+  <div class="legend-item"><div class="legend-dot" style="background:var(--foundation)"></div>Foundation</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--collection)"></div>Collection</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--processing)"></div>Processing</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--presentation)"></div>Presentation</div>
+  <div class="legend-item"><div class="legend-dot" style="background:var(--entry)"></div>Entry Point</div>
+</div>
+<svg id="svg"></svg>
 <div class="tooltip" id="tooltip"></div>
 <div class="hint">Click a crate to expand modules. Click a module to see sub-modules. Scroll to zoom. Drag to pan.</div>
 
@@ -227,11 +235,10 @@ const layerColors = {
 };
 
 let width = window.innerWidth;
-let height = window.innerHeight - 57;
+let height = window.innerHeight;
 const tooltip = d3.select('#tooltip');
 
-const svg = d3.select('#diagram')
-  .append('svg');
+const svg = d3.select('#svg');
 
 const defs = svg.append('defs');
 
@@ -277,9 +284,9 @@ svg.call(zoom);
 // Layout: tiered rows, dynamic repositioning on expand
 const crateW = 200;
 const crateH = 64;
-const rowGap = 40;  // vertical gap between rows
+const rowGap = 40;
 
-// Rows from top to bottom. Each row has crate IDs and horizontal offsets.
+// Rows from top to bottom
 const rows = [
   { ids: ['cli'],              offsets: [400] },
   { ids: ['pipeline', 'web'],  offsets: [300, 560] },
@@ -293,18 +300,15 @@ function computePositions() {
   let currentY = 60;
 
   for (const row of rows) {
-    // Place all crates in this row at currentY
     row.ids.forEach((id, i) => {
       pos[id] = { x: row.offsets[i], y: currentY };
     });
 
-    // Compute the max expanded height of any crate in this row
     let maxH = crateH;
     row.ids.forEach(id => {
       maxH = Math.max(maxH, getExpandedHeight(id));
     });
 
-    // Advance Y past the tallest crate in this row + gap
     currentY += maxH + rowGap;
   }
 
@@ -339,7 +343,6 @@ function getCrateCenter(id, positions) {
 function render() {
   g.selectAll('*').remove();
 
-  // Recompute positions based on current expanded state
   const positions = computePositions();
 
   // Draw dependency arrows
@@ -349,12 +352,10 @@ function render() {
     const fc = getCrateCenter(from, positions);
     const tc = getCrateCenter(to, positions);
 
-    // Calculate edge intersection points
     const dx = tc.x - fc.x;
     const dy = tc.y - fc.y;
     const angle = Math.atan2(dy, dx);
 
-    // Start point: edge of 'from' crate
     let sx, sy;
     if (Math.abs(Math.cos(angle)) * crateH > Math.abs(Math.sin(angle)) * crateW) {
       sx = fc.x + (dx > 0 ? crateW / 2 : -crateW / 2);
@@ -364,7 +365,6 @@ function render() {
       sx = fc.x + (dy > 0 ? 1 : -1) * (crateH / 2) / Math.tan(angle);
     }
 
-    // End point: edge of 'to' crate
     let ex, ey;
     const angle2 = Math.atan2(-dy, -dx);
     if (Math.abs(Math.cos(angle2)) * crateH > Math.abs(Math.sin(angle2)) * crateW) {
@@ -375,7 +375,6 @@ function render() {
       ex = tc.x + (-dy > 0 ? 1 : -1) * (crateH / 2) / Math.tan(angle2);
     }
 
-    // Offset end by marker size
     const elen = Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2);
     const markerOffset = 8;
     ex = ex - (ex - sx) / elen * markerOffset;
@@ -384,7 +383,6 @@ function render() {
     const midX = (sx + ex) / 2;
     const midY = (sy + ey) / 2;
 
-    // Slight curve
     const perpX = -(ey - sy) * 0.1;
     const perpY = (ex - sx) * 0.1;
 
@@ -399,7 +397,6 @@ function render() {
       .attr('data-from', from)
       .attr('data-to', to);
 
-    // Label
     arrowGroup.append('text')
       .attr('class', `dep-label dep-label-${from} dep-label-${to}`)
       .attr('x', midX + perpX)
@@ -421,10 +418,8 @@ function render() {
       .attr('class', 'crate')
       .style('cursor', 'pointer');
 
-    // Expanded height calc (uses shared function)
     const expandedH = getExpandedHeight(crate.id);
 
-    // Crate rect
     const rect = crateGroup.append('rect')
       .attr('x', pos.x)
       .attr('y', pos.y)
@@ -435,7 +430,6 @@ function render() {
       .attr('stroke', colors.stroke)
       .attr('stroke-width', 1.5);
 
-    // Crate label
     crateGroup.append('text')
       .attr('x', pos.x + crateW / 2)
       .attr('y', pos.y + 24)
@@ -445,7 +439,6 @@ function render() {
       .attr('font-weight', 700)
       .text(crate.label);
 
-    // Layer tag
     crateGroup.append('text')
       .attr('x', pos.x + crateW / 2)
       .attr('y', pos.y + 42)
@@ -455,20 +448,17 @@ function render() {
       .attr('opacity', 0.5)
       .text(crate.layer);
 
-    // Expand indicator
     crateGroup.append('text')
       .attr('x', pos.x + crateW - 16)
       .attr('y', pos.y + 20)
       .attr('fill', colors.text)
       .attr('font-size', '12px')
       .attr('opacity', 0.5)
-      .text(isExpanded ? '−' : '+');
+      .text(isExpanded ? '-' : '+');
 
-    // Interactions
     crateGroup
       .on('mouseover', (event) => {
         rect.transition().duration(150).attr('filter', 'url(#glow)').attr('stroke-width', 2.5);
-        // Highlight dependencies
         g.selectAll(`.dep-${crate.id}`).transition().duration(150)
           .attr('stroke', 'var(--arrow-highlight)')
           .attr('stroke-width', 2.5)
@@ -489,7 +479,6 @@ function render() {
         tooltip.style('opacity', 0);
       });
 
-    // Invisible click zone for header area only
     crateGroup.append('rect')
       .attr('x', pos.x)
       .attr('y', pos.y)
@@ -508,7 +497,6 @@ function render() {
         render();
       });
 
-    // Expanded modules
     if (isExpanded) {
       let offsetY = pos.y + crateH;
       const visibleModules = crate.modules.filter(m => !m.parent);
@@ -571,7 +559,6 @@ function render() {
 
         offsetY += 30;
 
-        // Sub-modules
         if (isModExpanded && mod.children) {
           mod.children.forEach((child, ci) => {
             const childY = offsetY;
@@ -611,7 +598,7 @@ render();
 
 function centerView() {
   width = window.innerWidth;
-  height = window.innerHeight - 57;
+  height = window.innerHeight;
 
   const positions = computePositions();
   const allX = Object.values(positions).map(p => p.x);
@@ -622,9 +609,12 @@ function centerView() {
   const maxY = Math.max(...allY) + crateH + 40;
   const contentW = maxX - minX;
   const contentH = maxY - minY;
+  const contentCenterX = minX + contentW / 2;
+  const contentCenterY = minY + contentH / 2;
+
   const initScale = Math.min(width / contentW, height / contentH, 1.1) * 0.85;
-  const initX = (width - contentW * initScale) / 2 - minX * initScale;
-  const initY = (height - contentH * initScale) / 2 - minY * initScale;
+  const initX = width / 2 - contentCenterX * initScale;
+  const initY = height / 2 - contentCenterY * initScale;
   svg.call(zoom.transform, d3.zoomIdentity.translate(initX, initY).scale(initScale));
 }
 
@@ -632,7 +622,7 @@ centerView();
 
 window.addEventListener('resize', () => {
   width = window.innerWidth;
-  height = window.innerHeight - 57;
+  height = window.innerHeight;
   centerView();
 });
 </script>
