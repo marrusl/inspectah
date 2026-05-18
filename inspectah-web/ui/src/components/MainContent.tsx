@@ -221,6 +221,7 @@ export function MainContent({
             filterText={filterText}
             repoGroups={viewData?.repo_groups ?? []}
             revealItemId={revealItemId}
+            leafDepTree={viewData?.leaf_dep_tree}
             versionChanges={viewData?.version_changes}
             onViewUpdate={onViewUpdate}
             onMutationError={onMutationError}

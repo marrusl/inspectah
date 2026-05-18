@@ -60,4 +60,12 @@ describe("DependencyModal", () => {
     const list = screen.getByRole("list");
     expect(list).toHaveStyle({ overflowY: "auto", maxHeight: "60vh" });
   });
+
+  it("dependency list is keyboard-focusable for scrolling", () => {
+    render(
+      <DependencyModal packageId="httpd.x86_64" dependencies={deps} isOpen={true} onClose={vi.fn()} />
+    );
+    const list = screen.getByRole("list");
+    expect(list).toHaveAttribute("tabindex", "0");
+  });
 });

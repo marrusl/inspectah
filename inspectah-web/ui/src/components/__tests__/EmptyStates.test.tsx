@@ -374,3 +374,40 @@ describe("Version Changes empty states", () => {
     expect(screen.getByText(/not available/)).toBeInTheDocument();
   });
 });
+
+describe("Leaf dependency tree integration", () => {
+  it("renders View Dependencies button when leaf_dep_tree is provided", async () => {
+    const { MainContent } = await import("../MainContent");
+    const pkg = makePkg({ name: "httpd" }, [ROUTINE_TAG]);
+    const viewData = {
+      ...MOCK_VIEW,
+      packages: [pkg],
+      stats: { ...MOCK_STATS, total_packages: 1, included_packages: 1 },
+      leaf_dep_tree: { "httpd.x86_64": ["apr.x86_64", "glibc.x86_64"] },
+    };
+    render(
+      <MainContent
+        activeSection="packages"
+        loading={false}
+        viewData={viewData}
+        sections={[]}
+        onViewUpdate={vi.fn()}
+        onMutationError={vi.fn()}
+        sectionSearchOpen={false}
+        onSectionSearchClose={vi.fn()}
+      />
+    );
+    // Wait for viewed fetch
+    await waitFor(() => {
+      expect(mockFetch).toHaveBeenCalled();
+    });
+    // Expand the package card to show detail view
+    const packageCard = screen.getByTestId("decision-item-packages:httpd.x86_64");
+    packageCard.focus();
+    await userEvent.keyboard("{Enter}");
+    // The View Dependencies button should render in the expanded detail
+    await waitFor(() => {
+      expect(screen.getByText(/View Dependencies/)).toBeInTheDocument();
+    });
+  });
+});

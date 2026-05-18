@@ -33,6 +33,7 @@ export function DependencyModal({
         <ul
           role="list"
           aria-label={`Dependency list for ${packageId}`}
+          tabIndex={0}
           style={{
             listStyle: "none",
             padding: 0,
