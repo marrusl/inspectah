@@ -27,7 +27,7 @@ use inspectah_core::types::completeness::{
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::redaction::RedactionState;
-use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
@@ -64,9 +64,18 @@ fn minimal_mock() -> MockExecutor {
 }
 
 /// Build a snapshot with services Degraded — partial data present.
+/// Includes a state_change entry to verify degraded data still renders.
 fn snapshot_with_degraded_services() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.services = Some(ServiceSection {
+        state_changes: vec![ServiceStateChange {
+            unit: "httpd.service".into(),
+            current_state: "enabled".into(),
+            default_state: "disabled".into(),
+            action: "enable".into(),
+            include: true,
+            ..Default::default()
+        }],
         enabled_units: vec!["httpd.service".into()],
         disabled_units: vec!["cups.service".into()],
         ..Default::default()
