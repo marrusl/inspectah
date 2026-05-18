@@ -157,14 +157,26 @@ fn collect_while(
     s
 }
 
+/// Package names that are always excluded from scan output.
+/// inspectah is the scanning tool itself — including it in migration
+/// output would be nonsensical.
+const SELF_EXCLUDE_PACKAGES: &[&str] = &["inspectah"];
+
 /// Parse the output of `rpm -qa --queryformat` into PackageEntry list.
-/// Filters gpg-pubkey virtual packages.
+/// Filters gpg-pubkey virtual packages and the inspectah package itself.
 pub fn parse_rpm_qa(output: &str) -> Vec<PackageEntry> {
     output
         .lines()
         .filter_map(|line| {
             let entry = parse_nevra(line)?;
             if entry.name == "gpg-pubkey" {
+                return None;
+            }
+            if SELF_EXCLUDE_PACKAGES.contains(&entry.name.as_str()) {
+                eprintln!(
+                    "inspectah: excluding self-package '{}' from scan output",
+                    entry.name
+                );
                 return None;
             }
             Some(entry)
@@ -239,5 +251,41 @@ mod tests {
             rpmvercmp("99999999999", "99999999998"),
             std::cmp::Ordering::Greater
         );
+    }
+
+    // --- Self-exclusion tests ---
+
+    #[test]
+    fn test_parse_rpm_qa_excludes_inspectah() {
+        let output = "\
+0:bash-5.2.26-3.el9.x86_64
+0:inspectah-0.8.0-1.el9.x86_64
+0:httpd-2.4.57-5.el9.x86_64
+0:gpg-pubkey-fd431d51-4ae0493b.x86_64
+";
+        let packages = parse_rpm_qa(output);
+        let names: Vec<&str> = packages.iter().map(|p| p.name.as_str()).collect();
+
+        assert!(names.contains(&"bash"), "bash must be included");
+        assert!(names.contains(&"httpd"), "httpd must be included");
+        assert!(
+            !names.contains(&"inspectah"),
+            "inspectah must be excluded from scan output"
+        );
+        assert!(
+            !names.contains(&"gpg-pubkey"),
+            "gpg-pubkey must still be excluded"
+        );
+        assert_eq!(packages.len(), 2, "only bash and httpd should remain");
+    }
+
+    #[test]
+    fn test_parse_rpm_qa_without_inspectah_unaffected() {
+        let output = "\
+0:bash-5.2.26-3.el9.x86_64
+0:httpd-2.4.57-5.el9.x86_64
+";
+        let packages = parse_rpm_qa(output);
+        assert_eq!(packages.len(), 2, "normal packages should not be filtered");
     }
 }

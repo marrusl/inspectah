@@ -2,7 +2,37 @@ use inspectah_core::traits::executor::Executor;
 use inspectah_core::types::rpm::RepoFile;
 use std::path::Path;
 
+/// Returns true if a repo file or its content identifies an inspectah COPR repo.
+/// inspectah is the scanning tool — its repo should not appear in migration output.
+///
+/// Matches patterns:
+/// - Filename: `_copr:copr.fedorainfracloud.org:*:inspectah.repo`
+/// - Filename: `copr-*-inspectah.repo` (legacy COPR naming)
+/// - Section ID in content: `[copr:copr.fedorainfracloud.org:*:inspectah]`
+fn is_inspectah_repo(filename: &str, content: &str) -> bool {
+    let lower_filename = filename.to_lowercase();
+
+    // Filename-based detection
+    if lower_filename.contains("inspectah") && lower_filename.ends_with(".repo") {
+        return true;
+    }
+
+    // Content-based detection: look for inspectah in section IDs
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            let section_id = &trimmed[1..trimmed.len() - 1];
+            if section_id.contains("inspectah") {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 /// Collect all .repo files from /etc/yum.repos.d/
+/// Excludes inspectah's own COPR repo from output.
 pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
     let mut repo_files = Vec::new();
     let repo_dir = Path::new("/etc/yum.repos.d");
@@ -25,6 +55,15 @@ pub fn collect_repo_files(exec: &dyn Executor) -> Vec<RepoFile> {
 
         // Skip files with NUL bytes or other binary content
         if content.contains('\0') {
+            continue;
+        }
+
+        // Exclude inspectah's own COPR repo
+        if is_inspectah_repo(&entry, &content) {
+            eprintln!(
+                "inspectah: excluding self-repo '{}' from scan output",
+                entry
+            );
             continue;
         }
 
@@ -264,6 +303,78 @@ mod tests {
         // Second key is redacted
         assert!(!keys[1].include);
         assert!(keys[1].content.contains("REDACTED"));
+    }
+
+    // --- Self-exclusion tests ---
+
+    #[test]
+    fn test_is_inspectah_repo_copr_filename() {
+        // Standard COPR naming: _copr:copr.fedorainfracloud.org:user:inspectah.repo
+        assert!(is_inspectah_repo(
+            "_copr:copr.fedorainfracloud.org:mrussell:inspectah.repo",
+            "[copr:copr.fedorainfracloud.org:mrussell:inspectah]\nbaseurl=...\n"
+        ));
+    }
+
+    #[test]
+    fn test_is_inspectah_repo_legacy_copr_filename() {
+        // Legacy COPR naming
+        assert!(is_inspectah_repo(
+            "copr-mrussell-inspectah.repo",
+            "[copr-mrussell-inspectah]\nbaseurl=...\n"
+        ));
+    }
+
+    #[test]
+    fn test_is_inspectah_repo_content_based() {
+        // Filename doesn't match but content has inspectah section
+        assert!(is_inspectah_repo(
+            "custom-repos.repo",
+            "[copr:copr.fedorainfracloud.org:conan:inspectah]\nbaseurl=...\n"
+        ));
+    }
+
+    #[test]
+    fn test_is_inspectah_repo_false_for_unrelated() {
+        assert!(!is_inspectah_repo("epel.repo", "[epel]\nname=EPEL 9\n"));
+        assert!(!is_inspectah_repo(
+            "redhat.repo",
+            "[rhel-9-baseos]\nname=RHEL 9 BaseOS\n"
+        ));
+    }
+
+    #[test]
+    fn test_collect_repo_files_excludes_inspectah_copr() {
+        let mock = MockExecutor::new()
+            .with_dir(
+                "/etc/yum.repos.d",
+                vec![
+                    "redhat.repo",
+                    "epel.repo",
+                    "_copr:copr.fedorainfracloud.org:mrussell:inspectah.repo",
+                ],
+            )
+            .with_file(
+                "/etc/yum.repos.d/redhat.repo",
+                "[rhel-9-baseos]\nname=RHEL 9 BaseOS\n",
+            )
+            .with_file(
+                "/etc/yum.repos.d/epel.repo",
+                "[epel]\nname=EPEL 9\n",
+            )
+            .with_file(
+                "/etc/yum.repos.d/_copr:copr.fedorainfracloud.org:mrussell:inspectah.repo",
+                "[copr:copr.fedorainfracloud.org:mrussell:inspectah]\nbaseurl=https://download.copr.fedorainfracloud.org/results/mrussell/inspectah/\n",
+            );
+
+        let repos = collect_repo_files(&mock);
+        assert_eq!(repos.len(), 2, "inspectah COPR repo must be excluded");
+
+        let repo_paths: Vec<&str> = repos.iter().map(|r| r.path.as_str()).collect();
+        assert!(
+            !repo_paths.iter().any(|p| p.contains("inspectah")),
+            "no repo with inspectah in path should be present"
+        );
     }
 
     #[test]
