@@ -18,8 +18,8 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::os::SystemType;
-use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::redaction::RedactionKind;
+use inspectah_core::types::rpm::PackageEntry;
 
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 
@@ -587,6 +587,7 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
 
     let mut safe_enabled = Vec::new();
     let mut safe_disabled = Vec::new();
+    let mut safe_masked = Vec::new();
     let mut deferred = Vec::new();
 
     for sc in &included_changes {
@@ -605,7 +606,10 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
             "disable" => {
                 safe_disabled.push(u.clone());
             }
-            _ => {} // "mask" or other actions handled elsewhere or skipped
+            "mask" => {
+                safe_masked.push(u.clone());
+            }
+            _ => {}
         }
     }
 
@@ -614,6 +618,9 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     }
     if !safe_disabled.is_empty() {
         lines.extend(systemctl_lines("disable", &safe_disabled));
+    }
+    if !safe_masked.is_empty() {
+        lines.extend(systemctl_lines("mask", &safe_masked));
     }
     if !deferred.is_empty() {
         lines.push(format!(
@@ -1495,7 +1502,9 @@ mod tests {
             .expect("install line must be present");
 
         assert!(
-            install_line.split_whitespace().any(|token| token == "httpd"),
+            install_line
+                .split_whitespace()
+                .any(|token| token == "httpd"),
             "install line must render package names, got: {install_line}"
         );
         assert!(
@@ -1685,7 +1694,11 @@ mod tests {
                 },
             ],
             // enabled_units/disabled_units are full inventory — not used by renderer
-            enabled_units: vec!["httpd.service".into(), "sshd.service".into(), "chronyd.service".into()],
+            enabled_units: vec![
+                "httpd.service".into(),
+                "sshd.service".into(),
+                "chronyd.service".into(),
+            ],
             disabled_units: vec!["cups.service".into(), "NetworkManager.service".into()],
             ..Default::default()
         });
@@ -1693,8 +1706,14 @@ mod tests {
         assert!(output.contains("systemctl enable httpd.service sshd.service"));
         assert!(output.contains("systemctl disable cups.service"));
         // Preset-matching units from enabled_units/disabled_units must NOT appear
-        assert!(!output.contains("chronyd"), "preset-matching enabled unit must not appear");
-        assert!(!output.contains("NetworkManager"), "preset-matching disabled unit must not appear");
+        assert!(
+            !output.contains("chronyd"),
+            "preset-matching enabled unit must not appear"
+        );
+        assert!(
+            !output.contains("NetworkManager"),
+            "preset-matching disabled unit must not appear"
+        );
     }
 
     #[test]
@@ -2129,6 +2148,41 @@ mod tests {
         assert!(
             !output.contains("\\"),
             "2 services should not use backslash continuation"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_masked_services() {
+        use inspectah_core::types::services::ServiceStateChange;
+        let mut snap = InspectionSnapshot::new();
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "cups.service".into(),
+                    current_state: "masked".into(),
+                    default_state: "enabled".into(),
+                    action: "mask".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("systemctl mask cups.service"),
+            "masked service must produce systemctl mask, got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("systemctl enable httpd.service"),
+            "enabled service must still work alongside masked"
         );
     }
 
