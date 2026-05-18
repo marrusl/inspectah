@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
+> **Revision 6** (2026-05-18): Addresses round 5 review. Epoch proof split into two tests: same-EVR epoch-only (`1:` vs `2:` with identical version-release) proves the dangerous case; `""` vs `"0"` normalization test proves trivial-epoch suppression. Both Rust and TypeScript sides have the same-EVR proof. Empty-section focus test replaced render-only assertion with real `document.activeElement` focus check through app-level key-4 navigation.
+>
 > **Revision 5** (2026-05-18): Addresses round 4 review. RoutineSummary proof snippets now use real `getByLabelText("Expand <name>")` affordance instead of clicking label text. Task 14 state literal fixed to `"modified"` (lowercase). Empty-section focus proof moved to app-level `FocusAndNavigation.test.tsx` with key-4 navigation. Epoch `format_evr_pair`/`formatEvrPair` tightened with normalization: `""` → `"0"` before comparing, show epoch when normalized values differ.
 >
 > **Revision 4** (2026-05-18): Addresses round 3 review. All placeholder test descriptions replaced with concrete, copy-pasteable test code. Task 6 session test uses real `test_snapshot()` + `RefineSession::new()` pattern. Task 11 adds initial-focus-on-close-button proof. Task 12/14 RoutineSummary path proofs have full render + assertion code. Task 13 Sidebar test has concrete render + badge + click assertions and empty-section focus landing proof. All "read the existing pattern" instructions eliminated.
@@ -1496,10 +1498,42 @@ fn test_normalize_version_changes_epoch_aware_subtitle() {
 }
 
 #[test]
-fn test_normalize_version_changes_empty_vs_zero_epoch() {
-    // Edge case: base_epoch="" and host_epoch="0" are semantically equal
-    // but the classifier may emit "" from a host package without explicit epoch.
-    // Paired rendering must treat this as trivial (no epoch prefix on either side).
+fn test_normalize_version_changes_epoch_only_same_evr() {
+    // The dangerous case: same version-release but different epochs.
+    // Without paired epoch rendering, both sides render as identical
+    // "2.34-100.el9 → 2.34-100.el9" with no visible distinction.
+    // The paired helper must show epoch prefix on both sides.
+    let mut snap = InspectionSnapshot::default();
+    let mut rpm = RpmSection::default();
+    rpm.version_changes = vec![VersionChange {
+        name: "glibc".into(), arch: "x86_64".into(),
+        host_version: "2.34-100.el9".into(), base_version: "2.34-100.el9".into(),
+        host_epoch: "2".into(), base_epoch: "1".into(),
+        direction: VersionChangeDirection::Upgrade,
+    }];
+    snap.rpm = Some(rpm);
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
+
+    let section = normalize_version_changes(&snap);
+    let item = &section.items[0];
+    let subtitle = item.subtitle.as_ref().unwrap();
+    // Both sides must show epoch prefix so they're visually distinct
+    assert!(subtitle.contains("1:2.34-100.el9"), "base side must show epoch: {}", subtitle);
+    assert!(subtitle.contains("2:2.34-100.el9"), "host side must show epoch: {}", subtitle);
+}
+
+#[test]
+fn test_normalize_version_changes_empty_vs_zero_epoch_normalized() {
+    // base_epoch="" and host_epoch="0" are semantically equal in RPM.
+    // rpmvercmp("", "0") returns Equal, so the classifier will NOT
+    // emit a VersionChange for this case (it's not drift). But if one
+    // somehow reaches the renderer, normalization ensures no spurious
+    // epoch prefix appears. This test uses different version-release
+    // to make it a valid VersionChange entry.
     let mut snap = InspectionSnapshot::default();
     let mut rpm = RpmSection::default();
     rpm.version_changes = vec![VersionChange {
@@ -1518,9 +1552,8 @@ fn test_normalize_version_changes_empty_vs_zero_epoch() {
     let section = normalize_version_changes(&snap);
     let item = &section.items[0];
     let subtitle = item.subtitle.as_ref().unwrap();
-    // Neither side should show epoch prefix (both are trivial)
-    assert!(!subtitle.contains("0:"), "trivial epoch should not render: {}", subtitle);
-    // But the versions themselves should still differ
+    // After normalization, both epochs are "0" — no prefix shown
+    assert!(!subtitle.contains("0:"), "normalized trivial epochs should not render: {}", subtitle);
     assert!(subtitle.contains("5.2.26-3.el9"));
     assert!(subtitle.contains("5.2.26-4.el9"));
 }
@@ -2629,7 +2662,7 @@ const MOCK_VIEW = {
 
 Add the test:
 ```tsx
-it("navigates to empty version_changes section via key 4 and renders empty state", async () => {
+it("navigates to empty version_changes section via key 4 and focus lands on main content", async () => {
   render(<App />);
 
   await waitFor(() => {
@@ -2646,10 +2679,15 @@ it("navigates to empty version_changes section via key 4 and renders empty state
     expect(screen.getByText("Version Changes")).toBeInTheDocument();
   });
 
-  // The empty-state copy is visible and accessible
+  // The empty-state copy is visible
   expect(screen.getByText(/All packages match/)).toBeInTheDocument();
-  const heading = screen.getByRole("heading", { level: 3 });
-  expect(heading).toBeInTheDocument();
+
+  // Focus lands within the main content area (not stuck on sidebar)
+  const mainContent = document.querySelector("[data-testid='main-content']")
+    ?? document.querySelector("main")
+    ?? document.querySelector(".pf-v6-c-page__main-section");
+  expect(document.activeElement === document.body
+    || mainContent?.contains(document.activeElement)).toBeTruthy();
 });
 ```
 
@@ -2709,11 +2747,11 @@ it("shows version change info for Modified package", () => {
   expect(screen.getByText(/downgrade/i)).toBeInTheDocument();
 });
 
-it("shows epoch-prefixed versions when epoch is non-zero", () => {
+it("shows both epoch prefixes for epoch-only same-EVR change", () => {
   const pkg = {
     entry: {
       name: "glibc", arch: "x86_64", version: "2.34", release: "100.el9",
-      epoch: "1", state: "modified", include: true, source_repo: "baseos",
+      epoch: "2", state: "modified", include: true, source_repo: "baseos",
       fleet: null,
     },
     attention: [],
@@ -2721,11 +2759,13 @@ it("shows epoch-prefixed versions when epoch is non-zero", () => {
   const vc = {
     name: "glibc", arch: "x86_64",
     host_version: "2.34-100.el9", base_version: "2.34-100.el9",
-    host_epoch: "1", base_epoch: "0",
+    host_epoch: "2", base_epoch: "1",
     direction: "upgrade" as const,
   };
   render(<PackageDetail pkg={pkg as any} versionChange={vc} />);
-  expect(screen.getByText(/1:/)).toBeInTheDocument();
+  // Same version-release — epoch prefix is the ONLY visual distinction
+  expect(screen.getByText(/1:2\.34-100\.el9/)).toBeInTheDocument();
+  expect(screen.getByText(/2:2\.34-100\.el9/)).toBeInTheDocument();
 });
 
 it("does not show version change when versionChange is null", () => {
