@@ -79,14 +79,16 @@ fn container_name() -> String {
 pub fn extract_baseline(
     executor: &dyn Executor,
     normalized_ref: &NormalizedImageRef,
+    on_pull_line: &mut dyn FnMut(&str),
 ) -> Result<BaselineData, ExtractionError> {
     let image_ref = normalized_ref.as_str();
     let ctr_name = container_name();
 
     let mut guard = CleanupGuard::new(executor);
 
-    // 1. Pull (with stderr passthrough for live layer progress)
-    let pull_result = run_nsenter_passthrough(executor, &["podman", "pull", image_ref]);
+    // 1. Pull (with per-line stderr callback for live progress)
+    let pull_result =
+        run_nsenter_with_callback(executor, &["podman", "pull", image_ref], on_pull_line);
     if !pull_result.success() {
         return Err(ExtractionError::PullFailed {
             image_ref: image_ref.to_string(),
@@ -176,10 +178,22 @@ fn run_nsenter(executor: &dyn Executor, cmd_and_args: &[&str]) -> ExecResult {
 
 /// Run a command through the nsenter prefix with stderr passed through
 /// to the terminal for live progress output.
+#[allow(dead_code)] // retained for future callers
 fn run_nsenter_passthrough(executor: &dyn Executor, cmd_and_args: &[&str]) -> ExecResult {
     let mut full_args: Vec<&str> = NSENTER_PREFIX.to_vec();
     full_args.extend_from_slice(cmd_and_args);
     executor.run_passthrough_stderr(full_args[0], &full_args[1..])
+}
+
+/// Run a command through the nsenter prefix with per-line stderr callback.
+fn run_nsenter_with_callback(
+    executor: &dyn Executor,
+    cmd_and_args: &[&str],
+    on_line: &mut dyn FnMut(&str),
+) -> ExecResult {
+    let mut full_args: Vec<&str> = NSENTER_PREFIX.to_vec();
+    full_args.extend_from_slice(cmd_and_args);
+    executor.run_with_line_callback(full_args[0], &full_args[1..], on_line)
 }
 
 /// Capture the image digest. Primary: `podman inspect --format '{{.Digest}}'`.

@@ -6,14 +6,14 @@ license.workspace = true
 
 [features]
 default = []
-ffi-rpm = ["dep:libc"]
+ffi-rpm = []
 
 [dependencies]
 inspectah-core = { path = "../inspectah-core" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-libc = { version = "0.2", optional = true }
+libc = "0.2"
 regex = "1"
 wait-timeout = "0.2"
 

@@ -163,7 +163,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     let baseline_data = match (&normalized_ref, args.no_baseline) {
         (Some(norm), false) => {
             eprintln!("Pulling target image...");
-            let data = inspectah_collect::baseline::extract_baseline(&executor, norm)
+            let data = inspectah_collect::baseline::extract_baseline(&executor, norm, &mut |_| {})
                 .context("baseline extraction failed")?;
             eprintln!("Extracting baseline... {} packages", data.packages.len());
             Some(data)

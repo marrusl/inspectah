@@ -237,6 +237,128 @@ impl Executor for RealExecutor {
         })
     }
 
+    fn run_with_line_callback(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        on_stderr_line: &mut dyn FnMut(&str),
+    ) -> ExecResult {
+        let resolved = resolve_command(cmd);
+        let child = Command::new(&resolved)
+            .args(args)
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                return ExecResult {
+                    stderr: e.to_string(),
+                    exit_code: 127,
+                    ..Default::default()
+                };
+            }
+        };
+
+        let stdout_handle = child.stdout.take();
+        let stderr_handle = child.stderr.take();
+
+        // Architecture: main thread reads stderr line-by-line and calls
+        // the callback (no Send required). A watchdog thread handles
+        // the 600s timeout/kill.
+        let pull_timeout = Duration::from_secs(600);
+
+        std::thread::scope(|s| {
+            // Drain stdout in a scoped thread.
+            let stdout_thread = s.spawn(|| {
+                let mut buf = Vec::new();
+                if let Some(r) = stdout_handle {
+                    let mut limited = io::Read::take(r, STDOUT_SIZE_CAP as u64 + 1);
+                    let _ = io::Read::read_to_end(&mut limited, &mut buf);
+                }
+                buf
+            });
+
+            // Watchdog thread: waits for timeout, then kills the child.
+            // Uses an Arc<AtomicBool> to coordinate with the main thread.
+            let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let finished_clone = finished.clone();
+            let child_id = child.id();
+            let watchdog = s.spawn(move || {
+                let start = std::time::Instant::now();
+                while start.elapsed() < pull_timeout {
+                    if finished_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                        return false; // main thread finished normally
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                // Timeout — kill via signal (child.kill() requires &mut,
+                // so we use the raw PID kill).
+                unsafe {
+                    libc::kill(child_id as i32, libc::SIGKILL);
+                }
+                true // timed out
+            });
+
+            // Main thread: read stderr line-by-line, call callback live.
+            let mut stderr_lines = Vec::new();
+            if let Some(r) = stderr_handle {
+                use std::io::BufRead;
+                let reader = io::BufReader::new(r);
+                for line in reader.lines() {
+                    match line {
+                        Ok(l) => {
+                            on_stderr_line(&l);
+                            stderr_lines.push(l);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }
+
+            // Signal watchdog that we're done reading stderr.
+            finished.store(true, std::sync::atomic::Ordering::Relaxed);
+            let timed_out = watchdog.join().unwrap();
+
+            // Wait for child to exit and collect status.
+            let status = child.wait();
+            let stdout_raw = stdout_thread.join().unwrap();
+
+            let stdout = if stdout_raw.len() > STDOUT_SIZE_CAP {
+                let s = String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
+                format!("{s}\n[output truncated at 64 MB]")
+            } else {
+                String::from_utf8_lossy(&stdout_raw).into_owned()
+            };
+
+            if timed_out {
+                ExecResult {
+                    stdout,
+                    stderr: format!(
+                        "command timed out after {}s: {} {}",
+                        pull_timeout.as_secs(),
+                        cmd,
+                        args.join(" ")
+                    ),
+                    exit_code: -1,
+                }
+            } else {
+                let exit_code = match status {
+                    Ok(s) => s.code().unwrap_or(-1),
+                    Err(_) => -1,
+                };
+                ExecResult {
+                    stdout,
+                    stderr: stderr_lines.join("\n"),
+                    exit_code,
+                }
+            }
+        })
+    }
+
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let metadata = std::fs::metadata(path)?;
         if metadata.len() > FILE_SIZE_CAP {

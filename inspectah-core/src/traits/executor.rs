@@ -26,6 +26,27 @@ pub trait Executor: Send + Sync {
         self.run(cmd, args)
     }
 
+    /// Run a command, calling `on_stderr_line` for each line of stderr output.
+    ///
+    /// Used for long-running commands (e.g., `podman pull`) where the caller
+    /// wants streaming stderr access for progress display. Full stderr is
+    /// still captured in `ExecResult.stderr`. Uses the same 600s timeout
+    /// as `run_passthrough_stderr`.
+    ///
+    /// # Contract
+    ///
+    /// - Callback is called per-line **live** as stderr is produced, not
+    ///   accumulated and replayed after completion.
+    /// - Callback runs on the main thread. No `Send` required.
+    /// - Full stderr transcript is always available in `ExecResult.stderr`
+    ///   for error diagnostics regardless of callback behavior.
+    fn run_with_line_callback(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        on_stderr_line: &mut dyn FnMut(&str),
+    ) -> ExecResult;
+
     fn read_file(&self, path: &Path) -> io::Result<String>;
     fn file_exists(&self, path: &Path) -> bool;
     fn read_dir(&self, path: &Path) -> io::Result<Vec<String>>;
