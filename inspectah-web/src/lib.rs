@@ -46,7 +46,10 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
             HeaderValue::from_str(served_origin).unwrap(),
         ))
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers([axum::http::header::CONTENT_TYPE]);
+        .allow_headers([
+            axum::http::header::CONTENT_TYPE,
+            axum::http::HeaderName::from_static("x-acknowledge-sensitive"),
+        ]);
 
     let served = served_origin.to_string();
 
@@ -60,6 +63,9 @@ pub fn router(state: Arc<AppState>, served_origin: &str) -> Router {
         .route("/api/ops", get(handlers::get_ops))
         .route("/api/changes", get(handlers::get_changes))
         .route("/api/tarball", post(handlers::export_tarball))
+        .route("/api/user-strategy", post(handlers::user_strategy))
+        .route("/api/user-password", post(handlers::user_password))
+        .route("/api/user-preview", get(handlers::user_preview))
         .route("/api/snapshot/sections", get(handlers::get_sections))
         .route(
             "/api/viewed",

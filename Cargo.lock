@@ -911,6 +911,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "inspectah-core",
+ "inspectah-pipeline",
  "inspectah-refine",
  "mime_guess",
  "rust-embed",

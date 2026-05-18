@@ -1,14 +1,15 @@
 use axum::extract::State;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
+use inspectah_core::types::users::UserContainerfileStrategy;
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance};
+use inspectah_refine::types::{RefinedView, RefinementOp, RepoProvenance, UserPasswordOp};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeSet;
@@ -63,6 +64,8 @@ pub struct ViewResponse {
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
     pub leaf_dep_tree: std::collections::HashMap<String, Vec<String>>,
+    pub users_groups_decisions: Vec<serde_json::Value>,
+    pub session_is_sensitive: bool,
 }
 
 #[derive(Serialize)]
@@ -88,6 +91,21 @@ pub struct ViewedRequest {
 #[derive(Deserialize)]
 pub struct TarballRequest {
     pub generation: u64,
+}
+
+// -- User endpoint request bodies -----------------------------------------
+
+#[derive(Deserialize)]
+pub struct UserStrategyRequest {
+    pub username: String,
+    pub strategy: String,
+}
+
+#[derive(Deserialize)]
+pub struct UserPasswordRequest {
+    pub username: String,
+    pub choice: String,
+    pub hash: Option<String>,
 }
 
 // -- Handlers -------------------------------------------------------------
@@ -188,12 +206,20 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
     } else {
         serde_json::from_value(session.leaf_dep_tree()).unwrap_or_default()
     };
+    let users_groups_decisions = session
+        .snapshot_projected()
+        .users_groups
+        .map(|ug| ug.users)
+        .unwrap_or_default();
+    let session_is_sensitive = session.is_sensitive();
     ViewResponse {
         view,
         repo_groups,
         baseline_summary,
         version_changes,
         leaf_dep_tree,
+        users_groups_decisions,
+        session_is_sensitive,
     }
 }
 
@@ -314,8 +340,9 @@ pub async fn get_changes(State(state): State<Arc<AppState>>) -> impl IntoRespons
 
 pub async fn export_tarball(
     State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
     body: axum::body::Bytes,
-) -> Result<impl IntoResponse, AppError> {
+) -> Result<axum::response::Response, AppError> {
     // Parse generation from request body — malformed JSON → 400
     let req: TarballRequest = serde_json::from_slice(&body).map_err(|_| {
         AppError(inspectah_refine::types::RefineError::BadRequest(
@@ -324,7 +351,7 @@ pub async fn export_tarball(
     })?;
 
     // Snapshot state under the lock, then release before expensive work.
-    let (projected, _generation) = {
+    let (projected, _generation, sensitive) = {
         let session = state.session.lock().unwrap();
         if req.generation != session.generation() {
             return Err(AppError(
@@ -334,9 +361,30 @@ pub async fn export_tarball(
                 },
             ));
         }
-        (session.snapshot_projected(), session.generation())
+        (
+            session.snapshot_projected(),
+            session.generation(),
+            session.is_sensitive(),
+        )
     };
     // Lock is released here.
+
+    // Export gating: require explicit acknowledgment for sensitive sessions.
+    if sensitive {
+        let ack = headers
+            .get("x-acknowledge-sensitive")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if ack != "true" {
+            let summary = build_sensitivity_summary(&projected);
+            return Ok((
+                StatusCode::PRECONDITION_REQUIRED,
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                serde_json::to_vec(&summary).unwrap_or_default(),
+            )
+                .into_response());
+        }
+    }
 
     // Expensive render + tar work happens outside the lock via spawn_blocking.
     let bytes = tokio::task::spawn_blocking(
@@ -365,7 +413,122 @@ pub async fn export_tarball(
             ),
         ],
         bytes,
+    )
+        .into_response())
+}
+
+// -- User decision endpoints -----------------------------------------------
+
+pub async fn user_strategy(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let req: UserStrategyRequest = serde_json::from_slice(&body).map_err(|e| {
+        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+            "invalid user strategy request: {e}"
+        )))
+    })?;
+    let strategy = match req.strategy.as_str() {
+        "skip" => UserContainerfileStrategy::Skip,
+        "useradd" => UserContainerfileStrategy::Useradd,
+        other => {
+            return Err(AppError(
+                inspectah_refine::types::RefineError::BadRequest(format!(
+                    "unknown strategy: {other} (expected \"skip\" or \"useradd\")"
+                )),
+            ));
+        }
+    };
+    let op = RefinementOp::UserStrategy {
+        username: req.username,
+        strategy,
+    };
+    let mut session = state.session.lock().unwrap();
+    session.apply(op).map_err(AppError)?;
+    Ok(Json(
+        serde_json::to_value(&build_view_response(&session)).unwrap(),
     ))
+}
+
+pub async fn user_password(
+    State(state): State<Arc<AppState>>,
+    body: axum::body::Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let req: UserPasswordRequest = serde_json::from_slice(&body).map_err(|e| {
+        AppError(inspectah_refine::types::RefineError::BadRequest(format!(
+            "invalid user password request: {e}"
+        )))
+    })?;
+    let pw_op = match req.choice.as_str() {
+        "none" => UserPasswordOp::None {
+            username: req.username,
+        },
+        "preserve" => UserPasswordOp::Preserve {
+            username: req.username,
+        },
+        "new" => UserPasswordOp::New {
+            username: req.username,
+            hash: req.hash,
+        },
+        other => {
+            return Err(AppError(
+                inspectah_refine::types::RefineError::BadRequest(format!(
+                    "unknown password choice: {other} (expected \"none\", \"preserve\", or \"new\")"
+                )),
+            ));
+        }
+    };
+    let op = RefinementOp::UserPassword(pw_op);
+    let mut session = state.session.lock().unwrap();
+    session.apply(op).map_err(AppError)?;
+    Ok(Json(
+        serde_json::to_value(&build_view_response(&session)).unwrap(),
+    ))
+}
+
+pub async fn user_preview(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    let session = state.session.lock().unwrap();
+    let projected = session.snapshot_projected();
+    let kickstart = inspectah_pipeline::render::users::render_kickstart(&projected);
+    let blueprint_toml = inspectah_pipeline::render::users::render_blueprint_toml(&projected);
+    Json(json!({
+        "kickstart": kickstart,
+        "blueprint_toml": blueprint_toml,
+    }))
+}
+
+/// Build a summary of why the session is considered sensitive.
+fn build_sensitivity_summary(snap: &InspectionSnapshot) -> serde_json::Value {
+    let mut reasons = Vec::new();
+    if snap.sensitive_snapshot {
+        reasons.push("snapshot contains sensitive data".to_string());
+    }
+    if let Some(ug) = &snap.users_groups {
+        for user in &ug.users {
+            let name = user
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let choice = user
+                .get("password_choice")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let has_hash = user
+                .get("password_hash")
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if choice == "new" && has_hash {
+                reasons.push(format!("user \"{name}\" has a new password hash"));
+            }
+        }
+    }
+    json!({
+        "error": "session contains sensitive data — set x-acknowledge-sensitive: true to export",
+        "sensitivity_summary": reasons,
+    })
 }
 
 // -- New Phase 4 endpoints ------------------------------------------------
@@ -401,14 +564,16 @@ pub async fn get_viewed(State(state): State<Arc<AppState>>) -> impl IntoResponse
 // -- normalize_for_context ------------------------------------------------
 
 /// Map an `InspectionSnapshot` to presentation-layer `ContextSection`s.
-/// Produces 10 sections matching the spec. Sections that are `None` in the
+/// Produces 9 sections matching the spec. Sections that are `None` in the
 /// snapshot produce a `ContextSection` with an empty `items` vec.
+///
+/// Users & Groups data is no longer included here — it flows through
+/// `ViewResponse.users_groups_decisions` from the projected snapshot.
 pub fn normalize_for_context(snap: &InspectionSnapshot) -> Vec<ContextSection> {
     vec![
         normalize_services(snap),
         normalize_version_changes(snap),
         normalize_containers(snap),
-        normalize_users_groups(snap),
         normalize_network(snap),
         normalize_storage(snap),
         normalize_scheduled_tasks(snap),
@@ -772,95 +937,6 @@ fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
     ContextSection {
         id: "containers".to_string(),
         display_name: "Containers".to_string(),
-        items,
-        empty_reason: None,
-    }
-}
-
-fn normalize_users_groups(snap: &InspectionSnapshot) -> ContextSection {
-    let mut items = Vec::new();
-
-    if let Some(ug) = &snap.users_groups {
-        // Users (serde_json::Value)
-        for user in &ug.users {
-            let name = user
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let uid = user.get("uid").map(|v| v.to_string()).unwrap_or_default();
-
-            // Build detail from sudoers + SSH keys
-            let mut detail_parts = Vec::new();
-
-            // Match sudoers rules referencing this user
-            let user_sudoers: Vec<&str> = ug
-                .sudoers_rules
-                .iter()
-                .filter(|r| r.contains(&name))
-                .map(|r| r.as_str())
-                .collect();
-            if !user_sudoers.is_empty() {
-                detail_parts.push(format!("sudoers: {}", user_sudoers.join("; ")));
-            }
-
-            // SSH key refs for this user
-            let user_keys: Vec<String> = ug
-                .ssh_authorized_keys_refs
-                .iter()
-                .filter(|k| {
-                    k.get("user")
-                        .and_then(|v| v.as_str())
-                        .map(|u| u == name)
-                        .unwrap_or(false)
-                })
-                .filter_map(|k| {
-                    k.get("path")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
-                .collect();
-            if !user_keys.is_empty() {
-                detail_parts.push(format!("ssh_keys: {}", user_keys.join(", ")));
-            }
-
-            let detail = if detail_parts.is_empty() {
-                None
-            } else {
-                Some(detail_parts.join("\n"))
-            };
-
-            items.push(ContextItem {
-                id: name.clone(),
-                title: name.clone(),
-                subtitle: Some(format!("uid:{uid}")),
-                detail,
-                searchable_text: format!("{} {}", name, uid),
-            });
-        }
-
-        // Groups (serde_json::Value)
-        for group in &ug.groups {
-            let name = group
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-                .to_string();
-            let gid = group.get("gid").map(|v| v.to_string()).unwrap_or_default();
-
-            items.push(ContextItem {
-                id: name.clone(),
-                title: name.clone(),
-                subtitle: Some(format!("gid:{gid}")),
-                detail: None,
-                searchable_text: format!("{} {}", name, gid),
-            });
-        }
-    }
-
-    ContextSection {
-        id: "users_groups".to_string(),
-        display_name: "Users & Groups".to_string(),
         items,
         empty_reason: None,
     }
@@ -2039,7 +2115,6 @@ mod tests {
     fn cross_section_no_contamination() {
         use inspectah_core::types::services::{ServiceSection, ServiceStateChange};
         use inspectah_core::types::storage::{MountPoint, StorageSection};
-        use inspectah_core::types::users::UserGroupSection;
 
         let mut snap = empty_snapshot();
 
@@ -2055,11 +2130,6 @@ mod tests {
             ..Default::default()
         });
 
-        snap.users_groups = Some(UserGroupSection {
-            users: vec![serde_json::json!({"name": "mark", "uid": 1000})],
-            ..Default::default()
-        });
-
         snap.storage = Some(StorageSection {
             mount_points: vec![MountPoint {
                 target: "/".into(),
@@ -2070,6 +2140,7 @@ mod tests {
             ..Default::default()
         });
 
+        // Users & groups no longer in sections — served via ViewResponse.
         let sections = normalize_for_context(&snap);
 
         for section in &sections {
@@ -2082,26 +2153,8 @@ mod tests {
                             .any(|i| i.id.contains("NetworkManager"))
                     );
                     assert!(
-                        !section.items.iter().any(|i| i.id == "mark"),
-                        "services has user item leak"
-                    );
-                    assert!(
                         !section.items.iter().any(|i| i.id == "/"),
                         "services has storage item leak"
-                    );
-                }
-                "users_groups" => {
-                    assert!(section.items.iter().any(|i| i.id == "mark"));
-                    assert!(
-                        !section
-                            .items
-                            .iter()
-                            .any(|i| i.id.contains("NetworkManager")),
-                        "users_groups has service item leak"
-                    );
-                    assert!(
-                        !section.items.iter().any(|i| i.id == "/"),
-                        "users_groups has storage item leak"
                     );
                 }
                 "storage" => {
@@ -2112,10 +2165,6 @@ mod tests {
                             .iter()
                             .any(|i| i.id.contains("NetworkManager")),
                         "storage has service item leak"
-                    );
-                    assert!(
-                        !section.items.iter().any(|i| i.id == "mark"),
-                        "storage has user item leak"
                     );
                 }
                 _ => {
