@@ -22,7 +22,7 @@ use inspectah_collect::inspectors::scheduled::ScheduledTasksInspector;
 use inspectah_collect::inspectors::selinux::SelinuxInspector;
 use inspectah_collect::inspectors::services::ServicesInspector;
 use inspectah_collect::inspectors::storage::StorageInspector;
-use inspectah_collect::inspectors::users::UsersGroupsInspector;
+use inspectah_collect::inspectors::users::{UserGroupOptions, UsersGroupsInspector};
 use inspectah_core::baseline::{TargetImageIdentity, UblueMetadata};
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::Inspector;
@@ -55,6 +55,18 @@ pub struct ScanArgs {
     /// Skip baseline extraction (degraded classification mode)
     #[arg(long)]
     pub no_baseline: bool,
+
+    /// Preserve password hashes for users with status password_set
+    #[arg(long)]
+    pub preserve_password_hashes: bool,
+
+    /// Preserve full SSH authorized_keys content per user
+    #[arg(long)]
+    pub preserve_ssh_keys: bool,
+
+    /// Acknowledge that snapshot contains sensitive data (required for export when preserve flags used)
+    #[arg(long)]
+    pub acknowledge_sensitive: bool,
 }
 
 /// Detect the source system by reading /etc/os-release.
@@ -241,6 +253,14 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     // Step 4: Collect — run all inspectors
     let hostname = get_hostname(&executor);
     eprintln!("Scanning host {hostname}...");
+
+    // Build UserGroupOptions from CLI flags
+    let user_group_options = UserGroupOptions {
+        strategy_override: None,
+        preserve_password_hashes: args.preserve_password_hashes,
+        preserve_ssh_keys: args.preserve_ssh_keys,
+    };
+
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ServicesInspector::new()),
@@ -248,7 +268,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(KernelbootInspector::new()),
         Box::new(NetworkInspector::new()),
         Box::new(ContainersInspector::new()),
-        Box::new(UsersGroupsInspector::new()),
+        Box::new(UsersGroupsInspector::with_options(user_group_options)),
         Box::new(ScheduledTasksInspector::new()),
         Box::new(ConfigInspector::new()),
         Box::new(SelinuxInspector::new()),
@@ -267,6 +287,11 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     snapshot.target_image = target_image;
     snapshot.baseline = baseline_data;
     snapshot.no_baseline = args.no_baseline;
+
+    // Set sensitivity metadata from CLI flags
+    snapshot.sensitive_snapshot = args.preserve_password_hashes || args.preserve_ssh_keys;
+    snapshot.preserved_credentials = args.preserve_password_hashes;
+    snapshot.preserved_ssh_keys = args.preserve_ssh_keys;
 
     // Version comparison line (prints after collection, since version_changes
     // is populated by the RPM inspector during collection)
@@ -287,6 +312,17 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     }
 
     redact(&mut snapshot, &RedactOptions::default());
+
+    // Export gating: if snapshot contains sensitive data, require acknowledgment
+    if snapshot.sensitive_snapshot && !args.acknowledge_sensitive {
+        eprintln!("Error: Snapshot contains sensitive data (password hashes or SSH keys).");
+        eprintln!("       To export, re-run with --acknowledge-sensitive");
+        eprintln!("       Preserved credentials: {}", snapshot.preserved_credentials);
+        eprintln!("       Preserved SSH keys: {}", snapshot.preserved_ssh_keys);
+        anyhow::bail!(
+            "Cannot export sensitive snapshot without --acknowledge-sensitive flag"
+        );
+    }
 
     // If --inspect-only, write JSON and exit
     if args.inspect_only {
