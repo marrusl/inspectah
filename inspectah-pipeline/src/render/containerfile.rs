@@ -571,7 +571,15 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         None => return lines,
     };
 
-    if services.enabled_units.is_empty() && services.disabled_units.is_empty() {
+    // Derive enable/disable lists from state_changes (preset-divergent only),
+    // not from enabled_units/disabled_units (full inventory).
+    let included_changes: Vec<_> = services
+        .state_changes
+        .iter()
+        .filter(|sc| sc.include)
+        .collect();
+
+    if included_changes.is_empty() {
         return lines;
     }
 
@@ -581,21 +589,24 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
     let mut safe_disabled = Vec::new();
     let mut deferred = Vec::new();
 
-    for u in &services.enabled_units {
+    for sc in &included_changes {
+        let u = &sc.unit;
         if sanitize_shell_value(u).is_none() {
             continue;
         }
-        if config_tree_units.contains(u) {
-            deferred.push(u.clone());
-            continue;
+        match sc.action.as_str() {
+            "enable" => {
+                if config_tree_units.contains(u.as_str()) {
+                    deferred.push(u.clone());
+                } else {
+                    safe_enabled.push(u.clone());
+                }
+            }
+            "disable" => {
+                safe_disabled.push(u.clone());
+            }
+            _ => {} // "mask" or other actions handled elsewhere or skipped
         }
-        safe_enabled.push(u.clone());
-    }
-    for u in &services.disabled_units {
-        if sanitize_shell_value(u).is_none() {
-            continue;
-        }
-        safe_disabled.push(u.clone());
     }
 
     if !safe_enabled.is_empty() {
@@ -1574,10 +1585,16 @@ mod tests {
 
     #[test]
     fn test_containerfile_section_ordering() {
+        use inspectah_core::types::services::ServiceStateChange;
         // Build a snapshot with data in multiple sections to verify ordering
         let mut snap = snapshot_with_packages(&["httpd"]);
         snap.services = Some(inspectah_core::types::services::ServiceSection {
-            enabled_units: vec!["httpd.service".into()],
+            state_changes: vec![ServiceStateChange {
+                unit: "httpd.service".into(),
+                action: "enable".into(),
+                include: true,
+                ..Default::default()
+            }],
             ..Default::default()
         });
         snap.selinux = Some(inspectah_core::types::selinux::SelinuxSection {
@@ -1638,15 +1655,46 @@ mod tests {
 
     #[test]
     fn test_containerfile_services() {
+        use inspectah_core::types::services::ServiceStateChange;
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
-            enabled_units: vec!["httpd.service".into(), "sshd.service".into()],
-            disabled_units: vec!["cups.service".into()],
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    current_state: "enabled".into(),
+                    default_state: "disabled".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "sshd.service".into(),
+                    current_state: "enabled".into(),
+                    default_state: "disabled".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "cups.service".into(),
+                    current_state: "disabled".into(),
+                    default_state: "enabled".into(),
+                    action: "disable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
+            // enabled_units/disabled_units are full inventory — not used by renderer
+            enabled_units: vec!["httpd.service".into(), "sshd.service".into(), "chronyd.service".into()],
+            disabled_units: vec!["cups.service".into(), "NetworkManager.service".into()],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None);
         assert!(output.contains("systemctl enable httpd.service sshd.service"));
         assert!(output.contains("systemctl disable cups.service"));
+        // Preset-matching units from enabled_units/disabled_units must NOT appear
+        assert!(!output.contains("chronyd"), "preset-matching enabled unit must not appear");
+        assert!(!output.contains("NetworkManager"), "preset-matching disabled unit must not appear");
     }
 
     #[test]
@@ -2009,13 +2057,34 @@ mod tests {
 
     #[test]
     fn test_service_backslash_continuation_over_3() {
+        use inspectah_core::types::services::ServiceStateChange;
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
-            enabled_units: vec![
-                "httpd.service".into(),
-                "sshd.service".into(),
-                "chronyd.service".into(),
-                "firewalld.service".into(),
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "sshd.service".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "chronyd.service".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "firewalld.service".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         });
@@ -2033,9 +2102,23 @@ mod tests {
 
     #[test]
     fn test_service_single_line_under_4() {
+        use inspectah_core::types::services::ServiceStateChange;
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
-            enabled_units: vec!["httpd.service".into(), "sshd.service".into()],
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "sshd.service".into(),
+                    action: "enable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         });
         let output = render_containerfile(&snap, None);
@@ -2051,13 +2134,34 @@ mod tests {
 
     #[test]
     fn test_service_disable_backslash_continuation_over_3() {
+        use inspectah_core::types::services::ServiceStateChange;
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
-            disabled_units: vec![
-                "cups.service".into(),
-                "avahi-daemon.service".into(),
-                "bluetooth.service".into(),
-                "ModemManager.service".into(),
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "cups.service".into(),
+                    action: "disable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "avahi-daemon.service".into(),
+                    action: "disable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "bluetooth.service".into(),
+                    action: "disable".into(),
+                    include: true,
+                    ..Default::default()
+                },
+                ServiceStateChange {
+                    unit: "ModemManager.service".into(),
+                    action: "disable".into(),
+                    include: true,
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         });

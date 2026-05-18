@@ -21,14 +21,24 @@ use tempfile::TempDir;
 fn snapshot_with_services() -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.services = Some(ServiceSection {
-        state_changes: vec![ServiceStateChange {
-            unit: "httpd.service".into(),
-            current_state: "enabled".into(),
-            default_state: "disabled".into(),
-            action: "enable".into(),
-            include: true,
-            ..Default::default()
-        }],
+        state_changes: vec![
+            ServiceStateChange {
+                unit: "httpd.service".into(),
+                current_state: "enabled".into(),
+                default_state: "disabled".into(),
+                action: "enable".into(),
+                include: true,
+                ..Default::default()
+            },
+            ServiceStateChange {
+                unit: "cups.service".into(),
+                current_state: "disabled".into(),
+                default_state: "enabled".into(),
+                action: "disable".into(),
+                include: true,
+                ..Default::default()
+            },
+        ],
         enabled_units: vec!["httpd.service".into()],
         disabled_units: vec!["cups.service".into()],
         drop_ins: vec![SystemdDropIn {
