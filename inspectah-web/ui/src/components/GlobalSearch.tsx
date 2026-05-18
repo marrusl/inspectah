@@ -2,7 +2,7 @@ import { useState, useMemo, useCallback, useRef, useEffect, forwardRef, useImper
 import { SearchInput } from "@patternfly/react-core";
 import type { DecisionItemKind } from "./DecisionItem";
 import { itemId as getItemId } from "./DecisionItem";
-import type { ContextSection } from "../api/types";
+import type { ContextSection, UserDecision } from "../api/types";
 
 export interface GlobalSearchResult {
   /** Section ID (e.g. "packages", "configs", "services"). */
@@ -35,6 +35,8 @@ export interface GlobalSearchProps {
   packageItems: DecisionItemKind[];
   /** All decision items from configs section. */
   configItems: DecisionItemKind[];
+  /** User decisions for the users_groups section. */
+  userDecisions?: UserDecision[];
   /** Context sections (services, containers, etc.). */
   contextSections: ContextSection[] | null;
   /** Called when user selects a result -- navigates to section + item. */
@@ -74,7 +76,7 @@ function itemSearchText(item: DecisionItemKind): string {
  * Ctrl+K focuses this input.
  */
 export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
-  function GlobalSearch({ packageItems, configItems, contextSections, onNavigate }, ref) {
+  function GlobalSearch({ packageItems, configItems, userDecisions, contextSections, onNavigate }, ref) {
     const [query, setQuery] = useState("");
     const [selectedIndex, setSelectedIndex] = useState(0);
     const inputRef = useRef<HTMLInputElement>(null);
@@ -106,6 +108,17 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
         });
       }
 
+      if (userDecisions) {
+        for (const user of userDecisions) {
+          results.push({
+            sectionId: "users_groups",
+            sectionLabel: SECTION_LABELS.users_groups,
+            title: user.name,
+            itemId: `users:${user.name}`,
+          });
+        }
+      }
+
       if (contextSections) {
         for (const section of contextSections) {
           const label = SECTION_LABELS[section.id] ?? section.display_name;
@@ -121,7 +134,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       }
 
       return results;
-    }, [packageItems, configItems, contextSections]);
+    }, [packageItems, configItems, userDecisions, contextSections]);
 
     // Build searchable text for decision items (keyed by itemId)
     const searchTextMap = useMemo(() => {
@@ -132,6 +145,14 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
       for (const item of configItems) {
         map.set(getItemId(item), itemSearchText(item));
       }
+      if (userDecisions) {
+        for (const user of userDecisions) {
+          map.set(
+            `users:${user.name}`,
+            `${user.name} ${user.uid} ${user.classification} ${user.shell} ${user.home}`.toLowerCase(),
+          );
+        }
+      }
       if (contextSections) {
         for (const section of contextSections) {
           for (const ci of section.items) {
@@ -140,7 +161,7 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
         }
       }
       return map;
-    }, [packageItems, configItems, contextSections]);
+    }, [packageItems, configItems, userDecisions, contextSections]);
 
     // Filter results
     const filtered = useMemo(() => {

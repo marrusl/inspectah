@@ -389,6 +389,7 @@ function App() {
       ref={globalSearchRef}
       packageItems={view.data ? view.data.packages.map((p) => ({ type: "package" as const, data: p })) : []}
       configItems={view.data ? view.data.config_files.map((c) => ({ type: "config" as const, data: c })) : []}
+      userDecisions={view.data?.users_groups_decisions}
       contextSections={sections.data}
       onNavigate={handleNavigateFromGlobalSearch}
     />
@@ -428,6 +429,7 @@ function App() {
               stats={view.data?.stats ?? null}
               sections={sections.data}
               health={health.data}
+              userDecisionCount={view.data?.users_groups_decisions?.length}
               searchSlot={searchSlot}
             />
           </div>
@@ -452,6 +454,7 @@ function App() {
           isOpen={cfPanelOpen}
           onToggle={togglePanel}
           loading={viewLoading}
+          sessionIsSensitive={view.data?.session_is_sensitive ?? false}
         />
       </div>
       {isMobile && sidebarOverlayOpen && (
@@ -461,6 +464,7 @@ function App() {
           stats={view.data?.stats ?? null}
           sections={sections.data}
           health={health.data}
+          userDecisionCount={view.data?.users_groups_decisions?.length}
           overlay
           onClose={closeSidebarOverlay}
           searchSlot={searchSlot}
@@ -475,6 +479,7 @@ function App() {
         onClose={() => setExportDialogOpen(false)}
         stats={view.data?.stats ?? null}
         generation={view.data?.generation ?? 0}
+        sessionIsSensitive={view.data?.session_is_sensitive ?? false}
         onViewUpdate={handleExportViewUpdate}
       />
     </Page>

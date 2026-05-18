@@ -95,12 +95,13 @@ describe("Sidebar", () => {
         stats={MOCK_STATS}
         sections={MOCK_SECTIONS}
         health={MOCK_HEALTH}
+        userDecisionCount={3}
       />,
     );
 
-    // Services has 1 item, Users & Groups has 2
+    // Services has 1 item in context; Users & Groups decision count is 3
     expect(screen.getByText("1")).toBeInTheDocument();
-    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
   });
 
   it("shows '...' when data is loading", () => {

@@ -12,6 +12,7 @@ import type { ViewResponse, RefinedPackage, RefinedConfig, ContextSection } from
 import { DecisionList } from "./DecisionList";
 import type { DecisionItemKind } from "./DecisionItem";
 import { ContextList } from "./ContextList";
+import { UsersGroupsSection } from "./UsersGroupsSection";
 import { SectionSearch } from "./SectionSearch";
 import { AttentionSummary } from "./AttentionSummary";
 import { highestAttention } from "./attentionUtils";
@@ -272,13 +273,47 @@ export function MainContent({
     );
   }
 
-  // Context sections: services, containers, users_groups, network, storage,
+  // Users & Groups decision section
+  if (activeSection === "users_groups") {
+    // Extract section-level data from the context sections endpoint
+    const ugSection = sections?.find((s) => s.id === "users_groups");
+    // The actual user decisions come from viewData
+    const userDecisions = viewData?.users_groups_decisions ?? [];
+
+    // Parse section-level SSH refs, sudoers, subuid from context section items
+    // These are available from the snapshot context, not the view endpoint
+    const sshRefs: Array<{ user: string; path: string }> = [];
+    const sudoersRules: string[] = [];
+    const subuidEntries: string[] = [];
+
+    if (ugSection) {
+      for (const item of ugSection.items) {
+        if (item.id.startsWith("ssh:")) {
+          const parts = item.title.split(" ");
+          sshRefs.push({ user: parts[0] ?? "", path: item.subtitle ?? "" });
+        }
+      }
+    }
+
+    return (
+      <UsersGroupsSection
+        users={userDecisions}
+        sshAuthorizedKeysRefs={sshRefs}
+        sudoersRules={sudoersRules}
+        subuidEntries={subuidEntries}
+        sessionIsSensitive={viewData?.session_is_sensitive ?? false}
+        onViewUpdate={onViewUpdate}
+        onMutationError={onMutationError}
+      />
+    );
+  }
+
+  // Context sections: services, containers, network, storage,
   // scheduled_tasks, non_rpm_software, kernel_boot, selinux
   const contextSectionIds = [
     "services",
     "version_changes",
     "containers",
-    "users_groups",
     "network",
     "storage",
     "scheduled_tasks",

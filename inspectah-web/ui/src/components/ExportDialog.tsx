@@ -18,6 +18,7 @@ export interface ExportDialogProps {
   onClose: () => void;
   stats: RefineStats | null;
   generation: number;
+  sessionIsSensitive: boolean;
   onViewUpdate: (view: ViewResponse) => void;
 }
 
@@ -26,11 +27,13 @@ export function ExportDialog({
   onClose,
   stats,
   generation,
+  sessionIsSensitive,
   onViewUpdate,
 }: ExportDialogProps) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  const [sensitiveAck, setSensitiveAck] = useState(false);
 
   const excludedPackages = stats?.excluded_packages ?? 0;
   const excludedConfigs = stats?.excluded_configs ?? 0;
@@ -41,7 +44,7 @@ export function ExportDialog({
     setStale(false);
 
     try {
-      const blob = await exportTarball(generation);
+      const blob = await exportTarball(generation, sensitiveAck);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -59,17 +62,24 @@ export function ExportDialog({
           // If re-fetch also fails, stale alert is still visible
         }
         onClose();
+      } else if (err instanceof ApiError && err.status === 428) {
+        // Server requires sensitive acknowledgment
+        setError(
+          "This export contains sensitive data (password hashes). " +
+            "Check the acknowledgment box and try again.",
+        );
       } else {
         setError(err instanceof Error ? err.message : String(err));
       }
     } finally {
       setExporting(false);
     }
-  }, [generation, onClose, onViewUpdate]);
+  }, [generation, sensitiveAck, onClose, onViewUpdate]);
 
   const handleClose = useCallback(() => {
     setError(null);
     setStale(false);
+    setSensitiveAck(false);
     onClose();
   }, [onClose]);
 
@@ -93,9 +103,39 @@ export function ExportDialog({
         </Content>
 
         <Alert variant="info" isInline isPlain title="Context sections">
-          Context sections (services, containers, users, etc.) are included in
+          Context sections (services, containers, etc.) are included in
           the export as-is and cannot be toggled.
         </Alert>
+
+        {sessionIsSensitive && (
+          <>
+            <Alert
+              variant="warning"
+              isInline
+              title="Sensitive data detected"
+              style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}
+            >
+              This export contains password hashes or other sensitive material.
+              The tarball should be handled with appropriate care.
+            </Alert>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "var(--pf-t--global--spacer--xs)",
+                marginTop: "var(--pf-t--global--spacer--sm)",
+                cursor: "pointer",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={sensitiveAck}
+                onChange={(e) => setSensitiveAck(e.target.checked)}
+              />
+              I acknowledge this export contains sensitive data
+            </label>
+          </>
+        )}
 
         {error && (
           <Alert variant="danger" isInline title="Export failed">
@@ -115,7 +155,7 @@ export function ExportDialog({
           variant="primary"
           onClick={handleExport}
           isLoading={exporting}
-          isDisabled={exporting}
+          isDisabled={exporting || (sessionIsSensitive && !sensitiveAck)}
         >
           Export
         </Button>
