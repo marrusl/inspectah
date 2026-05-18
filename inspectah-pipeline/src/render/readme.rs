@@ -3,6 +3,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 
+use super::baseline_fmt;
 use super::containerfile::base_image_from_snapshot;
 
 /// Render the README markdown from a snapshot.
@@ -224,6 +225,12 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     );
     lines.push(String::new());
 
+    // Baseline comparison section
+    let baseline_lines = baseline_fmt::baseline_section_lines(snap);
+    if !baseline_lines.is_empty() {
+        lines.extend(baseline_lines);
+    }
+
     let _ = base_image_from_snapshot(snap); // retained for future FROM reference
     lines.join("\n")
 }
@@ -231,7 +238,76 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::baseline::{BaselineData, ResolutionStrategy, TargetImageIdentity};
     use inspectah_core::types::completeness::InspectorId;
+    use inspectah_core::types::rpm::{RpmSection, VersionChange, VersionChangeDirection};
+    use std::collections::HashMap;
+
+    fn test_target_image() -> TargetImageIdentity {
+        TargetImageIdentity {
+            image_ref: "quay.io/centos-bootc/centos-bootc:stream9".into(),
+            strategy: ResolutionStrategy::OsRelease,
+        }
+    }
+
+    fn test_baseline() -> BaselineData {
+        BaselineData {
+            image_digest: "sha256:abc123def456".into(),
+            packages: HashMap::new(),
+            extracted_at: "2026-05-18T14:32:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn readme_includes_baseline_section_full() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(test_target_image());
+        snap.baseline = Some(test_baseline());
+        snap.rpm = Some(RpmSection {
+            version_changes: vec![VersionChange {
+                name: "glibc".into(),
+                direction: VersionChangeDirection::Upgrade,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let md = render_readme(&snap);
+        assert!(
+            md.contains("## Baseline comparison"),
+            "must have baseline section"
+        );
+        assert!(md.contains("centos-bootc:stream9"));
+        assert!(md.contains("os-release (auto-detected)"));
+        assert!(md.contains("sha256:abc123def456"));
+    }
+
+    #[test]
+    fn readme_baseline_section_degraded() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(test_target_image());
+        snap.baseline = None;
+        snap.no_baseline = false;
+        let md = render_readme(&snap);
+        assert!(md.contains("## Baseline comparison"));
+        assert!(md.contains("unavailable"));
+    }
+
+    #[test]
+    fn readme_baseline_section_skipped() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(test_target_image());
+        snap.baseline = None;
+        snap.no_baseline = true;
+        let md = render_readme(&snap);
+        assert!(md.contains("skipped (--no-baseline)"));
+    }
+
+    #[test]
+    fn readme_baseline_section_absent_when_no_target() {
+        let snap = InspectionSnapshot::new();
+        let md = render_readme(&snap);
+        assert!(!md.contains("Baseline comparison"));
+    }
 
     #[test]
     fn test_readme_renders() {
