@@ -126,8 +126,9 @@ fn snapshot_with_useradd_users() -> InspectionSnapshot {
         users: vec![serde_json::json!({
             "name": "appuser",
             "uid": 1500,
+            "gid": 1500,
             "include": true,
-            "strategy": "useradd"
+            "containerfile_strategy": "useradd"
         })],
         ..Default::default()
     });
@@ -142,13 +143,13 @@ fn snapshot_with_sysusers() -> InspectionSnapshot {
                 "name": "dbus",
                 "uid": 81,
                 "include": true,
-                "strategy": "sysusers"
+                "containerfile_strategy": "skip"
             }),
             serde_json::json!({
                 "name": "polkitd",
                 "uid": 998,
                 "include": true,
-                "strategy": "sysusers"
+                "containerfile_strategy": "skip"
             }),
         ],
         ..Default::default()
@@ -163,7 +164,7 @@ fn snapshot_with_blueprint_users() -> InspectionSnapshot {
             "name": "admin",
             "uid": 1000,
             "include": true,
-            "strategy": "blueprint"
+            "containerfile_strategy": "skip"
         })],
         ..Default::default()
     });
@@ -383,14 +384,14 @@ fn containerfile_users_useradd_override() {
         "Containerfile must contain Users and Groups heading"
     );
     assert!(
-        output.contains("RUN useradd -u 1500 appuser"),
-        "Containerfile must emit RUN useradd with uid for useradd-strategy users"
+        output.contains("RUN useradd -u 1500 -g 1500 appuser"),
+        "Containerfile must emit RUN useradd with uid/gid for useradd-strategy users"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: containerfile_users_sysusers_comment
-// Sysusers users produce count + config-tree comment.
+// Test 8: containerfile_users_sysusers_skip
+// Users with containerfile_strategy=skip produce no user section output.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -398,19 +399,16 @@ fn containerfile_users_sysusers_comment() {
     let snap = snapshot_with_sysusers();
     let output = containerfile::render_containerfile(&snap, None);
 
+    // Skip-strategy users produce no Users and Groups section
     assert!(
-        output.contains("systemd-sysusers entries (2)"),
-        "Containerfile must show count of sysusers entries"
-    );
-    assert!(
-        output.contains("sysusers.d drop-ins in config/"),
-        "Containerfile must reference sysusers.d config tree location"
+        !output.contains("Users and Groups"),
+        "Containerfile must NOT produce Users and Groups section for skip-strategy users"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Test 9: containerfile_users_blueprint_fixme
-// Blueprint users produce FIXME comment in Containerfile.
+// Test 9: containerfile_users_blueprint_skip
+// Users with containerfile_strategy=skip produce no user section output.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -418,13 +416,10 @@ fn containerfile_users_blueprint_fixme() {
     let snap = snapshot_with_blueprint_users();
     let output = containerfile::render_containerfile(&snap, None);
 
+    // Skip-strategy users produce no Users and Groups section
     assert!(
-        output.contains("FIXME"),
-        "Containerfile must include FIXME for blueprint-strategy users"
-    );
-    assert!(
-        output.contains("blueprint strategy"),
-        "Containerfile must mention blueprint strategy"
+        !output.contains("Users and Groups"),
+        "Containerfile must NOT produce Users and Groups section for skip-strategy users"
     );
 }
 
