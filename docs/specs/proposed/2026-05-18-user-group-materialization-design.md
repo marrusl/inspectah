@@ -310,11 +310,12 @@ sidebar navigation. This change must be reflected in:
 - **Password options** — collapsed by default. Expands to show:
   - With `--preserve-password-hashes`: "Keep existing" / "Set new" / "No password"
   - Without: "Set new" / "No password"
-  - New password entry field — plaintext input, hashed client-side to
-    `crypt(3)` sha512crypt format (`$6$rounds=5000$<salt>$<hash>`) before
-    storage in refine state. The browser uses a JS `crypt(3)` implementation
-    (e.g., `crypt-js` or equivalent) to produce the hash, not a generic
-    SHA-512 digest.
+  - New password entry field — the browser hashes the plaintext client-side
+    to `crypt(3)` sha512crypt format (`$6$rounds=5000$<salt>$<hash>`) before
+    sending anything to the backend. Only the hash is transmitted and stored.
+    The plaintext never leaves the browser, is never persisted, and is never
+    logged. The browser uses a JS `crypt(3)` implementation (e.g., `crypt-js`
+    or equivalent), not a generic SHA-512 digest.
 - **SSH key detail** — collapsed by default. Expands to show key type,
   fingerprint (e.g., `ed25519 SHA256:abc...xyz`), and captured/detected state
   per key. Full key text hidden behind per-key reveal toggle. Display-only —
