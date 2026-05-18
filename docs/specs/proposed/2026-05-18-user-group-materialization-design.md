@@ -237,13 +237,18 @@ honored:
   intentionally-retained credential fields (`password_hash`, `ssh_keys`).
 - Unresolved hints (`unresolved_count > 0`) continue to trigger `NeedsReview`
   attention for their respective findings, independent of the sensitive mode.
+  Unresolved hints are **attention-only** — they surface in the refine UI as
+  review items but do **not** block export. This matches current repo behavior
+  where `PartiallyRedacted` tarballs export without gating.
 - The combined `redaction_state` is represented as
   `SensitiveRetained { unresolved_count, unresolved_hints }` — the variant
   carries both the intentional-retention signal and the unresolved-hint
   metadata. This prevents either condition from shadowing the other.
-- Export gating fires if either condition is present: sensitive retention
-  requires acknowledgment, unresolved hints require review. Both gates
-  must be satisfied before export completes.
+- **Export gating fires only for sensitive retention** (the HTTP 428
+  acknowledgment flow). Unresolved hints do not add a second gate — they
+  are informational. An operator can export a tarball with unresolved hints
+  without acknowledgment (as today), but cannot export a sensitive tarball
+  without acknowledging the credential content.
 
 ### Export gating
 
@@ -618,8 +623,8 @@ in image mode — this Containerfile path is install-time seeding into mutable
 state, not immutable `/usr` content.
 
 SSH keys use `COPY` with a generated `authorized_keys` file staged in the
-tarball's `config/` tree, not shell `echo` chains. This is lossless and
-shell-safe regardless of key content. The generated file is one key per line,
+tarball's `users/` tree (see SSH key staging below), not shell `echo` chains.
+This is lossless and shell-safe regardless of key content. The generated file is one key per line,
 no trailing whitespace, newline-terminated. See SSH key staging below.
 
 ### SSH key staging
