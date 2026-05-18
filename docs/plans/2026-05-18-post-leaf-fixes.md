@@ -1327,7 +1327,7 @@ pub fn classify_packages(
 }
 ```
 
-Note: `pkg.epoch` is `String`, not `Option<String>`. No `.as_deref().unwrap_or("0")` needed — compare the strings directly. The existing `rpmvercmp` handles empty strings vs "0" correctly.
+Note: `pkg.epoch` is `String`, not `Option<String>`. The `norm_epoch()` closure normalizes `""` to `"0"` before `rpmvercmp` — do not compare raw epoch strings directly.
 
 Update all existing tests to use `.packages` on the result:
 ```rust
