@@ -283,11 +283,17 @@ pub fn compute_config_attention(snap: &InspectionSnapshot) -> Vec<RefinedConfig>
         .collect();
 
     // Surface unresolved redaction hints as needs-review tags on matching
-    // config files. Only applies when the snapshot is PartiallyRedacted.
-    if let Some(RedactionState::PartiallyRedacted {
-        ref unresolved_hints,
-        ..
-    }) = snap.redaction_state
+    // config files. Applies to PartiallyRedacted and SensitiveRetained.
+    if let Some(
+        RedactionState::PartiallyRedacted {
+            ref unresolved_hints,
+            ..
+        }
+        | RedactionState::SensitiveRetained {
+            ref unresolved_hints,
+            ..
+        },
+    ) = snap.redaction_state
     {
         for hint in unresolved_hints {
             if let Some(cfg) = configs.iter_mut().find(|c| c.entry.path == hint.path) {
@@ -975,5 +981,41 @@ mod tests {
         let result = compute_package_attention(&snap);
         let httpd = result.iter().find(|p| p.entry.name == "httpd").unwrap();
         assert_eq!(httpd.attention[0].level, AttentionLevel::NeedsReview);
+    }
+
+    // -----------------------------------------------------------------------
+    // SensitiveRetained: unresolved hints surface as NeedsReview
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sensitive_retained_surfaces_unresolved_hints() {
+        use inspectah_core::types::redaction::RedactionHint;
+
+        let mut snap = InspectionSnapshot::default();
+        snap.redaction_state = Some(RedactionState::SensitiveRetained {
+            redacted_by: "inspectah 0.8.0".into(),
+            config_hash: "abc".into(),
+            unresolved_count: 1,
+            unresolved_hints: vec![RedactionHint {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+                reason: "possible credential".into(),
+                confidence: None,
+            }],
+        });
+        snap.config = Some(ConfigSection {
+            files: vec![ConfigFileEntry {
+                path: "/etc/httpd/conf/httpd.conf".into(),
+                include: true,
+                ..Default::default()
+            }],
+        });
+
+        let result = compute_config_attention(&snap);
+        let config_attention = &result[0].attention;
+        assert!(
+            config_attention.iter().any(|a| a.level == AttentionLevel::NeedsReview
+                && matches!(a.reason, AttentionReason::Custom(_))),
+            "SensitiveRetained with unresolved hints must surface NeedsReview"
+        );
     }
 }

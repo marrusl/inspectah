@@ -952,7 +952,10 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
-    // Scan shadow entries in users_groups section
+    // Scan shadow entries in users_groups section.
+    // When preserved_credentials is true, record findings but skip the
+    // actual hash replacement — the operator chose to retain credentials.
+    let skip_shadow_redaction = snapshot.preserved_credentials;
     if let Some(ref mut users) = snapshot.users_groups {
         // Collect scan results first, then mutate (avoids borrow conflict).
         let scan_results: Vec<(usize, Vec<RedactionFinding>)> = users
@@ -964,24 +967,26 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
             .collect();
 
         for (i, findings) in scan_results {
-            let mut content = users.shadow_entries[i].clone();
-            for finding in &findings {
-                if finding.confidence == Some(Confidence::High)
-                    && finding.finding_kind == Some(FindingKind::ShadowHash)
-                {
-                    // Replace the hash field with a redaction token
-                    let fields: Vec<&str> = content.split(':').collect();
-                    if fields.len() >= 3 {
-                        let kind_label = "shadowhash";
-                        let token = registry.token_for(kind_label, fields[1]);
-                        let mut new_fields: Vec<String> =
-                            fields.iter().map(|f| f.to_string()).collect();
-                        new_fields[1] = token;
-                        content = new_fields.join(":");
+            if !skip_shadow_redaction {
+                let mut content = users.shadow_entries[i].clone();
+                for finding in &findings {
+                    if finding.confidence == Some(Confidence::High)
+                        && finding.finding_kind == Some(FindingKind::ShadowHash)
+                    {
+                        // Replace the hash field with a redaction token
+                        let fields: Vec<&str> = content.split(':').collect();
+                        if fields.len() >= 3 {
+                            let kind_label = "shadowhash";
+                            let token = registry.token_for(kind_label, fields[1]);
+                            let mut new_fields: Vec<String> =
+                                fields.iter().map(|f| f.to_string()).collect();
+                            new_fields[1] = token;
+                            content = new_fields.join(":");
+                        }
                     }
                 }
+                users.shadow_entries[i] = content;
             }
-            users.shadow_entries[i] = content;
             all_findings.extend(findings);
         }
     }
@@ -1136,34 +1141,37 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     let config_hash = format!("{:x}", all_findings.len()); // simple hash for now
     let redacted_by = format!("inspectah {}", env!("CARGO_PKG_VERSION"));
 
-    if all_findings.is_empty() {
-        // Nothing to redact — mark as fully clean
-        snapshot.redaction_state = Some(RedactionState::FullyRedacted {
+    let unresolved_count = unresolved.len() as u32;
+    let unresolved_hints: Vec<RedactionHint> = unresolved
+        .iter()
+        .map(|f| RedactionHint {
+            path: f.path.clone(),
+            reason: f.remediation.clone(),
+            confidence: f.confidence,
+        })
+        .collect();
+
+    if snapshot.sensitive_snapshot {
+        // Operator chose to retain sensitive material — always SensitiveRetained.
+        snapshot.redaction_state = Some(RedactionState::SensitiveRetained {
             redacted_by,
             config_hash,
+            unresolved_count,
+            unresolved_hints,
         });
-    } else if unresolved.is_empty() {
-        // All findings were high-confidence and auto-resolved
+    } else if all_findings.is_empty() || unresolved.is_empty() {
+        // Nothing to redact, or all findings auto-resolved → fully clean
         snapshot.redaction_state = Some(RedactionState::FullyRedacted {
             redacted_by,
             config_hash,
         });
     } else {
         // Some findings need operator triage
-        let hints: Vec<RedactionHint> = unresolved
-            .iter()
-            .map(|f| RedactionHint {
-                path: f.path.clone(),
-                reason: f.remediation.clone(),
-                confidence: f.confidence,
-            })
-            .collect();
-
         snapshot.redaction_state = Some(RedactionState::PartiallyRedacted {
             redacted_by,
             config_hash,
-            unresolved_count: unresolved.len() as u32,
-            unresolved_hints: hints,
+            unresolved_count,
+            unresolved_hints,
         });
     }
 
@@ -1802,6 +1810,65 @@ mod tests {
             other => {
                 panic!("expected FullyRedacted when hint path was regex-redacted, got {other:?}")
             }
+        }
+    }
+
+    // -- SensitiveRetained tests --
+
+    #[test]
+    fn redact_preserves_shadow_hash_when_credentials_preserved() {
+        let mut snap = InspectionSnapshot::new();
+        snap.sensitive_snapshot = true;
+        snap.preserved_credentials = true;
+        snap.users_groups = Some(UserGroupSection {
+            shadow_entries: vec![
+                "alice:$6$rounds=5000$salt$hash123:19000:0:99999:7:::".to_string(),
+            ],
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let entry = &snap.users_groups.as_ref().unwrap().shadow_entries[0];
+        assert!(
+            entry.contains("$6$rounds=5000$salt$hash123"),
+            "shadow hash must survive redaction when preserved_credentials is true, got: {entry}"
+        );
+    }
+
+    #[test]
+    fn redact_still_strips_shadow_hash_without_preserve_flag() {
+        // Sanity: without preserved_credentials, shadow hashes ARE redacted.
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            shadow_entries: vec![
+                "alice:$6$rounds=5000$salt$hash123:19000:0:99999:7:::".to_string(),
+            ],
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+        let entry = &snap.users_groups.as_ref().unwrap().shadow_entries[0];
+        assert!(
+            !entry.contains("$6$rounds=5000$salt$hash123"),
+            "shadow hash must be redacted without preserve flag, got: {entry}"
+        );
+    }
+
+    #[test]
+    fn redact_sets_sensitive_retained_state() {
+        let mut snap = InspectionSnapshot::new();
+        snap.sensitive_snapshot = true;
+        snap.preserved_credentials = true;
+        snap.users_groups = Some(UserGroupSection {
+            shadow_entries: vec![
+                "root:!!:19000:0:99999:7:::".to_string(),
+            ],
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+        match &snap.redaction_state {
+            Some(RedactionState::SensitiveRetained { redacted_by, .. }) => {
+                assert!(redacted_by.starts_with("inspectah "));
+            }
+            other => panic!("expected SensitiveRetained, got {other:?}"),
         }
     }
 }

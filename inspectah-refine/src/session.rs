@@ -863,7 +863,7 @@ fn create_flat_tarball(source_dir: &Path, tarball_path: &Path) -> Result<(), Ref
 #[cfg(test)]
 mod tests {
     use super::*;
-    use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+    use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 
     /// Build a minimal snapshot suitable for RefineSession tests.
     fn test_snapshot() -> InspectionSnapshot {

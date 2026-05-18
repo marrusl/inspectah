@@ -140,9 +140,73 @@ fn flatten_if_needed(dir: &Path) -> Result<std::path::PathBuf, RefineError> {
 fn validate_provenance(snap: &InspectionSnapshot) -> Result<(), RefineError> {
     match &snap.redaction_state {
         Some(RedactionState::FullyRedacted { .. })
-        | Some(RedactionState::PartiallyRedacted { .. }) => Ok(()),
+        | Some(RedactionState::PartiallyRedacted { .. })
+        | Some(RedactionState::SensitiveRetained { .. }) => Ok(()),
         _ => Err(RefineError::UntrustedSnapshot(
             "Snapshot has not been redacted. Run inspectah scan to produce a redacted snapshot before refining.".into(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_provenance_accepts_fully_redacted() {
+        let snap = InspectionSnapshot {
+            redaction_state: Some(RedactionState::FullyRedacted {
+                redacted_by: "inspectah 0.8.0".into(),
+                config_hash: "abc".into(),
+            }),
+            ..Default::default()
+        };
+        assert!(validate_provenance(&snap).is_ok());
+    }
+
+    #[test]
+    fn validate_provenance_accepts_partially_redacted() {
+        let snap = InspectionSnapshot {
+            redaction_state: Some(RedactionState::PartiallyRedacted {
+                redacted_by: "inspectah 0.8.0".into(),
+                config_hash: "abc".into(),
+                unresolved_count: 1,
+                unresolved_hints: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(validate_provenance(&snap).is_ok());
+    }
+
+    #[test]
+    fn validate_provenance_accepts_sensitive_retained() {
+        let snap = InspectionSnapshot {
+            redaction_state: Some(RedactionState::SensitiveRetained {
+                redacted_by: "inspectah 0.8.0".into(),
+                config_hash: "abc".into(),
+                unresolved_count: 0,
+                unresolved_hints: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(validate_provenance(&snap).is_ok());
+    }
+
+    #[test]
+    fn validate_provenance_rejects_raw() {
+        let snap = InspectionSnapshot {
+            redaction_state: Some(RedactionState::Raw),
+            ..Default::default()
+        };
+        assert!(validate_provenance(&snap).is_err());
+    }
+
+    #[test]
+    fn validate_provenance_rejects_none() {
+        let snap = InspectionSnapshot {
+            redaction_state: None,
+            ..Default::default()
+        };
+        assert!(validate_provenance(&snap).is_err());
     }
 }
