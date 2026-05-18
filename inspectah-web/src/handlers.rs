@@ -30,6 +30,8 @@ pub struct ContextSection {
     pub id: String,
     pub display_name: String,
     pub items: Vec<ContextItem>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub empty_reason: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -367,18 +369,33 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
     let mut items = Vec::new();
 
     if let Some(svc) = &snap.services {
-        // Collect drop-in units for lookup (matching state_change units get folded)
-        let mut dropin_by_unit: std::collections::HashMap<&str, Vec<&str>> =
-            std::collections::HashMap::new();
-        let mut standalone_dropins = Vec::new();
-        let state_change_units: std::collections::HashSet<&str> = svc
+        let matched_set: std::collections::HashSet<&str> = svc
+            .preset_matched_units
+            .iter()
+            .map(|s| s.as_str())
+            .collect();
+        let divergent_set: std::collections::HashSet<&str> = svc
             .state_changes
             .iter()
             .map(|sc| sc.unit.as_str())
             .collect();
 
+        // Build drop-in lookup: units that are divergent or matched get
+        // their drop-ins folded in; everything else is standalone.
+        let enabled_set: std::collections::HashSet<&str> =
+            svc.enabled_units.iter().map(|s| s.as_str()).collect();
+        let disabled_set: std::collections::HashSet<&str> =
+            svc.disabled_units.iter().map(|s| s.as_str()).collect();
+
+        let mut dropin_by_unit: std::collections::HashMap<&str, Vec<&str>> =
+            std::collections::HashMap::new();
+        let mut standalone_dropins = Vec::new();
         for d in &svc.drop_ins {
-            if state_change_units.contains(d.unit.as_str()) {
+            if divergent_set.contains(d.unit.as_str())
+                || matched_set.contains(d.unit.as_str())
+                || enabled_set.contains(d.unit.as_str())
+                || disabled_set.contains(d.unit.as_str())
+            {
                 dropin_by_unit
                     .entry(d.unit.as_str())
                     .or_default()
@@ -388,12 +405,11 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             }
         }
 
-        // ServiceStateChange items
+        // 1. Divergence items (from state_changes)
         for sc in &svc.state_changes {
             let dropin_detail = dropin_by_unit
                 .get(sc.unit.as_str())
                 .map(|contents| contents.join("\n---\n"));
-
             let mut search = format!(
                 "{} {} {} {}",
                 sc.unit, sc.current_state, sc.default_state, sc.action
@@ -402,46 +418,81 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 search.push(' ');
                 search.push_str(pkg);
             }
-
             items.push(ContextItem {
                 id: sc.unit.clone(),
                 title: sc.unit.clone(),
-                subtitle: Some(format!("{} \u{2192} {}", sc.current_state, sc.action)),
+                subtitle: Some(format!(
+                    "{} (diverges from preset: {})",
+                    sc.current_state, sc.default_state
+                )),
                 detail: dropin_detail,
                 searchable_text: search,
             });
         }
 
-        // Standalone drop-ins (no matching state_change)
+        // 2. Preset-matched with drop-in (visible with annotation)
+        //    Preset-matched without drop-in are suppressed entirely.
+        for unit_name in &svc.preset_matched_units {
+            if let Some(dropin_contents) = dropin_by_unit.get(unit_name.as_str()) {
+                let state = if enabled_set.contains(unit_name.as_str()) {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                items.push(ContextItem {
+                    id: unit_name.clone(),
+                    title: unit_name.clone(),
+                    subtitle: Some(format!(
+                        "{} (matches preset, has drop-in override)",
+                        state
+                    )),
+                    detail: Some(dropin_contents.join("\n---\n")),
+                    searchable_text: format!("{} {} drop-in override", unit_name, state),
+                });
+            }
+        }
+
+        // 3. Preset-unknown enabled units (not divergent, not matched)
+        for unit_name in &svc.enabled_units {
+            if !divergent_set.contains(unit_name.as_str())
+                && !matched_set.contains(unit_name.as_str())
+            {
+                let dropin_detail = dropin_by_unit
+                    .get(unit_name.as_str())
+                    .map(|contents| contents.join("\n---\n"));
+                items.push(ContextItem {
+                    id: unit_name.clone(),
+                    title: unit_name.clone(),
+                    subtitle: Some("enabled (no preset rule)".into()),
+                    detail: dropin_detail,
+                    searchable_text: format!("{} enabled no preset rule", unit_name),
+                });
+            }
+        }
+
+        // 4. Preset-unknown disabled units (not divergent, not matched)
+        for unit_name in &svc.disabled_units {
+            if !divergent_set.contains(unit_name.as_str())
+                && !matched_set.contains(unit_name.as_str())
+            {
+                items.push(ContextItem {
+                    id: unit_name.clone(),
+                    title: unit_name.clone(),
+                    subtitle: Some("disabled (no preset rule)".into()),
+                    detail: None,
+                    searchable_text: format!("{} disabled no preset rule", unit_name),
+                });
+            }
+        }
+
+        // 5. Standalone drop-ins (unit not covered by any of the above)
         for d in &standalone_dropins {
             items.push(ContextItem {
-                id: d.path.clone(),
-                title: d.unit.clone(),
-                subtitle: Some("drop-in".to_string()),
+                id: format!("dropin-{}", d.unit),
+                title: format!("{} (drop-in)", d.unit),
+                subtitle: Some("drop-in override".into()),
                 detail: Some(d.content.clone()),
-                searchable_text: format!("{} {} {}", d.unit, d.path, d.content),
-            });
-        }
-
-        // enabled_units
-        for unit in &svc.enabled_units {
-            items.push(ContextItem {
-                id: unit.clone(),
-                title: unit.clone(),
-                subtitle: Some("enabled".to_string()),
-                detail: None,
-                searchable_text: unit.clone(),
-            });
-        }
-
-        // disabled_units
-        for unit in &svc.disabled_units {
-            items.push(ContextItem {
-                id: unit.clone(),
-                title: unit.clone(),
-                subtitle: Some("disabled".to_string()),
-                detail: None,
-                searchable_text: unit.clone(),
+                searchable_text: format!("{} drop-in", d.unit),
             });
         }
     }
@@ -450,6 +501,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
         id: "services".to_string(),
         display_name: "Services".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -565,6 +617,7 @@ fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
         id: "containers".to_string(),
         display_name: "Containers".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -653,6 +706,7 @@ fn normalize_users_groups(snap: &InspectionSnapshot) -> ContextSection {
         id: "users_groups".to_string(),
         display_name: "Users & Groups".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -790,6 +844,7 @@ fn normalize_network(snap: &InspectionSnapshot) -> ContextSection {
         id: "network".to_string(),
         display_name: "Network".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -861,6 +916,7 @@ fn normalize_storage(snap: &InspectionSnapshot) -> ContextSection {
         id: "storage".to_string(),
         display_name: "Storage".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -951,6 +1007,7 @@ fn normalize_scheduled_tasks(snap: &InspectionSnapshot) -> ContextSection {
         id: "scheduled_tasks".to_string(),
         display_name: "Scheduled Tasks".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -1021,6 +1078,7 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
         id: "non_rpm_software".to_string(),
         display_name: "Non-RPM Software".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -1190,6 +1248,7 @@ fn normalize_kernel_boot(snap: &InspectionSnapshot) -> ContextSection {
         id: "kernel_boot".to_string(),
         display_name: "Kernel & Boot".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -1311,6 +1370,7 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
         id: "selinux".to_string(),
         display_name: "Security & Access Control".to_string(),
         items,
+        empty_reason: None,
     }
 }
 
@@ -1324,6 +1384,7 @@ mod tests {
     use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RepoFile, RpmSection};
     use inspectah_core::types::selinux::SelinuxSection;
+    use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
 
     fn empty_snapshot() -> InspectionSnapshot {
         InspectionSnapshot::new()
@@ -1908,5 +1969,122 @@ mod tests {
                 }
             }
         }
+    }
+
+    // -- Three-way services normalization ------------------------------------
+
+    #[test]
+    fn test_normalize_services_three_way_split() {
+        let mut snap = empty_snapshot();
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "httpd.service".into(),
+                current_state: "enabled".into(),
+                default_state: "disable".into(),
+                action: "enable".into(),
+                include: true,
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
+            }],
+            enabled_units: vec![
+                "httpd.service".into(),
+                "chronyd.service".into(),
+                "oddjobd.service".into(),
+            ],
+            disabled_units: vec!["cups.service".into()],
+            drop_ins: Vec::new(),
+            preset_matched_units: vec!["chronyd.service".into()],
+        });
+
+        let section = normalize_services(&snap);
+
+        assert!(
+            !section.items.iter().any(|i| i.id == "chronyd.service"),
+            "preset-matched unit should be suppressed"
+        );
+        assert_eq!(
+            section
+                .items
+                .iter()
+                .filter(|i| i.id == "httpd.service")
+                .count(),
+            1
+        );
+        let oddjobd = section
+            .items
+            .iter()
+            .find(|i| i.id == "oddjobd.service")
+            .unwrap();
+        assert!(oddjobd.subtitle.as_ref().unwrap().contains("no preset rule"));
+        let cups = section
+            .items
+            .iter()
+            .find(|i| i.id == "cups.service")
+            .unwrap();
+        assert!(cups.subtitle.as_ref().unwrap().contains("no preset rule"));
+    }
+
+    #[test]
+    fn test_normalize_services_matched_with_dropin_visible() {
+        let mut snap = empty_snapshot();
+        snap.services = Some(ServiceSection {
+            state_changes: Vec::new(),
+            enabled_units: vec!["sshd.service".into()],
+            disabled_units: Vec::new(),
+            drop_ins: vec![SystemdDropIn {
+                unit: "sshd.service".into(),
+                path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
+                content: "[Service]\nTimeoutStartSec=90".into(),
+                include: true,
+                tie: false,
+                tie_winner: false,
+                fleet: None,
+            }],
+            preset_matched_units: vec!["sshd.service".into()],
+        });
+
+        let section = normalize_services(&snap);
+        let sshd = section.items.iter().find(|i| i.id == "sshd.service");
+        assert!(
+            sshd.is_some(),
+            "matched unit with drop-in should remain visible"
+        );
+        assert!(sshd
+            .unwrap()
+            .subtitle
+            .as_ref()
+            .unwrap()
+            .contains("matches preset"));
+        assert!(sshd
+            .unwrap()
+            .subtitle
+            .as_ref()
+            .unwrap()
+            .contains("drop-in"));
+    }
+
+    #[test]
+    fn test_normalize_services_legacy_snapshot_no_preset_matched() {
+        let mut snap = empty_snapshot();
+        snap.services = Some(ServiceSection {
+            state_changes: Vec::new(),
+            enabled_units: vec!["chronyd.service".into()],
+            disabled_units: Vec::new(),
+            drop_ins: Vec::new(),
+            preset_matched_units: Vec::new(),
+        });
+
+        let section = normalize_services(&snap);
+        let chronyd = section
+            .items
+            .iter()
+            .find(|i| i.id == "chronyd.service")
+            .unwrap();
+        assert!(chronyd
+            .subtitle
+            .as_ref()
+            .unwrap()
+            .contains("no preset rule"));
     }
 }
