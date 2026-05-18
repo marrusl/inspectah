@@ -1,5 +1,6 @@
 use inspectah_core::types::config::ConfigFileEntry;
 use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::users::UserContainerfileStrategy;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -30,6 +31,16 @@ pub enum RefinementOp {
     IncludeConfig { path: PathBuf },
     ExcludeRepo { section_id: String },
     IncludeRepo { section_id: String },
+    UserStrategy { username: String, strategy: UserContainerfileStrategy },
+    UserPassword(UserPasswordOp),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "choice")]
+pub enum UserPasswordOp {
+    New { username: String, hash: Option<String> },
+    None { username: String },
+    Preserve { username: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -3,6 +3,7 @@ use inspectah_core::types::config::{ConfigFileEntry, ConfigFileKind, ConfigSecti
 use inspectah_core::types::containers::{ContainerSection, QuadletUnit};
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+use inspectah_core::types::users::UserGroupSection;
 use inspectah_refine::session::RefineSession;
 use inspectah_refine::types::{PackageTarget, RefinementOp};
 use std::collections::BTreeSet;
@@ -376,5 +377,64 @@ fn export_excludes_extra_config_tree_artifacts() {
     assert!(
         !files.iter().any(|f| f.starts_with("quadlet/")),
         "quadlet/ must not be in refine export, got: {files:?}"
+    );
+}
+
+#[test]
+fn export_includes_user_artifacts() {
+    let mut snap = test_snapshot();
+    snap.users_groups = Some(UserGroupSection {
+        users: vec![serde_json::json!({
+            "name": "webadmin",
+            "uid": 1001,
+            "gid": 1001,
+            "include": true,
+            "containerfile_strategy": "useradd",
+            "password_choice": "preserve",
+            "password_hash": "$6$rounds=5000$salt$hash",
+            "home": "/home/webadmin",
+            "shell": "/bin/bash",
+            "ssh_keys": ["ssh-rsa AAAAB3test webadmin@host"],
+            "source": "custom"
+        })],
+        groups: vec![serde_json::json!({
+            "name": "webadmin",
+            "gid": 1001,
+            "source": "custom",
+            "include": true
+        })],
+        ..Default::default()
+    });
+
+    let mut session = RefineSession::new(snap);
+
+    // Apply a user strategy op to exercise the pipeline
+    session
+        .apply(RefinementOp::UserStrategy {
+            username: "webadmin".into(),
+            strategy: inspectah_core::types::users::UserContainerfileStrategy::Useradd,
+        })
+        .unwrap();
+
+    let tempdir = tempfile::tempdir().unwrap();
+    let tarball_path = tempdir.path().join("output.tar.gz");
+    session
+        .export_tarball(&tarball_path, session.generation())
+        .unwrap();
+
+    let actual = tarball_file_set(&tarball_path);
+
+    // User artifacts must be present in the export
+    assert!(
+        actual.contains("inspectah-users.ks"),
+        "export must contain inspectah-users.ks, got: {actual:?}"
+    );
+    assert!(
+        actual.contains("inspectah-users.toml"),
+        "export must contain inspectah-users.toml, got: {actual:?}"
+    );
+    assert!(
+        actual.iter().any(|f| f.starts_with("users/")),
+        "export must contain users/ SSH key directory, got: {actual:?}"
     );
 }
