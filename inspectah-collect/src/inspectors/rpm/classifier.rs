@@ -1,41 +1,90 @@
 use super::parser::rpmvercmp;
-use inspectah_core::types::rpm::{PackageEntry, PackageState};
+use inspectah_core::types::rpm::{
+    PackageEntry, PackageState, VersionChange, VersionChangeDirection,
+};
+use std::cmp::Ordering;
 use std::collections::HashMap;
+
+pub struct ClassificationResult {
+    pub packages: Vec<PackageEntry>,
+    pub version_changes: Vec<VersionChange>,
+}
+
+/// Normalize epoch: treat empty string as "0" so that baseline entries
+/// with epoch=None (deserialized as "") match host entries with epoch="0".
+fn norm_epoch(e: &str) -> &str {
+    if e.is_empty() { "0" } else { e }
+}
 
 pub fn classify_packages(
     host: &[PackageEntry],
     baseline: &HashMap<String, PackageEntry>,
-) -> Vec<PackageEntry> {
-    host.iter()
+) -> ClassificationResult {
+    let mut version_changes = Vec::new();
+
+    let packages = host
+        .iter()
         .map(|pkg| {
             let key = format!("{}.{}", pkg.name, pkg.arch);
             let state = match baseline.get(&key) {
                 None => PackageState::Added,
                 Some(base) => {
-                    let epoch_cmp = rpmvercmp(&pkg.epoch, &base.epoch);
+                    let epoch_cmp =
+                        rpmvercmp(norm_epoch(&pkg.epoch), norm_epoch(&base.epoch));
                     let ver_cmp = rpmvercmp(&pkg.version, &base.version);
                     let rel_cmp = rpmvercmp(&pkg.release, &base.release);
-                    if epoch_cmp == std::cmp::Ordering::Equal
-                        && ver_cmp == std::cmp::Ordering::Equal
-                        && rel_cmp == std::cmp::Ordering::Equal
+                    if epoch_cmp == Ordering::Equal
+                        && ver_cmp == Ordering::Equal
+                        && rel_cmp == Ordering::Equal
                     {
                         // Same EVR — package matches baseline. Keep as Added.
                         // The attention model assigns PackageBaselineMatch.
                         PackageState::Added
                     } else {
+                        let direction = if epoch_cmp != Ordering::Equal {
+                            if epoch_cmp == Ordering::Greater {
+                                VersionChangeDirection::Upgrade
+                            } else {
+                                VersionChangeDirection::Downgrade
+                            }
+                        } else if ver_cmp != Ordering::Equal {
+                            if ver_cmp == Ordering::Greater {
+                                VersionChangeDirection::Upgrade
+                            } else {
+                                VersionChangeDirection::Downgrade
+                            }
+                        } else if rel_cmp == Ordering::Greater {
+                            VersionChangeDirection::Upgrade
+                        } else {
+                            VersionChangeDirection::Downgrade
+                        };
+
+                        version_changes.push(VersionChange {
+                            name: pkg.name.clone(),
+                            arch: pkg.arch.clone(),
+                            host_version: format!("{}-{}", pkg.version, pkg.release),
+                            base_version: format!("{}-{}", base.version, base.release),
+                            host_epoch: pkg.epoch.clone(),
+                            base_epoch: base.epoch.clone(),
+                            direction,
+                        });
                         PackageState::Modified
                     }
                 }
             };
             // All host packages get include: true — attention model decides visibility
-            let include = true;
             PackageEntry {
                 state,
-                include,
+                include: true,
                 ..pkg.clone()
             }
         })
-        .collect()
+        .collect();
+
+    ClassificationResult {
+        packages,
+        version_changes,
+    }
 }
 
 #[cfg(test)]
@@ -71,8 +120,8 @@ mod tests {
         let host = vec![pkg("httpd", "2.4.57", "5.el9")];
         let baseline: HashMap<String, PackageEntry> = HashMap::new();
         let result = classify_packages(&host, &baseline);
-        assert_eq!(result[0].state, PackageState::Added);
-        assert!(result[0].include);
+        assert_eq!(result.packages[0].state, PackageState::Added);
+        assert!(result.packages[0].include);
     }
 
     #[test]
@@ -80,8 +129,8 @@ mod tests {
         let host = vec![pkg("bash", "5.2.26", "3.el9")];
         let baseline = baseline_with(&[("bash", "5.2.26", "3.el9")]);
         let result = classify_packages(&host, &baseline);
-        assert_eq!(result[0].state, PackageState::Added);
-        assert!(result[0].include);
+        assert_eq!(result.packages[0].state, PackageState::Added);
+        assert!(result.packages[0].include);
     }
 
     #[test]
@@ -89,16 +138,16 @@ mod tests {
         let host = vec![pkg("bash", "5.2.26", "4.el9")];
         let baseline = baseline_with(&[("bash", "5.2.26", "3.el9")]);
         let result = classify_packages(&host, &baseline);
-        assert_eq!(result[0].state, PackageState::Modified);
-        assert!(result[0].include);
+        assert_eq!(result.packages[0].state, PackageState::Modified);
+        assert!(result.packages[0].include);
     }
 
     #[test]
     fn test_classify_empty_baseline_all_added() {
         let host = vec![pkg("httpd", "2.4.57", "5.el9"), pkg("vim", "9.0", "1.el9")];
         let result = classify_packages(&host, &HashMap::new());
-        assert!(result.iter().all(|p| p.state == PackageState::Added));
-        assert!(result.iter().all(|p| p.include));
+        assert!(result.packages.iter().all(|p| p.state == PackageState::Added));
+        assert!(result.packages.iter().all(|p| p.include));
     }
 
     #[test]
@@ -108,7 +157,7 @@ mod tests {
             pkg("bash", "5.2.26", "3.el9"),
         ];
         let result = classify_packages(&host, &HashMap::new());
-        assert_eq!(result.len(), 2);
+        assert_eq!(result.packages.len(), 2);
     }
 
     /// Verify that BaselineData.packages converted to the classifier's
@@ -204,54 +253,16 @@ mod tests {
         let result = classify_packages(&host, &classifier_baseline);
 
         // bash: same EVR -> Added (baseline match handled by attention model), include: true
-        assert_eq!(result[0].state, PackageState::Added);
-        assert!(result[0].include);
+        assert_eq!(result.packages[0].state, PackageState::Added);
+        assert!(result.packages[0].include);
 
         // glibc: different release -> Modified, include: true
-        assert_eq!(result[1].state, PackageState::Modified);
-        assert!(result[1].include);
+        assert_eq!(result.packages[1].state, PackageState::Modified);
+        assert!(result.packages[1].include);
 
         // httpd: not in baseline -> Added, include: true
-        assert_eq!(result[2].state, PackageState::Added);
-        assert!(result[2].include);
-    }
-
-    /// Verify that None epoch in BaselinePackageEntry defaults to empty
-    /// string, matching the classifier's epoch comparison.
-    #[test]
-    fn test_classify_baseline_none_epoch_defaults_to_empty() {
-        // Baseline package with epoch: None
-        let mut baseline = HashMap::new();
-        let key = "kernel.x86_64".to_string();
-        baseline.insert(
-            key,
-            PackageEntry {
-                name: "kernel".to_string(),
-                epoch: String::new(), // None.unwrap_or_default() = ""
-                version: "5.14.0".to_string(),
-                release: "503.el9".to_string(),
-                arch: "x86_64".to_string(),
-                state: PackageState::BaseImageOnly,
-                include: false,
-                ..Default::default()
-            },
-        );
-
-        // Host has kernel with epoch "0" (from rpm -qa which always emits epoch)
-        let host = vec![PackageEntry {
-            name: "kernel".to_string(),
-            epoch: "0".to_string(),
-            version: "5.14.0".to_string(),
-            release: "503.el9".to_string(),
-            arch: "x86_64".to_string(),
-            state: PackageState::Added,
-            include: true,
-            ..Default::default()
-        }];
-
-        let result = classify_packages(&host, &baseline);
-        // epoch "0" vs "" -> rpmvercmp should treat as Modified (they differ)
-        assert_eq!(result[0].state, PackageState::Modified);
+        assert_eq!(result.packages[2].state, PackageState::Added);
+        assert!(result.packages[2].include);
     }
 
     #[test]
@@ -263,9 +274,91 @@ mod tests {
         // baseline has epoch "0" via pkg() helper
         let result = classify_packages(&host, &baseline);
         assert_eq!(
-            result[0].state,
+            result.packages[0].state,
             PackageState::Modified,
             "epoch change must be Modified"
+        );
+    }
+
+    #[test]
+    fn test_classify_modified_emits_version_change() {
+        let host = vec![pkg("bash", "5.2.26", "4.el9")];
+        let baseline = baseline_with(&[("bash", "5.2.26", "3.el9")]);
+        let result = classify_packages(&host, &baseline);
+        assert_eq!(result.version_changes.len(), 1);
+        assert_eq!(result.version_changes[0].name, "bash");
+        assert_eq!(result.version_changes[0].host_version, "5.2.26-4.el9");
+        assert_eq!(result.version_changes[0].base_version, "5.2.26-3.el9");
+        assert!(matches!(
+            result.version_changes[0].direction,
+            VersionChangeDirection::Upgrade
+        ));
+    }
+
+    #[test]
+    fn test_classify_modified_downgrade_emits_version_change() {
+        let host = vec![pkg("bash", "5.2.26", "3.el9")];
+        let baseline = baseline_with(&[("bash", "5.2.26", "4.el9")]);
+        let result = classify_packages(&host, &baseline);
+        assert_eq!(result.version_changes.len(), 1);
+        assert!(matches!(
+            result.version_changes[0].direction,
+            VersionChangeDirection::Downgrade
+        ));
+    }
+
+    #[test]
+    fn test_classify_same_evr_no_version_change() {
+        let host = vec![pkg("bash", "5.2.26", "3.el9")];
+        let baseline = baseline_with(&[("bash", "5.2.26", "3.el9")]);
+        let result = classify_packages(&host, &baseline);
+        assert!(result.version_changes.is_empty());
+    }
+
+    #[test]
+    fn test_classify_added_no_baseline_no_version_change() {
+        let host = vec![pkg("httpd", "2.4.57", "5.el9")];
+        let result = classify_packages(&host, &HashMap::new());
+        assert!(result.version_changes.is_empty());
+    }
+
+    #[test]
+    fn test_classify_epoch_change_emits_version_change() {
+        let mut host_pkg = pkg("glibc", "2.34", "100.el9");
+        host_pkg.epoch = "1".into();
+        let mut base_pkg = pkg("glibc", "2.34", "100.el9");
+        base_pkg.epoch = "0".into();
+        let baseline = HashMap::from([("glibc.x86_64".to_string(), base_pkg)]);
+        let result = classify_packages(&[host_pkg], &baseline);
+        assert_eq!(result.version_changes.len(), 1);
+        assert_eq!(result.version_changes[0].host_epoch, "1");
+        assert_eq!(result.version_changes[0].base_epoch, "0");
+        assert!(matches!(
+            result.version_changes[0].direction,
+            VersionChangeDirection::Upgrade
+        ));
+    }
+
+    #[test]
+    fn test_classify_empty_vs_zero_epoch_is_not_drift() {
+        let mut host_pkg = pkg("kernel", "5.14.0", "503.el9");
+        host_pkg.epoch = "0".into();
+        let base_pkg = PackageEntry {
+            name: "kernel".into(),
+            epoch: String::new(),
+            version: "5.14.0".into(),
+            release: "503.el9".into(),
+            arch: "x86_64".into(),
+            state: PackageState::BaseImageOnly,
+            include: false,
+            ..Default::default()
+        };
+        let baseline = HashMap::from([("kernel.x86_64".to_string(), base_pkg)]);
+        let result = classify_packages(&[host_pkg], &baseline);
+        assert_eq!(result.packages[0].state, PackageState::Added);
+        assert!(
+            result.version_changes.is_empty(),
+            "'0' vs '' epoch must not produce a VersionChange after normalization"
         );
     }
 }

@@ -230,11 +230,12 @@ impl Inspector for RpmInspector {
 
         // 2. Build baseline and classify
         let baseline = self.build_baseline(ctx.baseline_data);
-        let classified = classifier::classify_packages(&host_packages, &baseline);
+        let classification = classifier::classify_packages(&host_packages, &baseline);
+        let version_changes = classification.version_changes;
 
         // 3. All classified host packages go to packages_added
         // (BaseImageOnly is no longer assigned to host packages by the classifier)
-        let mut packages_added = classified;
+        let mut packages_added = classification.packages;
 
         // 3a. Build base_image_only from baseline entries not found on host
         let host_keys: std::collections::HashSet<String> = packages_added
@@ -303,6 +304,7 @@ impl Inspector for RpmInspector {
         let section = RpmSection {
             packages_added,
             base_image_only,
+            version_changes,
             rpm_va: supp.rpm_va,
             repo_files: supp.repo_files,
             gpg_keys: supp.gpg_keys,
