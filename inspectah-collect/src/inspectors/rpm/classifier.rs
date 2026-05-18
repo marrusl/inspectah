@@ -29,8 +29,7 @@ pub fn classify_packages(
             let state = match baseline.get(&key) {
                 None => PackageState::Added,
                 Some(base) => {
-                    let epoch_cmp =
-                        rpmvercmp(norm_epoch(&pkg.epoch), norm_epoch(&base.epoch));
+                    let epoch_cmp = rpmvercmp(norm_epoch(&pkg.epoch), norm_epoch(&base.epoch));
                     let ver_cmp = rpmvercmp(&pkg.version, &base.version);
                     let rel_cmp = rpmvercmp(&pkg.release, &base.release);
                     if epoch_cmp == Ordering::Equal
@@ -41,22 +40,27 @@ pub fn classify_packages(
                         // The attention model assigns PackageBaselineMatch.
                         PackageState::Added
                     } else {
+                        // Direction is from the migration perspective: what
+                        // happens to the user when they move from host (package
+                        // mode) to the base image (image mode).
+                        //   host < base → Upgrade  (user gets newer package)
+                        //   host > base → Downgrade (user loses newer package)
                         let direction = if epoch_cmp != Ordering::Equal {
                             if epoch_cmp == Ordering::Greater {
-                                VersionChangeDirection::Upgrade
-                            } else {
                                 VersionChangeDirection::Downgrade
+                            } else {
+                                VersionChangeDirection::Upgrade
                             }
                         } else if ver_cmp != Ordering::Equal {
                             if ver_cmp == Ordering::Greater {
-                                VersionChangeDirection::Upgrade
-                            } else {
                                 VersionChangeDirection::Downgrade
+                            } else {
+                                VersionChangeDirection::Upgrade
                             }
                         } else if rel_cmp == Ordering::Greater {
-                            VersionChangeDirection::Upgrade
-                        } else {
                             VersionChangeDirection::Downgrade
+                        } else {
+                            VersionChangeDirection::Upgrade
                         };
 
                         version_changes.push(VersionChange {
@@ -146,7 +150,12 @@ mod tests {
     fn test_classify_empty_baseline_all_added() {
         let host = vec![pkg("httpd", "2.4.57", "5.el9"), pkg("vim", "9.0", "1.el9")];
         let result = classify_packages(&host, &HashMap::new());
-        assert!(result.packages.iter().all(|p| p.state == PackageState::Added));
+        assert!(
+            result
+                .packages
+                .iter()
+                .all(|p| p.state == PackageState::Added)
+        );
         assert!(result.packages.iter().all(|p| p.include));
     }
 
@@ -289,9 +298,10 @@ mod tests {
         assert_eq!(result.version_changes[0].name, "bash");
         assert_eq!(result.version_changes[0].host_version, "5.2.26-4.el9");
         assert_eq!(result.version_changes[0].base_version, "5.2.26-3.el9");
+        // host > base → Downgrade (user loses newer package when migrating)
         assert!(matches!(
             result.version_changes[0].direction,
-            VersionChangeDirection::Upgrade
+            VersionChangeDirection::Downgrade
         ));
     }
 
@@ -301,9 +311,10 @@ mod tests {
         let baseline = baseline_with(&[("bash", "5.2.26", "4.el9")]);
         let result = classify_packages(&host, &baseline);
         assert_eq!(result.version_changes.len(), 1);
+        // host < base → Upgrade (user gets newer package when migrating)
         assert!(matches!(
             result.version_changes[0].direction,
-            VersionChangeDirection::Downgrade
+            VersionChangeDirection::Upgrade
         ));
     }
 
@@ -333,9 +344,10 @@ mod tests {
         assert_eq!(result.version_changes.len(), 1);
         assert_eq!(result.version_changes[0].host_epoch, "1");
         assert_eq!(result.version_changes[0].base_epoch, "0");
+        // host epoch > base epoch → Downgrade (user loses newer epoch when migrating)
         assert!(matches!(
             result.version_changes[0].direction,
-            VersionChangeDirection::Upgrade
+            VersionChangeDirection::Downgrade
         ));
     }
 

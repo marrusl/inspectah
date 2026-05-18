@@ -601,10 +601,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 items.push(ContextItem {
                     id: unit_name.clone(),
                     title: unit_name.clone(),
-                    subtitle: Some(format!(
-                        "{} (matches preset, has drop-in override)",
-                        state
-                    )),
+                    subtitle: Some(format!("{} (matches preset, has drop-in override)", state)),
                     detail: Some(dropin_contents.join("\n---\n")),
                     searchable_text: format!("{} {} drop-in override", unit_name, state),
                 });
@@ -1536,12 +1533,12 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::completeness::{Completeness, InspectorId};
     use inspectah_core::types::containers::{
         ComposeFile, ComposeService, ContainerSection, RunningContainer,
     };
     use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection, PipPackage};
-    use inspectah_core::baseline::BaselineData;
     use inspectah_core::types::rpm::{
         PackageEntry, PackageState, RepoFile, RpmSection, VersionChange, VersionChangeDirection,
     };
@@ -2178,7 +2175,13 @@ mod tests {
             .iter()
             .find(|i| i.id == "oddjobd.service")
             .unwrap();
-        assert!(oddjobd.subtitle.as_ref().unwrap().contains("no preset rule"));
+        assert!(
+            oddjobd
+                .subtitle
+                .as_ref()
+                .unwrap()
+                .contains("no preset rule")
+        );
         let cups = section
             .items
             .iter()
@@ -2212,18 +2215,14 @@ mod tests {
             sshd.is_some(),
             "matched unit with drop-in should remain visible"
         );
-        assert!(sshd
-            .unwrap()
-            .subtitle
-            .as_ref()
-            .unwrap()
-            .contains("matches preset"));
-        assert!(sshd
-            .unwrap()
-            .subtitle
-            .as_ref()
-            .unwrap()
-            .contains("drop-in"));
+        assert!(
+            sshd.unwrap()
+                .subtitle
+                .as_ref()
+                .unwrap()
+                .contains("matches preset")
+        );
+        assert!(sshd.unwrap().subtitle.as_ref().unwrap().contains("drop-in"));
     }
 
     #[test]
@@ -2243,11 +2242,13 @@ mod tests {
             .iter()
             .find(|i| i.id == "chronyd.service")
             .unwrap();
-        assert!(chronyd
-            .subtitle
-            .as_ref()
-            .unwrap()
-            .contains("no preset rule"));
+        assert!(
+            chronyd
+                .subtitle
+                .as_ref()
+                .unwrap()
+                .contains("no preset rule")
+        );
     }
 
     // -- normalize_version_changes tests --------------------------------------
@@ -2264,7 +2265,7 @@ mod tests {
                 base_version: "3.1.1-1.el9".into(),
                 host_epoch: String::new(),
                 base_epoch: String::new(),
-                direction: VersionChangeDirection::Upgrade,
+                direction: VersionChangeDirection::Downgrade,
             },
             VersionChange {
                 name: "curl".into(),
@@ -2273,7 +2274,7 @@ mod tests {
                 base_version: "8.1.0-1.el9".into(),
                 host_epoch: String::new(),
                 base_epoch: String::new(),
-                direction: VersionChangeDirection::Downgrade,
+                direction: VersionChangeDirection::Upgrade,
             },
         ];
         snap.rpm = Some(rpm);
@@ -2290,8 +2291,8 @@ mod tests {
             section.items[0].title.starts_with('\u{25BC}'),
             "first item should be downgrade with ▼ prefix"
         );
-        assert!(section.items[0].title.contains("curl"));
-        assert!(section.items[1].title.contains("openssl"));
+        assert!(section.items[0].title.contains("openssl"));
+        assert!(section.items[1].title.contains("curl"));
         assert!(
             !section.items[1].title.starts_with('\u{25BC}'),
             "upgrade should not have ▼ prefix"
@@ -2309,7 +2310,7 @@ mod tests {
             base_version: "5.2.26-3.el9".into(),
             host_epoch: "0".into(),
             base_epoch: "1".into(),
-            direction: VersionChangeDirection::Downgrade,
+            direction: VersionChangeDirection::Upgrade,
         }];
         snap.rpm = Some(rpm);
         snap.baseline = Some(BaselineData {
@@ -2344,7 +2345,7 @@ mod tests {
             base_version: "2.34-100.el9".into(),
             host_epoch: "2".into(),
             base_epoch: "1".into(),
-            direction: VersionChangeDirection::Upgrade,
+            direction: VersionChangeDirection::Downgrade,
         }];
         snap.rpm = Some(rpm);
         snap.baseline = Some(BaselineData {
@@ -2380,7 +2381,7 @@ mod tests {
             base_version: "1.2.11-1.el9".into(),
             host_epoch: String::new(),
             base_epoch: "0".into(),
-            direction: VersionChangeDirection::Upgrade,
+            direction: VersionChangeDirection::Downgrade,
         }];
         snap.rpm = Some(rpm);
         snap.baseline = Some(BaselineData {
