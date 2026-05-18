@@ -51,6 +51,10 @@ pub struct UserGroupOptions {
     /// Override the auto-detected strategy for all users and groups.
     /// Accepts "useradd" or "kickstart" — bypasses the shell-based auto-detect.
     pub strategy_override: Option<String>,
+    /// When true, store raw password hashes for users with status `password_set`.
+    pub preserve_password_hashes: bool,
+    /// When true, store full SSH key content (parsed key lines) per user.
+    pub preserve_ssh_keys: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +137,13 @@ impl Inspector for UsersGroupsInspector {
         // -------------------------------------------------------------------
         match exec.read_file(Path::new("/etc/shadow")) {
             Ok(shadow_text) => {
-                parse_shadow(&shadow_text, &mut section, &non_system_users, &mut hints);
+                parse_shadow(
+                    &shadow_text,
+                    &mut section,
+                    &non_system_users,
+                    &mut hints,
+                    self.options.preserve_password_hashes,
+                );
             }
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                 degraded_reasons.push("cannot read /etc/shadow: permission denied".to_string());
@@ -193,7 +203,35 @@ impl Inspector for UsersGroupsInspector {
         // -------------------------------------------------------------------
         // SSH authorized_keys per user
         // -------------------------------------------------------------------
-        collect_ssh_keys(exec, &mut section);
+        collect_ssh_keys(exec, &mut section, self.options.preserve_ssh_keys);
+
+        // -------------------------------------------------------------------
+        // Enrichment: supplementary groups, has_sudo, has_subuid, rationale
+        // -------------------------------------------------------------------
+
+        // Collect supplementary groups from ALL group entries (including system
+        // GIDs). parse_group only stores GID >= 1000, so we re-scan the raw
+        // /etc/group text for membership across all GIDs.
+        if let Ok(group_text) = exec.read_file(Path::new("/etc/group")) {
+            enrich_supplementary_groups(&group_text, &mut section);
+        }
+
+        // Mark users with sudo access.
+        enrich_sudo_flags(&mut section);
+
+        // Mark users with subuid allocations.
+        enrich_subuid_flags(&mut section);
+
+        // LAST: compute classification_rationale with all signals available.
+        for user in &mut section.users {
+            let rationale = build_classification_rationale(user);
+            if let serde_json::Value::Object(map) = user {
+                map.insert(
+                    "classification_rationale".to_string(),
+                    serde_json::Value::String(rationale),
+                );
+            }
+        }
 
         // -------------------------------------------------------------------
         // Return
@@ -271,6 +309,7 @@ fn parse_shadow(
     section: &mut UserGroupSection,
     non_system_users: &HashMap<String, bool>,
     hints: &mut Vec<RedactionHint>,
+    preserve_hashes: bool,
 ) {
     for line in text.lines() {
         let line = line.trim();
@@ -286,7 +325,8 @@ fn parse_shadow(
             continue;
         }
 
-        // Determine password status from field 1 — NEVER store the hash.
+        // Determine password status from field 1 — NEVER store the hash
+        // unless preserve_hashes is explicitly true.
         let hash_field = parts[1];
         let status = if hash_field.starts_with("!!") || hash_field == "!" {
             "locked"
@@ -309,6 +349,23 @@ fn parse_shadow(
             });
         }
 
+        // When preserve_hashes is true AND status is password_set, store the
+        // raw hash on the matching user entry.
+        if preserve_hashes && status == "password_set" {
+            for user in &mut section.users {
+                let uname = user.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                if uname == username {
+                    if let serde_json::Value::Object(map) = user {
+                        map.insert(
+                            "password_hash".to_string(),
+                            serde_json::Value::String(hash_field.to_string()),
+                        );
+                    }
+                    break;
+                }
+            }
+        }
+
         // Build safe shadow entry: replace hash field with status string.
         // Format: username:STATUS:field2:field3:field4:field5:field6:field7:field8
         let remaining_fields: Vec<&str> = if parts.len() > 2 {
@@ -318,6 +375,20 @@ fn parse_shadow(
         };
         let safe_entry = format!("{}:{}:{}", username, status, remaining_fields.join(":"));
         section.shadow_entries.push(safe_entry);
+
+        // Enrich user entry with password_status.
+        for user in &mut section.users {
+            let uname = user.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if uname == username {
+                if let serde_json::Value::Object(map) = user {
+                    map.insert(
+                        "password_status".to_string(),
+                        serde_json::Value::String(status.to_string()),
+                    );
+                }
+                break;
+            }
+        }
     }
 }
 
@@ -355,11 +426,14 @@ fn parse_group(
             vec![]
         };
 
+        let source = if gid >= 1000 { "custom" } else { "system" };
+
         section.groups.push(serde_json::json!({
             "name": group_name,
             "gid": gid,
             "members": members,
             "include": true,
+            "source": source,
         }));
         // Store raw entry — matches how passwd_entries is populated.
         section.group_entries.push(line.to_string());
@@ -494,8 +568,12 @@ fn extract_sudoers_rules(
 }
 
 /// Checks for ~/.ssh/authorized_keys for each user, counting keys.
-/// SECURITY-CRITICAL: Only key count and path are stored, NEVER key content.
-fn collect_ssh_keys(exec: &dyn Executor, section: &mut UserGroupSection) {
+/// When `preserve_keys` is false (default), only key count and path are stored.
+/// When true, full key lines are stored in an `ssh_keys` array on the user entry.
+fn collect_ssh_keys(exec: &dyn Executor, section: &mut UserGroupSection, preserve_keys: bool) {
+    // Collect SSH data first, then apply to users — avoids double borrow.
+    let mut ssh_data: Vec<(String, usize, String, Vec<String>)> = Vec::new();
+
     for user in &section.users {
         let home = match user.get("home").and_then(|v| v.as_str()) {
             Some(h) if !h.is_empty() => h,
@@ -507,22 +585,227 @@ fn collect_ssh_keys(exec: &dyn Executor, section: &mut UserGroupSection) {
             Err(_) => continue, // SSH dir inaccessible or file doesn't exist.
         };
 
-        let key_count = content
+        let key_lines: Vec<String> = content
             .lines()
             .filter(|l| {
                 let trimmed = l.trim();
                 !trimmed.is_empty() && !trimmed.starts_with('#')
             })
-            .count();
+            .map(|l| l.trim().to_string())
+            .collect();
 
-        let username = user.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        let key_count = key_lines.len();
+        let username = user.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
+        ssh_data.push((username, key_count, auth_keys_path, key_lines));
+    }
+
+    for (username, key_count, auth_keys_path, key_lines) in &ssh_data {
         section.ssh_authorized_keys_refs.push(serde_json::json!({
             "user": username,
             "key_count": key_count,
             "path": auth_keys_path,
         }));
+
+        // Enrich user entries with ssh_key_count (always) and ssh_keys (when preserving).
+        for user in &mut section.users {
+            let uname = user.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if uname == username {
+                if let serde_json::Value::Object(map) = user {
+                    map.insert(
+                        "ssh_key_count".to_string(),
+                        serde_json::Value::Number((*key_count).into()),
+                    );
+                    if preserve_keys {
+                        let keys_json: Vec<serde_json::Value> = key_lines
+                            .iter()
+                            .map(|k| serde_json::Value::String(k.clone()))
+                            .collect();
+                        map.insert(
+                            "ssh_keys".to_string(),
+                            serde_json::Value::Array(keys_json),
+                        );
+                    }
+                }
+                break;
+            }
+        }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Enrichment helpers — run AFTER all collectors, BEFORE classification rationale
+// ---------------------------------------------------------------------------
+
+/// Scans ALL /etc/group entries (including system GIDs) to find supplementary
+/// group memberships for each user. Sets `supplementary_groups` array on user.
+fn enrich_supplementary_groups(group_text: &str, section: &mut UserGroupSection) {
+    // Build map: username → list of group names where they appear as a member.
+    let mut memberships: HashMap<String, Vec<String>> = HashMap::new();
+
+    for line in group_text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let parts: Vec<&str> = line.split(':').collect();
+        if parts.len() < 4 {
+            continue;
+        }
+        let group_name = parts[0];
+        let member_list = parts[3];
+        if member_list.is_empty() {
+            continue;
+        }
+        for member in member_list.split(',') {
+            let member = member.trim();
+            if !member.is_empty() {
+                memberships
+                    .entry(member.to_string())
+                    .or_default()
+                    .push(group_name.to_string());
+            }
+        }
+    }
+
+    // Apply to user entries.
+    for user in &mut section.users {
+        let username = user
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let groups = memberships.get(&username).cloned().unwrap_or_default();
+        if let serde_json::Value::Object(map) = user {
+            let groups_json: Vec<serde_json::Value> = groups
+                .iter()
+                .map(|g| serde_json::Value::String(g.clone()))
+                .collect();
+            map.insert(
+                "supplementary_groups".to_string(),
+                serde_json::Value::Array(groups_json),
+            );
+        }
+    }
+}
+
+/// Sets `has_sudo: true` on users who appear in sudoers rules.
+fn enrich_sudo_flags(section: &mut UserGroupSection) {
+    // Collect usernames that appear in sudoers rules.
+    let mut sudo_users: Vec<String> = Vec::new();
+    for rule in &section.sudoers_rules {
+        // Extract the first word of each rule — typically the user/group spec.
+        let first_word = rule.split_whitespace().next().unwrap_or("");
+        // Skip include directives and group specs (%group).
+        if first_word.starts_with('#')
+            || first_word.starts_with('@')
+            || first_word.starts_with('%')
+        {
+            continue;
+        }
+        sudo_users.push(first_word.to_string());
+    }
+
+    for user in &mut section.users {
+        let username = user
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        // Check direct user match OR group-based match (user in wheel/sudo group).
+        let has_sudo = sudo_users.contains(&username)
+            || user
+                .get("supplementary_groups")
+                .and_then(|v| v.as_array())
+                .map(|groups| {
+                    groups.iter().any(|g| {
+                        let name = g.as_str().unwrap_or("");
+                        // Check if any %group rule references a group the user belongs to.
+                        section.sudoers_rules.iter().any(|rule| {
+                            let first = rule.split_whitespace().next().unwrap_or("");
+                            first == format!("%{name}")
+                        })
+                    })
+                })
+                .unwrap_or(false);
+        if let serde_json::Value::Object(map) = user {
+            map.insert(
+                "has_sudo".to_string(),
+                serde_json::Value::Bool(has_sudo),
+            );
+        }
+    }
+}
+
+/// Sets `has_subuid: true` on users who have subuid allocations.
+fn enrich_subuid_flags(section: &mut UserGroupSection) {
+    let subuid_users: Vec<String> = section
+        .subuid_entries
+        .iter()
+        .filter_map(|entry| entry.split(':').next().map(|s| s.to_string()))
+        .collect();
+
+    for user in &mut section.users {
+        let username = user
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let has_subuid = subuid_users.contains(&username);
+        if let serde_json::Value::Object(map) = user {
+            map.insert(
+                "has_subuid".to_string(),
+                serde_json::Value::Bool(has_subuid),
+            );
+        }
+    }
+}
+
+/// Builds a human-readable classification rationale from all enrichment signals.
+/// Called LAST after all collectors and enrichments have run.
+fn build_classification_rationale(user: &serde_json::Value) -> String {
+    let mut parts: Vec<String> = Vec::new();
+
+    // Shell type.
+    if let Some(shell) = user.get("shell").and_then(|v| v.as_str()) {
+        let shell_name = shell.rsplit('/').next().unwrap_or(shell);
+        parts.push(format!("shell={shell_name}"));
+    }
+
+    // Home directory.
+    if let Some(home) = user.get("home").and_then(|v| v.as_str()) {
+        parts.push(format!("home={home}"));
+    }
+
+    // Password status.
+    if let Some(status) = user.get("password_status").and_then(|v| v.as_str()) {
+        parts.push(format!("password={status}"));
+    }
+
+    // Sudo access.
+    if let Some(true) = user.get("has_sudo").and_then(|v| v.as_bool()) {
+        parts.push("sudo=yes".to_string());
+    } else {
+        parts.push("sudo=no".to_string());
+    }
+
+    // SSH key count.
+    if let Some(count) = user.get("ssh_key_count").and_then(|v| v.as_u64()) {
+        parts.push(format!("ssh_keys={count}"));
+    }
+
+    // Supplementary groups.
+    if let Some(groups) = user.get("supplementary_groups").and_then(|v| v.as_array()) {
+        if !groups.is_empty() {
+            let names: Vec<&str> = groups
+                .iter()
+                .filter_map(|g| g.as_str())
+                .collect();
+            parts.push(format!("groups={}", names.join("+")));
+        }
+    }
+
+    parts.join(", ")
 }
 
 // ---------------------------------------------------------------------------
@@ -712,6 +995,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         };
         let inspector = UsersGroupsInspector::with_options(UserGroupOptions {
             strategy_override: Some("useradd".to_string()),
+            ..Default::default()
         });
         let result = inspector.inspect(&ctx);
 
@@ -744,6 +1028,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         };
         let inspector = UsersGroupsInspector::with_options(UserGroupOptions {
             strategy_override: Some("kickstart".to_string()),
+            ..Default::default()
         });
         let result = inspector.inspect(&ctx);
 
@@ -823,7 +1108,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         let mut section = UserGroupSection::default();
         let non_system = HashMap::from([("alice".to_string(), true)]);
         let mut hints = Vec::new();
-        parse_shadow(text, &mut section, &non_system, &mut hints);
+        parse_shadow(text, &mut section, &non_system, &mut hints, false);
 
         assert_eq!(section.shadow_entries.len(), 1);
         let entry = &section.shadow_entries[0];
@@ -837,7 +1122,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         let mut section = UserGroupSection::default();
         let non_system = HashMap::from([("alice".to_string(), true)]);
         let mut hints = Vec::new();
-        parse_shadow(text, &mut section, &non_system, &mut hints);
+        parse_shadow(text, &mut section, &non_system, &mut hints, false);
 
         assert!(section.shadow_entries[0].contains(":locked:"));
     }
@@ -848,7 +1133,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         let mut section = UserGroupSection::default();
         let non_system = HashMap::from([("bob".to_string(), true)]);
         let mut hints = Vec::new();
-        parse_shadow(text, &mut section, &non_system, &mut hints);
+        parse_shadow(text, &mut section, &non_system, &mut hints, false);
 
         assert!(section.shadow_entries[0].contains(":disabled:"));
     }
@@ -859,7 +1144,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
         let mut section = UserGroupSection::default();
         let non_system = HashMap::from([("alice".to_string(), true)]);
         let mut hints = Vec::new();
-        parse_shadow(text, &mut section, &non_system, &mut hints);
+        parse_shadow(text, &mut section, &non_system, &mut hints, false);
 
         let entry = &section.shadow_entries[0];
         // Must contain status, not the hash.
@@ -898,7 +1183,7 @@ charlie:$5$salt$sha256hash:19700:0:99999:7:::
             ("charlie".to_string(), true),
         ]);
         let mut hints = Vec::new();
-        parse_shadow(text, &mut section, &non_system, &mut hints);
+        parse_shadow(text, &mut section, &non_system, &mut hints, false);
 
         let json = serde_json::to_string(&section).expect("serialize");
         assert!(
@@ -1215,7 +1500,7 @@ nobody:x:65534:
                 "ssh-rsa AAAAB3NzaC1yc2... alice@laptop\n# comment line\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5... alice@work\n\n",
             );
 
-        collect_ssh_keys(&exec, &mut section);
+        collect_ssh_keys(&exec, &mut section, false);
 
         assert_eq!(section.ssh_authorized_keys_refs.len(), 1);
         let ref_entry = &section.ssh_authorized_keys_refs[0];
@@ -1245,7 +1530,7 @@ nobody:x:65534:
 
         // No file registered → read_file returns NotFound.
         let exec = MockExecutor::new();
-        collect_ssh_keys(&exec, &mut section);
+        collect_ssh_keys(&exec, &mut section, false);
 
         assert!(
             section.ssh_authorized_keys_refs.is_empty(),
@@ -1299,6 +1584,488 @@ nobody:x:65534:
             assert!(section.groups.is_empty(), "no non-system groups");
             assert!(section.sudoers_rules.is_empty());
             assert!(section.ssh_authorized_keys_refs.is_empty());
+        } else {
+            panic!("expected UsersGroups section");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // classification_rationale tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn classification_rationale_includes_all_enrichments() {
+        // Build a fully-enriched user with all signals present.
+        let user = serde_json::json!({
+            "name": "alice",
+            "uid": 1000,
+            "gid": 1000,
+            "shell": "/bin/bash",
+            "home": "/home/alice",
+            "password_status": "password_set",
+            "has_sudo": true,
+            "ssh_key_count": 2,
+            "supplementary_groups": ["wheel", "docker"],
+        });
+
+        let rationale = build_classification_rationale(&user);
+
+        // Verify ALL signals appear in the rationale.
+        assert!(
+            rationale.contains("shell=bash"),
+            "rationale should include shell: {rationale}"
+        );
+        assert!(
+            rationale.contains("home=/home/alice"),
+            "rationale should include home: {rationale}"
+        );
+        assert!(
+            rationale.contains("password=password_set"),
+            "rationale should include password status: {rationale}"
+        );
+        assert!(
+            rationale.contains("sudo=yes"),
+            "rationale should include sudo: {rationale}"
+        );
+        assert!(
+            rationale.contains("ssh_keys=2"),
+            "rationale should include ssh key count: {rationale}"
+        );
+        assert!(
+            rationale.contains("groups=wheel+docker"),
+            "rationale should include groups: {rationale}"
+        );
+    }
+
+    #[test]
+    fn classification_rationale_no_sudo() {
+        let user = serde_json::json!({
+            "name": "bob",
+            "shell": "/sbin/nologin",
+            "home": "/home/bob",
+            "has_sudo": false,
+        });
+
+        let rationale = build_classification_rationale(&user);
+        assert!(
+            rationale.contains("sudo=no"),
+            "rationale should show sudo=no: {rationale}"
+        );
+        assert!(
+            rationale.contains("shell=nologin"),
+            "rationale should include shell: {rationale}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // password hash preservation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn shadow_preserve_hashes_stores_hash() {
+        let text = "alice:$6$rounds=5000$salt$hashvalue:19700:0:99999:7:::\n";
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+            "uid": 1000,
+            "gid": 1000,
+            "shell": "/bin/bash",
+            "home": "/home/alice",
+            "include": true,
+        }));
+        let non_system = HashMap::from([("alice".to_string(), true)]);
+        let mut hints = Vec::new();
+
+        parse_shadow(text, &mut section, &non_system, &mut hints, true);
+
+        // Hash should be stored on the user entry.
+        let hash = section.users[0]
+            .get("password_hash")
+            .and_then(|v| v.as_str());
+        assert_eq!(
+            hash,
+            Some("$6$rounds=5000$salt$hashvalue"),
+            "hash should be preserved"
+        );
+
+        // password_status should also be set.
+        let status = section.users[0]
+            .get("password_status")
+            .and_then(|v| v.as_str());
+        assert_eq!(status, Some("password_set"));
+    }
+
+    #[test]
+    fn shadow_no_preserve_hashes_omits_hash() {
+        let text = "alice:$6$rounds=5000$salt$hashvalue:19700:0:99999:7:::\n";
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+            "uid": 1000,
+            "gid": 1000,
+            "shell": "/bin/bash",
+            "home": "/home/alice",
+            "include": true,
+        }));
+        let non_system = HashMap::from([("alice".to_string(), true)]);
+        let mut hints = Vec::new();
+
+        parse_shadow(text, &mut section, &non_system, &mut hints, false);
+
+        // Hash must NOT be stored.
+        assert!(
+            section.users[0].get("password_hash").is_none(),
+            "hash should not be stored when preserve is false"
+        );
+
+        // password_status should still be set.
+        let status = section.users[0]
+            .get("password_status")
+            .and_then(|v| v.as_str());
+        assert_eq!(status, Some("password_set"));
+    }
+
+    #[test]
+    fn shadow_preserve_hashes_locked_no_hash() {
+        // Locked accounts should NOT get password_hash even with preserve=true.
+        let text = "bob:!!:19700:0:99999:7:::\n";
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "bob",
+            "uid": 1001,
+            "gid": 1001,
+            "shell": "/bin/bash",
+            "home": "/home/bob",
+            "include": true,
+        }));
+        let non_system = HashMap::from([("bob".to_string(), true)]);
+        let mut hints = Vec::new();
+
+        parse_shadow(text, &mut section, &non_system, &mut hints, true);
+
+        assert!(
+            section.users[0].get("password_hash").is_none(),
+            "locked accounts should not get password_hash"
+        );
+        let status = section.users[0]
+            .get("password_status")
+            .and_then(|v| v.as_str());
+        assert_eq!(status, Some("locked"));
+    }
+
+    // -----------------------------------------------------------------------
+    // SSH key content preservation tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ssh_preserve_keys_stores_content() {
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+            "home": "/home/alice",
+        }));
+
+        let exec = MockExecutor::new().with_file(
+            "/home/alice/.ssh/authorized_keys",
+            "ssh-rsa AAAAB3... alice@laptop\nssh-ed25519 AAAAC3... alice@work\n",
+        );
+
+        collect_ssh_keys(&exec, &mut section, true);
+
+        // ssh_key_count should always be set.
+        assert_eq!(section.users[0]["ssh_key_count"], 2);
+
+        // ssh_keys array should contain the key lines.
+        let keys = section.users[0]["ssh_keys"]
+            .as_array()
+            .expect("ssh_keys should be an array");
+        assert_eq!(keys.len(), 2);
+        assert!(keys[0].as_str().unwrap().starts_with("ssh-rsa"));
+        assert!(keys[1].as_str().unwrap().starts_with("ssh-ed25519"));
+    }
+
+    #[test]
+    fn ssh_no_preserve_keys_omits_content() {
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+            "home": "/home/alice",
+        }));
+
+        let exec = MockExecutor::new().with_file(
+            "/home/alice/.ssh/authorized_keys",
+            "ssh-rsa AAAAB3... alice@laptop\n",
+        );
+
+        collect_ssh_keys(&exec, &mut section, false);
+
+        // ssh_key_count should be set.
+        assert_eq!(section.users[0]["ssh_key_count"], 1);
+
+        // ssh_keys array should NOT be present.
+        assert!(
+            section.users[0].get("ssh_keys").is_none(),
+            "ssh_keys should not be stored when preserve is false"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // group source field tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn group_source_custom_for_high_gid() {
+        let text = "devs:x:1001:alice,bob\n";
+        let mut section = UserGroupSection::default();
+        let mut non_system = HashMap::new();
+        parse_group(text, &mut section, &mut non_system);
+
+        assert_eq!(section.groups.len(), 1);
+        assert_eq!(section.groups[0]["source"], "custom");
+    }
+
+    // -----------------------------------------------------------------------
+    // supplementary groups tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn supplementary_groups_includes_system_groups() {
+        // wheel (GID 10) and docker (GID 999) are system groups — they won't
+        // appear in section.groups, but supplementary_groups should still list them.
+        let group_text = "\
+root:x:0:
+wheel:x:10:alice
+docker:x:999:alice,bob
+alice:x:1000:
+bob:x:1001:
+devs:x:1002:alice,bob
+";
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+            "uid": 1000,
+            "gid": 1000,
+            "shell": "/bin/bash",
+            "home": "/home/alice",
+            "include": true,
+        }));
+        section.users.push(serde_json::json!({
+            "name": "bob",
+            "uid": 1001,
+            "gid": 1001,
+            "shell": "/bin/bash",
+            "home": "/home/bob",
+            "include": true,
+        }));
+
+        enrich_supplementary_groups(group_text, &mut section);
+
+        // Alice should have wheel, docker, devs.
+        let alice_groups = section.users[0]["supplementary_groups"]
+            .as_array()
+            .expect("alice supplementary_groups");
+        let alice_names: Vec<&str> = alice_groups
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(
+            alice_names.contains(&"wheel"),
+            "alice should be in wheel: {alice_names:?}"
+        );
+        assert!(
+            alice_names.contains(&"docker"),
+            "alice should be in docker: {alice_names:?}"
+        );
+        assert!(
+            alice_names.contains(&"devs"),
+            "alice should be in devs: {alice_names:?}"
+        );
+
+        // Bob should have docker, devs (not wheel).
+        let bob_groups = section.users[1]["supplementary_groups"]
+            .as_array()
+            .expect("bob supplementary_groups");
+        let bob_names: Vec<&str> = bob_groups
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(
+            bob_names.contains(&"docker"),
+            "bob should be in docker: {bob_names:?}"
+        );
+        assert!(
+            bob_names.contains(&"devs"),
+            "bob should be in devs: {bob_names:?}"
+        );
+        assert!(
+            !bob_names.contains(&"wheel"),
+            "bob should NOT be in wheel: {bob_names:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // sudo enrichment tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn enrich_sudo_direct_user_rule() {
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+            "supplementary_groups": [],
+        }));
+        section
+            .sudoers_rules
+            .push("alice ALL=(ALL) ALL".to_string());
+
+        enrich_sudo_flags(&mut section);
+
+        assert_eq!(section.users[0]["has_sudo"], true);
+    }
+
+    #[test]
+    fn enrich_sudo_group_based() {
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+            "supplementary_groups": ["wheel"],
+        }));
+        section
+            .sudoers_rules
+            .push("%wheel ALL=(ALL) ALL".to_string());
+
+        enrich_sudo_flags(&mut section);
+
+        assert_eq!(section.users[0]["has_sudo"], true);
+    }
+
+    #[test]
+    fn enrich_sudo_no_match() {
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "bob",
+            "supplementary_groups": [],
+        }));
+        section
+            .sudoers_rules
+            .push("alice ALL=(ALL) ALL".to_string());
+
+        enrich_sudo_flags(&mut section);
+
+        assert_eq!(section.users[0]["has_sudo"], false);
+    }
+
+    // -----------------------------------------------------------------------
+    // subuid enrichment tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn enrich_subuid_flag() {
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "alice",
+        }));
+        section
+            .subuid_entries
+            .push("alice:100000:65536".to_string());
+
+        enrich_subuid_flags(&mut section);
+
+        assert_eq!(section.users[0]["has_subuid"], true);
+    }
+
+    #[test]
+    fn enrich_subuid_no_allocation() {
+        let mut section = UserGroupSection::default();
+        section.users.push(serde_json::json!({
+            "name": "bob",
+        }));
+        section
+            .subuid_entries
+            .push("alice:100000:65536".to_string());
+
+        enrich_subuid_flags(&mut section);
+
+        assert_eq!(section.users[0]["has_subuid"], false);
+    }
+
+    // -----------------------------------------------------------------------
+    // full integration: enrichment order in inspect()
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn inspect_enrichment_order_all_signals() {
+        let exec = MockExecutor::new()
+            .with_file(
+                "/etc/passwd",
+                "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
+            )
+            .with_file(
+                "/etc/shadow",
+                "alice:$6$salt$hash:19700:0:99999:7:::\n",
+            )
+            .with_file(
+                "/etc/group",
+                "root:x:0:\nwheel:x:10:alice\nalice:x:1000:\n",
+            )
+            .with_file(
+                "/etc/subuid",
+                "alice:100000:65536\n",
+            )
+            .with_file(
+                "/etc/sudoers",
+                "%wheel ALL=(ALL) ALL\n",
+            )
+            .with_file(
+                "/home/alice/.ssh/authorized_keys",
+                "ssh-rsa AAAAB3... alice@laptop\n",
+            );
+
+        let source = pkg_source();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+        let result = UsersGroupsInspector::new().inspect(&ctx);
+
+        // May be Degraded due to missing gshadow — extract partial.
+        let output = match result {
+            Ok(o) => o,
+            Err(InspectorError::Degraded { partial, .. }) => *partial,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        };
+
+        if let SectionData::UsersGroups(section) = &output.section {
+            let alice = &section.users[0];
+
+            // All enrichment fields should be present.
+            assert_eq!(alice["has_sudo"], true, "alice in wheel with %wheel rule");
+            assert_eq!(alice["has_subuid"], true, "alice has subuid allocation");
+            assert_eq!(alice["ssh_key_count"], 1);
+            assert_eq!(alice["password_status"], "password_set");
+
+            let groups = alice["supplementary_groups"]
+                .as_array()
+                .expect("supplementary_groups");
+            let group_names: Vec<&str> = groups
+                .iter()
+                .filter_map(|v| v.as_str())
+                .collect();
+            assert!(
+                group_names.contains(&"wheel"),
+                "should include system group wheel: {group_names:?}"
+            );
+
+            // classification_rationale should include all signals.
+            let rationale = alice["classification_rationale"]
+                .as_str()
+                .expect("rationale");
+            assert!(rationale.contains("shell=bash"), "rationale: {rationale}");
+            assert!(rationale.contains("sudo=yes"), "rationale: {rationale}");
+            assert!(rationale.contains("ssh_keys=1"), "rationale: {rationale}");
+            assert!(rationale.contains("wheel"), "rationale: {rationale}");
         } else {
             panic!("expected UsersGroups section");
         }
