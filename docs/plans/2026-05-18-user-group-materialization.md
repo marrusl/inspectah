@@ -1244,7 +1244,7 @@ export interface UserDecision {
 }
 ```
 
-Add `users_groups_decisions: UserDecision[]` to the `ViewResponse` type.
+Add `users_groups_decisions: UserDecision[]` and `session_is_sensitive: boolean` to the `ViewResponse` type.
 
 - [ ] **Step 2: Add API client methods**
 
@@ -1275,7 +1275,7 @@ Section wrapper with:
 - Header: "Users & Groups" title
 - Banner text about KS/TOML always generated
 - "Preview Artifacts" button
-- Sensitivity banner when `sensitive_snapshot` is true
+- Sensitivity banner when `session_is_sensitive` is true
 - Maps `users_groups_decisions` to `UserCard` components
 - Empty state when no users
 
