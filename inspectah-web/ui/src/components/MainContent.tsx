@@ -15,12 +15,14 @@ import { ContextList } from "./ContextList";
 import { SectionSearch } from "./SectionSearch";
 import { AttentionSummary } from "./AttentionSummary";
 import { highestAttention } from "./attentionUtils";
+import { CubesIcon } from "@patternfly/react-icons";
 
 /** Section ID to human-readable label. */
 const SECTION_LABELS: Record<string, string> = {
   packages: "Packages",
   configs: "Config Files",
   services: "Services",
+  version_changes: "Version Changes",
   containers: "Containers",
   users_groups: "Users & Groups",
   network: "Network",
@@ -272,6 +274,7 @@ export function MainContent({
   // scheduled_tasks, non_rpm_software, kernel_boot, selinux
   const contextSectionIds = [
     "services",
+    "version_changes",
     "containers",
     "users_groups",
     "network",
@@ -281,6 +284,40 @@ export function MainContent({
     "kernel_boot",
     "selinux",
   ];
+
+  if (activeSection === "version_changes") {
+    const section = sections?.find((s) => s.id === "version_changes");
+    if (!section) {
+      return (
+        <PageSection>
+          <Content><h2>{label}</h2></Content>
+          <p>Section data not available.</p>
+        </PageSection>
+      );
+    }
+
+    if (section.items.length === 0 && section.empty_reason) {
+      const copyMap: Record<string, string> = {
+        no_baseline: "Version comparison requires a baseline. Run with --baseline to enable.",
+        zero_drift: "All packages match the target baseline versions.",
+        data_unavailable: "Version change data is not available for this snapshot.",
+      };
+      const copy = copyMap[section.empty_reason] ?? copyMap.data_unavailable;
+      return (
+        <PageSection>
+          <Content><h2>{label}</h2></Content>
+          <EmptyState titleText={copy} icon={CubesIcon} headingLevel="h3" />
+        </PageSection>
+      );
+    }
+
+    return (
+      <PageSection>
+        <Content><h2>{label}</h2></Content>
+        <ContextList section={section} />
+      </PageSection>
+    );
+  }
 
   if (contextSectionIds.includes(activeSection)) {
     const section = sections?.find((s) => s.id === activeSection);

@@ -20,6 +20,7 @@ const DECISION_SECTIONS = [
 /** Section IDs from the snapshot context endpoint (read-only context). */
 const CONTEXT_SECTIONS = [
   { id: "services", label: "Services" },
+  { id: "version_changes", label: "Version Changes" },
   { id: "containers", label: "Containers" },
   { id: "users_groups", label: "Users & Groups" },
   { id: "network", label: "Network" },
