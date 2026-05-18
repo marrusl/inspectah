@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
+> **Revision 5** (2026-05-18): Addresses round 4 review. RoutineSummary proof snippets now use real `getByLabelText("Expand <name>")` affordance instead of clicking label text. Task 14 state literal fixed to `"modified"` (lowercase). Empty-section focus proof moved to app-level `FocusAndNavigation.test.tsx` with key-4 navigation. Epoch `format_evr_pair`/`formatEvrPair` tightened with normalization: `""` → `"0"` before comparing, show epoch when normalized values differ.
+>
 > **Revision 4** (2026-05-18): Addresses round 3 review. All placeholder test descriptions replaced with concrete, copy-pasteable test code. Task 6 session test uses real `test_snapshot()` + `RefineSession::new()` pattern. Task 11 adds initial-focus-on-close-button proof. Task 12/14 RoutineSummary path proofs have full render + assertion code. Task 13 Sidebar test has concrete render + badge + click assertions and empty-section focus landing proof. All "read the existing pattern" instructions eliminated.
 >
 > **Revision 3** (2026-05-18): Addresses round 2 review. Task 5 `BaselinePackageEntry.epoch` fixed to `Option<String>`, missing `glibc.x86_64` repoquery mock added. `format_evr()` replaced with paired `format_evr_pair()`/`formatEvrPair()` to handle `""` vs `"0"` edge case with explicit proof. Modal a11y proof expanded: Enter/Space open, Escape close, long-list scroll. RoutineSummary path proof tests added for both `leafDepTree` and `versionChange` threading. Concrete `4/5/9` remap assertions in `useKeyboard.test.ts`. ShortcutOverlay wording restored to approved `"Jump to section by index"`. `Sidebar.test.tsx` coverage added. Smoke fixture pinned to tracked path. Task 7 failure check split.
@@ -1391,20 +1393,28 @@ Assisted-by: Claude Code (Opus 4.6)"
 
 - [ ] **Step 1: Add shared `format_evr_pair()` helper**
 
-This is the single epoch-aware formatting path used by both the context section and `PackageDetail` supplement. It uses **paired** rendering: when either side has a non-trivial epoch, both sides show epoch prefixes. This prevents the `""` vs `"0"` edge case where independent per-side formatting renders identical EVR strings for packages with real drift.
+This is the single epoch-aware formatting path used by both the context section and `PackageDetail` supplement. It uses **paired** rendering with epoch normalization:
+
+1. Normalize both epochs: `""` → `"0"` (semantically equal in RPM).
+2. Compare the normalized values. If they differ, show epoch prefix on both sides.
+3. If both are `"0"` after normalization, suppress epoch prefix on both sides.
+
+This handles the real `base_epoch=""` vs `host_epoch="0"` edge case: after normalization both are `"0"`, so no prefix is shown (correct — they're semantically equal). But `base_epoch="0"` vs `host_epoch="1"` shows `0:` and `1:` on both sides.
 
 ```rust
 /// Format a version change pair with epoch-awareness.
-/// When EITHER side has a non-trivial epoch (not empty and not "0"),
-/// both sides render with epoch prefix. This prevents identical-looking
-/// EVR strings when only epoch differs.
+///
+/// Normalizes "" to "0" before comparing. When normalized epochs
+/// differ, both sides render with epoch prefix. When both are "0"
+/// (or empty), neither side shows epoch.
 fn format_evr_pair(
     base_epoch: &str, base_version: &str,
     host_epoch: &str, host_version: &str,
 ) -> (String, String) {
-    let base_nontrivial = !base_epoch.is_empty() && base_epoch != "0";
-    let host_nontrivial = !host_epoch.is_empty() && host_epoch != "0";
-    let show_epoch = base_nontrivial || host_nontrivial;
+    let norm = |e: &str| -> &str { if e.is_empty() { "0" } else { e } };
+    let base_norm = norm(base_epoch);
+    let host_norm = norm(host_epoch);
+    let show_epoch = base_norm != host_norm || (base_norm != "0");
 
     let fmt = |epoch: &str, version: &str| -> String {
         if show_epoch {
@@ -2230,7 +2240,7 @@ describe("PackageDetail dependency button", () => {
   const basePkg = {
     entry: {
       name: "httpd", arch: "x86_64", version: "2.4.57", release: "5.el9",
-      epoch: "0", state: "Added", include: true, source_repo: "appstream",
+      epoch: "0", state: "added", include: true, source_repo: "appstream",
       fleet: null,
     },
     attention: [],
@@ -2349,9 +2359,9 @@ it("threads leafDepTree through to PackageDetail View Dependencies button", asyn
     />,
   );
 
-  // Expand the detail pane on the rendered DecisionItem
-  const row = screen.getByText("httpd.x86_64");
-  await userEvent.click(row);
+  // Expand detail via the real expand affordance (aria-label button)
+  const expandBtn = screen.getByLabelText("Expand httpd.x86_64");
+  await userEvent.click(expandBtn);
 
   // leafDepTree survived RoutineSummary → DecisionItem → PackageDetail
   expect(screen.getByText(/View Dependencies \(2\)/)).toBeInTheDocument();
@@ -2586,34 +2596,60 @@ it("calls onSelect with version_changes when clicked", async () => {
 });
 ```
 
-- [ ] **Step 6: Add empty-section focus landing proof**
+- [ ] **Step 6: Add app-level empty-section focus landing proof**
 
-In `inspectah-web/ui/src/components/__tests__/EmptyStates.test.tsx`, add to the Version Changes empty states describe block:
+In `inspectah-web/ui/src/components/__tests__/FocusAndNavigation.test.tsx`, add a test that navigates to the empty `version_changes` section via the app-level section-change path and verifies focus lands correctly. This test must use the `App`-level render (matching the existing `FocusAndNavigation` pattern) to prove focus through the real navigation path, not just `MainContent` in isolation.
 
+Update the test file's `MOCK_SECTIONS` to include `version_changes`:
 ```tsx
-it("renders accessible empty state when version_changes section is navigated to", async () => {
-  const { MainContent } = await import("../MainContent");
-  const sections: ContextSection[] = [{
+const MOCK_SECTIONS = [
+  {
+    id: "services",
+    display_name: "Services",
+    items: [{ id: "svc-1", title: "httpd.service", searchable_text: "httpd service" }],
+  },
+  {
     id: "version_changes",
     display_name: "Version Changes",
     items: [],
     empty_reason: "zero_drift",
-  }];
-  render(
-    <MainContent
-      activeSection="version_changes"
-      loading={false}
-      viewData={{ ...MOCK_VIEW, leaf_dep_tree: {}, version_changes: [] }}
-      sections={sections}
-      onViewUpdate={vi.fn()}
-      onMutationError={vi.fn()}
-      sectionSearchOpen={false}
-      onSectionSearchClose={vi.fn()}
-    />
-  );
-  // The EmptyState heading is rendered and accessible
+  },
+  // ... rest of existing mock sections
+];
+```
+
+Update `MOCK_VIEW` to include the new required fields:
+```tsx
+const MOCK_VIEW = {
+  // ... existing fields ...
+  leaf_dep_tree: {},
+  version_changes: [],
+};
+```
+
+Add the test:
+```tsx
+it("navigates to empty version_changes section via key 4 and renders empty state", async () => {
+  render(<App />);
+
+  await waitFor(() => {
+    expect(screen.getByText("Packages")).toBeInTheDocument();
+  });
+
+  // Press key 4 to navigate to version_changes
+  await act(async () => {
+    fireEvent.keyDown(document, { key: "4" });
+  });
+
+  // The section heading renders
+  await waitFor(() => {
+    expect(screen.getByText("Version Changes")).toBeInTheDocument();
+  });
+
+  // The empty-state copy is visible and accessible
+  expect(screen.getByText(/All packages match/)).toBeInTheDocument();
   const heading = screen.getByRole("heading", { level: 3 });
-  expect(heading).toHaveTextContent(/All packages match/);
+  expect(heading).toBeInTheDocument();
 });
 ```
 
@@ -2656,7 +2692,7 @@ it("shows version change info for Modified package", () => {
   const pkg = {
     entry: {
       name: "bash", arch: "x86_64", version: "5.2.26", release: "3.el9",
-      epoch: "0", state: "Modified", include: true, source_repo: "baseos",
+      epoch: "0", state: "modified", include: true, source_repo: "baseos",
       fleet: null,
     },
     attention: [],
@@ -2677,7 +2713,7 @@ it("shows epoch-prefixed versions when epoch is non-zero", () => {
   const pkg = {
     entry: {
       name: "glibc", arch: "x86_64", version: "2.34", release: "100.el9",
-      epoch: "1", state: "Modified", include: true, source_repo: "baseos",
+      epoch: "1", state: "modified", include: true, source_repo: "baseos",
       fleet: null,
     },
     attention: [],
@@ -2696,7 +2732,7 @@ it("does not show version change when versionChange is null", () => {
   const pkg = {
     entry: {
       name: "httpd", arch: "x86_64", version: "2.4.57", release: "5.el9",
-      epoch: "0", state: "Added", include: true, source_repo: "appstream",
+      epoch: "0", state: "added", include: true, source_repo: "appstream",
       fleet: null,
     },
     attention: [],
@@ -2713,7 +2749,7 @@ it("does not show epoch prefix when both sides are trivial (empty vs 0)", () => 
   const pkg = {
     entry: {
       name: "bash", arch: "x86_64", version: "5.2.26", release: "4.el9",
-      epoch: "0", state: "Modified", include: true, source_repo: "baseos",
+      epoch: "0", state: "modified", include: true, source_repo: "baseos",
       fleet: null,
     },
     attention: [],
@@ -2734,16 +2770,20 @@ it("does not show epoch prefix when both sides are trivial (empty vs 0)", () => 
 
 - [ ] **Step 2: Add paired epoch-aware display helper to PackageDetail**
 
-Uses paired rendering (same logic as the Rust `format_evr_pair`): when EITHER side has a non-trivial epoch, both sides show epoch prefixes.
+Uses paired rendering with epoch normalization (same logic as the Rust `format_evr_pair`):
+
+1. Normalize `""` → `"0"` on both sides.
+2. If normalized epochs differ, show prefix on both. If both are `"0"`, suppress.
 
 ```tsx
 function formatEvrPair(
   baseEpoch: string, baseVersion: string,
   hostEpoch: string, hostVersion: string,
 ): [string, string] {
-  const baseNontrivial = baseEpoch !== "" && baseEpoch !== "0";
-  const hostNontrivial = hostEpoch !== "" && hostEpoch !== "0";
-  const showEpoch = baseNontrivial || hostNontrivial;
+  const norm = (e: string): string => (e === "" ? "0" : e);
+  const baseNorm = norm(baseEpoch);
+  const hostNorm = norm(hostEpoch);
+  const showEpoch = baseNorm !== hostNorm || baseNorm !== "0";
 
   const fmt = (epoch: string, version: string): string => {
     if (showEpoch) {
@@ -2812,7 +2852,7 @@ it("threads versionChanges through to PackageDetail version change display", asy
     data: {
       entry: {
         name: "bash", epoch: "0", version: "5.2.26", release: "3.el9",
-        arch: "x86_64", state: "Modified", include: true, source_repo: "baseos",
+        arch: "x86_64", state: "modified", include: true, source_repo: "baseos",
         fleet: null,
       },
       attention: [ROUTINE_TAG],
@@ -2837,9 +2877,9 @@ it("threads versionChanges through to PackageDetail version change display", asy
     />,
   );
 
-  // Expand detail pane on the rendered DecisionItem
-  const row = screen.getByText("bash.x86_64");
-  await userEvent.click(row);
+  // Expand detail via the real expand affordance
+  const expandBtn = screen.getByLabelText("Expand bash.x86_64");
+  await userEvent.click(expandBtn);
 
   // versionChanges survived RoutineSummary → DecisionItem → PackageDetail
   expect(screen.getByText("Version Change")).toBeInTheDocument();
