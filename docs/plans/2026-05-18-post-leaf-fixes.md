@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
+> **Revision 4** (2026-05-18): Addresses round 3 review. All placeholder test descriptions replaced with concrete, copy-pasteable test code. Task 6 session test uses real `test_snapshot()` + `RefineSession::new()` pattern. Task 11 adds initial-focus-on-close-button proof. Task 12/14 RoutineSummary path proofs have full render + assertion code. Task 13 Sidebar test has concrete render + badge + click assertions and empty-section focus landing proof. All "read the existing pattern" instructions eliminated.
+>
 > **Revision 3** (2026-05-18): Addresses round 2 review. Task 5 `BaselinePackageEntry.epoch` fixed to `Option<String>`, missing `glibc.x86_64` repoquery mock added. `format_evr()` replaced with paired `format_evr_pair()`/`formatEvrPair()` to handle `""` vs `"0"` edge case with explicit proof. Modal a11y proof expanded: Enter/Space open, Escape close, long-list scroll. RoutineSummary path proof tests added for both `leafDepTree` and `versionChange` threading. Concrete `4/5/9` remap assertions in `useKeyboard.test.ts`. ShortcutOverlay wording restored to approved `"Jump to section by index"`. `Sidebar.test.tsx` coverage added. Smoke fixture pinned to tracked path. Task 7 failure check split.
 >
 > **Revision 2** (2026-05-18): Addresses plan review findings. Item 1 rewritten against real `classify_leaf_auto`/`LeafClassification`/`recompute_view` seams. Tasks 5+8 merged into atomic commit. Epoch-aware `format_evr()` shared helper added. `PackageDetail` prop narrowed to card-local `versionChange?: VersionChangeEntry | null`. Frontend file map includes `RoutineSummary.tsx` and names existing proof suites. Verification gates use `set -o pipefail` and name specific proof-bearing tests. `BaselineData` fixtures are explicit (no `Default`). `PackageEntry.epoch` is `String` (not `Option`).
@@ -914,17 +916,37 @@ The current leaf filter in `recompute_view()` (~line 614) builds a `leaf_set` fr
 ```rust
 #[test]
 fn test_baseline_suppressed_excluded_from_view_even_if_needs_review() {
-    // A baseline-suppressed package that somehow gets NeedsReview attention
-    // should still be excluded from the view. This is defense-in-depth.
-    // Construct a snapshot where:
-    // - leaf_packages: ["httpd.x86_64"]
-    // - baseline_suppressed: Some(["kernel.x86_64"])
-    // - packages_added includes kernel.x86_64 with NeedsReview-level attention
-    // The view should NOT include kernel.x86_64
+    let mut snap = test_snapshot();
+    let rpm = snap.rpm.as_mut().unwrap();
+    rpm.packages_added = vec![
+        PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            include: true,
+            source_repo: "appstream".into(),
+            ..Default::default()
+        },
+        PackageEntry {
+            name: "kernel".into(),
+            arch: "x86_64".into(),
+            include: true,
+            source_repo: "baseos".into(),
+            state: PackageState::Modified,
+            ..Default::default()
+        },
+    ];
+    rpm.leaf_packages = Some(vec!["httpd.x86_64".into()]);
+    rpm.auto_packages = Some(Vec::new());
+    rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into()]);
 
-    // Use the existing session test pattern (RefineSession::new_from_snapshot)
-    // Read existing tests like view_filters_to_canonical_leaf_packages_when_available
-    // for the exact pattern.
+    let session = RefineSession::new(snap);
+    let view = session.view();
+
+    // kernel.x86_64 is baseline-suppressed — must not appear
+    assert_eq!(view.packages.len(), 1);
+    assert_eq!(view.packages[0].entry.name, "httpd");
+    assert!(!view.packages.iter().any(|p| p.entry.name == "kernel"),
+        "baseline-suppressed package must not appear in view");
 }
 ```
 
@@ -2008,6 +2030,21 @@ describe("DependencyModal", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it("places initial focus on the close button when opened", () => {
+    render(
+      <DependencyModal
+        packageId="httpd.x86_64"
+        dependencies={deps}
+        isOpen={true}
+        onClose={vi.fn()}
+      />
+    );
+    // PatternFly Modal's FocusTrap places initial focus on the first
+    // focusable element, which is the close "X" button
+    const closeButton = screen.getByLabelText("Close");
+    expect(closeButton).toHaveFocus();
+  });
+
   it("opens via Enter key on trigger button", async () => {
     // This tests the trigger-side contract, not the modal itself.
     // Render a button that opens the modal (simulates PackageDetail usage).
@@ -2283,26 +2320,43 @@ The threading path is: `MainContent` → `DecisionList` → `DecisionItem` → `
 
 - [ ] **Step 4: Add RoutineSummary path proof test**
 
-Add to `inspectah-web/ui/src/components/__tests__/RoutineSummary.test.tsx` (or `PackageDetail.test.tsx` if RoutineSummary tests don't render deep enough):
+Add to `inspectah-web/ui/src/components/__tests__/RoutineSummary.test.tsx`:
 
 ```tsx
-it("threads leafDepTree through RoutineSummary to PackageDetail", () => {
-  // Build a routine-level package item with a matching leafDepTree entry.
-  // Render through RoutineSummary → DecisionItem → PackageDetail.
-  // Verify the "View Dependencies" button appears.
-  // This proves the prop survives the routine-row path, not just the
-  // direct DecisionItem path.
-  //
-  // Use the existing RoutineSummary test pattern: render RoutineSummary
-  // with items, expand the summary, and check that PackageDetail
-  // receives the leafDepTree prop.
-  //
-  // Key assertion: screen.getByText(/View Dependencies/) is present
-  // after expanding a routine-level leaf package.
+it("threads leafDepTree through to PackageDetail View Dependencies button", async () => {
+  const items: DecisionItemKind[] = [{
+    type: "package",
+    data: {
+      entry: {
+        name: "httpd", epoch: "0", version: "2.4.57", release: "5.el9",
+        arch: "x86_64", state: "added", include: true, source_repo: "appstream",
+        fleet: null,
+      },
+      attention: [ROUTINE_TAG],
+    },
+  }];
+  const leafDepTree = { "httpd.x86_64": ["apr.x86_64", "glibc.x86_64"] };
+
+  render(
+    <RoutineSummary
+      items={items}
+      forceExpanded={true}
+      onToggleInclude={vi.fn()}
+      onMarkViewed={vi.fn()}
+      viewedIds={new Set()}
+      isPending={false}
+      leafDepTree={leafDepTree}
+    />,
+  );
+
+  // Expand the detail pane on the rendered DecisionItem
+  const row = screen.getByText("httpd.x86_64");
+  await userEvent.click(row);
+
+  // leafDepTree survived RoutineSummary → DecisionItem → PackageDetail
+  expect(screen.getByText(/View Dependencies \(2\)/)).toBeInTheDocument();
 });
 ```
-
-Read `RoutineSummary.test.tsx` for the existing render pattern and replicate it with the new `leafDepTree` prop threaded through.
 
 - [ ] **Step 5: Run tests**
 
@@ -2482,28 +2536,84 @@ describe("Version Changes empty states", () => {
 
 - [ ] **Step 5: Add Sidebar.test.tsx coverage for always-present section**
 
-In `inspectah-web/ui/src/components/__tests__/Sidebar.test.tsx`, add a test that verifies the `version_changes` entry is always rendered in the Context nav group:
+In `inspectah-web/ui/src/components/__tests__/Sidebar.test.tsx`:
 
+First, update `MOCK_SECTIONS` to include `version_changes`:
 ```tsx
-it("renders Version Changes in sidebar Context group", () => {
-  // Use the existing Sidebar test render pattern.
-  // Provide sections array that includes version_changes with 0 items.
-  // Assert: a NavItem with text "Version Changes" and badge "0" is present.
-  // This proves the section is always navigable regardless of data state.
+const MOCK_SECTIONS: ContextSection[] = [
+  { id: "services", display_name: "Services", items: [{ id: "s1", title: "sshd", subtitle: null, detail: null, searchable_text: "sshd" }] },
+  { id: "version_changes", display_name: "Version Changes", items: [] },  // NEW — 0 items
+  { id: "containers", display_name: "Containers", items: [] },
+  // ... rest unchanged
+];
+```
+
+Update the existing "renders all N section items" test count (11 → 12).
+
+Then add the explicit proof:
+```tsx
+it("renders Version Changes in sidebar Context group with badge", () => {
+  render(
+    <Sidebar
+      activeSection="packages"
+      onSelect={vi.fn()}
+      stats={MOCK_STATS}
+      sections={MOCK_SECTIONS}
+      health={MOCK_HEALTH}
+    />,
+  );
+
+  expect(screen.getByText("Version Changes")).toBeInTheDocument();
+  // Badge shows "0" for the empty section
+  const vcItem = screen.getByText("Version Changes").closest("a, button, li");
+  expect(vcItem).toHaveTextContent("0");
+});
+
+it("calls onSelect with version_changes when clicked", async () => {
+  const onSelect = vi.fn();
+  render(
+    <Sidebar
+      activeSection="packages"
+      onSelect={onSelect}
+      stats={MOCK_STATS}
+      sections={MOCK_SECTIONS}
+      health={MOCK_HEALTH}
+    />,
+  );
+
+  await userEvent.click(screen.getByText("Version Changes"));
+  expect(onSelect).toHaveBeenCalledWith("version_changes");
 });
 ```
 
-Read `Sidebar.test.tsx` for the existing render pattern.
+- [ ] **Step 6: Add empty-section focus landing proof**
 
-- [ ] **Step 6: Note on empty-section focus landing**
-
-When navigating to `version_changes` via key `4` and the section is empty, focus lands on the `EmptyState` heading. This is the PatternFly `EmptyState` default behavior — no custom focus management needed. The existing `FocusAndNavigation.test.tsx` pattern covers section-switch focus. Add a note in the test if the empty-state heading needs explicit focus verification:
+In `inspectah-web/ui/src/components/__tests__/EmptyStates.test.tsx`, add to the Version Changes empty states describe block:
 
 ```tsx
-// In FocusAndNavigation.test.tsx or EmptyStates.test.tsx:
-it("focuses Version Changes heading when section is empty", async () => {
-  // Navigate to version_changes section
-  // Verify the EmptyState titleText element is rendered and section is accessible
+it("renders accessible empty state when version_changes section is navigated to", async () => {
+  const { MainContent } = await import("../MainContent");
+  const sections: ContextSection[] = [{
+    id: "version_changes",
+    display_name: "Version Changes",
+    items: [],
+    empty_reason: "zero_drift",
+  }];
+  render(
+    <MainContent
+      activeSection="version_changes"
+      loading={false}
+      viewData={{ ...MOCK_VIEW, leaf_dep_tree: {}, version_changes: [] }}
+      sections={sections}
+      onViewUpdate={vi.fn()}
+      onMutationError={vi.fn()}
+      sectionSearchOpen={false}
+      onSectionSearchClose={vi.fn()}
+    />
+  );
+  // The EmptyState heading is rendered and accessible
+  const heading = screen.getByRole("heading", { level: 3 });
+  expect(heading).toHaveTextContent(/All packages match/);
 });
 ```
 
@@ -2696,15 +2806,44 @@ const matchingVc = versionChanges?.find(
 Add to `RoutineSummary.test.tsx`:
 
 ```tsx
-it("threads versionChanges through RoutineSummary to PackageDetail", () => {
-  // Build a routine-level Modified package with a matching versionChanges entry.
-  // Render through RoutineSummary → DecisionItem → PackageDetail.
-  // Verify the "Version Change" DescriptionListTerm appears with direction label.
-  // This proves the versionChanges → card-local versionChange resolution
-  // survives the routine-row path.
-  //
-  // Key assertion: after expanding the RoutineSummary, the rendered
-  // PackageDetail shows the version change info.
+it("threads versionChanges through to PackageDetail version change display", async () => {
+  const items: DecisionItemKind[] = [{
+    type: "package",
+    data: {
+      entry: {
+        name: "bash", epoch: "0", version: "5.2.26", release: "3.el9",
+        arch: "x86_64", state: "Modified", include: true, source_repo: "baseos",
+        fleet: null,
+      },
+      attention: [ROUTINE_TAG],
+    },
+  }];
+  const versionChanges = [{
+    name: "bash", arch: "x86_64",
+    host_version: "5.2.26-3.el9", base_version: "5.2.26-4.el9",
+    host_epoch: "", base_epoch: "",
+    direction: "downgrade" as const,
+  }];
+
+  render(
+    <RoutineSummary
+      items={items}
+      forceExpanded={true}
+      onToggleInclude={vi.fn()}
+      onMarkViewed={vi.fn()}
+      viewedIds={new Set()}
+      isPending={false}
+      versionChanges={versionChanges}
+    />,
+  );
+
+  // Expand detail pane on the rendered DecisionItem
+  const row = screen.getByText("bash.x86_64");
+  await userEvent.click(row);
+
+  // versionChanges survived RoutineSummary → DecisionItem → PackageDetail
+  expect(screen.getByText("Version Change")).toBeInTheDocument();
+  expect(screen.getByText(/downgrade/i)).toBeInTheDocument();
 });
 ```
 
