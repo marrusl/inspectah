@@ -34,6 +34,7 @@ struct LeafClassification {
     leaf_packages: Option<Vec<String>>,
     auto_packages: Option<Vec<String>>,
     leaf_dep_tree: serde_json::Value,
+    baseline_suppressed: Option<Vec<String>>,
 }
 
 impl LeafClassification {
@@ -41,11 +42,13 @@ impl LeafClassification {
         leaf_packages: Vec<String>,
         auto_packages: Vec<String>,
         leaf_dep_tree: serde_json::Value,
+        baseline_suppressed: Option<Vec<String>>,
     ) -> Self {
         Self {
             leaf_packages: Some(leaf_packages),
             auto_packages: Some(auto_packages),
             leaf_dep_tree,
+            baseline_suppressed,
         }
     }
 
@@ -54,6 +57,7 @@ impl LeafClassification {
             leaf_packages: None,
             auto_packages: None,
             leaf_dep_tree: empty_leaf_dep_tree(),
+            baseline_suppressed: None,
         }
     }
 }
@@ -262,7 +266,7 @@ impl Inspector for RpmInspector {
         }
 
         // 4. Classify leaf vs auto packages
-        let leaf_classification = classify_leaf_auto(exec, &packages_added);
+        let leaf_classification = classify_leaf_auto(exec, &packages_added, ctx.baseline_data);
 
         // 5. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
@@ -310,6 +314,7 @@ impl Inspector for RpmInspector {
             leaf_packages: leaf_classification.leaf_packages,
             auto_packages: leaf_classification.auto_packages,
             leaf_dep_tree: leaf_classification.leaf_dep_tree,
+            baseline_suppressed: leaf_classification.baseline_suppressed,
             ..Default::default()
         };
 
@@ -416,7 +421,14 @@ fn classify_deps_dnf(
 /// sets using canonical `name.arch` identities. If dependency classification is
 /// unavailable or incomplete, returns explicit degraded-mode metadata instead of
 /// successful-looking fallback data.
-fn classify_leaf_auto(exec: &dyn Executor, packages_added: &[PackageEntry]) -> LeafClassification {
+///
+/// When `baseline` is provided, packages present in both the leaf set and the
+/// baseline are suppressed from the leaf list and recorded in `baseline_suppressed`.
+fn classify_leaf_auto(
+    exec: &dyn Executor,
+    packages_added: &[PackageEntry],
+    baseline: Option<&inspectah_core::baseline::BaselineData>,
+) -> LeafClassification {
     let added_ids: HashSet<String> = packages_added.iter().map(canonical_package_id).collect();
 
     let user_installed = query_user_installed(exec);
@@ -445,6 +457,21 @@ fn classify_leaf_auto(exec: &dyn Executor, packages_added: &[PackageEntry]) -> L
         graph_based_split(&added_ids, &depends_on)
     };
 
+    // Suppress baseline-present packages from leaf set
+    let baseline_suppressed: Option<Vec<String>> = baseline.map(|bl| {
+        let mut suppressed = Vec::new();
+        leaf.retain(|id| {
+            if bl.packages.contains_key(id) {
+                suppressed.push(id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        suppressed.sort();
+        suppressed
+    });
+
     leaf.sort();
     auto.sort();
 
@@ -465,7 +492,7 @@ fn classify_leaf_auto(exec: &dyn Executor, packages_added: &[PackageEntry]) -> L
         dep_tree.insert(lf.clone(), serde_json::json!(filtered));
     }
 
-    LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree))
+    LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree), baseline_suppressed)
 }
 
 /// Graph-based fallback: package identities depended on by other added packages are
@@ -977,7 +1004,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added, None);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1030,7 +1057,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added, None);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1186,7 +1213,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added, None);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1268,5 +1295,100 @@ tzdata\t/usr/share/zoneinfo/UTC
         assert_eq!(names.len(), 2);
         assert!(names.contains("vim.x86_64"));
         assert!(names.contains("htop.noarch"));
+    }
+
+    #[test]
+    fn test_classify_leaf_auto_suppresses_baseline_present_packages() {
+        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "vim.x86_64\nkernel.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+                ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n kernel.x86_64",
+                ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
+                ExecResult { exit_code: 0, stdout: "glibc.x86_64\n".into(), stderr: String::new() },
+            );
+
+        let added = vec![
+            make_test_entry("vim", "x86_64"),
+            make_test_entry("kernel", "x86_64"),
+            make_test_entry("glibc", "x86_64"),
+        ];
+
+        let mut baseline_packages = HashMap::new();
+        baseline_packages.insert(
+            "kernel.x86_64".into(),
+            BaselinePackageEntry {
+                name: "kernel".into(),
+                arch: "x86_64".into(),
+                version: "5.14.0".into(),
+                release: "362.el9".into(),
+                epoch: Some("0".into()),
+            },
+        );
+
+        let baseline = BaselineData {
+            image_digest: "sha256:abc123".into(),
+            packages: baseline_packages,
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let classification = classify_leaf_auto(&exec, &added, Some(&baseline));
+
+        assert_eq!(
+            classification.leaf_packages,
+            Some(vec!["vim.x86_64".to_string()])
+        );
+        assert_eq!(
+            classification.baseline_suppressed,
+            Some(vec!["kernel.x86_64".to_string()])
+        );
+        assert_eq!(
+            classification.auto_packages,
+            Some(vec!["glibc.x86_64".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_classify_leaf_auto_no_baseline_suppressed_is_none() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "vim.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+                ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
+                ExecResult { exit_code: 0, stdout: "glibc.x86_64\n".into(), stderr: String::new() },
+            );
+
+        let added = vec![
+            make_test_entry("vim", "x86_64"),
+            make_test_entry("glibc", "x86_64"),
+        ];
+
+        let classification = classify_leaf_auto(&exec, &added, None);
+        assert!(classification.baseline_suppressed.is_none());
     }
 }
