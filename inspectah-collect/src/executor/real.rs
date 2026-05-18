@@ -156,6 +156,87 @@ impl Executor for RealExecutor {
         })
     }
 
+    fn run_passthrough_stderr(&self, cmd: &str, args: &[&str]) -> ExecResult {
+        let resolved = resolve_command(cmd);
+        let child = Command::new(&resolved)
+            .args(args)
+            .env("LC_ALL", "C")
+            .env("LANG", "C")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn();
+
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                return ExecResult {
+                    stderr: e.to_string(),
+                    exit_code: 127,
+                    ..Default::default()
+                };
+            }
+        };
+
+        let stdout_handle = child.stdout.take();
+
+        std::thread::scope(|s| {
+            let stdout_thread = s.spawn(|| {
+                let mut buf = Vec::new();
+                if let Some(r) = stdout_handle {
+                    let mut limited = io::Read::take(r, STDOUT_SIZE_CAP as u64 + 1);
+                    let _ = io::Read::read_to_end(&mut limited, &mut buf);
+                }
+                buf
+            });
+
+            // No stderr thread — stderr is inherited by the child process.
+            // Use a longer timeout for image pulls (10 minutes).
+            let pull_timeout = Duration::from_secs(600);
+            match child.wait_timeout(pull_timeout) {
+                Ok(Some(status)) => {
+                    let stdout_raw = stdout_thread.join().unwrap();
+
+                    let stdout = if stdout_raw.len() > STDOUT_SIZE_CAP {
+                        let s =
+                            String::from_utf8_lossy(&stdout_raw[..STDOUT_SIZE_CAP]).into_owned();
+                        format!("{s}\n[output truncated at 64 MB]")
+                    } else {
+                        String::from_utf8_lossy(&stdout_raw).into_owned()
+                    };
+
+                    ExecResult {
+                        stdout,
+                        stderr: String::new(),
+                        exit_code: status.code().unwrap_or(-1),
+                    }
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = stdout_thread.join();
+                    ExecResult {
+                        stderr: format!(
+                            "command timed out after {}s: {} {}",
+                            pull_timeout.as_secs(),
+                            cmd,
+                            args.join(" ")
+                        ),
+                        exit_code: -1,
+                        ..Default::default()
+                    }
+                }
+                Err(e) => {
+                    let _ = stdout_thread.join();
+                    ExecResult {
+                        stderr: format!("failed to wait on child process: {e}"),
+                        exit_code: -1,
+                        ..Default::default()
+                    }
+                }
+            }
+        })
+    }
+
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let metadata = std::fs::metadata(path)?;
         if metadata.len() > FILE_SIZE_CAP {

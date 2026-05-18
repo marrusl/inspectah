@@ -123,6 +123,10 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     // Step 1: Detect source system
     eprintln!("Detecting source system...");
     let source = detect_source_system(&executor).context("source system detection failed")?;
+    let pretty = &source.os_release().pretty_name;
+    if !pretty.is_empty() {
+        eprintln!("  {pretty}");
+    }
 
     // Step 2: Resolve target image
     eprintln!("Resolving target image...");
@@ -168,7 +172,8 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     };
 
     // Step 4: Collect — run all inspectors
-    eprintln!("Scanning host...");
+    let hostname = get_hostname(&executor);
+    eprintln!("Scanning host {hostname}...");
     let inspectors: Vec<Box<dyn Inspector>> = vec![
         Box::new(RpmInspector::new()),
         Box::new(ServicesInspector::new()),
@@ -183,7 +188,7 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         Box::new(NonRpmInspector::new()),
     ];
     let collected = collect(&source, &executor, &inspectors, baseline_data.as_ref());
-    eprintln!("Scanning host... done");
+    eprintln!("Scanning host {hostname}... done");
 
     // Step 5: Validate
     let validated = validate(collected).context("snapshot validation failed")?;
@@ -233,7 +238,6 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     )?;
 
     // Step 8: Create tarball
-    let hostname = get_hostname(&executor);
     let stamp = get_output_stamp(&hostname);
     let tarball_name = format!("{stamp}.tar.gz");
 

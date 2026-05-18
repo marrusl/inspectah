@@ -85,8 +85,8 @@ pub fn extract_baseline(
 
     let mut guard = CleanupGuard::new(executor);
 
-    // 1. Pull
-    let pull_result = run_nsenter(executor, &["podman", "pull", image_ref]);
+    // 1. Pull (with stderr passthrough for live layer progress)
+    let pull_result = run_nsenter_passthrough(executor, &["podman", "pull", image_ref]);
     if !pull_result.success() {
         return Err(ExtractionError::PullFailed {
             image_ref: image_ref.to_string(),
@@ -172,6 +172,14 @@ fn run_nsenter(executor: &dyn Executor, cmd_and_args: &[&str]) -> ExecResult {
     let mut full_args: Vec<&str> = NSENTER_PREFIX.to_vec();
     full_args.extend_from_slice(cmd_and_args);
     executor.run(full_args[0], &full_args[1..])
+}
+
+/// Run a command through the nsenter prefix with stderr passed through
+/// to the terminal for live progress output.
+fn run_nsenter_passthrough(executor: &dyn Executor, cmd_and_args: &[&str]) -> ExecResult {
+    let mut full_args: Vec<&str> = NSENTER_PREFIX.to_vec();
+    full_args.extend_from_slice(cmd_and_args);
+    executor.run_passthrough_stderr(full_args[0], &full_args[1..])
 }
 
 /// Capture the image digest. Primary: `podman inspect --format '{{.Digest}}'`.
