@@ -34,7 +34,6 @@ struct LeafClassification {
     leaf_packages: Option<Vec<String>>,
     auto_packages: Option<Vec<String>>,
     leaf_dep_tree: serde_json::Value,
-    baseline_suppressed: Option<Vec<String>>,
 }
 
 impl LeafClassification {
@@ -42,13 +41,11 @@ impl LeafClassification {
         leaf_packages: Vec<String>,
         auto_packages: Vec<String>,
         leaf_dep_tree: serde_json::Value,
-        baseline_suppressed: Option<Vec<String>>,
     ) -> Self {
         Self {
             leaf_packages: Some(leaf_packages),
             auto_packages: Some(auto_packages),
             leaf_dep_tree,
-            baseline_suppressed,
         }
     }
 
@@ -57,7 +54,6 @@ impl LeafClassification {
             leaf_packages: None,
             auto_packages: None,
             leaf_dep_tree: empty_leaf_dep_tree(),
-            baseline_suppressed: None,
         }
     }
 }
@@ -266,21 +262,34 @@ impl Inspector for RpmInspector {
             source_repos::populate_source_repos(exec, &mut packages_added);
         }
 
-        // 4. Classify leaf vs auto packages
-        let leaf_classification = classify_leaf_auto(exec, &packages_added, ctx.baseline_data);
+        // 4. Compute baseline_suppressed from ALL packages_added (leaf + auto).
+        // This runs at the inspector level so it covers every package, not just
+        // the leaf subset, and survives degraded leaf classification.
+        let baseline_suppressed: Option<Vec<String>> = ctx.baseline_data.map(|bl| {
+            let mut suppressed: Vec<String> = packages_added
+                .iter()
+                .map(|pkg| canonical_package_id(pkg))
+                .filter(|id| bl.packages.contains_key(id))
+                .collect();
+            suppressed.sort();
+            suppressed
+        });
 
-        // 5. Collect supplementary data
+        // 5. Classify leaf vs auto packages
+        let leaf_classification = classify_leaf_auto(exec, &packages_added);
+
+        // 6. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
 
-        // 6. Query file ownership for Wave 2 inspectors
+        // 7. Query file ownership for Wave 2 inspectors
         let file_ownership = self.query_file_ownership(exec);
 
-        // 7. Build baseline_package_names for Go snapshot backward compat
+        // 8. Build baseline_package_names for Go snapshot backward compat
         let baseline_package_names = ctx
             .baseline_data
             .map(|b| b.packages.keys().cloned().collect::<Vec<_>>());
 
-        // 8. Build warnings
+        // 9. Build warnings
         let mut warnings = Vec::new();
         let no_baseline = ctx.baseline_data.is_none();
         if no_baseline {
@@ -300,7 +309,7 @@ impl Inspector for RpmInspector {
             });
         }
 
-        // 9. Build RpmSection
+        // 10. Build RpmSection
         let section = RpmSection {
             packages_added,
             base_image_only,
@@ -316,7 +325,7 @@ impl Inspector for RpmInspector {
             leaf_packages: leaf_classification.leaf_packages,
             auto_packages: leaf_classification.auto_packages,
             leaf_dep_tree: leaf_classification.leaf_dep_tree,
-            baseline_suppressed: leaf_classification.baseline_suppressed,
+            baseline_suppressed,
             ..Default::default()
         };
 
@@ -424,12 +433,12 @@ fn classify_deps_dnf(
 /// unavailable or incomplete, returns explicit degraded-mode metadata instead of
 /// successful-looking fallback data.
 ///
-/// When `baseline` is provided, packages present in both the leaf set and the
-/// baseline are suppressed from the leaf list and recorded in `baseline_suppressed`.
+/// Baseline suppression is handled at the inspector level (not here) so that ALL
+/// packages_added — leaf and auto alike — are checked against the baseline, and
+/// the suppressed set survives even when leaf classification degrades.
 fn classify_leaf_auto(
     exec: &dyn Executor,
     packages_added: &[PackageEntry],
-    baseline: Option<&inspectah_core::baseline::BaselineData>,
 ) -> LeafClassification {
     let added_ids: HashSet<String> = packages_added.iter().map(canonical_package_id).collect();
 
@@ -459,21 +468,6 @@ fn classify_leaf_auto(
         graph_based_split(&added_ids, &depends_on)
     };
 
-    // Suppress baseline-present packages from leaf set
-    let baseline_suppressed: Option<Vec<String>> = baseline.map(|bl| {
-        let mut suppressed = Vec::new();
-        leaf.retain(|id| {
-            if bl.packages.contains_key(id) {
-                suppressed.push(id.clone());
-                false
-            } else {
-                true
-            }
-        });
-        suppressed.sort();
-        suppressed
-    });
-
     leaf.sort();
     auto.sort();
 
@@ -494,7 +488,7 @@ fn classify_leaf_auto(
         dep_tree.insert(lf.clone(), serde_json::json!(filtered));
     }
 
-    LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree), baseline_suppressed)
+    LeafClassification::authoritative(leaf, auto, serde_json::Value::Object(dep_tree))
 }
 
 /// Graph-based fallback: package identities depended on by other added packages are
@@ -1006,7 +1000,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, None);
+        let classification = classify_leaf_auto(&exec, &added);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1059,7 +1053,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, None);
+        let classification = classify_leaf_auto(&exec, &added);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1215,7 +1209,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, None);
+        let classification = classify_leaf_auto(&exec, &added);
 
         assert_eq!(
             classification.leaf_packages,
@@ -1300,9 +1294,10 @@ tzdata\t/usr/share/zoneinfo/UTC
     }
 
     #[test]
-    fn test_classify_leaf_auto_suppresses_baseline_present_packages() {
-        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
-
+    fn test_classify_leaf_auto_does_not_handle_baseline_suppression() {
+        // After the refactor, classify_leaf_auto no longer takes a baseline
+        // parameter and does not suppress baseline-present packages.
+        // Baseline suppression is handled at the inspector level.
         let exec = MockExecutor::new()
             .with_command(
                 "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
@@ -1331,6 +1326,58 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
+        let classification = classify_leaf_auto(&exec, &added);
+
+        // Both vim and kernel stay in leaf (no baseline suppression at this level)
+        let mut expected_leaf = vec!["kernel.x86_64".to_string(), "vim.x86_64".to_string()];
+        expected_leaf.sort();
+        assert_eq!(classification.leaf_packages, Some(expected_leaf));
+        assert_eq!(
+            classification.auto_packages,
+            Some(vec!["glibc.x86_64".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_baseline_suppressed_includes_auto_packages() {
+        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+
+        // Scenario:
+        // - vim.x86_64 is user-installed (leaf)
+        // - glibc.x86_64 is a dependency (auto)
+        // - kernel.x86_64 is user-installed (leaf)
+        // - baseline contains kernel AND glibc
+        // Result: baseline_suppressed should contain BOTH kernel.x86_64
+        //         AND glibc.x86_64 (not just kernel, which is the only
+        //         one in the leaf set)
+        let exec = build_leaf_classification_executor(
+            "\
+0:vim-9.0.1592-1.el9.x86_64
+0:kernel-5.14.0-503.el9.x86_64
+0:glibc-2.34-100.el9.x86_64
+",
+        )
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ExecResult {
+                exit_code: 0,
+                stdout: "vim.x86_64\nkernel.x86_64\n".into(),
+                stderr: String::new(),
+            },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+            ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n kernel.x86_64",
+            ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
+            ExecResult { exit_code: 0, stdout: "glibc.x86_64\n".into(), stderr: String::new() },
+        );
+
         let mut baseline_packages = HashMap::new();
         baseline_packages.insert(
             "kernel.x86_64".into(),
@@ -1342,31 +1389,126 @@ tzdata\t/usr/share/zoneinfo/UTC
                 epoch: Some("0".into()),
             },
         );
+        baseline_packages.insert(
+            "glibc.x86_64".into(),
+            BaselinePackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                version: "2.34".into(),
+                release: "100.el9".into(),
+                epoch: Some("0".into()),
+            },
+        );
 
-        let baseline = BaselineData {
+        let baseline_data = BaselineData {
             image_digest: "sha256:abc123".into(),
             packages: baseline_packages,
             extracted_at: "2026-01-01T00:00:00Z".into(),
         };
 
-        let classification = classify_leaf_auto(&exec, &added, Some(&baseline));
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: Some(&baseline_data),
+        };
 
-        assert_eq!(
-            classification.leaf_packages,
-            Some(vec!["vim.x86_64".to_string()])
-        );
-        assert_eq!(
-            classification.baseline_suppressed,
-            Some(vec!["kernel.x86_64".to_string()])
-        );
-        assert_eq!(
-            classification.auto_packages,
-            Some(vec!["glibc.x86_64".to_string()])
-        );
+        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+
+        // Both kernel (leaf) AND glibc (auto) should be in baseline_suppressed
+        let suppressed = rpm.baseline_suppressed.as_ref().expect("baseline_suppressed should be Some");
+        assert!(suppressed.contains(&"kernel.x86_64".to_string()),
+            "baseline_suppressed should include leaf package kernel.x86_64");
+        assert!(suppressed.contains(&"glibc.x86_64".to_string()),
+            "baseline_suppressed should include auto package glibc.x86_64");
+        assert_eq!(suppressed.len(), 2, "exactly kernel + glibc should be suppressed");
     }
 
     #[test]
-    fn test_classify_leaf_auto_no_baseline_suppressed_is_none() {
+    fn test_baseline_suppressed_survives_degraded_leaf_classification() {
+        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+
+        // Scenario:
+        // - dnf --userinstalled fails (leaf classification unavailable)
+        // - dnf repoquery --requires also fails (full dnf failure)
+        // - baseline data IS available
+        // - Some packages are in the baseline
+        // Result: leaf_packages is None, BUT baseline_suppressed is Some([...])
+        let exec = build_leaf_classification_executor(
+            "\
+0:glibc-2.34-100.el9.x86_64
+0:vim-9.0.1592-1.el9.x86_64
+",
+        )
+        .with_command(
+            "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+            ExecResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "dnf not found".into(),
+            },
+        );
+
+        let mut baseline_packages = HashMap::new();
+        baseline_packages.insert(
+            "glibc.x86_64".into(),
+            BaselinePackageEntry {
+                name: "glibc".into(),
+                arch: "x86_64".into(),
+                version: "2.34".into(),
+                release: "100.el9".into(),
+                epoch: Some("0".into()),
+            },
+        );
+
+        let baseline_data = BaselineData {
+            image_digest: "sha256:abc123".into(),
+            packages: baseline_packages,
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        };
+
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: Some(&baseline_data),
+        };
+
+        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+
+        // Leaf classification degraded
+        assert_eq!(rpm.leaf_packages, None, "leaf_packages should be None on dnf failure");
+        assert_eq!(rpm.auto_packages, None, "auto_packages should be None on dnf failure");
+
+        // But baseline_suppressed survives
+        let suppressed = rpm.baseline_suppressed.as_ref()
+            .expect("baseline_suppressed should be Some even when leaf classification fails");
+        assert!(suppressed.contains(&"glibc.x86_64".to_string()),
+            "glibc.x86_64 should be in baseline_suppressed");
+    }
+
+    #[test]
+    fn test_no_baseline_means_no_suppression() {
         let exec = MockExecutor::new()
             .with_command(
                 "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
@@ -1390,7 +1532,9 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added, None);
-        assert!(classification.baseline_suppressed.is_none());
+        // classify_leaf_auto no longer handles baseline, so verify no field
+        let classification = classify_leaf_auto(&exec, &added);
+        assert_eq!(classification.leaf_packages, Some(vec!["vim.x86_64".to_string()]));
+        assert_eq!(classification.auto_packages, Some(vec!["glibc.x86_64".to_string()]));
     }
 }
