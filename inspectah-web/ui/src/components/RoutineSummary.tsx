@@ -11,6 +11,8 @@ export interface RoutineSummaryProps {
   forceExpanded?: boolean;
   /** When set, auto-expands if this item ID is in the list */
   revealItemId?: string;
+  /** Leaf dependency tree for package dependency display. */
+  leafDepTree?: Record<string, string[]>;
   /** Callback for include/exclude toggle on expanded items */
   onToggleInclude?: (op: RefinementOp) => void;
   /** Callback for marking items as viewed */
@@ -33,6 +35,7 @@ export function RoutineSummary({
   items,
   forceExpanded = false,
   revealItemId,
+  leafDepTree,
   onToggleInclude,
   onMarkViewed,
   viewedIds,
