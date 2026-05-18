@@ -761,7 +761,11 @@ fn normalize_services_maps_state_changes_with_dropins() {
         "subtitle should contain current_state"
     );
     assert!(
-        httpd.subtitle.as_ref().unwrap().contains("diverges from preset"),
+        httpd
+            .subtitle
+            .as_ref()
+            .unwrap()
+            .contains("diverges from preset"),
         "subtitle should indicate preset divergence"
     );
     assert!(

@@ -359,7 +359,11 @@ fn mark_viewed_accepts_valid_packages_id() {
 #[test]
 fn mark_viewed_accepts_valid_configs_id() {
     let mut session = RefineSession::new(test_snapshot());
-    assert!(session.mark_viewed("configs:/etc/httpd/conf/httpd.conf").is_ok());
+    assert!(
+        session
+            .mark_viewed("configs:/etc/httpd/conf/httpd.conf")
+            .is_ok()
+    );
     assert!(session.is_viewed("configs:/etc/httpd/conf/httpd.conf"));
 }
 
@@ -367,9 +371,17 @@ fn mark_viewed_accepts_valid_configs_id() {
 fn mark_viewed_accepts_all_valid_sections() {
     let mut session = RefineSession::new(test_snapshot());
     let sections = [
-        "packages", "configs", "services", "containers",
-        "users_groups", "network", "storage", "scheduled_tasks",
-        "non_rpm_software", "kernel_boot", "selinux",
+        "packages",
+        "configs",
+        "services",
+        "containers",
+        "users_groups",
+        "network",
+        "storage",
+        "scheduled_tasks",
+        "non_rpm_software",
+        "kernel_boot",
+        "selinux",
     ];
     for section in sections {
         let id = format!("{section}:test_item");
@@ -487,7 +499,10 @@ fn test_non_leaf_needs_review_stays_visible_and_counted_with_leaf_data() {
         .find(|pkg| pkg.entry.name == "mystery" && pkg.entry.arch == "x86_64")
         .expect("needs-review package must stay visible");
 
-    assert!(!mystery.entry.include, "needs-review package stays excluded by default");
+    assert!(
+        !mystery.entry.include,
+        "needs-review package stays excluded by default"
+    );
     assert_eq!(view.stats.total_packages, 2);
     assert_eq!(view.stats.included_packages, 1);
     assert_eq!(view.stats.excluded_packages, 1);
@@ -524,7 +539,11 @@ fn test_user_included_non_leaf_package_stays_visible_under_leaf_filter() {
 
     let mut session = RefineSession::new(snap);
     assert!(
-        !session.view().packages.iter().any(|pkg| pkg.entry.name == "apr"),
+        !session
+            .view()
+            .packages
+            .iter()
+            .any(|pkg| pkg.entry.name == "apr"),
         "non-leaf package starts hidden"
     );
 
@@ -607,7 +626,11 @@ fn test_multiarch_leaf_truth_does_not_leak_across_arches_in_view_stats() {
     let session = RefineSession::new(snap);
     let view = session.view();
 
-    assert_eq!(view.packages.len(), 1, "only the matching arch should remain visible");
+    assert_eq!(
+        view.packages.len(),
+        1,
+        "only the matching arch should remain visible"
+    );
     assert_eq!(view.packages[0].entry.arch, "x86_64");
     assert_eq!(view.stats.total_packages, 1);
     assert_eq!(view.stats.included_packages, 1);
@@ -647,7 +670,11 @@ fn test_fleet_snapshot_skips_leaf_only_filter() {
     let session = RefineSession::new(snap);
     let view = session.view();
 
-    assert_eq!(view.packages.len(), 2, "fleet snapshots should keep all packages visible");
+    assert_eq!(
+        view.packages.len(),
+        2,
+        "fleet snapshots should keep all packages visible"
+    );
     assert!(view.packages.iter().any(|pkg| pkg.entry.name == "httpd"));
     assert!(view.packages.iter().any(|pkg| pkg.entry.name == "apr"));
 }
@@ -723,13 +750,7 @@ fn test_session_normalizes_at_construction() {
         "Tier 1 should be auto-included after normalization"
     );
     assert!(
-        session
-            .snapshot()
-            .rpm
-            .as_ref()
-            .unwrap()
-            .packages_added[0]
-            .include,
+        session.snapshot().rpm.as_ref().unwrap().packages_added[0].include,
         "Original snapshot must reflect normalized state"
     );
 }
@@ -819,23 +840,54 @@ fn test_tier1_configs_not_in_containerfile() {
 fn test_exclude_repo_cascades_packages_in_view() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
-    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
-    let epel_pkg = session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap();
-    assert!(!epel_pkg.entry.include, "epel package must be excluded in view");
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "epel".into(),
+        })
+        .unwrap();
+    let epel_pkg = session
+        .view()
+        .packages
+        .iter()
+        .find(|p| p.entry.name == "epel-release")
+        .unwrap();
+    assert!(
+        !epel_pkg.entry.include,
+        "epel package must be excluded in view"
+    );
 }
 
 #[test]
 fn test_exclude_repo_cascades_in_projected_snapshot() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
-    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "epel".into(),
+        })
+        .unwrap();
     let projected = session.snapshot_projected();
-    let epel_pkg = projected.rpm.as_ref().unwrap().packages_added.iter()
-        .find(|p| p.name == "epel-release").unwrap();
-    assert!(!epel_pkg.include, "epel package must be excluded in projected snapshot");
-    let orig_pkg = session.snapshot().rpm.as_ref().unwrap().packages_added.iter()
-        .find(|p| p.name == "epel-release").unwrap();
+    let epel_pkg = projected
+        .rpm
+        .as_ref()
+        .unwrap()
+        .packages_added
+        .iter()
+        .find(|p| p.name == "epel-release")
+        .unwrap();
+    assert!(
+        !epel_pkg.include,
+        "epel package must be excluded in projected snapshot"
+    );
+    let orig_pkg = session
+        .snapshot()
+        .rpm
+        .as_ref()
+        .unwrap()
+        .packages_added
+        .iter()
+        .find(|p| p.name == "epel-release")
+        .unwrap();
     assert!(orig_pkg.include, "original snapshot must be unchanged");
 }
 
@@ -843,23 +895,31 @@ fn test_exclude_repo_cascades_in_projected_snapshot() {
 fn test_exclude_repo_rejects_distro_repo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
-    let result = session.apply(RefinementOp::ExcludeRepo { section_id: "baseos".into() });
+    let result = session.apply(RefinementOp::ExcludeRepo {
+        section_id: "baseos".into(),
+    });
     assert!(result.is_err());
 }
 
 #[test]
 fn test_exclude_repo_rejects_incomplete_provenance() {
     let mut snap = make_snap_with_repos();
-    snap.rpm.as_mut().unwrap().packages_added.push(PackageEntry {
-        name: "custom".into(),
-        arch: "x86_64".into(),
-        state: PackageState::Added,
-        source_repo: "no-repo-file".into(),
-        include: true,
-        ..Default::default()
-    });
+    snap.rpm
+        .as_mut()
+        .unwrap()
+        .packages_added
+        .push(PackageEntry {
+            name: "custom".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            source_repo: "no-repo-file".into(),
+            include: true,
+            ..Default::default()
+        });
     let mut session = RefineSession::new(snap);
-    let result = session.apply(RefinementOp::ExcludeRepo { section_id: "no-repo-file".into() });
+    let result = session.apply(RefinementOp::ExcludeRepo {
+        section_id: "no-repo-file".into(),
+    });
     assert!(result.is_err());
 }
 
@@ -868,7 +928,11 @@ fn test_exclude_repo_is_dirty_with_repo_tracking() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
     assert!(!session.is_dirty());
-    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "epel".into(),
+        })
+        .unwrap();
     assert!(session.is_dirty());
     let changes = session.pending_changes();
     assert!(changes.repos_excluded.contains(&"epel".to_string()));
@@ -879,19 +943,51 @@ fn test_shared_repo_file_retained_until_last_section() {
     let snap = make_snap_with_multi_section_third_party();
     let mut session = RefineSession::new(snap);
 
-    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-a".into() }).unwrap();
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "custom-a".into(),
+        })
+        .unwrap();
     let projected = session.snapshot_projected();
-    let repo_file = projected.rpm.as_ref().unwrap().repo_files.iter()
-        .find(|rf| rf.path.contains("custom-multi")).unwrap();
-    assert!(repo_file.include, "shared repo file must stay while custom-b is enabled");
-    let gpg = projected.rpm.as_ref().unwrap().gpg_keys.iter()
-        .find(|k| k.path.contains("RPM-GPG-KEY-custom")).unwrap();
-    assert!(gpg.include, "shared GPG key must stay while custom-b is enabled");
+    let repo_file = projected
+        .rpm
+        .as_ref()
+        .unwrap()
+        .repo_files
+        .iter()
+        .find(|rf| rf.path.contains("custom-multi"))
+        .unwrap();
+    assert!(
+        repo_file.include,
+        "shared repo file must stay while custom-b is enabled"
+    );
+    let gpg = projected
+        .rpm
+        .as_ref()
+        .unwrap()
+        .gpg_keys
+        .iter()
+        .find(|k| k.path.contains("RPM-GPG-KEY-custom"))
+        .unwrap();
+    assert!(
+        gpg.include,
+        "shared GPG key must stay while custom-b is enabled"
+    );
 
-    session.apply(RefinementOp::ExcludeRepo { section_id: "custom-b".into() }).unwrap();
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "custom-b".into(),
+        })
+        .unwrap();
     let projected2 = session.snapshot_projected();
-    let gpg2 = projected2.rpm.as_ref().unwrap().gpg_keys.iter()
-        .find(|k| k.path.contains("RPM-GPG-KEY-custom")).unwrap();
+    let gpg2 = projected2
+        .rpm
+        .as_ref()
+        .unwrap()
+        .gpg_keys
+        .iter()
+        .find(|k| k.path.contains("RPM-GPG-KEY-custom"))
+        .unwrap();
     assert!(!gpg2.include, "GPG key excluded once all sections excluded");
 }
 
@@ -899,39 +995,110 @@ fn test_shared_repo_file_retained_until_last_section() {
 fn test_exclude_repo_then_per_package_then_include_repo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
-    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
-    assert!(!session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "epel".into(),
+        })
+        .unwrap();
+    assert!(
+        !session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .include
+    );
 
-    session.apply(RefinementOp::IncludePackage(PackageTarget {
-        name: "epel-release".into(), arch: "noarch".into(),
-    })).unwrap();
-    assert!(session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    session
+        .apply(RefinementOp::IncludePackage(PackageTarget {
+            name: "epel-release".into(),
+            arch: "noarch".into(),
+        }))
+        .unwrap();
+    assert!(
+        session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .include
+    );
 
-    session.apply(RefinementOp::IncludeRepo { section_id: "epel".into() }).unwrap();
-    assert!(session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    session
+        .apply(RefinementOp::IncludeRepo {
+            section_id: "epel".into(),
+        })
+        .unwrap();
+    assert!(
+        session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .include
+    );
 
     session.undo().unwrap();
-    assert!(session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap().entry.include,
-        "per-package include is still active after undoing repo include");
+    assert!(
+        session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .include,
+        "per-package include is still active after undoing repo include"
+    );
 }
 
 #[test]
 fn test_exclude_repo_undo_redo() {
     let snap = make_snap_with_repos();
     let mut session = RefineSession::new(snap);
-    session.apply(RefinementOp::ExcludeRepo { section_id: "epel".into() }).unwrap();
-    assert!(!session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "epel".into(),
+        })
+        .unwrap();
+    assert!(
+        !session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .include
+    );
     session.undo().unwrap();
-    assert!(session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    assert!(
+        session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .include
+    );
     session.redo().unwrap();
-    assert!(!session.view().packages.iter()
-        .find(|p| p.entry.name == "epel-release").unwrap().entry.include);
+    assert!(
+        !session
+            .view()
+            .packages
+            .iter()
+            .find(|p| p.entry.name == "epel-release")
+            .unwrap()
+            .entry
+            .include
+    );
 }
 
 #[test]
@@ -959,10 +1126,20 @@ fn test_exclude_repo_case_insensitive() {
     });
     let mut session = RefineSession::new(snap);
     // ExcludeRepo with lowercase section_id (as the UI sends after RepoIndex lowercasing)
-    session.apply(RefinementOp::ExcludeRepo { section_id: "epel-testing".into() }).unwrap();
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "epel-testing".into(),
+        })
+        .unwrap();
     let projected = session.snapshot_projected();
-    let httpd = projected.rpm.as_ref().unwrap().packages_added.iter()
-        .find(|p| p.name == "httpd").unwrap();
+    let httpd = projected
+        .rpm
+        .as_ref()
+        .unwrap()
+        .packages_added
+        .iter()
+        .find(|p| p.name == "httpd")
+        .unwrap();
     assert!(!httpd.include, "ExcludeRepo must match case-insensitively");
 }
 
@@ -989,10 +1166,27 @@ fn test_include_repo_case_insensitive() {
         ..Default::default()
     });
     let mut session = RefineSession::new(snap);
-    session.apply(RefinementOp::ExcludeRepo { section_id: "epel-testing".into() }).unwrap();
-    session.apply(RefinementOp::IncludeRepo { section_id: "epel-testing".into() }).unwrap();
+    session
+        .apply(RefinementOp::ExcludeRepo {
+            section_id: "epel-testing".into(),
+        })
+        .unwrap();
+    session
+        .apply(RefinementOp::IncludeRepo {
+            section_id: "epel-testing".into(),
+        })
+        .unwrap();
     let projected = session.snapshot_projected();
-    let nginx = projected.rpm.as_ref().unwrap().packages_added.iter()
-        .find(|p| p.name == "nginx").unwrap();
-    assert!(nginx.include, "IncludeRepo must match case-insensitively after ExcludeRepo");
+    let nginx = projected
+        .rpm
+        .as_ref()
+        .unwrap()
+        .packages_added
+        .iter()
+        .find(|p| p.name == "nginx")
+        .unwrap();
+    assert!(
+        nginx.include,
+        "IncludeRepo must match case-insensitively after ExcludeRepo"
+    );
 }
