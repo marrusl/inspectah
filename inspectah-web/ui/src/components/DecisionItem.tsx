@@ -26,6 +26,7 @@ export interface DecisionItemProps {
   isViewed: boolean;
   isPending: boolean;
   tabIndex?: number;
+  leafDepTree?: Record<string, string[]>;
   onToggleInclude?: (op: RefinementOp) => void;
   onMarkViewed: (id: string) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
@@ -69,6 +70,7 @@ export function DecisionItem({
   isViewed,
   isPending,
   tabIndex = 0,
+  leafDepTree,
   onToggleInclude,
   onMarkViewed,
   onKeyDown: onKeyDownProp,
@@ -197,7 +199,7 @@ export function DecisionItem({
         {isExpanded && (
           <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
             {item.type === "package" ? (
-              <PackageDetail pkg={item.data as RefinedPackage} />
+              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} />
             ) : (
               <ConfigDetail config={item.data as RefinedConfig} />
             )}
@@ -279,7 +281,7 @@ export function DecisionItem({
         {isExpanded && (
           <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
             {item.type === "package" ? (
-              <PackageDetail pkg={item.data as RefinedPackage} />
+              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} />
             ) : (
               <ConfigDetail config={item.data as RefinedConfig} />
             )}
@@ -344,7 +346,7 @@ export function DecisionItem({
       {isExpanded && (
         <div role="gridcell" style={{ flexBasis: "100%", paddingTop: "var(--pf-t--global--spacer--xs)" }}>
           {item.type === "package" ? (
-            <PackageDetail pkg={item.data as RefinedPackage} />
+            <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} />
           ) : (
             <ConfigDetail config={item.data as RefinedConfig} />
           )}

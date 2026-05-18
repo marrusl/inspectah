@@ -1,9 +1,13 @@
-import { Content, DescriptionList, DescriptionListGroup, DescriptionListTerm, DescriptionListDescription, Label } from "@patternfly/react-core";
-import type { RefinedPackage, AttentionTag } from "../api/types";
+import { useState } from "react";
+import { Content, DescriptionList, DescriptionListGroup, DescriptionListTerm, DescriptionListDescription, Label, Button } from "@patternfly/react-core";
+import type { RefinedPackage, AttentionTag, VersionChangeEntry } from "../api/types";
 import { attentionLabelColor, formatReasonText } from "./attentionUtils";
+import { DependencyModal } from "./DependencyModal";
 
 export interface PackageDetailProps {
   pkg: RefinedPackage;
+  leafDepTree?: Record<string, string[]>;
+  versionChange?: VersionChangeEntry | null;
 }
 
 function formatNevra(pkg: RefinedPackage): string {
@@ -19,7 +23,12 @@ function formatState(state: string): string {
     .join(" ");
 }
 
-export function PackageDetail({ pkg }: PackageDetailProps) {
+export function PackageDetail({ pkg, leafDepTree }: PackageDetailProps) {
+  const [depModalOpen, setDepModalOpen] = useState(false);
+  const canonicalId = `${pkg.entry.name}.${pkg.entry.arch}`;
+  const deps = leafDepTree?.[canonicalId];
+  const hasDeps = deps && deps.length > 0;
+
   return (
     <div data-testid="package-detail" style={{ padding: "var(--pf-t--global--spacer--sm) 0" }}>
       <DescriptionList isHorizontal isCompact>
@@ -71,6 +80,23 @@ export function PackageDetail({ pkg }: PackageDetailProps) {
           </DescriptionListGroup>
         )}
       </DescriptionList>
+      {hasDeps && (
+        <>
+          <Button
+            variant="link"
+            onClick={() => setDepModalOpen(true)}
+            style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}
+          >
+            View Dependencies ({deps.length})
+          </Button>
+          <DependencyModal
+            packageId={canonicalId}
+            dependencies={deps}
+            isOpen={depModalOpen}
+            onClose={() => setDepModalOpen(false)}
+          />
+        </>
+      )}
     </div>
   );
 }

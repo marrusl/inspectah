@@ -221,6 +221,8 @@ export interface DecisionListProps {
   repoGroups?: RepoGroupInfo[];
   /** When set, auto-expands any collapsed summary containing this item ID. */
   revealItemId?: string;
+  /** Leaf dependency tree for package dependency display. */
+  leafDepTree?: Record<string, string[]>;
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
@@ -235,6 +237,7 @@ export function DecisionList({
   filterText = "",
   repoGroups = EMPTY_REPO_GROUPS,
   revealItemId,
+  leafDepTree,
   onViewUpdate,
   onMutationError,
   onViewedChange,
@@ -572,6 +575,7 @@ export function DecisionList({
                       isViewed={viewedIds.has(id)}
                       isPending={mutation.isPending}
                       tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                      leafDepTree={leafDepTree}
                       onToggleInclude={handleToggle}
                       onMarkViewed={markAsViewed}
                       onKeyDown={handleRowKeyDown}
@@ -646,6 +650,7 @@ export function DecisionList({
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                    leafDepTree={leafDepTree}
                     onToggleInclude={isDisabled ? undefined : handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
@@ -666,6 +671,7 @@ export function DecisionList({
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                    leafDepTree={leafDepTree}
                     onToggleInclude={isDisabled ? undefined : handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
@@ -678,6 +684,7 @@ export function DecisionList({
                   items={part.routine}
                   forceExpanded={routineHasMatch}
                   revealItemId={revealItemId}
+                  leafDepTree={leafDepTree}
                   onToggleInclude={isDisabled ? undefined : handleToggle}
                   onMarkViewed={markAsViewed}
                   viewedIds={viewedIds}
@@ -747,6 +754,7 @@ export function DecisionList({
                       isViewed={viewedIds.has(id)}
                       isPending={mutation.isPending}
                       tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                      leafDepTree={leafDepTree}
                       onToggleInclude={handleToggle}
                       onMarkViewed={markAsViewed}
                       onKeyDown={handleRowKeyDown}
@@ -772,6 +780,7 @@ export function DecisionList({
                     isViewed={viewedIds.has(id)}
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
+                    leafDepTree={leafDepTree}
                     onToggleInclude={handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
