@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>inspectah — Software Architecture</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1729;
+    --surface: #182038;
+    --surface-hover: #1e2a4a;
+    --border: #2a3a5c;
+    --border-light: #3a4a6c;
+    --text: #e0e6f0;
+    --text-dim: #8899bb;
+    --foundation: #2dd4bf;
+    --foundation-dim: rgba(45,212,191,0.12);
+    --collection: #4ade80;
+    --collection-dim: rgba(74,222,128,0.10);
+    --processing: #a78bfa;
+    --processing-dim: rgba(167,139,250,0.10);
+    --presentation: #22d3ee;
+    --presentation-dim: rgba(34,211,238,0.10);
+    --entry: #f59e0b;
+    --entry-dim: rgba(245,158,11,0.10);
+    --arrow-default: #3a4a6c;
+    --arrow-highlight: #f59e0b;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow: hidden;
+    height: 100vh;
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--surface);
+    position: relative;
+    z-index: 10;
+  }
+  header h1 { font-size: 18px; font-weight: 600; color: var(--foundation); }
+  header span { font-size: 13px; color: var(--text-dim); }
+  .legend {
+    margin-left: auto;
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+  #diagram { width: 100%; height: calc(100vh - 57px); }
+  .tooltip {
+    position: absolute;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 150ms;
+    max-width: 280px;
+    line-height: 1.5;
+    z-index: 100;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  }
+  .hint {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: var(--text-dim);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 14px;
+    z-index: 10;
+    opacity: 0.8;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>inspectah</h1>
+  <span>Rust Workspace Architecture — 6 Crates</span>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:var(--foundation)"></div>Foundation</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--collection)"></div>Collection</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--processing)"></div>Processing</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--presentation)"></div>Presentation</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--entry)"></div>Entry Point</div>
+  </div>
+</header>
+<div id="diagram"></div>
+<div class="tooltip" id="tooltip"></div>
+<div class="hint">Click a crate to expand modules. Click a module to see sub-modules. Scroll to zoom. Drag to pan.</div>
+
+<script>
+const crates = [
+  {
+    id: 'core', label: 'inspectah-core', layer: 'foundation',
+    desc: 'Foundation types, traits, and central data structures shared by all crates.',
+    modules: [
+      { id: 'types', label: 'types/', desc: 'Domain models for all inspection domains',
+        children: ['rpm', 'services', 'config', 'network', 'storage', 'scheduled', 'containers',
+                   'nonrpm', 'kernelboot', 'selinux', 'users', 'fleet', 'os', 'system',
+                   'preflight', 'redaction', 'completeness', 'warnings'] },
+      { id: 'traits', label: 'traits/', desc: 'Core abstractions: Inspector, Renderer, Executor, Detector',
+        children: ['Inspector', 'Renderer', 'Executor', 'Detector'] },
+      { id: 'snapshot', label: 'snapshot.rs', desc: 'InspectionSnapshot — the central data structure' },
+      { id: 'baseline', label: 'baseline.rs', desc: 'Baseline subtraction logic' },
+      { id: 'pipeline', label: 'pipeline.rs', desc: 'Pipeline orchestration types' },
+      { id: 'normalize', label: 'normalize.rs', desc: 'Data normalization utilities' },
+    ]
+  },
+  {
+    id: 'collect', label: 'inspectah-collect', layer: 'collection',
+    desc: 'Host inspection — implements the Inspector trait for 11 domains.',
+    modules: [
+      { id: 'inspectors', label: 'inspectors/', desc: '11 inspector modules for host scanning',
+        children: ['rpm/', 'config/', 'services', 'network', 'storage', 'scheduled',
+                   'containers', 'nonrpm', 'kernelboot', 'selinux', 'users'] },
+      { id: 'rpm-sub', label: '  rpm/', desc: 'RPM inspector sub-modules',
+        children: ['classifier', 'parser', 'repos', 'modules', 'source_repos'], parent: 'inspectors' },
+      { id: 'config-sub', label: '  config/', desc: 'Config inspector sub-modules',
+        children: ['classify', 'rpmva', 'walk'], parent: 'inspectors' },
+      { id: 'executor', label: 'executor/', desc: 'Command execution abstraction (real + mock)',
+        children: ['real', 'mock'] },
+      { id: 'ffi', label: 'ffi/', desc: 'RPM FFI bindings for librpm' },
+      { id: 'collect-baseline', label: 'baseline.rs', desc: 'Base image baseline collection' },
+    ]
+  },
+  {
+    id: 'pipeline', label: 'inspectah-pipeline', layer: 'processing',
+    desc: 'Orchestration, rendering, and secret detection.',
+    modules: [
+      { id: 'orchestrate', label: 'orchestrate.rs', desc: 'Pipeline orchestration — coordinates collection and rendering' },
+      { id: 'collect-coord', label: 'collect.rs', desc: 'Collection coordination across inspectors' },
+      { id: 'validate', label: 'validate.rs', desc: 'Containerfile validation' },
+      { id: 'redaction', label: 'redaction/', desc: 'Secret detection engine',
+        children: ['engine', 'patterns'] },
+      { id: 'render', label: 'render/', desc: 'Output renderers',
+        children: ['containerfile', 'audit', 'report', 'secrets', 'readme',
+                   'kickstart', 'configtree', 'tarball', 'safety'] },
+    ]
+  },
+  {
+    id: 'cli', label: 'inspectah-cli', layer: 'entry',
+    desc: 'Binary entry point — clap-based CLI with scan, refine, version commands.',
+    modules: [
+      { id: 'commands', label: 'commands/', desc: 'CLI subcommands',
+        children: ['scan', 'refine', 'version'] },
+    ]
+  },
+  {
+    id: 'web', label: 'inspectah-web', layer: 'presentation',
+    desc: 'Axum web server + React/TypeScript single-page application.',
+    modules: [
+      { id: 'handlers', label: 'handlers/', desc: 'Axum HTTP handlers (API routes)' },
+      { id: 'assets', label: 'assets/', desc: 'Static asset serving (embedded Vite build)' },
+      { id: 'error', label: 'error.rs', desc: 'Web error types and responses' },
+      { id: 'ui', label: 'ui/ (React)', desc: '~30 React/TypeScript components',
+        children: ['DecisionList', 'ContainerfilePanel', 'AttentionGroup', 'StatsBar',
+                   'RepoGroup', 'PackageDetail', 'SectionSearch', 'ExportDialog',
+                   'NavSidebar', 'FilterBar', '...'] },
+      { id: 'e2e', label: 'e2e/', desc: 'Playwright end-to-end tests',
+        children: ['smoke', 'triage', 'keyboard', 'a11y', 'responsive'] },
+    ]
+  },
+  {
+    id: 'refine', label: 'inspectah-refine', layer: 'presentation',
+    desc: 'Refine server logic — session management, triage classification, tarball export.',
+    modules: [
+      { id: 'session', label: 'session.rs', desc: 'Refine session state management' },
+      { id: 'attention', label: 'attention.rs', desc: 'Attention/triage classification engine' },
+      { id: 'baseline-summary', label: 'baseline_summary.rs', desc: 'Base image summary generation' },
+      { id: 'repo-index', label: 'repo_index.rs', desc: 'Repository indexing for search' },
+      { id: 'tarball', label: 'tarball.rs', desc: 'Tarball generation for export' },
+      { id: 'refine-normalize', label: 'normalize.rs', desc: 'Refine-specific normalization' },
+      { id: 'refine-types', label: 'types.rs', desc: 'Refine domain types' },
+    ]
+  },
+];
+
+// Dependencies: [from, to]
+const dependencies = [
+  ['collect', 'core'],
+  ['pipeline', 'core'],
+  ['pipeline', 'collect'],
+  ['cli', 'core'],
+  ['cli', 'pipeline'],
+  ['cli', 'web'],
+  ['cli', 'refine'],
+  ['web', 'core'],
+  ['web', 'refine'],
+  ['refine', 'core'],
+];
+
+const layerColors = {
+  foundation:   { fill: 'var(--foundation-dim)', stroke: 'var(--foundation)', text: 'var(--foundation)' },
+  collection:   { fill: 'var(--collection-dim)',  stroke: 'var(--collection)',  text: 'var(--collection)' },
+  processing:   { fill: 'var(--processing-dim)',  stroke: 'var(--processing)',  text: 'var(--processing)' },
+  presentation: { fill: 'var(--presentation-dim)',stroke: 'var(--presentation)',text: 'var(--presentation)' },
+  entry:        { fill: 'var(--entry-dim)',        stroke: 'var(--entry)',        text: 'var(--entry)' },
+};
+
+const width = window.innerWidth;
+const height = window.innerHeight - 57;
+const tooltip = d3.select('#tooltip');
+
+const svg = d3.select('#diagram')
+  .append('svg')
+  .attr('width', width)
+  .attr('height', height);
+
+const defs = svg.append('defs');
+
+// Arrowhead markers
+defs.append('marker')
+  .attr('id', 'dep-arrow')
+  .attr('viewBox', '0 0 10 7')
+  .attr('refX', 0)
+  .attr('refY', 3.5)
+  .attr('markerWidth', 7)
+  .attr('markerHeight', 5)
+  .attr('orient', 'auto')
+  .append('path')
+  .attr('d', 'M0,0 L10,3.5 L0,7 Z')
+  .attr('fill', '#3a4a6c');
+
+defs.append('marker')
+  .attr('id', 'dep-arrow-highlight')
+  .attr('viewBox', '0 0 10 7')
+  .attr('refX', 0)
+  .attr('refY', 3.5)
+  .attr('markerWidth', 7)
+  .attr('markerHeight', 5)
+  .attr('orient', 'auto')
+  .append('path')
+  .attr('d', 'M0,0 L10,3.5 L0,7 Z')
+  .attr('fill', '#f59e0b');
+
+// Glow
+const filter = defs.append('filter').attr('id', 'glow');
+filter.append('feGaussianBlur').attr('stdDeviation', '3').attr('result', 'blur');
+const feMerge = filter.append('feMerge');
+feMerge.append('feMergeNode').attr('in', 'blur');
+feMerge.append('feMergeNode').attr('in', 'SourceGraphic');
+
+const g = svg.append('g');
+
+const zoom = d3.zoom()
+  .scaleExtent([0.2, 4])
+  .on('zoom', (e) => g.attr('transform', e.transform));
+svg.call(zoom);
+
+// Layout: tiered rows
+// Row 0 (bottom): core
+// Row 1: collect
+// Row 2: pipeline, refine
+// Row 3: web
+// Row 4 (top): cli
+const crateW = 200;
+const crateH = 64;
+const positions = {
+  core:     { x: 400, y: 520 },
+  collect:  { x: 180, y: 400 },
+  pipeline: { x: 400, y: 280 },
+  refine:   { x: 620, y: 400 },
+  web:      { x: 620, y: 280 },
+  cli:      { x: 400, y: 140 },
+};
+
+const expanded = {};
+const expandedModule = {};
+
+function getCrateCenter(id) {
+  const p = positions[id];
+  return { x: p.x + crateW / 2, y: p.y + crateH / 2 };
+}
+
+function render() {
+  g.selectAll('*').remove();
+
+  // Draw dependency arrows
+  const arrowGroup = g.append('g').attr('class', 'arrows');
+
+  dependencies.forEach(([from, to]) => {
+    const fc = getCrateCenter(from);
+    const tc = getCrateCenter(to);
+
+    // Calculate edge intersection points
+    const dx = tc.x - fc.x;
+    const dy = tc.y - fc.y;
+    const angle = Math.atan2(dy, dx);
+
+    // Start point: edge of 'from' crate
+    let sx, sy;
+    if (Math.abs(Math.cos(angle)) * crateH > Math.abs(Math.sin(angle)) * crateW) {
+      sx = fc.x + (dx > 0 ? crateW / 2 : -crateW / 2);
+      sy = fc.y + (dx > 0 ? 1 : -1) * (crateW / 2) * Math.tan(angle);
+    } else {
+      sy = fc.y + (dy > 0 ? crateH / 2 : -crateH / 2);
+      sx = fc.x + (dy > 0 ? 1 : -1) * (crateH / 2) / Math.tan(angle);
+    }
+
+    // End point: edge of 'to' crate
+    let ex, ey;
+    const angle2 = Math.atan2(-dy, -dx);
+    if (Math.abs(Math.cos(angle2)) * crateH > Math.abs(Math.sin(angle2)) * crateW) {
+      ex = tc.x + (-dx > 0 ? crateW / 2 : -crateW / 2);
+      ey = tc.y + (-dx > 0 ? 1 : -1) * (crateW / 2) * Math.tan(angle2);
+    } else {
+      ey = tc.y + (-dy > 0 ? crateH / 2 : -crateH / 2);
+      ex = tc.x + (-dy > 0 ? 1 : -1) * (crateH / 2) / Math.tan(angle2);
+    }
+
+    // Offset end by marker size
+    const elen = Math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2);
+    const markerOffset = 8;
+    ex = ex - (ex - sx) / elen * markerOffset;
+    ey = ey - (ey - sy) / elen * markerOffset;
+
+    const midX = (sx + ex) / 2;
+    const midY = (sy + ey) / 2;
+
+    // Slight curve
+    const perpX = -(ey - sy) * 0.1;
+    const perpY = (ex - sx) * 0.1;
+
+    arrowGroup.append('path')
+      .attr('class', `dep-line dep-${from} dep-${to}`)
+      .attr('d', `M${sx},${sy} Q${midX + perpX},${midY + perpY} ${ex},${ey}`)
+      .attr('fill', 'none')
+      .attr('stroke', 'var(--arrow-default)')
+      .attr('stroke-width', 1.5)
+      .attr('stroke-dasharray', '5,4')
+      .attr('marker-end', 'url(#dep-arrow)')
+      .attr('data-from', from)
+      .attr('data-to', to);
+
+    // Label
+    arrowGroup.append('text')
+      .attr('class', `dep-label dep-label-${from} dep-label-${to}`)
+      .attr('x', midX + perpX)
+      .attr('y', midY + perpY - 6)
+      .attr('text-anchor', 'middle')
+      .attr('fill', 'var(--text-dim)')
+      .attr('font-size', '9px')
+      .attr('opacity', 0)
+      .text('depends on');
+  });
+
+  // Draw crate boxes
+  crates.forEach((crate) => {
+    const pos = positions[crate.id];
+    const colors = layerColors[crate.layer];
+    const isExpanded = expanded[crate.id];
+
+    const crateGroup = g.append('g')
+      .attr('class', 'crate')
+      .style('cursor', 'pointer');
+
+    // Expanded height calc
+    let expandedH = crateH;
+    if (isExpanded) {
+      const visibleModules = crate.modules.filter(m => !m.parent);
+      expandedH = crateH + visibleModules.length * 30 + 16;
+
+      // Check if any module is expanded with children
+      visibleModules.forEach((mod) => {
+        if (expandedModule[crate.id + '/' + mod.id] && mod.children) {
+          expandedH += mod.children.length * 22 + 8;
+        }
+      });
+    }
+
+    // Crate rect
+    const rect = crateGroup.append('rect')
+      .attr('x', pos.x)
+      .attr('y', pos.y)
+      .attr('width', crateW)
+      .attr('height', expandedH)
+      .attr('rx', 8)
+      .attr('fill', colors.fill)
+      .attr('stroke', colors.stroke)
+      .attr('stroke-width', 1.5);
+
+    // Crate label
+    crateGroup.append('text')
+      .attr('x', pos.x + crateW / 2)
+      .attr('y', pos.y + 24)
+      .attr('text-anchor', 'middle')
+      .attr('fill', colors.text)
+      .attr('font-size', '14px')
+      .attr('font-weight', 700)
+      .text(crate.label);
+
+    // Layer tag
+    crateGroup.append('text')
+      .attr('x', pos.x + crateW / 2)
+      .attr('y', pos.y + 42)
+      .attr('text-anchor', 'middle')
+      .attr('fill', colors.text)
+      .attr('font-size', '10px')
+      .attr('opacity', 0.5)
+      .text(crate.layer);
+
+    // Expand indicator
+    crateGroup.append('text')
+      .attr('x', pos.x + crateW - 16)
+      .attr('y', pos.y + 20)
+      .attr('fill', colors.text)
+      .attr('font-size', '12px')
+      .attr('opacity', 0.5)
+      .text(isExpanded ? '−' : '+');
+
+    // Interactions
+    crateGroup
+      .on('mouseover', (event) => {
+        rect.transition().duration(150).attr('filter', 'url(#glow)').attr('stroke-width', 2.5);
+        // Highlight dependencies
+        g.selectAll(`.dep-${crate.id}`).transition().duration(150)
+          .attr('stroke', 'var(--arrow-highlight)')
+          .attr('stroke-width', 2.5)
+          .attr('marker-end', 'url(#dep-arrow-highlight)');
+        g.selectAll(`.dep-label-${crate.id}`).transition().duration(150).attr('opacity', 1);
+        tooltip.style('opacity', 1).html(`<strong>${crate.label}</strong><br>${crate.desc}`);
+      })
+      .on('mousemove', (event) => {
+        tooltip.style('left', (event.pageX + 12) + 'px').style('top', (event.pageY - 10) + 'px');
+      })
+      .on('mouseout', () => {
+        rect.transition().duration(150).attr('filter', 'none').attr('stroke-width', 1.5);
+        g.selectAll(`.dep-${crate.id}`).transition().duration(150)
+          .attr('stroke', 'var(--arrow-default)')
+          .attr('stroke-width', 1.5)
+          .attr('marker-end', 'url(#dep-arrow)');
+        g.selectAll(`.dep-label-${crate.id}`).transition().duration(150).attr('opacity', 0);
+        tooltip.style('opacity', 0);
+      });
+
+    // Invisible click zone for header area only
+    crateGroup.append('rect')
+      .attr('x', pos.x)
+      .attr('y', pos.y)
+      .attr('width', crateW)
+      .attr('height', crateH)
+      .attr('fill', 'transparent')
+      .style('cursor', 'pointer')
+      .on('click', (event) => {
+        event.stopPropagation();
+        expanded[crate.id] = !expanded[crate.id];
+        if (!expanded[crate.id]) {
+          crate.modules.forEach(m => {
+            delete expandedModule[crate.id + '/' + m.id];
+          });
+        }
+        render();
+      });
+
+    // Expanded modules
+    if (isExpanded) {
+      let offsetY = pos.y + crateH;
+      const visibleModules = crate.modules.filter(m => !m.parent);
+
+      visibleModules.forEach((mod) => {
+        const modKey = crate.id + '/' + mod.id;
+        const isModExpanded = expandedModule[modKey];
+        const modY = offsetY;
+
+        const modGroup = g.append('g')
+          .attr('opacity', 0)
+          .style('cursor', mod.children ? 'pointer' : 'default');
+
+        modGroup.transition().duration(300).attr('opacity', 1);
+
+        modGroup.append('rect')
+          .attr('x', pos.x + 8)
+          .attr('y', modY)
+          .attr('width', crateW - 16)
+          .attr('height', 26)
+          .attr('rx', 4)
+          .attr('fill', 'rgba(255,255,255,0.03)')
+          .attr('stroke', colors.stroke)
+          .attr('stroke-width', 0.5)
+          .attr('opacity', 0.6);
+
+        modGroup.append('text')
+          .attr('x', pos.x + 18)
+          .attr('y', modY + 16)
+          .attr('fill', colors.text)
+          .attr('font-size', '11px')
+          .attr('font-weight', 500)
+          .text(mod.label);
+
+        if (mod.children) {
+          modGroup.append('text')
+            .attr('x', pos.x + crateW - 24)
+            .attr('y', modY + 16)
+            .attr('fill', colors.text)
+            .attr('font-size', '9px')
+            .attr('opacity', 0.4)
+            .text(isModExpanded ? '▲' : '▼');
+        }
+
+        modGroup
+          .on('mouseover', (event) => {
+            event.stopPropagation();
+            tooltip.style('opacity', 1).html(`<strong>${mod.label}</strong><br>${mod.desc}`);
+          })
+          .on('mousemove', (event) => {
+            tooltip.style('left', (event.pageX + 12) + 'px').style('top', (event.pageY - 10) + 'px');
+          })
+          .on('mouseout', () => { tooltip.style('opacity', 0); })
+          .on('click', (event) => {
+            event.stopPropagation();
+            if (!mod.children) return;
+            expandedModule[modKey] = !expandedModule[modKey];
+            render();
+          });
+
+        offsetY += 30;
+
+        // Sub-modules
+        if (isModExpanded && mod.children) {
+          mod.children.forEach((child, ci) => {
+            const childY = offsetY;
+            const childGroup = g.append('g').attr('opacity', 0);
+            childGroup.transition().duration(200).delay(ci * 20).attr('opacity', 1);
+
+            childGroup.append('rect')
+              .attr('x', pos.x + 20)
+              .attr('y', childY)
+              .attr('width', crateW - 36)
+              .attr('height', 18)
+              .attr('rx', 3)
+              .attr('fill', colors.fill)
+              .attr('stroke', colors.stroke)
+              .attr('stroke-width', 0.3)
+              .attr('opacity', 0.5);
+
+            childGroup.append('text')
+              .attr('x', pos.x + 28)
+              .attr('y', childY + 12)
+              .attr('fill', 'var(--text-dim)')
+              .attr('font-size', '10px')
+              .text(typeof child === 'string' ? child : child);
+
+            childGroup.on('click', (event) => event.stopPropagation());
+
+            offsetY += 22;
+          });
+          offsetY += 8;
+        }
+      });
+    }
+  });
+}
+
+render();
+
+// Center the view
+const allX = Object.values(positions).map(p => p.x);
+const allY = Object.values(positions).map(p => p.y);
+const minX = Math.min(...allX) - 40;
+const maxX = Math.max(...allX) + crateW + 40;
+const minY = Math.min(...allY) - 40;
+const maxY = Math.max(...allY) + crateH + 40;
+const contentW = maxX - minX;
+const contentH = maxY - minY;
+const initScale = Math.min(width / contentW, height / contentH, 1.1) * 0.85;
+const initX = (width - contentW * initScale) / 2 - minX * initScale;
+const initY = (height - contentH * initScale) / 2 - minY * initScale;
+svg.call(zoom.transform, d3.zoomIdentity.translate(initX, initY).scale(initScale));
+</script>
+</body>
+</html>
