@@ -392,4 +392,27 @@ mod tests {
         snap.rpm = None;
         assert!(!is_rpm_comparison_available(&snap));
     }
+
+    #[test]
+    fn readme_audit_parity() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(test_target_image());
+        snap.baseline = Some(test_baseline());
+        snap.rpm = Some(RpmSection {
+            version_changes: vec![make_vc(VersionChangeDirection::Upgrade)],
+            ..Default::default()
+        });
+        let readme = crate::render::readme::render_readme(&snap);
+        let audit = crate::render::audit::render_audit(&snap);
+
+        // Both must contain the same baseline metadata
+        assert!(readme.contains("centos-bootc:stream9"));
+        assert!(audit.contains("centos-bootc:stream9"));
+        assert!(readme.contains("os-release (auto-detected)"));
+        assert!(audit.contains("os-release (auto-detected)"));
+        assert!(readme.contains("sha256:abc123def456"));
+        assert!(audit.contains("sha256:abc123def456"));
+        assert!(readme.contains("1 shared packages with version changes"));
+        assert!(audit.contains("1 shared packages with version changes"));
+    }
 }
