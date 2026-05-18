@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-17)
+## Current Status (2026-05-18)
 
 | Phase | Status |
 |-------|--------|
@@ -13,7 +13,7 @@
 | Alpha.3 Bug Fix Pass | COMPLETE |
 | Unified Repo View | SHIPPED (2026-05-17) |
 | Leaf Package Filter | SHIPPED (2026-05-17) |
-| Post-Leaf Bug Fix Run | HIGH |
+| Post-Leaf Bug Fix Run | SHIPPED (2026-05-18) |
 
 ## Roadmap to CLI Cutover
 
@@ -34,7 +34,7 @@
     ↓
 ✅ Leaf Package Filter (2026-05-17)
     ↓
-⏳ Post-Leaf Bug Fix Run ← in progress
+✅ Post-Leaf Bug Fix Run (16 commits, 2026-05-18)
     ↓
 ⏳ User/Group Materialization ← brainstorm next
     ↓
@@ -49,19 +49,19 @@ Post-cutover: Architect v2, TUI, build command
 
 ## Upcoming Work
 
-### Post-Leaf Bug Fix Run (HIGH — spec approved, ready to implement)
+### Post-Leaf Bug Fix Run (COMPLETE — 2026-05-18)
 
-**Status:** Spec approved after 10 review rounds (2026-05-17). See `docs/specs/proposed/2026-05-17-post-leaf-fixes.md`.
+**Status:** Implemented in 16 commits. Spec at `docs/specs/implemented/2026-05-17-post-leaf-fixes.md`. Plan at `docs/plans/2026-05-18-post-leaf-fixes.md` (8 revision rounds).
 
-**Context-only drift model:** Baseline-present packages are suppressed from the decision surface and `RUN dnf install`, regardless of Added or Modified state. Version drift is informational context only. Major/minor version guardrails are future work.
+**Context-only drift model:** Baseline-present packages are suppressed from the decision surface and `RUN dnf install`, regardless of Added or Modified state. Version drift is informational context only.
 
-1. **Leaf classification quality:** `baseline_suppressed` field separates baseline-present suppression from dependency-derived `auto_packages`. Uses `ctx.baseline_data` as authoritative source.
+1. **Leaf classification quality:** `baseline_suppressed` field threads through `classify_leaf_auto` → `LeafClassification` → `RpmSection` → `recompute_view()`. Epoch normalization (`""` → `"0"`) prevents spurious drift.
 
-2. **Service classification noise:** Honest three-way contract via new `preset_matched_units` collector carrier. Known-divergence (show), known-match (suppress, unless drop-in override exists), preset-unknown (keep visible with label).
+2. **Service classification noise:** Three-way contract via `preset_matched_units` collector carrier. Stock-default services suppressed (~110 → divergences + unknowns only). Drop-in overrides preserved.
 
-3. **Leaf dep-tree modal:** Per-package dependency modal on leaf cards. Flat list, non-fleet guard, full a11y contract (focus trap, keyboard, scroll, `name.arch` identity).
+3. **Leaf dep-tree modal:** Per-package dependency modal on leaf cards. Flat sorted list, fleet-gated, full a11y (distinct ARIA labels, focus trap, keyboard, scroll).
 
-4. **Version Changes context section:** New read-only sidebar section under Context group. Typed `VersionChangeEntry` contract. Downgrades floated to top with visual emphasis. Three-state empty reason (`zero_drift` / `no_baseline` / `data_unavailable`). Section-jump keyboard contract at key `4`.
+4. **Version Changes context section:** New sidebar section at key `4`. Paired epoch-aware `format_evr_pair` rendering. Typed `VersionChangeEntry` in ViewResponse. Three-state empty reason. Audit table renders when populated.
 
 ### User/Group Materialization (HIGH — brainstorm next)
 
