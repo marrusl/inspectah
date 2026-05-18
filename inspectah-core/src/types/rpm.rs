@@ -201,6 +201,8 @@ pub struct RpmSection {
     #[serde(default)]
     pub ostree_removals: Vec<String>,
     pub base_image: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline_suppressed: Option<Vec<String>>,
     pub baseline_package_names: Option<Vec<String>>,
     #[serde(default)]
     pub no_baseline: bool,
@@ -306,6 +308,32 @@ mod tests {
             json["leaf_dep_tree"],
             serde_json::json!({"vim.x86_64": ["glibc.x86_64", "ncurses.x86_64"]})
         );
+    }
+
+    #[test]
+    fn test_baseline_suppressed_roundtrip() {
+        let mut rpm = RpmSection::default();
+        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into(), "dosfstools.x86_64".into()]);
+        let json = serde_json::to_value(&rpm).unwrap();
+        assert_eq!(
+            json["baseline_suppressed"],
+            serde_json::json!(["kernel.x86_64", "dosfstools.x86_64"])
+        );
+    }
+
+    #[test]
+    fn test_baseline_suppressed_none_when_absent() {
+        let json = r#"{"packages_added":[],"version_changes":[],"leaf_dep_tree":{}}"#;
+        let parsed: RpmSection = serde_json::from_str(json).unwrap();
+        assert!(parsed.baseline_suppressed.is_none());
+    }
+
+    #[test]
+    fn test_baseline_suppressed_some_empty_when_baseline_exists_but_nothing_suppressed() {
+        let mut rpm = RpmSection::default();
+        rpm.baseline_suppressed = Some(Vec::new());
+        let json = serde_json::to_value(&rpm).unwrap();
+        assert_eq!(json["baseline_suppressed"], serde_json::json!([]));
     }
 
     #[test]
