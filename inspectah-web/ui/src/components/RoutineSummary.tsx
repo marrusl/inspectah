@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
-import type { RefinementOp } from "../api/types";
+import type { RefinementOp, VersionChangeEntry } from "../api/types";
 import { DecisionItem, itemId as getItemId } from "./DecisionItem";
 import type { DecisionItemKind } from "./DecisionItem";
 import { highestAttention } from "./attentionUtils";
@@ -13,6 +13,8 @@ export interface RoutineSummaryProps {
   revealItemId?: string;
   /** Leaf dependency tree for package dependency display. */
   leafDepTree?: Record<string, string[]>;
+  /** Version change entries for package version change display. */
+  versionChanges?: VersionChangeEntry[];
   /** Callback for include/exclude toggle on expanded items */
   onToggleInclude?: (op: RefinementOp) => void;
   /** Callback for marking items as viewed */
@@ -36,6 +38,7 @@ export function RoutineSummary({
   forceExpanded = false,
   revealItemId,
   leafDepTree,
+  versionChanges,
   onToggleInclude,
   onMarkViewed,
   viewedIds,
@@ -102,6 +105,8 @@ export function RoutineSummary({
               isViewed={viewedIds.has(id)}
               isPending={isPending}
               tabIndex={flatIdx === focusedIndex ? 0 : -1}
+              leafDepTree={leafDepTree}
+              versionChanges={versionChanges}
               onToggleInclude={onToggleInclude}
               onMarkViewed={onMarkViewed}
               onKeyDown={onKeyDown}

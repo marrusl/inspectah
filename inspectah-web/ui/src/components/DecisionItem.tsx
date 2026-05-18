@@ -6,6 +6,7 @@ import type {
   RefinedConfig,
   AttentionLevel,
   RefinementOp,
+  VersionChangeEntry,
 } from "../api/types";
 import {
   attentionLabelColor,
@@ -27,6 +28,7 @@ export interface DecisionItemProps {
   isPending: boolean;
   tabIndex?: number;
   leafDepTree?: Record<string, string[]>;
+  versionChanges?: VersionChangeEntry[];
   onToggleInclude?: (op: RefinementOp) => void;
   onMarkViewed: (id: string) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
@@ -71,6 +73,7 @@ export function DecisionItem({
   isPending,
   tabIndex = 0,
   leafDepTree,
+  versionChanges,
   onToggleInclude,
   onMarkViewed,
   onKeyDown: onKeyDownProp,
@@ -82,6 +85,12 @@ export function DecisionItem({
   const hasBeenToggled = useRef(false);
   const isNeedsReview = level === "needs_review";
   const showUnviewedDot = isNeedsReview && !isViewed;
+
+  const matchingVc = item.type === "package" && versionChanges
+    ? versionChanges.find(
+        (vc) => vc.name === item.data.entry.name && vc.arch === item.data.entry.arch,
+      ) ?? null
+    : null;
 
   const handleToggle = useCallback(() => {
     if (!onToggleInclude) return;
@@ -199,7 +208,7 @@ export function DecisionItem({
         {isExpanded && (
           <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
             {item.type === "package" ? (
-              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} />
+              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
             ) : (
               <ConfigDetail config={item.data as RefinedConfig} />
             )}
@@ -281,7 +290,7 @@ export function DecisionItem({
         {isExpanded && (
           <div role="gridcell" style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
             {item.type === "package" ? (
-              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} />
+              <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
             ) : (
               <ConfigDetail config={item.data as RefinedConfig} />
             )}
@@ -346,7 +355,7 @@ export function DecisionItem({
       {isExpanded && (
         <div role="gridcell" style={{ flexBasis: "100%", paddingTop: "var(--pf-t--global--spacer--xs)" }}>
           {item.type === "package" ? (
-            <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} />
+            <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
           ) : (
             <ConfigDetail config={item.data as RefinedConfig} />
           )}
