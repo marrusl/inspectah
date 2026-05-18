@@ -32,8 +32,11 @@ use inspectah_core::types::system::SourceSystem;
 use inspectah_pipeline::collect::collect;
 use inspectah_pipeline::redaction::engine::{RedactOptions, redact};
 use inspectah_pipeline::render;
+use inspectah_pipeline::render::baseline_fmt;
 use inspectah_pipeline::render::tarball::{create_tarball, get_output_stamp};
 use inspectah_pipeline::validate::validate;
+
+use super::pull_progress;
 
 #[derive(Args)]
 pub struct ScanArgs {
@@ -162,11 +165,73 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     // Step 3: Extract baseline
     let baseline_data = match (&normalized_ref, args.no_baseline) {
         (Some(norm), false) => {
-            eprintln!("Pulling target image...");
-            let data = inspectah_collect::baseline::extract_baseline(&executor, norm, &mut |_| {})
-                .context("baseline extraction failed")?;
-            eprintln!("Extracting baseline... {} packages", data.packages.len());
+            eprintln!("Pulling {}...", norm.as_str());
+
+            let use_viewport = std::io::IsTerminal::is_terminal(&std::io::stderr());
+            let mut collected_lines: Vec<String> = Vec::new();
+
+            let data = if use_viewport {
+                // TTY: viewport rendering
+                let term_width = terminal_size::terminal_size()
+                    .map(|(w, _)| w.0 as usize)
+                    .unwrap_or(80);
+
+                if term_width >= pull_progress::MIN_VIEWPORT_WIDTH {
+                    let content_width = pull_progress::viewport_content_width(term_width);
+                    let mut ring = [String::new(), String::new(), String::new()];
+                    let mut ring_pos: usize = 0;
+
+                    let result = {
+                        let mut callback = pull_progress::tty_viewport_callback(
+                            &mut collected_lines,
+                            &mut ring,
+                            &mut ring_pos,
+                            content_width,
+                        );
+                        inspectah_collect::baseline::extract_baseline(
+                            &executor,
+                            norm,
+                            &mut callback,
+                        )
+                    };
+                    // Clear viewport on both success and failure before propagating.
+                    pull_progress::viewport_cleanup();
+                    result.context("baseline extraction failed")?
+                } else {
+                    // Narrow terminal — fall back to non-TTY
+                    let mut callback = pull_progress::non_tty_callback(&mut collected_lines);
+                    inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
+                        .context("baseline extraction failed")?
+                }
+            } else {
+                // Non-TTY: prefixed passthrough
+                let mut callback = pull_progress::non_tty_callback(&mut collected_lines);
+                inspectah_collect::baseline::extract_baseline(&executor, norm, &mut callback)
+                    .context("baseline extraction failed")?
+            };
+
+            // Pull summary line
+            let blob_count = pull_progress::count_completed_blobs(&collected_lines);
+            eprintln!(
+                "{}",
+                pull_progress::pull_summary_line(norm.as_str(), &data.image_digest, blob_count,)
+            );
+
+            // Provenance block
+            eprintln!("  Baseline extracted: {} packages", data.packages.len());
+            if let Some(ti) = &target_image {
+                eprintln!(
+                    "  Resolved via: {}",
+                    baseline_fmt::strategy_label(&ti.strategy)
+                );
+            }
+
             Some(data)
+        }
+        (Some(_norm), true) => {
+            // --no-baseline: show degraded message
+            eprintln!("  Baseline: skipped (--no-baseline)");
+            None
         }
         _ => None,
     };
@@ -200,6 +265,25 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     snapshot.target_image = target_image;
     snapshot.baseline = baseline_data;
     snapshot.no_baseline = args.no_baseline;
+
+    // Version comparison line (prints after collection, since version_changes
+    // is populated by the RPM inspector during collection)
+    if snapshot.baseline.is_some() {
+        let vc_display = baseline_fmt::version_changes_for_display(&snapshot);
+        let shared_count = match (snapshot.rpm.as_ref(), snapshot.baseline.as_ref()) {
+            (Some(rpm), Some(bl)) if baseline_fmt::is_rpm_comparison_available(&snapshot) => {
+                baseline_fmt::shared_package_count(bl, rpm)
+            }
+            _ => 0,
+        };
+        let summary = baseline_fmt::version_comparison_summary(vc_display, shared_count);
+        if vc_display.is_none() {
+            eprintln!("  Version comparison: {summary}");
+        } else {
+            eprintln!("  Version changes: {summary}");
+        }
+    }
+
     redact(&mut snapshot, &RedactOptions::default());
 
     // If --inspect-only, write JSON and exit
