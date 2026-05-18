@@ -72,9 +72,29 @@ pub fn compute_package_attention(snap: &InspectionSnapshot) -> Vec<RefinedPackag
         .map(|b| b.packages.keys().cloned().collect());
     let baseline: Option<&[String]> = baseline_names.as_deref();
 
+    // Build baseline_suppressed set for fast lookup
+    let suppressed_set: std::collections::HashSet<&str> = rpm
+        .baseline_suppressed
+        .as_ref()
+        .map(|v| v.iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+
     rpm.packages_added
         .iter()
         .map(|entry| {
+            let canonical_id = format!("{}.{}", entry.name, entry.arch);
+
+            if suppressed_set.contains(canonical_id.as_str()) {
+                return RefinedPackage {
+                    entry: entry.clone(),
+                    attention: vec![AttentionTag {
+                        level: AttentionLevel::Routine,
+                        reason: AttentionReason::PackageBaselineMatch,
+                        detail: None,
+                    }],
+                };
+            }
+
             let tag = classify_package(entry, baseline, &rpm.version_changes);
             let mut tags = vec![tag];
 
@@ -878,5 +898,82 @@ mod tests {
             "SensitivePath promotion applied"
         );
         assert_eq!(result[0].attention[1].level, AttentionLevel::NeedsReview);
+    }
+
+    // -----------------------------------------------------------------------
+    // Baseline-suppressed attention gating
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_baseline_suppressed_package_gets_routine_not_needs_review() {
+        let mut snap = InspectionSnapshot::default();
+        let mut rpm = RpmSection::default();
+        rpm.packages_added = vec![PackageEntry {
+            name: "bash".into(),
+            arch: "x86_64".into(),
+            version: "5.2.26".into(),
+            release: "3.el9".into(),
+            epoch: String::new(),
+            state: PackageState::Modified,
+            include: true,
+            source_repo: "baseos".into(),
+            ..Default::default()
+        }];
+        rpm.version_changes = vec![VersionChange {
+            name: "bash".into(),
+            arch: "x86_64".into(),
+            host_version: "5.2.26-3.el9".into(),
+            base_version: "5.2.26-4.el9".into(),
+            host_epoch: String::new(),
+            base_epoch: String::new(),
+            direction: VersionChangeDirection::Downgrade,
+        }];
+        rpm.baseline_suppressed = Some(vec!["bash.x86_64".into()]);
+        snap.rpm = Some(rpm);
+
+        let result = compute_package_attention(&snap);
+        let bash = result.iter().find(|p| p.entry.name == "bash").unwrap();
+        assert_eq!(bash.attention[0].level, AttentionLevel::Routine);
+        assert_eq!(
+            bash.attention[0].reason,
+            AttentionReason::PackageBaselineMatch
+        );
+    }
+
+    #[test]
+    fn test_non_suppressed_downgrade_still_gets_needs_review() {
+        let mut snap = InspectionSnapshot::default();
+        let mut rpm = RpmSection::default();
+        rpm.packages_added = vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            version: "2.4.57".into(),
+            release: "4.el9".into(),
+            epoch: String::new(),
+            state: PackageState::Modified,
+            include: true,
+            source_repo: "appstream".into(),
+            ..Default::default()
+        }];
+        rpm.version_changes = vec![VersionChange {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            host_version: "2.4.57-4.el9".into(),
+            base_version: "2.4.57-5.el9".into(),
+            host_epoch: String::new(),
+            base_epoch: String::new(),
+            direction: VersionChangeDirection::Downgrade,
+        }];
+        rpm.baseline_suppressed = Some(Vec::new());
+        snap.rpm = Some(rpm);
+        snap.baseline = Some(BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: std::collections::HashMap::new(),
+            extracted_at: "2026-01-01T00:00:00Z".into(),
+        });
+
+        let result = compute_package_attention(&snap);
+        let httpd = result.iter().find(|p| p.entry.name == "httpd").unwrap();
+        assert_eq!(httpd.attention[0].level, AttentionLevel::NeedsReview);
     }
 }
