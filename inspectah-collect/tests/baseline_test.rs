@@ -86,7 +86,7 @@ fn baseline_happy_path_extracts_packages_and_digest() {
     let mock = happy_mock();
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
 
     let data = result.unwrap();
@@ -111,7 +111,7 @@ fn baseline_command_ordering() {
     let mock = happy_mock();
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok());
 
     let log = mock.command_log();
@@ -160,7 +160,7 @@ fn baseline_create_includes_entrypoint_and_network_none() {
     let mock = happy_mock();
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok());
 
     let log = mock.command_log();
@@ -185,7 +185,7 @@ fn baseline_pull_fails_no_rm_attempted() {
     );
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_err());
 
     match result.unwrap_err() {
@@ -211,7 +211,7 @@ fn baseline_create_fails_no_rm_attempted() {
         );
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_err());
 
     match result.unwrap_err() {
@@ -241,7 +241,7 @@ fn baseline_start_fails_rm_runs() {
         .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm -f", ok_result());
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_err());
 
     match result.unwrap_err() {
@@ -272,7 +272,7 @@ fn baseline_exec_fails_rm_runs() {
         .with_command_prefix("nsenter -t 1 -m -u -i -n -- podman rm -f", ok_result());
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_err());
 
     match result.unwrap_err() {
@@ -331,7 +331,7 @@ fn baseline_digest_fallback_repo_digests() {
         );
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
 
     let data = result.unwrap();
@@ -367,7 +367,7 @@ glibc\t0\t2.34\t83.el9\taarch64
         );
     let normalized = NormalizedImageRef::from_validated(TEST_IMAGE.to_string());
 
-    let result = extract_baseline(&mock, &normalized);
+    let result = extract_baseline(&mock, &normalized, &mut |_| {});
     assert!(result.is_ok());
 
     let data = result.unwrap();

@@ -156,6 +156,20 @@ impl Executor for MockExecutor {
         }
     }
 
+    fn run_with_line_callback(
+        &self,
+        cmd: &str,
+        args: &[&str],
+        on_stderr_line: &mut dyn FnMut(&str),
+    ) -> ExecResult {
+        let result = self.run(cmd, args);
+        // Split pre-recorded stderr and call callback per-line.
+        for line in result.stderr.lines() {
+            on_stderr_line(line);
+        }
+        result
+    }
+
     fn read_file(&self, path: &Path) -> io::Result<String> {
         let key = path.to_str().unwrap_or("");
         // Explicit error injection takes priority over registered files.
@@ -267,5 +281,27 @@ mod tests {
     fn test_mock_host_root() {
         let mock = MockExecutor::new();
         assert_eq!(mock.host_root(), Path::new("/"));
+    }
+
+    #[test]
+    fn test_mock_line_callback() {
+        let mock = MockExecutor::new().with_command(
+            "podman pull quay.io/test:latest",
+            ExecResult {
+                stderr: "Copying blob sha256:aaa... done\nCopying blob sha256:bbb... skipped\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        );
+        let mut lines = Vec::new();
+        let result =
+            mock.run_with_line_callback("podman", &["pull", "quay.io/test:latest"], &mut |line| {
+                lines.push(line.to_string())
+            });
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("aaa"));
+        assert!(lines[1].contains("bbb"));
     }
 }
