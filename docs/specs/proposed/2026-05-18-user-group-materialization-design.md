@@ -226,6 +226,25 @@ attention. `SensitiveRetained` does not — the operator made a deliberate
 choice. Both carry credential material, but the provenance and response
 are different.
 
+### Overlap rule: SensitiveRetained + unresolved hints
+
+A snapshot can be both `SensitiveRetained` (operator chose to keep hashes/keys)
+AND have unresolved redaction hints (the engine flagged potential secrets it
+could not fully resolve). These are independent conditions and both must be
+honored:
+
+- `SensitiveRetained` governs export gating and preview redaction for the
+  intentionally-retained credential fields (`password_hash`, `ssh_keys`).
+- Unresolved hints (`unresolved_count > 0`) continue to trigger `NeedsReview`
+  attention for their respective findings, independent of the sensitive mode.
+- The combined `redaction_state` is represented as
+  `SensitiveRetained { unresolved_count, unresolved_hints }` — the variant
+  carries both the intentional-retention signal and the unresolved-hint
+  metadata. This prevents either condition from shadowing the other.
+- Export gating fires if either condition is present: sensitive retention
+  requires acknowledgment, unresolved hints require review. Both gates
+  must be satisfied before export completes.
+
 ### Export gating
 
 Sensitive exports require explicit operator acknowledgment. The gate fires
@@ -384,10 +403,29 @@ When a user strategy or password decision is applied:
 1. The op is recorded in the in-memory op log (for undo/redo).
 2. The view is recomputed from the projected snapshot state.
 3. On export, user decisions are written as fields in the snapshot's
-   `users_groups` section (e.g., `"containerfile_strategy": "useradd"`,
-   `"password_choice": "preserve"`). No separate decisions file.
+   `users_groups` section. No separate decisions file.
 4. On re-import via `from_tarball()`, the session starts clean with user
    decisions already reflected in the snapshot fields. No op replay.
+
+Projected fields per user entry on export:
+
+```json
+{
+  "containerfile_strategy": "useradd",
+  "password_choice": "new",
+  "password_hash": "$6$rounds=5000$salt$hash..."
+}
+```
+
+- `containerfile_strategy` — `"skip"` (default, omitted on export) or
+  `"useradd"`.
+- `password_choice` — `"none"`, `"preserve"`, or `"new"`.
+- `password_hash` — the actual `crypt(3)` hash. Present when
+  `password_choice` is `"preserve"` (copied from the scan-time preserved
+  hash) or `"new"` (generated client-side). This is the field that the
+  KS/TOML/Containerfile renderers read to emit `--iscrypted`, `password =`,
+  and `chpasswd -e` lines. On re-import, this field is sufficient to
+  regenerate all credential-bearing artifacts without op replay.
 
 This avoids introducing a new export artifact or changing the re-import
 contract.
@@ -413,7 +451,7 @@ view path:
 | `/api/user-strategy`           | POST   | `{ "username": "alice", "strategy": "useradd" }` |
 | `/api/user-password`           | POST   | `{ "username": "alice", "choice": "preserve" }` or `{ "username": "alice", "choice": "new", "hash": "$6$..." }` |
 | `/api/user-preview`            | GET    | Returns rendered `inspectah-users.ks` and `inspectah-users.toml` content |
-| `/api/export`                  | POST   | Existing endpoint. Returns HTTP 428 if `session_is_sensitive` and `X-Acknowledge-Sensitive` header is absent. |
+| `/api/tarball`                 | POST   | Existing endpoint (unchanged route). Returns HTTP 428 if `session_is_sensitive` and `X-Acknowledge-Sensitive` header is absent. |
 
 Strategy and password endpoints return the updated `ViewResponse` with the
 Users & Groups section reflecting the new state. The `user-password` endpoint
@@ -567,7 +605,7 @@ RUN echo 'alice:$6$rounds=5000$salt$hash...' | chpasswd -e
 **SSH key block** (conditional — only when keys captured):
 ```dockerfile
 RUN install -d -m 700 -o alice -g alice /home/alice/.ssh
-COPY config/home/alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys
+COPY users/home/alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys
 RUN chown alice:alice /home/alice/.ssh/authorized_keys && \
     chmod 600 /home/alice/.ssh/authorized_keys
 ```
@@ -587,13 +625,24 @@ no trailing whitespace, newline-terminated. See SSH key staging below.
 ### SSH key staging
 
 When `--preserve-ssh-keys` is active, a generated `authorized_keys` file is
-created per user in the tarball at `config/home/<username>/.ssh/authorized_keys`.
+created per user in the tarball at `users/home/<username>/.ssh/authorized_keys`.
 
-This staging path is separate from the existing `config/` copy pipeline used
-by the config section. Config-section files are staged under `config/etc/` and
-handled by a shared COPY/ownership pipeline. SSH key files are staged under
-`config/home/` and emitted by the user materialization renderer, not the
-config renderer. The two paths do not overlap — there is no collision risk.
+**Renderer ownership rule:** SSH key files are staged under `users/home/`,
+NOT under `config/`. The existing `config/` tree is owned exclusively by the
+config-section renderer, which walks `config/` and emits generic root-copy
+`COPY` directives. Staging SSH keys under `config/home/` would cause the
+generic pipeline to copy them a second time.
+
+By using `users/home/<username>/.ssh/authorized_keys` instead, the user
+materialization renderer owns these files exclusively. The Containerfile
+`COPY` directive references this path:
+
+```dockerfile
+COPY users/home/alice/.ssh/authorized_keys /home/alice/.ssh/authorized_keys
+```
+
+The two staging trees (`config/` and `users/`) are disjoint. No exclusion
+rules or special-case filtering is needed in the config renderer.
 
 This file:
 - Contains one key per line in standard OpenSSH format
@@ -611,7 +660,7 @@ consumed by reference, avoiding shell escaping issues entirely.
 Blueprint TOML's `key` field accepts a single string. For users with one key,
 TOML is fully faithful. For users with multiple keys:
 - `inspectah-users.toml` carries only the first key and includes a TOML
-  comment: `# Additional keys in inspectah-users.ks and config/home/<user>/.ssh/authorized_keys`
+  comment: `# Additional keys in inspectah-users.ks and users/home/<user>/.ssh/authorized_keys`
 - `inspectah-users.ks` carries all keys (one `sshkey` directive per key)
 - The staged `authorized_keys` file carries all keys
 
@@ -824,6 +873,28 @@ revision:
 
 Individual round-2 review files:
 - `marks-inbox/reviews/2026-05-18-inspectah-user-group-materialization-design-*-review-round2.md`
+
+### Round 3 review (2026-05-18)
+
+Team verdict: request changes, extremely close. Four surgical residuals
+addressed in this revision:
+
+1. **SensitiveRetained + unresolved hints overlap** — resolved by defining
+   `SensitiveRetained { unresolved_count, unresolved_hints }` as a combined
+   variant. Neither condition shadows the other; both gates must be satisfied
+   before export (Collins, Thorn).
+2. **New password hash field in projected snapshot** — resolved by pinning
+   `password_hash` as the projected field carrying the `crypt(3)` hash for
+   both preserved and new passwords. Renderers read this field directly on
+   re-import (Tang).
+3. **SSH key staging vs config/ COPY seam** — resolved by moving staged keys
+   to `users/home/` (separate from `config/`). Disjoint trees, no exclusion
+   rules needed (Press).
+4. **Export route name** — corrected to `POST /api/tarball` (existing route).
+   HTTP 428 gate added there, no route rename (Thorn).
+
+Individual round-3 spot-check files:
+- `marks-inbox/reviews/2026-05-18-inspectah-user-group-materialization-design-*-review-round3.md`
 
 Related backlog items:
 - `workflow/backlog/2026-05-18-inspectah-user-group-contract-hardening.md`
