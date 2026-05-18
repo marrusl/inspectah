@@ -1315,15 +1315,19 @@ Check if session is sensitive. If so:
 
 The existing Containerfile preview (`containerfile_preview` in `RefinedView`) is rendered by `render_containerfile()` in `inspectah-refine/src/session.rs::recompute_view()`. When a useradd user has a preserved or new password hash, the preview will contain the raw `chpasswd -e` line with the hash visible.
 
-The Containerfile panel must apply the same default-redaction behavior as user cards and the artifact preview:
+**Session-level sensitivity signal:** The redaction trigger must be `session_is_sensitive` (the computed flag from Task 6's `is_sensitive()`), NOT `sensitive_snapshot` (which is scan-time only). A non-sensitive scan that becomes sensitive because the user sets a new password in refine must still trigger redaction. The signal flows through the mutable view/API path:
+
+1. Add `session_is_sensitive: bool` to `ViewResponse` (in `inspectah-web/src/handlers.rs`), populated from `session.is_sensitive()` on every view response.
+2. `App.tsx` reads `session_is_sensitive` from the view hook and passes it to `ContainerfilePanel`, `UsersGroupsSection` (for the sensitivity banner), and `ExportDialog`.
+3. `ContainerfilePanel.tsx` uses `session_is_sensitive` (not `sensitive_snapshot`) to activate redaction.
+
+The Containerfile panel applies default-redaction when `session_is_sensitive` is true:
 - Scan the rendered `containerfile_preview` string for `crypt(3)` hash patterns (`$6$...`, `$y$...`, `$5$...`) in `chpasswd -e` lines
 - Replace with a redacted placeholder (e.g., `$6$<REDACTED>`) by default
 - Add a reveal toggle (consistent with user card reveal pattern) that shows the actual hash
-- When no sensitive values are present, the panel renders unchanged
+- When `session_is_sensitive` is false, the panel renders unchanged
 
 This is a UI-only transform — the underlying `containerfile_preview` string from the API is unchanged. The redaction happens in the React component at render time.
-
-Also update `inspectah-web/ui/src/App.tsx` to pass the `sensitive_snapshot` flag through to `ContainerfilePanel` so it knows when to activate redaction.
 
 - [ ] **Step 13: Manual testing in browser**
 
@@ -1463,13 +1467,23 @@ fn preview_export_parity_for_user_artifacts() {
         unresolved_count: 0, unresolved_hints: vec![],
     });
 
-    let session = RefineSession::new(snap);
-    let projected = session.snapshot_projected();
+    let mut session = RefineSession::new(snap);
+    session.apply(RefinementOp::UserStrategy {
+        username: "alice".into(),
+        strategy: UserContainerfileStrategy::Useradd,
+    }).unwrap();
 
-    // Preview output (what the API returns)
+    // Preview output — read from the LIVE refine view, the same path
+    // the web handler reads. This is the actual preview seam, not a
+    // renderer shortcut.
+    let view = session.view();
+    let preview_cf = view.containerfile_preview.clone();
+
+    // User artifact preview — rendered from the projected snapshot,
+    // same as the /api/user-preview handler.
+    let projected = session.snapshot_projected();
     let preview_ks = inspectah_pipeline::render::users::render_kickstart(&projected);
     let preview_toml = inspectah_pipeline::render::users::render_blueprint_toml(&projected);
-    let preview_cf = render_containerfile(&projected, None);
 
     // Export output (what goes in the tarball)
     let tempdir = tempfile::tempdir().unwrap();
@@ -1484,7 +1498,7 @@ fn preview_export_parity_for_user_artifacts() {
     assert_eq!(preview_toml, export_toml,
         "inspectah-users.toml preview must match export");
     assert_eq!(preview_cf, export_cf,
-        "Containerfile preview must match export");
+        "Containerfile live preview must match export");
 }
 ```
 
