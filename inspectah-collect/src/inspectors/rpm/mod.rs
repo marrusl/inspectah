@@ -275,8 +275,13 @@ impl Inspector for RpmInspector {
             suppressed
         });
 
-        // 5. Classify leaf vs auto packages
-        let leaf_classification = classify_leaf_auto(exec, &packages_added);
+        // 5. Classify leaf vs auto packages (subtract baseline so dep trees
+        //    only count genuinely new packages, not base-image residents).
+        let baseline_name_set: HashSet<String> = ctx
+            .baseline_data
+            .map(|b| b.packages.keys().cloned().collect())
+            .unwrap_or_default();
+        let leaf_classification = classify_leaf_auto(exec, &packages_added, &baseline_name_set);
 
         // 6. Collect supplementary data
         let supp = self.collect_supplementary(exec, ctx.source_system);
@@ -439,6 +444,7 @@ fn classify_deps_dnf(
 fn classify_leaf_auto(
     exec: &dyn Executor,
     packages_added: &[PackageEntry],
+    baseline_names: &HashSet<String>,
 ) -> LeafClassification {
     let added_ids: HashSet<String> = packages_added.iter().map(canonical_package_id).collect();
 
@@ -469,6 +475,7 @@ fn classify_leaf_auto(
     };
 
     leaf.sort();
+    auto.retain(|pkg| !baseline_names.contains(pkg));
     auto.sort();
 
     // Build per-leaf dep tree: for each leaf, list its auto dependencies.
@@ -1000,7 +1007,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
 
         assert_eq!(
             classification.leaf_packages,
@@ -1053,7 +1060,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
 
         assert_eq!(
             classification.leaf_packages,
@@ -1209,7 +1216,7 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
 
         assert_eq!(
             classification.leaf_packages,
@@ -1326,9 +1333,9 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        let classification = classify_leaf_auto(&exec, &added);
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
 
-        // Both vim and kernel stay in leaf (no baseline suppression at this level)
+        // Both vim and kernel stay in leaf (empty baseline — no suppression)
         let mut expected_leaf = vec!["kernel.x86_64".to_string(), "vim.x86_64".to_string()];
         expected_leaf.sort();
         assert_eq!(classification.leaf_packages, Some(expected_leaf));
@@ -1422,12 +1429,23 @@ tzdata\t/usr/share/zoneinfo/UTC
         };
 
         // Both kernel (leaf) AND glibc (auto) should be in baseline_suppressed
-        let suppressed = rpm.baseline_suppressed.as_ref().expect("baseline_suppressed should be Some");
-        assert!(suppressed.contains(&"kernel.x86_64".to_string()),
-            "baseline_suppressed should include leaf package kernel.x86_64");
-        assert!(suppressed.contains(&"glibc.x86_64".to_string()),
-            "baseline_suppressed should include auto package glibc.x86_64");
-        assert_eq!(suppressed.len(), 2, "exactly kernel + glibc should be suppressed");
+        let suppressed = rpm
+            .baseline_suppressed
+            .as_ref()
+            .expect("baseline_suppressed should be Some");
+        assert!(
+            suppressed.contains(&"kernel.x86_64".to_string()),
+            "baseline_suppressed should include leaf package kernel.x86_64"
+        );
+        assert!(
+            suppressed.contains(&"glibc.x86_64".to_string()),
+            "baseline_suppressed should include auto package glibc.x86_64"
+        );
+        assert_eq!(
+            suppressed.len(),
+            2,
+            "exactly kernel + glibc should be suppressed"
+        );
     }
 
     #[test]
@@ -1497,14 +1515,24 @@ tzdata\t/usr/share/zoneinfo/UTC
         };
 
         // Leaf classification degraded
-        assert_eq!(rpm.leaf_packages, None, "leaf_packages should be None on dnf failure");
-        assert_eq!(rpm.auto_packages, None, "auto_packages should be None on dnf failure");
+        assert_eq!(
+            rpm.leaf_packages, None,
+            "leaf_packages should be None on dnf failure"
+        );
+        assert_eq!(
+            rpm.auto_packages, None,
+            "auto_packages should be None on dnf failure"
+        );
 
         // But baseline_suppressed survives
-        let suppressed = rpm.baseline_suppressed.as_ref()
+        let suppressed = rpm
+            .baseline_suppressed
+            .as_ref()
             .expect("baseline_suppressed should be Some even when leaf classification fails");
-        assert!(suppressed.contains(&"glibc.x86_64".to_string()),
-            "glibc.x86_64 should be in baseline_suppressed");
+        assert!(
+            suppressed.contains(&"glibc.x86_64".to_string()),
+            "glibc.x86_64 should be in baseline_suppressed"
+        );
     }
 
     #[test]
@@ -1532,9 +1560,72 @@ tzdata\t/usr/share/zoneinfo/UTC
             make_test_entry("glibc", "x86_64"),
         ];
 
-        // classify_leaf_auto no longer handles baseline, so verify no field
-        let classification = classify_leaf_auto(&exec, &added);
-        assert_eq!(classification.leaf_packages, Some(vec!["vim.x86_64".to_string()]));
-        assert_eq!(classification.auto_packages, Some(vec!["glibc.x86_64".to_string()]));
+        // No baseline provided — auto includes all non-leaf added packages
+        let classification = classify_leaf_auto(&exec, &added, &HashSet::new());
+        assert_eq!(
+            classification.leaf_packages,
+            Some(vec!["vim.x86_64".to_string()])
+        );
+        assert_eq!(
+            classification.auto_packages,
+            Some(vec!["glibc.x86_64".to_string()])
+        );
+    }
+
+    #[test]
+    fn classify_leaf_auto_baseline_removes_auto_and_dep_tree_entries() {
+        // Scenario: vim is leaf, glibc + ncurses are auto deps of vim,
+        // but glibc is in the baseline. After filtering:
+        // - auto_packages should NOT contain glibc
+        // - dep tree for vim should NOT list glibc
+        let exec = MockExecutor::new()
+            .with_command(
+                "dnf repoquery --userinstalled --queryformat %{name}.%{arch}\n",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "vim.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+                ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n ncurses.x86_64",
+                ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+            )
+            .with_command(
+                "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
+                ExecResult {
+                    exit_code: 0,
+                    stdout: "glibc.x86_64\nncurses.x86_64\n".into(),
+                    stderr: String::new(),
+                },
+            );
+
+        let added = vec![
+            make_test_entry("vim", "x86_64"),
+            make_test_entry("glibc", "x86_64"),
+            make_test_entry("ncurses", "x86_64"),
+        ];
+
+        let baseline: HashSet<String> = ["glibc.x86_64"].iter().map(|s| s.to_string()).collect();
+        let classification = classify_leaf_auto(&exec, &added, &baseline);
+
+        assert_eq!(
+            classification.leaf_packages,
+            Some(vec!["vim.x86_64".to_string()])
+        );
+        // glibc filtered out by baseline — only ncurses remains
+        assert_eq!(
+            classification.auto_packages,
+            Some(vec!["ncurses.x86_64".to_string()])
+        );
+        // dep tree for vim should only include ncurses (glibc excluded)
+        assert_eq!(
+            classification.leaf_dep_tree,
+            serde_json::json!({"vim.x86_64": ["ncurses.x86_64"]})
+        );
     }
 }
