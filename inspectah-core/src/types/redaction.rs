@@ -45,6 +45,14 @@ pub enum RedactionState {
         #[serde(default)]
         unresolved_hints: Vec<RedactionHint>,
     },
+    #[serde(rename = "sensitive_retained")]
+    SensitiveRetained {
+        redacted_by: String,
+        config_hash: String,
+        unresolved_count: u32,
+        #[serde(default)]
+        unresolved_hints: Vec<RedactionHint>,
+    },
     #[serde(rename = "unknown")]
     Unknown,
     #[serde(rename = "raw")]
@@ -170,6 +178,19 @@ mod tests {
         assert_eq!(finding.path, "/etc/shadow");
         assert_eq!(finding.kind, RedactionKind::Excluded);
         assert_eq!(finding.detection_method, DetectionMethod::Pattern);
+    }
+
+    #[test]
+    fn sensitive_retained_roundtrip() {
+        let state = RedactionState::SensitiveRetained {
+            redacted_by: "inspectah 0.8.0".into(),
+            config_hash: "abc123".into(),
+            unresolved_count: 2,
+            unresolved_hints: vec![],
+        };
+        let json = serde_json::to_string(&state).unwrap();
+        let parsed: RedactionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, parsed);
     }
 
     #[test]

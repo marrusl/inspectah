@@ -64,6 +64,15 @@ pub struct InspectionSnapshot {
     /// Distinguishes "no baseline" from "baseline not yet attempted".
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub no_baseline: bool,
+    /// True if this snapshot intentionally retains credential material.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub sensitive_snapshot: bool,
+    /// True if password hashes were preserved by operator choice.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub preserved_credentials: bool,
+    /// True if SSH authorized keys were preserved by operator choice.
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub preserved_ssh_keys: bool,
 }
 
 impl InspectionSnapshot {

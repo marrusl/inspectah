@@ -1,5 +1,32 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserContainerfileStrategy {
+    Skip,
+    Useradd,
+}
+
+impl Default for UserContainerfileStrategy {
+    fn default() -> Self {
+        Self::Skip
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserPasswordChoice {
+    None,
+    Preserve,
+    New,
+}
+
+impl Default for UserPasswordChoice {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UserGroupSection {
     #[serde(default)]
@@ -27,6 +54,30 @@ pub struct UserGroupSection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_containerfile_strategy_roundtrip() {
+        let skip: UserContainerfileStrategy = serde_json::from_str("\"skip\"").unwrap();
+        assert_eq!(skip, UserContainerfileStrategy::Skip);
+        let useradd: UserContainerfileStrategy = serde_json::from_str("\"useradd\"").unwrap();
+        assert_eq!(useradd, UserContainerfileStrategy::Useradd);
+    }
+
+    #[test]
+    fn user_password_choice_roundtrip() {
+        let none: UserPasswordChoice = serde_json::from_str("\"none\"").unwrap();
+        assert_eq!(none, UserPasswordChoice::None);
+        let preserve: UserPasswordChoice = serde_json::from_str("\"preserve\"").unwrap();
+        assert_eq!(preserve, UserPasswordChoice::Preserve);
+        let new: UserPasswordChoice = serde_json::from_str("\"new\"").unwrap();
+        assert_eq!(new, UserPasswordChoice::New);
+    }
+
+    #[test]
+    fn user_decision_enum_defaults() {
+        assert_eq!(UserContainerfileStrategy::default(), UserContainerfileStrategy::Skip);
+        assert_eq!(UserPasswordChoice::default(), UserPasswordChoice::None);
+    }
 
     #[test]
     fn test_usergroup_section_roundtrip() {
