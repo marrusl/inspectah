@@ -5,6 +5,8 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 
+use super::baseline_fmt;
+
 /// Render the audit report markdown from a snapshot.
 pub fn render_audit(snap: &InspectionSnapshot) -> String {
     let mut lines = Vec::new();
@@ -63,6 +65,12 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
                 .into(),
         );
         lines.push(String::new());
+    }
+
+    // Baseline comparison section
+    let baseline_lines = baseline_fmt::baseline_section_lines(snap);
+    if !baseline_lines.is_empty() {
+        lines.extend(baseline_lines);
     }
 
     // OS info
@@ -493,9 +501,55 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use inspectah_core::baseline::{BaselineData, ResolutionStrategy, TargetImageIdentity};
     use inspectah_core::types::rpm::{
         PackageEntry, PackageState, RpmSection, VersionChange, VersionChangeDirection,
     };
+    use std::collections::HashMap;
+
+    fn test_target_image() -> TargetImageIdentity {
+        TargetImageIdentity {
+            image_ref: "quay.io/centos-bootc/centos-bootc:stream9".into(),
+            strategy: ResolutionStrategy::OsRelease,
+        }
+    }
+
+    fn test_baseline() -> BaselineData {
+        BaselineData {
+            image_digest: "sha256:abc123def456".into(),
+            packages: HashMap::new(),
+            extracted_at: "2026-05-18T14:32:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn audit_includes_baseline_section() {
+        let mut snap = InspectionSnapshot::new();
+        snap.target_image = Some(test_target_image());
+        snap.baseline = Some(test_baseline());
+        snap.rpm = Some(RpmSection {
+            version_changes: vec![VersionChange {
+                name: "glibc".into(),
+                direction: VersionChangeDirection::Upgrade,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let md = render_audit(&snap);
+        assert!(
+            md.contains("## Baseline comparison"),
+            "audit must have baseline section"
+        );
+        assert!(md.contains("centos-bootc:stream9"));
+        assert!(md.contains("os-release (auto-detected)"));
+    }
+
+    #[test]
+    fn audit_baseline_absent_when_no_target() {
+        let snap = InspectionSnapshot::new();
+        let md = render_audit(&snap);
+        assert!(!md.contains("Baseline comparison"));
+    }
 
     fn test_snapshot() -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
