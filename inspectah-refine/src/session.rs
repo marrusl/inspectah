@@ -3,7 +3,6 @@ use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
-use inspectah_core::types::rpm::PackageState;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
