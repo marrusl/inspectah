@@ -5,6 +5,7 @@ import type {
   ChangesSummary,
   HealthResponse,
   RefinementOp,
+  UserPreviewResponse,
 } from "./types";
 import { ApiError } from "./types";
 
@@ -88,12 +89,42 @@ export async function markViewed(id: string): Promise<void> {
   if (!res.ok && res.status !== 204) return parseJsonError(res);
 }
 
-export async function exportTarball(generation: number): Promise<Blob> {
+export async function exportTarball(
+  generation: number,
+  acknowledgeSensitive = false,
+): Promise<Blob> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (acknowledgeSensitive) {
+    headers["X-Acknowledge-Sensitive"] = "true";
+  }
   const res = await fetch("/api/tarball", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify({ generation }),
   });
   if (!res.ok) return parseJsonError(res);
   return res.blob();
+}
+
+// --- User decision endpoints ---
+
+export function setUserStrategy(
+  username: string,
+  strategy: "skip" | "useradd",
+): Promise<ViewResponse> {
+  return postJson("/api/user-strategy", { username, strategy });
+}
+
+export function setUserPassword(
+  username: string,
+  choice: "none" | "preserve" | "new",
+  hash?: string,
+): Promise<ViewResponse> {
+  return postJson("/api/user-password", { username, choice, hash });
+}
+
+export function fetchUserPreview(): Promise<UserPreviewResponse> {
+  return getJson("/api/user-preview");
 }

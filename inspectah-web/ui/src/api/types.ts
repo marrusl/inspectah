@@ -237,6 +237,31 @@ export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
   leaf_dep_tree: Record<string, string[]>;
   version_changes: VersionChangeEntry[];
+  users_groups_decisions: UserDecision[];
+  session_is_sensitive: boolean;
+}
+
+// --- User decision types (inspectah-core/src/types/users.rs) ---
+
+/** User decision JSON shape from projected snapshot. */
+export interface UserDecision {
+  name: string;
+  uid: number;
+  gid: number;
+  shell: string;
+  home: string;
+  include: boolean;
+  classification: "service" | "human" | "ambiguous";
+  strategy: "sysusers" | "kickstart" | "useradd";
+  containerfile_strategy: "skip" | "useradd";
+  password_choice: "none" | "preserve" | "new";
+  password_hash?: string;
+}
+
+/** Response from /api/user-preview. */
+export interface UserPreviewResponse {
+  kickstart: string;
+  blueprint_toml: string;
 }
 
 // --- Error type ---

@@ -38,6 +38,8 @@ const MOCK_VIEW: ViewResponse = {
   repo_groups: [],
   leaf_dep_tree: {},
   version_changes: [],
+  users_groups_decisions: [],
+  session_is_sensitive: false,
 };
 
 describe("ExportDialog", () => {
@@ -48,6 +50,7 @@ describe("ExportDialog", () => {
         onClose={vi.fn()}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -62,6 +65,7 @@ describe("ExportDialog", () => {
         onClose={vi.fn()}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -80,6 +84,7 @@ describe("ExportDialog", () => {
         onClose={vi.fn()}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -97,6 +102,7 @@ describe("ExportDialog", () => {
         onClose={vi.fn()}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -119,6 +125,7 @@ describe("ExportDialog", () => {
         onClose={onClose}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -153,6 +160,7 @@ describe("ExportDialog", () => {
         onClose={onClose}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -214,6 +222,7 @@ describe("ExportDialog", () => {
         onClose={vi.fn()}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -251,6 +260,7 @@ describe("ExportDialog", () => {
         onClose={onClose}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={onViewUpdate}
       />,
     );
@@ -280,6 +290,7 @@ describe("ExportDialog", () => {
         onClose={vi.fn()}
         stats={MOCK_STATS}
         generation={7}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );
@@ -307,6 +318,7 @@ describe("ExportDialog", () => {
         onClose={vi.fn()}
         stats={zeroStats}
         generation={1}
+        sessionIsSensitive={false}
         onViewUpdate={vi.fn()}
       />,
     );

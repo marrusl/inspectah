@@ -74,6 +74,8 @@ const MOCK_VIEW: ViewResponse = {
   repo_groups: [],
   leaf_dep_tree: {},
   version_changes: [],
+  users_groups_decisions: [],
+  session_is_sensitive: false,
 };
 
 function makePkg(overrides: Partial<RefinedPackage["entry"]> = {}, attention: AttentionTag[] = []): RefinedPackage {
@@ -129,6 +131,8 @@ function makeViewResponse(overrides: {
     repo_groups: overrides.repo_groups ?? [],
     leaf_dep_tree: {},
     version_changes: [],
+  users_groups_decisions: [],
+  session_is_sensitive: false,
   };
 }
 

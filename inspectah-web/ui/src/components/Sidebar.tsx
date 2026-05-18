@@ -11,10 +11,11 @@ import type { RefineStats } from "../api/types";
 import type { ContextSection } from "../api/types";
 import type { HealthResponse } from "../api/types";
 
-/** Section IDs that represent decision sections (packages, configs). */
+/** Section IDs that represent decision sections (packages, configs, users). */
 const DECISION_SECTIONS = [
   { id: "packages", label: "Packages" },
   { id: "configs", label: "Config Files" },
+  { id: "users_groups", label: "Users & Groups" },
 ];
 
 /** Section IDs from the snapshot context endpoint (read-only context). */
@@ -22,7 +23,6 @@ const CONTEXT_SECTIONS = [
   { id: "services", label: "Services" },
   { id: "version_changes", label: "Version Changes" },
   { id: "containers", label: "Containers" },
-  { id: "users_groups", label: "Users & Groups" },
   { id: "network", label: "Network" },
   { id: "storage", label: "Storage" },
   { id: "scheduled_tasks", label: "Scheduled Tasks" },
@@ -37,6 +37,8 @@ export interface SidebarProps {
   stats: RefineStats | null;
   sections: ContextSection[] | null;
   health: HealthResponse | null;
+  /** Number of user decisions (for the Users & Groups badge). */
+  userDecisionCount?: number;
   /** When true, renders as a fixed overlay with backdrop. */
   overlay?: boolean;
   /** Called to close the overlay (Escape, backdrop click). */
@@ -57,7 +59,11 @@ function sectionCount(
 function decisionCount(
   stats: RefineStats | null,
   id: string,
+  userDecisionCount?: number,
 ): string | undefined {
+  if (id === "users_groups") {
+    return userDecisionCount != null ? String(userDecisionCount) : "...";
+  }
   if (!stats) return "...";
   if (id === "packages") return String(stats.total_packages);
   if (id === "configs") return String(stats.total_configs);
@@ -70,6 +76,7 @@ export function Sidebar({
   stats,
   sections,
   health,
+  userDecisionCount,
   overlay = false,
   onClose,
   searchSlot,
@@ -157,7 +164,7 @@ export function Sidebar({
               onClick={() => onSelect(sec.id)}
             >
               {sec.label}{" "}
-              <Badge isRead>{decisionCount(stats, sec.id)}</Badge>
+              <Badge isRead>{decisionCount(stats, sec.id, userDecisionCount)}</Badge>
             </NavItem>
           ))}
         </NavGroup>

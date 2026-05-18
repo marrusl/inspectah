@@ -7,19 +7,26 @@ export interface ContainerfilePanelProps {
   isOpen: boolean;
   onToggle: () => void;
   loading: boolean;
+  /** When true, redact crypt(3) hashes in chpasswd lines. */
+  sessionIsSensitive?: boolean;
 }
 
 const DEFAULT_WIDTH = 340;
 const MIN_WIDTH = 200;
 const MAX_WIDTH_RATIO = 0.6; // 60% of viewport
 
+/** Regex matching crypt(3) hash patterns ($6$..., $y$..., $5$...). */
+const CRYPT_HASH_RE = /(\$(?:6|5|y)\$[^\s'"\\]+)/g;
+
 export function ContainerfilePanel({
   content,
   isOpen,
   onToggle,
   loading,
+  sessionIsSensitive = false,
 }: ContainerfilePanelProps) {
   const [panelWidth, setPanelWidth] = useState(DEFAULT_WIDTH);
+  const [hashesRevealed, setHashesRevealed] = useState(false);
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(DEFAULT_WIDTH);
@@ -114,10 +121,21 @@ export function ContainerfilePanel({
     [DOCKERFILE_KEYWORDS],
   );
 
-  const lines = useMemo(
-    () => (content != null ? content.split("\n") : []),
-    [content],
-  );
+  const lines = useMemo(() => {
+    if (content == null) return [];
+    const raw = content.split("\n");
+    if (!sessionIsSensitive || hashesRevealed) return raw;
+    // Redact crypt(3) hashes in the preview
+    return raw.map((line) => {
+      if (!CRYPT_HASH_RE.test(line)) return line;
+      // Reset regex lastIndex since it's global
+      CRYPT_HASH_RE.lastIndex = 0;
+      return line.replace(CRYPT_HASH_RE, (match) => {
+        const prefix = match.match(/^(\$[^$]+\$)/);
+        return prefix ? `${prefix[1]}<REDACTED>` : "$<REDACTED>";
+      });
+    });
+  }, [content, sessionIsSensitive, hashesRevealed]);
 
   const lineCount = lines.filter((l) => l.length > 0).length;
 
@@ -199,6 +217,21 @@ export function ContainerfilePanel({
       </div>
       <div className="inspectah-cf-panel__footer">
         <Content component="small">{lineCount} lines</Content>
+        {sessionIsSensitive && (
+          <button
+            onClick={() => setHashesRevealed((p) => !p)}
+            style={{
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              textDecoration: "underline",
+              fontSize: "var(--pf-t--global--font--size--xs)",
+              padding: 0,
+            }}
+          >
+            {hashesRevealed ? "Redact hashes" : "Reveal hashes"}
+          </button>
+        )}
         <Content component="small" className="inspectah-cf-panel__footer-note">
           Preview reflects package and config decisions. Context sections are
           included as-is.
