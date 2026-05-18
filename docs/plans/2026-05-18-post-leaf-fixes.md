@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
+> **Revision 3** (2026-05-18): Addresses round 2 review. Task 5 `BaselinePackageEntry.epoch` fixed to `Option<String>`, missing `glibc.x86_64` repoquery mock added. `format_evr()` replaced with paired `format_evr_pair()`/`formatEvrPair()` to handle `""` vs `"0"` edge case with explicit proof. Modal a11y proof expanded: Enter/Space open, Escape close, long-list scroll. RoutineSummary path proof tests added for both `leafDepTree` and `versionChange` threading. Concrete `4/5/9` remap assertions in `useKeyboard.test.ts`. ShortcutOverlay wording restored to approved `"Jump to section by index"`. `Sidebar.test.tsx` coverage added. Smoke fixture pinned to tracked path. Task 7 failure check split.
+>
 > **Revision 2** (2026-05-18): Addresses plan review findings. Item 1 rewritten against real `classify_leaf_auto`/`LeafClassification`/`recompute_view` seams. Tasks 5+8 merged into atomic commit. Epoch-aware `format_evr()` shared helper added. `PackageDetail` prop narrowed to card-local `versionChange?: VersionChangeEntry | null`. Frontend file map includes `RoutineSummary.tsx` and names existing proof suites. Verification gates use `set -o pipefail` and name specific proof-bearing tests. `BaselineData` fixtures are explicit (no `Default`). `PackageEntry.epoch` is `String` (not `Option`).
 
 **Goal:** Implement the four post-leaf fixes from the approved spec (`docs/specs/proposed/2026-05-17-post-leaf-fixes.md`): service noise reduction, leaf classification quality, leaf dependency tree modal, and version changes context section.
@@ -684,6 +686,10 @@ fn test_classify_leaf_auto_suppresses_baseline_present_packages() {
         .with_command(
             "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n kernel.x86_64",
             ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+            ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
         );
 
     let added = vec![
@@ -698,7 +704,7 @@ fn test_classify_leaf_auto_suppresses_baseline_present_packages() {
         arch: "x86_64".into(),
         version: "5.14.0".into(),
         release: "362.el9".into(),
-        epoch: "0".into(),
+        epoch: Some("0".into()),
     });
 
     let baseline = BaselineData {
@@ -727,6 +733,10 @@ fn test_classify_leaf_auto_no_baseline_suppressed_is_none() {
         .with_command(
             "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n vim.x86_64",
             ExecResult { exit_code: 0, stdout: "glibc.x86_64\n".into(), stderr: String::new() },
+        )
+        .with_command(
+            "dnf repoquery --requires --resolve --recursive --installed --queryformat %{name}.%{arch}\n glibc.x86_64",
+            ExecResult { exit_code: 0, stdout: "".into(), stderr: String::new() },
         );
 
     let added = vec![
@@ -1146,15 +1156,23 @@ fn test_non_suppressed_downgrade_still_gets_needs_review() {
 }
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **Step 3a: Run classifier tests to verify they fail**
 
 ```bash
 set -o pipefail
 cd /Users/mrussell/Work/bootc-migration/inspectah && cargo test -p inspectah-collect test_classify_modified_emits 2>&1 | tee /dev/stderr | tail -5
+```
+
+Expected: FAIL — `classify_packages` returns `Vec<PackageEntry>`, not `ClassificationResult`.
+
+- [ ] **Step 3b: Run attention tests to verify they fail**
+
+```bash
+set -o pipefail
 cd /Users/mrussell/Work/bootc-migration/inspectah && cargo test -p inspectah-refine test_baseline_suppressed_package 2>&1 | tee /dev/stderr | tail -5
 ```
 
-Expected: FAIL for both.
+Expected: FAIL — no baseline_suppressed gating in `compute_package_attention`.
 
 - [ ] **Step 4: Create `ClassificationResult` and refactor `classify_packages`**
 
@@ -1349,17 +1367,33 @@ Assisted-by: Claude Code (Opus 4.6)"
 **Files:**
 - Modify: `inspectah-web/src/handlers.rs`
 
-- [ ] **Step 1: Add shared `format_evr()` helper**
+- [ ] **Step 1: Add shared `format_evr_pair()` helper**
 
-This is the single epoch-aware formatting path used by both the context section and `PackageDetail` supplement:
+This is the single epoch-aware formatting path used by both the context section and `PackageDetail` supplement. It uses **paired** rendering: when either side has a non-trivial epoch, both sides show epoch prefixes. This prevents the `""` vs `"0"` edge case where independent per-side formatting renders identical EVR strings for packages with real drift.
 
 ```rust
-fn format_evr(epoch: &str, version: &str) -> String {
-    if epoch.is_empty() || epoch == "0" {
-        version.to_string()
-    } else {
-        format!("{}:{}", epoch, version)
-    }
+/// Format a version change pair with epoch-awareness.
+/// When EITHER side has a non-trivial epoch (not empty and not "0"),
+/// both sides render with epoch prefix. This prevents identical-looking
+/// EVR strings when only epoch differs.
+fn format_evr_pair(
+    base_epoch: &str, base_version: &str,
+    host_epoch: &str, host_version: &str,
+) -> (String, String) {
+    let base_nontrivial = !base_epoch.is_empty() && base_epoch != "0";
+    let host_nontrivial = !host_epoch.is_empty() && host_epoch != "0";
+    let show_epoch = base_nontrivial || host_nontrivial;
+
+    let fmt = |epoch: &str, version: &str| -> String {
+        if show_epoch {
+            let e = if epoch.is_empty() { "0" } else { epoch };
+            format!("{}:{}", e, version)
+        } else {
+            version.to_string()
+        }
+    };
+
+    (fmt(base_epoch, base_version), fmt(host_epoch, host_version))
 }
 ```
 
@@ -1425,6 +1459,38 @@ fn test_normalize_version_changes_epoch_aware_subtitle() {
     let item = &section.items[0];
     // Epoch-only change: subtitle must show epoch prefix so versions don't look identical
     assert!(item.subtitle.as_ref().unwrap().contains("1:"));
+    // Paired rendering: base side also gets epoch prefix
+    assert!(item.subtitle.as_ref().unwrap().contains("0:"));
+}
+
+#[test]
+fn test_normalize_version_changes_empty_vs_zero_epoch() {
+    // Edge case: base_epoch="" and host_epoch="0" are semantically equal
+    // but the classifier may emit "" from a host package without explicit epoch.
+    // Paired rendering must treat this as trivial (no epoch prefix on either side).
+    let mut snap = InspectionSnapshot::default();
+    let mut rpm = RpmSection::default();
+    rpm.version_changes = vec![VersionChange {
+        name: "bash".into(), arch: "x86_64".into(),
+        host_version: "5.2.26-4.el9".into(), base_version: "5.2.26-3.el9".into(),
+        host_epoch: "0".into(), base_epoch: String::new(),
+        direction: VersionChangeDirection::Upgrade,
+    }];
+    snap.rpm = Some(rpm);
+    snap.baseline = Some(BaselineData {
+        image_digest: "sha256:test".into(),
+        packages: std::collections::HashMap::new(),
+        extracted_at: "2026-01-01T00:00:00Z".into(),
+    });
+
+    let section = normalize_version_changes(&snap);
+    let item = &section.items[0];
+    let subtitle = item.subtitle.as_ref().unwrap();
+    // Neither side should show epoch prefix (both are trivial)
+    assert!(!subtitle.contains("0:"), "trivial epoch should not render: {}", subtitle);
+    // But the versions themselves should still differ
+    assert!(subtitle.contains("5.2.26-3.el9"));
+    assert!(subtitle.contains("5.2.26-4.el9"));
 }
 
 #[test]
@@ -1484,8 +1550,10 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
                 } else {
                     id.clone()
                 };
-                let base_evr = format_evr(&vc.base_epoch, &vc.base_version);
-                let host_evr = format_evr(&vc.host_epoch, &vc.host_version);
+                let (base_evr, host_evr) = format_evr_pair(
+                    &vc.base_epoch, &vc.base_version,
+                    &vc.host_epoch, &vc.host_version,
+                );
                 let subtitle = format!(
                     "{} \u{2192} {} ({})",
                     base_evr,
@@ -1939,8 +2007,85 @@ describe("DependencyModal", () => {
     );
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("opens via Enter key on trigger button", async () => {
+    // This tests the trigger-side contract, not the modal itself.
+    // Render a button that opens the modal (simulates PackageDetail usage).
+    const Wrapper = () => {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>View Dependencies (3)</button>
+          <DependencyModal
+            packageId="httpd.x86_64"
+            dependencies={deps}
+            isOpen={open}
+            onClose={() => setOpen(false)}
+          />
+        </>
+      );
+    };
+    render(<Wrapper />);
+    const trigger = screen.getByText("View Dependencies (3)");
+    trigger.focus();
+    await userEvent.keyboard("{Enter}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("opens via Space key on trigger button", async () => {
+    const Wrapper = () => {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>View Dependencies (3)</button>
+          <DependencyModal
+            packageId="httpd.x86_64"
+            dependencies={deps}
+            isOpen={open}
+            onClose={() => setOpen(false)}
+          />
+        </>
+      );
+    };
+    render(<Wrapper />);
+    const trigger = screen.getByText("View Dependencies (3)");
+    trigger.focus();
+    await userEvent.keyboard(" ");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("closes on Escape key", async () => {
+    const onClose = vi.fn();
+    render(
+      <DependencyModal
+        packageId="httpd.x86_64"
+        dependencies={deps}
+        isOpen={true}
+        onClose={onClose}
+      />
+    );
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("scrolls long dependency lists", () => {
+    const longDeps = Array.from({ length: 60 }, (_, i) => `dep-${String(i).padStart(3, "0")}.x86_64`);
+    render(
+      <DependencyModal
+        packageId="httpd.x86_64"
+        dependencies={longDeps}
+        isOpen={true}
+        onClose={vi.fn()}
+      />
+    );
+    expect(screen.getByText("(60 dependencies)")).toBeInTheDocument();
+    const list = screen.getByRole("list");
+    expect(list).toHaveStyle({ overflowY: "auto", maxHeight: "60vh" });
+  });
 });
 ```
+
+Note: The `Enter`/`Space` open tests and the `useState` import need `import { useState } from "react";` at the top of the test file.
 
 - [ ] **Step 2: Create `DependencyModal.tsx`**
 
@@ -2136,7 +2281,30 @@ The threading path is: `MainContent` → `DecisionList` → `DecisionItem` → `
 3. `RoutineSummary`: Accept `leafDepTree` prop, pass to `DecisionItem`.
 4. `DecisionItem`: Accept `leafDepTree` prop, pass to `PackageDetail` at all 3 render sites (~lines 200, 282, 347).
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Add RoutineSummary path proof test**
+
+Add to `inspectah-web/ui/src/components/__tests__/RoutineSummary.test.tsx` (or `PackageDetail.test.tsx` if RoutineSummary tests don't render deep enough):
+
+```tsx
+it("threads leafDepTree through RoutineSummary to PackageDetail", () => {
+  // Build a routine-level package item with a matching leafDepTree entry.
+  // Render through RoutineSummary → DecisionItem → PackageDetail.
+  // Verify the "View Dependencies" button appears.
+  // This proves the prop survives the routine-row path, not just the
+  // direct DecisionItem path.
+  //
+  // Use the existing RoutineSummary test pattern: render RoutineSummary
+  // with items, expand the summary, and check that PackageDetail
+  // receives the leafDepTree prop.
+  //
+  // Key assertion: screen.getByText(/View Dependencies/) is present
+  // after expanding a routine-level leaf package.
+});
+```
+
+Read `RoutineSummary.test.tsx` for the existing render pattern and replicate it with the new `leafDepTree` prop threaded through.
+
+- [ ] **Step 5: Run tests**
 
 ```bash
 set -o pipefail
@@ -2145,14 +2313,14 @@ cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx vitest
 
 Expected: All tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah && git add inspectah-web/ui/src/components/ && git commit -m "feat(ui): add View Dependencies button to leaf package cards
 
 Button on leaf packages with non-empty dep trees. Opens DependencyModal.
 Threaded through full render chain including RoutineSummary path.
-Focus-return proof test verifies a11y.
+Focus-return and RoutineSummary path proof tests verify a11y and threading.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -2312,20 +2480,48 @@ describe("Version Changes empty states", () => {
 });
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Add Sidebar.test.tsx coverage for always-present section**
+
+In `inspectah-web/ui/src/components/__tests__/Sidebar.test.tsx`, add a test that verifies the `version_changes` entry is always rendered in the Context nav group:
+
+```tsx
+it("renders Version Changes in sidebar Context group", () => {
+  // Use the existing Sidebar test render pattern.
+  // Provide sections array that includes version_changes with 0 items.
+  // Assert: a NavItem with text "Version Changes" and badge "0" is present.
+  // This proves the section is always navigable regardless of data state.
+});
+```
+
+Read `Sidebar.test.tsx` for the existing render pattern.
+
+- [ ] **Step 6: Note on empty-section focus landing**
+
+When navigating to `version_changes` via key `4` and the section is empty, focus lands on the `EmptyState` heading. This is the PatternFly `EmptyState` default behavior — no custom focus management needed. The existing `FocusAndNavigation.test.tsx` pattern covers section-switch focus. Add a note in the test if the empty-state heading needs explicit focus verification:
+
+```tsx
+// In FocusAndNavigation.test.tsx or EmptyStates.test.tsx:
+it("focuses Version Changes heading when section is empty", async () => {
+  // Navigate to version_changes section
+  // Verify the EmptyState titleText element is rendered and section is accessible
+});
+```
+
+- [ ] **Step 7: Run tests**
 
 ```bash
 set -o pipefail
 cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx vitest run 2>&1 | tee /dev/stderr | tail -15
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah && git add inspectah-web/ui/src/components/ && git commit -m "feat(ui): add Version Changes sidebar section with typed empty states
 
 Three-state empty reason rendering with proof tests for each:
-no_baseline, zero_drift, data_unavailable.
+no_baseline, zero_drift, data_unavailable. Sidebar.test.tsx proves
+section is always navigable. Empty-section focus landing verified.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -2400,26 +2596,73 @@ it("does not show version change when versionChange is null", () => {
 });
 ```
 
-- [ ] **Step 2: Add epoch-aware display helper to PackageDetail**
+- [ ] **Step 1b: Add `""` vs `"0"` epoch edge case proof**
 
 ```tsx
-function formatEvr(epoch: string, version: string): string {
-  if (!epoch || epoch === "0") return version;
-  return `${epoch}:${version}`;
+it("does not show epoch prefix when both sides are trivial (empty vs 0)", () => {
+  const pkg = {
+    entry: {
+      name: "bash", arch: "x86_64", version: "5.2.26", release: "4.el9",
+      epoch: "0", state: "Modified", include: true, source_repo: "baseos",
+      fleet: null,
+    },
+    attention: [],
+  };
+  const vc = {
+    name: "bash", arch: "x86_64",
+    host_version: "5.2.26-4.el9", base_version: "5.2.26-3.el9",
+    host_epoch: "0", base_epoch: "",
+    direction: "upgrade" as const,
+  };
+  render(<PackageDetail pkg={pkg as any} versionChange={vc} />);
+  // Neither side shows epoch prefix (both are trivial)
+  expect(screen.queryByText(/0:/)).not.toBeInTheDocument();
+  expect(screen.getByText(/5\.2\.26-3\.el9/)).toBeInTheDocument();
+  expect(screen.getByText(/5\.2\.26-4\.el9/)).toBeInTheDocument();
+});
+```
+
+- [ ] **Step 2: Add paired epoch-aware display helper to PackageDetail**
+
+Uses paired rendering (same logic as the Rust `format_evr_pair`): when EITHER side has a non-trivial epoch, both sides show epoch prefixes.
+
+```tsx
+function formatEvrPair(
+  baseEpoch: string, baseVersion: string,
+  hostEpoch: string, hostVersion: string,
+): [string, string] {
+  const baseNontrivial = baseEpoch !== "" && baseEpoch !== "0";
+  const hostNontrivial = hostEpoch !== "" && hostEpoch !== "0";
+  const showEpoch = baseNontrivial || hostNontrivial;
+
+  const fmt = (epoch: string, version: string): string => {
+    if (showEpoch) {
+      const e = epoch === "" ? "0" : epoch;
+      return `${e}:${version}`;
+    }
+    return version;
+  };
+
+  return [fmt(baseEpoch, baseVersion), fmt(hostEpoch, hostVersion)];
 }
 ```
 
 - [ ] **Step 3: Add version change display to PackageDetail**
 
 ```tsx
-{versionChange && (
+{versionChange && (() => {
+  const [baseEvr, hostEvr] = formatEvrPair(
+    versionChange.base_epoch, versionChange.base_version,
+    versionChange.host_epoch, versionChange.host_version,
+  );
+  return (
   <DescriptionListGroup>
     <DescriptionListTerm>Version Change</DescriptionListTerm>
     <DescriptionListDescription>
       <Content component="small">
-        {formatEvr(versionChange.base_epoch, versionChange.base_version)}
+        {baseEvr}
         {" → "}
-        {formatEvr(versionChange.host_epoch, versionChange.host_version)}
+        {hostEvr}
         {" "}
         <Label color={versionChange.direction === "downgrade" ? "red" : "blue"}>
           {versionChange.direction}
@@ -2427,7 +2670,8 @@ function formatEvr(epoch: string, version: string): string {
       </Content>
     </DescriptionListDescription>
   </DescriptionListGroup>
-)}
+  );
+})()}
 ```
 
 - [ ] **Step 4: Thread through render chain (card-local resolution)**
@@ -2447,21 +2691,38 @@ const matchingVc = versionChanges?.find(
 <PackageDetail pkg={item.data as RefinedPackage} leafDepTree={leafDepTree} versionChange={matchingVc} />
 ```
 
-- [ ] **Step 5: Run tests**
+- [ ] **Step 5: Add RoutineSummary path proof for versionChange threading**
+
+Add to `RoutineSummary.test.tsx`:
+
+```tsx
+it("threads versionChanges through RoutineSummary to PackageDetail", () => {
+  // Build a routine-level Modified package with a matching versionChanges entry.
+  // Render through RoutineSummary → DecisionItem → PackageDetail.
+  // Verify the "Version Change" DescriptionListTerm appears with direction label.
+  // This proves the versionChanges → card-local versionChange resolution
+  // survives the routine-row path.
+  //
+  // Key assertion: after expanding the RoutineSummary, the rendered
+  // PackageDetail shows the version change info.
+});
+```
+
+- [ ] **Step 6: Run tests**
 
 ```bash
 set -o pipefail
 cd /Users/mrussell/Work/bootc-migration/inspectah/inspectah-web/ui && npx vitest run 2>&1 | tee /dev/stderr | tail -15
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 cd /Users/mrussell/Work/bootc-migration/inspectah && git add inspectah-web/ui/src/components/ && git commit -m "feat(ui): show version change info on package detail cards
 
 Card-local prop: DecisionItem resolves matching VersionChangeEntry
-and passes single versionChange to PackageDetail. Epoch-aware display
-with formatEvr helper. Threaded through RoutineSummary path.
+and passes single versionChange to PackageDetail. Paired epoch-aware
+formatEvrPair helper. Threaded through RoutineSummary path with proof.
 
 Assisted-by: Claude Code (Opus 4.6)"
 ```
@@ -2493,19 +2754,50 @@ const SECTION_IDS = [
 ];
 ```
 
-- [ ] **Step 2: Update ShortcutOverlay**
+- [ ] **Step 2: Keep ShortcutOverlay wording aligned with approved spec**
+
+The existing wording is `"Jump to section by index"`. Do **not** change it to `"Jump to section (4 = Version Changes)"` — the approved spec keeps the generic wording. Leave ShortcutOverlay unchanged.
 
 ```typescript
-{ keys: "1-9", description: "Jump to section (4 = Version Changes)" },
+// KEEP EXISTING — no change:
+{ keys: "1-9", description: "Jump to section by index" },
 ```
 
-- [ ] **Step 3: Update keyboard test**
+- [ ] **Step 3: Add concrete remap assertions in `useKeyboard.test.ts`**
 
-In `inspectah-web/ui/src/hooks/__tests__/useKeyboard.test.ts`, update any assertions about section index mapping (e.g., key `4` should now map to `"version_changes"`, not `"containers"`).
+In `inspectah-web/ui/src/hooks/__tests__/useKeyboard.test.ts`, the existing test `"calls onSectionChange with correct section on 1-9"` asserts keys `1`, `2`, `3`. Extend it (or add a new test) with explicit `4`, `5`, and `9` assertions:
 
-Also check `FocusAndNavigation.test.tsx` for section-jump assertions that need updating.
+```typescript
+it("maps key 4 to version_changes after insertion", () => {
+  const opts = makeOptions();
+  renderHook(() => useKeyboard(opts));
 
-- [ ] **Step 4: Run tests**
+  fireEvent.keyDown(document, { key: "4" });
+  expect(opts.onSectionChange).toHaveBeenCalledWith("version_changes");
+});
+
+it("maps key 5 to containers (shifted from 4)", () => {
+  const opts = makeOptions();
+  renderHook(() => useKeyboard(opts));
+
+  fireEvent.keyDown(document, { key: "5" });
+  expect(opts.onSectionChange).toHaveBeenCalledWith("containers");
+});
+
+it("maps key 9 to scheduled_tasks (shifted from 8)", () => {
+  const opts = makeOptions();
+  renderHook(() => useKeyboard(opts));
+
+  fireEvent.keyDown(document, { key: "9" });
+  expect(opts.onSectionChange).toHaveBeenCalledWith("scheduled_tasks");
+});
+```
+
+- [ ] **Step 4: Update `ShortcutOverlay.test.tsx` if it pins shortcut descriptions**
+
+Check `inspectah-web/ui/src/components/__tests__/ShortcutOverlay.test.tsx` for assertions about the "1-9" shortcut description. Since we're keeping the wording unchanged, no update should be needed — but verify.
+
+- [ ] **Step 5: Run tests**
 
 ```bash
 set -o pipefail
@@ -2566,14 +2858,21 @@ Expected: No errors.
 
 - [ ] **Step 5: Start dev server and smoke test**
 
-Find a real snapshot fixture:
-```bash
-ls /Users/mrussell/Work/bootc-migration/inspectah/tests/fixtures/
+Use the tracked snapshot fixture at:
+```
+/Users/mrussell/Work/bootc-migration/inspectah/input-20260323-133834/inspection-snapshot.json
 ```
 
-If no JSON fixture exists, generate one or use the existing test harness. Run:
+If this path does not exist (snapshot was cleaned up), generate a fresh one:
 ```bash
-cd /Users/mrussell/Work/bootc-migration/inspectah && cargo run -p inspectah-web -- --snapshot <path-to-fixture>
+set -o pipefail
+cd /Users/mrussell/Work/bootc-migration/inspectah && cargo run -p inspectah-cli -- scan --output /tmp/inspectah-smoke-fixture 2>&1 | tee /dev/stderr | tail -5
+```
+Then use `/tmp/inspectah-smoke-fixture/inspection-snapshot.json`.
+
+Start the dev server:
+```bash
+cd /Users/mrussell/Work/bootc-migration/inspectah && cargo run -p inspectah-web -- --snapshot /Users/mrussell/Work/bootc-migration/inspectah/input-20260323-133834/inspection-snapshot.json
 ```
 
 Verify in browser:
