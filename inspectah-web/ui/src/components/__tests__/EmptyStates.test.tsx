@@ -64,6 +64,8 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 1,
   repo_groups: [],
+  leaf_dep_tree: {},
+  version_changes: [],
 };
 
 const ROUTINE_TAG: AttentionTag = {
@@ -301,6 +303,8 @@ describe("Filter empty state in MainContent", () => {
       stats: { ...MOCK_STATS, total_packages: 1, included_packages: 1 },
       generation: 1,
       repo_groups: [],
+      leaf_dep_tree: {},
+      version_changes: [],
     };
 
     render(

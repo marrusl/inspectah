@@ -194,10 +194,21 @@ export interface ContextSection {
   id: string;
   display_name: string;
   items: ContextItem[];
+  empty_reason?: string;
 }
 
 /** Rust: #[serde(rename_all = "snake_case")] */
 export type RepoProvenance = "verified" | "incomplete" | "unknown";
+
+export interface VersionChangeEntry {
+  name: string;
+  arch: string;
+  host_version: string;
+  base_version: string;
+  host_epoch: string;
+  base_epoch: string;
+  direction: "upgrade" | "downgrade";
+}
 
 export interface RepoGroupInfo {
   section_id: string;
@@ -224,6 +235,8 @@ export interface HealthResponse {
 /** View endpoint response: RefinedView + repo_groups. */
 export interface ViewResponse extends RefinedView {
   repo_groups: RepoGroupInfo[];
+  leaf_dep_tree: Record<string, string[]>;
+  version_changes: VersionChangeEntry[];
 }
 
 // --- Error type ---
