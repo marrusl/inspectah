@@ -11,7 +11,7 @@ use crate::normalize::{normalize_config_defaults, normalize_package_defaults};
 use crate::repo_index::RepoIndex;
 use crate::types::{
     AnnotatedOp, AttentionLevel, ChangesSummary, PackageTarget, RefineError, RefineStats,
-    RefinedView, RefinementOp, RepoProvenance,
+    RefinedView, RefinementOp, RepoProvenance, UserPasswordOp,
 };
 
 pub struct RefineSession {
@@ -284,6 +284,35 @@ impl RefineSession {
         &self.viewed
     }
 
+    /// Returns true if the PROJECTED state contains sensitive material.
+    ///
+    /// Sensitive when `sensitive_snapshot` is true OR any user has
+    /// `password_choice == "new"` with a non-empty `password_hash`.
+    /// Based on projected state, not op history.
+    pub fn is_sensitive(&self) -> bool {
+        let projected = self.project_snapshot();
+        if projected.sensitive_snapshot {
+            return true;
+        }
+        if let Some(ug) = &projected.users_groups {
+            for user in &ug.users {
+                let choice = user
+                    .get("password_choice")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let has_hash = user
+                    .get("password_hash")
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+                if choice == "new" && has_hash {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn export_tarball(&self, path: &Path, expected_generation: u64) -> Result<(), RefineError> {
         if expected_generation != self.generation {
             return Err(RefineError::StaleGeneration {
@@ -352,8 +381,39 @@ impl RefineSession {
                     )));
                 }
             }
+            RefinementOp::UserStrategy { username, .. } => {
+                if !self.user_exists(username) {
+                    return Err(RefineError::UnknownTarget(username.clone()));
+                }
+            }
+            RefinementOp::UserPassword(pw_op) => {
+                let uname = match pw_op {
+                    UserPasswordOp::New { username, .. } => username,
+                    UserPasswordOp::None { username } => username,
+                    UserPasswordOp::Preserve { username } => username,
+                };
+                if !self.user_exists(uname) {
+                    return Err(RefineError::UnknownTarget(uname.clone()));
+                }
+            }
         }
         Ok(())
+    }
+
+    /// Check whether a username exists in the snapshot's users_groups.users.
+    fn user_exists(&self, username: &str) -> bool {
+        self.original
+            .users_groups
+            .as_ref()
+            .map(|ug| {
+                ug.users.iter().any(|u| {
+                    u.get("name")
+                        .and_then(|v| v.as_str())
+                        .map(|n| n == username)
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
     }
 
     fn is_op_noop(&self, op: &RefinementOp) -> bool {
@@ -397,6 +457,8 @@ impl RefineSession {
                 let excluded = self.excluded_sections_at(&projected);
                 !excluded.contains(section_id)
             }
+            // User ops are never noop — always replay to ensure correctness
+            RefinementOp::UserStrategy { .. } | RefinementOp::UserPassword(_) => false,
         }
     }
 
@@ -530,6 +592,100 @@ impl RefineSession {
                                     rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path)
                                 {
                                     k.include = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                RefinementOp::UserStrategy { username, strategy } => {
+                    if let Some(ref mut ug) = snap.users_groups {
+                        if let Some(user) = ug.users.iter_mut().find(|u| {
+                            u.get("name").and_then(|v| v.as_str()) == Some(username)
+                        }) {
+                            user.as_object_mut().map(|m| {
+                                m.insert(
+                                    "containerfile_strategy".to_string(),
+                                    serde_json::to_value(strategy).unwrap(),
+                                );
+                            });
+                        }
+                    }
+                }
+                RefinementOp::UserPassword(pw_op) => {
+                    match pw_op {
+                        UserPasswordOp::New { username, hash } => {
+                            if let Some(ref mut ug) = snap.users_groups {
+                                if let Some(user) = ug.users.iter_mut().find(|u| {
+                                    u.get("name").and_then(|v| v.as_str()) == Some(username)
+                                }) {
+                                    if let Some(m) = user.as_object_mut() {
+                                        m.insert(
+                                            "password_choice".to_string(),
+                                            serde_json::json!("new"),
+                                        );
+                                        if let Some(h) = hash {
+                                            m.insert(
+                                                "password_hash".to_string(),
+                                                serde_json::json!(h),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        UserPasswordOp::None { username } => {
+                            if let Some(ref mut ug) = snap.users_groups {
+                                if let Some(user) = ug.users.iter_mut().find(|u| {
+                                    u.get("name").and_then(|v| v.as_str()) == Some(username)
+                                }) {
+                                    if let Some(m) = user.as_object_mut() {
+                                        m.insert(
+                                            "password_choice".to_string(),
+                                            serde_json::json!("none"),
+                                        );
+                                        // CLEAR password_hash
+                                        m.remove("password_hash");
+                                    }
+                                }
+                            }
+                        }
+                        UserPasswordOp::Preserve { username } => {
+                            // CRITICAL: Restore the ORIGINAL hash from self.original,
+                            // not the projected state. This handles New -> Preserve correctly.
+                            let original_hash = self
+                                .original
+                                .users_groups
+                                .as_ref()
+                                .and_then(|ug| {
+                                    ug.users.iter().find(|u| {
+                                        u.get("name").and_then(|v| v.as_str()) == Some(username)
+                                    })
+                                })
+                                .and_then(|u| u.get("password_hash"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string());
+
+                            if let Some(ref mut ug) = snap.users_groups {
+                                if let Some(user) = ug.users.iter_mut().find(|u| {
+                                    u.get("name").and_then(|v| v.as_str()) == Some(username)
+                                }) {
+                                    if let Some(m) = user.as_object_mut() {
+                                        m.insert(
+                                            "password_choice".to_string(),
+                                            serde_json::json!("preserve"),
+                                        );
+                                        match original_hash {
+                                            Some(h) => {
+                                                m.insert(
+                                                    "password_hash".to_string(),
+                                                    serde_json::json!(h),
+                                                );
+                                            }
+                                            None => {
+                                                m.remove("password_hash");
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -771,15 +927,30 @@ pub fn render_refine_export(
     inspectah_pipeline::render::configtree::write_env_files(snap, out)
         .map_err(|e| RefineError::RenderFailed(e.to_string()))?;
 
-    // 2b. Remove any top-level artifacts outside the approved export contract.
+    // 2b. User artifacts (conditional — only when users_groups has data)
+    let users_ks = inspectah_pipeline::render::users::render_kickstart(snap);
+    if !users_ks.is_empty() {
+        std::fs::write(out.join("inspectah-users.ks"), users_ks)?;
+    }
+    let users_toml = inspectah_pipeline::render::users::render_blueprint_toml(snap);
+    if !users_toml.is_empty() {
+        std::fs::write(out.join("inspectah-users.toml"), users_toml)?;
+    }
+    inspectah_pipeline::render::users::stage_ssh_keys(snap, out)
+        .map_err(|e| RefineError::RenderFailed(format!("stage SSH keys: {e}")))?;
+
+    // 2c. Remove any top-level artifacts outside the approved export contract.
     // write_config_tree() can emit drop-ins/, quadlet/, flatpak/ at root.
     let allowed_top_level: std::collections::HashSet<&str> = [
         "config",
         "env-files",
         "schema",
+        "users",
         "inspection-snapshot.json",
         "Containerfile",
         "audit-report.md",
+        "inspectah-users.ks",
+        "inspectah-users.toml",
     ]
     .iter()
     .copied()
@@ -863,7 +1034,9 @@ fn create_flat_tarball(source_dir: &Path, tarball_path: &Path) -> Result<(), Ref
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::UserPasswordOp;
     use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
+    use inspectah_core::types::users::UserGroupSection;
 
     /// Build a minimal snapshot suitable for RefineSession tests.
     fn test_snapshot() -> InspectionSnapshot {
@@ -1155,5 +1328,184 @@ mod tests {
             "baseline-suppressed package must not appear even in degraded mode"
         );
         assert!(view.packages.iter().any(|p| p.entry.name == "httpd"));
+    }
+
+    /// Build a snapshot with a users_groups section containing one user.
+    fn test_snapshot_with_user() -> InspectionSnapshot {
+        InspectionSnapshot {
+            schema_version: 15,
+            rpm: Some(RpmSection::default()),
+            users_groups: Some(UserGroupSection {
+                users: vec![serde_json::json!({
+                    "name": "alice",
+                    "uid": 1001,
+                    "gid": 1001,
+                    "include": true,
+                    "containerfile_strategy": "skip",
+                    "password_choice": "none",
+                    "password_hash": "$6$original_hash",
+                    "home": "/home/alice",
+                    "shell": "/bin/bash"
+                })],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn user_strategy_op_projects_useradd() {
+        let snap = test_snapshot_with_user();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::UserStrategy {
+                username: "alice".into(),
+                strategy: inspectah_core::types::users::UserContainerfileStrategy::Useradd,
+            })
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let user = projected
+            .users_groups
+            .as_ref()
+            .unwrap()
+            .users
+            .iter()
+            .find(|u| u.get("name").and_then(|v| v.as_str()) == Some("alice"))
+            .unwrap();
+
+        assert_eq!(
+            user.get("containerfile_strategy").and_then(|v| v.as_str()),
+            Some("useradd"),
+            "UserStrategy op must set containerfile_strategy to useradd"
+        );
+    }
+
+    #[test]
+    fn user_password_none_clears_hash() {
+        let snap = test_snapshot_with_user();
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::UserPassword(UserPasswordOp::None {
+                username: "alice".into(),
+            }))
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let user = projected
+            .users_groups
+            .as_ref()
+            .unwrap()
+            .users
+            .iter()
+            .find(|u| u.get("name").and_then(|v| v.as_str()) == Some("alice"))
+            .unwrap();
+
+        assert_eq!(
+            user.get("password_choice").and_then(|v| v.as_str()),
+            Some("none"),
+            "password_choice must be 'none'"
+        );
+        assert!(
+            user.get("password_hash").is_none(),
+            "password_hash must be cleared when password_choice is 'none'"
+        );
+    }
+
+    #[test]
+    fn preserve_after_new_restores_original_hash() {
+        let snap = test_snapshot_with_user();
+        let mut session = RefineSession::new(snap);
+
+        // Step 1: Set a NEW password hash
+        session
+            .apply(RefinementOp::UserPassword(UserPasswordOp::New {
+                username: "alice".into(),
+                hash: Some("$6$new_hash_value".into()),
+            }))
+            .unwrap();
+
+        // Verify new hash is in place
+        let projected = session.snapshot_projected();
+        let user = projected
+            .users_groups
+            .as_ref()
+            .unwrap()
+            .users
+            .iter()
+            .find(|u| u.get("name").and_then(|v| v.as_str()) == Some("alice"))
+            .unwrap();
+        assert_eq!(
+            user.get("password_hash").and_then(|v| v.as_str()),
+            Some("$6$new_hash_value"),
+            "after New op, hash must be the new value"
+        );
+
+        // Step 2: Preserve — must restore the ORIGINAL hash, not the new one
+        session
+            .apply(RefinementOp::UserPassword(UserPasswordOp::Preserve {
+                username: "alice".into(),
+            }))
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        let user = projected
+            .users_groups
+            .as_ref()
+            .unwrap()
+            .users
+            .iter()
+            .find(|u| u.get("name").and_then(|v| v.as_str()) == Some("alice"))
+            .unwrap();
+
+        assert_eq!(
+            user.get("password_choice").and_then(|v| v.as_str()),
+            Some("preserve"),
+            "password_choice must be 'preserve'"
+        );
+        assert_eq!(
+            user.get("password_hash").and_then(|v| v.as_str()),
+            Some("$6$original_hash"),
+            "Preserve must restore the ORIGINAL scan-time hash, not the projected (new) hash"
+        );
+    }
+
+    #[test]
+    fn new_password_triggers_sensitive_on_projected_state() {
+        let snap = test_snapshot_with_user();
+        let mut session = RefineSession::new(snap);
+
+        // Before any password ops, not sensitive
+        assert!(
+            !session.is_sensitive(),
+            "session must not be sensitive before any password ops"
+        );
+
+        // Set a new password hash
+        session
+            .apply(RefinementOp::UserPassword(UserPasswordOp::New {
+                username: "alice".into(),
+                hash: Some("$6$new_secret".into()),
+            }))
+            .unwrap();
+
+        assert!(
+            session.is_sensitive(),
+            "session must be sensitive after setting a new password hash"
+        );
+
+        // Switch to None — clears hash, no longer sensitive
+        session
+            .apply(RefinementOp::UserPassword(UserPasswordOp::None {
+                username: "alice".into(),
+            }))
+            .unwrap();
+
+        assert!(
+            !session.is_sensitive(),
+            "session must not be sensitive after clearing password"
+        );
     }
 }
