@@ -46,6 +46,8 @@ pub struct ServiceSection {
     pub disabled_units: Vec<String>,
     #[serde(default)]
     pub drop_ins: Vec<SystemdDropIn>,
+    #[serde(default)]
+    pub preset_matched_units: Vec<String>,
 }
 
 #[cfg(test)]
@@ -68,5 +70,29 @@ mod tests {
         let json = serde_json::to_string(&section).unwrap();
         let parsed: ServiceSection = serde_json::from_str(&json).unwrap();
         assert_eq!(section, parsed);
+    }
+
+    #[test]
+    fn test_preset_matched_units_roundtrip() {
+        let section = ServiceSection {
+            state_changes: Vec::new(),
+            enabled_units: vec!["sshd.service".into()],
+            disabled_units: Vec::new(),
+            drop_ins: Vec::new(),
+            preset_matched_units: vec!["chronyd.service".into(), "firewalld.service".into()],
+        };
+        let json = serde_json::to_string(&section).unwrap();
+        let parsed: ServiceSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            parsed.preset_matched_units,
+            vec!["chronyd.service", "firewalld.service"]
+        );
+    }
+
+    #[test]
+    fn test_preset_matched_units_missing_deserializes_empty() {
+        let json = r#"{"state_changes":[],"enabled_units":[],"disabled_units":[],"drop_ins":[]}"#;
+        let parsed: ServiceSection = serde_json::from_str(json).unwrap();
+        assert!(parsed.preset_matched_units.is_empty());
     }
 }

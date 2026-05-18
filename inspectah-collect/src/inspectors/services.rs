@@ -109,6 +109,7 @@ impl Inspector for ServicesInspector {
                             enabled_units,
                             disabled_units,
                             drop_ins: Vec::new(),
+                            preset_matched_units: Vec::new(),
                         }),
                         warnings: Vec::new(),
                         redaction_hints: Vec::new(),
@@ -170,6 +171,7 @@ impl Inspector for ServicesInspector {
             enabled_units,
             disabled_units,
             drop_ins,
+            preset_matched_units: Vec::new(),
         };
 
         // Preset file read failures are correctness-bearing — a missing
