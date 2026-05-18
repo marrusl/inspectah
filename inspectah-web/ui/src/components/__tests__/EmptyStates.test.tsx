@@ -342,3 +342,35 @@ describe("Filter empty state in MainContent", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("Version Changes empty states", () => {
+  it("renders no_baseline empty state", async () => {
+    const { MainContent } = await import("../MainContent");
+    const sections = [{ id: "version_changes", display_name: "Version Changes", items: [], empty_reason: "no_baseline" }];
+    render(<MainContent activeSection="version_changes" loading={false}
+      viewData={{ ...MOCK_VIEW }} sections={sections}
+      onViewUpdate={vi.fn()} onMutationError={vi.fn()}
+      sectionSearchOpen={false} onSectionSearchClose={vi.fn()} />);
+    expect(screen.getByText(/requires a baseline/)).toBeInTheDocument();
+  });
+
+  it("renders zero_drift empty state", async () => {
+    const { MainContent } = await import("../MainContent");
+    const sections = [{ id: "version_changes", display_name: "Version Changes", items: [], empty_reason: "zero_drift" }];
+    render(<MainContent activeSection="version_changes" loading={false}
+      viewData={{ ...MOCK_VIEW }} sections={sections}
+      onViewUpdate={vi.fn()} onMutationError={vi.fn()}
+      sectionSearchOpen={false} onSectionSearchClose={vi.fn()} />);
+    expect(screen.getByText(/All packages match/)).toBeInTheDocument();
+  });
+
+  it("renders data_unavailable empty state", async () => {
+    const { MainContent } = await import("../MainContent");
+    const sections = [{ id: "version_changes", display_name: "Version Changes", items: [], empty_reason: "data_unavailable" }];
+    render(<MainContent activeSection="version_changes" loading={false}
+      viewData={{ ...MOCK_VIEW }} sections={sections}
+      onViewUpdate={vi.fn()} onMutationError={vi.fn()}
+      sectionSearchOpen={false} onSectionSearchClose={vi.fn()} />);
+    expect(screen.getByText(/not available/)).toBeInTheDocument();
+  });
+});

@@ -21,6 +21,7 @@ const MOCK_STATS: RefineStats = {
 
 const MOCK_SECTIONS: ContextSection[] = [
   { id: "services", display_name: "Services", items: [{ id: "s1", title: "sshd", subtitle: null, detail: null, searchable_text: "sshd" }] },
+  { id: "version_changes", display_name: "Version Changes", items: [] },
   { id: "containers", display_name: "Containers", items: [] },
   { id: "users_groups", display_name: "Users & Groups", items: [{ id: "u1", title: "root", subtitle: null, detail: null, searchable_text: "root" }, { id: "u2", title: "nobody", subtitle: null, detail: null, searchable_text: "nobody" }] },
   { id: "network", display_name: "Network", items: [] },
@@ -46,7 +47,7 @@ const MOCK_HEALTH: HealthResponse = {
 };
 
 describe("Sidebar", () => {
-  it("renders all 11 section items", () => {
+  it("renders all 12 section items", () => {
     render(
       <Sidebar
         activeSection="packages"
@@ -60,6 +61,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("Packages")).toBeInTheDocument();
     expect(screen.getByText("Config Files")).toBeInTheDocument();
     expect(screen.getByText("Services")).toBeInTheDocument();
+    expect(screen.getByText("Version Changes")).toBeInTheDocument();
     expect(screen.getByText("Containers")).toBeInTheDocument();
     expect(screen.getByText("Users & Groups")).toBeInTheDocument();
     expect(screen.getByText("Network")).toBeInTheDocument();
