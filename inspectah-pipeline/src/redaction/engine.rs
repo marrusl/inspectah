@@ -991,6 +991,26 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
         }
     }
 
+    // Handle SSH keys in user objects.
+    // When preserved_ssh_keys is true, skip redaction — the operator chose
+    // to retain SSH keys. When false, remove the ssh_keys content entirely.
+    // SSH public keys are not cryptographic secrets, but they can reveal
+    // server access patterns and should be handled as sensitive data.
+    if let Some(ref mut users) = snapshot.users_groups {
+        for user in &mut users.users {
+            if user.get("ssh_keys").is_some() {
+                if !snapshot.preserved_ssh_keys {
+                    // Strip SSH keys when not explicitly preserved
+                    if let Some(user_obj) = user.as_object_mut() {
+                        user_obj.remove("ssh_keys");
+                    }
+                }
+                // When preserved_ssh_keys is true, keys are intentionally
+                // retained and pass through unchanged.
+            }
+        }
+    }
+
     // Build a map of path → post-redaction content so that hint resolution
     // can check whether flagged sensitive content survived the regex pass.
     let mut post_redaction_content: HashMap<String, String> = HashMap::new();
@@ -1870,5 +1890,61 @@ mod tests {
             }
             other => panic!("expected SensitiveRetained, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn redact_preserves_ssh_keys_when_flag_set() {
+        let mut snap = InspectionSnapshot::new();
+        snap.sensitive_snapshot = true;
+        snap.preserved_ssh_keys = true;
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "alice",
+                "uid": 1000,
+                "ssh_keys": [
+                    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... alice@example.com",
+                    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAbc... alice@laptop"
+                ]
+            })],
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+
+        let users = &snap.users_groups.as_ref().unwrap().users;
+        let ssh_keys = users[0]["ssh_keys"].as_array().unwrap();
+
+        assert_eq!(ssh_keys.len(), 2, "both SSH keys must be preserved");
+        assert!(
+            ssh_keys[0].as_str().unwrap().contains("ssh-rsa"),
+            "first SSH key must survive redaction when preserved_ssh_keys is true"
+        );
+        assert!(
+            ssh_keys[1].as_str().unwrap().contains("ssh-ed25519"),
+            "second SSH key must survive redaction when preserved_ssh_keys is true"
+        );
+    }
+
+    #[test]
+    fn redact_strips_ssh_keys_without_preserve_flag() {
+        // Sanity: without preserved_ssh_keys, SSH keys are removed entirely.
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "bob",
+                "uid": 1001,
+                "ssh_keys": [
+                    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... bob@example.com"
+                ]
+            })],
+            ..Default::default()
+        });
+        redact(&mut snap, &RedactOptions::default());
+
+        let users = &snap.users_groups.as_ref().unwrap().users;
+
+        assert!(
+            users[0].get("ssh_keys").is_none(),
+            "SSH keys field must be removed without preserve flag"
+        );
     }
 }
