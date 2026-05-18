@@ -924,11 +924,68 @@ RefinementOp::UserPassword { username, password, hash } => {
                     UserPasswordChoice::None => {
                         user.as_object_mut().map(|m| m.remove("password_hash"));
                     }
-                    UserPasswordChoice::Preserve => {} // keep existing hash
+                    UserPasswordChoice::Preserve => {
+                        // Restore the ORIGINAL scan-time hash from self.original,
+                        // not whatever is currently in the projected state.
+                        // This handles the New -> Preserve sequence correctly:
+                        // New sets a new hash, Preserve must restore the original.
+                        let original_hash = self.original.users_groups.as_ref()
+                            .and_then(|ug| ug.users.iter().find(|u|
+                                u.get("name").and_then(|n| n.as_str()) == Some(username)
+                            ))
+                            .and_then(|u| u.get("password_hash"))
+                            .cloned();
+                        match original_hash {
+                            Some(h) => { user["password_hash"] = h; }
+                            None => {
+                                // No preserved hash exists — this is a no-op.
+                                // The user entry keeps whatever password_status it had.
+                            }
+                        }
+                    }
                 }
             }
         }
     }
+}
+```
+
+- [ ] **Step 3b: Write test for New -> Preserve restoring original hash**
+
+```rust
+#[test]
+fn preserve_after_new_restores_original_hash() {
+    let mut snap = InspectionSnapshot::new();
+    snap.sensitive_snapshot = true;
+    snap.preserved_credentials = true;
+    snap.users_groups = Some(UserGroupSection {
+        users: vec![serde_json::json!({
+            "name": "alice", "uid": 1000,
+            "password_hash": "$6$original$hash",
+            "password_status": "password_set"
+        })],
+        ..Default::default()
+    });
+    let mut session = RefineSession::new(snap);
+
+    // Set a new password
+    session.apply(RefinementOp::UserPassword {
+        username: "alice".into(),
+        password: UserPasswordChoice::New,
+        hash: Some("$6$new$hash".into()),
+    }).unwrap();
+    let proj = session.snapshot_projected();
+    assert_eq!(proj.users_groups.as_ref().unwrap().users[0]["password_hash"], "$6$new$hash");
+
+    // Switch back to preserve — must restore original, not keep the new one
+    session.apply(RefinementOp::UserPassword {
+        username: "alice".into(),
+        password: UserPasswordChoice::Preserve,
+        hash: None,
+    }).unwrap();
+    let proj = session.snapshot_projected();
+    assert_eq!(proj.users_groups.as_ref().unwrap().users[0]["password_hash"], "$6$original$hash",
+        "Preserve must restore the original scan-time hash, not keep the New hash");
 }
 ```
 
@@ -1159,6 +1216,7 @@ This task creates the React components. The real file owners after `users_groups
 - Modify: `inspectah-web/ui/src/components/MainContent.tsx` — render decision section
 - Modify: `inspectah-web/ui/src/components/GlobalSearch.tsx` — include user items in search
 - Modify: `inspectah-web/ui/src/components/ExportDialog.tsx` — sensitivity gating with acknowledgment
+- Modify: `inspectah-web/ui/src/components/ContainerfilePanel.tsx` — default-redaction for sensitive values in live preview
 - Modify: `inspectah-web/ui/src/hooks/useKeyboard.ts` — register shortcut for Users section
 - Modify: `inspectah-web/ui/src/api/client.ts` — API methods
 - Modify: `inspectah-web/ui/src/api/types.ts` — type definitions for user decisions
@@ -1253,7 +1311,21 @@ Check if session is sensitive. If so:
 - Pass `X-Acknowledge-Sensitive: true` header on export request
 - Handle HTTP 428 response from the tarball endpoint
 
-- [ ] **Step 12: Manual testing in browser**
+- [ ] **Step 12: Update `ContainerfilePanel.tsx` — default-redaction for sensitive values**
+
+The existing Containerfile preview (`containerfile_preview` in `RefinedView`) is rendered by `render_containerfile()` in `inspectah-refine/src/session.rs::recompute_view()`. When a useradd user has a preserved or new password hash, the preview will contain the raw `chpasswd -e` line with the hash visible.
+
+The Containerfile panel must apply the same default-redaction behavior as user cards and the artifact preview:
+- Scan the rendered `containerfile_preview` string for `crypt(3)` hash patterns (`$6$...`, `$y$...`, `$5$...`) in `chpasswd -e` lines
+- Replace with a redacted placeholder (e.g., `$6$<REDACTED>`) by default
+- Add a reveal toggle (consistent with user card reveal pattern) that shows the actual hash
+- When no sensitive values are present, the panel renders unchanged
+
+This is a UI-only transform — the underlying `containerfile_preview` string from the API is unchanged. The redaction happens in the React component at render time.
+
+Also update `inspectah-web/ui/src/App.tsx` to pass the `sensitive_snapshot` flag through to `ContainerfilePanel` so it knows when to activate redaction.
+
+- [ ] **Step 13: Manual testing in browser**
 
 Start dev server: `cargo run -p inspectah-cli -- refine <test-tarball>`
 Verify:
@@ -1263,11 +1335,12 @@ Verify:
 - Password/SSH expandable sections work
 - Artifact preview modal shows KS and TOML
 - Sensitivity banner appears for sensitive snapshots
+- Containerfile preview redacts password hashes by default, reveal toggle works
 - Export dialog shows acknowledgment for sensitive sessions
 - GlobalSearch finds users
 - Keyboard shortcut navigates to section
 
-- [ ] **Step 13: Commit**
+- [ ] **Step 14: Commit**
 
 ```bash
 git add inspectah-web/ui/src/
@@ -1360,12 +1433,67 @@ fn full_pipeline_users_groups_materialization() {
 Run: `cargo test -p inspectah-refine full_pipeline_users`
 Expected: PASS
 
-- [ ] **Step 3: Run full workspace test suite**
+- [ ] **Step 3: Write preview/export parity proof**
+
+Verify that preview API output matches exported tarball content for all user artifacts:
+
+```rust
+#[test]
+fn preview_export_parity_for_user_artifacts() {
+    let mut snap = InspectionSnapshot::new();
+    snap.users_groups = Some(UserGroupSection {
+        users: vec![serde_json::json!({
+            "name": "alice", "uid": 1000, "gid": 1000,
+            "shell": "/bin/bash", "home": "/home/alice",
+            "classification": "interactive",
+            "containerfile_strategy": "useradd",
+            "password_hash": "$6$rounds=5000$salt$hash",
+            "supplementary_groups": ["wheel"],
+            "ssh_keys": ["ssh-ed25519 AAAA alice@work"]
+        })],
+        groups: vec![serde_json::json!({"name": "alice", "gid": 1000, "source": "custom"})],
+        ..Default::default()
+    });
+    snap.sensitive_snapshot = true;
+    snap.preserved_credentials = true;
+    snap.preserved_ssh_keys = true;
+    snap.redaction_state = Some(RedactionState::SensitiveRetained {
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc".into(),
+        unresolved_count: 0, unresolved_hints: vec![],
+    });
+
+    let session = RefineSession::new(snap);
+    let projected = session.snapshot_projected();
+
+    // Preview output (what the API returns)
+    let preview_ks = inspectah_pipeline::render::users::render_kickstart(&projected);
+    let preview_toml = inspectah_pipeline::render::users::render_blueprint_toml(&projected);
+    let preview_cf = render_containerfile(&projected, None);
+
+    // Export output (what goes in the tarball)
+    let tempdir = tempfile::tempdir().unwrap();
+    let path = tempdir.path().join("out.tar.gz");
+    session.export_tarball(&path, session.generation()).unwrap();
+    let export_ks = read_tarball_file(&path, "inspectah-users.ks");
+    let export_toml = read_tarball_file(&path, "inspectah-users.toml");
+    let export_cf = read_tarball_file(&path, "Containerfile");
+
+    assert_eq!(preview_ks, export_ks,
+        "inspectah-users.ks preview must match export");
+    assert_eq!(preview_toml, export_toml,
+        "inspectah-users.toml preview must match export");
+    assert_eq!(preview_cf, export_cf,
+        "Containerfile preview must match export");
+}
+```
+
+- [ ] **Step 4: Run full workspace test suite**
 
 Run: `cargo test --workspace`
 Expected: all PASS
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add inspectah-refine/tests/
