@@ -38,6 +38,7 @@ fn snapshot_with_services() -> InspectionSnapshot {
             include: true,
             ..Default::default()
         }],
+        preset_matched_units: Vec::new(),
     });
     snap
 }

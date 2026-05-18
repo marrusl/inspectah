@@ -123,6 +123,7 @@ impl Inspector for ServicesInspector {
         let mut state_changes = Vec::new();
         let mut enabled_units = Vec::new();
         let mut disabled_units = Vec::new();
+        let mut preset_matched_units = Vec::new();
 
         for unit in &units {
             // Skip template units and static units
@@ -139,9 +140,10 @@ impl Inspector for ServicesInspector {
             // Look up preset default
             let default_state = resolve_preset(&unit.unit, &preset_rules);
 
-            // Only record divergences
+            // Compare current state vs preset default
             if let Some(ref default) = default_state {
                 if *default != unit.state {
+                    // Divergence — record for handler processing
                     let action = if unit.state == "enabled" {
                         "enable"
                     } else {
@@ -157,6 +159,9 @@ impl Inspector for ServicesInspector {
                         fleet: None,
                         attention_reason: None,
                     });
+                } else {
+                    // Match — capture for handler suppression
+                    preset_matched_units.push(unit.unit.clone());
                 }
             }
             // No matching preset rule → no state_change entry (we cannot determine divergence)
@@ -171,7 +176,7 @@ impl Inspector for ServicesInspector {
             enabled_units,
             disabled_units,
             drop_ins,
-            preset_matched_units: Vec::new(),
+            preset_matched_units,
         };
 
         // Preset file read failures are correctness-bearing — a missing
