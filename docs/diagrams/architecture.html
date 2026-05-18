@@ -28,11 +28,12 @@
     --arrow-highlight: #f59e0b;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
+  html, body {
     background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     overflow: hidden;
+    width: 100vw;
     height: 100vh;
   }
   header {
@@ -56,7 +57,18 @@
   }
   .legend-item { display: flex; align-items: center; gap: 6px; }
   .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
-  #diagram { width: 100%; height: calc(100vh - 57px); }
+  #diagram {
+    width: 100vw;
+    height: calc(100vh - 57px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #diagram svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
   .tooltip {
     position: absolute;
     background: var(--surface);
@@ -214,14 +226,12 @@ const layerColors = {
   entry:        { fill: 'var(--entry-dim)',        stroke: 'var(--entry)',        text: 'var(--entry)' },
 };
 
-const width = window.innerWidth;
-const height = window.innerHeight - 57;
+let width = window.innerWidth;
+let height = window.innerHeight - 57;
 const tooltip = d3.select('#tooltip');
 
 const svg = d3.select('#diagram')
-  .append('svg')
-  .attr('width', width)
-  .attr('height', height);
+  .append('svg');
 
 const defs = svg.append('defs');
 
@@ -599,20 +609,32 @@ function render() {
 
 render();
 
-// Center the view
-const initPositions = computePositions();
-const allX = Object.values(initPositions).map(p => p.x);
-const allY = Object.values(initPositions).map(p => p.y);
-const minX = Math.min(...allX) - 40;
-const maxX = Math.max(...allX) + crateW + 40;
-const minY = Math.min(...allY) - 40;
-const maxY = Math.max(...allY) + crateH + 40;
-const contentW = maxX - minX;
-const contentH = maxY - minY;
-const initScale = Math.min(width / contentW, height / contentH, 1.1) * 0.85;
-const initX = (width - contentW * initScale) / 2 - minX * initScale;
-const initY = (height - contentH * initScale) / 2 - minY * initScale;
-svg.call(zoom.transform, d3.zoomIdentity.translate(initX, initY).scale(initScale));
+function centerView() {
+  width = window.innerWidth;
+  height = window.innerHeight - 57;
+
+  const positions = computePositions();
+  const allX = Object.values(positions).map(p => p.x);
+  const allY = Object.values(positions).map(p => p.y);
+  const minX = Math.min(...allX) - 40;
+  const maxX = Math.max(...allX) + crateW + 40;
+  const minY = Math.min(...allY) - 40;
+  const maxY = Math.max(...allY) + crateH + 40;
+  const contentW = maxX - minX;
+  const contentH = maxY - minY;
+  const initScale = Math.min(width / contentW, height / contentH, 1.1) * 0.85;
+  const initX = (width - contentW * initScale) / 2 - minX * initScale;
+  const initY = (height - contentH * initScale) / 2 - minY * initScale;
+  svg.call(zoom.transform, d3.zoomIdentity.translate(initX, initY).scale(initScale));
+}
+
+centerView();
+
+window.addEventListener('resize', () => {
+  width = window.innerWidth;
+  height = window.innerHeight - 57;
+  centerView();
+});
 </script>
 </body>
 </html>
