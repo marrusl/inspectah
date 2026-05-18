@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
+> **Revision 7** (2026-05-18): Addresses round 6 review. Epoch classifier/render contract closed: added `test_classify_empty_vs_zero_epoch_is_not_drift` proving `rpmvercmp("", "0")` returns Equal so the classifier never emits a `VersionChange` for this case. Render-side normalization is defense-in-depth. Focus test tightened: `document.body` removed as passing state — `mainContent!.contains(document.activeElement)` must be `true`.
+>
 > **Revision 6** (2026-05-18): Addresses round 5 review. Epoch proof split into two tests: same-EVR epoch-only (`1:` vs `2:` with identical version-release) proves the dangerous case; `""` vs `"0"` normalization test proves trivial-epoch suppression. Both Rust and TypeScript sides have the same-EVR proof. Empty-section focus test replaced render-only assertion with real `document.activeElement` focus check through app-level key-4 navigation.
 >
 > **Revision 5** (2026-05-18): Addresses round 4 review. RoutineSummary proof snippets now use real `getByLabelText("Expand <name>")` affordance instead of clicking label text. Task 14 state literal fixed to `"modified"` (lowercase). Empty-section focus proof moved to app-level `FocusAndNavigation.test.tsx` with key-4 navigation. Epoch `format_evr_pair`/`formatEvrPair` tightened with normalization: `""` → `"0"` before comparing, show epoch when normalized values differ.
@@ -1102,6 +1104,25 @@ fn test_classify_epoch_change_emits_version_change() {
     assert_eq!(result.version_changes[0].host_epoch, "1");
     assert_eq!(result.version_changes[0].base_epoch, "0");
     assert!(matches!(result.version_changes[0].direction, VersionChangeDirection::Upgrade));
+}
+
+#[test]
+fn test_classify_empty_vs_zero_epoch_is_not_drift() {
+    // rpmvercmp("", "0") returns Equal. The classifier must NOT emit
+    // a VersionChange when the only difference is "" vs "0" epoch —
+    // they are semantically equal in RPM. This closes the
+    // classifier/render contract: the render helper's normalization
+    // of "" → "0" is defense-in-depth, not the primary guarantee.
+    let mut host_pkg = pkg("bash", "5.2.26", "3.el9");
+    host_pkg.epoch = String::new(); // ""
+    let mut base_pkg = pkg("bash", "5.2.26", "3.el9");
+    base_pkg.epoch = "0".into();
+    let baseline = HashMap::from([("bash.x86_64".to_string(), base_pkg)]);
+    let result = classify_packages(&[host_pkg], &baseline);
+    // Same EVR after rpmvercmp — classified as Added (baseline match), no version change
+    assert_eq!(result.packages[0].state, PackageState::Added);
+    assert!(result.version_changes.is_empty(),
+        "empty vs '0' epoch must not produce a VersionChange");
 }
 ```
 
@@ -2682,12 +2703,13 @@ it("navigates to empty version_changes section via key 4 and focus lands on main
   // The empty-state copy is visible
   expect(screen.getByText(/All packages match/)).toBeInTheDocument();
 
-  // Focus lands within the main content area (not stuck on sidebar)
+  // Focus must land inside the main content area, not on document.body
+  // or stuck in the sidebar. This is the real app-level focus proof.
   const mainContent = document.querySelector("[data-testid='main-content']")
     ?? document.querySelector("main")
     ?? document.querySelector(".pf-v6-c-page__main-section");
-  expect(document.activeElement === document.body
-    || mainContent?.contains(document.activeElement)).toBeTruthy();
+  expect(mainContent).not.toBeNull();
+  expect(mainContent!.contains(document.activeElement)).toBe(true);
 });
 ```
 
