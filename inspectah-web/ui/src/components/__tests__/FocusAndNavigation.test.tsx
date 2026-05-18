@@ -60,6 +60,8 @@ const MOCK_VIEW = {
   },
   generation: 1,
   repo_groups: [],
+  leaf_dep_tree: {},
+  version_changes: [],
 };
 
 const MOCK_SECTIONS = [
@@ -521,6 +523,8 @@ describe("Repo group header keyboard traversal", () => {
         enabled: true,
       },
     ],
+    leaf_dep_tree: {},
+    version_changes: [],
   };
 
   it("group header is a tab stop with role=heading", async () => {

@@ -49,21 +49,19 @@ Post-cutover: Architect v2, TUI, build command
 
 ## Upcoming Work
 
-### Post-Leaf Bug Fix Run (HIGH — in progress)
+### Post-Leaf Bug Fix Run (HIGH — spec approved, ready to implement)
 
-**Status:** Leaf Package Filter shipped 2026-05-17. Testing revealed 4 issues:
+**Status:** Spec approved after 10 review rounds (2026-05-17). See `docs/specs/proposed/2026-05-17-post-leaf-fixes.md`.
 
-1. **Leaf classification quality (HIGH):** Base-install packages (kernel, dosfstools, efibootmgr, langpacks-en, lvm2, shim-aa64) show up as leaf packages on stock CentOS. `dnf repoquery --userinstalled` reports anaconda/kickstart packages as user-installed. Need additional filtering logic.
+**Context-only drift model:** Baseline-present packages are suppressed from the decision surface and `RUN dnf install`, regardless of Added or Modified state. Version drift is informational context only. Major/minor version guardrails are future work.
 
-2. **Service classification noise (HIGH):** `systemctl enable/disable` lines too noisy on stock systems. Service diff isn't comparing against base image defaults properly.
+1. **Leaf classification quality:** `baseline_suppressed` field separates baseline-present suppression from dependency-derived `auto_packages`. Uses `ctx.baseline_data` as authoritative source.
 
-3. **Leaf dep-tree UI (MEDIUM):** `leaf_dep_tree` data exists in snapshot but web UI doesn't surface it. Users can't see what dependencies a leaf package pulls in.
+2. **Service classification noise:** Honest three-way contract via new `preset_matched_units` collector carrier. Known-divergence (show), known-match (suppress, unless drop-in override exists), preset-unknown (keep visible with label).
 
-4. **Context tab (MEDIUM):** No way to view non-leaf packages, version changes, or full system picture. Need read-only "Context" tab showing all packages and version deltas. Requires Fern (UX) + Ember (product strategy) input before implementation.
+3. **Leaf dep-tree modal:** Per-package dependency modal on leaf cards. Flat list, non-fleet guard, full a11y contract (focus trap, keyboard, scroll, `name.arch` identity).
 
-Items 1-3 are bug fixes. Item 4 is a new UI surface requiring design input first.
-
-**Note:** Leaf Package Filter shipped 2026-05-17. See `docs/plans/2026-05-17-leaf-package-filter.md` for implementation details.
+4. **Version Changes context section:** New read-only sidebar section under Context group. Typed `VersionChangeEntry` contract. Downgrades floated to top with visual emphasis. Three-state empty reason (`zero_drift` / `no_baseline` / `data_unavailable`). Section-jump keyboard contract at key `4`.
 
 ### User/Group Materialization (HIGH — brainstorm next)
 

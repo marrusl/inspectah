@@ -36,6 +36,8 @@ const MOCK_VIEW: ViewResponse = {
   stats: MOCK_STATS,
   generation: 7,
   repo_groups: [],
+  leaf_dep_tree: {},
+  version_changes: [],
 };
 
 describe("ExportDialog", () => {

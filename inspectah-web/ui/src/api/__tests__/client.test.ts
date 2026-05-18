@@ -106,6 +106,8 @@ const mockView: ViewResponse = {
   repo_groups: [
     { section_id: "appstream", provenance: "verified", is_distro: true, package_count: 1, enabled: true },
   ],
+  leaf_dep_tree: {},
+  version_changes: [],
 };
 
 const mockSections: ContextSection[] = [
