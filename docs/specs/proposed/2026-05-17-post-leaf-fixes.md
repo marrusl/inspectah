@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 10** (2026-05-17): Fixes attention cardinality invariant (emit Routine, don't skip). Removes stale Added-only sentence.
+>
 > **Revision 9** (2026-05-17): Adopts context-only drift model. Baseline-present packages are fully informational -- no decision surface, no attention, no install. Downgrades emphasized in Version Changes.
 >
 > **Revision 8** (2026-05-17): Modified baseline packages now suppressed. Version drift surfaced in Version Changes (Item 4), not on the decision surface.
@@ -139,8 +141,7 @@ pub baseline_suppressed: Option<Vec<String>>,
 
 The suppression filter runs inside `classify_leaf_auto()` using
 `ctx.baseline_data` (the authoritative baseline, not the compat
-`baseline_package_names` field). It applies only to packages whose
-classification state is `Added` (baseline-matching, same EVR):
+`baseline_package_names` field):
 
 ```rust
 fn classify_leaf_auto(
@@ -1613,9 +1614,13 @@ The `compute_package_attention()` function iterates over
 `rpm.packages_added` and calls `classify_package()` for each. Before
 calling `classify_package()`, check whether the package's canonical
 `name.arch` is in `rpm.baseline_suppressed`. If it is, skip
-classification (do not emit an `AttentionTag` for this package) or
-emit a `Routine` / `PackageBaselineMatch` tag. Either approach is
-acceptable as long as the package never becomes `NeedsReview`.
+classification. Emit a `Routine` tag with reason `PackageBaselineMatch`
+for every baseline-suppressed package. **Do not skip emitting a
+`RefinedPackage`** -- `normalize_package_defaults()` walks
+`packages.iter().enumerate()` and assumes 1:1 cardinality with
+`rpm.packages_added`. Dropping entries would break index alignment.
+Baseline-suppressed packages are emitted as `Routine` and filtered out
+at the view layer (which already happens via `baseline_suppressed`).
 
 ```rust
 let baseline_suppressed_set: HashSet<&str> = rpm
@@ -1629,9 +1634,15 @@ let baseline_suppressed_set: HashSet<&str> = rpm
 for entry in &rpm.packages_added {
     let id = canonical_package_id(&entry.name, &entry.arch);
     if baseline_suppressed_set.contains(id.as_str()) {
-        // Baseline-present: context-only, skip attention classification.
-        // These packages are not on the decision surface.
-        continue;  // or emit Routine/PackageBaselineMatch
+        // Baseline-present: context-only, not on the decision surface.
+        // Emit Routine/PackageBaselineMatch to preserve cardinality
+        // with packages_added (required by normalize_package_defaults).
+        tags.push(AttentionTag {
+            level: AttentionLevel::Routine,
+            reason: AttentionReason::PackageBaselineMatch,
+            ..Default::default()
+        });
+        continue;
     }
     let tag = classify_package(entry, baseline, &rpm.version_changes);
     // ... rest of classification
