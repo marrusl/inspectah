@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
+> **Revision 8** (2026-05-18): Addresses round 7 review. Epoch contract fully closed: `classify_packages()` now normalizes epochs via `norm_epoch()` (`""` → `"0"`) before `rpmvercmp` call, preventing spurious `Modified` for trivial epoch differences. Explicit step to delete contradictory `test_classify_baseline_none_epoch_defaults_to_empty()` test (line ~222) which asserts `Modified` for `"0"` vs `""`. Replacement test uses same fixture data (kernel, same EVR) with correct `Added` expectation.
+>
 > **Revision 7** (2026-05-18): Addresses round 6 review. Epoch classifier/render contract closed: added `test_classify_empty_vs_zero_epoch_is_not_drift` proving `rpmvercmp("", "0")` returns Equal so the classifier never emits a `VersionChange` for this case. Render-side normalization is defense-in-depth. Focus test tightened: `document.body` removed as passing state — `mainContent!.contains(document.activeElement)` must be `true`.
 >
 > **Revision 6** (2026-05-18): Addresses round 5 review. Epoch proof split into two tests: same-EVR epoch-only (`1:` vs `2:` with identical version-release) proves the dangerous case; `""` vs `"0"` normalization test proves trivial-epoch suppression. Both Rust and TypeScript sides have the same-EVR proof. Empty-section focus test replaced render-only assertion with real `document.activeElement` focus check through app-level key-4 navigation.
@@ -1108,22 +1110,42 @@ fn test_classify_epoch_change_emits_version_change() {
 
 #[test]
 fn test_classify_empty_vs_zero_epoch_is_not_drift() {
-    // rpmvercmp("", "0") returns Equal. The classifier must NOT emit
-    // a VersionChange when the only difference is "" vs "0" epoch —
-    // they are semantically equal in RPM. This closes the
-    // classifier/render contract: the render helper's normalization
-    // of "" → "0" is defense-in-depth, not the primary guarantee.
-    let mut host_pkg = pkg("bash", "5.2.26", "3.el9");
-    host_pkg.epoch = String::new(); // ""
-    let mut base_pkg = pkg("bash", "5.2.26", "3.el9");
-    base_pkg.epoch = "0".into();
-    let baseline = HashMap::from([("bash.x86_64".to_string(), base_pkg)]);
+    // Replaces the old test_classify_baseline_none_epoch_defaults_to_empty()
+    // at classifier.rs:222, which expected Modified for "" vs "0".
+    //
+    // After adding norm_epoch() in classify_packages(), "" and "0" are
+    // normalized to "0" before rpmvercmp, so same-version packages with
+    // only a trivial epoch difference are correctly classified as
+    // baseline-match (Added), not drift (Modified).
+    let mut host_pkg = pkg("kernel", "5.14.0", "503.el9");
+    host_pkg.epoch = "0".into(); // from rpm -qa (always emits epoch)
+    let mut base_pkg = PackageEntry {
+        name: "kernel".into(),
+        epoch: String::new(), // from baseline (None.unwrap_or_default() = "")
+        version: "5.14.0".into(),
+        release: "503.el9".into(),
+        arch: "x86_64".into(),
+        state: PackageState::BaseImageOnly,
+        include: false,
+        ..Default::default()
+    };
+    let baseline = HashMap::from([("kernel.x86_64".to_string(), base_pkg)]);
     let result = classify_packages(&[host_pkg], &baseline);
-    // Same EVR after rpmvercmp — classified as Added (baseline match), no version change
+    // After epoch normalization: "0" == "0", same EVR → Added, no VersionChange
     assert_eq!(result.packages[0].state, PackageState::Added);
     assert!(result.version_changes.is_empty(),
-        "empty vs '0' epoch must not produce a VersionChange");
+        "'0' vs '' epoch must not produce a VersionChange after normalization");
 }
+```
+
+- [ ] **Step 1b: Delete the contradictory existing test**
+
+In `classifier.rs`, delete or replace `test_classify_baseline_none_epoch_defaults_to_empty()` (line ~222). This test currently asserts `PackageState::Modified` for `epoch "0"` vs `epoch ""` — the exact case the new `norm_epoch()` fix now classifies as `Added`. The new `test_classify_empty_vs_zero_epoch_is_not_drift` test above covers the same scenario with the correct expectation.
+
+```rust
+// DELETE this test from classifier.rs (lines 219-255):
+// fn test_classify_baseline_none_epoch_defaults_to_empty()
+// It asserts Modified for "0" vs "" which is now intentionally Added.
 ```
 
 - [ ] **Step 2: Write the attention gating test**
@@ -1240,13 +1262,19 @@ pub fn classify_packages(
 ) -> ClassificationResult {
     let mut version_changes = Vec::new();
 
+    // Normalize epoch: "" and "0" are semantically equal in RPM.
+    // Without this, rpmvercmp("0", "") returns Greater, causing
+    // spurious Modified classification for packages where the host
+    // rpm -qa emits "0" but the baseline carries "".
+    let norm_epoch = |e: &str| -> &str { if e.is_empty() { "0" } else { e } };
+
     let packages = host.iter()
         .map(|pkg| {
             let key = format!("{}.{}", pkg.name, pkg.arch);
             let state = match baseline.get(&key) {
                 None => PackageState::Added,
                 Some(base) => {
-                    let epoch_cmp = rpmvercmp(&pkg.epoch, &base.epoch);
+                    let epoch_cmp = rpmvercmp(norm_epoch(&pkg.epoch), norm_epoch(&base.epoch));
                     let ver_cmp = rpmvercmp(&pkg.version, &base.version);
                     let rel_cmp = rpmvercmp(&pkg.release, &base.release);
 
