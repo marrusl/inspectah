@@ -264,27 +264,64 @@ const zoom = d3.zoom()
   .on('zoom', (e) => g.attr('transform', e.transform));
 svg.call(zoom);
 
-// Layout: tiered rows
-// Row 0 (bottom): core
-// Row 1: collect
-// Row 2: pipeline, refine
-// Row 3: web
-// Row 4 (top): cli
+// Layout: tiered rows, dynamic repositioning on expand
 const crateW = 200;
 const crateH = 64;
-const positions = {
-  core:     { x: 400, y: 520 },
-  collect:  { x: 180, y: 400 },
-  pipeline: { x: 400, y: 280 },
-  refine:   { x: 620, y: 400 },
-  web:      { x: 620, y: 280 },
-  cli:      { x: 400, y: 140 },
-};
+const rowGap = 40;  // vertical gap between rows
+
+// Rows from top to bottom. Each row has crate IDs and horizontal offsets.
+const rows = [
+  { ids: ['cli'],              offsets: [400] },
+  { ids: ['pipeline', 'web'],  offsets: [300, 560] },
+  { ids: ['collect', 'refine'],offsets: [300, 560] },
+  { ids: ['core'],             offsets: [400] },
+];
+
+// Compute current positions dynamically based on expanded state
+function computePositions() {
+  const pos = {};
+  let currentY = 60;
+
+  for (const row of rows) {
+    // Place all crates in this row at currentY
+    row.ids.forEach((id, i) => {
+      pos[id] = { x: row.offsets[i], y: currentY };
+    });
+
+    // Compute the max expanded height of any crate in this row
+    let maxH = crateH;
+    row.ids.forEach(id => {
+      maxH = Math.max(maxH, getExpandedHeight(id));
+    });
+
+    // Advance Y past the tallest crate in this row + gap
+    currentY += maxH + rowGap;
+  }
+
+  return pos;
+}
+
+function getExpandedHeight(crateId) {
+  if (!expanded[crateId]) return crateH;
+  const crate = crates.find(c => c.id === crateId);
+  if (!crate) return crateH;
+
+  const visibleModules = crate.modules.filter(m => !m.parent);
+  let h = crateH + visibleModules.length * 30 + 16;
+
+  visibleModules.forEach((mod) => {
+    if (expandedModule[crateId + '/' + mod.id] && mod.children) {
+      h += mod.children.length * 22 + 8;
+    }
+  });
+
+  return h;
+}
 
 const expanded = {};
 const expandedModule = {};
 
-function getCrateCenter(id) {
+function getCrateCenter(id, positions) {
   const p = positions[id];
   return { x: p.x + crateW / 2, y: p.y + crateH / 2 };
 }
@@ -292,12 +329,15 @@ function getCrateCenter(id) {
 function render() {
   g.selectAll('*').remove();
 
+  // Recompute positions based on current expanded state
+  const positions = computePositions();
+
   // Draw dependency arrows
   const arrowGroup = g.append('g').attr('class', 'arrows');
 
   dependencies.forEach(([from, to]) => {
-    const fc = getCrateCenter(from);
-    const tc = getCrateCenter(to);
+    const fc = getCrateCenter(from, positions);
+    const tc = getCrateCenter(to, positions);
 
     // Calculate edge intersection points
     const dx = tc.x - fc.x;
@@ -371,19 +411,8 @@ function render() {
       .attr('class', 'crate')
       .style('cursor', 'pointer');
 
-    // Expanded height calc
-    let expandedH = crateH;
-    if (isExpanded) {
-      const visibleModules = crate.modules.filter(m => !m.parent);
-      expandedH = crateH + visibleModules.length * 30 + 16;
-
-      // Check if any module is expanded with children
-      visibleModules.forEach((mod) => {
-        if (expandedModule[crate.id + '/' + mod.id] && mod.children) {
-          expandedH += mod.children.length * 22 + 8;
-        }
-      });
-    }
+    // Expanded height calc (uses shared function)
+    const expandedH = getExpandedHeight(crate.id);
 
     // Crate rect
     const rect = crateGroup.append('rect')
@@ -571,8 +600,9 @@ function render() {
 render();
 
 // Center the view
-const allX = Object.values(positions).map(p => p.x);
-const allY = Object.values(positions).map(p => p.y);
+const initPositions = computePositions();
+const allX = Object.values(initPositions).map(p => p.x);
+const allY = Object.values(initPositions).map(p => p.y);
 const minX = Math.min(...allX) - 40;
 const maxX = Math.max(...allX) + crateW + 40;
 const minY = Math.min(...allY) - 40;

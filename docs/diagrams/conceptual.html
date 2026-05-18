@@ -25,6 +25,8 @@
     --cyan-dim: rgba(34,211,238,0.12);
     --rose: #fb7185;
     --rose-dim: rgba(251,113,133,0.12);
+    --red: #ef4444;
+    --red-dim: rgba(239,68,68,0.15);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -114,6 +116,7 @@
     <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div>Input</div>
     <div class="legend-item"><div class="legend-dot" style="background:var(--teal)"></div>Processing</div>
     <div class="legend-item"><div class="legend-dot" style="background:var(--amber)"></div>Data</div>
+    <div class="legend-item"><div class="legend-dot" style="background:var(--red)"></div>Security</div>
     <div class="legend-item"><div class="legend-dot" style="background:var(--purple)"></div>Output</div>
     <div class="legend-item"><div class="legend-dot" style="background:var(--cyan)"></div>Interactive</div>
     <div class="legend-item"><div class="legend-dot" style="background:var(--rose)"></div>Fleet/Architect</div>
@@ -169,6 +172,16 @@ const stages = [
     ]
   },
   {
+    id: 'redaction', label: 'Secret Redaction', color: 'red',
+    desc: 'Multi-layer secret detection scans the snapshot for credentials, API keys, passwords, and tokens. Redacts sensitive content and produces a secrets-review.md for operator sign-off.',
+    children: [
+      { label: 'Pattern Detection', desc: 'Regex + heuristic scanning for credentials, API keys, tokens, passwords' },
+      { label: 'Config File Scan', desc: 'Targeted analysis of collected config files for embedded secrets' },
+      { label: 'Snapshot Redaction', desc: 'Replaces detected secrets with redaction markers in the snapshot' },
+      { label: 'secrets-review.md', desc: 'Generates operator sign-off document listing all detected/redacted items' },
+    ]
+  },
+  {
     id: 'render', label: 'Render', color: 'purple',
     desc: '6+ renderers produce output artifacts from the snapshot. Each renderer is independent.',
     children: [
@@ -215,6 +228,7 @@ const stageColors = {
   green:  { fill: 'var(--green-dim)',  stroke: 'var(--green)',  text: 'var(--green)' },
   teal:   { fill: 'var(--teal-dim)',   stroke: 'var(--teal)',   text: 'var(--teal)' },
   amber:  { fill: 'var(--amber-dim)',  stroke: 'var(--amber)',  text: 'var(--amber)' },
+  red:    { fill: 'var(--red-dim)',    stroke: 'var(--red)',    text: 'var(--red)' },
   purple: { fill: 'var(--purple-dim)', stroke: 'var(--purple)', text: 'var(--purple)' },
   cyan:   { fill: 'var(--cyan-dim)',   stroke: 'var(--cyan)',   text: 'var(--cyan)' },
   rose:   { fill: 'var(--rose-dim)',   stroke: 'var(--rose)',   text: 'var(--rose)' },
@@ -380,6 +394,22 @@ function render() {
         .text('inspect once, render many');
     }
 
+    // Security-critical highlight for redaction
+    if (stage.id === 'redaction') {
+      rect.attr('stroke-width', 2.5)
+        .attr('stroke-dasharray', '6,3')
+        .attr('filter', 'url(#glow)');
+
+      group.append('text')
+        .attr('x', x + nodeW / 2)
+        .attr('y', centerY - nodeH / 2 - 10)
+        .attr('text-anchor', 'middle')
+        .attr('fill', colors.text)
+        .attr('font-size', '14px')
+        .attr('opacity', 0.9)
+        .text('\u{1F6E1}');  // shield emoji
+    }
+
     // Hover tooltip
     group
       .on('mouseover', (event) => {
@@ -394,9 +424,10 @@ function render() {
           .style('top', (event.pageY - 10) + 'px');
       })
       .on('mouseout', () => {
+        const keepGlow = stage.id === 'snapshot' || stage.id === 'redaction';
         rect.transition().duration(150)
-          .attr('stroke-width', stage.id === 'snapshot' ? 2.5 : 1.5)
-          .attr('filter', stage.id === 'snapshot' ? 'url(#glow)' : 'none');
+          .attr('stroke-width', keepGlow ? 2.5 : 1.5)
+          .attr('filter', keepGlow ? 'url(#glow)' : 'none');
         tooltip.style('opacity', 0);
       })
       .on('click', () => {
