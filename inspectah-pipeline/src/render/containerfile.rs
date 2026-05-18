@@ -419,11 +419,21 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         .filter(|_| !is_fleet_snapshot)
         .map(|leaf_packages| leaf_packages.iter().cloned().collect());
 
+    let baseline_suppressed_set: std::collections::HashSet<String> = rpm
+        .baseline_suppressed
+        .as_ref()
+        .map(|v| v.iter().cloned().collect())
+        .unwrap_or_default();
+
     let installable_packages: Vec<&PackageEntry> = rpm
         .packages_added
         .iter()
         .filter(|pkg| pkg.include)
         .filter(|pkg| manual_follow_up_line(pkg).is_none())
+        .filter(|pkg| {
+            // Baseline-suppressed packages never go into RUN dnf install
+            !baseline_suppressed_set.contains(&canonical_package_id(&pkg.name, &pkg.arch))
+        })
         .filter(|pkg| {
             leaf_filter.as_ref().is_none_or(|leaf_ids| {
                 leaf_ids.contains(&canonical_package_id(&pkg.name, &pkg.arch))
@@ -2178,6 +2188,47 @@ mod tests {
             result.unwrap(),
             "registry.redhat.io/rhel9/rhel-bootc:9.6",
             "target_image must take priority over rpm.base_image"
+        );
+    }
+
+    #[test]
+    fn test_containerfile_excludes_baseline_suppressed_packages() {
+        use inspectah_core::snapshot::InspectionSnapshot;
+        use inspectah_core::types::rpm::{PackageEntry, RpmSection};
+
+        // Build an RpmSection with baseline_suppressed packages
+        // and verify they don't appear in the rendered containerfile
+        let mut rpm = RpmSection::default();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "kernel".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["httpd.x86_64".into(), "kernel.x86_64".into()]);
+        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into()]);
+
+        let mut snap = InspectionSnapshot::default();
+        snap.rpm = Some(rpm);
+
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("httpd"),
+            "non-suppressed package should be in containerfile"
+        );
+        assert!(
+            !output.contains("kernel"),
+            "baseline-suppressed package must not be in containerfile"
         );
     }
 }

@@ -621,27 +621,35 @@ impl RefineSession {
         // whose include state the operator explicitly changed so the view/stats
         // stay honest.
         let packages = if let Some(rpm) = projected.rpm.as_ref() {
-            let is_fleet_snapshot = rpm.packages_added.iter().any(|pkg| pkg.fleet.is_some());
-            if let Some(leaf_names) = rpm.leaf_packages.as_ref().filter(|_| !is_fleet_snapshot) {
-                let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
-                let baseline_suppressed_set: HashSet<&str> = rpm
-                    .baseline_suppressed
-                    .as_ref()
-                    .map(|v| v.iter().map(|s| s.as_str()).collect())
-                    .unwrap_or_default();
+            // Step 1: ALWAYS filter baseline-suppressed (independent of leaf data)
+            let baseline_suppressed_set: HashSet<&str> = rpm
+                .baseline_suppressed
+                .as_ref()
+                .map(|v| v.iter().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
 
+            let packages: Vec<_> = if !baseline_suppressed_set.is_empty() {
                 packages
                     .into_iter()
                     .filter(|pkg| {
                         let package_id =
                             canonical_package_id(pkg.entry.name.as_str(), pkg.entry.arch.as_str());
+                        !baseline_suppressed_set.contains(package_id.as_str())
+                    })
+                    .collect()
+            } else {
+                packages
+            };
 
-                        // Baseline-suppressed packages are excluded unconditionally,
-                        // even if they have NeedsReview attention. This is
-                        // belt-and-suspenders alongside the attention gating in Task 7.
-                        if baseline_suppressed_set.contains(package_id.as_str()) {
-                            return false;
-                        }
+            // Step 2: THEN apply leaf filter if available
+            let is_fleet_snapshot = rpm.packages_added.iter().any(|pkg| pkg.fleet.is_some());
+            if let Some(leaf_names) = rpm.leaf_packages.as_ref().filter(|_| !is_fleet_snapshot) {
+                let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
+                packages
+                    .into_iter()
+                    .filter(|pkg| {
+                        let package_id =
+                            canonical_package_id(pkg.entry.name.as_str(), pkg.entry.arch.as_str());
 
                         let primary_level = pkg.attention.first().map(|t| t.level);
                         let original_include = original_package_includes
@@ -1111,5 +1119,42 @@ mod tests {
             !view.containerfile_preview.contains("kernel"),
             "containerfile should NOT contain baseline-suppressed package 'kernel'"
         );
+    }
+
+    #[test]
+    fn test_baseline_suppressed_excluded_even_when_leaf_packages_unavailable() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "kernel".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                ..Default::default()
+            },
+        ];
+        // Degraded mode: no leaf data
+        rpm.leaf_packages = None;
+        rpm.auto_packages = None;
+        // But baseline suppression IS available
+        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // kernel should be excluded even though leaf filter is disabled
+        assert!(
+            !view.packages.iter().any(|p| p.entry.name == "kernel"),
+            "baseline-suppressed package must not appear even in degraded mode"
+        );
+        assert!(view.packages.iter().any(|p| p.entry.name == "httpd"));
     }
 }
