@@ -1,5 +1,7 @@
 # Post-Leaf Bug Fix Run
 
+> **Revision 9** (2026-05-17): Adopts context-only drift model. Baseline-present packages are fully informational -- no decision surface, no attention, no install. Downgrades emphasized in Version Changes.
+>
 > **Revision 8** (2026-05-17): Modified baseline packages now suppressed. Version drift surfaced in Version Changes (Item 4), not on the decision surface.
 >
 > **Revision 7** (2026-05-17): Simplifies empty-state derivation. No defensive compat code before 1.0.
@@ -861,11 +863,24 @@ existing consumers:
 
 1. **`inspectah-refine/src/attention.rs`** -- already consumes
    `rpm.version_changes` to classify modified packages as upgrade vs
-   downgrade. Upgrades stay `Routine`; downgrades become `NeedsReview`.
-   Currently, with `version_changes` empty, all `Modified` packages
-   default to upgrade-like attention. Once the collector populates
-   this field, downgrades will shift to `NeedsReview`, changing
-   `needs_review_count` and package grouping on the triage surface.
+   downgrade. However, **baseline-present packages are excluded from
+   attention classification entirely.** All baseline-present drift --
+   including downgrades -- is informational context only. Baseline-
+   present packages must NOT become `NeedsReview`, must NOT affect
+   `needs_review_count`, and must NOT change package triage grouping
+   on the decision surface. The attention system only classifies
+   packages that appear on the decision surface (non-baseline-present
+   packages). Version Changes is a read-only context surface, not a
+   decision surface.
+
+   **Implementation:** `classify_package()` in `attention.rs` currently
+   returns `NeedsReview` for `Modified` packages with a downgrade
+   `VersionChange` entry. This classification must be gated: if the
+   package's `name.arch` is in `baseline_suppressed`, skip attention
+   classification (or classify as `Routine` with reason
+   `PackageBaselineMatch`). The `compute_package_attention()` function
+   receives the full snapshot, which includes `baseline_suppressed` on
+   `RpmSection` -- use this to filter before classifying.
 
 2. **`inspectah-pipeline/src/render/audit.rs`** -- already renders a
    "Version Changes" markdown table (columns: Package, Host Version,
@@ -956,14 +971,22 @@ epoch-aware rendering:
 fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
     let mut items = Vec::new();
     if let Some(rpm) = &snap.rpm {
+        // Partition into downgrades and upgrades so downgrades float
+        // to the top of the list for operator visibility.
+        let mut downgrades = Vec::new();
+        let mut upgrades = Vec::new();
+
         for vc in &rpm.version_changes {
-            let direction_label = match vc.direction {
-                VersionChangeDirection::Upgrade => "upgrade",
-                VersionChangeDirection::Downgrade => "downgrade",
+            let (direction_label, direction_prefix) = match vc.direction {
+                VersionChangeDirection::Downgrade => ("downgrade", "\u{25bc} "),  // ▼
+                VersionChangeDirection::Upgrade => ("upgrade", ""),
             };
-            items.push(ContextItem {
+            let item = ContextItem {
                 id: format!("{}.{}", vc.name, vc.arch),
-                title: format!("{}.{}", vc.name, vc.arch),  // name.arch visible identity
+                title: format!(
+                    "{}{}.{}",
+                    direction_prefix, vc.name, vc.arch
+                ),  // downgrades prefixed with ▼ for visual emphasis
                 subtitle: Some(format!(
                     "{} -> {} ({})",
                     format_evr(&vc.base_epoch, &vc.base_version),
@@ -977,8 +1000,18 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
                     vc.host_version, direction_label,
                     format!("{}.{}", vc.name, vc.arch)
                 ),
-            });
+            };
+            match vc.direction {
+                VersionChangeDirection::Downgrade => downgrades.push(item),
+                VersionChangeDirection::Upgrade => upgrades.push(item),
+            }
         }
+
+        // Downgrades first, then upgrades. Within each group,
+        // preserve collector emission order (alphabetical by
+        // name.arch is a reasonable follow-up but not required).
+        items.extend(downgrades);
+        items.extend(upgrades);
     }
     ContextSection {
         id: "version_changes".to_string(),
@@ -987,6 +1020,32 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
     }
 }
 ```
+
+**Downgrade visual treatment:** Downgrades are emphasized through
+three mechanisms:
+
+1. **Sort order** -- downgrades float to the top of the Version
+   Changes list, before any upgrades. Operators scanning the list
+   see the unusual items first.
+
+2. **Title prefix** -- downgrade entries are prefixed with `▼`
+   (Unicode U+25BC, BLACK DOWN-POINTING TRIANGLE) in the title
+   field: `"▼ glibc.x86_64"`. Upgrades have no prefix. This
+   creates immediate visual distinction in the sidebar list.
+
+3. **Subtitle label** -- the parenthetical direction label reads
+   `"(downgrade)"` vs `"(upgrade)"`, matching the existing
+   convention but now more prominent because downgrades appear
+   first.
+
+**Why these three and not color/icons:** The `ContextItem` wire
+format has no styling fields -- it is a plain data struct rendered
+by the generic `ContextList` component. Adding a color or icon
+field would require a `ContextList` contract change that affects
+all context sections. The prefix approach works within the existing
+contract. A follow-up could add a `severity` or `variant` field to
+`ContextItem` for richer rendering, but that is out of scope for
+this fix run.
 
 **Path 2: Typed carrier for `PackageDetail`**
 
@@ -1195,10 +1254,18 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
 
     match &snap.rpm {
         Some(rpm) => {
+            // Build items with downgrade-first sort order and visual
+            // emphasis (see normalize_version_changes above for the
+            // full partition + prefix logic).
+            let mut downgrades = Vec::new();
+            let mut upgrades = Vec::new();
             for vc in &rpm.version_changes {
-                // ... existing ContextItem construction ...
-                items.push(/* ... */);
+                // ... ContextItem construction with ▼ prefix for
+                // downgrades, partition into downgrades/upgrades ...
             }
+            items.extend(downgrades);
+            items.extend(upgrades);
+
             if !items.is_empty() {
                 empty_reason = None;
             } else if snap.baseline.is_some() {
@@ -1376,15 +1443,31 @@ interface PackageDetailProps {
 - Unit test: multiarch -- same package name, different arches with
   different version drift -> separate `VersionChange` entries for each.
 
-**Refine attention (cross-surface proof):**
+**Refine attention (context-only drift proof):**
 - Unit test: `classify_package` in `attention.rs` with populated
-  `version_changes` containing a downgrade -> package gets
-  `NeedsReview` attention.
-- Unit test: populated `version_changes` with upgrade -> package stays
-  `Routine`.
+  `version_changes` containing a downgrade for a **non-baseline-
+  present** package -> package gets `NeedsReview` attention. (This
+  case applies to packages the user explicitly installed that happen
+  to have a version change -- they are on the decision surface.)
+- Unit test: populated `version_changes` with upgrade for a non-
+  baseline-present package -> package stays `Routine`.
+- Unit test: baseline-present package with a downgrade
+  `VersionChange` entry -> package does NOT get `NeedsReview`.
+  Baseline-present packages are excluded from attention
+  classification entirely. Verify the package is either not
+  classified or classified as `Routine` with
+  `PackageBaselineMatch` reason.
+- Unit test: baseline-present package with an upgrade
+  `VersionChange` entry -> same: no `NeedsReview`, excluded from
+  attention or classified as `Routine`/`PackageBaselineMatch`.
+- Unit test: `needs_review_count` is unaffected by baseline-present
+  drift. Create a snapshot with 3 baseline-present packages (2
+  downgrades, 1 upgrade) and 1 non-baseline `LocalInstall` package.
+  `needs_review_count` must be 1 (only the `LocalInstall`), not 3.
 - End-to-end: collect with real baseline -> refine -> verify
-  `needs_review_count` increases for downgraded packages vs. the
-  current behavior (empty `version_changes` defaults to routine).
+  baseline-present downgrades appear in Version Changes context
+  section but do NOT appear in the `NeedsReview` attention group
+  and do NOT inflate `needs_review_count`.
 
 **Audit export (cross-surface proof):**
 - Unit test: `render_audit` with populated `version_changes` ->
@@ -1402,6 +1485,13 @@ interface PackageDetailProps {
 **Frontend:**
 - Unit test: Version Changes section renders in sidebar with correct
   count.
+- Unit test: downgrades sorted to top of Version Changes list --
+  given 2 upgrades and 2 downgrades, the first 2 items are
+  downgrades.
+- Unit test: downgrade items have `▼` prefix in title (e.g.,
+  `"▼ glibc.x86_64"`), upgrade items have no prefix.
+- Unit test: downgrade subtitle contains `"(downgrade)"`, upgrade
+  subtitle contains `"(upgrade)"`.
 - Unit test: zero-drift empty state -- section with zero items,
   `snap.baseline` present, `empty_reason: "zero_drift"` shows
   `"All packages match the target baseline versions."`.
@@ -1439,9 +1529,139 @@ interface PackageDetailProps {
 - Unit test: `ShortcutOverlay` still documents `1-9` as
   `"Jump to section by index"`.
 
+**Context-only drift model proof (cross-cutting):**
+
+These proofs verify the end-to-end context-only drift invariant
+across Items 1 and 4 and the attention/session systems:
+
+- **Item 1 proof (decision/install suppression):** Baseline-present
+  packages (both `Added` and `Modified`) do not appear on the
+  decision surface. They are in `baseline_suppressed`, not in
+  `leaf_packages`. They do not appear in `RUN dnf install` output.
+  Test with a snapshot containing 5 baseline-present packages (3
+  `Added`, 2 `Modified`) and 3 true user-installed packages. The
+  decision surface shows exactly 3 packages.
+
+- **Item 4 proof (Version Changes visibility):** Baseline-present
+  `Modified` packages appear in the Version Changes context section.
+  Their version drift is rendered with correct epoch-aware formatting.
+  Test with 2 baseline-present downgrades and 3 upgrades. All 5
+  appear in Version Changes.
+
+- **Item 4 proof (downgrade emphasis):** Downgrades are sorted to
+  the top of the Version Changes list and prefixed with `▼`. Given
+  the same 2 downgrades + 3 upgrades, the first 2 items in the
+  rendered list are the downgrades, each with `▼` in the title.
+
+- **Attention proof (baseline-present exclusion):** Baseline-present
+  packages with downgrade `VersionChange` entries do NOT receive
+  `NeedsReview` attention. Test with a snapshot containing 2
+  baseline-present downgrades, 1 baseline-present upgrade, and 1
+  non-baseline `LocalInstall` package. Only the `LocalInstall`
+  package has `NeedsReview` attention.
+
+- **Stats proof (`needs_review_count`):** Using the same snapshot
+  as the attention proof, `needs_review_count` is exactly 1 (the
+  `LocalInstall` package). The 3 baseline-present packages do not
+  contribute to the count.
+
 ---
 
 ## Cross-Cutting Concerns
+
+### Attention Model: Context-Only Drift
+
+**Policy:** Baseline-present packages are fully informational. They
+are suppressed from the decision surface (Item 1), surfaced in Version
+Changes as read-only context (Item 4), and **excluded from attention
+classification entirely**.
+
+This is a cross-cutting invariant that touches Items 1 and 4 and the
+attention/session systems in `inspectah-refine`.
+
+**What "excluded from attention" means concretely:**
+
+1. **No `NeedsReview`** -- a baseline-present package with a downgrade
+   `VersionChange` entry must NOT receive `AttentionLevel::NeedsReview`.
+   The current `classify_package()` in `attention.rs` returns
+   `NeedsReview` for `Modified` + downgrade. This must be gated on
+   whether the package is baseline-suppressed.
+
+2. **No `needs_review_count` impact** -- `needs_review_count` in
+   `session.rs` counts packages where any attention tag has level
+   `NeedsReview`. Since baseline-present packages are either excluded
+   from classification or classified as `Routine`/`PackageBaselineMatch`,
+   they never contribute to this count.
+
+3. **No triage grouping change** -- the package triage surface groups
+   packages by attention level. Baseline-present packages do not appear
+   on this surface at all (they are in `baseline_suppressed`, filtered
+   out by the leaf filter in `session.rs`). Even if they were somehow
+   classified, the filter prevents them from reaching the grouping
+   logic.
+
+4. **Version Changes is read-only context** -- the Version Changes
+   sidebar section renders baseline-present drift for operator
+   awareness. It is not a decision surface. Downgrades are visually
+   emphasized (sorted to top, `▼` prefix) so operators notice them,
+   but this emphasis is purely informational -- it does not trigger
+   attention tags, review counts, or triage actions.
+
+**Implementation approach in `attention.rs`:**
+
+The `compute_package_attention()` function iterates over
+`rpm.packages_added` and calls `classify_package()` for each. Before
+calling `classify_package()`, check whether the package's canonical
+`name.arch` is in `rpm.baseline_suppressed`. If it is, skip
+classification (do not emit an `AttentionTag` for this package) or
+emit a `Routine` / `PackageBaselineMatch` tag. Either approach is
+acceptable as long as the package never becomes `NeedsReview`.
+
+```rust
+let baseline_suppressed_set: HashSet<&str> = rpm
+    .baseline_suppressed
+    .as_deref()
+    .unwrap_or_default()
+    .iter()
+    .map(|s| s.as_str())
+    .collect();
+
+for entry in &rpm.packages_added {
+    let id = canonical_package_id(&entry.name, &entry.arch);
+    if baseline_suppressed_set.contains(id.as_str()) {
+        // Baseline-present: context-only, skip attention classification.
+        // These packages are not on the decision surface.
+        continue;  // or emit Routine/PackageBaselineMatch
+    }
+    let tag = classify_package(entry, baseline, &rpm.version_changes);
+    // ... rest of classification
+}
+```
+
+### Future Work: Downgrade Guardrails
+
+All baseline-present drift is currently informational context only,
+including downgrades. This is the correct default -- most version
+drift between a running host and a target base image is routine
+maintenance (e.g., `podman-4.9.1` on host vs `podman-4.9.0` in base).
+
+However, **major or minor version downgrades** (e.g., `podman 5.x`
+on host vs `podman 4.x` in base, or `python 3.12` vs `python 3.9`)
+may represent unacceptable regression that should surface as a warning
+or review item. This is out of scope for the current fix run.
+
+**When implemented, guardrails should:**
+- Parse NEVRA version fields to detect major/minor boundary crossings
+- Surface flagged downgrades as a distinct attention level (e.g.,
+  `NeedsReview` with reason `PackageMajorDowngrade`)
+- Only apply to downgrade direction -- upgrades across major versions
+  are normal base-image refresh behavior
+- Be configurable (threshold for what constitutes "major" may vary
+  by package ecosystem)
+
+Until then, operators monitor downgrades via the Version Changes
+context section, where downgrades are sorted to the top and visually
+marked with the `▼` prefix.
 
 ### Data Flow Summary
 
@@ -1472,6 +1692,7 @@ Web Handler (Rust)
 
 Refine (Rust, existing consumers affected by Item 4)
   |-- attention.rs: version_changes -> upgrade/downgrade attention
+  |   (baseline-present packages EXCLUDED from attention -- context-only)
   +-- session.rs: baseline_suppressed added to leaf filter set  [Item 1]
 
 Pipeline (Rust, existing consumer affected by Item 4)
@@ -1500,10 +1721,15 @@ the snapshot -- no collector changes needed. Requires the fleet scope
 guard in the handler.
 
 Item 4 (version changes) is a cross-surface contract change. The
-collector change affects attention.rs and audit.rs immediately. The
-backend change (classifier + handler) ships first; the frontend follows.
-**Critical: the attention and audit behavior changes must be verified
-before the frontend work begins.**
+collector change affects audit.rs immediately. The attention.rs change
+is gated by Item 1's `baseline_suppressed` field: baseline-present
+packages are excluded from attention classification, so populating
+`version_changes` does NOT cause baseline-present downgrades to become
+`NeedsReview`. The backend change (classifier + handler + attention
+exclusion) ships first; the frontend follows.
+**Critical: the attention exclusion for baseline-present packages and
+the audit behavior changes must be verified before the frontend work
+begins.**
 
 Recommended implementation order:
 1. Item 2 (service noise fix) -- collector carrier + handler change
@@ -1525,5 +1751,5 @@ Recommended implementation order:
 | Snapshot JSON | `version_changes` populated instead of empty | No (field already in schema) |
 | Snapshot JSON | New `baseline_suppressed` field on `RpmSection` | No (additive, `Option`) |
 | Snapshot JSON | New `preset_matched_units` field on `ServiceSection` | No (additive, `serde(default)`) |
-| Refine | `needs_review_count` may change for downgraded packages | Behavioral (correct) |
+| Refine | `needs_review_count` unaffected by baseline-present drift (context-only) | Behavioral (correct) |
 | Audit | "Version Changes" table appears when field populated | Behavioral (correct) |
