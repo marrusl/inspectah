@@ -3,6 +3,7 @@ use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::rpm::PackageState;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
@@ -613,11 +614,25 @@ impl RefineSession {
             let is_fleet_snapshot = rpm.packages_added.iter().any(|pkg| pkg.fleet.is_some());
             if let Some(leaf_names) = rpm.leaf_packages.as_ref().filter(|_| !is_fleet_snapshot) {
                 let leaf_set: HashSet<&str> = leaf_names.iter().map(|s| s.as_str()).collect();
+                let baseline_suppressed_set: HashSet<&str> = rpm
+                    .baseline_suppressed
+                    .as_ref()
+                    .map(|v| v.iter().map(|s| s.as_str()).collect())
+                    .unwrap_or_default();
+
                 packages
                     .into_iter()
                     .filter(|pkg| {
                         let package_id =
                             canonical_package_id(pkg.entry.name.as_str(), pkg.entry.arch.as_str());
+
+                        // Baseline-suppressed packages are excluded unconditionally,
+                        // even if they have NeedsReview attention. This is
+                        // belt-and-suspenders alongside the attention gating in Task 7.
+                        if baseline_suppressed_set.contains(package_id.as_str()) {
+                            return false;
+                        }
+
                         let primary_level = pkg.attention.first().map(|t| t.level);
                         let original_include = original_package_includes
                             .get(&(pkg.entry.name.as_str(), pkg.entry.arch.as_str()))
@@ -975,6 +990,116 @@ mod tests {
         assert_eq!(
             view.stats.included_packages, 1,
             "included_packages should be leaf count"
+        );
+    }
+
+    #[test]
+    fn baseline_suppressed_excluded_from_view_even_if_needs_review() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "kernel".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                state: PackageState::Modified,
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["httpd.x86_64".into()]);
+        rpm.auto_packages = Some(Vec::new());
+        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        assert_eq!(view.packages.len(), 1);
+        assert_eq!(view.packages[0].entry.name, "httpd");
+        assert!(
+            !view.packages.iter().any(|p| p.entry.name == "kernel"),
+            "baseline-suppressed package must not appear in view"
+        );
+    }
+
+    #[test]
+    fn needs_review_count_stable_with_baseline_suppression() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "vim".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                state: PackageState::LocalInstall,
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "kernel".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                state: PackageState::Modified,
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["vim.x86_64".into()]);
+        rpm.auto_packages = Some(Vec::new());
+        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        // Only vim (LocalInstall) should be counted, not kernel (Modified but suppressed)
+        assert_eq!(
+            view.stats.needs_review_count, 1,
+            "needs_review_count should exclude baseline-suppressed packages"
+        );
+    }
+
+    #[test]
+    fn containerfile_excludes_baseline_suppressed_packages() {
+        let mut snap = test_snapshot();
+        let rpm = snap.rpm.as_mut().unwrap();
+        rpm.packages_added = vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "kernel".into(),
+                arch: "x86_64".into(),
+                include: true,
+                source_repo: "baseos".into(),
+                state: PackageState::Modified,
+                ..Default::default()
+            },
+        ];
+        rpm.leaf_packages = Some(vec!["httpd.x86_64".into()]);
+        rpm.auto_packages = Some(Vec::new());
+        rpm.baseline_suppressed = Some(vec!["kernel.x86_64".into()]);
+
+        let session = RefineSession::new(snap);
+        let view = session.view();
+
+        assert!(
+            view.containerfile_preview.contains("httpd"),
+            "containerfile should contain leaf package 'httpd'"
+        );
+        assert!(
+            !view.containerfile_preview.contains("kernel"),
+            "containerfile should NOT contain baseline-suppressed package 'kernel'"
         );
     }
 }
