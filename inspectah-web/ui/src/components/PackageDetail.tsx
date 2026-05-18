@@ -23,7 +23,25 @@ function formatState(state: string): string {
     .join(" ");
 }
 
-export function PackageDetail({ pkg, leafDepTree }: PackageDetailProps) {
+function formatEvrPair(
+  baseEpoch: string, baseVersion: string,
+  hostEpoch: string, hostVersion: string,
+): [string, string] {
+  const norm = (e: string): string => (e === "" ? "0" : e);
+  const baseNorm = norm(baseEpoch);
+  const hostNorm = norm(hostEpoch);
+  const showEpoch = baseNorm !== hostNorm || baseNorm !== "0";
+  const fmt = (epoch: string, version: string): string => {
+    if (showEpoch) {
+      const e = epoch === "" ? "0" : epoch;
+      return `${e}:${version}`;
+    }
+    return version;
+  };
+  return [fmt(baseEpoch, baseVersion), fmt(hostEpoch, hostVersion)];
+}
+
+export function PackageDetail({ pkg, leafDepTree, versionChange }: PackageDetailProps) {
   const [depModalOpen, setDepModalOpen] = useState(false);
   const canonicalId = `${pkg.entry.name}.${pkg.entry.arch}`;
   const deps = leafDepTree?.[canonicalId];
@@ -79,6 +97,25 @@ export function PackageDetail({ pkg, leafDepTree }: PackageDetailProps) {
             </DescriptionListDescription>
           </DescriptionListGroup>
         )}
+        {versionChange && (() => {
+          const [baseEvr, hostEvr] = formatEvrPair(
+            versionChange.base_epoch, versionChange.base_version,
+            versionChange.host_epoch, versionChange.host_version,
+          );
+          return (
+            <DescriptionListGroup>
+              <DescriptionListTerm>Version Change</DescriptionListTerm>
+              <DescriptionListDescription>
+                <Content component="small">
+                  {baseEvr} → {hostEvr}{" "}
+                  <Label color={versionChange.direction === "downgrade" ? "red" : "blue"}>
+                    {versionChange.direction}
+                  </Label>
+                </Content>
+              </DescriptionListDescription>
+            </DescriptionListGroup>
+          );
+        })()}
       </DescriptionList>
       {hasDeps && (
         <>

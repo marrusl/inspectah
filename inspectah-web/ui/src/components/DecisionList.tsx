@@ -13,6 +13,7 @@ import type {
   RefinementOp,
   ViewResponse,
   RepoGroupInfo,
+  VersionChangeEntry,
 } from "../api/types";
 import { fetchView } from "../api/client";
 import { ApiError } from "../api/types";
@@ -223,6 +224,8 @@ export interface DecisionListProps {
   revealItemId?: string;
   /** Leaf dependency tree for package dependency display. */
   leafDepTree?: Record<string, string[]>;
+  /** Version change entries for package version change display. */
+  versionChanges?: VersionChangeEntry[];
   onViewUpdate: (view: ViewResponse) => void;
   onMutationError: (err: Error) => void;
   /** Called (debounced) after a viewed POST succeeds, so App can refresh its viewed count. */
@@ -238,6 +241,7 @@ export function DecisionList({
   repoGroups = EMPTY_REPO_GROUPS,
   revealItemId,
   leafDepTree,
+  versionChanges,
   onViewUpdate,
   onMutationError,
   onViewedChange,
@@ -576,6 +580,7 @@ export function DecisionList({
                       isPending={mutation.isPending}
                       tabIndex={flatIdx === focusedIndex ? 0 : -1}
                       leafDepTree={leafDepTree}
+                      versionChanges={versionChanges}
                       onToggleInclude={handleToggle}
                       onMarkViewed={markAsViewed}
                       onKeyDown={handleRowKeyDown}
@@ -651,6 +656,7 @@ export function DecisionList({
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
                     leafDepTree={leafDepTree}
+                    versionChanges={versionChanges}
                     onToggleInclude={isDisabled ? undefined : handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
@@ -672,6 +678,7 @@ export function DecisionList({
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
                     leafDepTree={leafDepTree}
+                    versionChanges={versionChanges}
                     onToggleInclude={isDisabled ? undefined : handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
@@ -685,6 +692,7 @@ export function DecisionList({
                   forceExpanded={routineHasMatch}
                   revealItemId={revealItemId}
                   leafDepTree={leafDepTree}
+                  versionChanges={versionChanges}
                   onToggleInclude={isDisabled ? undefined : handleToggle}
                   onMarkViewed={markAsViewed}
                   viewedIds={viewedIds}
@@ -755,6 +763,7 @@ export function DecisionList({
                       isPending={mutation.isPending}
                       tabIndex={flatIdx === focusedIndex ? 0 : -1}
                       leafDepTree={leafDepTree}
+                      versionChanges={versionChanges}
                       onToggleInclude={handleToggle}
                       onMarkViewed={markAsViewed}
                       onKeyDown={handleRowKeyDown}
@@ -781,6 +790,7 @@ export function DecisionList({
                     isPending={mutation.isPending}
                     tabIndex={flatIdx === focusedIndex ? 0 : -1}
                     leafDepTree={leafDepTree}
+                    versionChanges={versionChanges}
                     onToggleInclude={handleToggle}
                     onMarkViewed={markAsViewed}
                     onKeyDown={handleRowKeyDown}
