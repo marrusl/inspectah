@@ -886,8 +886,8 @@ addressed in this revision:
 
 1. **SensitiveRetained + unresolved hints overlap** — resolved by defining
    `SensitiveRetained { unresolved_count, unresolved_hints }` as a combined
-   variant. Neither condition shadows the other; both gates must be satisfied
-   before export (Collins, Thorn).
+   variant. Neither condition shadows the other. Sensitive retention triggers
+   the export gate; unresolved hints are attention-only (Collins, Thorn).
 2. **New password hash field in projected snapshot** — resolved by pinning
    `password_hash` as the projected field carrying the `crypt(3)` hash for
    both preserved and new passwords. Renderers read this field directly on
