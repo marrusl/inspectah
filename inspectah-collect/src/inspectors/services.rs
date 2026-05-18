@@ -10,6 +10,48 @@ use std::path::Path;
 /// Secret-like environment variable name fragments that trigger redaction hints.
 const SECRET_PATTERNS: &[&str] = &["PASSWORD", "SECRET", "TOKEN", "KEY", "CREDENTIAL"];
 
+/// D-Bus activation alias prefix — services with names starting with this
+/// are symlinks managed by D-Bus activation, not operator intent.
+const DBUS_ALIAS_PREFIX: &str = "dbus-org.";
+
+/// Service name patterns that should always be filtered from state changes.
+/// These represent natural divergence between package-mode installation state
+/// and base image presets, not operator intent.
+const FILTERED_SERVICE_PREFIXES: &[&str] = &[
+    "dbus-org.freedesktop.",
+    "dbus-org.fedoraproject.",
+    "dbus-:", // malformed dbus aliases
+];
+
+/// Services irrelevant for bootc migrations — always filtered.
+const FILTERED_SERVICE_NAMES: &[&str] = &[
+    "systemd-sysupdate.service",
+    "systemd-sysupdate.timer",
+    "systemd-sysupdate-cleanup.service",
+    "systemd-sysupdate-cleanup.timer",
+];
+
+/// Returns true if a unit name is a D-Bus activation alias or otherwise
+/// should be filtered from state changes as non-operator-intent.
+fn is_filtered_service(unit: &str) -> bool {
+    // D-Bus activation aliases
+    if unit.starts_with(DBUS_ALIAS_PREFIX) {
+        return true;
+    }
+    // Specific filtered prefixes
+    if FILTERED_SERVICE_PREFIXES
+        .iter()
+        .any(|prefix| unit.starts_with(prefix))
+    {
+        return true;
+    }
+    // Specific filtered service names
+    if FILTERED_SERVICE_NAMES.contains(&unit) {
+        return true;
+    }
+    false
+}
+
 /// Inspects systemd service state: enabled/disabled vs. preset defaults,
 /// drop-in overrides, and flags environment variables that may contain secrets.
 pub struct ServicesInspector;
@@ -134,7 +176,30 @@ impl Inspector for ServicesInspector {
             match unit.state.as_str() {
                 "enabled" => enabled_units.push(unit.unit.clone()),
                 "disabled" => disabled_units.push(unit.unit.clone()),
+                "masked" => disabled_units.push(unit.unit.clone()),
                 _ => {}
+            }
+
+            // Filter D-Bus activation aliases and irrelevant services —
+            // these are never operator intent.
+            if is_filtered_service(&unit.unit) {
+                continue;
+            }
+
+            // Masked services are unambiguous operator intent — always capture
+            // regardless of preset state.
+            if unit.state == "masked" {
+                state_changes.push(ServiceStateChange {
+                    unit: unit.unit.clone(),
+                    current_state: "masked".into(),
+                    default_state: resolve_preset(&unit.unit, &preset_rules).unwrap_or_default(),
+                    action: "mask".into(),
+                    include: true,
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
+                });
+                continue;
             }
 
             // Look up preset default
@@ -819,6 +884,244 @@ mod tests {
             other => panic!(
                 "expected Degraded for PermissionDenied on /etc/systemd/system, got {other:?}"
             ),
+        }
+    }
+
+    // --- D-Bus alias and service filtering tests ---
+
+    #[test]
+    fn test_is_filtered_service_dbus_aliases() {
+        assert!(is_filtered_service(
+            "dbus-org.freedesktop.NetworkManager.service"
+        ));
+        assert!(is_filtered_service(
+            "dbus-org.freedesktop.timedate1.service"
+        ));
+        assert!(is_filtered_service(
+            "dbus-org.fedoraproject.FirewallD1.service"
+        ));
+        assert!(is_filtered_service("dbus-org.bluez.service"));
+        // Not a D-Bus alias
+        assert!(!is_filtered_service("httpd.service"));
+        assert!(!is_filtered_service("sshd.service"));
+        assert!(!is_filtered_service("dbus.service")); // the actual dbus service, not an alias
+        assert!(!is_filtered_service("dbus-broker.service"));
+    }
+
+    #[test]
+    fn test_is_filtered_service_sysupdate() {
+        assert!(is_filtered_service("systemd-sysupdate.service"));
+        assert!(is_filtered_service("systemd-sysupdate.timer"));
+        assert!(is_filtered_service("systemd-sysupdate-cleanup.service"));
+        assert!(is_filtered_service("systemd-sysupdate-cleanup.timer"));
+        // Not sysupdate
+        assert!(!is_filtered_service("systemd-resolved.service"));
+    }
+
+    #[test]
+    fn test_dbus_alias_filtered_from_state_changes() {
+        // D-Bus aliases show up as disabled but should not produce state_changes
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             httpd.service                              enabled         disabled\n\
+                             dbus-org.freedesktop.NetworkManager.service disabled        enabled\n\
+                             dbus-org.freedesktop.timedate1.service     disabled        enabled\n\
+                             \n\
+                             3 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable dbus-org.freedesktop.NetworkManager.service\n\
+                 enable dbus-org.freedesktop.timedate1.service\n\
+                 disable *\n",
+            )
+            .with_dir("/etc/systemd/system", vec![]);
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx).unwrap();
+        if let SectionData::Services(ref svc) = result.section {
+            // httpd should be captured (operator enabled a preset-disabled service)
+            assert!(
+                svc.state_changes
+                    .iter()
+                    .any(|sc| sc.unit == "httpd.service"),
+                "httpd.service must be in state_changes"
+            );
+            // D-Bus aliases must NOT appear in state_changes
+            assert!(
+                !svc.state_changes
+                    .iter()
+                    .any(|sc| sc.unit.starts_with("dbus-org.")),
+                "D-Bus aliases must be filtered from state_changes, got: {:?}",
+                svc.state_changes
+            );
+        } else {
+            panic!("expected SectionData::Services");
+        }
+    }
+
+    #[test]
+    fn test_masked_service_captured_as_operator_intent() {
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             sshd.service                               enabled         enabled\n\
+                             cups.service                               masked          enabled\n\
+                             \n\
+                             2 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable sshd.service\nenable cups.service\ndisable *\n",
+            )
+            .with_dir("/etc/systemd/system", vec![]);
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx).unwrap();
+        if let SectionData::Services(ref svc) = result.section {
+            // sshd matches preset — should not be in state_changes
+            assert!(
+                !svc.state_changes.iter().any(|sc| sc.unit == "sshd.service"),
+                "sshd.service matches preset, must not be in state_changes"
+            );
+            // cups is masked — operator intent, must be captured
+            let cups = svc
+                .state_changes
+                .iter()
+                .find(|sc| sc.unit == "cups.service");
+            assert!(
+                cups.is_some(),
+                "masked cups.service must be in state_changes"
+            );
+            let cups = cups.unwrap();
+            assert_eq!(cups.action, "mask", "masked service action must be 'mask'");
+            assert_eq!(cups.current_state, "masked");
+            assert!(cups.include, "masked service must be included");
+        } else {
+            panic!("expected SectionData::Services");
+        }
+    }
+
+    #[test]
+    fn test_operator_disabled_service_captured() {
+        // A service that is enabled by preset but disabled by operator
+        let exec = MockExecutor::new()
+            .with_command(
+                "systemctl list-unit-files --type=service --no-pager",
+                ExecResult {
+                    stdout: "UNIT FILE                                  STATE           PRESET\n\
+                             firewalld.service                          disabled        enabled\n\
+                             \n\
+                             1 unit files listed.\n"
+                        .into(),
+                    exit_code: 0,
+                    ..Default::default()
+                },
+            )
+            .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+            .with_file(
+                "/usr/lib/systemd/system-preset/90-default.preset",
+                "enable firewalld.service\ndisable *\n",
+            )
+            .with_dir("/etc/systemd/system", vec![]);
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx).unwrap();
+        if let SectionData::Services(ref svc) = result.section {
+            let fw = svc
+                .state_changes
+                .iter()
+                .find(|sc| sc.unit == "firewalld.service");
+            assert!(
+                fw.is_some(),
+                "operator-disabled firewalld must be in state_changes"
+            );
+            assert_eq!(fw.unwrap().action, "disable");
+        } else {
+            panic!("expected SectionData::Services");
+        }
+    }
+
+    #[test]
+    fn test_dropin_captured_for_service() {
+        // Drop-in override files represent operator customization
+        let exec = svc_base_mock()
+            .with_dir("/etc/systemd/system", vec!["httpd.service.d"])
+            .with_dir("/etc/systemd/system/httpd.service.d", vec!["restart.conf"])
+            .with_file(
+                "/etc/systemd/system/httpd.service.d/restart.conf",
+                "[Service]\nRestart=always\nRestartSec=5\n",
+            );
+
+        let source = SourceSystem::PackageBased {
+            os_release: svc_test_os_release(),
+        };
+        let inspector = ServicesInspector::new();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+
+        let result = inspector.inspect(&ctx).unwrap();
+        if let SectionData::Services(ref svc) = result.section {
+            assert!(
+                !svc.drop_ins.is_empty(),
+                "drop-in overrides must be captured"
+            );
+            let dropin = svc.drop_ins.iter().find(|d| d.unit == "httpd.service");
+            assert!(dropin.is_some(), "httpd.service drop-in must be captured");
+            let dropin = dropin.unwrap();
+            assert!(dropin.content.contains("Restart=always"));
+            assert!(dropin.include);
+        } else {
+            panic!("expected SectionData::Services");
         }
     }
 
