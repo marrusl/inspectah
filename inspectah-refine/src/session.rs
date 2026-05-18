@@ -220,6 +220,16 @@ impl RefineSession {
         derive_baseline_summary(&self.original, &self.view().packages)
     }
 
+    /// Return the leaf dependency tree from the snapshot's RPM section.
+    /// Returns an empty JSON object when RPM data is unavailable.
+    pub fn leaf_dep_tree(&self) -> serde_json::Value {
+        self.snapshot()
+            .rpm
+            .as_ref()
+            .map(|rpm| rpm.leaf_dep_tree.clone())
+            .unwrap_or(serde_json::json!({}))
+    }
+
     /// Valid section prefixes for viewed IDs.
     const VALID_SECTIONS: &'static [&'static str] = &[
         "packages",

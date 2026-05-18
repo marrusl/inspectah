@@ -62,6 +62,7 @@ pub struct ViewResponse {
     pub repo_groups: Vec<RepoGroupInfo>,
     pub baseline_summary: Option<BaselineSummary>,
     pub version_changes: Vec<VersionChangeEntry>,
+    pub leaf_dep_tree: std::collections::HashMap<String, Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -176,11 +177,23 @@ fn build_view_response(session: &RefineSession) -> ViewResponse {
                 .collect()
         })
         .unwrap_or_default();
+    let is_fleet = session
+        .snapshot()
+        .rpm
+        .as_ref()
+        .map(|rpm| rpm.packages_added.iter().any(|p| p.fleet.is_some()))
+        .unwrap_or(false);
+    let leaf_dep_tree: std::collections::HashMap<String, Vec<String>> = if is_fleet {
+        std::collections::HashMap::new()
+    } else {
+        serde_json::from_value(session.leaf_dep_tree()).unwrap_or_default()
+    };
     ViewResponse {
         view,
         repo_groups,
         baseline_summary,
         version_changes,
+        leaf_dep_tree,
     }
 }
 
