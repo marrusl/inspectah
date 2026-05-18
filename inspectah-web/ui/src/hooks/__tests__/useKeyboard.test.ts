@@ -93,6 +93,30 @@ describe("useKeyboard", () => {
     expect(opts.onSectionChange).toHaveBeenCalledWith("services");
   });
 
+  it("maps key 4 to version_changes after insertion", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    fireEvent.keyDown(document, { key: "4" });
+    expect(opts.onSectionChange).toHaveBeenCalledWith("version_changes");
+  });
+
+  it("maps key 5 to containers (shifted from 4)", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    fireEvent.keyDown(document, { key: "5" });
+    expect(opts.onSectionChange).toHaveBeenCalledWith("containers");
+  });
+
+  it("maps key 9 to scheduled_tasks (shifted from 8)", () => {
+    const opts = makeOptions();
+    renderHook(() => useKeyboard(opts));
+
+    fireEvent.keyDown(document, { key: "9" });
+    expect(opts.onSectionChange).toHaveBeenCalledWith("scheduled_tasks");
+  });
+
   it("suppresses single-key shortcuts when focus is in an input", () => {
     const opts = makeOptions();
     renderHook(() => useKeyboard(opts));

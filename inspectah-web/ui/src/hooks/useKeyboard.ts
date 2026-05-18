@@ -2,14 +2,15 @@ import { useEffect, useCallback } from "react";
 
 /** All sidebar section IDs in display order (for 1-9 jump). */
 const SECTION_IDS = [
-  "packages",
-  "configs",
-  "services",
-  "containers",
-  "users_groups",
-  "network",
-  "storage",
-  "scheduled_tasks",
+  "packages",          // 1
+  "configs",           // 2
+  "services",          // 3
+  "version_changes",   // 4
+  "containers",        // 5
+  "users_groups",      // 6
+  "network",           // 7
+  "storage",           // 8
+  "scheduled_tasks",   // 9
   "non_rpm_software",
   "kernel_boot",
   "selinux",
