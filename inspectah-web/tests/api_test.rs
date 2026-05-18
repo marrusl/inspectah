@@ -760,25 +760,29 @@ fn normalize_services_maps_state_changes_with_dropins() {
         "subtitle should contain current_state"
     );
     assert!(
+        httpd.subtitle.as_ref().unwrap().contains("diverges from preset"),
+        "subtitle should indicate preset divergence"
+    );
+    assert!(
         httpd.detail.is_some(),
         "httpd should have drop-in content folded in"
     );
 
-    // standalone drop-in (no matching state_change)
+    // standalone drop-in (no matching state_change, not in enabled/disabled)
     let standalone = svc
         .items
         .iter()
         .find(|i| i.id.contains("standalone.service"))
         .unwrap();
-    assert_eq!(standalone.subtitle.as_deref(), Some("drop-in"));
+    assert_eq!(standalone.subtitle.as_deref(), Some("drop-in override"));
 
-    // enabled_units
+    // enabled_units (legacy snapshot with empty preset_matched_units)
     let sshd = svc.items.iter().find(|i| i.id == "sshd.service").unwrap();
-    assert_eq!(sshd.subtitle.as_deref(), Some("enabled"));
+    assert_eq!(sshd.subtitle.as_deref(), Some("enabled (no preset rule)"));
 
-    // disabled_units
+    // disabled_units (legacy snapshot with empty preset_matched_units)
     let cups = svc.items.iter().find(|i| i.id == "cups.service").unwrap();
-    assert_eq!(cups.subtitle.as_deref(), Some("disabled"));
+    assert_eq!(cups.subtitle.as_deref(), Some("disabled (no preset rule)"));
 }
 
 #[test]
