@@ -6,6 +6,7 @@ use inspectah_core::traits::executor::ExecResult;
 use inspectah_core::traits::inspector::{InspectionContext, Inspector, InspectorError};
 use inspectah_core::types::completeness::{SectionData, SourceSystemKind};
 use inspectah_core::types::os::OsRelease;
+use inspectah_core::types::services::{PresetDefault, ServiceAction, ServiceUnitState};
 use inspectah_core::types::system::SourceSystem;
 
 /// Standard fixture: `systemctl list-unit-files` output.
@@ -91,9 +92,9 @@ fn happy_path_state_changes() {
         .iter()
         .find(|s| s.unit == "bluetooth.service")
         .expect("bluetooth should have state change");
-    assert_eq!(bluetooth.current_state, "enabled");
-    assert_eq!(bluetooth.default_state, "disabled");
-    assert_eq!(bluetooth.action, "enable");
+    assert_eq!(bluetooth.current_state, ServiceUnitState::Enabled);
+    assert_eq!(bluetooth.default_state, Some(PresetDefault::Disable));
+    assert_eq!(bluetooth.implied_action(), ServiceAction::Enable);
 
     // gdm: disabled on host, preset says "enable" → divergence
     let gdm = section
@@ -101,9 +102,9 @@ fn happy_path_state_changes() {
         .iter()
         .find(|s| s.unit == "gdm.service")
         .expect("gdm should have state change");
-    assert_eq!(gdm.current_state, "disabled");
-    assert_eq!(gdm.default_state, "enabled");
-    assert_eq!(gdm.action, "disable");
+    assert_eq!(gdm.current_state, ServiceUnitState::Disabled);
+    assert_eq!(gdm.default_state, Some(PresetDefault::Enable));
+    assert_eq!(gdm.implied_action(), ServiceAction::Disable);
 
     // httpd: enabled on host, no preset entry → NO state change (cannot determine divergence)
     assert!(
@@ -205,8 +206,8 @@ fn preset_first_match_wins() {
         .iter()
         .find(|s| s.unit == "sshd.service")
         .expect("sshd should diverge from first-match preset");
-    assert_eq!(sshd.default_state, "disabled");
-    assert_eq!(sshd.current_state, "enabled");
+    assert_eq!(sshd.default_state, Some(PresetDefault::Disable));
+    assert_eq!(sshd.current_state, ServiceUnitState::Enabled);
 }
 
 // ── Test 4: Preset glob matching ───────────────────────────────────
@@ -252,8 +253,8 @@ fn preset_glob_matching() {
         .iter()
         .find(|s| s.unit == "custom-app.service")
         .expect("custom-app should diverge from glob preset");
-    assert_eq!(app.default_state, "enabled");
-    assert_eq!(app.current_state, "disabled");
+    assert_eq!(app.default_state, Some(PresetDefault::Enable));
+    assert_eq!(app.current_state, ServiceUnitState::Disabled);
 }
 
 // ── Test 5: Drop-in files collected ────────────────────────────────
@@ -603,5 +604,113 @@ fn preset_matched_units_empty_when_no_preset_rules() {
     assert!(
         section.state_changes.is_empty(),
         "state_changes should be empty when no preset rules exist"
+    );
+}
+
+// ── Intent gate: warning states ───────────────────────────────────────
+
+#[test]
+fn test_intent_gate_warns_runtime_linked_bad_and_unknown_states() {
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         transient.service                          transient       disabled\n\
+                         linked.service                             linked          enabled\n\
+                         broken.service                             bad             disabled\n\
+                         future.service                             future-state    disabled\n\
+                         \n\
+                         4 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file(
+            "/usr/lib/systemd/system-preset/90-default.preset",
+            "disable *\n",
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected Services section, got {other:?}"),
+    };
+
+    assert!(
+        section.state_changes.is_empty(),
+        "warning-only states must not persist"
+    );
+    assert_eq!(
+        output.warnings.len(),
+        4,
+        "each warning state should emit one warning"
+    );
+    assert!(output.warnings.iter().any(|w| {
+        w.inspector == "services"
+            && w.extra.get("unit") == Some(&serde_json::json!("linked.service"))
+            && w.extra.get("raw_state") == Some(&serde_json::json!("linked"))
+    }));
+}
+
+#[test]
+fn test_clean_default_snapshot_produces_zero_state_changes() {
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         dbus.service                               alias           disabled\n\
+                         sssd-kcm.service                           indirect        disabled\n\
+                         systemd-sysupdate.service                  indirect        disabled\n\
+                         chronyd.service                            enabled         enabled\n\
+                         sshd.service                               enabled         enabled\n\
+                         cups.service                               disabled        disabled\n\
+                         \n\
+                         6 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file(
+            "/usr/lib/systemd/system-preset/90-default.preset",
+            "enable chronyd.service\nenable sshd.service\ndisable *\n",
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected Services section, got {other:?}"),
+    };
+
+    assert!(
+        section.state_changes.is_empty(),
+        "clean default host should be a no-op"
+    );
+    assert!(
+        output.warnings.is_empty(),
+        "known inert states should drop silently"
     );
 }

@@ -200,8 +200,8 @@ fn pre_phase6_migration_cross_crate() {
     migrate(&mut snap);
 
     assert_eq!(
-        snap.schema_version, 15,
-        "schema_version must be 15 after migration"
+        snap.schema_version, 16,
+        "schema_version must be 16 after migration"
     );
     assert!(snap.target_image.is_none(), "target_image must remain None");
     assert!(snap.baseline.is_none(), "baseline must remain None");
@@ -220,24 +220,26 @@ fn pre_phase6_migration_cross_crate() {
 fn service_surface_agreement() {
     // Build a snapshot JSON with dnf-makecache.service in services
     let mut snap = InspectionSnapshot::new();
-    snap.schema_version = 15;
+    snap.schema_version = 16;
     snap.services = Some(ServiceSection {
         state_changes: vec![
             ServiceStateChange {
                 unit: "dnf-makecache.service".into(),
-                current_state: "enabled".into(),
-                default_state: "disabled".into(),
-                action: "enable".into(),
+                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
                 include: true,
-                ..Default::default()
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
             },
             ServiceStateChange {
                 unit: "httpd.service".into(),
-                current_state: "enabled".into(),
-                default_state: "disabled".into(),
-                action: "enable".into(),
+                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
                 include: true,
-                ..Default::default()
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
             },
         ],
         enabled_units: vec!["dnf-makecache.service".into(), "httpd.service".into()],

@@ -20,6 +20,7 @@ use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::rpm::PackageEntry;
+use inspectah_core::types::services::ServiceAction;
 
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
 
@@ -595,21 +596,20 @@ fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
         if sanitize_shell_value(u).is_none() {
             continue;
         }
-        match sc.action.as_str() {
-            "enable" => {
+        match sc.implied_action() {
+            ServiceAction::Enable => {
                 if config_tree_units.contains(u.as_str()) {
                     deferred.push(u.clone());
                 } else {
                     safe_enabled.push(u.clone());
                 }
             }
-            "disable" => {
+            ServiceAction::Disable => {
                 safe_disabled.push(u.clone());
             }
-            "mask" => {
+            ServiceAction::Mask => {
                 safe_masked.push(u.clone());
             }
-            _ => {}
         }
     }
 
@@ -1520,15 +1520,20 @@ mod tests {
 
     #[test]
     fn test_containerfile_section_ordering() {
-        use inspectah_core::types::services::ServiceStateChange;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
         // Build a snapshot with data in multiple sections to verify ordering
         let mut snap = snapshot_with_packages(&["httpd"]);
         snap.services = Some(inspectah_core::types::services::ServiceSection {
             state_changes: vec![ServiceStateChange {
                 unit: "httpd.service".into(),
-                action: "enable".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Disable),
                 include: true,
-                ..Default::default()
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
             }],
             ..Default::default()
         });
@@ -1590,33 +1595,38 @@ mod tests {
 
     #[test]
     fn test_containerfile_services() {
-        use inspectah_core::types::services::ServiceStateChange;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
             state_changes: vec![
                 ServiceStateChange {
                     unit: "httpd.service".into(),
-                    current_state: "enabled".into(),
-                    default_state: "disabled".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "sshd.service".into(),
-                    current_state: "enabled".into(),
-                    default_state: "disabled".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "cups.service".into(),
-                    current_state: "disabled".into(),
-                    default_state: "enabled".into(),
-                    action: "disable".into(),
+                    current_state: ServiceUnitState::Disabled,
+                    default_state: Some(PresetDefault::Enable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
             ],
             // enabled_units/disabled_units are full inventory — not used by renderer
@@ -2002,33 +2012,47 @@ mod tests {
 
     #[test]
     fn test_service_backslash_continuation_over_3() {
-        use inspectah_core::types::services::ServiceStateChange;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
             state_changes: vec![
                 ServiceStateChange {
                     unit: "httpd.service".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "sshd.service".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "chronyd.service".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "firewalld.service".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
             ],
             ..Default::default()
@@ -2047,21 +2071,29 @@ mod tests {
 
     #[test]
     fn test_service_single_line_under_4() {
-        use inspectah_core::types::services::ServiceStateChange;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
             state_changes: vec![
                 ServiceStateChange {
                     unit: "httpd.service".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "sshd.service".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
             ],
             ..Default::default()
@@ -2079,23 +2111,29 @@ mod tests {
 
     #[test]
     fn test_containerfile_masked_services() {
-        use inspectah_core::types::services::ServiceStateChange;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
             state_changes: vec![
                 ServiceStateChange {
                     unit: "cups.service".into(),
-                    current_state: "masked".into(),
-                    default_state: "enabled".into(),
-                    action: "mask".into(),
+                    current_state: ServiceUnitState::Masked,
+                    default_state: Some(PresetDefault::Enable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "httpd.service".into(),
-                    action: "enable".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
             ],
             ..Default::default()
@@ -2114,33 +2152,47 @@ mod tests {
 
     #[test]
     fn test_service_disable_backslash_continuation_over_3() {
-        use inspectah_core::types::services::ServiceStateChange;
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
         let mut snap = InspectionSnapshot::new();
         snap.services = Some(inspectah_core::types::services::ServiceSection {
             state_changes: vec![
                 ServiceStateChange {
                     unit: "cups.service".into(),
-                    action: "disable".into(),
+                    current_state: ServiceUnitState::Disabled,
+                    default_state: Some(PresetDefault::Enable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "avahi-daemon.service".into(),
-                    action: "disable".into(),
+                    current_state: ServiceUnitState::Disabled,
+                    default_state: Some(PresetDefault::Enable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "bluetooth.service".into(),
-                    action: "disable".into(),
+                    current_state: ServiceUnitState::Disabled,
+                    default_state: Some(PresetDefault::Enable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
                 ServiceStateChange {
                     unit: "ModemManager.service".into(),
-                    action: "disable".into(),
+                    current_state: ServiceUnitState::Disabled,
+                    default_state: Some(PresetDefault::Enable),
                     include: true,
-                    ..Default::default()
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
                 },
             ],
             ..Default::default()

@@ -19,24 +19,27 @@ use tempfile::TempDir;
 // ---------------------------------------------------------------------------
 
 fn snapshot_with_services() -> InspectionSnapshot {
+    use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
     let mut snap = InspectionSnapshot::new();
     snap.services = Some(ServiceSection {
         state_changes: vec![
             ServiceStateChange {
                 unit: "httpd.service".into(),
-                current_state: "enabled".into(),
-                default_state: "disabled".into(),
-                action: "enable".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Disable),
                 include: true,
-                ..Default::default()
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
             },
             ServiceStateChange {
                 unit: "cups.service".into(),
-                current_state: "disabled".into(),
-                default_state: "enabled".into(),
-                action: "disable".into(),
+                current_state: ServiceUnitState::Disabled,
+                default_state: Some(PresetDefault::Enable),
                 include: true,
-                ..Default::default()
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
             },
         ],
         enabled_units: vec!["httpd.service".into()],

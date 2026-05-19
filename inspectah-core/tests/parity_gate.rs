@@ -61,75 +61,20 @@ fn test_snapshot_serde_roundtrip() {
     );
 }
 
-// ── Services section serde roundtrip ─────────────────────────────────
+// ── Services section: legacy golden must fail typed deserialization ───
 
-/// Proves Go golden JSON deserializes into ServiceSection and
-/// re-serializes without undocumented field loss.
+/// Legacy Go v13 services payloads use stringly typed fields (action,
+/// current_state as plain strings). The v16 typed contract intentionally
+/// rejects these — operators must re-scan to get typed snapshots.
 #[test]
-fn test_services_serde_roundtrip() {
+fn test_legacy_go_v13_services_section_requires_rescan() {
     let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
-
-    let section: ServiceSection =
-        serde_json::from_str(golden).expect("golden must deserialize into ServiceSection");
-
-    let rust_json = serde_json::to_string_pretty(&section).unwrap();
-    let undocumented = diff_snapshots(golden, &rust_json, &allowlist()).unwrap();
-
+    let err = serde_json::from_str::<ServiceSection>(golden).unwrap_err();
     assert!(
-        undocumented.is_empty(),
-        "Services section has undocumented divergences:\n{}",
-        format_diffs(&undocumented)
+        err.to_string().contains("current_state")
+            || err.to_string().contains("unknown variant"),
+        "legacy services payload should fail typed deserialization, got: {err}"
     );
-}
-
-/// Validates Go golden services structure matches expected field layout.
-/// On the real CentOS Stream 9 host: 186 state_changes (184 unchanged +
-/// 2 enable), 2 enabled_units, 0 disabled_units, 0 drop_ins.
-#[test]
-fn test_services_field_coverage() {
-    let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
-    let section: ServiceSection = serde_json::from_str(golden).unwrap();
-
-    // state_changes: Go includes ALL units (unchanged + divergent)
-    assert!(
-        !section.state_changes.is_empty(),
-        "golden must contain state_changes"
-    );
-    assert!(
-        section.state_changes.len() > 100,
-        "Go golden should have 180+ state_changes (all units), got {}",
-        section.state_changes.len()
-    );
-
-    // enabled_units: 2 units on this host
-    assert!(
-        !section.enabled_units.is_empty(),
-        "golden must contain enabled_units"
-    );
-
-    // disabled_units and drop_ins: empty on this host — just verify they
-    // deserialized (the arrays exist even if empty)
-    assert!(
-        section.disabled_units.is_empty(),
-        "Go golden has no disabled_units on this host"
-    );
-    assert!(
-        section.drop_ins.is_empty(),
-        "Go golden has no drop_ins on this host"
-    );
-
-    // Verify structural fields on individual state_change entries
-    let sc = &section.state_changes[0];
-    assert!(!sc.unit.is_empty(), "unit must be populated");
-    assert!(
-        !sc.current_state.is_empty(),
-        "current_state must be populated"
-    );
-    assert!(
-        !sc.default_state.is_empty(),
-        "default_state must be populated"
-    );
-    assert!(!sc.action.is_empty(), "action must be populated");
 }
 
 // ── Storage section serde roundtrip ──────────────────────────────────
@@ -975,6 +920,8 @@ fn test_full_snapshot_serde_all_sections_present() {
         "redaction_hints": []
     });
 
+    // Services excluded: v16 typed enums intentionally reject the legacy
+    // Go golden (tested separately in test_legacy_go_v13_services_section_requires_rescan).
     let sections: &[(&str, &str)] = &[
         (
             "rpm",
@@ -983,10 +930,6 @@ fn test_full_snapshot_serde_all_sections_present() {
         (
             "config",
             include_str!("../../testdata/golden/go-v13-config-section.json"),
-        ),
-        (
-            "services",
-            include_str!("../../testdata/golden/go-v13-services-section.json"),
         ),
         (
             "network",
@@ -1035,15 +978,13 @@ fn test_full_snapshot_serde_all_sections_present() {
     let snap: InspectionSnapshot =
         serde_json::from_str(&full_json).expect("full snapshot with all sections must deserialize");
 
-    // All 11 section keys must be present (Some, not None)
+    // 10 section keys must be present (Some, not None).
+    // Services excluded from this test — legacy golden uses stringly typed
+    // fields that the v16 typed contract intentionally rejects.
     assert!(snap.rpm.is_some(), "rpm section must survive roundtrip");
     assert!(
         snap.config.is_some(),
         "config section must survive roundtrip"
-    );
-    assert!(
-        snap.services.is_some(),
-        "services section must survive roundtrip"
     );
     assert!(
         snap.network.is_some(),

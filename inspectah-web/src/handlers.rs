@@ -832,9 +832,24 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             let dropin_detail = dropin_by_unit
                 .get(sc.unit.as_str())
                 .map(|contents| contents.join("\n---\n"));
+            let state_str = match sc.current_state {
+                inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
+                inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
+                inspectah_core::types::services::ServiceUnitState::Masked => "masked",
+            };
+            let default_str = match sc.default_state {
+                Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
+                Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
+                None => "unknown",
+            };
+            let action_str = match sc.implied_action() {
+                inspectah_core::types::services::ServiceAction::Enable => "enable",
+                inspectah_core::types::services::ServiceAction::Disable => "disable",
+                inspectah_core::types::services::ServiceAction::Mask => "mask",
+            };
             let mut search = format!(
                 "{} {} {} {}",
-                sc.unit, sc.current_state, sc.default_state, sc.action
+                sc.unit, state_str, default_str, action_str
             );
             if let Some(pkg) = &sc.owning_package {
                 search.push(' ');
@@ -845,7 +860,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 title: sc.unit.clone(),
                 subtitle: Some(format!(
                     "{} (diverges from preset: {})",
-                    sc.current_state, sc.default_state
+                    state_str, default_str
                 )),
                 detail: dropin_detail,
                 searchable_text: search,
@@ -2219,11 +2234,12 @@ mod tests {
         snap.services = Some(ServiceSection {
             state_changes: vec![ServiceStateChange {
                 unit: "NetworkManager-wait-online.service".into(),
-                current_state: "enabled".into(),
-                default_state: "enable".into(),
-                action: "enable".into(),
+                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
                 include: true,
-                ..Default::default()
+                owning_package: None,
+                fleet: None,
+                attention_reason: None,
             }],
             ..Default::default()
         });
@@ -2285,9 +2301,8 @@ mod tests {
         snap.services = Some(ServiceSection {
             state_changes: vec![ServiceStateChange {
                 unit: "httpd.service".into(),
-                current_state: "enabled".into(),
-                default_state: "disable".into(),
-                action: "enable".into(),
+                current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+                default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
                 include: true,
                 owning_package: None,
                 fleet: None,

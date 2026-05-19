@@ -1,22 +1,63 @@
 use super::fleet::FleetPrevalence;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+/// Durable systemd unit states that represent administrator intent.
+/// Only these three states produce migration-worthy `ServiceStateChange` entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ServiceUnitState {
+    Enabled,
+    Disabled,
+    Masked,
+}
+
+/// Preset default from systemd `.preset` files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PresetDefault {
+    Enable,
+    Disable,
+}
+
+/// Derived action for the Containerfile renderer.
+/// Not serialized — computed from `current_state` via `implied_action()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceAction {
+    Enable,
+    Disable,
+    Mask,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServiceStateChange {
-    #[serde(default)]
     pub unit: String,
-    #[serde(default)]
-    pub current_state: String,
-    #[serde(default)]
-    pub default_state: String,
-    #[serde(default)]
-    pub action: String,
-    #[serde(default)]
+    pub current_state: ServiceUnitState,
+    #[serde(deserialize_with = "require_explicit_null")]
+    pub default_state: Option<PresetDefault>,
     pub include: bool,
     pub owning_package: Option<String>,
     pub fleet: Option<FleetPrevalence>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attention_reason: Option<String>,
+}
+
+fn require_explicit_null<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
+impl ServiceStateChange {
+    /// Derive the Containerfile action from the current unit state.
+    pub fn implied_action(&self) -> ServiceAction {
+        match self.current_state {
+            ServiceUnitState::Enabled => ServiceAction::Enable,
+            ServiceUnitState::Disabled => ServiceAction::Disable,
+            ServiceUnitState::Masked => ServiceAction::Mask,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -55,21 +96,113 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_service_section_roundtrip() {
+    fn test_service_state_change_roundtrip_uses_typed_enums() {
         let section = ServiceSection {
-            state_changes: vec![ServiceStateChange {
-                unit: "httpd.service".into(),
-                current_state: "enabled".into(),
-                default_state: "disabled".into(),
-                action: "enable".into(),
-                include: true,
-                ..Default::default()
-            }],
-            ..Default::default()
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "firewalld.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: Some("firewalld".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+                ServiceStateChange {
+                    unit: "cups.service".into(),
+                    current_state: ServiceUnitState::Masked,
+                    default_state: None,
+                    include: true,
+                    owning_package: Some("cups".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+            ],
+            enabled_units: vec!["firewalld.service".into()],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
         };
+
         let json = serde_json::to_string(&section).unwrap();
         let parsed: ServiceSection = serde_json::from_str(&json).unwrap();
-        assert_eq!(section, parsed);
+
+        assert_eq!(parsed, section);
+    }
+
+    #[test]
+    fn test_implied_action_derives_from_current_state() {
+        let enabled = ServiceStateChange {
+            unit: "firewalld.service".into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
+            include: true,
+            owning_package: Some("firewalld".into()),
+            fleet: None,
+            attention_reason: None,
+        };
+        let disabled = ServiceStateChange {
+            unit: "sshd.service".into(),
+            current_state: ServiceUnitState::Disabled,
+            default_state: Some(PresetDefault::Enable),
+            include: true,
+            owning_package: Some("openssh-server".into()),
+            fleet: None,
+            attention_reason: None,
+        };
+        let masked = ServiceStateChange {
+            unit: "cups.service".into(),
+            current_state: ServiceUnitState::Masked,
+            default_state: None,
+            include: true,
+            owning_package: Some("cups".into()),
+            fleet: None,
+            attention_reason: None,
+        };
+
+        assert_eq!(enabled.implied_action(), ServiceAction::Enable);
+        assert_eq!(disabled.implied_action(), ServiceAction::Disable);
+        assert_eq!(masked.implied_action(), ServiceAction::Mask);
+    }
+
+    #[test]
+    fn test_option_preset_default_serde_roundtrip() {
+        let with_preset = ServiceStateChange {
+            unit: "firewalld.service".into(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
+            include: true,
+            owning_package: Some("firewalld".into()),
+            fleet: None,
+            attention_reason: None,
+        };
+        let json = serde_json::to_string(&with_preset).unwrap();
+        let parsed: ServiceStateChange = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.default_state, Some(PresetDefault::Disable));
+
+        let without_preset = ServiceStateChange {
+            unit: "cups.service".into(),
+            current_state: ServiceUnitState::Masked,
+            default_state: None,
+            include: true,
+            owning_package: Some("cups".into()),
+            fleet: None,
+            attention_reason: None,
+        };
+        let json = serde_json::to_string(&without_preset).unwrap();
+        let parsed: ServiceStateChange = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.default_state, None);
+
+        let null_json = r#"{
+            "unit":"cups.service",
+            "current_state":"masked",
+            "default_state":null,
+            "include":true,
+            "owning_package":"cups",
+            "fleet":null
+        }"#;
+        let parsed: ServiceStateChange = serde_json::from_str(null_json).unwrap();
+        assert_eq!(parsed.default_state, None);
     }
 
     #[test]
@@ -94,5 +227,22 @@ mod tests {
         let json = r#"{"state_changes":[],"enabled_units":[],"disabled_units":[],"drop_ins":[]}"#;
         let parsed: ServiceSection = serde_json::from_str(json).unwrap();
         assert!(parsed.preset_matched_units.is_empty());
+    }
+
+    #[test]
+    fn test_missing_default_state_does_not_deserialize() {
+        let json = r#"{
+            "unit":"firewalld.service",
+            "current_state":"enabled",
+            "include":true,
+            "owning_package":"firewalld",
+            "fleet":null
+        }"#;
+
+        let err = serde_json::from_str::<ServiceStateChange>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("default_state"),
+            "expected missing-field error, got: {err}"
+        );
     }
 }

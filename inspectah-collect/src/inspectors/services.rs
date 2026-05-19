@@ -4,7 +4,10 @@ use inspectah_core::traits::inspector::{
 };
 use inspectah_core::types::completeness::{InspectorId, SectionData, SourceSystemKind};
 use inspectah_core::types::redaction::{Confidence, RedactionHint};
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
+use inspectah_core::types::services::{
+    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+};
+use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use std::path::Path;
 
 /// Secret-like environment variable name fragments that trigger redaction hints.
@@ -27,6 +30,80 @@ fn is_real_service(unit: &str) -> bool {
         return false;
     }
     true
+}
+
+/// Result of parsing a raw systemd unit state string into the typed contract.
+enum ParsedUnitState {
+    /// Durable administrator intent — produces a `ServiceStateChange`.
+    Durable(ServiceUnitState),
+    /// Known-inert packaging artifact — silently dropped, no warning.
+    SilentDrop,
+    /// Runtime/linked/bad/unknown — emits a structured warning and drops.
+    Warn(Warning),
+}
+
+/// Classify a raw systemd unit-file state into the typed contract.
+fn parse_unit_state(unit: &str, raw_state: &str) -> ParsedUnitState {
+    match raw_state {
+        "enabled" => ParsedUnitState::Durable(ServiceUnitState::Enabled),
+        "disabled" => ParsedUnitState::Durable(ServiceUnitState::Disabled),
+        "masked" => ParsedUnitState::Durable(ServiceUnitState::Masked),
+        // Packaging/dependency artifacts — no migration relevance.
+        "static" | "alias" | "indirect" | "generated" => ParsedUnitState::SilentDrop,
+        // Runtime/volatile states — lost on reboot, cannot be migrated.
+        "enabled-runtime" | "masked-runtime" | "transient" | "linked-runtime" => {
+            ParsedUnitState::Warn(service_warning(
+                unit,
+                raw_state,
+                "transient state is not migrated",
+            ))
+        }
+        // Linked units require manual handling.
+        "linked" => ParsedUnitState::Warn(service_warning(
+            unit,
+            raw_state,
+            "linked unit requires manual handling",
+        )),
+        // Bad unit files are invalid/unreadable.
+        "bad" => ParsedUnitState::Warn(service_warning(
+            unit,
+            raw_state,
+            "unit file is invalid or unreadable",
+        )),
+        // Future-proof catch-all for unrecognized states.
+        other => ParsedUnitState::Warn(service_warning(
+            unit,
+            other,
+            "unrecognized systemd state",
+        )),
+    }
+}
+
+/// Build a structured warning for a non-durable service state.
+fn service_warning(unit: &str, raw_state: &str, detail: &str) -> Warning {
+    Warning {
+        inspector: "services".into(),
+        message: format!("unit {unit} has state '{raw_state}' - {detail}"),
+        severity: Some(WarningSeverity::Warning),
+        extra: std::collections::HashMap::from([
+            ("unit".into(), serde_json::json!(unit)),
+            ("raw_state".into(), serde_json::json!(raw_state)),
+        ]),
+    }
+}
+
+/// Maps preset rule action strings to typed enum values.
+fn resolve_preset_default(unit: &str, rules: &[PresetRule]) -> Option<PresetDefault> {
+    for rule in rules {
+        if glob_match(&rule.pattern, unit) {
+            return Some(match rule.action.as_str() {
+                "enable" => PresetDefault::Enable,
+                "disable" => PresetDefault::Disable,
+                _ => PresetDefault::Disable,
+            });
+        }
+    }
+    None
 }
 
 /// Inspects systemd service state: enabled/disabled vs. preset defaults,
@@ -138,31 +215,41 @@ impl Inspector for ServicesInspector {
             }
         };
 
-        // 4. Build state_changes using operator-intent whitelist model.
+        // 4. Build state_changes using operator-intent whitelist model
+        //    with typed parse gate.
         //
         // Instead of diffing all services and subtracting noise, we start
         // from an empty list and only add entries where there is clear
-        // evidence the operator explicitly acted. This makes blocklists
-        // unnecessary — D-Bus aliases, sysupdate services, SSSD defaults,
-        // and any future noise patterns are automatically excluded because
-        // they lack evidence of operator action.
+        // evidence the operator explicitly acted. Non-durable states
+        // (static, alias, indirect, generated) are silently dropped;
+        // runtime/linked/bad/unknown states emit structured warnings.
         let mut state_changes = Vec::new();
         let mut enabled_units = Vec::new();
         let mut disabled_units = Vec::new();
         let mut preset_matched_units = Vec::new();
+        let mut warnings = Vec::new();
 
         for unit in &units {
-            // Skip template units and static units — no operator intent
-            if unit.unit.contains('@') || unit.state == "static" {
+            // Skip template units — no operator intent
+            if unit.unit.contains('@') {
                 continue;
             }
 
+            // Parse-time intent gate: classify the raw state string.
+            let current_state = match parse_unit_state(&unit.unit, &unit.state) {
+                ParsedUnitState::Durable(state) => state,
+                ParsedUnitState::SilentDrop => continue,
+                ParsedUnitState::Warn(warning) => {
+                    warnings.push(warning);
+                    continue;
+                }
+            };
+
             // Build full inventory lists (used by handlers, not by state_changes)
-            match unit.state.as_str() {
-                "enabled" => enabled_units.push(unit.unit.clone()),
-                "disabled" => disabled_units.push(unit.unit.clone()),
-                "masked" => disabled_units.push(unit.unit.clone()),
-                _ => {}
+            match current_state {
+                ServiceUnitState::Enabled => enabled_units.push(unit.unit.clone()),
+                ServiceUnitState::Disabled => disabled_units.push(unit.unit.clone()),
+                ServiceUnitState::Masked => disabled_units.push(unit.unit.clone()),
             }
 
             // --- Operator-intent gate ---
@@ -175,12 +262,12 @@ impl Inspector for ServicesInspector {
 
             // Signal 1: Masked services — unambiguous operator intent.
             // Always capture regardless of preset state.
-            if unit.state == "masked" {
+            if current_state == ServiceUnitState::Masked {
+                let preset = resolve_preset_default(&unit.unit, &preset_rules);
                 state_changes.push(ServiceStateChange {
                     unit: unit.unit.clone(),
-                    current_state: "masked".into(),
-                    default_state: resolve_preset(&unit.unit, &preset_rules).unwrap_or_default(),
-                    action: "mask".into(),
+                    current_state,
+                    default_state: preset,
                     include: true,
                     owning_package: None,
                     fleet: None,
@@ -193,31 +280,32 @@ impl Inspector for ServicesInspector {
             // service state from what the distro presets dictate. We need a
             // definitive preset to prove divergence; without one, there is no
             // evidence of operator action.
-            let default_state = resolve_preset(&unit.unit, &preset_rules);
+            let preset = resolve_preset_default(&unit.unit, &preset_rules);
 
-            if let Some(ref default) = default_state {
-                if *default != unit.state {
-                    // Preset says one thing, current state says another.
-                    // This is evidence the operator ran systemctl enable/disable.
-                    let action = if unit.state == "enabled" {
-                        "enable"
-                    } else {
-                        "disable"
-                    };
-                    state_changes.push(ServiceStateChange {
-                        unit: unit.unit.clone(),
-                        current_state: unit.state.clone(),
-                        default_state: default.clone(),
-                        action: action.into(),
-                        include: true,
-                        owning_package: None,
-                        fleet: None,
-                        attention_reason: None,
-                    });
-                } else {
-                    // State matches preset — no operator action
-                    preset_matched_units.push(unit.unit.clone());
+            let (default_state, diverges) = match preset {
+                Some(PresetDefault::Enable) if current_state == ServiceUnitState::Disabled => {
+                    (Some(PresetDefault::Enable), true)
                 }
+                Some(PresetDefault::Disable) if current_state == ServiceUnitState::Enabled => {
+                    (Some(PresetDefault::Disable), true)
+                }
+                Some(p) => (Some(p), false),
+                None => (None, false),
+            };
+
+            if diverges {
+                state_changes.push(ServiceStateChange {
+                    unit: unit.unit.clone(),
+                    current_state,
+                    default_state,
+                    include: true,
+                    owning_package: None,
+                    fleet: None,
+                    attention_reason: None,
+                });
+            } else if preset.is_some() {
+                // State matches preset — no operator action
+                preset_matched_units.push(unit.unit.clone());
             }
             // No matching preset rule → no evidence of operator action
         }
@@ -245,7 +333,7 @@ impl Inspector for ServicesInspector {
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::Services(section),
-                    warnings: Vec::new(),
+                    warnings,
                     redaction_hints,
                 }),
                 reason,
@@ -262,7 +350,7 @@ impl Inspector for ServicesInspector {
             return Err(InspectorError::Degraded {
                 partial: Box::new(InspectorOutput {
                     section: SectionData::Services(section),
-                    warnings: Vec::new(),
+                    warnings,
                     redaction_hints,
                 }),
                 reason,
@@ -271,7 +359,7 @@ impl Inspector for ServicesInspector {
 
         Ok(InspectorOutput {
             section: SectionData::Services(section),
-            warnings: Vec::new(),
+            warnings,
             redaction_hints,
         })
     }
@@ -403,21 +491,7 @@ fn read_preset_rules(exec: &dyn Executor) -> Result<(Vec<PresetRule>, Vec<String
     Ok((rules, read_failures))
 }
 
-/// Resolve a unit name against preset rules with first-match-wins semantics.
-/// Supports `*` and `?` glob matching.
-fn resolve_preset(unit: &str, rules: &[PresetRule]) -> Option<String> {
-    for rule in rules {
-        if glob_match(&rule.pattern, unit) {
-            let state = if rule.action == "enable" {
-                "enabled"
-            } else {
-                "disabled"
-            };
-            return Some(state.to_string());
-        }
-    }
-    None
-}
+// resolve_preset_default() is defined above, near the parse gate functions.
 
 /// Simple glob matching supporting `*` (any chars) and `?` (single char).
 fn glob_match(pattern: &str, text: &str) -> bool {
@@ -1023,8 +1097,12 @@ mod tests {
                 "masked cups.service must be in state_changes"
             );
             let cups = cups.unwrap();
-            assert_eq!(cups.action, "mask", "masked service action must be 'mask'");
-            assert_eq!(cups.current_state, "masked");
+            assert_eq!(
+                cups.implied_action(),
+                inspectah_core::types::services::ServiceAction::Mask,
+                "masked service action must be Mask"
+            );
+            assert_eq!(cups.current_state, ServiceUnitState::Masked);
             assert!(cups.include, "masked service must be included");
         } else {
             panic!("expected SectionData::Services");
@@ -1075,7 +1153,10 @@ mod tests {
                 fw.is_some(),
                 "operator-disabled firewalld must be in state_changes"
             );
-            assert_eq!(fw.unwrap().action, "disable");
+            assert_eq!(
+                fw.unwrap().implied_action(),
+                inspectah_core::types::services::ServiceAction::Disable
+            );
         } else {
             panic!("expected SectionData::Services");
         }

@@ -201,14 +201,10 @@ fn test_services_inspector_correctness() {
     );
     for sc in &section.state_changes {
         assert!(!sc.unit.is_empty(), "state_change unit must not be empty");
-        assert!(
-            !sc.current_state.is_empty(),
-            "state_change current_state must not be empty"
-        );
-        assert!(
-            !sc.action.is_empty(),
-            "state_change action must not be empty"
-        );
+        // current_state is a typed enum — the fact that it deserialized proves
+        // it is one of Enabled, Disabled, or Masked.
+        // implied_action() derives from current_state and is exhaustive.
+        let _ = sc.implied_action();
     }
 }
 

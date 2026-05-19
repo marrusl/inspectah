@@ -356,10 +356,12 @@ fn rich_snapshot() -> InspectionSnapshot {
     snap.services = Some(ServiceSection {
         state_changes: vec![ServiceStateChange {
             unit: "httpd.service".into(),
-            current_state: "inactive".into(),
-            default_state: "disabled".into(),
-            action: "enable".into(),
-            ..Default::default()
+            current_state: inspectah_core::types::services::ServiceUnitState::Enabled,
+            default_state: Some(inspectah_core::types::services::PresetDefault::Disable),
+            include: false,
+            owning_package: None,
+            fleet: None,
+            attention_reason: None,
         }],
         drop_ins: vec![
             SystemdDropIn {
@@ -726,7 +728,7 @@ async fn health_extended_fields() {
     assert_eq!(host["os_version"], "9.4", "os_version uses version_id");
     assert_eq!(host["os_id"], "rhel");
     assert!(host.get("system_type").is_some());
-    assert_eq!(host["schema_version"], 15);
+    assert_eq!(host["schema_version"], 16);
     assert!(json.get("completeness").is_some());
 }
 
@@ -743,7 +745,7 @@ async fn health_minimal_snapshot() {
     assert_eq!(host["os_name"], "");
     assert_eq!(host["os_version"], "");
     assert_eq!(host["os_id"], "");
-    assert_eq!(host["schema_version"], 15);
+    assert_eq!(host["schema_version"], 16);
 }
 
 // --- normalize_for_context unit tests ---------------------------------------
@@ -758,7 +760,7 @@ fn normalize_services_maps_state_changes_with_dropins() {
     let httpd = svc.items.iter().find(|i| i.id == "httpd.service").unwrap();
     assert_eq!(httpd.title, "httpd.service");
     assert!(
-        httpd.subtitle.as_ref().unwrap().contains("inactive"),
+        httpd.subtitle.as_ref().unwrap().contains("enabled"),
         "subtitle should contain current_state"
     );
     assert!(
