@@ -245,11 +245,13 @@ impl Inspector for ServicesInspector {
                 }
             };
 
-            // Build full inventory lists (used by handlers, not by state_changes)
+            // Build full inventory lists (used by handlers, not by state_changes).
+            // Masked units are NOT added to disabled_units — they only enter
+            // state_changes via the masked bypass path below.
             match current_state {
                 ServiceUnitState::Enabled => enabled_units.push(unit.unit.clone()),
                 ServiceUnitState::Disabled => disabled_units.push(unit.unit.clone()),
-                ServiceUnitState::Masked => disabled_units.push(unit.unit.clone()),
+                ServiceUnitState::Masked => {} // distinct from disabled
             }
 
             // --- Operator-intent gate ---

@@ -833,11 +833,15 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 .get(sc.unit.as_str())
                 .map(|contents| contents.join("\n---\n"));
             let state_str = sc.current_state.to_string();
+            let action_str = sc.implied_action().to_string();
+            let subtitle = match sc.default_state {
+                Some(d) => format!("{} (diverges from preset: {})", state_str, d),
+                None => format!("{} (no preset rule)", state_str),
+            };
             let default_str = sc
                 .default_state
                 .map(|d| d.to_string())
-                .unwrap_or_else(|| "unknown".to_string());
-            let action_str = sc.implied_action().to_string();
+                .unwrap_or_else(|| "none".to_string());
             let mut search = format!(
                 "{} {} {} {}",
                 sc.unit, state_str, default_str, action_str
@@ -849,10 +853,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             items.push(ContextItem {
                 id: sc.unit.clone(),
                 title: sc.unit.clone(),
-                subtitle: Some(format!(
-                    "{} (diverges from preset: {})",
-                    state_str, default_str
-                )),
+                subtitle: Some(subtitle),
                 detail: dropin_detail,
                 searchable_text: search,
             });

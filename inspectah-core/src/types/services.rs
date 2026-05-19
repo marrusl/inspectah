@@ -111,15 +111,10 @@ pub struct SystemdDropIn {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ServiceSection {
-    #[serde(default)]
     pub state_changes: Vec<ServiceStateChange>,
-    #[serde(default)]
     pub enabled_units: Vec<String>,
-    #[serde(default)]
     pub disabled_units: Vec<String>,
-    #[serde(default)]
     pub drop_ins: Vec<SystemdDropIn>,
-    #[serde(default)]
     pub preset_matched_units: Vec<String>,
 }
 
@@ -255,10 +250,14 @@ mod tests {
     }
 
     #[test]
-    fn test_preset_matched_units_missing_deserializes_empty() {
+    fn test_missing_field_fails_deserialization() {
+        // Missing preset_matched_units must fail, not silently backfill.
         let json = r#"{"state_changes":[],"enabled_units":[],"disabled_units":[],"drop_ins":[]}"#;
-        let parsed: ServiceSection = serde_json::from_str(json).unwrap();
-        assert!(parsed.preset_matched_units.is_empty());
+        let err = serde_json::from_str::<ServiceSection>(json).unwrap_err();
+        assert!(
+            err.to_string().contains("preset_matched_units"),
+            "expected missing-field error for preset_matched_units, got: {err}"
+        );
     }
 
     #[test]
