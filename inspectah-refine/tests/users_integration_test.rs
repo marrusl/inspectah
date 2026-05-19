@@ -11,7 +11,7 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::redaction::RedactionState;
 use inspectah_core::types::users::{UserContainerfileStrategy, UserGroupSection};
 use inspectah_refine::session::RefineSession;
-use inspectah_refine::types::RefinementOp;
+use inspectah_refine::types::{RefinementOp, UserPasswordOp};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,7 +71,8 @@ fn snapshot_with_alice() -> InspectionSnapshot {
                 "shell": "/bin/bash",
                 "ssh_keys": ["ssh-rsa AAAAB3testkey alice@host"],
                 "source": "custom",
-                "groups": ["docker"]
+                "groups": ["docker"],
+                "supplementary_groups": ["docker"]
             })],
             groups: vec![serde_json::json!({
                 "name": "docker",
@@ -259,5 +260,120 @@ fn preview_export_parity_for_user_artifacts() {
     assert_eq!(
         preview_toml, export_toml,
         "Blueprint TOML preview and export must be byte-identical"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 3: Collector-shaped snapshot preserves trust cues through projection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn collector_shaped_snapshot_preserves_trust_cues() {
+    // Build a snapshot matching real collector output shape with all enrichment fields
+    let mut snap = InspectionSnapshot::new();
+    snap.users_groups = Some(UserGroupSection {
+        users: vec![serde_json::json!({
+            "name": "alice", "uid": 1000, "gid": 1000,
+            "shell": "/bin/bash", "home": "/home/alice",
+            "classification": "interactive",
+            "classification_rationale": "bash shell, home at /home/alice, password set, has sudo, 1 SSH key, member of wheel",
+            "password_status": "password_set",
+            "has_sudo": true,
+            "has_subuid": true,
+            "ssh_key_count": 1,
+            "supplementary_groups": ["wheel", "docker"],
+            "containerfile_strategy": "skip",
+            "password_choice": "none"
+        })],
+        groups: vec![serde_json::json!({"name": "alice", "gid": 1000, "source": "custom"})],
+        ..Default::default()
+    });
+
+    let session = RefineSession::new(snap);
+    let projected = session.snapshot_projected();
+    let user = &projected.users_groups.as_ref().unwrap().users[0];
+
+    // All trust-cue fields must survive projection
+    assert_eq!(user["classification"], "interactive");
+    assert!(user["classification_rationale"]
+        .as_str()
+        .unwrap()
+        .contains("bash shell"));
+    assert_eq!(user["has_sudo"], true);
+    assert_eq!(user["has_subuid"], true);
+    assert_eq!(user["ssh_key_count"], 1);
+    assert_eq!(user["password_status"], "password_set");
+    assert_eq!(user["containerfile_strategy"], "skip");
+    assert_eq!(user["password_choice"], "none");
+    let groups = user["supplementary_groups"].as_array().unwrap();
+    assert!(groups.iter().any(|g| g == "wheel"));
+}
+
+// ---------------------------------------------------------------------------
+// Test 4: Refine-time sensitivity upgrades redaction state
+// ---------------------------------------------------------------------------
+
+#[test]
+fn refine_time_sensitivity_upgrades_redaction_state() {
+    let mut snap = InspectionSnapshot::new();
+    snap.redaction_state = Some(RedactionState::FullyRedacted {
+        redacted_by: "inspectah 0.8.0".into(),
+        config_hash: "abc".into(),
+    });
+    snap.users_groups = Some(UserGroupSection {
+        users: vec![serde_json::json!({"name": "alice", "uid": 1000})],
+        ..Default::default()
+    });
+
+    let mut session = RefineSession::new(snap);
+    session
+        .apply(RefinementOp::UserPassword(UserPasswordOp::New {
+            username: "alice".into(),
+            hash: Some("$6$salt$hash".into()),
+        }))
+        .unwrap();
+
+    let projected = session.snapshot_projected();
+    assert!(
+        projected.sensitive_snapshot,
+        "projected must be sensitive"
+    );
+    assert!(
+        matches!(
+            projected.redaction_state,
+            Some(RedactionState::SensitiveRetained { .. })
+        ),
+        "redaction_state must upgrade to SensitiveRetained"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: is_sensitive detects new password on projected state
+// ---------------------------------------------------------------------------
+
+#[test]
+fn is_sensitive_detects_new_password() {
+    let mut snap = InspectionSnapshot::new();
+    snap.users_groups = Some(UserGroupSection {
+        users: vec![serde_json::json!({"name": "bob", "uid": 1001})],
+        ..Default::default()
+    });
+
+    let mut session = RefineSession::new(snap);
+    assert!(
+        !session.is_sensitive(),
+        "session must not be sensitive before any password ops"
+    );
+
+    session
+        .apply(RefinementOp::UserPassword(UserPasswordOp::New {
+            username: "bob".into(),
+            hash: Some("$6$rounds=5000$salt$hash".into()),
+        }))
+        .unwrap();
+
+    assert!(
+        session.is_sensitive(),
+        "session must be sensitive after setting a new password"
     );
 }
