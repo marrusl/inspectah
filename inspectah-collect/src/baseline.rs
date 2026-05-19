@@ -9,6 +9,8 @@ use inspectah_core::traits::executor::{ExecResult, Executor};
 /// Errors that can occur during baseline extraction.
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractionError {
+    #[error("podman is not installed. inspectah requires podman to pull container images.\nInstall it with: sudo dnf install podman")]
+    PodmanNotFound,
     #[error("failed to pull image {image_ref}: {reason}")]
     PullFailed { image_ref: String, reason: String },
     #[error("failed to create baseline container: {0}")]
@@ -83,6 +85,12 @@ pub fn extract_baseline(
 ) -> Result<BaselineData, ExtractionError> {
     let image_ref = normalized_ref.as_str();
     let ctr_name = container_name();
+
+    // 0. Verify podman is available before attempting any operations.
+    let which_result = run_nsenter(executor, &["which", "podman"]);
+    if !which_result.success() {
+        return Err(ExtractionError::PodmanNotFound);
+    }
 
     let mut guard = CleanupGuard::new(executor);
 
