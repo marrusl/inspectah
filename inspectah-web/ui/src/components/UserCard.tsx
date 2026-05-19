@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { Label } from "@patternfly/react-core";
 import { AngleRightIcon, AngleDownIcon } from "@patternfly/react-icons";
 import type { UserDecision } from "../api/types";
+import { sha512Crypt } from "../utils/crypt";
 
 export interface UserCardProps {
   user: UserDecision;
@@ -31,8 +32,12 @@ export function UserCard({
   const [expanded, setExpanded] = useState(false);
   const [passwordExpanded, setPasswordExpanded] = useState(false);
   const [hashRevealed, setHashRevealed] = useState(false);
-  const [newHash, setNewHash] = useState("");
-  const [hashInputVisible, setHashInputVisible] = useState(
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [isHashing, setIsHashing] = useState(false);
+  const [passwordSet, setPasswordSet] = useState(user.password_choice === "new");
+  const [passwordInputVisible, setPasswordInputVisible] = useState(
     user.password_choice === "new",
   );
 
@@ -51,22 +56,44 @@ export function UserCard({
   const handlePasswordChoice = useCallback(
     (choice: "none" | "preserve" | "new") => {
       if (choice === "new") {
-        // Show the hash input but don't submit yet — wait for the hash.
-        setHashInputVisible(true);
+        setPasswordInputVisible(true);
+        setPasswordSet(false);
+        setNewPassword("");
+        setConfirmPassword("");
+        setPasswordError("");
         return;
       }
-      setHashInputVisible(false);
+      setPasswordInputVisible(false);
+      setPasswordSet(false);
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordError("");
       onPasswordChange(user.name, choice);
     },
     [user.name, onPasswordChange],
   );
 
-  const handleSetNewHash = useCallback(() => {
-    if (newHash.trim()) {
-      onPasswordChange(user.name, "new", newHash.trim());
-      setNewHash("");
+  const handleSetPassword = useCallback(async () => {
+    if (!newPassword) {
+      setPasswordError("Password is required.");
+      return;
     }
-  }, [user.name, newHash, onPasswordChange]);
+    if (newPassword !== confirmPassword) {
+      setPasswordError("Passwords do not match.");
+      return;
+    }
+    setPasswordError("");
+    setIsHashing(true);
+    try {
+      const hash = await sha512Crypt(newPassword);
+      onPasswordChange(user.name, "new", hash);
+      setPasswordSet(true);
+      setNewPassword("");
+      setConfirmPassword("");
+    } finally {
+      setIsHashing(false);
+    }
+  }, [user.name, newPassword, confirmPassword, onPasswordChange]);
 
   const classificationLabel = isInteractive
     ? "Interactive user"
@@ -239,23 +266,40 @@ export function UserCard({
 
           {/* Password section */}
           <div style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
-            <button
-              onClick={() => setPasswordExpanded((p) => !p)}
-              style={{
-                background: "none",
-                border: "none",
-                cursor: "pointer",
-                padding: 0,
-                fontWeight: 600,
-                fontSize: "var(--pf-t--global--font--size--sm)",
-                display: "flex",
-                alignItems: "center",
-                gap: "4px",
-              }}
-            >
-              {passwordExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
-              Password options
-            </button>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <button
+                onClick={() => setPasswordExpanded((p) => !p)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                  fontWeight: 600,
+                  fontSize: "var(--pf-t--global--font--size--sm)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                {passwordExpanded ? <AngleDownIcon /> : <AngleRightIcon />}
+                Password options
+              </button>
+              {!passwordExpanded && (
+                <span
+                  style={{
+                    fontSize: "var(--pf-t--global--font--size--xs)",
+                    opacity: 0.6,
+                    fontStyle: "italic",
+                  }}
+                >
+                  {passwordSet || user.password_choice === "new"
+                    ? "New password set"
+                    : user.password_choice === "preserve"
+                      ? "Existing password preserved"
+                      : "No password"}
+                </span>
+              )}
+            </div>
             {passwordExpanded && (
               <div
                 style={{
@@ -310,7 +354,7 @@ export function UserCard({
                       name={`password-${user.name}`}
                       value="none"
                       checked={
-                        user.password_choice === "none" && !hashInputVisible
+                        user.password_choice === "none" && !passwordInputVisible
                       }
                       onChange={() => handlePasswordChoice("none")}
                       disabled={isPending}
@@ -334,7 +378,7 @@ export function UserCard({
                         value="preserve"
                         checked={
                           user.password_choice === "preserve" &&
-                          !hashInputVisible
+                          !passwordInputVisible
                         }
                         onChange={() => handlePasswordChoice("preserve")}
                         disabled={isPending}
@@ -357,33 +401,23 @@ export function UserCard({
                       name={`password-${user.name}`}
                       value="new"
                       checked={
-                        hashInputVisible || user.password_choice === "new"
+                        passwordInputVisible || user.password_choice === "new"
                       }
                       onChange={() => handlePasswordChoice("new")}
                       disabled={isPending}
                     />
-                    Set password hash (advanced)
+                    Set new password
                   </label>
-                  {/* Hash input — shown when "Set password hash" is selected */}
-                  {(hashInputVisible || user.password_choice === "new") && (
+                  {/* Password input — shown when "Set new password" is selected */}
+                  {(passwordInputVisible || user.password_choice === "new") && (
                     <div
                       style={{
                         marginLeft: "var(--pf-t--global--spacer--md)",
                         marginTop: "4px",
                       }}
                     >
-                      <div
-                        style={{
-                          fontSize: "var(--pf-t--global--font--size--xs)",
-                          opacity: 0.7,
-                          marginBottom: "6px",
-                        }}
-                      >
-                        This is an advanced option. Generate a hash
-                        with: <code>openssl passwd -6</code>
-                      </div>
                       <label
-                        htmlFor={`new-hash-${user.name}`}
+                        htmlFor={`new-pw-${user.name}`}
                         style={{
                           display: "block",
                           fontSize: "var(--pf-t--global--font--size--sm)",
@@ -391,49 +425,85 @@ export function UserCard({
                           marginBottom: "4px",
                         }}
                       >
-                        crypt(3) password hash
+                        Password
                       </label>
-                      <div
+                      <input
+                        id={`new-pw-${user.name}`}
+                        type="password"
+                        value={newPassword}
+                        onChange={(e) => {
+                          setNewPassword(e.target.value);
+                          setPasswordError("");
+                        }}
+                        disabled={isPending || isHashing}
                         style={{
-                          display: "flex",
-                          gap: "var(--pf-t--global--spacer--xs)",
+                          width: "100%",
+                          maxWidth: "300px",
+                          fontSize: "var(--pf-t--global--font--size--sm)",
+                          padding: "2px 6px",
+                          marginBottom: "6px",
+                        }}
+                      />
+                      <label
+                        htmlFor={`confirm-pw-${user.name}`}
+                        style={{
+                          display: "block",
+                          fontSize: "var(--pf-t--global--font--size--sm)",
+                          fontWeight: 600,
+                          marginBottom: "4px",
                         }}
                       >
-                        <input
-                          id={`new-hash-${user.name}`}
-                          type="text"
-                          placeholder="$6$salt$hash..."
-                          value={newHash}
-                          onChange={(e) => setNewHash(e.target.value)}
-                          disabled={isPending}
+                        Confirm password
+                      </label>
+                      <input
+                        id={`confirm-pw-${user.name}`}
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(e) => {
+                          setConfirmPassword(e.target.value);
+                          setPasswordError("");
+                        }}
+                        disabled={isPending || isHashing}
+                        style={{
+                          width: "100%",
+                          maxWidth: "300px",
+                          fontSize: "var(--pf-t--global--font--size--sm)",
+                          padding: "2px 6px",
+                          marginBottom: "6px",
+                        }}
+                      />
+                      {passwordError && (
+                        <div
                           style={{
-                            flex: 1,
-                            fontFamily: "monospace",
-                            fontSize: "var(--pf-t--global--font--size--sm)",
-                            padding: "2px 6px",
-                          }}
-                        />
-                        <button
-                          onClick={handleSetNewHash}
-                          disabled={isPending || !newHash.trim()}
-                          style={{
-                            cursor: "pointer",
-                            padding: "2px 8px",
-                            fontSize: "var(--pf-t--global--font--size--sm)",
+                            fontSize: "var(--pf-t--global--font--size--xs)",
+                            color:
+                              "var(--pf-t--global--color--status--danger--default)",
+                            marginBottom: "6px",
                           }}
                         >
-                          Set
-                        </button>
-                      </div>
+                          {passwordError}
+                        </div>
+                      )}
+                      <button
+                        onClick={handleSetPassword}
+                        disabled={isPending || isHashing || !newPassword}
+                        style={{
+                          cursor: "pointer",
+                          padding: "2px 8px",
+                          fontSize: "var(--pf-t--global--font--size--sm)",
+                        }}
+                      >
+                        {isHashing ? "Hashing..." : "Set password"}
+                      </button>
                       <div
                         style={{
                           fontSize: "var(--pf-t--global--font--size--xs)",
                           opacity: 0.7,
-                          marginTop: "4px",
+                          marginTop: "6px",
                         }}
                       >
-                        Browser-side password entry is planned for a
-                        future update.
+                        Password is hashed in your browser. The plaintext
+                        never leaves this page.
                       </div>
                     </div>
                   )}
