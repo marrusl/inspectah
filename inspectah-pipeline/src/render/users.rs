@@ -273,20 +273,38 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
 
     lines.push("# === Users and Groups ===".into());
 
-    // Collect all custom groups needed (primary + supplementary)
+    // Collect GIDs and supplementary group names needed by useradd users
+    let mut needed_gids: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut needed_supp_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for u in &useradd_users {
+        let gid = uid_field(u, "gid");
+        if gid > 0 {
+            needed_gids.insert(gid);
+        }
+        for g in supp_groups(u) {
+            needed_supp_names.insert(g);
+        }
+    }
+
+    // Only emit groupadd for custom groups that are either:
+    // - The primary group (by GID) of a useradd user, OR
+    // - A supplementary group (by name) of a useradd user
     let all_custom_groups = custom_groups(snap);
-    if !all_custom_groups.is_empty() {
-        for g in &all_custom_groups {
-            let name = str_field(g, "name");
-            let gid = uid_field(g, "gid");
-            if name.is_empty() || sanitize_shell_value(name).is_none() {
-                continue;
-            }
-            if gid > 0 {
-                lines.push(format!("RUN groupadd -g {gid} {name}"));
-            } else {
-                lines.push(format!("RUN groupadd {name}"));
-            }
+    for g in &all_custom_groups {
+        let name = str_field(g, "name");
+        let gid = uid_field(g, "gid");
+        if name.is_empty() || sanitize_shell_value(name).is_none() {
+            continue;
+        }
+        let is_primary = gid > 0 && needed_gids.contains(&gid);
+        let is_supplementary = needed_supp_names.contains(name);
+        if !is_primary && !is_supplementary {
+            continue;
+        }
+        if gid > 0 {
+            lines.push(format!("RUN groupadd -g {gid} {name}"));
+        } else {
+            lines.push(format!("RUN groupadd {name}"));
         }
     }
 
@@ -614,6 +632,43 @@ mod tests {
         let snap = InspectionSnapshot::new();
         let lines = render_containerfile_users(&snap);
         assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn containerfile_only_emits_groups_for_useradd_users() {
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![
+                serde_json::json!({
+                    "name": "alice", "uid": 1000, "gid": 1000,
+                    "shell": "/bin/bash", "home": "/home/alice",
+                    "containerfile_strategy": "useradd",
+                    "supplementary_groups": ["wheel"]
+                }),
+                serde_json::json!({
+                    "name": "bob", "uid": 1001, "gid": 1001,
+                    "shell": "/bin/bash", "home": "/home/bob",
+                    "containerfile_strategy": "skip",
+                    "supplementary_groups": []
+                }),
+            ],
+            groups: vec![
+                serde_json::json!({"name": "alice", "gid": 1000, "source": "custom"}),
+                serde_json::json!({"name": "bob", "gid": 1001, "source": "custom"}),
+            ],
+            ..Default::default()
+        });
+
+        let cf = render_containerfile_users(&snap);
+        let output = cf.join("\n");
+        assert!(
+            output.contains("groupadd -g 1000 alice"),
+            "alice's group needed for useradd: {output}"
+        );
+        assert!(
+            !output.contains("groupadd -g 1001 bob"),
+            "bob's group should NOT be emitted (skip strategy): {output}"
+        );
     }
 
     // ----- SSH staging tests -----
