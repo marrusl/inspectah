@@ -96,11 +96,11 @@ fn service_warning(unit: &str, raw_state: &str, detail: &str) -> Warning {
 fn resolve_preset_default(unit: &str, rules: &[PresetRule]) -> Option<PresetDefault> {
     for rule in rules {
         if glob_match(&rule.pattern, unit) {
-            return Some(match rule.action.as_str() {
-                "enable" => PresetDefault::Enable,
-                "disable" => PresetDefault::Disable,
-                _ => PresetDefault::Disable,
-            });
+            return match rule.action.as_str() {
+                "enable" => Some(PresetDefault::Enable),
+                "disable" => Some(PresetDefault::Disable),
+                _ => None, // Unknown action → no preset rule found
+            };
         }
     }
     None

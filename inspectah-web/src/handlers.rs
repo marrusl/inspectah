@@ -832,21 +832,12 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             let dropin_detail = dropin_by_unit
                 .get(sc.unit.as_str())
                 .map(|contents| contents.join("\n---\n"));
-            let state_str = match sc.current_state {
-                inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
-                inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
-                inspectah_core::types::services::ServiceUnitState::Masked => "masked",
-            };
-            let default_str = match sc.default_state {
-                Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
-                Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
-                None => "unknown",
-            };
-            let action_str = match sc.implied_action() {
-                inspectah_core::types::services::ServiceAction::Enable => "enable",
-                inspectah_core::types::services::ServiceAction::Disable => "disable",
-                inspectah_core::types::services::ServiceAction::Mask => "mask",
-            };
+            let state_str = sc.current_state.to_string();
+            let default_str = sc
+                .default_state
+                .map(|d| d.to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            let action_str = sc.implied_action().to_string();
             let mut search = format!(
                 "{} {} {} {}",
                 sc.unit, state_str, default_str, action_str
