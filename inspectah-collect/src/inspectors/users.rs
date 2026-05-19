@@ -1,10 +1,12 @@
 //! Users/Groups inspector: non-system users and groups, sudoers, SSH key refs.
 //!
 //! Parses passwd/group/shadow/gshadow/subuid/subgid under host_root.
-//! Uses a two-strategy auto-detect model (diverges from Go's three-way model):
-//!   - Valid login shell → `blueprint` (auto)
-//!   - No valid login shell → `sysusers` (auto)
-//!   - `useradd` and `kickstart` → override-only (via UserGroupOptions)
+//! Classifies users by login shell:
+//!   - Valid login shell → `interactive`
+//!   - No valid login shell → `non-interactive`
+//!
+//! Each user gets default `containerfile_strategy: "skip"` and
+//! `password_choice: "none"` — downstream UI/renderers override these.
 
 use inspectah_core::traits::executor::Executor;
 use inspectah_core::traits::inspector::{
@@ -113,22 +115,19 @@ impl Inspector for UsersGroupsInspector {
                 })?;
         parse_passwd(&passwd_text, &mut section, &mut non_system_users);
 
-        // Classify and assign strategies (two-strategy auto-detect).
+        // Classify users and set defaults.
         for user in &mut section.users {
             let classification = classify_user(user);
-            let strategy = match &self.options.strategy_override {
-                Some(ovr) => ovr.clone(),
-                None => match classification.as_str() {
-                    "blueprint" => "blueprint".to_string(),
-                    _ => "sysusers".to_string(),
-                },
-            };
             if let serde_json::Value::Object(map) = user {
                 map.insert(
                     "classification".to_string(),
                     serde_json::Value::String(classification),
                 );
-                map.insert("strategy".to_string(), serde_json::Value::String(strategy));
+                // Set default containerfile_strategy and password_choice.
+                map.entry("containerfile_strategy")
+                    .or_insert_with(|| serde_json::Value::String("skip".to_string()));
+                map.entry("password_choice")
+                    .or_insert_with(|| serde_json::Value::String("none".to_string()));
             }
         }
 
@@ -169,8 +168,8 @@ impl Inspector for UsersGroupsInspector {
             }
         }
 
-        // Assign strategies to groups: override > follow primary user > default sysusers.
-        assign_group_strategies(&mut section, &self.options.strategy_override);
+        // Note: group strategies removed — downstream renderers decide provisioning
+        // method based on user classification (interactive/non-interactive).
 
         // -------------------------------------------------------------------
         // /etc/gshadow — match by group name
@@ -812,57 +811,22 @@ fn build_classification_rationale(user: &serde_json::Value) -> String {
 // User classification — two-strategy auto-detect (Rust model)
 // ---------------------------------------------------------------------------
 
-/// Classifies a user using the two-strategy auto-detect model.
+/// Classifies a user as interactive or non-interactive based on login shell.
 ///
-/// This DIVERGES from Go's three-way model (service/human/ambiguous).
-/// Rust uses shell-only classification:
-///   - Valid login shell → `blueprint`
-///   - No valid login shell (nologin, /bin/false, unknown) → `sysusers`
+///   - Valid login shell → `interactive`
+///   - No valid login shell (nologin, /bin/false, unknown) → `non-interactive`
 fn classify_user(user: &serde_json::Value) -> String {
     let shell = user.get("shell").and_then(|v| v.as_str()).unwrap_or("");
 
     if VALID_LOGIN_SHELLS.contains(&shell) {
-        "blueprint".to_string()
+        "interactive".to_string()
     } else {
-        "sysusers".to_string()
+        "non-interactive".to_string()
     }
 }
 
-/// Assigns migration strategies to groups.
-///
-/// Groups follow their primary user's strategy when possible:
-///   - Override takes precedence over everything
-///   - If a user shares the group's GID, the group inherits that user's strategy
-///   - Groups with no primary user default to `sysusers`
-fn assign_group_strategies(section: &mut UserGroupSection, override_strategy: &Option<String>) {
-    // Build first-match map: GID → user entry.
-    let mut user_by_gid: HashMap<u64, &serde_json::Value> = HashMap::new();
-    for user in &section.users {
-        if let Some(gid) = user.get("gid").and_then(|v| v.as_u64()) {
-            user_by_gid.entry(gid).or_insert(user);
-        }
-    }
-
-    for group in &mut section.groups {
-        let strategy = if let Some(ovr) = override_strategy {
-            ovr.clone()
-        } else {
-            let gid = group.get("gid").and_then(|v| v.as_u64()).unwrap_or(0);
-            if let Some(primary_user) = user_by_gid.get(&gid) {
-                primary_user
-                    .get("strategy")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("sysusers")
-                    .to_string()
-            } else {
-                "sysusers".to_string()
-            }
-        };
-        if let serde_json::Value::Object(map) = group {
-            map.insert("strategy".to_string(), serde_json::Value::String(strategy));
-        }
-    }
-}
+// assign_group_strategies removed — groups no longer carry a strategy
+// field. Downstream renderers decide provisioning based on user classification.
 
 // ===========================================================================
 // Tests
@@ -940,39 +904,39 @@ high:x:65534:65534:High:/home/high:/bin/bash
     // -----------------------------------------------------------------------
 
     #[test]
-    fn classify_user_valid_shell_blueprint() {
+    fn classify_user_valid_shell_interactive() {
         let user = serde_json::json!({"shell": "/bin/bash"});
-        assert_eq!(classify_user(&user), "blueprint");
+        assert_eq!(classify_user(&user), "interactive");
     }
 
     #[test]
-    fn classify_user_nologin_sysusers() {
+    fn classify_user_nologin_non_interactive() {
         let user = serde_json::json!({"shell": "/sbin/nologin"});
-        assert_eq!(classify_user(&user), "sysusers");
+        assert_eq!(classify_user(&user), "non-interactive");
     }
 
     #[test]
-    fn classify_user_unknown_shell_sysusers() {
+    fn classify_user_unknown_shell_non_interactive() {
         let user = serde_json::json!({"shell": "/usr/local/bin/custom"});
-        assert_eq!(classify_user(&user), "sysusers");
+        assert_eq!(classify_user(&user), "non-interactive");
     }
 
     #[test]
-    fn classify_user_bin_false_sysusers() {
+    fn classify_user_bin_false_non_interactive() {
         let user = serde_json::json!({"shell": "/bin/false"});
-        assert_eq!(classify_user(&user), "sysusers");
+        assert_eq!(classify_user(&user), "non-interactive");
     }
 
     #[test]
-    fn classify_user_zsh_blueprint() {
+    fn classify_user_zsh_interactive() {
         let user = serde_json::json!({"shell": "/bin/zsh"});
-        assert_eq!(classify_user(&user), "blueprint");
+        assert_eq!(classify_user(&user), "interactive");
     }
 
     #[test]
-    fn classify_user_fish_blueprint() {
+    fn classify_user_fish_interactive() {
         let user = serde_json::json!({"shell": "/usr/bin/fish"});
-        assert_eq!(classify_user(&user), "blueprint");
+        assert_eq!(classify_user(&user), "interactive");
     }
 
     // -----------------------------------------------------------------------
@@ -980,7 +944,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
     // -----------------------------------------------------------------------
 
     #[test]
-    fn strategy_override_useradd() {
+    fn classification_interactive_with_login_shell() {
         let exec = MockExecutor::new().with_file(
             "/etc/passwd",
             "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
@@ -993,27 +957,25 @@ high:x:65534:65534:High:/home/high:/bin/bash
             rpm_state: None,
             baseline_data: None,
         };
-        let inspector = UsersGroupsInspector::with_options(UserGroupOptions {
-            strategy_override: Some("useradd".to_string()),
-            ..Default::default()
-        });
+        let inspector = UsersGroupsInspector::new();
         let result = inspector.inspect(&ctx);
 
-        // May be Degraded due to missing /etc/group, extract partial.
         let output = match result {
             Ok(o) => o,
             Err(InspectorError::Degraded { partial, .. }) => *partial,
             Err(e) => panic!("unexpected error: {e}"),
         };
         if let SectionData::UsersGroups(section) = &output.section {
-            assert_eq!(section.users[0]["strategy"], "useradd");
+            assert_eq!(section.users[0]["classification"], "interactive");
+            assert_eq!(section.users[0]["containerfile_strategy"], "skip");
+            assert_eq!(section.users[0]["password_choice"], "none");
         } else {
             panic!("expected UsersGroups section");
         }
     }
 
     #[test]
-    fn strategy_override_kickstart() {
+    fn classification_non_interactive_with_nologin() {
         let exec = MockExecutor::new().with_file(
             "/etc/passwd",
             "bob:x:1001:1001:Bob:/home/bob:/sbin/nologin\n",
@@ -1026,10 +988,7 @@ high:x:65534:65534:High:/home/high:/bin/bash
             rpm_state: None,
             baseline_data: None,
         };
-        let inspector = UsersGroupsInspector::with_options(UserGroupOptions {
-            strategy_override: Some("kickstart".to_string()),
-            ..Default::default()
-        });
+        let inspector = UsersGroupsInspector::new();
         let result = inspector.inspect(&ctx);
 
         let output = match result {
@@ -1038,7 +997,9 @@ high:x:65534:65534:High:/home/high:/bin/bash
             Err(e) => panic!("unexpected error: {e}"),
         };
         if let SectionData::UsersGroups(section) = &output.section {
-            assert_eq!(section.users[0]["strategy"], "kickstart");
+            assert_eq!(section.users[0]["classification"], "non-interactive");
+            assert_eq!(section.users[0]["containerfile_strategy"], "skip");
+            assert_eq!(section.users[0]["password_choice"], "none");
         } else {
             panic!("expected UsersGroups section");
         }
@@ -1049,53 +1010,38 @@ high:x:65534:65534:High:/home/high:/bin/bash
     // -----------------------------------------------------------------------
 
     #[test]
-    fn group_strategy_follows_primary_user() {
-        let mut section = UserGroupSection::default();
-        section.users.push(serde_json::json!({
-            "name": "alice", "gid": 1000, "strategy": "blueprint"
-        }));
-        section.users.push(serde_json::json!({
-            "name": "bob", "gid": 1001, "strategy": "sysusers"
-        }));
-        section
-            .groups
-            .push(serde_json::json!({"name": "alice", "gid": 1000}));
-        section
-            .groups
-            .push(serde_json::json!({"name": "bob", "gid": 1001}));
+    fn groups_have_no_strategy_field() {
+        // Groups no longer carry a strategy field — downstream renderers
+        // decide provisioning method based on user classification.
+        let exec = MockExecutor::new()
+            .with_file(
+                "/etc/passwd",
+                "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
+            )
+            .with_file("/etc/group", "alice:x:1000:\n");
 
-        assign_group_strategies(&mut section, &None);
+        let source = pkg_source();
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: None,
+        };
+        let result = UsersGroupsInspector::new().inspect(&ctx);
 
-        assert_eq!(section.groups[0]["strategy"], "blueprint");
-        assert_eq!(section.groups[1]["strategy"], "sysusers");
-    }
-
-    #[test]
-    fn group_strategy_default_sysusers() {
-        let mut section = UserGroupSection::default();
-        // Group with no matching user.
-        section
-            .groups
-            .push(serde_json::json!({"name": "orphan", "gid": 9999}));
-
-        assign_group_strategies(&mut section, &None);
-
-        assert_eq!(section.groups[0]["strategy"], "sysusers");
-    }
-
-    #[test]
-    fn group_strategy_override() {
-        let mut section = UserGroupSection::default();
-        section.users.push(serde_json::json!({
-            "name": "alice", "gid": 1000, "strategy": "blueprint"
-        }));
-        section
-            .groups
-            .push(serde_json::json!({"name": "alice", "gid": 1000}));
-
-        assign_group_strategies(&mut section, &Some("useradd".to_string()));
-
-        assert_eq!(section.groups[0]["strategy"], "useradd");
+        let output = match result {
+            Ok(o) => o,
+            Err(InspectorError::Degraded { partial, .. }) => *partial,
+            Err(e) => panic!("unexpected error: {e}"),
+        };
+        if let SectionData::UsersGroups(section) = &output.section {
+            assert!(
+                section.groups[0].get("strategy").is_none(),
+                "groups should not have a strategy field"
+            );
+        } else {
+            panic!("expected UsersGroups section");
+        }
     }
 
     // -----------------------------------------------------------------------
