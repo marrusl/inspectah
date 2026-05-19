@@ -5,12 +5,6 @@ import type { UserDecision } from "../api/types";
 
 export interface UserCardProps {
   user: UserDecision;
-  /** SSH authorized_keys refs for this user (from section-level data). */
-  sshRefs: Array<{ user: string; path: string }>;
-  /** Whether subuid entries exist for this user. */
-  hasSubuid: boolean;
-  /** Whether sudoers rules mention this user. */
-  hasSudo: boolean;
   isPending: boolean;
   onStrategyChange: (username: string, strategy: "skip" | "useradd") => void;
   onPasswordChange: (
@@ -30,9 +24,6 @@ function redactHash(hash: string): string {
 
 export function UserCard({
   user,
-  sshRefs,
-  hasSubuid,
-  hasSudo,
   isPending,
   onStrategyChange,
   onPasswordChange,
@@ -115,9 +106,13 @@ export function UserCard({
         >
           UID {user.uid}
         </span>
-        {hasSudo && <Label color="orange">sudo</Label>}
-        {sshRefs.length > 0 && <Label color="blue">SSH keys</Label>}
-        {hasSubuid && <Label color="teal">subuid</Label>}
+        {user.has_sudo && <Label color="orange">sudo</Label>}
+        {(user.ssh_key_count ?? 0) > 0 && (
+          <Label color="blue">
+            {user.ssh_key_count === 1 ? "1 SSH key" : `${user.ssh_key_count} SSH keys`}
+          </Label>
+        )}
+        {user.has_subuid && <Label color="teal">subuid</Label>}
         <Label color={isInteractive ? "orange" : "grey"}>
           {classificationLabel}
         </Label>
@@ -149,7 +144,23 @@ export function UserCard({
         }}
       >
         {user.shell} &middot; {user.home}
+        {user.supplementary_groups && user.supplementary_groups.length > 0 && (
+          <> &middot; groups: {user.supplementary_groups.join(", ")}</>
+        )}
       </div>
+
+      {/* Classification rationale */}
+      {user.classification_rationale && (
+        <div
+          style={{
+            fontSize: "var(--pf-t--global--font--size--sm)",
+            opacity: 0.7,
+            marginTop: "var(--pf-t--global--spacer--xs)",
+          }}
+        >
+          {user.classification_rationale}
+        </div>
+      )}
 
       {!isInteractive && (
         <div
@@ -432,7 +443,7 @@ export function UserCard({
           </div>
 
           {/* SSH keys */}
-          {sshRefs.length > 0 && (
+          {user.ssh_keys && user.ssh_keys.length > 0 && (
             <div style={{ marginTop: "var(--pf-t--global--spacer--sm)" }}>
               <div
                 style={{
@@ -443,15 +454,16 @@ export function UserCard({
               >
                 SSH authorized keys
               </div>
-              {sshRefs.map((ref) => (
+              {user.ssh_keys.map((key, idx) => (
                 <div
-                  key={ref.path}
+                  key={idx}
                   style={{
                     fontSize: "var(--pf-t--global--font--size--sm)",
                     fontFamily: "monospace",
+                    wordBreak: "break-all",
                   }}
                 >
-                  {ref.path}
+                  {key}
                 </div>
               ))}
             </div>
