@@ -20,10 +20,9 @@ use inspectah_core::types::completeness::{Completeness, InspectorId};
 use inspectah_core::types::os::SystemType;
 use inspectah_core::types::redaction::RedactionKind;
 use inspectah_core::types::rpm::PackageEntry;
-use inspectah_core::types::services::ServiceAction;
 
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
-use super::service_intent::{is_package_installable, manual_follow_up_line};
+use super::service_intent::{is_package_installable, manual_follow_up_line, render_service_intent};
 
 /// Render the Containerfile content from a snapshot.
 ///
@@ -487,115 +486,16 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
     lines
 }
 
-// --- Services section ---
-
-/// Format a `RUN systemctl enable/disable` block. When the unit count
-/// exceeds 3, use backslash line-continuation for readability.
-fn systemctl_lines(verb: &str, units: &[String]) -> Vec<String> {
-    if units.len() <= 3 {
-        vec![format!("RUN systemctl {} {}", verb, units.join(" "))]
-    } else {
-        let mut lines = vec![format!("RUN systemctl {} \\", verb)];
-        for (i, u) in units.iter().enumerate() {
-            if i < units.len() - 1 {
-                lines.push(format!("    {} \\", u));
-            } else {
-                lines.push(format!("    {}", u));
-            }
-        }
-        lines
-    }
-}
+// --- Services section (delegated to service_intent authority) ---
 
 fn services_section_lines(snap: &InspectionSnapshot) -> Vec<String> {
-    let mut lines = Vec::new();
-
-    // Build set of config-tree timer units to exclude from service enables
-    let mut config_tree_units: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if let Some(st) = &snap.scheduled_tasks {
-        for t in &st.systemd_timers {
-            if t.source == "local" && !t.name.is_empty() {
-                config_tree_units.insert(format!("{}.timer", t.name));
-                config_tree_units.insert(format!("{}.service", t.name));
-            }
-        }
-        for u in &st.generated_timer_units {
-            if u.include && !u.name.is_empty() {
-                // @reboot entries have empty timer_content — only the service
-                // file is materialized in the config tree.
-                if !u.timer_content.is_empty() {
-                    config_tree_units.insert(format!("{}.timer", u.name));
-                }
-                if !u.service_content.is_empty() {
-                    config_tree_units.insert(format!("{}.service", u.name));
-                }
-            }
-        }
+    let plan = render_service_intent(snap);
+    if plan.lines.is_empty() {
+        return Vec::new();
     }
 
-    let services = match &snap.services {
-        Some(s) => s,
-        None => return lines,
-    };
-
-    // Derive enable/disable lists from state_changes (preset-divergent only),
-    // not from enabled_units/disabled_units (full inventory).
-    let included_changes: Vec<_> = services
-        .state_changes
-        .iter()
-        .filter(|sc| sc.include)
-        .collect();
-
-    if included_changes.is_empty() {
-        return lines;
-    }
-
-    lines.push("# === Service Enablement ===".into());
-
-    let mut safe_enabled = Vec::new();
-    let mut safe_disabled = Vec::new();
-    let mut safe_masked = Vec::new();
-    let mut deferred = Vec::new();
-
-    for sc in &included_changes {
-        let u = &sc.unit;
-        if sanitize_shell_value(u).is_none() {
-            continue;
-        }
-        match sc.implied_action() {
-            ServiceAction::Enable => {
-                if config_tree_units.contains(u.as_str()) {
-                    deferred.push(u.clone());
-                } else {
-                    safe_enabled.push(u.clone());
-                }
-            }
-            ServiceAction::Disable => {
-                safe_disabled.push(u.clone());
-            }
-            ServiceAction::Mask => {
-                safe_masked.push(u.clone());
-            }
-        }
-    }
-
-    if !safe_enabled.is_empty() {
-        lines.extend(systemctl_lines("enable", &safe_enabled));
-    }
-    if !safe_disabled.is_empty() {
-        lines.extend(systemctl_lines("disable", &safe_disabled));
-    }
-    if !safe_masked.is_empty() {
-        lines.extend(systemctl_lines("mask", &safe_masked));
-    }
-    if !deferred.is_empty() {
-        lines.push(format!(
-            "# {} unit(s) deferred to Scheduled Tasks section: {}",
-            deferred.len(),
-            deferred.join(", ")
-        ));
-    }
-
+    let mut lines = vec!["# === Service Enablement ===".into()];
+    lines.extend(plan.lines);
     lines.push(String::new());
     lines
 }
@@ -2331,6 +2231,73 @@ mod tests {
         assert!(
             !output.contains("kernel"),
             "baseline-suppressed package must not be in containerfile"
+        );
+    }
+
+    /// End-to-end: containerfile service section uses implied_action via the
+    /// service_intent authority — enabled/disabled/masked services produce
+    /// the correct systemctl verbs.
+    #[test]
+    fn test_containerfile_services_use_implied_action() {
+        use inspectah_core::types::services::{
+            PresetDefault, ServiceStateChange, ServiceUnitState,
+        };
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec![
+                "httpd".into(),
+                "cups".into(),
+                "avahi".into(),
+            ]),
+            packages_added: vec![],
+            no_baseline: false,
+            ..Default::default()
+        });
+        snap.services = Some(inspectah_core::types::services::ServiceSection {
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "httpd.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: Some("httpd".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+                ServiceStateChange {
+                    unit: "cups.service".into(),
+                    current_state: ServiceUnitState::Masked,
+                    default_state: Some(PresetDefault::Enable),
+                    include: true,
+                    owning_package: Some("cups".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+                ServiceStateChange {
+                    unit: "avahi-daemon.service".into(),
+                    current_state: ServiceUnitState::Disabled,
+                    default_state: Some(PresetDefault::Enable),
+                    include: true,
+                    owning_package: Some("avahi".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+            ],
+            ..Default::default()
+        });
+
+        let output = render_containerfile(&snap, None);
+        assert!(
+            output.contains("systemctl enable httpd.service"),
+            "enabled service must produce systemctl enable"
+        );
+        assert!(
+            output.contains("systemctl mask cups.service"),
+            "masked service must produce systemctl mask"
+        );
+        assert!(
+            output.contains("systemctl disable avahi-daemon.service"),
+            "disabled service must produce systemctl disable"
         );
     }
 }
