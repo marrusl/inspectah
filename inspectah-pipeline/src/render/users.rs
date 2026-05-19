@@ -115,12 +115,21 @@ pub fn render_kickstart(snap: &InspectionSnapshot) -> String {
         let gid = uid_field(u, "gid");
         let groups_list = supp_groups(u);
 
+        let shell = str_field(u, "shell");
+        let home = str_field(u, "home");
+
         let mut opts = format!("user --name={name}");
         if uid > 0 {
             opts.push_str(&format!(" --uid={uid}"));
         }
         if gid > 0 {
             opts.push_str(&format!(" --gid={gid}"));
+        }
+        if !shell.is_empty() {
+            opts.push_str(&format!(" --shell={shell}"));
+        }
+        if !home.is_empty() {
+            opts.push_str(&format!(" --homedir={home}"));
         }
         if !groups_list.is_empty() {
             opts.push_str(&format!(" --groups={}", groups_list.join(",")));
@@ -470,6 +479,22 @@ mod tests {
         assert!(ks.contains("--groups=wheel,docker"), "supplementary groups missing");
         assert!(ks.contains("--iscrypted --password="), "password flag missing");
         assert!(ks.contains("sshkey --username=alice"), "sshkey line missing");
+    }
+
+    #[test]
+    fn kickstart_includes_shell_and_homedir() {
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "alice", "uid": 1000, "gid": 1000,
+                "shell": "/bin/bash", "home": "/home/alice",
+                "supplementary_groups": []
+            })],
+            ..Default::default()
+        });
+        let ks = render_kickstart(&snap);
+        assert!(ks.contains("--shell=/bin/bash"), "missing --shell: {ks}");
+        assert!(ks.contains("--homedir=/home/alice"), "missing --homedir: {ks}");
     }
 
     #[test]
