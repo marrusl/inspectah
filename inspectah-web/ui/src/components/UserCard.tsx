@@ -41,9 +41,15 @@ export function UserCard({
   const [passwordExpanded, setPasswordExpanded] = useState(false);
   const [hashRevealed, setHashRevealed] = useState(false);
   const [newHash, setNewHash] = useState("");
+  const [hashInputVisible, setHashInputVisible] = useState(
+    user.password_choice === "new",
+  );
 
   const isInteractive =
     user.classification === "human" || user.classification === "ambiguous";
+
+  // "Preserve" is only available when the user has an existing password hash.
+  const canPreserve = Boolean(user.password_hash);
 
   const handleStrategyChange = useCallback(
     (strategy: "skip" | "useradd") => {
@@ -55,9 +61,11 @@ export function UserCard({
   const handlePasswordChoice = useCallback(
     (choice: "none" | "preserve" | "new") => {
       if (choice === "new") {
-        // Don't send until hash is provided
+        // Show the hash input but don't submit yet — wait for the hash.
+        setHashInputVisible(true);
         return;
       }
+      setHashInputVisible(false);
       onPasswordChange(user.name, choice);
     },
     [user.name, onPasswordChange],
@@ -288,6 +296,7 @@ export function UserCard({
                   style={{ border: "none", padding: 0, margin: 0 }}
                   disabled={isPending}
                 >
+                  {/* No password — always available */}
                   <label
                     style={{
                       display: "flex",
@@ -301,31 +310,40 @@ export function UserCard({
                       type="radio"
                       name={`password-${user.name}`}
                       value="none"
-                      checked={user.password_choice === "none"}
+                      checked={
+                        user.password_choice === "none" && !hashInputVisible
+                      }
                       onChange={() => handlePasswordChoice("none")}
                       disabled={isPending}
                     />
                     No password
                   </label>
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "4px",
-                      marginBottom: "4px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="radio"
-                      name={`password-${user.name}`}
-                      value="preserve"
-                      checked={user.password_choice === "preserve"}
-                      onChange={() => handlePasswordChoice("preserve")}
-                      disabled={isPending}
-                    />
-                    Preserve existing hash
-                  </label>
+                  {/* Keep existing — only when user has a preserved hash */}
+                  {canPreserve && (
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        marginBottom: "4px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name={`password-${user.name}`}
+                        value="preserve"
+                        checked={
+                          user.password_choice === "preserve" &&
+                          !hashInputVisible
+                        }
+                        onChange={() => handlePasswordChoice("preserve")}
+                        disabled={isPending}
+                      />
+                      Keep existing password
+                    </label>
+                  )}
+                  {/* Set new password — always available */}
                   <label
                     style={{
                       display: "flex",
@@ -339,47 +357,75 @@ export function UserCard({
                       type="radio"
                       name={`password-${user.name}`}
                       value="new"
-                      checked={user.password_choice === "new"}
-                      onChange={() => {
-                        /* selection handled by set button */
-                      }}
+                      checked={
+                        hashInputVisible || user.password_choice === "new"
+                      }
+                      onChange={() => handlePasswordChoice("new")}
                       disabled={isPending}
                     />
-                    Set new hash
+                    Set new password
                   </label>
-                  {user.password_choice === "new" && (
+                  {/* Hash input — shown when "Set new password" is selected */}
+                  {(hashInputVisible || user.password_choice === "new") && (
                     <div
                       style={{
-                        display: "flex",
-                        gap: "var(--pf-t--global--spacer--xs)",
                         marginLeft: "var(--pf-t--global--spacer--md)",
                         marginTop: "4px",
                       }}
                     >
-                      <input
-                        type="text"
-                        placeholder="crypt(3) hash, e.g. $6$..."
-                        value={newHash}
-                        onChange={(e) => setNewHash(e.target.value)}
-                        disabled={isPending}
+                      <label
+                        htmlFor={`new-hash-${user.name}`}
                         style={{
-                          flex: 1,
-                          fontFamily: "monospace",
+                          display: "block",
                           fontSize: "var(--pf-t--global--font--size--sm)",
-                          padding: "2px 6px",
-                        }}
-                      />
-                      <button
-                        onClick={handleSetNewHash}
-                        disabled={isPending || !newHash.trim()}
-                        style={{
-                          cursor: "pointer",
-                          padding: "2px 8px",
-                          fontSize: "var(--pf-t--global--font--size--sm)",
+                          fontWeight: 600,
+                          marginBottom: "4px",
                         }}
                       >
-                        Set
-                      </button>
+                        Password hash (crypt(3) format)
+                      </label>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: "var(--pf-t--global--spacer--xs)",
+                        }}
+                      >
+                        <input
+                          id={`new-hash-${user.name}`}
+                          type="text"
+                          placeholder="$6$salt$hash..."
+                          value={newHash}
+                          onChange={(e) => setNewHash(e.target.value)}
+                          disabled={isPending}
+                          style={{
+                            flex: 1,
+                            fontFamily: "monospace",
+                            fontSize: "var(--pf-t--global--font--size--sm)",
+                            padding: "2px 6px",
+                          }}
+                        />
+                        <button
+                          onClick={handleSetNewHash}
+                          disabled={isPending || !newHash.trim()}
+                          style={{
+                            cursor: "pointer",
+                            padding: "2px 8px",
+                            fontSize: "var(--pf-t--global--font--size--sm)",
+                          }}
+                        >
+                          Set
+                        </button>
+                      </div>
+                      <div
+                        style={{
+                          fontSize: "var(--pf-t--global--font--size--xs)",
+                          opacity: 0.7,
+                          marginTop: "4px",
+                        }}
+                      >
+                        Generate with:{" "}
+                        <code>openssl passwd -6</code>
+                      </div>
                     </div>
                   )}
                 </fieldset>
