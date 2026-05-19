@@ -384,7 +384,7 @@ fn containerfile_users_useradd_override() {
         "Containerfile must contain Users and Groups heading"
     );
     assert!(
-        output.contains("RUN useradd -u 1500 -g 1500 appuser"),
+        output.contains("RUN useradd -m -u 1500 -g 1500 appuser"),
         "Containerfile must emit RUN useradd with uid/gid for useradd-strategy users"
     );
 }
