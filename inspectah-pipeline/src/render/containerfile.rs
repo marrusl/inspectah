@@ -23,6 +23,7 @@ use inspectah_core::types::rpm::PackageEntry;
 use inspectah_core::types::services::ServiceAction;
 
 use super::safety::{is_valid_tuned_profile, operator_kargs, sanitize_shell_value};
+use super::service_intent::{is_package_installable, manual_follow_up_line};
 
 /// Render the Containerfile content from a snapshot.
 ///
@@ -198,41 +199,6 @@ pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> Option<String> {
 
 fn canonical_package_id(name: &str, arch: &str) -> String {
     format!("{name}.{arch}")
-}
-
-fn package_display_name(pkg: &PackageEntry) -> String {
-    if pkg.arch.is_empty() {
-        pkg.name.clone()
-    } else {
-        canonical_package_id(&pkg.name, &pkg.arch)
-    }
-}
-
-fn package_state_label(pkg: &PackageEntry) -> String {
-    serde_json::to_string(&pkg.state)
-        .unwrap_or_default()
-        .trim_matches('"')
-        .to_string()
-}
-
-fn manual_follow_up_line(pkg: &PackageEntry) -> Option<String> {
-    match pkg.state {
-        inspectah_core::types::rpm::PackageState::LocalInstall => Some(format!(
-            "# TODO: '{}' was installed locally (state: {}) — provide a .rpm or custom repo.",
-            package_display_name(pkg),
-            package_state_label(pkg)
-        )),
-        inspectah_core::types::rpm::PackageState::NoRepo => Some(format!(
-            "# TODO: '{}' has no repository source (state: {}) — provide a .rpm or custom repo.",
-            package_display_name(pkg),
-            package_state_label(pkg)
-        )),
-        _ if pkg.source_repo.is_empty() => Some(format!(
-            "# TODO: '{}' has no recorded repository source — verify how to reinstall it in the image.",
-            package_display_name(pkg)
-        )),
-        _ => None,
-    }
 }
 
 fn install_name_for_package(
@@ -430,7 +396,7 @@ fn packages_section_lines(snap: &InspectionSnapshot, base: Option<&str>) -> Vec<
         .packages_added
         .iter()
         .filter(|pkg| pkg.include)
-        .filter(|pkg| manual_follow_up_line(pkg).is_none())
+        .filter(|pkg| is_package_installable(pkg))
         .filter(|pkg| {
             // Baseline-suppressed packages never go into RUN dnf install
             !baseline_suppressed_set.contains(&canonical_package_id(&pkg.name, &pkg.arch))

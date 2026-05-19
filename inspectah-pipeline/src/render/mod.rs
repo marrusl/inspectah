@@ -25,6 +25,8 @@ pub mod users;
 
 pub mod baseline_fmt;
 
+pub mod service_intent;
+
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::traits::renderer::{RenderContext, RenderError};
 use std::path::Path;
