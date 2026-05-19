@@ -251,8 +251,7 @@ export interface UserDecision {
   shell: string;
   home: string;
   include: boolean;
-  classification: "service" | "human" | "ambiguous";
-  strategy: "sysusers" | "kickstart" | "useradd";
+  classification: "interactive" | "non-interactive";
   containerfile_strategy: "skip" | "useradd";
   password_choice: "none" | "preserve" | "new";
   password_hash?: string;

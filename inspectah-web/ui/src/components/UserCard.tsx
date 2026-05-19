@@ -45,8 +45,7 @@ export function UserCard({
     user.password_choice === "new",
   );
 
-  const isInteractive =
-    user.classification === "human" || user.classification === "ambiguous";
+  const isInteractive = user.classification === "interactive";
 
   // "Preserve" is only available when the user has an existing password hash.
   const canPreserve = Boolean(user.password_hash);
@@ -78,12 +77,9 @@ export function UserCard({
     }
   }, [user.name, newHash, onPasswordChange]);
 
-  const classificationLabel =
-    user.classification === "human"
-      ? "Interactive user"
-      : user.classification === "service"
-        ? "Service account"
-        : "Ambiguous classification";
+  const classificationLabel = isInteractive
+    ? "Interactive user"
+    : "Non-interactive account";
 
   const cardStyle: React.CSSProperties = {
     borderLeft: isInteractive
@@ -122,15 +118,7 @@ export function UserCard({
         {hasSudo && <Label color="orange">sudo</Label>}
         {sshRefs.length > 0 && <Label color="blue">SSH keys</Label>}
         {hasSubuid && <Label color="teal">subuid</Label>}
-        <Label
-          color={
-            user.classification === "human"
-              ? "orange"
-              : user.classification === "service"
-                ? "grey"
-                : "purple"
-          }
-        >
+        <Label color={isInteractive ? "orange" : "grey"}>
           {classificationLabel}
         </Label>
         <div style={{ marginLeft: "auto", flexShrink: 0 }}>
@@ -171,7 +159,7 @@ export function UserCard({
             marginTop: "var(--pf-t--global--spacer--xs)",
           }}
         >
-          Service account &mdash; review recommended before including
+          Non-interactive account &mdash; review recommended before including
         </div>
       )}
 
@@ -363,9 +351,9 @@ export function UserCard({
                       onChange={() => handlePasswordChoice("new")}
                       disabled={isPending}
                     />
-                    Set new password
+                    Set password hash (advanced)
                   </label>
-                  {/* Hash input — shown when "Set new password" is selected */}
+                  {/* Hash input — shown when "Set password hash" is selected */}
                   {(hashInputVisible || user.password_choice === "new") && (
                     <div
                       style={{
@@ -373,6 +361,16 @@ export function UserCard({
                         marginTop: "4px",
                       }}
                     >
+                      <div
+                        style={{
+                          fontSize: "var(--pf-t--global--font--size--xs)",
+                          opacity: 0.7,
+                          marginBottom: "6px",
+                        }}
+                      >
+                        This is an advanced option. Generate a hash
+                        with: <code>openssl passwd -6</code>
+                      </div>
                       <label
                         htmlFor={`new-hash-${user.name}`}
                         style={{
@@ -382,7 +380,7 @@ export function UserCard({
                           marginBottom: "4px",
                         }}
                       >
-                        Password hash (crypt(3) format)
+                        crypt(3) password hash
                       </label>
                       <div
                         style={{
@@ -423,8 +421,8 @@ export function UserCard({
                           marginTop: "4px",
                         }}
                       >
-                        Generate with:{" "}
-                        <code>openssl passwd -6</code>
+                        Browser-side password entry is planned for a
+                        future update.
                       </div>
                     </div>
                   )}
