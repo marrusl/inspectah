@@ -720,17 +720,32 @@ impl RefineSession {
             if has_new_password {
                 snap.sensitive_snapshot = true;
 
-                if let Some(RedactionState::FullyRedacted {
-                    ref redacted_by,
-                    ref config_hash,
-                }) = snap.redaction_state
-                {
-                    snap.redaction_state = Some(RedactionState::SensitiveRetained {
-                        redacted_by: redacted_by.clone(),
-                        config_hash: config_hash.clone(),
-                        unresolved_count: 0,
-                        unresolved_hints: Vec::new(),
-                    });
+                match &snap.redaction_state {
+                    Some(RedactionState::FullyRedacted {
+                        redacted_by,
+                        config_hash,
+                    }) => {
+                        snap.redaction_state = Some(RedactionState::SensitiveRetained {
+                            redacted_by: redacted_by.clone(),
+                            config_hash: config_hash.clone(),
+                            unresolved_count: 0,
+                            unresolved_hints: Vec::new(),
+                        });
+                    }
+                    Some(RedactionState::PartiallyRedacted {
+                        redacted_by,
+                        config_hash,
+                        unresolved_count,
+                        unresolved_hints,
+                    }) => {
+                        snap.redaction_state = Some(RedactionState::SensitiveRetained {
+                            redacted_by: redacted_by.clone(),
+                            config_hash: config_hash.clone(),
+                            unresolved_count: *unresolved_count,
+                            unresolved_hints: unresolved_hints.clone(),
+                        });
+                    }
+                    _ => {} // Already SensitiveRetained or other state
                 }
             }
         }
@@ -1548,5 +1563,56 @@ mod tests {
             !session.is_sensitive(),
             "session must not be sensitive after clearing password"
         );
+    }
+
+    #[test]
+    fn partially_redacted_upgrades_to_sensitive_retained() {
+        use inspectah_core::types::redaction::{Confidence, RedactionHint};
+
+        let mut snap = test_snapshot_with_user();
+        snap.redaction_state = Some(RedactionState::PartiallyRedacted {
+            redacted_by: "inspectah 0.8.0".into(),
+            config_hash: "abc".into(),
+            unresolved_count: 1,
+            unresolved_hints: vec![RedactionHint {
+                path: "/etc/foo".into(),
+                reason: "test hint".into(),
+                confidence: Some(Confidence::High),
+            }],
+        });
+
+        let mut session = RefineSession::new(snap);
+
+        session
+            .apply(RefinementOp::UserPassword(UserPasswordOp::New {
+                username: "alice".into(),
+                hash: Some("$6$salt$hash".into()),
+            }))
+            .unwrap();
+
+        let projected = session.snapshot_projected();
+        assert!(
+            projected.sensitive_snapshot,
+            "snapshot must be sensitive after new password"
+        );
+        match &projected.redaction_state {
+            Some(RedactionState::SensitiveRetained {
+                unresolved_count,
+                unresolved_hints,
+                ..
+            }) => {
+                assert_eq!(
+                    *unresolved_count, 1,
+                    "must carry forward unresolved count from PartiallyRedacted"
+                );
+                assert_eq!(
+                    unresolved_hints.len(),
+                    1,
+                    "must carry forward unresolved hints from PartiallyRedacted"
+                );
+                assert_eq!(unresolved_hints[0].path, "/etc/foo");
+            }
+            other => panic!("expected SensitiveRetained, got {other:?}"),
+        }
     }
 }
