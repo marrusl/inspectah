@@ -28,6 +28,38 @@ pub enum ServiceAction {
     Mask,
 }
 
+impl std::fmt::Display for ServiceUnitState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ServiceUnitState::Enabled => "enabled",
+            ServiceUnitState::Disabled => "disabled",
+            ServiceUnitState::Masked => "masked",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl std::fmt::Display for PresetDefault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            PresetDefault::Enable => "enable",
+            PresetDefault::Disable => "disable",
+        };
+        write!(f, "{}", s)
+    }
+}
+
+impl std::fmt::Display for ServiceAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            ServiceAction::Enable => "enable",
+            ServiceAction::Disable => "disable",
+            ServiceAction::Mask => "mask",
+        };
+        write!(f, "{}", s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ServiceStateChange {
     pub unit: String,
