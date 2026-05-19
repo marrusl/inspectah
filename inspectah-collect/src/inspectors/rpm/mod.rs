@@ -290,9 +290,17 @@ impl Inspector for RpmInspector {
         let file_ownership = self.query_file_ownership(exec);
 
         // 8. Build baseline_package_names for Go snapshot backward compat
-        let baseline_package_names = ctx
-            .baseline_data
-            .map(|b| b.packages.keys().cloned().collect::<Vec<_>>());
+        let baseline_package_names = ctx.baseline_data.map(|b| {
+            let mut names: Vec<String> = b
+                .packages
+                .values()
+                .map(|pkg| pkg.name.clone())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            names.sort();
+            names
+        });
 
         // 9. Build warnings
         let mut warnings = Vec::new();
@@ -1627,5 +1635,68 @@ tzdata\t/usr/share/zoneinfo/UTC
             classification.leaf_dep_tree,
             serde_json::json!({"vim.x86_64": ["ncurses.x86_64"]})
         );
+    }
+
+    #[test]
+    fn test_baseline_package_names_use_plain_rpm_names() {
+        use inspectah_core::baseline::{BaselineData, BaselinePackageEntry};
+
+        // Build baseline with canonical name.arch keys but plain names in entries
+        let mut baseline_packages = HashMap::new();
+        baseline_packages.insert(
+            "firewalld.x86_64".into(),
+            BaselinePackageEntry {
+                name: "firewalld".into(),
+                epoch: Some("0".into()),
+                version: "1.3.4".into(),
+                release: "1.el9".into(),
+                arch: "x86_64".into(),
+            },
+        );
+        baseline_packages.insert(
+            "systemd.x86_64".into(),
+            BaselinePackageEntry {
+                name: "systemd".into(),
+                epoch: Some("0".into()),
+                version: "252.32".into(),
+                release: "1.el9".into(),
+                arch: "x86_64".into(),
+            },
+        );
+
+        let baseline_data = BaselineData {
+            image_digest: "sha256:test".into(),
+            packages: baseline_packages,
+            extracted_at: "2026-05-19T00:00:00Z".into(),
+        };
+
+        let exec = build_rpm_mock_executor();
+        let source = SourceSystem::PackageBased {
+            os_release: test_os_release(),
+        };
+        let ctx = InspectionContext {
+            source_system: &source,
+            executor: &exec,
+            rpm_state: None,
+            baseline_data: Some(&baseline_data),
+        };
+
+        let output = RpmInspector::new().inspect(&ctx).unwrap();
+        let SectionData::Rpm(rpm) = &output.section else {
+            panic!("expected SectionData::Rpm");
+        };
+
+        // baseline_package_names should contain plain package names, not name.arch
+        let baseline_names = rpm
+            .baseline_package_names
+            .as_ref()
+            .expect("baseline_package_names should be Some");
+
+        assert!(baseline_names.contains(&"firewalld".to_string()),
+                "baseline_package_names should contain plain name 'firewalld'");
+        assert!(baseline_names.contains(&"systemd".to_string()),
+                "baseline_package_names should contain plain name 'systemd'");
+        assert!(!baseline_names.iter().any(|name| name.contains('.')),
+                "baseline_package_names should not contain any names with arch suffix (name.arch)");
     }
 }
