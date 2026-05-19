@@ -3,17 +3,21 @@
 > Replace state filtering with intent inference so the Containerfile
 > renderer only emits service instructions for deliberate user choices.
 
-**Status:** Proposed (revision 7)  
+**Status:** Proposed (revision 8)  
 **Created:** 2026-05-19  
 **Area:** inspectah-collect, inspectah-pipeline, inspectah-web
 
+> **Revision 8** (2026-05-19): Addresses round 6 review findings.
+> Installability keyed to shared `is_package_installable()` predicate
+> used by both package and service renderers — no more hardcoded
+> state enumeration in the spec. `ServiceAdvisory.reasons` is now
+> `Vec<AdvisoryReason>` to handle overlapping caveats (e.g.,
+> `BaselineUnavailable` + `PackageExcluded`).
+>
 > **Revision 7** (2026-05-19): Addresses round 5 review findings.
-> Splits renderer output into `Vec<ServiceOmission>` (truly omitted,
-> service NOT in Containerfile) and `Vec<ServiceAdvisory>` (emitted
-> with caveats). Excluded-package advisories are no longer conflated
-> with true omissions. Adds unreachable-package tier for
-> `LocalInstall`/`NoRepo` packages that the package renderer also
-> treats as manual-follow-up.
+> Splits renderer output into `Vec<ServiceOmission>` (truly omitted)
+> and `Vec<ServiceAdvisory>` (emitted with caveats). Adds
+> unreachable-package tier.
 >
 > **Revision 6** (2026-05-19): Addresses round 4 review findings.
 > Fixes follow-up flag contradiction. Replaces single-tier
@@ -387,33 +391,50 @@ be pulled in as a transitive dependency of another included package).
 
 The suppression logic is tiered to match this confidence level.
 
+**Shared installability predicate.** The package renderer already
+decides whether a package is auto-installable (emits `dnf install`)
+or requires manual follow-up (emits `# TODO:`). The service renderer
+uses the same predicate via a shared function:
+
+```rust
+/// Returns true if the package will be auto-installed by the
+/// package renderer's `dnf install` line. Returns false for
+/// packages that require manual intervention (LocalInstall,
+/// NoRepo, empty source_repo, or any future manual-follow-up
+/// condition the package renderer adds).
+fn is_package_installable(pkg: &PackageEntry) -> bool
+```
+
+This function is defined once and called by both renderers. The spec
+does not enumerate the conditions — it delegates to the package
+renderer's existing logic. If the package renderer adds new
+manual-follow-up conditions, the service renderer picks them up
+automatically.
+
 **Render-decision tiers.** For each `state_change`, the renderer
-classifies the service's package presence and chooses the appropriate
-action. The classification uses `packages_added` entries' `state`
-field to detect unreachable packages (same `LocalInstall`/`NoRepo`
-check the package renderer uses for its `# TODO:` lines):
+classifies the service's package presence and accumulates advisory
+reasons (a service can have multiple caveats):
 
 | `owning_package` | In baseline? | In `packages_added`? | `include`? | Installable? | Confidence | Action |
 |---|---|---|---|---|---|---|
 | `None` | — | — | — | — | Unknown | Emit |
 | `Some(pkg)` | Yes | — | — | — | Proven present | Emit |
 | `Some(pkg)` | No | Yes | `true` | Yes | Present | Emit |
-| `Some(pkg)` | No | Yes | `true` | No (unreachable) | Uncertain | Emit + advisory |
+| `Some(pkg)` | No | Yes | `true` | No | Uncertain | Emit + advisory |
 | `Some(pkg)` | No | Yes | `false` | — | Uncertain | Emit + advisory |
 | `Some(pkg)` | No | No | — | — | Proven absent | Omit |
 
 - **Proven present** (in baseline, or in `packages_added` with
   `include: true` and installable): emit the service instruction.
-- **Present but unreachable** (in `packages_added` with
-  `include: true` but `LocalInstall`/`NoRepo` state): the package
-  renderer emits a `# TODO:` for this package rather than a `dnf
-  install` line. Emit the service instruction with an advisory:
-  `# NOTE: package '<pkg>' requires manual installation`
+- **Present but not installable** (in `packages_added` with
+  `include: true` but `is_package_installable()` returns false):
+  the package renderer emits a `# TODO:` for this package rather
+  than a `dnf install` line. Emit the service instruction with a
+  `PackageUnreachable` advisory.
 - **Excluded** (in `packages_added` with `include: false`): the user
   excluded this package, but it may still be pulled in as a
   transitive dependency of another included package. Emit the service
-  instruction with an advisory:
-  `# NOTE: package '<pkg>' excluded — verify this service is needed`
+  instruction with a `PackageExcluded` advisory.
 - **Proven absent** (not in baseline AND not in `packages_added` at
   all): omit and emit a Containerfile comment:
   `# Omitted: <unit> (package '<pkg>' not in target image)`
@@ -422,9 +443,12 @@ check the package renderer uses for its `# TODO:` lines):
 **Degraded mode.** When `snap.rpm.no_baseline` is `true` (baseline
 data unavailable), `baseline_package_names` is empty and the
 "proven absent" tier is unreachable (cannot prove a package is absent
-without knowing what's in the base image). All services with known
-`owning_package` are emitted with an advisory:
-`# NOTE: baseline unavailable — cannot verify '<pkg>' in target image`
+without knowing what's in the base image). A `BaselineUnavailable`
+advisory reason is added to every service with a known
+`owning_package` that is not in `packages_added`. This reason
+**stacks** with other reasons — a service can carry both
+`PackageExcluded` and `BaselineUnavailable` when the user excluded
+a package AND baseline data is missing.
 
 #### Render-decision output
 
@@ -448,7 +472,7 @@ pub struct ServiceOmission {
 pub struct ServiceAdvisory {
     pub unit: String,
     pub owning_package: String,
-    pub reason: AdvisoryReason,
+    pub reasons: Vec<AdvisoryReason>,
 }
 
 pub enum AdvisoryReason {
@@ -457,6 +481,11 @@ pub enum AdvisoryReason {
     BaselineUnavailable,
 }
 ```
+
+`reasons` is a `Vec` because caveats can overlap. For example, a
+service whose package is excluded (`PackageExcluded`) while baseline
+data is also unavailable (`BaselineUnavailable`) carries both reasons.
+The UI renders all applicable reasons.
 
 Both lists are produced by the renderer as the single source of
 truth. The refine UI consumes them directly — it does not recompute
@@ -525,14 +554,14 @@ Each advisory is a `ContextItem`:
 
 - `id`: unit name
 - `title`: unit name
-- `subtitle`: derived from `AdvisoryReason`:
-  - `PackageExcluded` → `"package '<pkg>' excluded — may be present
-    as dependency"`
-  - `PackageUnreachable` → `"package '<pkg>' requires manual
-    installation"`
+- `subtitle`: derived from `reasons` (all applicable reasons
+  rendered, joined when multiple):
+  - `PackageExcluded` → `"package excluded — may be present as
+    dependency"`
+  - `PackageUnreachable` → `"package requires manual installation"`
   - `BaselineUnavailable` → `"baseline unavailable — cannot verify
-    '<pkg>' in target image"`
-- `detail`: explanation
+    presence"`
+- `detail`: explanation, including owning package name
 
 Both subsections are direct handoffs from the renderer — refine does
 not recompute render decisions independently.
@@ -610,13 +639,15 @@ Drop-in override handling is unchanged from the post-leaf fixes.
   where custom-app is in `packages_added` with `include: true` and
   installable state → emitted, no omission or advisory
 - Unreachable: `owning_package: Some("local-pkg")` where local-pkg
-  is in `packages_added` with `include: true` but state is
-  `LocalInstall` → emitted with `# NOTE:` advisory, appears in
-  `Vec<ServiceAdvisory>` with `PackageUnreachable`
+  is in `packages_added` with `include: true` but
+  `is_package_installable()` returns false → emitted with advisory,
+  `reasons: [PackageUnreachable]`
 - Excluded: `owning_package: Some("custom-app")` where custom-app
   is in `packages_added` with `include: false` → emitted with
-  `# NOTE:` advisory, appears in `Vec<ServiceAdvisory>` with
-  `PackageExcluded`
+  advisory, `reasons: [PackageExcluded]`
+- Overlap: excluded package + `no_baseline == true` → advisory with
+  `reasons: [PackageExcluded, BaselineUnavailable]` (both reasons
+  present)
 - Proven absent: `owning_package: Some("exotic-pkg")` where
   exotic-pkg is NOT in `packages_added` AND NOT in
   `baseline_package_names` → NOT emitted, appears in
@@ -628,10 +659,11 @@ Drop-in override handling is unchanged from the post-leaf fixes.
   emitted with comments
 - Degraded mode: `no_baseline == true`, service with
   `owning_package: Some("pkg")` not in `packages_added` → emitted
-  with advisory, appears in `Vec<ServiceAdvisory>` with
-  `BaselineUnavailable`
+  with advisory, `reasons: [BaselineUnavailable]`
 - `Vec<ServiceOmission>` and `Vec<ServiceAdvisory>` are separate
   lists — omissions are NOT in Containerfile, advisories ARE
+- `is_package_installable()` returns same result as the package
+  renderer's manual-follow-up predicate — no enumeration drift
 - Integration: CentOS 9 snapshot produces no sssd/dbus lines in
   Containerfile output (dropped by parse-time gate, not package
   suppression)
