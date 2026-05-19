@@ -125,6 +125,9 @@ export function setUserPassword(
   return postJson("/api/user-password", { username, choice, hash });
 }
 
-export function fetchUserPreview(): Promise<UserPreviewResponse> {
-  return getJson("/api/user-preview");
+export function fetchUserPreview(
+  reveal = false,
+): Promise<UserPreviewResponse> {
+  const url = reveal ? "/api/user-preview?reveal=true" : "/api/user-preview";
+  return getJson(url);
 }

@@ -17,6 +17,7 @@ serde_json.workspace = true
 tokio = { version = "1", features = ["full"] }
 mime_guess = "2"
 tempfile.workspace = true
+regex = "1"
 
 [dev-dependencies]
 tempfile.workspace = true
