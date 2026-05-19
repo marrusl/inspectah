@@ -12,7 +12,7 @@ export interface UserCardProps {
     username: string,
     choice: "none" | "preserve" | "new",
     hash?: string,
-  ) => void;
+  ) => Promise<void>;
 }
 
 /** Redact a crypt(3) hash, showing only the prefix. */
@@ -86,10 +86,12 @@ export function UserCard({
     setIsHashing(true);
     try {
       const hash = await sha512Crypt(newPassword);
-      onPasswordChange(user.name, "new", hash);
+      await onPasswordChange(user.name, "new", hash);
       setPasswordSet(true);
       setNewPassword("");
       setConfirmPassword("");
+    } catch {
+      setPasswordError("Failed to set password. Please try again.");
     } finally {
       setIsHashing(false);
     }
