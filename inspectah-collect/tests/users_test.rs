@@ -4,10 +4,9 @@
 //! verifies output is structurally correct. Follows the same pattern as
 //! parity_test.rs (Slice 2a inspectors).
 //!
-//! Key differences from Go's three-strategy model:
-//!   - Rust uses a two-strategy auto-detect: valid login shell → blueprint,
-//!     everything else → sysusers.
-//!   - `useradd` and `kickstart` are override-only (via UserGroupOptions).
+//! Classifies users by login shell:
+//!   - Valid login shell → `interactive`
+//!   - No valid login shell → `non-interactive`
 
 use inspectah_collect::executor::mock::MockExecutor;
 use inspectah_collect::inspectors::users::UsersGroupsInspector;
@@ -234,9 +233,10 @@ fn test_users_inspector_gshadow_strips_passwords() {
     );
 }
 
-/// Two-strategy auto-detect: valid login shell -> blueprint, nologin/false -> sysusers.
+/// Classification: valid login shell -> interactive, nologin/false -> non-interactive.
+/// Also verifies default containerfile_strategy and password_choice fields.
 #[test]
-fn test_users_inspector_two_strategy_autodetect() {
+fn test_users_inspector_classification() {
     let exec = MockExecutor::new().with_file(
         "/etc/passwd",
         "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n\
@@ -257,51 +257,65 @@ fn test_users_inspector_two_strategy_autodetect() {
     let result = UsersGroupsInspector::new().inspect(&ctx);
     let (section, _) = extract_section(result);
 
-    // Build a name -> strategy map.
-    let strategies: std::collections::HashMap<String, String> = section
+    // Build a name -> classification map.
+    let classifications: std::collections::HashMap<String, String> = section
         .users
         .iter()
         .filter_map(|u| {
             let name = u.get("name")?.as_str()?.to_string();
-            let strategy = u.get("strategy")?.as_str()?.to_string();
-            Some((name, strategy))
+            let classification = u.get("classification")?.as_str()?.to_string();
+            Some((name, classification))
         })
         .collect();
 
-    // Valid login shells -> blueprint
+    // Valid login shells -> interactive
     assert_eq!(
-        strategies.get("alice").map(|s| s.as_str()),
-        Some("blueprint"),
-        "alice (/bin/bash) should be blueprint"
+        classifications.get("alice").map(|s| s.as_str()),
+        Some("interactive"),
+        "alice (/bin/bash) should be interactive"
     );
     assert_eq!(
-        strategies.get("charlie").map(|s| s.as_str()),
-        Some("blueprint"),
-        "charlie (/bin/zsh) should be blueprint"
+        classifications.get("charlie").map(|s| s.as_str()),
+        Some("interactive"),
+        "charlie (/bin/zsh) should be interactive"
     );
 
-    // Nologin, false, unknown shells -> sysusers
+    // Nologin, false, unknown shells -> non-interactive
     assert_eq!(
-        strategies.get("bob").map(|s| s.as_str()),
-        Some("sysusers"),
-        "bob (/usr/sbin/nologin) should be sysusers"
+        classifications.get("bob").map(|s| s.as_str()),
+        Some("non-interactive"),
+        "bob (/usr/sbin/nologin) should be non-interactive"
     );
     assert_eq!(
-        strategies.get("daemon").map(|s| s.as_str()),
-        Some("sysusers"),
-        "daemon (/bin/false) should be sysusers"
+        classifications.get("daemon").map(|s| s.as_str()),
+        Some("non-interactive"),
+        "daemon (/bin/false) should be non-interactive"
     );
     assert_eq!(
-        strategies.get("custom").map(|s| s.as_str()),
-        Some("sysusers"),
-        "custom (/usr/local/bin/custom) should be sysusers (unknown shell)"
+        classifications.get("custom").map(|s| s.as_str()),
+        Some("non-interactive"),
+        "custom (/usr/local/bin/custom) should be non-interactive (unknown shell)"
     );
+
+    // All users should have default containerfile_strategy and password_choice.
+    for user in &section.users {
+        let name = user.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        assert_eq!(
+            user.get("containerfile_strategy").and_then(|v| v.as_str()),
+            Some("skip"),
+            "{name} should have containerfile_strategy=skip"
+        );
+        assert_eq!(
+            user.get("password_choice").and_then(|v| v.as_str()),
+            Some("none"),
+            "{name} should have password_choice=none"
+        );
+    }
 }
 
-/// Group strategy follows the primary user's strategy when a user with
-/// the same name exists in the users list.
+/// Groups no longer carry a strategy field.
 #[test]
-fn test_users_inspector_group_strategy_follows_user() {
+fn test_users_inspector_groups_no_strategy() {
     let exec = MockExecutor::new()
         .with_file(
             "/etc/passwd",
@@ -325,26 +339,13 @@ fn test_users_inspector_group_strategy_follows_user() {
     let result = UsersGroupsInspector::new().inspect(&ctx);
     let (section, _) = extract_section(result);
 
-    let group_strategies: std::collections::HashMap<String, String> = section
-        .groups
-        .iter()
-        .filter_map(|g| {
-            let name = g.get("name")?.as_str()?.to_string();
-            let strategy = g.get("strategy")?.as_str()?.to_string();
-            Some((name, strategy))
-        })
-        .collect();
-
-    assert_eq!(
-        group_strategies.get("alice").map(|s| s.as_str()),
-        Some("blueprint"),
-        "alice group should follow alice user's blueprint strategy"
-    );
-    assert_eq!(
-        group_strategies.get("daemon").map(|s| s.as_str()),
-        Some("sysusers"),
-        "daemon group should follow daemon user's sysusers strategy"
-    );
+    for group in &section.groups {
+        let name = group.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+        assert!(
+            group.get("strategy").is_none(),
+            "{name} group should not have a strategy field"
+        );
+    }
 }
 
 /// PermissionDenied on /etc/shadow -> Degraded output.
