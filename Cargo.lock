@@ -914,6 +914,7 @@ dependencies = [
  "inspectah-pipeline",
  "inspectah-refine",
  "mime_guess",
+ "regex",
  "rust-embed",
  "serde",
  "serde_json",

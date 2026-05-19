@@ -27,24 +27,41 @@ export function UserArtifactPreview({
   const [data, setData] = useState<UserPreviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revealed, setRevealed] = useState(false);
+
+  const loadPreview = useCallback(
+    (reveal: boolean) => {
+      setLoading(true);
+      setError(null);
+      fetchUserPreview(reveal)
+        .then((resp) => {
+          setData(resp);
+          setRevealed(reveal);
+        })
+        .catch((err) =>
+          setError(err instanceof Error ? err.message : String(err)),
+        )
+        .finally(() => setLoading(false));
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!isOpen) return;
-    setLoading(true);
-    setError(null);
-    fetchUserPreview()
-      .then((resp) => setData(resp))
-      .catch((err) =>
-        setError(err instanceof Error ? err.message : String(err)),
-      )
-      .finally(() => setLoading(false));
-  }, [isOpen]);
+    setRevealed(false);
+    loadPreview(false);
+  }, [isOpen, loadPreview]);
 
   const handleClose = useCallback(() => {
     setData(null);
     setError(null);
+    setRevealed(false);
     onClose();
   }, [onClose]);
+
+  const handleRevealToggle = useCallback(() => {
+    loadPreview(!revealed);
+  }, [revealed, loadPreview]);
 
   const content =
     activeTab === "kickstart"
@@ -104,6 +121,30 @@ export function UserArtifactPreview({
             Blueprint TOML
           </button>
         </div>
+
+        {/* Sensitive redaction banner */}
+        {data?.sensitive && !loading && (
+          <Alert
+            variant={revealed ? "warning" : "info"}
+            isInline
+            title={
+              revealed
+                ? "Sensitive values are visible."
+                : "Sensitive values are redacted."
+            }
+            style={{ marginBottom: "var(--pf-t--global--spacer--sm)" }}
+            actionLinks={
+              <Button
+                variant="link"
+                isInline
+                onClick={handleRevealToggle}
+                isDisabled={loading}
+              >
+                {revealed ? "Redact values" : "Click to reveal"}
+              </Button>
+            }
+          />
+        )}
 
         {loading && (
           <div style={{ textAlign: "center", padding: "var(--pf-t--global--spacer--lg)" }}>

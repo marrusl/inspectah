@@ -262,6 +262,7 @@ export interface UserDecision {
 export interface UserPreviewResponse {
   kickstart: string;
   blueprint_toml: string;
+  sensitive: boolean;
 }
 
 // --- Error type ---

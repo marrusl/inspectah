@@ -1,4 +1,4 @@
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json};
 use inspectah_core::snapshot::InspectionSnapshot;
@@ -486,17 +486,60 @@ pub async fn user_password(
     ))
 }
 
+// -- User preview query params --------------------------------------------
+
+#[derive(Deserialize)]
+pub struct UserPreviewQuery {
+    #[serde(default)]
+    pub reveal: Option<bool>,
+}
+
 pub async fn user_preview(
     State(state): State<Arc<AppState>>,
+    Query(params): Query<UserPreviewQuery>,
 ) -> impl IntoResponse {
     let session = state.session.lock().unwrap();
+    let sensitive = session.is_sensitive();
     let projected = session.snapshot_projected();
     let kickstart = inspectah_pipeline::render::users::render_kickstart(&projected);
     let blueprint_toml = inspectah_pipeline::render::users::render_blueprint_toml(&projected);
+
+    let reveal = params.reveal.unwrap_or(false);
+    let (kickstart, blueprint_toml) = if sensitive && !reveal {
+        (
+            redact_sensitive_content(&kickstart),
+            redact_sensitive_content(&blueprint_toml),
+        )
+    } else {
+        (kickstart, blueprint_toml)
+    };
+
     Json(json!({
         "kickstart": kickstart,
         "blueprint_toml": blueprint_toml,
+        "sensitive": sensitive,
     }))
+}
+
+/// Redact crypt(3) hashes and SSH key content from rendered artifact strings.
+fn redact_sensitive_content(content: &str) -> String {
+    use regex::Regex;
+
+    // Redact crypt(3) hashes: $6$..., $5$..., $y$... patterns.
+    // Matches the full hash from the $ prefix through the hash characters.
+    let crypt_re =
+        Regex::new(r#"\$(?:6|5|y)\$[^\s'""]+"#).expect("crypt regex");
+    let result = crypt_re.replace_all(content, "<REDACTED>");
+
+    // Redact SSH key base64 blobs, keeping the key type prefix.
+    // Matches: ssh-rsa AAAA..., ssh-ed25519 AAAA..., ecdsa-sha2-nistp256 AAAA..., etc.
+    let ssh_re = Regex::new(
+        r#"((?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp(?:256|384|521))\s+)\S+"#,
+    )
+    .expect("ssh regex");
+    let result = ssh_re.replace_all(&result, "${1}<REDACTED>");
+
+    result.into_owned()
 }
 
 /// Build a summary of why the session is considered sensitive.
