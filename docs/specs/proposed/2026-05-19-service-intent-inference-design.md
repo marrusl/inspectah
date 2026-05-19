@@ -3,10 +3,20 @@
 > Replace state filtering with intent inference so the Containerfile
 > renderer only emits service instructions for deliberate user choices.
 
-**Status:** Proposed (revision 5)  
+**Status:** Proposed (revision 6)  
 **Created:** 2026-05-19  
 **Area:** inspectah-collect, inspectah-pipeline, inspectah-web
 
+> **Revision 6** (2026-05-19): Addresses round 4 review findings.
+> Fixes follow-up flag contradiction (owning_package removed from
+> follow-up list). Replaces single-tier suppression with tiered
+> model: proven-absent packages are omitted, excluded packages get
+> advisory comments (may still be pulled in as dependencies),
+> proven-present packages are emitted. Acknowledges that inspectah
+> does not re-resolve dependencies after refine decisions. Renderer
+> produces `Vec<ServiceOmission>` as single source of truth consumed
+> by refine UI — no recomputation.
+>
 > **Revision 5** (2026-05-19): `owning_package` population included
 > in spec scope. The services collector now populates `owning_package`
 > via batch `rpm -qf` with per-unit fallback, matching the Go
@@ -262,11 +272,14 @@ output for diagnostics.
 
 #### Follow-up flag
 
-Fields `include`, `owning_package`, `fleet`, `attention_reason` on
+Fields `include`, `fleet`, `attention_reason` on
 `ServiceStateChange` and `include`, `tie`, `tie_winner` on
 `SystemdDropIn` are refinement-layer concerns populated downstream,
 not at collection time. Separating them into a refinement overlay
 type is a follow-up, not part of this spec.
+
+Note: `owning_package` was previously in this follow-up list but is
+now populated by the collector as part of this spec (see section 2).
 
 ### 2. Collector Logic
 
@@ -326,50 +339,12 @@ to determine whether to emit `enable`, `disable`, or `mask`. The
 method maps purely from `current_state` — it does not inspect
 `default_state`.
 
-#### Target-image package presence
+#### `owning_package` population
 
-Service suppression keys off the same effective package set that the
-package renderer uses for `RUN dnf install`. This is computed by a
-shared function `effective_target_packages()` that both renderers
-call, ensuring a single source of truth.
-
-**`effective_target_packages(snap) -> HashSet<&str>`** returns the
-set of package names that will exist in the target image:
-
-1. `baseline_package_names` — packages already in the base image.
-   These are always present in the target regardless of refine
-   decisions. (The user cannot un-install base image packages through
-   the refine UI — that would require a separate `RUN dnf remove`,
-   which is a different rendering concern.)
-
-2. `packages_added` filtered by `include == true` — packages that
-   will be installed via `RUN dnf install`. Note: `packages_added`
-   contains ALL packages present on the host beyond the baseline,
-   including transitive dependencies pulled in by dnf — it is not
-   limited to packages the operator explicitly installed. The
-   leaf/auto classification (`leaf_packages`, `auto_packages`) is
-   orthogonal to this set; both leaf and auto packages appear in
-   `packages_added`. Packages where the user set `include: false`
-   are excluded — if the package won't be installed, its services
-   shouldn't be enabled.
-
-The function builds a `HashSet<&str>` from
-`baseline_package_names.iter().map(|s| s.as_str())` chained with
-`packages_added.iter().filter(|p| p.include).map(|p| p.name.as_str())`.
-
-**Package-name matching contract.** All three data sources
-(`owning_package`, `packages_added.name`, `baseline_package_names`)
-use the RPM `Name:` field — plain package names without arch suffix
-or epoch. Matching is exact string comparison. Provider aliases and
-subpackage relationships are resolved at RPM metadata time, not at
-render time. If `owning_package` cannot be determined for a service
-(e.g., the unit file is not owned by any RPM), it is `None` and the
-service is emitted conservatively.
-
-**`owning_package` population.** The services collector populates
-`owning_package` for each `ServiceStateChange` entry via `rpm -qf`
-after `state_changes` is built. This is the same pattern used in
-the Go codebase's `resolveOwningPackages` function.
+The services collector populates `owning_package` for each
+`ServiceStateChange` entry via `rpm -qf` after `state_changes` is
+built. This is the same pattern used in the Go codebase's
+`resolveOwningPackages` function.
 
 **Approach:** Batch-first with per-unit fallback:
 
@@ -388,29 +363,86 @@ This runs after `state_changes` is populated (insertion point:
 between state_changes assembly and drop-in collection). The executor
 already supports arbitrary command execution via `exec.run()`.
 
-**Suppression logic.** For each `state_change`:
+#### Target-image package presence
 
-- If `owning_package` is `Some(pkg)` and `pkg` IS in the effective
-  target set → emit (the package will exist, user intent preserved)
-- If `owning_package` is `Some(pkg)` and `pkg` is NOT in the
-  effective target set → omit and emit a Containerfile comment:
+**Package-name matching contract.** All three data sources
+(`owning_package`, `packages_added.name`, `baseline_package_names`)
+use the RPM `Name:` field — plain package names without arch suffix
+or epoch. Matching is exact string comparison. Provider aliases and
+subpackage relationships are resolved at RPM metadata time, not at
+render time.
+
+**Limitation: inspectah does not re-resolve dependencies after
+refine decisions.** The snapshot captures the host's installed package
+set and the baseline. It does not run `dnf repoquery` against the
+post-refine install list to compute the final dependency closure.
+This means the renderer can prove presence (package is in baseline
+or included in `packages_added`) and strong absence (package was
+never on the host and is not in the baseline), but cannot always
+prove weak absence (package was excluded by the user but might still
+be pulled in as a transitive dependency of another included package).
+
+The suppression logic is tiered to match this confidence level.
+
+**Suppression tiers.** For each `state_change`, the renderer
+classifies the service's package presence and chooses the appropriate
+action:
+
+| `owning_package` | Package in baseline? | Package in `packages_added`? | `include`? | Confidence | Action |
+|---|---|---|---|---|---|
+| `None` | — | — | — | Unknown | Emit (conservative) |
+| `Some(pkg)` | Yes | — | — | Proven present | Emit |
+| `Some(pkg)` | No | Yes | `true` | Present (will install) | Emit |
+| `Some(pkg)` | No | Yes | `false` | Uncertain (excluded but may be dep) | Emit with advisory comment |
+| `Some(pkg)` | No | No | — | Proven absent | Omit with omission comment |
+
+- **Proven present** (in baseline or included `packages_added`):
+  emit the service instruction.
+- **Proven absent** (not in baseline AND not in `packages_added` at
+  all): omit and emit a Containerfile comment:
   `# Omitted: <unit> (package '<pkg>' not in target image)`
-- If `owning_package` is `None` → emit (conservative — don't suppress
-  what you can't verify)
+- **Uncertain** (in `packages_added` with `include: false`): the
+  user excluded this package, but it may still be pulled in as a
+  transitive dependency of another included package. Emit the
+  service instruction with an advisory comment:
+  `# NOTE: package '<pkg>' excluded — verify this service is needed`
+- **Unknown** (`owning_package: None`): emit conservatively.
 
 **Degraded mode.** When `snap.rpm.no_baseline` is `true` (baseline
 data unavailable), `baseline_package_names` is empty and the
-effective target set only contains included `packages_added`. The
-renderer cannot prove whether a package is absent from the target
-image, so it does NOT suppress — it emits the service instruction
-with a comment:
+"proven absent" tier is unreachable (cannot prove a package is absent
+without knowing what's in the base image). All services with known
+`owning_package` are emitted with an advisory comment:
 `# NOTE: baseline unavailable — cannot verify '<pkg>' in target image`
 
+#### Omission list
+
+The renderer produces a structured `Vec<ServiceOmission>` alongside
+the Containerfile lines. Each omission records:
+
+```rust
+pub struct ServiceOmission {
+    pub unit: String,
+    pub owning_package: String,
+    pub reason: OmissionReason,
+}
+
+pub enum OmissionReason {
+    PackageAbsent,
+    PackageExcluded,
+}
+```
+
+This list is the single source of truth for omission decisions. The
+refine UI consumes it directly to populate the "Omitted Services"
+subsection — it does not recompute suppression logic independently.
+
 **Suppress beats defer.** If a service would be deferred by
-`config_tree_units` but its owning package isn't in the effective
-target set, suppress it entirely. No point deferring a service whose
-package won't be installed. The target-image check runs before
-`config_tree_units` deferral.
+`config_tree_units` but its package is proven absent, suppress it
+entirely. No point deferring a service whose package won't be
+installed. The target-image check runs before `config_tree_units`
+deferral. (Uncertain/excluded packages are NOT suppressed — they
+are emitted with advisory comments.)
 
 The `include` filter on `ServiceStateChange` is unchanged — only
 `sc.include == true` entries enter the renderer loop.
@@ -449,14 +481,18 @@ representable as a preset value.
 
 #### Omitted services subsection
 
-When the renderer suppresses a service due to target-image package
-absence, the refine UI surfaces this in an "Omitted Services"
-subsection. Each omission is a `ContextItem`:
+The refine UI consumes the renderer's `Vec<ServiceOmission>` list
+(see section 3) to populate an "Omitted Services" subsection. This
+is a direct handoff — refine does not recompute suppression logic.
+Each omission is a `ContextItem`:
 
 - `id`: unit name
 - `title`: unit name
-- `subtitle`: `"omitted (package '<pkg>' not in target image)"`
-- `detail`: explanation of why the service was omitted
+- `subtitle`: derived from `OmissionReason`:
+  - `PackageAbsent` → `"omitted (package '<pkg>' not in target image)"`
+  - `PackageExcluded` → `"advisory (package '<pkg>' excluded — may still
+    be present as dependency)"`
+- `detail`: explanation of the omission decision
 
 This makes renderer decisions visible — the user can see what was
 excluded and why, rather than the Containerfile looking fully
@@ -528,30 +564,33 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 
 - `implied_action()` returns correct `ServiceAction` for all three
   `ServiceUnitState` variants
-- Service with `owning_package: Some("firewalld")` where firewalld
-  IS in `baseline_package_names` but NOT in `packages_added` → emitted
-  (base image package, user intent preserved)
-- Service with `owning_package: Some("sssd")` where sssd is NOT in
-  `packages_added` AND NOT in `baseline_package_names` → omitted with
-  Containerfile comment
-- Service with `owning_package: Some("custom-app")` where custom-app
-  is in `packages_added` with `include: true` → emitted
-- Service with `owning_package: Some("custom-app")` where custom-app
-  is in `packages_added` with `include: false` → omitted (user
-  excluded the package in refine, service shouldn't be enabled)
-- `effective_target_packages()` returns same set that package renderer
-  uses for `RUN dnf install` — packages excluded in refine are absent
-  from both
-- Service with `owning_package: None` → emitted (conservative)
-- Service that is both config-tree-deferred and missing-package →
-  suppressed entirely (suppress beats defer)
+- Proven present (baseline): `owning_package: Some("firewalld")`
+  where firewalld IS in `baseline_package_names` → emitted
+- Proven present (included): `owning_package: Some("custom-app")`
+  where custom-app is in `packages_added` with `include: true` →
+  emitted
+- Proven absent: `owning_package: Some("exotic-pkg")` where
+  exotic-pkg is NOT in `packages_added` AND NOT in
+  `baseline_package_names` → omitted with `# Omitted:` comment,
+  appears in `ServiceOmission` list with `PackageAbsent` reason
+- Uncertain (excluded): `owning_package: Some("custom-app")` where
+  custom-app is in `packages_added` with `include: false` → emitted
+  with `# NOTE: package excluded` advisory comment, appears in
+  `ServiceOmission` list with `PackageExcluded` reason
+- Unknown: `owning_package: None` → emitted (conservative)
+- Suppress beats defer: service with proven-absent package AND
+  config-tree-deferred → suppressed entirely
+- Suppress does NOT beat defer for uncertain/excluded packages —
+  those are emitted with advisory comments
 - Degraded mode: `no_baseline == true`, service with
   `owning_package: Some("pkg")` not in `packages_added` → emitted
-  with `# NOTE: baseline unavailable` comment
-- Omitted services produce `# Omitted:` comments in Containerfile
-  output
+  with `# NOTE: baseline unavailable` comment (proven-absent tier
+  unreachable)
+- Omission list: renderer produces `Vec<ServiceOmission>` consumed
+  by refine UI — refine does not recompute suppression
 - Integration: CentOS 9 snapshot produces no sssd/dbus lines in
-  Containerfile output
+  Containerfile output (dropped by parse-time gate, not package
+  suppression)
 - Integration: CentOS 9 snapshot preserves `firewalld` mask if
   firewalld is in `baseline_package_names` and was masked by the user
 
@@ -567,8 +606,12 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 - Preset-matched service with drop-in renders with override detail
 - Preset-matched service without drop-in is suppressed
 - Preset-unknown service shows `"(no preset rule)"` subtitle
-- Omitted services appear in "Omitted Services" subsection with
-  package absence reason
+- Omitted services (PackageAbsent) appear in "Omitted Services"
+  subsection with absence explanation
+- Excluded services (PackageExcluded) appear in "Omitted Services"
+  subsection with advisory explanation
+- Refine UI consumes renderer's `ServiceOmission` list directly —
+  does not recompute suppression logic
 - `linked` warning renders in "Service Warnings" subsection with
   `extra["unit"]` as stable identity
 - `enabled-runtime` warning renders in "Service Warnings" with
@@ -585,11 +628,13 @@ Drop-in override handling is unchanged from the post-leaf fixes.
   never produce `state_changes` entries
 - Runtime-only and unrecognized states produce warnings, not silent
   drops
-- Services for packages not in the target image (verified via
-  `effective_target_packages()`: included `packages_added` ∪
-  `baseline_package_names`) do not appear in the Containerfile output
+- Services for packages proven absent (not in baseline, not in
+  `packages_added` at all) are omitted from Containerfile output with
+  visible comments
 - Services for packages excluded in refine (`include: false`) are
-  omitted from service output, matching the package renderer
+  emitted with advisory comments (may still be present as dependency)
+- Renderer produces a `Vec<ServiceOmission>` that refine consumes
+  directly — single source of truth for omission decisions
 - Services for packages present in the target image (including base
   image packages) ARE preserved in the Containerfile output
 - Masked units with no preset rule carry `default_state: None`, not
