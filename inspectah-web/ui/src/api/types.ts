@@ -255,6 +255,20 @@ export interface UserDecision {
   containerfile_strategy: "skip" | "useradd";
   password_choice: "none" | "preserve" | "new";
   password_hash?: string;
+  /** Enrichment: whether sudoers rules grant this user sudo access. */
+  has_sudo?: boolean;
+  /** Enrichment: whether this user has subuid allocations. */
+  has_subuid?: boolean;
+  /** Enrichment: number of SSH authorized keys found. */
+  ssh_key_count?: number;
+  /** Enrichment: full SSH key lines (only when preserve_ssh_keys is enabled). */
+  ssh_keys?: string[];
+  /** Enrichment: human-readable rationale for the classification. */
+  classification_rationale?: string;
+  /** Enrichment: supplementary group memberships (including system groups). */
+  supplementary_groups?: string[];
+  /** Enrichment: password status from /etc/shadow (locked, disabled, password_set, etc.). */
+  password_status?: string;
 }
 
 /** Response from /api/user-preview. */
