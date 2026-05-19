@@ -3,19 +3,22 @@
 > Replace state filtering with intent inference so the Containerfile
 > renderer only emits service instructions for deliberate user choices.
 
-**Status:** Proposed (revision 6)  
+**Status:** Proposed (revision 7)  
 **Created:** 2026-05-19  
 **Area:** inspectah-collect, inspectah-pipeline, inspectah-web
 
+> **Revision 7** (2026-05-19): Addresses round 5 review findings.
+> Splits renderer output into `Vec<ServiceOmission>` (truly omitted,
+> service NOT in Containerfile) and `Vec<ServiceAdvisory>` (emitted
+> with caveats). Excluded-package advisories are no longer conflated
+> with true omissions. Adds unreachable-package tier for
+> `LocalInstall`/`NoRepo` packages that the package renderer also
+> treats as manual-follow-up.
+>
 > **Revision 6** (2026-05-19): Addresses round 4 review findings.
-> Fixes follow-up flag contradiction (owning_package removed from
-> follow-up list). Replaces single-tier suppression with tiered
-> model: proven-absent packages are omitted, excluded packages get
-> advisory comments (may still be pulled in as dependencies),
-> proven-present packages are emitted. Acknowledges that inspectah
-> does not re-resolve dependencies after refine decisions. Renderer
-> produces `Vec<ServiceOmission>` as single source of truth consumed
-> by refine UI — no recomputation.
+> Fixes follow-up flag contradiction. Replaces single-tier
+> suppression with tiered model. Renderer produces structured
+> omission list as single source of truth consumed by refine UI.
 >
 > **Revision 5** (2026-05-19): `owning_package` population included
 > in spec scope. The services collector now populates `owning_package`
@@ -384,65 +387,87 @@ be pulled in as a transitive dependency of another included package).
 
 The suppression logic is tiered to match this confidence level.
 
-**Suppression tiers.** For each `state_change`, the renderer
+**Render-decision tiers.** For each `state_change`, the renderer
 classifies the service's package presence and chooses the appropriate
-action:
+action. The classification uses `packages_added` entries' `state`
+field to detect unreachable packages (same `LocalInstall`/`NoRepo`
+check the package renderer uses for its `# TODO:` lines):
 
-| `owning_package` | Package in baseline? | Package in `packages_added`? | `include`? | Confidence | Action |
-|---|---|---|---|---|---|
-| `None` | — | — | — | Unknown | Emit (conservative) |
-| `Some(pkg)` | Yes | — | — | Proven present | Emit |
-| `Some(pkg)` | No | Yes | `true` | Present (will install) | Emit |
-| `Some(pkg)` | No | Yes | `false` | Uncertain (excluded but may be dep) | Emit with advisory comment |
-| `Some(pkg)` | No | No | — | Proven absent | Omit with omission comment |
+| `owning_package` | In baseline? | In `packages_added`? | `include`? | Installable? | Confidence | Action |
+|---|---|---|---|---|---|---|
+| `None` | — | — | — | — | Unknown | Emit |
+| `Some(pkg)` | Yes | — | — | — | Proven present | Emit |
+| `Some(pkg)` | No | Yes | `true` | Yes | Present | Emit |
+| `Some(pkg)` | No | Yes | `true` | No (unreachable) | Uncertain | Emit + advisory |
+| `Some(pkg)` | No | Yes | `false` | — | Uncertain | Emit + advisory |
+| `Some(pkg)` | No | No | — | — | Proven absent | Omit |
 
-- **Proven present** (in baseline or included `packages_added`):
-  emit the service instruction.
+- **Proven present** (in baseline, or in `packages_added` with
+  `include: true` and installable): emit the service instruction.
+- **Present but unreachable** (in `packages_added` with
+  `include: true` but `LocalInstall`/`NoRepo` state): the package
+  renderer emits a `# TODO:` for this package rather than a `dnf
+  install` line. Emit the service instruction with an advisory:
+  `# NOTE: package '<pkg>' requires manual installation`
+- **Excluded** (in `packages_added` with `include: false`): the user
+  excluded this package, but it may still be pulled in as a
+  transitive dependency of another included package. Emit the service
+  instruction with an advisory:
+  `# NOTE: package '<pkg>' excluded — verify this service is needed`
 - **Proven absent** (not in baseline AND not in `packages_added` at
   all): omit and emit a Containerfile comment:
   `# Omitted: <unit> (package '<pkg>' not in target image)`
-- **Uncertain** (in `packages_added` with `include: false`): the
-  user excluded this package, but it may still be pulled in as a
-  transitive dependency of another included package. Emit the
-  service instruction with an advisory comment:
-  `# NOTE: package '<pkg>' excluded — verify this service is needed`
 - **Unknown** (`owning_package: None`): emit conservatively.
 
 **Degraded mode.** When `snap.rpm.no_baseline` is `true` (baseline
 data unavailable), `baseline_package_names` is empty and the
 "proven absent" tier is unreachable (cannot prove a package is absent
 without knowing what's in the base image). All services with known
-`owning_package` are emitted with an advisory comment:
+`owning_package` are emitted with an advisory:
 `# NOTE: baseline unavailable — cannot verify '<pkg>' in target image`
 
-#### Omission list
+#### Render-decision output
 
-The renderer produces a structured `Vec<ServiceOmission>` alongside
-the Containerfile lines. Each omission records:
+The renderer produces two structured lists alongside the
+Containerfile lines. These are semantically distinct — omissions
+and advisories are different render decisions, not variants of the
+same thing.
+
+**Omissions** — service NOT emitted in the Containerfile:
 
 ```rust
 pub struct ServiceOmission {
     pub unit: String,
     pub owning_package: String,
-    pub reason: OmissionReason,
-}
-
-pub enum OmissionReason {
-    PackageAbsent,
-    PackageExcluded,
 }
 ```
 
-This list is the single source of truth for omission decisions. The
-refine UI consumes it directly to populate the "Omitted Services"
-subsection — it does not recompute suppression logic independently.
+**Advisories** — service IS emitted, but with caveats:
+
+```rust
+pub struct ServiceAdvisory {
+    pub unit: String,
+    pub owning_package: String,
+    pub reason: AdvisoryReason,
+}
+
+pub enum AdvisoryReason {
+    PackageExcluded,
+    PackageUnreachable,
+    BaselineUnavailable,
+}
+```
+
+Both lists are produced by the renderer as the single source of
+truth. The refine UI consumes them directly — it does not recompute
+render decisions independently.
 
 **Suppress beats defer.** If a service would be deferred by
 `config_tree_units` but its package is proven absent, suppress it
 entirely. No point deferring a service whose package won't be
 installed. The target-image check runs before `config_tree_units`
-deferral. (Uncertain/excluded packages are NOT suppressed — they
-are emitted with advisory comments.)
+deferral. (Uncertain/advisory services are NOT suppressed — they
+are emitted with comments.)
 
 The `include` filter on `ServiceStateChange` is unchanged — only
 `sc.include == true` entries enter the renderer loop.
@@ -481,22 +506,36 @@ representable as a preset value.
 
 #### Omitted services subsection
 
-The refine UI consumes the renderer's `Vec<ServiceOmission>` list
-(see section 3) to populate an "Omitted Services" subsection. This
-is a direct handoff — refine does not recompute suppression logic.
-Each omission is a `ContextItem`:
+The refine UI consumes the renderer's `Vec<ServiceOmission>` (see
+section 3) to populate an "Omitted Services" subsection. These are
+services NOT emitted in the Containerfile. Each omission is a
+`ContextItem`:
 
 - `id`: unit name
 - `title`: unit name
-- `subtitle`: derived from `OmissionReason`:
-  - `PackageAbsent` → `"omitted (package '<pkg>' not in target image)"`
-  - `PackageExcluded` → `"advisory (package '<pkg>' excluded — may still
-    be present as dependency)"`
-- `detail`: explanation of the omission decision
+- `subtitle`: `"omitted (package '<pkg>' not in target image)"`
+- `detail`: explanation
 
-This makes renderer decisions visible — the user can see what was
-excluded and why, rather than the Containerfile looking fully
-authoritative with silently dropped instructions.
+#### Service advisories subsection
+
+The refine UI consumes the renderer's `Vec<ServiceAdvisory>` (see
+section 3) to populate a "Service Advisories" subsection. These are
+services that ARE emitted in the Containerfile but with caveats.
+Each advisory is a `ContextItem`:
+
+- `id`: unit name
+- `title`: unit name
+- `subtitle`: derived from `AdvisoryReason`:
+  - `PackageExcluded` → `"package '<pkg>' excluded — may be present
+    as dependency"`
+  - `PackageUnreachable` → `"package '<pkg>' requires manual
+    installation"`
+  - `BaselineUnavailable` → `"baseline unavailable — cannot verify
+    '<pkg>' in target image"`
+- `detail`: explanation
+
+Both subsections are direct handoffs from the renderer — refine does
+not recompute render decisions independently.
 
 #### Service warnings subsection
 
@@ -565,29 +604,34 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 - `implied_action()` returns correct `ServiceAction` for all three
   `ServiceUnitState` variants
 - Proven present (baseline): `owning_package: Some("firewalld")`
-  where firewalld IS in `baseline_package_names` → emitted
+  where firewalld IS in `baseline_package_names` → emitted, no
+  omission or advisory
 - Proven present (included): `owning_package: Some("custom-app")`
-  where custom-app is in `packages_added` with `include: true` →
-  emitted
+  where custom-app is in `packages_added` with `include: true` and
+  installable state → emitted, no omission or advisory
+- Unreachable: `owning_package: Some("local-pkg")` where local-pkg
+  is in `packages_added` with `include: true` but state is
+  `LocalInstall` → emitted with `# NOTE:` advisory, appears in
+  `Vec<ServiceAdvisory>` with `PackageUnreachable`
+- Excluded: `owning_package: Some("custom-app")` where custom-app
+  is in `packages_added` with `include: false` → emitted with
+  `# NOTE:` advisory, appears in `Vec<ServiceAdvisory>` with
+  `PackageExcluded`
 - Proven absent: `owning_package: Some("exotic-pkg")` where
   exotic-pkg is NOT in `packages_added` AND NOT in
-  `baseline_package_names` → omitted with `# Omitted:` comment,
-  appears in `ServiceOmission` list with `PackageAbsent` reason
-- Uncertain (excluded): `owning_package: Some("custom-app")` where
-  custom-app is in `packages_added` with `include: false` → emitted
-  with `# NOTE: package excluded` advisory comment, appears in
-  `ServiceOmission` list with `PackageExcluded` reason
+  `baseline_package_names` → NOT emitted, appears in
+  `Vec<ServiceOmission>`
 - Unknown: `owning_package: None` → emitted (conservative)
 - Suppress beats defer: service with proven-absent package AND
   config-tree-deferred → suppressed entirely
-- Suppress does NOT beat defer for uncertain/excluded packages —
-  those are emitted with advisory comments
+- Suppress does NOT beat defer for advisory services — those are
+  emitted with comments
 - Degraded mode: `no_baseline == true`, service with
   `owning_package: Some("pkg")` not in `packages_added` → emitted
-  with `# NOTE: baseline unavailable` comment (proven-absent tier
-  unreachable)
-- Omission list: renderer produces `Vec<ServiceOmission>` consumed
-  by refine UI — refine does not recompute suppression
+  with advisory, appears in `Vec<ServiceAdvisory>` with
+  `BaselineUnavailable`
+- `Vec<ServiceOmission>` and `Vec<ServiceAdvisory>` are separate
+  lists — omissions are NOT in Containerfile, advisories ARE
 - Integration: CentOS 9 snapshot produces no sssd/dbus lines in
   Containerfile output (dropped by parse-time gate, not package
   suppression)
@@ -606,12 +650,15 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 - Preset-matched service with drop-in renders with override detail
 - Preset-matched service without drop-in is suppressed
 - Preset-unknown service shows `"(no preset rule)"` subtitle
-- Omitted services (PackageAbsent) appear in "Omitted Services"
-  subsection with absence explanation
-- Excluded services (PackageExcluded) appear in "Omitted Services"
-  subsection with advisory explanation
-- Refine UI consumes renderer's `ServiceOmission` list directly —
-  does not recompute suppression logic
+- Omitted services appear in "Omitted Services" subsection —
+  these are NOT in the Containerfile
+- Advisory services appear in "Service Advisories" subsection —
+  these ARE in the Containerfile but with caveats
+- `PackageExcluded` advisory shows dependency uncertainty message
+- `PackageUnreachable` advisory shows manual-install message
+- `BaselineUnavailable` advisory shows verification message
+- Refine UI consumes renderer's `ServiceOmission` and
+  `ServiceAdvisory` lists directly — does not recompute
 - `linked` warning renders in "Service Warnings" subsection with
   `extra["unit"]` as stable identity
 - `enabled-runtime` warning renders in "Service Warnings" with
@@ -633,8 +680,11 @@ Drop-in override handling is unchanged from the post-leaf fixes.
   visible comments
 - Services for packages excluded in refine (`include: false`) are
   emitted with advisory comments (may still be present as dependency)
-- Renderer produces a `Vec<ServiceOmission>` that refine consumes
-  directly — single source of truth for omission decisions
+- Services for unreachable packages (`LocalInstall`/`NoRepo`) are
+  emitted with advisory comments (require manual installation)
+- Renderer produces `Vec<ServiceOmission>` (truly omitted) and
+  `Vec<ServiceAdvisory>` (emitted with caveats) as separate lists —
+  refine consumes both directly, single source of truth
 - Services for packages present in the target image (including base
   image packages) ARE preserved in the Containerfile output
 - Masked units with no preset rule carry `default_state: None`, not
