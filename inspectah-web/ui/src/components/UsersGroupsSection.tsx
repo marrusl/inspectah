@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   PageSection,
   Content,
@@ -49,6 +49,18 @@ export function UsersGroupsSection({
     },
     [onViewUpdate, onMutationError],
   );
+
+  // Collect custom groups: groups whose GID matches a user's primary GID
+  // (these are user-private groups that useradd would create).
+  const customGroupSummary = useMemo(() => {
+    const included = users.filter(
+      (u) => u.containerfile_strategy === "useradd",
+    );
+    if (included.length === 0) return null;
+    // Each included user creates a primary group with their name and GID.
+    const groups = included.map((u) => `${u.name} (${u.gid})`);
+    return groups;
+  }, [users]);
 
   if (users.length === 0) {
     return (
@@ -114,6 +126,19 @@ export function UsersGroupsSection({
         >
           Preview Artifacts
         </Button>
+      </div>
+
+      <div
+        style={{
+          fontSize: "var(--pf-t--global--font--size--sm)",
+          opacity: 0.6,
+          marginBottom: "var(--pf-t--global--spacer--md)",
+          fontStyle: "italic",
+        }}
+      >
+        {customGroupSummary && customGroupSummary.length > 0
+          ? `Custom groups to be created: ${customGroupSummary.join(", ")}`
+          : "No custom groups"}
       </div>
 
       {users.map((user) => (
