@@ -3,10 +3,17 @@
 > Replace state filtering with intent inference so the Containerfile
 > renderer only emits service instructions for deliberate user choices.
 
-**Status:** Proposed (revision 3)  
+**Status:** Proposed (revision 4)  
 **Created:** 2026-05-19  
 **Area:** inspectah-collect, inspectah-pipeline, inspectah-web
 
+> **Revision 4** (2026-05-19): Addresses round 3 review finding.
+> Clarifies that `packages_added` includes transitive dependencies
+> (not just direct installs), closing Thorn's dependency-closure
+> concern. Documents that `owning_package` is not yet populated by
+> the services collector — suppression logic is designed and tested
+> but activates only after enrichment is implemented.
+>
 > **Revision 3** (2026-05-19): Addresses round 2 review findings.
 > Preset knowledge uses its own `PresetDefault` enum (`Enable`,
 > `Disable`) — `Masked` is no longer representable as a preset value.
@@ -331,11 +338,16 @@ set of package names that will exist in the target image:
    the refine UI — that would require a separate `RUN dnf remove`,
    which is a different rendering concern.)
 
-2. `packages_added` filtered by `include == true` — packages the
-   user chose to install in the refine UI. This matches what the
-   package renderer actually emits in the `RUN dnf install` line.
-   Packages where the user set `include: false` are excluded — if
-   the package won't be installed, its services shouldn't be enabled.
+2. `packages_added` filtered by `include == true` — packages that
+   will be installed via `RUN dnf install`. Note: `packages_added`
+   contains ALL packages present on the host beyond the baseline,
+   including transitive dependencies pulled in by dnf — it is not
+   limited to packages the operator explicitly installed. The
+   leaf/auto classification (`leaf_packages`, `auto_packages`) is
+   orthogonal to this set; both leaf and auto packages appear in
+   `packages_added`. Packages where the user set `include: false`
+   are excluded — if the package won't be installed, its services
+   shouldn't be enabled.
 
 The function builds a `HashSet<&str>` from
 `baseline_package_names.iter().map(|s| s.as_str())` chained with
@@ -349,6 +361,16 @@ subpackage relationships are resolved at RPM metadata time, not at
 render time. If `owning_package` cannot be determined for a service
 (e.g., the unit file is not owned by any RPM), it is `None` and the
 service is emitted conservatively.
+
+**`owning_package` enrichment.** The `owning_package` field on
+`ServiceStateChange` exists in the struct but is not currently
+populated by the services collector — it is always `None`. Populating
+it requires a service-to-package attribution step (e.g., using
+`file_ownership` data or `rpm -qf` on the unit file path). Until
+this enrichment is implemented, all services fall through to the
+conservative `owning_package: None` path and are emitted without
+package-presence checking. The suppression logic is designed and
+tested but does not activate until `owning_package` is populated.
 
 **Suppression logic.** For each `state_change`:
 
