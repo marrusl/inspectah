@@ -231,13 +231,15 @@ mod tests {
     }
 
     fn sc(unit: &str, include: bool) -> ServiceStateChange {
+        use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
         ServiceStateChange {
             unit: unit.to_string(),
-            current_state: "enabled".to_string(),
-            default_state: "disabled".to_string(),
-            action: "enable".to_string(),
+            current_state: ServiceUnitState::Enabled,
+            default_state: Some(PresetDefault::Disable),
             include,
-            ..Default::default()
+            owning_package: None,
+            fleet: None,
+            attention_reason: None,
         }
     }
 

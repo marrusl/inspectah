@@ -7,8 +7,7 @@ expression: section
     {
       "unit": "bluetooth.service",
       "current_state": "enabled",
-      "default_state": "disabled",
-      "action": "enable",
+      "default_state": "disable",
       "include": true,
       "owning_package": null,
       "fleet": null
@@ -16,8 +15,7 @@ expression: section
     {
       "unit": "gdm.service",
       "current_state": "disabled",
-      "default_state": "enabled",
-      "action": "disable",
+      "default_state": "enable",
       "include": true,
       "owning_package": null,
       "fleet": null

@@ -208,9 +208,24 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             lines.push("| Unit | Current | Default | Action |".into());
             lines.push("|------|---------|---------|--------|".into());
             for sc in &services.state_changes {
+                let state_str = match sc.current_state {
+                    inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
+                    inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
+                    inspectah_core::types::services::ServiceUnitState::Masked => "masked",
+                };
+                let default_str = match sc.default_state {
+                    Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
+                    Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
+                    None => "unknown",
+                };
+                let action_str = match sc.implied_action() {
+                    inspectah_core::types::services::ServiceAction::Enable => "enable",
+                    inspectah_core::types::services::ServiceAction::Disable => "disable",
+                    inspectah_core::types::services::ServiceAction::Mask => "mask",
+                };
                 lines.push(format!(
                     "| {} | {} | {} | {} |",
-                    sc.unit, sc.current_state, sc.default_state, sc.action
+                    sc.unit, state_str, default_str, action_str
                 ));
             }
             lines.push(String::new());

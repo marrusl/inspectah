@@ -17,7 +17,10 @@ use crate::types::warnings::Warning;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const SCHEMA_VERSION: u32 = 15;
+/// v15 -> v16: services contract migrated to typed enums (ServiceUnitState,
+/// PresetDefault). Legacy service payloads with stringly typed fields must
+/// be re-scanned — they will fail deserialization by design.
+pub const SCHEMA_VERSION: u32 = 16;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -100,6 +103,7 @@ impl InspectionSnapshot {
 /// v12 -> v13: no structural changes needed, just field defaults
 /// v13 -> v14: no structural changes needed, serde(default) handles missing fields
 /// v14 -> v15: legacy snapshots have no baseline data — mark explicitly
+/// v15 -> v16: services section uses typed enums — legacy payloads must be re-scanned
 pub fn migrate(snap: &mut InspectionSnapshot) {
     if snap.schema_version >= SCHEMA_VERSION {
         return;
@@ -365,10 +369,10 @@ mod tests {
         assert!(snap.baseline.is_none());
         assert!(!snap.no_baseline); // serde(default) gives false
 
-        // Migrate to v15
+        // Migrate to current
         migrate(&mut snap);
 
-        assert_eq!(snap.schema_version, 15);
+        assert_eq!(snap.schema_version, SCHEMA_VERSION);
         assert!(snap.no_baseline); // Migration explicitly sets this to true
     }
 }
