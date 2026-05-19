@@ -3,20 +3,28 @@
 > Replace state filtering with intent inference so the Containerfile
 > renderer only emits service instructions for deliberate user choices.
 
-**Status:** Proposed (revision 2)  
+**Status:** Proposed (revision 3)  
 **Created:** 2026-05-19  
 **Area:** inspectah-collect, inspectah-pipeline, inspectah-web
 
+> **Revision 3** (2026-05-19): Addresses round 2 review findings.
+> Preset knowledge uses its own `PresetDefault` enum (`Enable`,
+> `Disable`) — `Masked` is no longer representable as a preset value.
+> Target-image package set filters `packages_added` by `include ==
+> true` to match the post-refine package plan. Package presence logic
+> extracted into a shared `effective_target_packages()` function used
+> by both package and service renderers. Package-name matching
+> contract documented explicitly.
+>
 > **Revision 2** (2026-05-19): Addresses round 1 review findings.
-> `default_state` is now `Option<ServiceUnitState>` — masked units
-> with no preset rule carry `None`, not a fabricated `Disabled`.
-> Missing-package suppression uses `packages_added ∪
-> baseline_package_names` as the truthful target-image package set.
-> Silent-drop policy narrowed: known inert states drop silently,
-> runtime/unknown states emit warnings. Renderer omissions surface
-> explicitly in Containerfile comments and refine UI. Warning payloads
-> carry structured `unit` + `raw_state` keys. Test coverage expanded
-> for all new branches.
+> `default_state` is now `Option` — masked units with no preset rule
+> carry `None`, not a fabricated `Disabled`. Missing-package
+> suppression uses `packages_added ∪ baseline_package_names` as the
+> truthful target-image package set. Silent-drop policy narrowed:
+> known inert states drop silently, runtime/unknown states emit
+> warnings. Renderer omissions surface explicitly in Containerfile
+> comments and refine UI. Warning payloads carry structured `unit` +
+> `raw_state` keys. Test coverage expanded for all new branches.
 
 ## Problem
 
@@ -119,23 +127,49 @@ pub enum ServiceUnitState {
 Three variants only. Non-actionable states are gated at parse time
 and never enter the data model.
 
+#### `PresetDefault` enum
+
+Represents what the systemd preset system says a unit's default
+enablement state should be. This is a separate type from
+`ServiceUnitState` because presets occupy a narrower state space —
+presets can only say `enable` or `disable`, never `mask`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PresetDefault {
+    Enable,
+    Disable,
+}
+```
+
+Using a dedicated type makes `Masked` unrepresentable as a preset
+value at the type level — the compiler prevents this impossible state.
+
 #### Observed state vs. preset knowledge
 
 The spec separates what was observed on the system (`current_state`)
 from what the preset system says the default should be
-(`default_state`). These are independent facts:
+(`default_state`). These are independent facts with independent type
+spaces:
 
 - `current_state: ServiceUnitState` — what `systemctl is-enabled`
-  reported (always known for `state_changes` entries)
-- `default_state: Option<ServiceUnitState>` — what the preset rule
-  says the package default is. `None` means no matching preset rule
-  was found.
+  reported. Three possible values: `Enabled`, `Disabled`, `Masked`.
+- `default_state: Option<PresetDefault>` — what the preset rule says
+  the package default is. Two possible values (`Enable`, `Disable`)
+  or `None` when no matching preset rule was found.
 
 The `Option` on `default_state` is load-bearing. A masked unit with
 `default_state: None` means "the operator masked this, but we don't
 know what the package default was." The UI renders this honestly as
 `"masked (no preset rule)"` — not as a fabricated divergence from a
 made-up default.
+
+The type separation also prevents a class of comparison bugs: you
+cannot accidentally compare `current_state == default_state` because
+they are different types. The collector's divergence check explicitly
+maps between them (e.g., `ServiceUnitState::Enabled` diverges from
+`PresetDefault::Disable`).
 
 #### `ServiceAction` — derived, not stored
 
@@ -172,7 +206,7 @@ pub enum ServiceAction {
 #### `ServiceStateChange` field changes
 
 - `current_state`: `String` → `ServiceUnitState`
-- `default_state`: `String` → `Option<ServiceUnitState>` (`None` =
+- `default_state`: `String` → `Option<PresetDefault>` (`None` =
   no preset rule found)
 - `action`: removed (replaced by `implied_action()`)
 
@@ -249,7 +283,10 @@ units, compare `ServiceUnitState` against the preset:
 
 - **Divergent** (current state differs from preset) — push to
   `state_changes` with `current_state: ServiceUnitState` and
-  `default_state: Some(preset_value)`
+  `default_state: Some(PresetDefault)`. The divergence check maps
+  between the two type spaces: `Enabled` diverges from
+  `PresetDefault::Disable`, `Disabled` diverges from
+  `PresetDefault::Enable`.
 - **Matched** (current state matches preset) — push to
   `preset_matched_units`
 - **No preset rule** — unit appears in `enabled_units`/`disabled_units`
@@ -278,48 +315,67 @@ to determine whether to emit `enable`, `disable`, or `mask`. The
 method maps purely from `current_state` — it does not inspect
 `default_state`.
 
-#### Target-image package suppression
+#### Target-image package presence
 
-The renderer builds the target-image package set from two sources
-already present on `InspectionSnapshot`:
+Service suppression keys off the same effective package set that the
+package renderer uses for `RUN dnf install`. This is computed by a
+shared function `effective_target_packages()` that both renderers
+call, ensuring a single source of truth.
 
-- `snap.rpm.packages_added` — packages inspectah will install via
-  `RUN dnf install`
-- `snap.rpm.baseline_package_names` — packages already present in
-  the base image
+**`effective_target_packages(snap) -> HashSet<&str>`** returns the
+set of package names that will exist in the target image:
 
-The union of these two lists represents all packages that will exist
-in the target image. The renderer builds a `HashSet<&str>` from
-`packages_added.iter().map(|p| p.name.as_str())` chained with
-`baseline_package_names.iter().map(|s| s.as_str())`.
+1. `baseline_package_names` — packages already in the base image.
+   These are always present in the target regardless of refine
+   decisions. (The user cannot un-install base image packages through
+   the refine UI — that would require a separate `RUN dnf remove`,
+   which is a different rendering concern.)
 
-For each `state_change`:
+2. `packages_added` filtered by `include == true` — packages the
+   user chose to install in the refine UI. This matches what the
+   package renderer actually emits in the `RUN dnf install` line.
+   Packages where the user set `include: false` are excluded — if
+   the package won't be installed, its services shouldn't be enabled.
 
-- If `owning_package` is `Some(pkg)` and `pkg` IS in the target set
-  → emit (the package will exist, the user's intent is preserved)
-- If `owning_package` is `Some(pkg)` and `pkg` is NOT in the target
-  set → omit and emit a Containerfile comment:
+The function builds a `HashSet<&str>` from
+`baseline_package_names.iter().map(|s| s.as_str())` chained with
+`packages_added.iter().filter(|p| p.include).map(|p| p.name.as_str())`.
+
+**Package-name matching contract.** All three data sources
+(`owning_package`, `packages_added.name`, `baseline_package_names`)
+use the RPM `Name:` field — plain package names without arch suffix
+or epoch. Matching is exact string comparison. Provider aliases and
+subpackage relationships are resolved at RPM metadata time, not at
+render time. If `owning_package` cannot be determined for a service
+(e.g., the unit file is not owned by any RPM), it is `None` and the
+service is emitted conservatively.
+
+**Suppression logic.** For each `state_change`:
+
+- If `owning_package` is `Some(pkg)` and `pkg` IS in the effective
+  target set → emit (the package will exist, user intent preserved)
+- If `owning_package` is `Some(pkg)` and `pkg` is NOT in the
+  effective target set → omit and emit a Containerfile comment:
   `# Omitted: <unit> (package '<pkg>' not in target image)`
 - If `owning_package` is `None` → emit (conservative — don't suppress
   what you can't verify)
 
 **Degraded mode.** When `snap.rpm.no_baseline` is `true` (baseline
-data unavailable), `baseline_package_names` is empty. In this case
-the target set only contains `packages_added`, which may undercount.
-The renderer emits all services whose `owning_package` is `Some(pkg)`
-where `pkg` is not in `packages_added` — it does NOT suppress them,
-because it cannot prove the package is absent from the target image.
-Instead, it emits the service instruction with a comment:
+data unavailable), `baseline_package_names` is empty and the
+effective target set only contains included `packages_added`. The
+renderer cannot prove whether a package is absent from the target
+image, so it does NOT suppress — it emits the service instruction
+with a comment:
 `# NOTE: baseline unavailable — cannot verify '<pkg>' in target image`
 
 **Suppress beats defer.** If a service would be deferred by
-`config_tree_units` but its owning package isn't in the target set,
-suppress it entirely. No point deferring a service whose package won't
-be installed. Missing-package check runs before `config_tree_units`
-deferral.
+`config_tree_units` but its owning package isn't in the effective
+target set, suppress it entirely. No point deferring a service whose
+package won't be installed. The target-image check runs before
+`config_tree_units` deferral.
 
-The `include` filter is unchanged — only `sc.include == true` entries
-enter the renderer loop.
+The `include` filter on `ServiceStateChange` is unchanged — only
+`sc.include == true` entries enter the renderer loop.
 
 ### 4. Refine UI Changes
 
@@ -330,20 +386,28 @@ typed states and new visibility for omissions and warnings.
 
 #### Subtitle labels
 
-| Situation | Subtitle |
-|-----------|----------|
-| Divergent, preset known | `"{current_state} (diverges from preset: {default_state})"` |
-| Divergent, preset unknown (`None`) | `"{current_state} (no preset rule)"` |
-| Masked, preset known | `"masked (diverges from preset: {default_state})"` |
-| Masked, preset unknown (`None`) | `"masked (no preset rule)"` |
-| Preset-matched, has drop-in | `"{state} (matches preset, has drop-in override)"` |
+| Situation | Example subtitle |
+|-----------|-----------------|
+| Enabled, preset says disable | `"enabled (diverges from preset: disable)"` |
+| Disabled, preset says enable | `"disabled (diverges from preset: enable)"` |
+| Masked, preset known | `"masked (preset default: enable)"` |
+| Masked, preset unknown | `"masked (no preset rule)"` |
+| Preset-matched, has drop-in | `"enabled (matches preset, has drop-in override)"` |
 | Preset-matched, no drop-in | Suppressed — not rendered |
 | Preset-unknown (enabled/disabled lists only) | `"enabled (no preset rule)"` / `"disabled (no preset rule)"` |
 
+Note: The "Divergent, preset unknown" case does not exist for
+`enabled`/`disabled` units — those only enter `state_changes` when
+a preset rule IS found and the state diverges. Units with no preset
+rule stay in `enabled_units`/`disabled_units` only. The `None` case
+for `default_state` only occurs with masked units.
+
 The handler uses `implied_action()` and pattern matching on
 `ServiceUnitState` variants instead of `match sc.action.as_str()`
-string comparisons. When `default_state` is `None`, the subtitle
-omits the preset reference entirely.
+string comparisons. `default_state` is `Option<PresetDefault>` and
+the handler matches on `Some(PresetDefault::Enable)`,
+`Some(PresetDefault::Disable)`, or `None` — `Masked` is not
+representable as a preset value.
 
 #### Omitted services subsection
 
@@ -387,11 +451,11 @@ Drop-in override handling is unchanged from the post-leaf fixes.
   `preset_matched_units`, not in `state_changes`
 - Unit: `"enabled"` state with divergent preset → in `state_changes`
   with typed `ServiceUnitState::Enabled` and
-  `default_state: Some(ServiceUnitState::Disabled)`
+  `default_state: Some(PresetDefault::Disable)`
 - Unit: `"masked"` state with preset rule → in `state_changes` with
-  `default_state: Some(preset_value)`
+  `default_state: Some(PresetDefault::Enable)`
 - Unit: `"masked"` state with no preset rule → in `state_changes`
-  with `default_state: None`
+  with `default_state: None` (not fabricated `Disable`)
 - Unit: `"alias"` state → silently dropped, not in any list, no
   warning
 - Unit: `"indirect"` state → silently dropped, no warning
@@ -424,6 +488,14 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 - Service with `owning_package: Some("sssd")` where sssd is NOT in
   `packages_added` AND NOT in `baseline_package_names` → omitted with
   Containerfile comment
+- Service with `owning_package: Some("custom-app")` where custom-app
+  is in `packages_added` with `include: true` → emitted
+- Service with `owning_package: Some("custom-app")` where custom-app
+  is in `packages_added` with `include: false` → omitted (user
+  excluded the package in refine, service shouldn't be enabled)
+- `effective_target_packages()` returns same set that package renderer
+  uses for `RUN dnf install` — packages excluded in refine are absent
+  from both
 - Service with `owning_package: None` → emitted (conservative)
 - Service that is both config-tree-deferred and missing-package →
   suppressed entirely (suppress beats defer)
@@ -439,13 +511,13 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 
 ### Refine UI
 
-- Divergent service with `default_state: Some(...)` shows typed
-  subtitle with preset context
-- Divergent service with `default_state: None` shows
-  `"(no preset rule)"` subtitle without fabricated preset reference
+- Divergent service with `default_state: Some(PresetDefault::Disable)`
+  shows `"enabled (diverges from preset: disable)"` subtitle
+- Masked service with `default_state: Some(PresetDefault::Enable)`
+  shows `"masked (preset default: enable)"` subtitle
 - Masked service with `default_state: None` shows
   `"masked (no preset rule)"` — not `"masked (diverges from preset:
-  disabled)"`
+  disabled)"` or any other fabricated value
 - Preset-matched service with drop-in renders with override detail
 - Preset-matched service without drop-in is suppressed
 - Preset-unknown service shows `"(no preset rule)"` subtitle
@@ -468,12 +540,15 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 - Runtime-only and unrecognized states produce warnings, not silent
   drops
 - Services for packages not in the target image (verified via
-  `packages_added ∪ baseline_package_names`) do not appear in the
-  Containerfile output
+  `effective_target_packages()`: included `packages_added` ∪
+  `baseline_package_names`) do not appear in the Containerfile output
+- Services for packages excluded in refine (`include: false`) are
+  omitted from service output, matching the package renderer
 - Services for packages present in the target image (including base
   image packages) ARE preserved in the Containerfile output
 - Masked units with no preset rule carry `default_state: None`, not
-  a fabricated value
+  a fabricated value — `PresetDefault` enum makes `Masked` as a
+  preset value unrepresentable at the type level
 - User-intent services (preset-divergent, masked, drop-in overrides)
   are faithfully preserved
 - The refine UI shows intent signal strength via subtitles
