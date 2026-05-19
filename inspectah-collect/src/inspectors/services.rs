@@ -106,6 +106,69 @@ fn resolve_preset_default(unit: &str, rules: &[PresetRule]) -> Option<PresetDefa
     None
 }
 
+const OWNING_PACKAGE_QUERY: &str = "%{NAME}\n";
+
+/// Populate `owning_package` on each `ServiceStateChange` via a batch
+/// `rpm -qf` lookup on `/usr/lib/systemd/system/<unit>`. Falls back to
+/// per-unit queries when the batch fails or line count mismatches.
+fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [ServiceStateChange]) {
+    if state_changes.is_empty() {
+        return;
+    }
+
+    let batch_paths: Vec<String> = state_changes
+        .iter()
+        .map(|sc| format!("/usr/lib/systemd/system/{}", sc.unit))
+        .collect();
+
+    let batch_args: Vec<&str> = std::iter::once("-qf")
+        .chain(std::iter::once("--queryformat"))
+        .chain(std::iter::once(OWNING_PACKAGE_QUERY))
+        .chain(batch_paths.iter().map(|s| s.as_str()))
+        .collect();
+
+    let result = exec.run("rpm", &batch_args);
+    let batch_lines: Vec<&str> = result.stdout.lines().collect();
+
+    if result.success() && batch_lines.len() == state_changes.len() {
+        for (sc, owner) in state_changes.iter_mut().zip(batch_lines.into_iter()) {
+            let trimmed = owner.trim();
+            if !trimmed.is_empty() && !trimmed.contains("not owned") {
+                sc.owning_package = Some(trimmed.to_string());
+            }
+        }
+        return;
+    }
+
+    // Batch failed or line count mismatch — fall back to per-unit queries.
+    for sc in state_changes.iter_mut() {
+        sc.owning_package = query_owning_package(exec, &sc.unit);
+    }
+}
+
+/// Query the owning RPM package for a single unit file. Checks
+/// `/usr/lib/systemd/system/<unit>` first, then `/etc/systemd/system/<unit>`.
+fn query_owning_package(exec: &dyn Executor, unit: &str) -> Option<String> {
+    for path in [
+        format!("/usr/lib/systemd/system/{unit}"),
+        format!("/etc/systemd/system/{unit}"),
+    ] {
+        let result = exec.run("rpm", &["-qf", "--queryformat", OWNING_PACKAGE_QUERY, &path]);
+        if result.success() {
+            let pkg = result
+                .stdout
+                .lines()
+                .next()
+                .map(|line| line.trim().to_string())
+                .unwrap_or_default();
+            if !pkg.is_empty() && !pkg.contains("not owned") {
+                return Some(pkg);
+            }
+        }
+    }
+    None
+}
+
 /// Inspects systemd service state: enabled/disabled vs. preset defaults,
 /// drop-in overrides, and flags environment variables that may contain secrets.
 pub struct ServicesInspector;
@@ -311,6 +374,9 @@ impl Inspector for ServicesInspector {
             }
             // No matching preset rule → no evidence of operator action
         }
+
+        // 4b. Resolve owning packages for state_changes entries.
+        populate_owning_packages(exec, &mut state_changes);
 
         // 5. Scan drop-in directories
         let (drop_ins, redaction_hints, dropin_read_failures) = collect_drop_ins(exec);
