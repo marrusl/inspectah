@@ -714,3 +714,226 @@ fn test_clean_default_snapshot_produces_zero_state_changes() {
         "known inert states should drop silently"
     );
 }
+
+// ── Owning-package resolution tests ──────────────────────────────────
+
+#[test]
+fn test_owning_package_batch_query_populates_state_changes() {
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         httpd.service                              enabled         disabled\n\
+                         firewalld.service                          disabled        enabled\n\
+                         \n\
+                         2 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file(
+            "/usr/lib/systemd/system-preset/90-default.preset",
+            "disable httpd.service\nenable firewalld.service\n",
+        )
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/httpd.service /usr/lib/systemd/system/firewalld.service",
+            ExecResult {
+                stdout: "httpd\nfirewalld\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected Services section, got {other:?}"),
+    };
+
+    assert_eq!(section.state_changes[0].owning_package.as_deref(), Some("httpd"));
+    assert_eq!(section.state_changes[1].owning_package.as_deref(), Some("firewalld"));
+}
+
+#[test]
+fn test_owning_package_fallback_checks_etc_systemd_path() {
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         custom-local.service                       enabled         disabled\n\
+                         \n\
+                         1 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file("/usr/lib/systemd/system-preset/90-default.preset", "disable *\n")
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/custom-local.service",
+            ExecResult {
+                stdout: "file /usr/lib/systemd/system/custom-local.service is not owned by any package\n".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /etc/systemd/system/custom-local.service",
+            ExecResult {
+                stdout: "custom-local\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected Services section, got {other:?}"),
+    };
+
+    assert_eq!(
+        section.state_changes[0].owning_package.as_deref(),
+        Some("custom-local")
+    );
+}
+
+#[test]
+fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         httpd.service                              enabled         disabled\n\
+                         firewalld.service                          disabled        enabled\n\
+                         \n\
+                         2 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file(
+            "/usr/lib/systemd/system-preset/90-default.preset",
+            "disable httpd.service\nenable firewalld.service\n",
+        )
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/httpd.service /usr/lib/systemd/system/firewalld.service",
+            ExecResult {
+                stdout: "error: batch ownership lookup failed\n".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/httpd.service",
+            ExecResult {
+                stdout: "httpd\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/firewalld.service",
+            ExecResult {
+                stdout: "firewalld\n".into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected Services section, got {other:?}"),
+    };
+
+    assert_eq!(section.state_changes[0].owning_package.as_deref(), Some("httpd"));
+    assert_eq!(section.state_changes[1].owning_package.as_deref(), Some("firewalld"));
+}
+
+#[test]
+fn test_unowned_unit_keeps_owning_package_none() {
+    let exec = MockExecutor::new()
+        .with_command(
+            "systemctl list-unit-files --type=service --no-pager",
+            ExecResult {
+                stdout: "UNIT FILE                                  STATE           PRESET\n\
+                         custom-local.service                       enabled         disabled\n\
+                         \n\
+                         1 unit files listed.\n"
+                    .into(),
+                exit_code: 0,
+                ..Default::default()
+            },
+        )
+        .with_dir("/usr/lib/systemd/system-preset", vec!["90-default.preset"])
+        .with_file("/usr/lib/systemd/system-preset/90-default.preset", "disable *\n")
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /usr/lib/systemd/system/custom-local.service",
+            ExecResult {
+                stdout: "file /usr/lib/systemd/system/custom-local.service is not owned by any package\n".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+        )
+        .with_command(
+            "rpm -qf --queryformat %{NAME}\n /etc/systemd/system/custom-local.service",
+            ExecResult {
+                stdout: "file /etc/systemd/system/custom-local.service is not owned by any package\n".into(),
+                exit_code: 1,
+                ..Default::default()
+            },
+        )
+        .with_dir("/etc/systemd/system", vec![]);
+
+    let source = pkg_source();
+    let ctx = InspectionContext {
+        source_system: &source,
+        executor: &exec,
+        rpm_state: None,
+        baseline_data: None,
+    };
+
+    let output = ServicesInspector::new().inspect(&ctx).unwrap();
+    let section = match &output.section {
+        SectionData::Services(s) => s,
+        other => panic!("expected Services section, got {other:?}"),
+    };
+
+    assert_eq!(section.state_changes[0].owning_package, None);
+}
