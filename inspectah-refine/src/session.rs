@@ -3,6 +3,7 @@ use std::path::Path;
 
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::redaction::RedactionState;
 use inspectah_pipeline::render::containerfile::render_containerfile;
 
 use crate::attention::{compute_config_attention, compute_package_attention};
@@ -690,6 +691,46 @@ impl RefineSession {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // If refine-time ops introduced sensitivity (e.g. NewPassword),
+        // upgrade the snapshot's redaction_state and sensitive_snapshot flag.
+        if !self.original.sensitive_snapshot {
+            let has_new_password = snap
+                .users_groups
+                .as_ref()
+                .map(|ug| {
+                    ug.users.iter().any(|u| {
+                        let choice = u
+                            .get("password_choice")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        let has_hash = u
+                            .get("password_hash")
+                            .and_then(|v| v.as_str())
+                            .map(|s| !s.is_empty())
+                            .unwrap_or(false);
+                        choice == "new" && has_hash
+                    })
+                })
+                .unwrap_or(false);
+
+            if has_new_password {
+                snap.sensitive_snapshot = true;
+
+                if let Some(RedactionState::FullyRedacted {
+                    ref redacted_by,
+                    ref config_hash,
+                }) = snap.redaction_state
+                {
+                    snap.redaction_state = Some(RedactionState::SensitiveRetained {
+                        redacted_by: redacted_by.clone(),
+                        config_hash: config_hash.clone(),
+                        unresolved_count: 0,
+                        unresolved_hints: Vec::new(),
+                    });
                 }
             }
         }
