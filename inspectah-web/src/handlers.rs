@@ -463,13 +463,68 @@ pub async fn user_password(
         "none" => UserPasswordOp::None {
             username: req.username,
         },
-        "preserve" => UserPasswordOp::Preserve {
-            username: req.username,
-        },
-        "new" => UserPasswordOp::New {
-            username: req.username,
-            hash: req.hash,
-        },
+        "preserve" => {
+            // Validate: snapshot must have preserved_credentials and user must
+            // have a password_hash — otherwise "preserve" is an impossible state.
+            let session = state.session.lock().unwrap();
+            let snap = session.snapshot();
+            if !snap.preserved_credentials {
+                return Err(AppError(
+                    inspectah_refine::types::RefineError::BadRequest(
+                        "cannot preserve password: snapshot does not contain preserved credentials"
+                            .into(),
+                    ),
+                ));
+            }
+            let has_hash = snap
+                .users_groups
+                .as_ref()
+                .and_then(|ug| {
+                    ug.users.iter().find(|u| {
+                        u.get("name").and_then(|v| v.as_str()) == Some(&req.username)
+                    })
+                })
+                .and_then(|u| u.get("password_hash"))
+                .and_then(|v| v.as_str())
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if !has_hash {
+                return Err(AppError(
+                    inspectah_refine::types::RefineError::BadRequest(format!(
+                        "cannot preserve password for \"{}\": user has no password hash",
+                        req.username
+                    )),
+                ));
+            }
+            drop(session); // release lock before re-acquiring below
+            UserPasswordOp::Preserve {
+                username: req.username,
+            }
+        }
+        "new" => {
+            // Validate: hash must be provided, non-empty, and in a recognized
+            // crypt(3) format ($6$, $5$, or $y$).
+            let hash = req.hash.as_deref().unwrap_or("");
+            if hash.is_empty() {
+                return Err(AppError(
+                    inspectah_refine::types::RefineError::BadRequest(
+                        "password choice \"new\" requires a non-empty \"hash\" field".into(),
+                    ),
+                ));
+            }
+            if !hash.starts_with("$6$") && !hash.starts_with("$5$") && !hash.starts_with("$y$") {
+                return Err(AppError(
+                    inspectah_refine::types::RefineError::BadRequest(
+                        "invalid hash format: must start with $6$, $5$, or $y$ (crypt(3) format)"
+                            .into(),
+                    ),
+                ));
+            }
+            UserPasswordOp::New {
+                username: req.username,
+                hash: req.hash,
+            }
+        }
         other => {
             return Err(AppError(
                 inspectah_refine::types::RefineError::BadRequest(format!(
