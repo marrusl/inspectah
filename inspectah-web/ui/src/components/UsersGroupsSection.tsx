@@ -55,16 +55,15 @@ export function UsersGroupsSection({
     [onViewUpdate, onMutationError],
   );
 
-  // Collect custom groups: groups whose GID matches a user's primary GID
-  // (these are user-private groups that useradd would create).
-  const customGroupSummary = useMemo(() => {
+  // Summarize which users are included via useradd. The full set of
+  // groupadd/useradd commands (including supplementary groups) is visible
+  // in the artifact preview — don't try to replicate renderer logic here.
+  const useraddSummary = useMemo(() => {
     const included = users.filter(
       (u) => u.containerfile_strategy === "useradd",
     );
     if (included.length === 0) return null;
-    // Each included user creates a primary group with their name and GID.
-    const groups = included.map((u) => `${u.name} (${u.gid})`);
-    return groups;
+    return included.map((u) => u.name);
   }, [users]);
 
   if (users.length === 0) {
@@ -141,9 +140,9 @@ export function UsersGroupsSection({
           fontStyle: "italic",
         }}
       >
-        {customGroupSummary && customGroupSummary.length > 0
-          ? `Custom groups to be created: ${customGroupSummary.join(", ")}`
-          : "No custom groups"}
+        {useraddSummary && useraddSummary.length > 0
+          ? `Users added via useradd: ${useraddSummary.join(", ")}`
+          : "No users added to Containerfile"}
       </div>
 
       {users.map((user) => (
