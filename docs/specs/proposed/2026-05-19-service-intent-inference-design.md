@@ -3,16 +3,20 @@
 > Replace state filtering with intent inference so the Containerfile
 > renderer only emits service instructions for deliberate user choices.
 
-**Status:** Proposed (revision 4)  
+**Status:** Proposed (revision 5)  
 **Created:** 2026-05-19  
 **Area:** inspectah-collect, inspectah-pipeline, inspectah-web
 
+> **Revision 5** (2026-05-19): `owning_package` population included
+> in spec scope. The services collector now populates `owning_package`
+> via batch `rpm -qf` with per-unit fallback, matching the Go
+> codebase's `resolveOwningPackages` pattern. Suppression logic is
+> no longer dormant — it activates end-to-end.
+>
 > **Revision 4** (2026-05-19): Addresses round 3 review finding.
 > Clarifies that `packages_added` includes transitive dependencies
 > (not just direct installs), closing Thorn's dependency-closure
-> concern. Documents that `owning_package` is not yet populated by
-> the services collector — suppression logic is designed and tested
-> but activates only after enrichment is implemented.
+> concern.
 >
 > **Revision 3** (2026-05-19): Addresses round 2 review findings.
 > Preset knowledge uses its own `PresetDefault` enum (`Enable`,
@@ -362,15 +366,27 @@ render time. If `owning_package` cannot be determined for a service
 (e.g., the unit file is not owned by any RPM), it is `None` and the
 service is emitted conservatively.
 
-**`owning_package` enrichment.** The `owning_package` field on
-`ServiceStateChange` exists in the struct but is not currently
-populated by the services collector — it is always `None`. Populating
-it requires a service-to-package attribution step (e.g., using
-`file_ownership` data or `rpm -qf` on the unit file path). Until
-this enrichment is implemented, all services fall through to the
-conservative `owning_package: None` path and are emitted without
-package-presence checking. The suppression logic is designed and
-tested but does not activate until `owning_package` is populated.
+**`owning_package` population.** The services collector populates
+`owning_package` for each `ServiceStateChange` entry via `rpm -qf`
+after `state_changes` is built. This is the same pattern used in
+the Go codebase's `resolveOwningPackages` function.
+
+**Approach:** Batch-first with per-unit fallback:
+
+1. Collect unit file paths for all `state_changes` entries
+   (`/usr/lib/systemd/system/<unit>`)
+2. Run batch `rpm -qf --queryformat "%{NAME}\n" <paths...>`
+3. If the batch succeeds and output line count matches input count,
+   zip results onto `state_changes`
+4. If the batch fails (count mismatch, error), fall back to
+   individual `rpm -qf` per unit, trying `/usr/lib/systemd/system/`
+   then `/etc/systemd/system/`
+5. Units not owned by any RPM (e.g., manually placed unit files)
+   get `owning_package: None`
+
+This runs after `state_changes` is populated (insertion point:
+between state_changes assembly and drop-in collection). The executor
+already supports arbitrary command execution via `exec.run()`.
 
 **Suppression logic.** For each `state_change`:
 
@@ -497,6 +513,14 @@ Drop-in override handling is unchanged from the post-leaf fixes.
   emitted with `raw_state: "future-state"`, not in service data
 - Unit: no matching preset rule, state `"enabled"` → in
   `enabled_units` only, no `ServiceStateChange`
+- `owning_package`: batch `rpm -qf` for 3 units → all 3 get
+  `owning_package: Some(package_name)`
+- `owning_package`: batch `rpm -qf` returns "not owned" for one
+  unit → that unit gets `owning_package: None`
+- `owning_package`: batch `rpm -qf` fails (exit code != 0) →
+  falls back to individual queries per unit
+- `owning_package`: unit in `/etc/systemd/system/` (not
+  `/usr/lib/`) → fallback tries both paths
 - Integration: clean RHEL/CentOS install with no user service changes
   produces zero `state_changes` entries
 
