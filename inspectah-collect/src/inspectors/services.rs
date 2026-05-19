@@ -133,7 +133,7 @@ fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [ServiceSta
     if result.success() && batch_lines.len() == state_changes.len() {
         for (sc, owner) in state_changes.iter_mut().zip(batch_lines.into_iter()) {
             let trimmed = owner.trim();
-            if !trimmed.is_empty() && !trimmed.contains("not owned") {
+            if !trimmed.is_empty() && !trimmed.contains(' ') {
                 sc.owning_package = Some(trimmed.to_string());
             }
         }
@@ -161,7 +161,7 @@ fn query_owning_package(exec: &dyn Executor, unit: &str) -> Option<String> {
                 .next()
                 .map(|line| line.trim().to_string())
                 .unwrap_or_default();
-            if !pkg.is_empty() && !pkg.contains("not owned") {
+            if !pkg.is_empty() && !pkg.contains(' ') {
                 return Some(pkg);
             }
         }
