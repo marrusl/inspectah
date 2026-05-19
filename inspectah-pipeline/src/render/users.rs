@@ -302,7 +302,7 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         let home = str_field(u, "home");
         let shell = str_field(u, "shell");
 
-        let mut cmd = "RUN useradd".to_string();
+        let mut cmd = "RUN useradd -m".to_string();
         if uid > 0 {
             cmd.push_str(&format!(" -u {uid}"));
         }
@@ -560,7 +560,7 @@ mod tests {
         // Groups come first
         assert!(output.contains("RUN groupadd -g 1010 docker"), "groupadd missing");
         // useradd with flags
-        assert!(output.contains("RUN useradd -u 1001 -g 1001 -G wheel,docker"), "useradd missing");
+        assert!(output.contains("RUN useradd -m -u 1001 -g 1001 -G wheel,docker"), "useradd missing");
         // Password warning
         assert!(output.contains("WARNING: Embedding password hashes"), "password warning missing");
         // chpasswd
@@ -574,6 +574,25 @@ mod tests {
         let groupadd_pos = output.find("RUN groupadd").unwrap();
         let useradd_pos = output.find("RUN useradd").unwrap();
         assert!(groupadd_pos < useradd_pos, "groupadd must precede useradd");
+    }
+
+    #[test]
+    fn containerfile_useradd_creates_home_without_ssh_keys() {
+        let mut snap = InspectionSnapshot::new();
+        snap.users_groups = Some(UserGroupSection {
+            users: vec![serde_json::json!({
+                "name": "bob", "uid": 1001, "gid": 1001,
+                "shell": "/bin/bash", "home": "/home/bob",
+                "containerfile_strategy": "useradd",
+                "supplementary_groups": []
+            })],
+            groups: vec![serde_json::json!({"name": "bob", "gid": 1001, "source": "custom"})],
+            ..Default::default()
+        });
+        let cf = render_containerfile_users(&snap);
+        let output = cf.join("\n");
+        assert!(output.contains("-m"), "useradd must include -m to create home dir: {output}");
+        assert!(output.contains("useradd"), "must contain useradd: {output}");
     }
 
     #[test]

@@ -144,7 +144,7 @@ fn containerfile_useradd_with_groups_and_ssh() {
     );
     // useradd with flags
     assert!(
-        output.contains("RUN useradd -u 1001 -g 1001 -G wheel,docker"),
+        output.contains("RUN useradd -m -u 1001 -g 1001 -G wheel,docker"),
         "useradd with flags missing"
     );
     // Password warning comment
@@ -170,7 +170,7 @@ fn containerfile_useradd_with_groups_and_ssh() {
 
     // Ordering: groupadd before useradd
     let groupadd_pos = output.find("RUN groupadd").unwrap();
-    let useradd_pos = output.find("RUN useradd -u").unwrap();
+    let useradd_pos = output.find("RUN useradd -m").unwrap();
     assert!(
         groupadd_pos < useradd_pos,
         "groupadd must precede useradd"
