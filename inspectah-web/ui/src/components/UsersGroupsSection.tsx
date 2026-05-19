@@ -40,12 +40,17 @@ export function UsersGroupsSection({
   );
 
   const handlePasswordChange = useCallback(
-    (username: string, choice: "none" | "preserve" | "new", hash?: string) => {
+    async (username: string, choice: "none" | "preserve" | "new", hash?: string) => {
       setIsPending(true);
-      setUserPassword(username, choice, hash)
-        .then(onViewUpdate)
-        .catch(onMutationError)
-        .finally(() => setIsPending(false));
+      try {
+        const view = await setUserPassword(username, choice, hash);
+        onViewUpdate(view);
+      } catch (err) {
+        onMutationError(err instanceof Error ? err : new Error(String(err)));
+        throw err; // Re-throw so callers can distinguish success from failure
+      } finally {
+        setIsPending(false);
+      }
     },
     [onViewUpdate, onMutationError],
   );
