@@ -127,9 +127,15 @@ fn test_service_render_plan_omits_proven_absent_service() {
 
     let plan = render_service_intent(&snap);
 
+    // Omission comment IS in lines — user sees what was excluded
     assert!(
-        plan.lines.iter().all(|line| !line.contains("sssd-kcm.service")),
-        "omitted service must not appear in output lines"
+        plan.lines.iter().any(|line| line.contains("# Omitted: sssd-kcm.service")),
+        "omission comment must appear in output lines"
+    );
+    // No systemctl command references the omitted unit
+    assert!(
+        plan.lines.iter().all(|line| !line.contains("systemctl") || !line.contains("sssd-kcm.service")),
+        "omitted service must not appear in systemctl commands"
     );
     assert_eq!(plan.omissions.len(), 1);
     assert_eq!(plan.omissions[0].unit, "sssd-kcm.service");
@@ -300,9 +306,18 @@ fn test_service_render_plan_suppresses_before_config_tree_deferral() {
     // Must be omitted, NOT deferred
     assert_eq!(plan.omissions.len(), 1, "proven-absent must be omitted even with timer");
     assert_eq!(plan.omissions[0].unit, "absent-timer.service");
+    // Omission comment IS in lines
     assert!(
-        plan.lines.iter().all(|l| !l.contains("absent-timer")),
-        "omitted service must not appear in any output line (including deferred)"
+        plan.lines.iter().any(|l| l.contains("# Omitted: absent-timer.service")),
+        "omission comment must appear in output lines"
+    );
+    // But no systemctl or deferred line references it
+    assert!(
+        plan.lines.iter().all(|l| {
+            if l.starts_with("# Omitted:") { return true; }
+            !l.contains("absent-timer")
+        }),
+        "omitted service must not appear in systemctl or deferred lines"
     );
 }
 
@@ -546,4 +561,58 @@ fn test_service_render_plan_present_package_deferred_to_config_tree() {
             .any(|l| l.contains("deferred") && l.contains("timer-pkg")),
         "deferred service must appear in deferred comment"
     );
+}
+
+/// Duplicate same-name packages: one excluded, one included+installable.
+/// The included entry should win — package is present, no advisory.
+#[test]
+fn test_service_render_plan_duplicate_package_uses_best_entry() {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        baseline_package_names: Some(vec![]),
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: false, // excluded entry
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "i686".into(),
+                state: PackageState::Added,
+                include: true, // included entry — should win
+                source_repo: "appstream".into(),
+                ..Default::default()
+            },
+        ],
+        no_baseline: false,
+        ..Default::default()
+    });
+    snap.services = Some(ServiceSection {
+        state_changes: vec![state_change(
+            "httpd.service",
+            ServiceUnitState::Enabled,
+            Some(PresetDefault::Disable),
+            Some("httpd"),
+        )],
+        enabled_units: vec![],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec![],
+    });
+
+    let plan = render_service_intent(&snap);
+
+    assert!(
+        plan.omissions.is_empty(),
+        "included entry should make package present"
+    );
+    assert!(
+        plan.advisories.is_empty(),
+        "included+installable entry should emit clean"
+    );
+    assert!(plan.lines.iter().any(|l| l.contains("httpd.service")));
 }

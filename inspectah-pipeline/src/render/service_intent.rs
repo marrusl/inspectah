@@ -218,20 +218,29 @@ fn classify_service_presence(
         None => return PresenceDecision::Emit { advisory_reasons: None },
     };
 
-    // Check if the package appears in packages_added
-    if let Some(pkg) = rpm.packages_added.iter().find(|p| &p.name == pkg_name) {
-        if !pkg.include {
-            // Tier 2: excluded package
-            let mut reasons = vec![AdvisoryReason::PackageExcluded];
-            if baseline_unavailable {
-                reasons.push(AdvisoryReason::BaselineUnavailable);
-            }
-            return PresenceDecision::Emit {
-                advisory_reasons: Some((pkg_name.clone(), reasons)),
-            };
+    // Check all entries with this package name — duplicates may differ in
+    // include/installability state.  Best-case wins: any included+installable
+    // entry means the package is present.
+    let matching_packages: Vec<&PackageEntry> = rpm
+        .packages_added
+        .iter()
+        .filter(|p| p.name == *pkg_name)
+        .collect();
+
+    if !matching_packages.is_empty() {
+        // Tier 4: if ANY entry is included AND installable → proven present
+        let any_installable = matching_packages
+            .iter()
+            .any(|pkg| pkg.include && is_package_installable(pkg));
+        if any_installable {
+            return PresenceDecision::Emit { advisory_reasons: None };
         }
-        if !is_package_installable(pkg) {
-            // Tier 3: included but not installable
+
+        // Tier 3: if ANY entry is included but not installable → PackageUnreachable
+        let any_included_not_installable = matching_packages
+            .iter()
+            .any(|pkg| pkg.include && !is_package_installable(pkg));
+        if any_included_not_installable {
             let mut reasons = vec![AdvisoryReason::PackageUnreachable];
             if baseline_unavailable {
                 reasons.push(AdvisoryReason::BaselineUnavailable);
@@ -240,8 +249,15 @@ fn classify_service_presence(
                 advisory_reasons: Some((pkg_name.clone(), reasons)),
             };
         }
-        // Tier 4: included and installable
-        return PresenceDecision::Emit { advisory_reasons: None };
+
+        // Tier 2: all entries are excluded → PackageExcluded
+        let mut reasons = vec![AdvisoryReason::PackageExcluded];
+        if baseline_unavailable {
+            reasons.push(AdvisoryReason::BaselineUnavailable);
+        }
+        return PresenceDecision::Emit {
+            advisory_reasons: Some((pkg_name.clone(), reasons)),
+        };
     }
 
     // Check if the package is in the effective target set (baseline or included-added)
@@ -315,6 +331,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     }
 
     let mut omissions = Vec::new();
+    let mut omission_comments = Vec::new();
     let mut advisories = Vec::new();
     let mut safe_enabled = Vec::new();
     let mut safe_disabled = Vec::new();
@@ -331,6 +348,10 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
         // service never becomes deferred fiction.
         match classify_service_presence(sc, rpm, &target_packages, baseline_unavailable) {
             PresenceDecision::Omit { owning_package } => {
+                omission_comments.push(format!(
+                    "# Omitted: {} (package '{}' not in target image)",
+                    u, owning_package
+                ));
                 omissions.push(ServiceOmission {
                     unit: u.clone(),
                     owning_package,
@@ -368,6 +389,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     }
 
     let mut lines = Vec::new();
+    lines.extend(omission_comments);
     if !safe_enabled.is_empty() {
         lines.extend(systemctl_lines("enable", &safe_enabled));
     }
