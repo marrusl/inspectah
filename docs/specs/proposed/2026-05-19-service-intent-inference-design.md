@@ -3,16 +3,19 @@
 > Replace state filtering with intent inference so the Containerfile
 > renderer only emits service instructions for deliberate user choices.
 
-**Status:** Proposed (revision 8)  
+**Status:** Proposed (revision 9)  
 **Created:** 2026-05-19  
 **Area:** inspectah-collect, inspectah-pipeline, inspectah-web
 
+> **Revision 9** (2026-05-19): Nit fixes from round 7
+> approve-with-nits. Degraded-mode prose aligned with overlap case.
+> Stale `LocalInstall`/`NoRepo` references replaced with
+> `is_package_installable()`. Stacked-advisory UI test added.
+> Service Advisories documented as supplemental context.
+>
 > **Revision 8** (2026-05-19): Addresses round 6 review findings.
-> Installability keyed to shared `is_package_installable()` predicate
-> used by both package and service renderers — no more hardcoded
-> state enumeration in the spec. `ServiceAdvisory.reasons` is now
-> `Vec<AdvisoryReason>` to handle overlapping caveats (e.g.,
-> `BaselineUnavailable` + `PackageExcluded`).
+> Shared `is_package_installable()` predicate. Multi-reason
+> advisories via `Vec<AdvisoryReason>`.
 >
 > **Revision 7** (2026-05-19): Addresses round 5 review findings.
 > Splits renderer output into `Vec<ServiceOmission>` (truly omitted)
@@ -444,11 +447,14 @@ reasons (a service can have multiple caveats):
 data unavailable), `baseline_package_names` is empty and the
 "proven absent" tier is unreachable (cannot prove a package is absent
 without knowing what's in the base image). A `BaselineUnavailable`
-advisory reason is added to every service with a known
-`owning_package` that is not in `packages_added`. This reason
-**stacks** with other reasons — a service can carry both
-`PackageExcluded` and `BaselineUnavailable` when the user excluded
-a package AND baseline data is missing.
+advisory reason is added to any service whose render decision would
+benefit from baseline knowledge — this includes services whose
+packages are excluded (`PackageExcluded`) or not installable
+(`PackageUnreachable`), not just packages absent from
+`packages_added`. `BaselineUnavailable` **stacks** with other
+reasons — a service can carry `[PackageExcluded,
+BaselineUnavailable]` when the user excluded a package AND baseline
+data is missing.
 
 #### Render-decision output
 
@@ -687,8 +693,14 @@ Drop-in override handling is unchanged from the post-leaf fixes.
 - Advisory services appear in "Service Advisories" subsection —
   these ARE in the Containerfile but with caveats
 - `PackageExcluded` advisory shows dependency uncertainty message
-- `PackageUnreachable` advisory shows manual-install message
+- `PackageUnreachable` advisory shows manual-follow-up message
 - `BaselineUnavailable` advisory shows verification message
+- Stacked reasons: advisory with `[PackageExcluded,
+  BaselineUnavailable]` renders both reasons joined in subtitle
+  (e.g., `"package excluded; baseline unavailable"`)
+- Advisory-emitted services remain in the main actionable service
+  list — "Service Advisories" is supplemental context, not a
+  replacement
 - Refine UI consumes renderer's `ServiceOmission` and
   `ServiceAdvisory` lists directly — does not recompute
 - `linked` warning renders in "Service Warnings" subsection with
@@ -712,8 +724,8 @@ Drop-in override handling is unchanged from the post-leaf fixes.
   visible comments
 - Services for packages excluded in refine (`include: false`) are
   emitted with advisory comments (may still be present as dependency)
-- Services for unreachable packages (`LocalInstall`/`NoRepo`) are
-  emitted with advisory comments (require manual installation)
+- Services for packages where `is_package_installable()` returns
+  false are emitted with `PackageUnreachable` advisory
 - Renderer produces `Vec<ServiceOmission>` (truly omitted) and
   `Vec<ServiceAdvisory>` (emitted with caveats) as separate lists —
   refine consumes both directly, single source of truth
