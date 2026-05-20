@@ -4,6 +4,7 @@
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
+use inspectah_core::types::fleet::VariantSelection;
 
 use super::baseline_fmt;
 
@@ -13,6 +14,97 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
 
     lines.push("# Audit Report".into());
     lines.push(String::new());
+
+    // Fleet aggregate summary section
+    if let Some(meta) = &snap.fleet_meta {
+        lines.push("## Fleet Aggregate Summary".into());
+        lines.push(String::new());
+
+        lines.push(format!("- **Label:** {}", meta.label));
+        lines.push(format!("- **Host count:** {}", meta.host_count));
+        lines.push(format!(
+            "- **Baseline selection:** {}",
+            if meta.baseline_provisional {
+                "Provisional"
+            } else {
+                "Explicit"
+            }
+        ));
+
+        if !meta.hostnames.is_empty() {
+            lines.push(String::new());
+            lines.push("### Hosts".into());
+            lines.push(String::new());
+            for hostname in &meta.hostnames {
+                lines.push(format!("- {}", hostname));
+            }
+        }
+
+        if !meta.section_host_counts.is_empty() {
+            lines.push(String::new());
+            lines.push("### Section Coverage".into());
+            lines.push(String::new());
+            lines.push("| Section | Hosts |".into());
+            lines.push("|---------|-------|".into());
+            for (section, count) in &meta.section_host_counts {
+                lines.push(format!("| {} | {} |", section, count));
+            }
+        }
+
+        // Count variant conflicts across all sections
+        let mut conflict_count = 0usize;
+
+        if let Some(config) = &snap.config {
+            conflict_count += config
+                .files
+                .iter()
+                .filter(|f| {
+                    f.variant_selection == VariantSelection::Selected
+                        || f.variant_selection == VariantSelection::Alternative
+                })
+                .count();
+        }
+
+        if let Some(services) = &snap.services {
+            conflict_count += services
+                .drop_ins
+                .iter()
+                .filter(|d| {
+                    d.variant_selection == VariantSelection::Selected
+                        || d.variant_selection == VariantSelection::Alternative
+                })
+                .count();
+        }
+
+        if let Some(containers) = &snap.containers {
+            conflict_count += containers
+                .quadlet_units
+                .iter()
+                .filter(|q| {
+                    q.variant_selection == VariantSelection::Selected
+                        || q.variant_selection == VariantSelection::Alternative
+                })
+                .count();
+            conflict_count += containers
+                .compose_files
+                .iter()
+                .filter(|c| {
+                    c.variant_selection == VariantSelection::Selected
+                        || c.variant_selection == VariantSelection::Alternative
+                })
+                .count();
+        }
+
+        if conflict_count > 0 {
+            lines.push(String::new());
+            lines.push(format!(
+                "**Variant conflicts:** {} path(s) with multiple content versions across the fleet",
+                conflict_count
+            ));
+        }
+
+        lines.push(String::new());
+    }
 
     // Incomplete sections warning — distinguish failed (no data) from degraded (partial data)
     let (failed_ids, degraded_ids) = match &snap.completeness {
@@ -660,5 +752,97 @@ mod tests {
         snap.rpm = Some(RpmSection::default());
         let report = render_audit(&snap);
         assert!(!report.contains("Version Changes"));
+    }
+
+    #[test]
+    fn test_audit_fleet_summary_section() {
+        use inspectah_core::types::fleet::FleetSnapshotMeta;
+        use std::collections::BTreeMap;
+
+        let mut snap = InspectionSnapshot::default();
+        snap.fleet_meta = Some(FleetSnapshotMeta {
+            label: "web-servers".into(),
+            host_count: 3,
+            hostnames: vec!["host1".into(), "host2".into(), "host3".into()],
+            merged_at: "2026-05-20T12:00:00Z".into(),
+            baseline_provisional: true,
+            section_host_counts: BTreeMap::from([
+                ("config".into(), 3usize),
+                ("rpm".into(), 3),
+                ("services".into(), 2),
+            ]),
+        });
+
+        let report = render_audit(&snap);
+
+        assert!(report.contains("## Fleet Aggregate Summary"));
+        assert!(report.contains("**Label:** web-servers"));
+        assert!(report.contains("**Host count:** 3"));
+        assert!(report.contains("**Baseline selection:** Provisional"));
+        assert!(report.contains("### Hosts"));
+        assert!(report.contains("- host1"));
+        assert!(report.contains("- host2"));
+        assert!(report.contains("- host3"));
+        assert!(report.contains("### Section Coverage"));
+        assert!(report.contains("| config | 3 |"));
+        assert!(report.contains("| rpm | 3 |"));
+        assert!(report.contains("| services | 2 |"));
+    }
+
+    #[test]
+    fn test_audit_fleet_variant_conflicts() {
+        use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+        use inspectah_core::types::fleet::{FleetSnapshotMeta, VariantSelection};
+        use inspectah_core::types::services::{ServiceSection, SystemdDropIn};
+        use std::collections::BTreeMap;
+
+        let mut snap = InspectionSnapshot::default();
+        snap.fleet_meta = Some(FleetSnapshotMeta {
+            label: "test-fleet".into(),
+            host_count: 2,
+            hostnames: vec!["host1".into(), "host2".into()],
+            merged_at: "2026-05-20T12:00:00Z".into(),
+            baseline_provisional: false,
+            section_host_counts: BTreeMap::new(),
+        });
+
+        // Add config file with variant conflict
+        snap.config = Some(ConfigSection {
+            files: vec![
+                ConfigFileEntry {
+                    path: "/etc/app.conf".into(),
+                    variant_selection: VariantSelection::Selected,
+                    ..Default::default()
+                },
+                ConfigFileEntry {
+                    path: "/etc/other.conf".into(),
+                    variant_selection: VariantSelection::Only,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        // Add service drop-in with variant conflict
+        snap.services = Some(ServiceSection {
+            drop_ins: vec![SystemdDropIn {
+                path: "/etc/systemd/system/foo.service.d/override.conf".into(),
+                variant_selection: VariantSelection::Alternative,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+
+        let report = render_audit(&snap);
+
+        assert!(report.contains("**Baseline selection:** Explicit"));
+        assert!(report.contains("**Variant conflicts:** 2 path(s)"));
+    }
+
+    #[test]
+    fn test_audit_no_fleet_summary_for_single_host() {
+        let snap = InspectionSnapshot::default();
+        let report = render_audit(&snap);
+        assert!(!report.contains("Fleet Aggregate Summary"));
     }
 }
