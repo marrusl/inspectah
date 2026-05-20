@@ -77,8 +77,10 @@ Types that implement `FleetMergeable` (have both `fleet` and `include`):
 | `NonRpmItem` | `name` | No (variant support deferred) | — |
 | `KernelModule` | `name` | No | **Needs `fleet` field added** |
 | `SysctlOverride` | `key` | No | **Needs `fleet` field added** |
+| `SystemdTimer` | `name` | No | Note: `include` is `Option<bool>`, already has `fleet` |
+| `AtJob` | `file` | No | Note: `include` is `Option<bool>`, already has `fleet` |
 
-Types handled by section adapters (no `fleet`/`include`):
+Types handled by section adapters (no `fleet`/`include`, or non-prevalence fields):
 
 | Type | Section | Strategy |
 |------|---------|----------|
@@ -89,8 +91,6 @@ Types handled by section adapters (no `fleet`/`include`):
 | `LvmVolume` | `storage` | Dedup by identity |
 | `VarDirectory` | `storage` | Dedup by identity |
 | `CredentialRef` | `storage` | Dedup by identity |
-| `SystemdTimer` | `scheduled_tasks` | Dedup by identity |
-| `AtJob` | `scheduled_tasks` | Dedup by identity |
 | `GeneratedTimerUnit` | `scheduled_tasks` | Dedup by `unit_name` |
 | `ProxyEntry` | `network` | Dedup by `source` |
 | `FirewallDirectRule` | `network` | Dedup by identity |
@@ -651,7 +651,7 @@ pub fn merge_items<T: FleetMergeable>(
         let has_variants = group[0].1.content_variant_key().is_some();
 
         if has_variants {
-            result.extend(merge_with_variants(group, total_hosts, &hosts));
+            result.extend(merge_with_variants(group, total_hosts, hostnames));
         } else {
             let mut representative = group[0].1.clone();
             *representative.fleet_mut() = Some(FleetPrevalence {
@@ -715,50 +715,58 @@ Key behavior: subgroup by content hash. If only one subgroup exists → `Only` (
 fn merge_with_variants<T: FleetMergeable>(
     group: &mut [(usize, T)],
     total_hosts: usize,
-    all_hosts_sorted: &[String],
+    hostnames: &[String],  // full hostnames array, indexed by host_idx
 ) -> Vec<T> {
-    use sha2::{Sha256, Digest};
-
     let mut subgroups: HashMap<String, Vec<(usize, &T)>> = HashMap::new();
     for (idx, item) in group.iter() {
         let hash = item.content_variant_key().unwrap().into_owned();
         subgroups.entry(hash).or_default().push((*idx, item));
     }
 
-    // Single content version across all hosts → Only, not Selected
-    if subgroups.len() == 1 {
-        let (_, subgroup) = subgroups.into_iter().next().unwrap();
-        let mut item = subgroup[0].1.clone();
+    // Helper: compute unique host list for a subgroup
+    fn unique_hosts(subgroup: &[(usize, &impl FleetMergeable)], hostnames: &[String]) -> Vec<String> {
         let mut hosts: Vec<String> = subgroup.iter()
-            .map(|(idx, _)| all_hosts_sorted[*idx].clone())
+            .map(|(idx, _)| hostnames[*idx].clone())
             .collect();
         hosts.sort();
         hosts.dedup();
+        hosts
+    }
+
+    // Single content version across all hosts → Only, not Selected
+    if subgroups.len() == 1 {
+        let (_, subgroup) = subgroups.into_iter().next().unwrap();
+        let hosts = unique_hosts(&subgroup, hostnames);
+        let mut item = subgroup[0].1.clone();
         *item.fleet_mut() = Some(FleetPrevalence {
             count: hosts.len() as i32,
             total: total_hosts as i32,
             hosts,
         });
         item.set_include(true);
-        // variant_selection stays Only (default)
         return vec![item];
     }
 
-    // Multiple content versions — rank by prevalence, tie-break by hash
+    // Multiple content versions — rank by unique host count, tie-break by hash
     let mut ranked: Vec<(String, Vec<(usize, &T)>)> = subgroups.into_iter().collect();
     ranked.sort_by(|(hash_a, hosts_a), (hash_b, hosts_b)| {
-        hosts_b.len().cmp(&hosts_a.len())
+        // Use unique host count, not raw entry count (prevents duplicate
+        // entries from one host inflating prevalence)
+        let count_a = {
+            let mut h: Vec<usize> = hosts_a.iter().map(|(i, _)| *i).collect();
+            h.sort(); h.dedup(); h.len()
+        };
+        let count_b = {
+            let mut h: Vec<usize> = hosts_b.iter().map(|(i, _)| *i).collect();
+            h.sort(); h.dedup(); h.len()
+        };
+        count_b.cmp(&count_a)
             .then_with(|| hash_a.cmp(hash_b))
     });
 
     let mut result = Vec::new();
     for (i, (_hash, subgroup)) in ranked.iter().enumerate() {
-        let mut hosts: Vec<String> = subgroup.iter()
-            .map(|(idx, _)| all_hosts_sorted[*idx].clone())
-            .collect();
-        hosts.sort();
-        hosts.dedup();
-
+        let hosts = unique_hosts(subgroup, hostnames);
         let mut item = subgroup[0].1.clone();
         *item.fleet_mut() = Some(FleetPrevalence {
             count: hosts.len() as i32,
@@ -919,19 +927,19 @@ Each adapter takes `Vec<Option<SectionType>>` (one per host, `None` if host didn
 
 **Config:** merge `files` via `merge_items` (has variants). Pass through section-level fields.
 
-**Services:** merge `state_changes` via `merge_items` (no variants — typed enum fields: `current_state: ServiceUnitState`, `default_state: Option<PresetDefault>`), merge `drop_ins` via `merge_items` (has variants), dedup `enabled_units`/`disabled_units`.
+**Services:** `ServiceSection` fields: merge `state_changes` via `merge_items` (no variants — typed enum fields: `current_state: ServiceUnitState`, `default_state: Option<PresetDefault>`), merge `drop_ins` via `merge_items` (has variants), dedup `enabled_units`/`disabled_units`/`preset_matched_units` as string lists.
 
 **Containers:** merge `quadlet_units` (has variants), `compose_files` (has variants — variant key hashes serialized `images`, not a content field). Skip `running_containers` (runtime state, not config).
 
-**Network:** merge `firewall_zones` via `merge_items` (no variants despite having content — no tie/tie_winner), merge `nm_connections` via `merge_items` (note: `include` is `Option<bool>`), dedup `proxy_entries` by `source`, dedup `direct_rules`/`static_routes` by identity.
+**Network:** `NetworkSection` fields: merge `firewall_zones` via `merge_items` (no variants despite having content — no tie/tie_winner), merge `connections` (field name is `connections`, type `Vec<NMConnection>`, note: `include` is `Option<bool>`) via `merge_items`, dedup `proxy` (field name is `proxy`, type `Vec<ProxyEntry>`) by `source`, dedup `firewall_direct_rules`/`static_routes` by identity, dedup `ip_routes`/`ip_rules`/`hosts_additions` as string lists, most-prevalent for `resolv_provenance`.
 
-**Storage:** Dedup `fstab_entries` by identity, `mount_points` by `target`, `lvm_info`/`var_directories`/`credential_refs` by identity. No types have fleet/include.
+**Storage:** `StorageSection` fields: dedup `fstab_entries` by identity, `mount_points` by `target`, `lvm_info`/`var_directories`/`credential_refs` by identity. No types have fleet/include.
 
-**Scheduled Tasks:** merge `cron_jobs` via `merge_items`, dedup `systemd_timers`/`at_jobs` by identity, dedup `generated_timer_units` by `unit_name`.
+**Scheduled Tasks:** `ScheduledTaskSection` fields: merge `cron_jobs` via `merge_items` (has fleet/include), merge `systemd_timers` via `merge_items` (has fleet `Option<FleetPrevalence>`, include `Option<bool>`), merge `at_jobs` via `merge_items` (has fleet/include `Option`), dedup `generated_timer_units` by `unit_name`.
 
 **SELinux:** merge `port_labels` via `merge_items`, dedup `custom_modules`/`fcontext_rules` (string lists), dedup `boolean_overrides` (JSON equality), dedup `audit_rules`/`pam_configs` (`CarryForwardFile`) by `path`. Most-prevalent for `mode`/`fips_mode`.
 
-**KernelBoot:** merge `kernel_modules`/`sysctl_overrides` via `merge_items`, dedup `modules_load_d`/`modprobe_d` (`ConfigSnippet`) by `path`, dedup `alternatives` by `name`. Most-prevalent for `cmdline`/`grub_defaults`.
+**KernelBoot:** `KernelBootSection` fields: merge `sysctl_overrides` via `merge_items`, merge `loaded_modules` and `non_default_modules` (field names — NOT `kernel_modules`) via `merge_items`, dedup `modules_load_d`/`modprobe_d`/`dracut_conf`/`tuned_custom_profiles` (`ConfigSnippet`) by `path`, dedup `alternatives` by `name`. Most-prevalent for `cmdline`/`grub_defaults`/`tuned_active`. Pass through `locale`/`timezone` from first host (sorted by hostname).
 
 **NonRpm:** merge `items` via `merge_items` (no variants despite having content — deferred per spec), merge `env_files` (these are `ConfigFileEntry` — has variants).
 
@@ -1156,12 +1164,15 @@ if args.strict && !all_warnings.is_empty() {
 
 - [ ] **Step 5: Implement render + tarball packaging**
 
-Follow the scan command's pattern:
-1. Save `inspection-snapshot.json` to temp dir
-2. Call `render_all()` with the merged snapshot
-3. Write `fleet/variants/` (Task 13)
-4. Prepend Containerfile header (Task 13)
-5. Package into `.tar.gz`
+Follow the scan command's exact flow (`inspectah-cli/src/commands/scan.rs`):
+1. Create temp dir
+2. Call `render_all(&merged, &context, temp_dir)` — this writes ALL artifacts including `inspection-snapshot.json` (artifact 7 inside `render_all()`)
+3. Write `schema/snapshot.schema.json` sidecar to temp dir (same placeholder as scan.rs)
+4. Write `fleet/variants/` to temp dir (Task 13)
+5. Prepend Containerfile header in temp dir (Task 13)
+6. Call `create_tarball(temp_dir, &tarball_path, &stamp)` to package
+
+**Do NOT pre-write `inspection-snapshot.json` separately** — `render_all()` already does this. Writing it twice would either duplicate or race.
 
 - [ ] **Step 6: Implement output formatting**
 
