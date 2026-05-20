@@ -856,8 +856,18 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             }
         }
 
+        // Collect omitted unit names so they are excluded from the main list.
+        let omitted_units: std::collections::HashSet<&str> = render_plan
+            .omissions
+            .iter()
+            .map(|o| o.unit.as_str())
+            .collect();
+
         // 1. Divergence items (from state_changes) — typed subtitles
         for sc in &svc.state_changes {
+            if omitted_units.contains(sc.unit.as_str()) {
+                continue;
+            }
             let dropin_detail = dropin_by_unit
                 .get(sc.unit.as_str())
                 .map(|contents| contents.join("\n---\n"));
@@ -956,7 +966,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 .omissions
                 .iter()
                 .map(|o| ContextItem {
-                    id: o.unit.clone(),
+                    id: format!("omitted-{}", o.unit),
                     title: o.unit.clone(),
                     subtitle: Some(format!("package '{}' not in target image", o.owning_package)),
                     detail: None,
@@ -986,7 +996,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                         })
                         .collect();
                     ContextItem {
-                        id: a.unit.clone(),
+                        id: format!("advisory-{}", a.unit),
                         title: a.unit.clone(),
                         subtitle: Some(format!(
                             "package '{}': {}",
@@ -1023,7 +1033,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                     .unwrap_or("unknown")
                     .to_string();
                 ContextItem {
-                    id: unit_id.clone(),
+                    id: format!("warning-{}", unit_id),
                     title: unit_id,
                     subtitle: Some(w.message.clone()),
                     detail: None,
@@ -2807,9 +2817,56 @@ mod tests {
         let advisories = section.subsections.iter().find(|s| s.id == "service_advisories").unwrap();
         let warnings = section.subsections.iter().find(|s| s.id == "service_warnings").unwrap();
 
-        assert!(omitted.items.iter().any(|item| item.id == "sssd-kcm.service"));
-        assert!(advisories.items.iter().any(|item| item.id == "custom-app.service"));
-        assert!(warnings.items.iter().any(|item| item.id == "linked.service"));
+        assert!(omitted.items.iter().any(|item| item.id == "omitted-sssd-kcm.service"));
+        assert!(advisories.items.iter().any(|item| item.id == "advisory-custom-app.service"));
+        assert!(warnings.items.iter().any(|item| item.id == "warning-linked.service"));
         assert!(section.items.iter().any(|item| item.id == "custom-app.service"));
+    }
+
+    #[test]
+    fn test_normalize_services_omitted_units_not_in_main_items() {
+        // sssd-kcm.service has owning_package "sssd" which is NOT in
+        // baseline or packages_added, so the renderer marks it omitted.
+        // It must appear only in the omitted subsection, not in section.items.
+        let mut snap = empty_snapshot();
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec!["firewalld".into()]),
+            packages_added: vec![],
+            ..Default::default()
+        });
+        snap.services = Some(ServiceSection {
+            state_changes: vec![ServiceStateChange {
+                unit: "sssd-kcm.service".into(),
+                current_state: ServiceUnitState::Disabled,
+                default_state: Some(PresetDefault::Enable),
+                include: true,
+                owning_package: Some("sssd".into()),
+                fleet: None,
+                attention_reason: None,
+            }],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+
+        let section = normalize_services(&snap);
+
+        // Must NOT appear in the main items list.
+        assert!(
+            !section.items.iter().any(|item| item.title == "sssd-kcm.service"),
+            "omitted service should not appear in main items"
+        );
+
+        // Must appear in the omitted subsection.
+        let omitted = section
+            .subsections
+            .iter()
+            .find(|s| s.id == "omitted_services")
+            .expect("omitted_services subsection should exist");
+        assert!(
+            omitted.items.iter().any(|item| item.id == "omitted-sssd-kcm.service"),
+            "omitted service should be in omitted subsection with prefixed id"
+        );
     }
 }
