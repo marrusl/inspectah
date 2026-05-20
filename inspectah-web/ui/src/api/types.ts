@@ -190,10 +190,17 @@ export interface ContextItem {
   searchable_text: string;
 }
 
+export interface ContextSubsection {
+  id: string;
+  display_name: string;
+  items: ContextItem[];
+}
+
 export interface ContextSection {
   id: string;
   display_name: string;
   items: ContextItem[];
+  subsections?: ContextSubsection[];
   empty_reason?: string;
 }
 
