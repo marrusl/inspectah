@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-19)
+## Current Status (2026-05-20)
 
 | Phase | Status |
 |-------|--------|
@@ -18,6 +18,7 @@
 | User/Group Materialization | SHIPPED (2026-05-19) |
 | Service Intent Inference | SHIPPED (2026-05-19) |
 | **v0.8.0-alpha.4** | **TAGGED (2026-05-19)** |
+| Fleet Aggregate Phase 1 | SHIPPED (2026-05-20) |
 
 ## Roadmap to CLI Cutover
 
@@ -48,14 +49,34 @@
     ↓
 ✅ v0.8.0-alpha.4 (tagged 2026-05-19, 181 commits since alpha.3)
     ↓
-⏳ Phase 3b: Fleet Refine
+✅ Fleet Spec 1: Aggregate (29 commits, 3 review rounds, 2026-05-20)
+    ↓
+⏳ Fleet Spec 2: Refine (fleet sessions in refine UI, provenance gate)
+    ↓
+Fleet Spec 3: Architect (cross-role hierarchy from refined fleet tarballs)
     ↓
 CLI Cutover: Rust binary becomes primary `inspectah` command
     ↓
-Post-cutover: Architect v2, TUI, build command
+Post-cutover: TUI, build command
 ```
 
 ## Shipped Work
+
+### Fleet Aggregate Phase 1 (SHIPPED — 2026-05-20)
+
+**Status:** 29 implementation commits, 3 review rounds (Tang, Collins, Thorn, Mango). Spec at `docs/specs/proposed/2026-05-19-fleet-aggregate-spec.md` (8 review rounds). Plan at `docs/plans/2026-05-20-fleet-aggregate.md` (4 revisions).
+
+Implements `inspectah fleet aggregate` and `inspectah fleet init` commands. Aggregates N single-host tarballs into a fleet tarball with prevalence metadata. Key components:
+
+1. **VariantSelection enum** replaces tie/tie_winner bools — schema-breaking change with load-time migration pre-patch
+2. **FleetMergeable trait** with 16 implementations, generic `merge_items` function with prevalence and variant handling
+3. **11 section adapters** — RPM, Config, Services, Containers, Network, Storage, Scheduled, SELinux, KernelBoot, NonRpm, UsersGroups
+4. **merge_snapshots() orchestrator** — validation, canonical host ordering, section merge, target image/baseline selection, completeness merge, FleetSnapshotMeta
+5. **Fleet CLI** — tarball loading, input resolution (manifest/directory/explicit), render+package pipeline, --json-only output matrix, --strict warning promotion
+6. **Fleet init** — directory scan, TOML manifest generation with relative paths, baseline conflict detection
+7. **Variant file staging** under fleet/variants/ with content hash naming, Containerfile draft header
+8. **Fleet-aware audit report** with host counts, section coverage, variant conflicts by unique path
+9. **62 files changed, +9,347 / -759 lines**, 315+ tests
 
 ### Service Intent Inference (SHIPPED — 2026-05-19)
 
@@ -95,9 +116,13 @@ Shared `baseline_fmt` presentation helpers render baseline comparison sections a
 
 Neither Go nor Rust handles `dnf group install` / anaconda group selections. Individual packages from groups (e.g., GNOME desktop) show up as separate items instead of being grouped. Potential approach: query `dnf group list --installed` and `dnf history` to detect group-installed packages, then emit `dnf group install` lines in the Containerfile.
 
-### Fleet Refine (Phase 3b)
+### Fleet Spec 2: Refine
 
-Same refine crate, fleet aggregate session. Cross-host package prevalence analysis.
+Fleet aggregate sessions in the refine crate. Cross-host package prevalence analysis, fleet-aware triage decisions, import of fleet tarballs into refine editor. Resolves the provenance gate (`redaction_state: None` for fleet tarballs). Builds on Spec 1's merge engine and FleetSnapshotMeta. Per-section host counts feed the UI.
+
+### Fleet Spec 3: Architect
+
+Takes refined fleet tarballs, discovers cross-role hierarchy, exports decomposed tarball set. Consumes the fleet tarball format designed in Spec 1. Spec to be written after Specs 1 and 2 are shipped.
 
 ### Pre-1.0 Compat Sweep (LOW — before 1.0)
 
