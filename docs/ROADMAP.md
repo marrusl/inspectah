@@ -18,7 +18,7 @@
 | User/Group Materialization | SHIPPED (2026-05-19) |
 | Service Intent Inference | SHIPPED (2026-05-19) |
 | **v0.8.0-alpha.4** | **TAGGED (2026-05-19)** |
-| Fleet Aggregate Phase 1 | SHIPPED (2026-05-20) |
+| Fleet Phase 1: Aggregate | SHIPPED (2026-05-20) |
 
 ## Roadmap to CLI Cutover
 
@@ -49,20 +49,20 @@
     ↓
 ✅ v0.8.0-alpha.4 (tagged 2026-05-19, 181 commits since alpha.3)
     ↓
-✅ Fleet Spec 1: Aggregate (29 commits, 3 review rounds, 2026-05-20)
+✅ Fleet Phase 1: Aggregate (29 commits, 3 review rounds, 2026-05-20)
     ↓
-⏳ Fleet Spec 2: Refine (fleet sessions in refine UI, provenance gate)
+⏳ Fleet Phase 2: Refine Import (provenance gate, fleet tarball → refine)
     ↓
-Fleet Spec 3: Architect (cross-role hierarchy from refined fleet tarballs)
+Fleet Phase 3: Fleet-Aware Display (prevalence UI, variant swap, baseline confirm)
     ↓
 CLI Cutover: Rust binary becomes primary `inspectah` command
     ↓
-Post-cutover: TUI, build command
+Post-cutover: Architect v2, TUI, build command
 ```
 
 ## Shipped Work
 
-### Fleet Aggregate Phase 1 (SHIPPED — 2026-05-20)
+### Fleet Phase 1: Aggregate (SHIPPED — 2026-05-20)
 
 **Status:** 29 implementation commits, 3 review rounds (Tang, Collins, Thorn, Mango). Spec at `docs/specs/proposed/2026-05-19-fleet-aggregate-spec.md` (8 review rounds). Plan at `docs/plans/2026-05-20-fleet-aggregate.md` (4 revisions).
 
@@ -116,13 +116,13 @@ Shared `baseline_fmt` presentation helpers render baseline comparison sections a
 
 Neither Go nor Rust handles `dnf group install` / anaconda group selections. Individual packages from groups (e.g., GNOME desktop) show up as separate items instead of being grouped. Potential approach: query `dnf group list --installed` and `dnf history` to detect group-installed packages, then emit `dnf group install` lines in the Containerfile.
 
-### Fleet Spec 2: Refine
+### Fleet Phase 2: Refine Import
 
-Fleet aggregate sessions in the refine crate. Cross-host package prevalence analysis, fleet-aware triage decisions, import of fleet tarballs into refine editor. Resolves the provenance gate (`redaction_state: None` for fleet tarballs). Builds on Spec 1's merge engine and FleetSnapshotMeta. Per-section host counts feed the UI.
+Resolve the provenance gate so fleet tarballs are importable into refine sessions. Today `from_tarball()` rejects `redaction_state: None` which fleet aggregate produces. Options: fleet-specific exception when `fleet_meta.is_some()`, require pre-redaction, or fleet-specific import path. Once resolved, fleet tarballs open in refine for interactive editing.
 
-### Fleet Spec 3: Architect
+### Fleet Phase 3: Fleet-Aware Display
 
-Takes refined fleet tarballs, discovers cross-role hierarchy, exports decomposed tarball set. Consumes the fleet tarball format designed in Spec 1. Spec to be written after Specs 1 and 2 are shipped.
+Full fleet-aware refine UX. Prevalence columns and threshold controls, variant swapping UI (VariantSelection awareness), baseline confirmation workflow (baseline_provisional awareness), section-level "reported by N of M hosts" indicators. Builds on Phase 1's FleetSnapshotMeta and per-section host counts.
 
 ### Pre-1.0 Compat Sweep (LOW — before 1.0)
 
