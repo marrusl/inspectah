@@ -352,12 +352,18 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
     let baseline = if image_counts.is_empty() {
         None
     } else {
-        // Pick the most common image
-        let (most_common, _count) = image_counts.iter().max_by_key(|(_, count)| *count).unwrap();
+        // Pick the most common image. For deterministic tie-breaking when
+        // multiple images have equal prevalence, sort by count (descending)
+        // then by image ref (lexicographically ascending).
+        let mut sorted_images: Vec<(String, usize)> = image_counts.into_iter().collect();
+        sorted_images.sort_by(|(ref_a, count_a), (ref_b, count_b)| {
+            count_b.cmp(count_a).then_with(|| ref_a.cmp(ref_b))
+        });
+        let (most_common, _count) = &sorted_images[0];
 
         // Warn if there are conflicts
-        if image_counts.len() > 1 {
-            let dist: Vec<String> = image_counts
+        if sorted_images.len() > 1 {
+            let dist: Vec<String> = sorted_images
                 .iter()
                 .map(|(img, count)| format!("{img} ({count})"))
                 .collect();
@@ -992,6 +998,68 @@ mod tests {
         assert_eq!(
             winner, common_image,
             "conflict resolution should pick the most common baseline"
+        );
+    }
+
+    #[test]
+    fn test_fleet_init_baseline_tie_break_is_deterministic() {
+        // Regression test for nondeterminism bug: when two images have equal
+        // prevalence (1 host each), the baseline selection must use lexicographic
+        // image ref comparison instead of nondeterministic HashMap iteration order.
+        let dir = tempfile::tempdir().unwrap();
+
+        // Two images, each appearing exactly once (tie).
+        // Lexicographically: "alpha:1.0" < "beta:1.0"
+        let alpha_image = "registry.example.com/alpha:1.0";
+        let beta_image = "registry.example.com/beta:1.0";
+
+        let json_alpha = serde_json::json!({
+            "schema_version": 17,
+            "meta": {"hostname": "host-alpha"},
+            "target_image": {"image_ref": alpha_image, "strategy": "BootcStatus"}
+        });
+        let json_beta = serde_json::json!({
+            "schema_version": 17,
+            "meta": {"hostname": "host-beta"},
+            "target_image": {"image_ref": beta_image, "strategy": "BootcStatus"}
+        });
+
+        let t_alpha = make_test_tarball(dir.path(), "host-alpha.tar.gz", &json_alpha);
+        let t_beta = make_test_tarball(dir.path(), "host-beta.tar.gz", &json_beta);
+
+        // Extract metadata
+        let meta_list: Vec<TarballMetadata> = [t_alpha, t_beta]
+            .iter()
+            .map(|p| extract_tarball_metadata(p).unwrap())
+            .collect();
+
+        // Replicate the conflict-resolution logic
+        let mut image_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for meta in &meta_list {
+            if let Some(img) = &meta.target_image {
+                *image_counts.entry(img.clone()).or_insert(0) += 1;
+            }
+        }
+
+        assert_eq!(
+            image_counts.len(),
+            2,
+            "should detect two distinct baselines"
+        );
+        assert_eq!(image_counts[alpha_image], 1);
+        assert_eq!(image_counts[beta_image], 1);
+
+        // Deterministic tie-break: sort by count (descending) then image ref (ascending)
+        let mut sorted_images: Vec<(String, usize)> = image_counts.into_iter().collect();
+        sorted_images.sort_by(|(ref_a, count_a), (ref_b, count_b)| {
+            count_b.cmp(count_a).then_with(|| ref_a.cmp(ref_b))
+        });
+        let (winner, _) = &sorted_images[0];
+
+        assert_eq!(
+            winner, alpha_image,
+            "tie-break should select lexicographically earlier image ref (alpha < beta)"
         );
     }
 
