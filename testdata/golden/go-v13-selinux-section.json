@@ -3,8 +3,8 @@
   "custom_modules": [],
   "boolean_overrides": [],
   "fcontext_rules": [],
-  "audit_rules": null,
+  "audit_rules": [],
   "fips_mode": false,
-  "pam_configs": null,
+  "pam_configs": [],
   "port_labels": []
 }

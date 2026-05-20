@@ -910,7 +910,7 @@ fn test_full_snapshot_serde_all_sections_present() {
 
     // Build the snapshot as a Value tree
     let mut snap_value = serde_json::json!({
-        "schema_version": 14,
+        "schema_version": 16,
         "meta": {},
         "os_release": null,
         "system_type": "package-mode",
@@ -972,8 +972,6 @@ fn test_full_snapshot_serde_all_sections_present() {
     }
 
     // Serialize the assembled snapshot, then deserialize into typed struct.
-    // No manual null→[] coercion needed — deserialize_null_default on Vec
-    // fields handles Go's null arrays natively.
     let full_json = serde_json::to_string_pretty(&snap_value).unwrap();
     let snap: InspectionSnapshot =
         serde_json::from_str(&full_json).expect("full snapshot with all sections must deserialize");
