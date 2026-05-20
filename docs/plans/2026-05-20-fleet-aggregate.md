@@ -79,6 +79,8 @@ Types that implement `FleetMergeable` (have both `fleet` and `include`):
 | `SysctlOverride` | `key` | No | **Needs `fleet` field added** |
 | `SystemdTimer` | `name` | No | Note: `include` is `Option<bool>`, already has `fleet` |
 | `AtJob` | `file` | No | Note: `include` is `Option<bool>`, already has `fleet` |
+| `FstabEntry` | `mount_point` | No | Note: `include` is `Option<bool>`, already has `fleet` |
+| `GeneratedTimerUnit` | `name` | No | Already has `fleet`/`include` |
 
 Types handled by section adapters (no `fleet`/`include`, or non-prevalence fields):
 
@@ -86,12 +88,11 @@ Types handled by section adapters (no `fleet`/`include`, or non-prevalence field
 |------|---------|----------|
 | `VersionChange` | `rpm` | Dedup by `name.arch` |
 | `RpmVaEntry` | `rpm` | Dedup by identity |
-| `FstabEntry` | `storage` | Dedup by identity |
 | `MountPoint` | `storage` | Dedup by `target` |
 | `LvmVolume` | `storage` | Dedup by identity |
 | `VarDirectory` | `storage` | Dedup by identity |
 | `CredentialRef` | `storage` | Dedup by identity |
-| `GeneratedTimerUnit` | `scheduled_tasks` | Dedup by `unit_name` |
+| `FlatpakApp` | `containers` | Dedup by `app_id`. Has `include` but no `fleet` — add `fleet` field or dedup only. |
 | `ProxyEntry` | `network` | Dedup by `source` |
 | `FirewallDirectRule` | `network` | Dedup by identity |
 | `StaticRouteFile` | `network` | Dedup by identity |
@@ -929,13 +930,13 @@ Each adapter takes `Vec<Option<SectionType>>` (one per host, `None` if host didn
 
 **Services:** `ServiceSection` fields: merge `state_changes` via `merge_items` (no variants — typed enum fields: `current_state: ServiceUnitState`, `default_state: Option<PresetDefault>`), merge `drop_ins` via `merge_items` (has variants), dedup `enabled_units`/`disabled_units`/`preset_matched_units` as string lists.
 
-**Containers:** merge `quadlet_units` (has variants), `compose_files` (has variants — variant key hashes serialized `images`, not a content field). Skip `running_containers` (runtime state, not config).
+**Containers:** `ContainerSection` fields: merge `quadlet_units` (has variants), `compose_files` (has variants — variant key hashes serialized `images`, not a content field), dedup `flatpak_apps` by `app_id` (has `include` but no `fleet` — add `fleet: Option<FleetPrevalence>` to `FlatpakApp` for prevalence tracking, or dedup only). Skip `running_containers` (runtime state, not config).
 
 **Network:** `NetworkSection` fields: merge `firewall_zones` via `merge_items` (no variants despite having content — no tie/tie_winner), merge `connections` (field name is `connections`, type `Vec<NMConnection>`, note: `include` is `Option<bool>`) via `merge_items`, dedup `proxy` (field name is `proxy`, type `Vec<ProxyEntry>`) by `source`, dedup `firewall_direct_rules`/`static_routes` by identity, dedup `ip_routes`/`ip_rules`/`hosts_additions` as string lists, most-prevalent for `resolv_provenance`.
 
-**Storage:** `StorageSection` fields: dedup `fstab_entries` by identity, `mount_points` by `target`, `lvm_info`/`var_directories`/`credential_refs` by identity. No types have fleet/include.
+**Storage:** `StorageSection` fields: merge `fstab_entries` via `merge_items` (has fleet/include `Option`, identity key `mount_point`), dedup `mount_points` by `target`, `lvm_info`/`var_directories`/`credential_refs` by identity.
 
-**Scheduled Tasks:** `ScheduledTaskSection` fields: merge `cron_jobs` via `merge_items` (has fleet/include), merge `systemd_timers` via `merge_items` (has fleet `Option<FleetPrevalence>`, include `Option<bool>`), merge `at_jobs` via `merge_items` (has fleet/include `Option`), dedup `generated_timer_units` by `unit_name`.
+**Scheduled Tasks:** `ScheduledTaskSection` fields: merge `cron_jobs` via `merge_items` (has fleet/include), merge `systemd_timers` via `merge_items` (identity: `name`, has fleet/include `Option`), merge `at_jobs` via `merge_items` (identity: `file`, has fleet/include `Option`), merge `generated_timer_units` via `merge_items` (identity: `name` — field name is `name` not `unit_name`, has fleet/include).
 
 **SELinux:** merge `port_labels` via `merge_items`, dedup `custom_modules`/`fcontext_rules` (string lists), dedup `boolean_overrides` (JSON equality), dedup `audit_rules`/`pam_configs` (`CarryForwardFile`) by `path`. Most-prevalent for `mode`/`fips_mode`.
 
@@ -977,10 +978,23 @@ pub fn merge_snapshots(
     }
 
     let total = snapshots.len();
-    let hostnames = extract_sorted_hostnames(&snapshots);
-    let section_host_counts = compute_section_host_counts(&snapshots);
 
-    // Merge each section
+    // CANONICAL HOST ORDERING: sort snapshots by hostname FIRST, then
+    // derive the hostnames vec. All downstream code uses index into
+    // this sorted vec as host_idx. This is the SINGLE source of truth
+    // for host ordering — section adapters receive the same hostnames
+    // slice and the same sorted snapshot order.
+    let mut indexed: Vec<(String, InspectionSnapshot)> = snapshots.into_iter()
+        .map(|s| (extract_hostname(&s), s))
+        .collect();
+    indexed.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let hostnames: Vec<String> = indexed.iter().map(|(h, _)| h.clone()).collect();
+    let sorted_snapshots: Vec<InspectionSnapshot> = indexed.into_iter()
+        .map(|(_, s)| s).collect();
+
+    let section_host_counts = compute_section_host_counts(&sorted_snapshots);
+
+    // Merge each section — all adapters receive (&sorted_snapshots, total, &hostnames)
     let rpm = merge::merge_rpm_section(/* ... */);
     let config = merge::merge_config_section(/* ... */);
     // ... all sections
