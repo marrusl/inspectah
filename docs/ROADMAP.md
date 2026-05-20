@@ -120,6 +120,8 @@ Neither Go nor Rust handles `dnf group install` / anaconda group selections. Ind
 
 Fleet sessions in the refine crate. Resolves the provenance gate (`redaction_state: None` for fleet tarballs), adds fleet-aware refine UX: prevalence columns, threshold controls, variant comparison and selection, baseline confirmation workflow, section-level host indicators. Builds on Spec 1's merge engine, FleetSnapshotMeta, and per-section host counts. Brainstorm inputs at `docs/specs/proposed/2026-05-07-fleet-refine-product-brainstorm.md` and `2026-05-07-fleet-refine-ux-brainstorm.md`.
 
+**Design decision for Spec 2:** Variant filenames currently use 8-char SHA-256 prefix (human-browsable). If refine needs to machine-correlate variant files back to merge-time identity, extend to full hash or 16+ chars. Decide during brainstorm whether variant files need to be machine-addressable.
+
 ### Fleet Spec 3: Architect
 
 Takes refined fleet tarballs, discovers cross-role hierarchy, exports decomposed tarball set. May be multi-phase. Spec to be written after Spec 2 ships.
