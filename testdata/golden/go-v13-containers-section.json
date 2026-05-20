@@ -1,6 +1,6 @@
 {
-  "quadlet_units": null,
-  "compose_files": null,
-  "running_containers": null,
-  "flatpak_apps": null
+  "quadlet_units": [],
+  "compose_files": [],
+  "running_containers": [],
+  "flatpak_apps": []
 }
