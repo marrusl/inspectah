@@ -1,6 +1,6 @@
 # inspectah Roadmap
 
-## Current Status (2026-05-18)
+## Current Status (2026-05-19)
 
 | Phase | Status |
 |-------|--------|
@@ -14,6 +14,10 @@
 | Unified Repo View | SHIPPED (2026-05-17) |
 | Leaf Package Filter | SHIPPED (2026-05-17) |
 | Post-Leaf Bug Fix Run | SHIPPED (2026-05-18) |
+| Baseline Visibility | SHIPPED (2026-05-18) |
+| User/Group Materialization | SHIPPED (2026-05-19) |
+| Service Intent Inference | SHIPPED (2026-05-19) |
+| **v0.8.0-alpha.4** | **TAGGED (2026-05-19)** |
 
 ## Roadmap to CLI Cutover
 
@@ -36,18 +40,40 @@
     ↓
 ✅ Post-Leaf Bug Fix Run (16 commits, 2026-05-18)
     ↓
-⏳ User/Group Materialization ← brainstorm next
+✅ Baseline Visibility (2026-05-18)
     ↓
-⏳ v0.8.0-alpha.4 milestone
+✅ User/Group Materialization (2026-05-19)
     ↓
-Phase 3b: Fleet Refine
+✅ Service Intent Inference (13 commits, 2026-05-19)
+    ↓
+✅ v0.8.0-alpha.4 (tagged 2026-05-19, 181 commits since alpha.3)
+    ↓
+⏳ Phase 3b: Fleet Refine
     ↓
 CLI Cutover: Rust binary becomes primary `inspectah` command
     ↓
 Post-cutover: Architect v2, TUI, build command
 ```
 
-## Upcoming Work
+## Shipped Work
+
+### Service Intent Inference (SHIPPED — 2026-05-19)
+
+**Status:** 13 implementation commits. Spec at `docs/specs/proposed/2026-05-19-service-intent-inference-design.md` (9 revisions, 7 review rounds). Plan at `docs/plans/2026-05-19-service-intent-inference.md` (2 revisions).
+
+Replaced stringly-typed service filtering with typed intent inference. Only services where the operator made a deliberate choice (enable, disable, mask, or drop-in override) appear in the Containerfile. Stock-default services matching systemd presets are suppressed. Non-actionable systemd states (`alias`, `indirect`, `enabled-runtime`, etc.) dropped at collection time. Tiered omission/advisory model with structured renderer authority.
+
+### User/Group Materialization (SHIPPED — 2026-05-19)
+
+**Status:** Implemented. Spec at `docs/specs/proposed/2026-05-18-user-group-materialization-design.md`. Plan at `docs/plans/2026-05-18-user-group-materialization.md`.
+
+Collects user and group data from the source host. Custom users surfaced in refine UI with per-account strategy control (skip or useradd). Password handling: omit, preserve, or new. Renders kickstart fragments, blueprint TOML, and Containerfile lines. Custom groups, supplementary memberships, sudoers rules, and SSH key references captured.
+
+### Baseline Visibility (SHIPPED — 2026-05-18)
+
+**Status:** Implemented. Spec at `docs/specs/proposed/2026-05-18-baseline-visibility-design.md`. Plan at `docs/plans/2026-05-18-baseline-visibility.md`.
+
+Shared `baseline_fmt` presentation helpers render baseline comparison sections across audit, readme, and Containerfile outputs. CLI shows pull progress with live viewport during base image extraction.
 
 ### Post-Leaf Bug Fix Run (COMPLETE — 2026-05-18)
 
@@ -63,39 +89,11 @@ Post-cutover: Architect v2, TUI, build command
 
 4. **Version Changes context section:** New sidebar section at key `4`. Paired epoch-aware `format_evr_pair` rendering. Typed `VersionChangeEntry` in ViewResponse. Three-state empty reason. Audit table renders when populated.
 
-### User/Group Materialization (HIGH — brainstorm next)
-
-Produce actionable output for migrating system and human accounts to image mode.
-
-**Three output buckets:**
-- **sysusers_ready** — passes all criteria, has a corresponding RPM with upstream sysusers.d snippet. Just ensure the package is in the bootc image.
-- **sysusers_candidate** — passes criteria but no upstream snippet. inspectah generates a proposed snippet.
-- **needs_review** — fails one or more criteria. Human user or customized service account needing migration planning.
-
-**Composite sysusers-eligible predicate (all five must pass):**
-1. UID < SYS_UID_MAX (usually 999, check /etc/login.defs)
-2. Shell in {nologin, false, sync, halt, shutdown}
-3. Home NOT in /home/*
-4. Password locked/empty in shadow (!! or *)
-5. Not in {root, nobody}
-
-**Strategy overrides in refine UI:** Each account can be switched between sysusers (default for system accounts), kickstart/blueprint TOML, or useradd (with warning about secrets in image layers). Dual output: produce BOTH kickstart AND blueprint TOML for selected accounts.
-
-**Open design question:** useradd strategy needs password hashes from shadow, but the redaction engine strips them at scan time. Three options: collect-time opt-in flag, re-read at export time, or accept the gap with a warning.
-
-**Edge cases:** group-only entries (supplementary memberships via `m` lines), UID/GID stability for persistent volume owners, non-RPM-sourced accounts (Docker, Ansible, manual useradd), reserved-but-unused accounts (already in setup's basic.conf).
-
-**Classification explainability:** Each account includes a plain-language explanation of WHY it was classified that way, not just the bucket.
-
-**Brainstorm team:** Fern (interaction design for override toggles), Collins (which strategy fits which account types in image mode). Full pre-spec details in PKA project memory.
+## Upcoming Work
 
 ### Package Group Detection (MEDIUM — future)
 
 Neither Go nor Rust handles `dnf group install` / anaconda group selections. Individual packages from groups (e.g., GNOME desktop) show up as separate items instead of being grouped. Potential approach: query `dnf group list --installed` and `dnf history` to detect group-installed packages, then emit `dnf group install` lines in the Containerfile.
-
-### v0.8.0-alpha.4 Milestone
-
-Bundle: leaf filter + user/group materialization + accumulated bug fixes since alpha.3.
 
 ### Fleet Refine (Phase 3b)
 
