@@ -924,7 +924,7 @@ fn test_dedup_json_values_removes_duplicates() {
 
 #[test]
 fn test_merge_rpm_sections_all_none() {
-    let result = merge_rpm_sections(vec![None, None], 2, &["h1".into(), "h2".into()]);
+    let result = merge_rpm_sections(vec![None, None], 2, &["h1".into(), "h2".into()], None);
     assert!(result.is_none());
 }
 
@@ -954,7 +954,7 @@ fn test_merge_rpm_sections_packages_merged() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
 
     assert_eq!(result.packages_added.len(), 2);
     let httpd = result
@@ -984,7 +984,7 @@ fn test_merge_rpm_sections_dedup_strings() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
 
     assert_eq!(result.dnf_history_removed, vec!["pkg-a", "pkg-b", "pkg-c"]);
     assert_eq!(result.multiarch_packages, vec!["glibc", "openssl"]);
@@ -1013,7 +1013,7 @@ fn test_merge_rpm_sections_version_changes_dedup() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
-    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames, Some(0)).unwrap();
 
     // Should be deduped to 1 entry
     assert_eq!(result.version_changes.len(), 1);
@@ -1029,7 +1029,7 @@ fn test_merge_rpm_sections_passthrough_scalars() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into()];
-    let result = merge_rpm_sections(vec![Some(s1)], 1, &hostnames).unwrap();
+    let result = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, Some(0)).unwrap();
 
     assert!(result.no_baseline);
     assert_eq!(
@@ -1633,4 +1633,73 @@ fn test_merge_usersgroups_sections_dedup_by_name() {
     // String lists deduped
     assert_eq!(result.sudoers_rules.len(), 2);
     assert_eq!(result.passwd_entries.len(), 2);
+}
+
+// ===========================================================================
+// Regression: baseline fields sourced from winning baseline host, not first
+// ===========================================================================
+
+#[test]
+fn test_merge_rpm_sections_baseline_from_winning_host_not_first() {
+    // host-a (index 0) has a DIFFERENT target_image than host-b/host-c.
+    // The winning baseline should come from host-b (index 1), not host-a.
+    let s_a = RpmSection {
+        base_image: Some("quay.io/rhel:9.3".into()),
+        baseline_package_names: Some(vec!["old-pkg".into()]),
+        no_baseline: false,
+        baseline_suppressed: Some(vec!["not-suppressed-a".into()]),
+        ..Default::default()
+    };
+    let s_b = RpmSection {
+        base_image: Some("quay.io/rhel:9.4".into()),
+        baseline_package_names: Some(vec!["correct-pkg".into()]),
+        no_baseline: true,
+        baseline_suppressed: Some(vec!["suppressed-b".into()]),
+        ..Default::default()
+    };
+    let s_c = RpmSection {
+        base_image: Some("quay.io/rhel:9.4".into()),
+        baseline_package_names: Some(vec!["correct-pkg".into()]),
+        no_baseline: true,
+        baseline_suppressed: Some(vec!["suppressed-b".into()]),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+
+    // Baseline host is index 1 (host-b), NOT index 0 (host-a)
+    let result =
+        merge_rpm_sections(vec![Some(s_a), Some(s_b), Some(s_c)], 3, &hostnames, Some(1)).unwrap();
+
+    // RPM section must use host-b's baseline data, not host-a's
+    assert_eq!(result.base_image, Some("quay.io/rhel:9.4".into()));
+    assert_eq!(
+        result.baseline_package_names,
+        Some(vec!["correct-pkg".into()])
+    );
+    assert!(result.no_baseline);
+    assert_eq!(
+        result.baseline_suppressed,
+        Some(vec!["suppressed-b".into()])
+    );
+}
+
+#[test]
+fn test_merge_rpm_sections_no_baseline_gives_defaults() {
+    // When no baseline is selected, baseline-bearing fields should be defaults
+    let s1 = RpmSection {
+        base_image: Some("quay.io/rhel:9.4".into()),
+        baseline_package_names: Some(vec!["some-pkg".into()]),
+        no_baseline: true,
+        baseline_suppressed: Some(vec!["suppressed".into()]),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["host-a".into()];
+
+    // baseline_host_idx = None means no baseline was selected
+    let result = merge_rpm_sections(vec![Some(s1)], 1, &hostnames, None).unwrap();
+
+    assert_eq!(result.base_image, None);
+    assert_eq!(result.baseline_package_names, None);
+    assert!(!result.no_baseline);
+    assert_eq!(result.baseline_suppressed, None);
 }

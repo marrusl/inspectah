@@ -704,11 +704,46 @@ use crate::types::services::ServiceSection;
 use crate::types::storage::StorageSection;
 use crate::types::users::UserGroupSection;
 
+/// Pick an optional scalar value from a specific host index.
+/// Falls back to `None` if the host has no section or the field is empty.
+fn baseline_host_option<S, T, F>(
+    sections: &[Option<S>],
+    baseline_idx: usize,
+    extractor: F,
+) -> Option<T>
+where
+    T: Clone,
+    F: Fn(&S) -> &Option<T>,
+{
+    sections
+        .get(baseline_idx)
+        .and_then(|s| s.as_ref())
+        .and_then(|s| extractor(s).clone())
+}
+
+/// Pick a bool from a specific host index.
+/// Returns `false` if the host has no section.
+fn baseline_host_bool<S, F>(sections: &[Option<S>], baseline_idx: usize, extractor: F) -> bool
+where
+    F: Fn(&S) -> bool,
+{
+    sections
+        .get(baseline_idx)
+        .and_then(|s| s.as_ref())
+        .map(|s| extractor(s))
+        .unwrap_or(false)
+}
+
 /// Merge RPM sections from multiple hosts.
+///
+/// `baseline_host_idx` identifies which sorted host's baseline-bearing fields
+/// to use (e.g. `baseline_package_names`, `base_image`, `no_baseline`).
+/// When `None`, falls back to first-host behavior for backward compat.
 pub fn merge_rpm_sections(
     sections: Vec<Option<RpmSection>>,
     total_hosts: usize,
     hostnames: &[String],
+    baseline_host_idx: Option<usize>,
 ) -> Option<RpmSection> {
     if sections.iter().all(|s| s.is_none()) {
         return None;
@@ -810,18 +845,28 @@ pub fn merge_rpm_sections(
         result
     };
 
-    // Pass-through from first host (sorted by hostname): scalar/optional fields
+    // Pass-through from first host (sorted by hostname): non-baseline scalar fields
     let leaf_packages = first_host_option(&sections, hostnames, |s| &s.leaf_packages);
     let auto_packages = first_host_option(&sections, hostnames, |s| &s.auto_packages);
-    let baseline_package_names =
-        first_host_option(&sections, hostnames, |s| &s.baseline_package_names);
-    let baseline_module_streams =
-        first_host_option(&sections, hostnames, |s| &s.baseline_module_streams);
     let versionlock_command_output =
         first_host_option(&sections, hostnames, |s| &s.versionlock_command_output);
-    let base_image = first_host_option(&sections, hostnames, |s| &s.base_image);
-    let no_baseline = first_host_bool(&sections, hostnames, |s| s.no_baseline);
-    let baseline_suppressed = first_host_option(&sections, hostnames, |s| &s.baseline_suppressed);
+
+    // Baseline-bearing fields: source from the winning baseline host (not first-sorted).
+    // This ensures RPM section baseline data is consistent with the top-level
+    // baseline selection in the orchestrator.
+    let (baseline_package_names, baseline_module_streams, base_image, no_baseline, baseline_suppressed) =
+        if let Some(idx) = baseline_host_idx {
+            (
+                baseline_host_option(&sections, idx, |s| &s.baseline_package_names),
+                baseline_host_option(&sections, idx, |s| &s.baseline_module_streams),
+                baseline_host_option(&sections, idx, |s| &s.base_image),
+                baseline_host_bool(&sections, idx, |s| s.no_baseline),
+                baseline_host_option(&sections, idx, |s| &s.baseline_suppressed),
+            )
+        } else {
+            // No baseline selected — use defaults
+            (None, None, None, false, None)
+        };
     let leaf_dep_tree = {
         let mut pairs: Vec<(&str, &serde_json::Value)> = Vec::new();
         for (idx, section) in sections.iter().enumerate() {

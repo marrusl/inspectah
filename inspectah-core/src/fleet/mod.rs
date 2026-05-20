@@ -50,6 +50,7 @@ pub fn merge_snapshots(
     // Snapshot-level field merging
     let (target_image, baseline_provisional) = select_target_image(&sorted_snapshots, manifest);
     let baseline = select_baseline(&sorted_snapshots, &target_image);
+    let baseline_host_idx = find_baseline_host_idx(&sorted_snapshots, &target_image);
     let completeness = merge_completeness(&sorted_snapshots);
 
     let fleet_meta = FleetSnapshotMeta {
@@ -168,7 +169,7 @@ pub fn merge_snapshots(
     merged.redaction_hints = merged_hints;
 
     // Merge each section via adapters
-    merged.rpm = merge_rpm_sections(rpm_sections, total, &hostnames);
+    merged.rpm = merge_rpm_sections(rpm_sections, total, &hostnames, baseline_host_idx);
     merged.config = merge_config_sections(config_sections, total, &hostnames);
     merged.services = merge_service_sections(service_sections, total, &hostnames);
     merged.network = merge_network_sections(network_sections, total, &hostnames);
@@ -300,6 +301,24 @@ fn select_baseline(
                 && s.baseline.is_some()
         })
         .and_then(|s| s.baseline.clone())
+}
+
+/// Find the index of the first sorted host whose target_image matches the
+/// selected one and has baseline data. This is the host whose RPM baseline
+/// fields should be used in the merged output.
+fn find_baseline_host_idx(
+    snapshots: &[InspectionSnapshot],
+    selected_target: &Option<TargetImageIdentity>,
+) -> Option<usize> {
+    let target = selected_target.as_ref()?;
+
+    snapshots.iter().position(|s| {
+        s.target_image
+            .as_ref()
+            .map(|ti| ti.image_ref == target.image_ref)
+            .unwrap_or(false)
+            && s.baseline.is_some()
+    })
 }
 
 /// Merge completeness across all snapshots.
