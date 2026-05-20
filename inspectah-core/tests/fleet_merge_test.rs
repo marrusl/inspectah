@@ -1,14 +1,26 @@
-use inspectah_core::fleet::merge::{merge_items, FleetMergeable};
-use inspectah_core::types::config::ConfigFileEntry;
-use inspectah_core::types::containers::{ComposeFile, QuadletUnit};
+use inspectah_core::fleet::merge::{
+    dedup_json_values, dedup_strings, merge_config_sections, merge_container_sections,
+    merge_items, merge_kernelboot_sections, merge_network_sections, merge_nonrpm_sections,
+    merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
+    merge_service_sections, merge_storage_sections, merge_usersgroups_sections,
+    FleetMergeable,
+};
+use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
+use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
 use inspectah_core::types::fleet::VariantSelection;
-use inspectah_core::types::kernelboot::{KernelModule, SysctlOverride};
-use inspectah_core::types::network::{FirewallZone, NMConnection};
-use inspectah_core::types::nonrpm::NonRpmItem;
-use inspectah_core::types::rpm::{EnabledModuleStream, PackageEntry, RepoFile, VersionLockEntry};
-use inspectah_core::types::scheduled::CronJob;
-use inspectah_core::types::selinux::SelinuxPortLabel;
-use inspectah_core::types::services::SystemdDropIn;
+use inspectah_core::types::kernelboot::{
+    AlternativeEntry, ConfigSnippet, KernelBootSection, KernelModule, SysctlOverride,
+};
+use inspectah_core::types::network::{FirewallZone, NMConnection, NetworkSection, ProxyEntry};
+use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
+use inspectah_core::types::rpm::{
+    EnabledModuleStream, PackageEntry, RepoFile, RpmSection, VersionChange, VersionLockEntry,
+};
+use inspectah_core::types::scheduled::{AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer};
+use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
+use inspectah_core::types::services::{ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn};
+use inspectah_core::types::storage::{FstabEntry, StorageSection, MountPoint};
+use inspectah_core::types::users::UserGroupSection;
 
 // ---------------------------------------------------------------------------
 // PackageEntry
@@ -801,4 +813,783 @@ fn test_merge_items_variant_total_reflects_fleet_size() {
     for item in &merged {
         assert_eq!(item.fleet.as_ref().unwrap().total, 5);
     }
+}
+
+// ===========================================================================
+// New FleetMergeable impls (Task 9)
+// ===========================================================================
+
+#[test]
+fn test_systemd_timer_identity_is_name() {
+    let t = SystemdTimer {
+        name: "backup.timer".into(),
+        ..Default::default()
+    };
+    assert_eq!(t.identity_key().as_ref(), "backup.timer");
+}
+
+#[test]
+fn test_at_job_identity_is_file() {
+    let a = AtJob {
+        file: "/var/spool/at/a00001".into(),
+        ..Default::default()
+    };
+    assert_eq!(a.identity_key().as_ref(), "/var/spool/at/a00001");
+}
+
+#[test]
+fn test_generated_timer_unit_identity_is_name() {
+    let g = GeneratedTimerUnit {
+        name: "cron-daily-backup.timer".into(),
+        ..Default::default()
+    };
+    assert_eq!(g.identity_key().as_ref(), "cron-daily-backup.timer");
+}
+
+#[test]
+fn test_fstab_entry_identity_is_mount_point() {
+    let f = FstabEntry {
+        mount_point: "/data".into(),
+        ..Default::default()
+    };
+    assert_eq!(f.identity_key().as_ref(), "/data");
+}
+
+#[test]
+fn test_systemd_timer_set_include_uses_option() {
+    let mut t = SystemdTimer::default();
+    assert!(t.include.is_none());
+    t.set_include(true);
+    assert_eq!(t.include, Some(true));
+}
+
+#[test]
+fn test_fstab_entry_set_include_uses_option() {
+    let mut f = FstabEntry::default();
+    assert!(f.include.is_none());
+    f.set_include(true);
+    assert_eq!(f.include, Some(true));
+}
+
+// ===========================================================================
+// dedup_strings
+// ===========================================================================
+
+#[test]
+fn test_dedup_strings_merges_and_sorts() {
+    let lists = vec![
+        vec!["c".into(), "a".into()],
+        vec!["b".into(), "a".into()],
+    ];
+    let result = dedup_strings(lists);
+    assert_eq!(result, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn test_dedup_strings_empty_input() {
+    let result = dedup_strings(vec![]);
+    assert!(result.is_empty());
+}
+
+#[test]
+fn test_dedup_strings_single_list() {
+    let lists = vec![vec!["x".into(), "y".into(), "x".into()]];
+    let result = dedup_strings(lists);
+    assert_eq!(result, vec!["x", "y"]);
+}
+
+// ===========================================================================
+// dedup_json_values
+// ===========================================================================
+
+#[test]
+fn test_dedup_json_values_removes_duplicates() {
+    let lists = vec![
+        vec![serde_json::json!({"a": 1}), serde_json::json!({"b": 2})],
+        vec![serde_json::json!({"a": 1}), serde_json::json!({"c": 3})],
+    ];
+    let result = dedup_json_values(lists);
+    assert_eq!(result.len(), 3);
+}
+
+// ===========================================================================
+// Section adapter: RPM
+// ===========================================================================
+
+#[test]
+fn test_merge_rpm_sections_all_none() {
+    let result = merge_rpm_sections(vec![None, None], 2, &["h1".into(), "h2".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_rpm_sections_packages_merged() {
+    let s1 = RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "httpd".into(),
+            arch: "x86_64".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let s2 = RpmSection {
+        packages_added: vec![
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                ..Default::default()
+            },
+            PackageEntry {
+                name: "nginx".into(),
+                arch: "x86_64".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    assert_eq!(result.packages_added.len(), 2);
+    let httpd = result.packages_added.iter().find(|p| p.name == "httpd").unwrap();
+    assert_eq!(httpd.fleet.as_ref().unwrap().count, 2);
+    let nginx = result.packages_added.iter().find(|p| p.name == "nginx").unwrap();
+    assert_eq!(nginx.fleet.as_ref().unwrap().count, 1);
+}
+
+#[test]
+fn test_merge_rpm_sections_dedup_strings() {
+    let s1 = RpmSection {
+        dnf_history_removed: vec!["pkg-a".into(), "pkg-b".into()],
+        multiarch_packages: vec!["glibc".into()],
+        ..Default::default()
+    };
+    let s2 = RpmSection {
+        dnf_history_removed: vec!["pkg-b".into(), "pkg-c".into()],
+        multiarch_packages: vec!["glibc".into(), "openssl".into()],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    assert_eq!(result.dnf_history_removed, vec!["pkg-a", "pkg-b", "pkg-c"]);
+    assert_eq!(result.multiarch_packages, vec!["glibc", "openssl"]);
+}
+
+#[test]
+fn test_merge_rpm_sections_version_changes_dedup() {
+    let s1 = RpmSection {
+        version_changes: vec![VersionChange {
+            name: "kernel".into(),
+            arch: "x86_64".into(),
+            host_version: "5.14.0-200".into(),
+            base_version: "5.14.0-100".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let s2 = RpmSection {
+        version_changes: vec![VersionChange {
+            name: "kernel".into(),
+            arch: "x86_64".into(),
+            host_version: "5.14.0-200".into(),
+            base_version: "5.14.0-100".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Should be deduped to 1 entry
+    assert_eq!(result.version_changes.len(), 1);
+    assert_eq!(result.version_changes[0].name, "kernel");
+}
+
+#[test]
+fn test_merge_rpm_sections_passthrough_scalars() {
+    let s1 = RpmSection {
+        no_baseline: true,
+        base_image: Some("registry.example.com/image:latest".into()),
+        leaf_packages: Some(vec!["httpd.x86_64".into()]),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into()];
+    let result = merge_rpm_sections(vec![Some(s1)], 1, &hostnames).unwrap();
+
+    assert!(result.no_baseline);
+    assert_eq!(result.base_image, Some("registry.example.com/image:latest".into()));
+    assert_eq!(result.leaf_packages, Some(vec!["httpd.x86_64".into()]));
+}
+
+// ===========================================================================
+// Section adapter: Config
+// ===========================================================================
+
+#[test]
+fn test_merge_config_sections_all_none() {
+    let result = merge_config_sections(vec![None, None], 2, &["h1".into(), "h2".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_config_sections_files_with_variants() {
+    let s1 = ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/httpd/conf/httpd.conf".into(),
+            content: "ServerName h1".into(),
+            ..Default::default()
+        }],
+    };
+    let s2 = ConfigSection {
+        files: vec![ConfigFileEntry {
+            path: "/etc/httpd/conf/httpd.conf".into(),
+            content: "ServerName h2".into(),
+            ..Default::default()
+        }],
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_config_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Two variants of the same path
+    assert_eq!(result.files.len(), 2);
+    assert!(result.files.iter().any(|f| f.variant_selection == VariantSelection::Selected));
+    assert!(result.files.iter().any(|f| f.variant_selection == VariantSelection::Alternative));
+}
+
+// ===========================================================================
+// Section adapter: Services
+// ===========================================================================
+
+#[test]
+fn test_merge_service_sections_all_none() {
+    let result = merge_service_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_service_sections_dedup_units() {
+    let make_sc = |unit: &str| ServiceStateChange {
+        unit: unit.into(),
+        current_state: ServiceUnitState::Enabled,
+        default_state: None,
+        include: false,
+        owning_package: None,
+        fleet: None,
+        attention_reason: None,
+    };
+    let s1 = ServiceSection {
+        state_changes: vec![make_sc("httpd.service")],
+        enabled_units: vec!["sshd.service".into(), "httpd.service".into()],
+        disabled_units: vec!["firewalld.service".into()],
+        drop_ins: vec![],
+        preset_matched_units: vec!["chronyd.service".into()],
+    };
+    let s2 = ServiceSection {
+        state_changes: vec![make_sc("httpd.service")],
+        enabled_units: vec!["httpd.service".into(), "crond.service".into()],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec!["chronyd.service".into(), "sshd.service".into()],
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_service_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // state_changes merged: httpd present on both hosts
+    assert_eq!(result.state_changes.len(), 1);
+    assert_eq!(result.state_changes[0].fleet.as_ref().unwrap().count, 2);
+
+    // String lists deduped and sorted
+    assert_eq!(result.enabled_units, vec!["crond.service", "httpd.service", "sshd.service"]);
+    assert_eq!(result.disabled_units, vec!["firewalld.service"]);
+    assert_eq!(result.preset_matched_units, vec!["chronyd.service", "sshd.service"]);
+}
+
+// ===========================================================================
+// Section adapter: Containers
+// ===========================================================================
+
+#[test]
+fn test_merge_container_sections_all_none() {
+    let result = merge_container_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_container_sections_flatpak_dedup() {
+    let s1 = ContainerSection {
+        flatpak_apps: vec![FlatpakApp {
+            app_id: "org.gnome.Calculator".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let s2 = ContainerSection {
+        flatpak_apps: vec![
+            FlatpakApp {
+                app_id: "org.gnome.Calculator".into(),
+                ..Default::default()
+            },
+            FlatpakApp {
+                app_id: "org.mozilla.Firefox".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_container_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    assert_eq!(result.flatpak_apps.len(), 2);
+    assert!(result.running_containers.is_empty()); // runtime state skipped
+}
+
+#[test]
+fn test_merge_container_sections_quadlets_with_variants() {
+    let s1 = ContainerSection {
+        quadlet_units: vec![QuadletUnit {
+            path: "/etc/containers/systemd/app.container".into(),
+            content: "Image=quay.io/app:v1".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let s2 = ContainerSection {
+        quadlet_units: vec![QuadletUnit {
+            path: "/etc/containers/systemd/app.container".into(),
+            content: "Image=quay.io/app:v2".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_container_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Two variants
+    assert_eq!(result.quadlet_units.len(), 2);
+    assert!(result.quadlet_units.iter().any(|q| q.variant_selection == VariantSelection::Selected));
+}
+
+// ===========================================================================
+// Section adapter: Network
+// ===========================================================================
+
+#[test]
+fn test_merge_network_sections_all_none() {
+    let result = merge_network_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_network_sections_dedup_proxy_by_source() {
+    let s1 = NetworkSection {
+        proxy: vec![ProxyEntry {
+            source: "/etc/profile.d/proxy.sh".into(),
+            line: "HTTP_PROXY=http://proxy:8080".into(),
+        }],
+        ip_routes: vec!["10.0.0.0/8 via 192.168.1.1".into()],
+        ..Default::default()
+    };
+    let s2 = NetworkSection {
+        proxy: vec![ProxyEntry {
+            source: "/etc/profile.d/proxy.sh".into(),
+            line: "HTTP_PROXY=http://proxy:8080".into(),
+        }],
+        ip_routes: vec!["10.0.0.0/8 via 192.168.1.1".into(), "172.16.0.0/12 via 192.168.1.1".into()],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_network_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    assert_eq!(result.proxy.len(), 1);
+    assert_eq!(result.ip_routes.len(), 2);
+}
+
+// ===========================================================================
+// Section adapter: Storage
+// ===========================================================================
+
+#[test]
+fn test_merge_storage_sections_all_none() {
+    let result = merge_storage_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_storage_sections_fstab_merged() {
+    let s1 = StorageSection {
+        fstab_entries: vec![FstabEntry {
+            mount_point: "/data".into(),
+            device: "/dev/sda1".into(),
+            ..Default::default()
+        }],
+        mount_points: vec![MountPoint {
+            target: "/".into(),
+            source: "/dev/sda2".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let s2 = StorageSection {
+        fstab_entries: vec![FstabEntry {
+            mount_point: "/data".into(),
+            device: "/dev/sdb1".into(),
+            ..Default::default()
+        }],
+        mount_points: vec![
+            MountPoint {
+                target: "/".into(),
+                source: "/dev/sda2".into(),
+                ..Default::default()
+            },
+            MountPoint {
+                target: "/home".into(),
+                source: "/dev/sda3".into(),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_storage_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // fstab merged by mount_point identity
+    assert_eq!(result.fstab_entries.len(), 1);
+    assert_eq!(result.fstab_entries[0].fleet.as_ref().unwrap().count, 2);
+
+    // mount_points deduped by target
+    assert_eq!(result.mount_points.len(), 2);
+}
+
+// ===========================================================================
+// Section adapter: Scheduled Tasks
+// ===========================================================================
+
+#[test]
+fn test_merge_scheduled_sections_all_none() {
+    let result = merge_scheduled_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_scheduled_sections_cron_and_timers() {
+    let s1 = ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: "/etc/cron.d/backup".into(),
+            ..Default::default()
+        }],
+        systemd_timers: vec![SystemdTimer {
+            name: "logrotate.timer".into(),
+            ..Default::default()
+        }],
+        at_jobs: vec![],
+        generated_timer_units: vec![],
+    };
+    let s2 = ScheduledTaskSection {
+        cron_jobs: vec![CronJob {
+            path: "/etc/cron.d/backup".into(),
+            ..Default::default()
+        }],
+        systemd_timers: vec![
+            SystemdTimer {
+                name: "logrotate.timer".into(),
+                ..Default::default()
+            },
+            SystemdTimer {
+                name: "fstrim.timer".into(),
+                ..Default::default()
+            },
+        ],
+        at_jobs: vec![AtJob {
+            file: "/var/spool/at/a00001".into(),
+            ..Default::default()
+        }],
+        generated_timer_units: vec![GeneratedTimerUnit {
+            name: "cron-daily-backup.timer".into(),
+            ..Default::default()
+        }],
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_scheduled_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    assert_eq!(result.cron_jobs.len(), 1);
+    assert_eq!(result.cron_jobs[0].fleet.as_ref().unwrap().count, 2);
+    assert_eq!(result.systemd_timers.len(), 2);
+    assert_eq!(result.at_jobs.len(), 1);
+    assert_eq!(result.generated_timer_units.len(), 1);
+}
+
+// ===========================================================================
+// Section adapter: SELinux
+// ===========================================================================
+
+#[test]
+fn test_merge_selinux_sections_all_none() {
+    let result = merge_selinux_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_selinux_sections_dedup_and_merge() {
+    let s1 = SelinuxSection {
+        mode: "enforcing".into(),
+        port_labels: vec![SelinuxPortLabel {
+            protocol: "tcp".into(),
+            port: "8080".into(),
+            ..Default::default()
+        }],
+        custom_modules: vec!["mymodule".into()],
+        fcontext_rules: vec!["/opt/app(/.*)?".into()],
+        boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
+        audit_rules: vec![CarryForwardFile {
+            path: "etc/audit/rules.d/custom.rules".into(),
+            content: "-w /etc/passwd".into(),
+        }],
+        pam_configs: vec![],
+        fips_mode: false,
+    };
+    let s2 = SelinuxSection {
+        mode: "enforcing".into(),
+        port_labels: vec![SelinuxPortLabel {
+            protocol: "tcp".into(),
+            port: "8080".into(),
+            ..Default::default()
+        }],
+        custom_modules: vec!["mymodule".into(), "othermodule".into()],
+        fcontext_rules: vec!["/opt/app(/.*)?".into()],
+        boolean_overrides: vec![serde_json::json!({"httpd_can_network_connect": true})],
+        audit_rules: vec![CarryForwardFile {
+            path: "etc/audit/rules.d/custom.rules".into(),
+            content: "-w /etc/passwd".into(),
+        }],
+        pam_configs: vec![],
+        fips_mode: false,
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_selinux_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Port labels merged via merge_items
+    assert_eq!(result.port_labels.len(), 1);
+    assert_eq!(result.port_labels[0].fleet.as_ref().unwrap().count, 2);
+
+    // String lists deduped
+    assert_eq!(result.custom_modules, vec!["mymodule", "othermodule"]);
+    assert_eq!(result.fcontext_rules, vec!["/opt/app(/.*)?"]);
+
+    // JSON deduped
+    assert_eq!(result.boolean_overrides.len(), 1);
+
+    // CarryForwardFile deduped by path
+    assert_eq!(result.audit_rules.len(), 1);
+
+    // Scalar from first host
+    assert_eq!(result.mode, "enforcing");
+}
+
+// ===========================================================================
+// Section adapter: KernelBoot
+// ===========================================================================
+
+#[test]
+fn test_merge_kernelboot_sections_all_none() {
+    let result = merge_kernelboot_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_kernelboot_sections_modules_and_snippets() {
+    let s1 = KernelBootSection {
+        cmdline: "root=/dev/sda1 console=ttyS0".into(),
+        sysctl_overrides: vec![SysctlOverride {
+            key: "net.ipv4.ip_forward".into(),
+            runtime: "1".into(),
+            ..Default::default()
+        }],
+        loaded_modules: vec![KernelModule {
+            name: "vfio_pci".into(),
+            ..Default::default()
+        }],
+        modules_load_d: vec![ConfigSnippet {
+            path: "/etc/modules-load.d/vfio.conf".into(),
+            content: "vfio_pci".into(),
+        }],
+        alternatives: vec![AlternativeEntry {
+            name: "python3".into(),
+            path: "/usr/bin/python3.11".into(),
+            status: "auto".into(),
+        }],
+        ..Default::default()
+    };
+    let s2 = KernelBootSection {
+        cmdline: "root=/dev/sda1 console=ttyS0".into(),
+        sysctl_overrides: vec![SysctlOverride {
+            key: "net.ipv4.ip_forward".into(),
+            runtime: "1".into(),
+            ..Default::default()
+        }],
+        loaded_modules: vec![
+            KernelModule {
+                name: "vfio_pci".into(),
+                ..Default::default()
+            },
+            KernelModule {
+                name: "br_netfilter".into(),
+                ..Default::default()
+            },
+        ],
+        modules_load_d: vec![ConfigSnippet {
+            path: "/etc/modules-load.d/vfio.conf".into(),
+            content: "vfio_pci".into(),
+        }],
+        alternatives: vec![AlternativeEntry {
+            name: "python3".into(),
+            path: "/usr/bin/python3.11".into(),
+            status: "auto".into(),
+        }],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_kernelboot_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // sysctl merged
+    assert_eq!(result.sysctl_overrides.len(), 1);
+    assert_eq!(result.sysctl_overrides[0].fleet.as_ref().unwrap().count, 2);
+
+    // loaded_modules merged
+    assert_eq!(result.loaded_modules.len(), 2);
+
+    // ConfigSnippets deduped by path
+    assert_eq!(result.modules_load_d.len(), 1);
+
+    // alternatives deduped by name
+    assert_eq!(result.alternatives.len(), 1);
+
+    // Scalar from first host
+    assert_eq!(result.cmdline, "root=/dev/sda1 console=ttyS0");
+}
+
+// ===========================================================================
+// Section adapter: NonRpm
+// ===========================================================================
+
+#[test]
+fn test_merge_nonrpm_sections_all_none() {
+    let result = merge_nonrpm_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_nonrpm_sections_items_and_env_files() {
+    let s1 = NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            name: "myapp".into(),
+            path: "/opt/myapp".into(),
+            ..Default::default()
+        }],
+        env_files: vec![ConfigFileEntry {
+            path: "/etc/sysconfig/myapp".into(),
+            content: "FOO=bar".into(),
+            ..Default::default()
+        }],
+    };
+    let s2 = NonRpmSoftwareSection {
+        items: vec![NonRpmItem {
+            name: "myapp".into(),
+            path: "/opt/myapp".into(),
+            ..Default::default()
+        }],
+        env_files: vec![ConfigFileEntry {
+            path: "/etc/sysconfig/myapp".into(),
+            content: "FOO=baz".into(), // different content = different variant
+            ..Default::default()
+        }],
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_nonrpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Items merged by name
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.items[0].fleet.as_ref().unwrap().count, 2);
+
+    // env_files: same path, different content = 2 variants
+    assert_eq!(result.env_files.len(), 2);
+}
+
+// ===========================================================================
+// Section adapter: UsersGroups
+// ===========================================================================
+
+#[test]
+fn test_merge_usersgroups_sections_all_none() {
+    let result = merge_usersgroups_sections(vec![None], 1, &["h1".into()]);
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_merge_usersgroups_sections_dedup_by_name() {
+    let s1 = UserGroupSection {
+        users: vec![serde_json::json!({
+            "name": "alice",
+            "uid": 1000,
+            "groups": ["wheel"]
+        })],
+        groups: vec![serde_json::json!({
+            "name": "devops",
+            "gid": 2000,
+            "members": ["alice"]
+        })],
+        sudoers_rules: vec!["alice ALL=(ALL) NOPASSWD:ALL".into()],
+        passwd_entries: vec!["alice:x:1000:1000::/home/alice:/bin/bash".into()],
+        ..Default::default()
+    };
+    let s2 = UserGroupSection {
+        users: vec![
+            serde_json::json!({
+                "name": "alice",
+                "uid": 1000,
+                "groups": ["docker"]
+            }),
+            serde_json::json!({
+                "name": "bob",
+                "uid": 1001,
+                "groups": ["wheel"]
+            }),
+        ],
+        groups: vec![serde_json::json!({
+            "name": "devops",
+            "gid": 2000,
+            "members": ["alice", "bob"]
+        })],
+        sudoers_rules: vec![
+            "alice ALL=(ALL) NOPASSWD:ALL".into(),
+            "bob ALL=(ALL) NOPASSWD:ALL".into(),
+        ],
+        passwd_entries: vec![
+            "alice:x:1000:1000::/home/alice:/bin/bash".into(),
+            "bob:x:1001:1001::/home/bob:/bin/bash".into(),
+        ],
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_usersgroups_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Users deduped by name: alice (merged groups), bob
+    assert_eq!(result.users.len(), 2);
+
+    // alice's groups should be union: ["docker", "wheel"]
+    let alice = result.users.iter().find(|u| u["name"] == "alice").unwrap();
+    let groups = alice["groups"].as_array().unwrap();
+    assert!(groups.contains(&serde_json::json!("wheel")));
+    assert!(groups.contains(&serde_json::json!("docker")));
+
+    // Groups deduped: devops with merged members
+    assert_eq!(result.groups.len(), 1);
+    let devops = &result.groups[0];
+    let members = devops["members"].as_array().unwrap();
+    assert!(members.contains(&serde_json::json!("alice")));
+    assert!(members.contains(&serde_json::json!("bob")));
+
+    // String lists deduped
+    assert_eq!(result.sudoers_rules.len(), 2);
+    assert_eq!(result.passwd_entries.len(), 2);
 }

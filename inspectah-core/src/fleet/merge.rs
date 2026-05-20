@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::types::fleet::{FleetPrevalence, VariantSelection};
 
@@ -343,7 +343,7 @@ impl FleetMergeable for NonRpmItem {
 // Scheduled task types
 // ---------------------------------------------------------------------------
 
-use crate::types::scheduled::CronJob;
+use crate::types::scheduled::{AtJob, CronJob, GeneratedTimerUnit, SystemdTimer};
 
 impl FleetMergeable for CronJob {
     fn identity_key(&self) -> Cow<'_, str> {
@@ -356,6 +356,68 @@ impl FleetMergeable for CronJob {
 
     fn set_include(&mut self, val: bool) {
         self.include = val;
+    }
+}
+
+impl FleetMergeable for SystemdTimer {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.name)
+    }
+
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> {
+        &mut self.fleet
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.include = Some(val);
+    }
+}
+
+impl FleetMergeable for AtJob {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.file)
+    }
+
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> {
+        &mut self.fleet
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.include = Some(val);
+    }
+}
+
+impl FleetMergeable for GeneratedTimerUnit {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.name)
+    }
+
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> {
+        &mut self.fleet
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.include = val;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Storage types
+// ---------------------------------------------------------------------------
+
+use crate::types::storage::FstabEntry;
+
+impl FleetMergeable for FstabEntry {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.mount_point)
+    }
+
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> {
+        &mut self.fleet
+    }
+
+    fn set_include(&mut self, val: bool) {
+        self.include = Some(val);
     }
 }
 
@@ -501,4 +563,943 @@ fn merge_with_variants<T: FleetMergeable>(
         variant_results.push(item);
     }
     variant_results
+}
+
+// ===========================================================================
+// Dedup helpers
+// ===========================================================================
+
+/// Deduplicate and sort string lists from multiple hosts.
+pub fn dedup_strings(lists: Vec<Vec<String>>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for list in lists {
+        for item in list {
+            if seen.insert(item.clone()) {
+                result.push(item);
+            }
+        }
+    }
+    result.sort();
+    result
+}
+
+/// Deduplicate JSON values by serialized equality.
+pub fn dedup_json_values(lists: Vec<Vec<serde_json::Value>>) -> Vec<serde_json::Value> {
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for list in lists {
+        for item in list {
+            let key = serde_json::to_string(&item).unwrap_or_default();
+            if seen.insert(key) {
+                result.push(item);
+            }
+        }
+    }
+    result
+}
+
+/// Collect items from optional sections, pairing each with its host index.
+fn collect_items<S, T, F>(sections: &[Option<S>], extractor: F) -> Vec<(usize, T)>
+where
+    T: Clone,
+    F: Fn(&S) -> &Vec<T>,
+{
+    let mut items = Vec::new();
+    for (idx, section) in sections.iter().enumerate() {
+        if let Some(s) = section {
+            for item in extractor(s) {
+                items.push((idx, item.clone()));
+            }
+        }
+    }
+    items
+}
+
+/// Collect string lists from optional sections.
+fn collect_string_lists<S, F>(sections: &[Option<S>], extractor: F) -> Vec<Vec<String>>
+where
+    F: Fn(&S) -> &Vec<String>,
+{
+    sections
+        .iter()
+        .filter_map(|s| s.as_ref().map(|s| extractor(s).clone()))
+        .collect()
+}
+
+/// Pick a scalar value from the first host (sorted by hostname).
+/// Returns `None` if no section has a non-empty value.
+fn first_host_scalar<S, F>(sections: &[Option<S>], hostnames: &[String], extractor: F) -> String
+where
+    F: Fn(&S) -> &str,
+{
+    // Build (hostname, value) pairs and sort by hostname for determinism.
+    let mut pairs: Vec<(&str, &str)> = Vec::new();
+    for (idx, section) in sections.iter().enumerate() {
+        if let Some(s) = section {
+            let val = extractor(s);
+            if !val.is_empty() {
+                pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), val));
+            }
+        }
+    }
+    pairs.sort_by_key(|(h, _)| *h);
+    pairs.first().map(|(_, v)| v.to_string()).unwrap_or_default()
+}
+
+/// Pick an optional scalar value from the first host (sorted by hostname).
+fn first_host_option<S, T, F>(sections: &[Option<S>], hostnames: &[String], extractor: F) -> Option<T>
+where
+    T: Clone,
+    F: Fn(&S) -> &Option<T>,
+{
+    let mut pairs: Vec<(&str, &T)> = Vec::new();
+    for (idx, section) in sections.iter().enumerate() {
+        if let Some(s) = section {
+            if let Some(val) = extractor(s) {
+                pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), val));
+            }
+        }
+    }
+    pairs.sort_by_key(|(h, _)| *h);
+    pairs.first().map(|(_, v)| (*v).clone())
+}
+
+/// Pick a bool from the first host (sorted by hostname).
+fn first_host_bool<S, F>(sections: &[Option<S>], hostnames: &[String], extractor: F) -> bool
+where
+    F: Fn(&S) -> bool,
+{
+    let mut pairs: Vec<(&str, bool)> = Vec::new();
+    for (idx, section) in sections.iter().enumerate() {
+        if let Some(s) = section {
+            pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), extractor(s)));
+        }
+    }
+    pairs.sort_by_key(|(h, _)| *h);
+    pairs.first().map(|(_, v)| *v).unwrap_or(false)
+}
+
+// ===========================================================================
+// Section adapters
+// ===========================================================================
+
+use crate::types::config::ConfigSection;
+use crate::types::containers::ContainerSection;
+use crate::types::kernelboot::KernelBootSection;
+use crate::types::network::NetworkSection;
+use crate::types::nonrpm::NonRpmSoftwareSection;
+use crate::types::rpm::RpmSection;
+use crate::types::scheduled::ScheduledTaskSection;
+use crate::types::selinux::SelinuxSection;
+use crate::types::services::ServiceSection;
+use crate::types::storage::StorageSection;
+use crate::types::users::UserGroupSection;
+
+/// Merge RPM sections from multiple hosts.
+pub fn merge_rpm_sections(
+    sections: Vec<Option<RpmSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<RpmSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let packages_added = merge_items(
+        collect_items(&sections, |s| &s.packages_added),
+        total_hosts,
+        hostnames,
+    );
+    let base_image_only = merge_items(
+        collect_items(&sections, |s| &s.base_image_only),
+        total_hosts,
+        hostnames,
+    );
+    let repo_files = merge_items(
+        collect_items(&sections, |s| &s.repo_files),
+        total_hosts,
+        hostnames,
+    );
+    let gpg_keys = merge_items(
+        collect_items(&sections, |s| &s.gpg_keys),
+        total_hosts,
+        hostnames,
+    );
+    let module_streams = merge_items(
+        collect_items(&sections, |s| &s.module_streams),
+        total_hosts,
+        hostnames,
+    );
+    let version_locks = merge_items(
+        collect_items(&sections, |s| &s.version_locks),
+        total_hosts,
+        hostnames,
+    );
+
+    // Dedup string lists
+    let dnf_history_removed = dedup_strings(collect_string_lists(&sections, |s| &s.dnf_history_removed));
+    let module_stream_conflicts = dedup_strings(collect_string_lists(&sections, |s| &s.module_stream_conflicts));
+    let multiarch_packages = dedup_strings(collect_string_lists(&sections, |s| &s.multiarch_packages));
+    let duplicate_packages = dedup_strings(collect_string_lists(&sections, |s| &s.duplicate_packages));
+    let repo_providing_packages = dedup_strings(collect_string_lists(&sections, |s| &s.repo_providing_packages));
+    let ostree_removals = dedup_strings(collect_string_lists(&sections, |s| &s.ostree_removals));
+
+    // Dedup version_changes by name.arch
+    let version_changes = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for vc in &s.version_changes {
+                    let key = format!("{}.{}", vc.name, vc.arch);
+                    if seen.insert(key) {
+                        result.push(vc.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| {
+            let ka = format!("{}.{}", a.name, a.arch);
+            let kb = format!("{}.{}", b.name, b.arch);
+            ka.cmp(&kb)
+        });
+        result
+    };
+
+    // Dedup ostree_overrides by name
+    let ostree_overrides = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for oo in &s.ostree_overrides {
+                    if seen.insert(oo.name.clone()) {
+                        result.push(oo.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    };
+
+    // Dedup rpm_va by path
+    let rpm_va = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for entry in &s.rpm_va {
+                    if seen.insert(entry.path.clone()) {
+                        result.push(entry.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.path.cmp(&b.path));
+        result
+    };
+
+    // Pass-through from first host (sorted by hostname): scalar/optional fields
+    let leaf_packages = first_host_option(&sections, hostnames, |s| &s.leaf_packages);
+    let auto_packages = first_host_option(&sections, hostnames, |s| &s.auto_packages);
+    let baseline_package_names = first_host_option(&sections, hostnames, |s| &s.baseline_package_names);
+    let baseline_module_streams = first_host_option(&sections, hostnames, |s| &s.baseline_module_streams);
+    let versionlock_command_output = first_host_option(&sections, hostnames, |s| &s.versionlock_command_output);
+    let base_image = first_host_option(&sections, hostnames, |s| &s.base_image);
+    let no_baseline = first_host_bool(&sections, hostnames, |s| s.no_baseline);
+    let baseline_suppressed = first_host_option(&sections, hostnames, |s| &s.baseline_suppressed);
+    let leaf_dep_tree = {
+        let mut pairs: Vec<(&str, &serde_json::Value)> = Vec::new();
+        for (idx, section) in sections.iter().enumerate() {
+            if let Some(s) = section {
+                if !s.leaf_dep_tree.is_null() {
+                    pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), &s.leaf_dep_tree));
+                }
+            }
+        }
+        pairs.sort_by_key(|(h, _)| *h);
+        pairs.first().map(|(_, v)| (*v).clone()).unwrap_or(serde_json::Value::Null)
+    };
+    // file_ownership: dedup by package_name
+    let file_ownership = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for entry in &s.file_ownership {
+                    if seen.insert(entry.package_name.clone()) {
+                        result.push(entry.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.package_name.cmp(&b.package_name));
+        result
+    };
+
+    Some(RpmSection {
+        packages_added,
+        base_image_only,
+        rpm_va,
+        repo_files,
+        gpg_keys,
+        dnf_history_removed,
+        version_changes,
+        leaf_packages,
+        auto_packages,
+        leaf_dep_tree,
+        module_streams,
+        version_locks,
+        module_stream_conflicts,
+        baseline_module_streams,
+        versionlock_command_output,
+        multiarch_packages,
+        duplicate_packages,
+        repo_providing_packages,
+        ostree_overrides,
+        ostree_removals,
+        base_image,
+        baseline_package_names,
+        no_baseline,
+        baseline_suppressed,
+        file_ownership,
+    })
+}
+
+/// Merge config sections from multiple hosts.
+pub fn merge_config_sections(
+    sections: Vec<Option<ConfigSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<ConfigSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let files = merge_items(
+        collect_items(&sections, |s| &s.files),
+        total_hosts,
+        hostnames,
+    );
+
+    Some(ConfigSection { files })
+}
+
+/// Merge service sections from multiple hosts.
+pub fn merge_service_sections(
+    sections: Vec<Option<ServiceSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<ServiceSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let state_changes = merge_items(
+        collect_items(&sections, |s| &s.state_changes),
+        total_hosts,
+        hostnames,
+    );
+    let drop_ins = merge_items(
+        collect_items(&sections, |s| &s.drop_ins),
+        total_hosts,
+        hostnames,
+    );
+    let enabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.enabled_units));
+    let disabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.disabled_units));
+    let preset_matched_units = dedup_strings(collect_string_lists(&sections, |s| &s.preset_matched_units));
+
+    Some(ServiceSection {
+        state_changes,
+        enabled_units,
+        disabled_units,
+        drop_ins,
+        preset_matched_units,
+    })
+}
+
+/// Merge container sections from multiple hosts.
+pub fn merge_container_sections(
+    sections: Vec<Option<ContainerSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<ContainerSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let quadlet_units = merge_items(
+        collect_items(&sections, |s| &s.quadlet_units),
+        total_hosts,
+        hostnames,
+    );
+    let compose_files = merge_items(
+        collect_items(&sections, |s| &s.compose_files),
+        total_hosts,
+        hostnames,
+    );
+
+    // Skip running_containers — runtime state, not config
+    let running_containers = Vec::new();
+
+    // Dedup flatpak_apps by app_id
+    let flatpak_apps = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for app in &s.flatpak_apps {
+                    if seen.insert(app.app_id.clone()) {
+                        result.push(app.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.app_id.cmp(&b.app_id));
+        result
+    };
+
+    Some(ContainerSection {
+        quadlet_units,
+        compose_files,
+        running_containers,
+        flatpak_apps,
+    })
+}
+
+/// Merge network sections from multiple hosts.
+pub fn merge_network_sections(
+    sections: Vec<Option<NetworkSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<NetworkSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let connections = merge_items(
+        collect_items(&sections, |s| &s.connections),
+        total_hosts,
+        hostnames,
+    );
+    let firewall_zones = merge_items(
+        collect_items(&sections, |s| &s.firewall_zones),
+        total_hosts,
+        hostnames,
+    );
+
+    // Dedup firewall_direct_rules by identity (all fields)
+    let firewall_direct_rules = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for rule in &s.firewall_direct_rules {
+                    let key = format!(
+                        "{}:{}:{}:{}:{}",
+                        rule.ipv, rule.table, rule.chain, rule.priority, rule.args
+                    );
+                    if seen.insert(key) {
+                        result.push(rule.clone());
+                    }
+                }
+            }
+        }
+        result
+    };
+
+    // Dedup static_routes by path
+    let static_routes = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for route in &s.static_routes {
+                    if seen.insert(route.path.clone()) {
+                        result.push(route.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.path.cmp(&b.path));
+        result
+    };
+
+    let ip_routes = dedup_strings(collect_string_lists(&sections, |s| &s.ip_routes));
+    let ip_rules = dedup_strings(collect_string_lists(&sections, |s| &s.ip_rules));
+    let hosts_additions = dedup_strings(collect_string_lists(&sections, |s| &s.hosts_additions));
+
+    // Dedup proxy by source
+    let proxy = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for entry in &s.proxy {
+                    if seen.insert(entry.source.clone()) {
+                        result.push(entry.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.source.cmp(&b.source));
+        result
+    };
+
+    // Most-prevalent for resolv_provenance (first host sorted by hostname)
+    let resolv_provenance = first_host_scalar(&sections, hostnames, |s| &s.resolv_provenance);
+
+    Some(NetworkSection {
+        connections,
+        firewall_zones,
+        firewall_direct_rules,
+        static_routes,
+        ip_routes,
+        ip_rules,
+        resolv_provenance,
+        hosts_additions,
+        proxy,
+    })
+}
+
+/// Merge storage sections from multiple hosts.
+pub fn merge_storage_sections(
+    sections: Vec<Option<StorageSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<StorageSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let fstab_entries = merge_items(
+        collect_items(&sections, |s| &s.fstab_entries),
+        total_hosts,
+        hostnames,
+    );
+
+    // Dedup mount_points by target
+    let mount_points = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for mp in &s.mount_points {
+                    if seen.insert(mp.target.clone()) {
+                        result.push(mp.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.target.cmp(&b.target));
+        result
+    };
+
+    // Dedup lvm_info by lv_name + vg_name
+    let lvm_info = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for vol in &s.lvm_info {
+                    let key = format!("{}/{}", vol.vg_name, vol.lv_name);
+                    if seen.insert(key) {
+                        result.push(vol.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| {
+            let ka = format!("{}/{}", a.vg_name, a.lv_name);
+            let kb = format!("{}/{}", b.vg_name, b.lv_name);
+            ka.cmp(&kb)
+        });
+        result
+    };
+
+    // Dedup var_directories by path
+    let var_directories = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for dir in &s.var_directories {
+                    if seen.insert(dir.path.clone()) {
+                        result.push(dir.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.path.cmp(&b.path));
+        result
+    };
+
+    // Dedup credential_refs by mount_point + credential_path
+    let credential_refs = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for cr in &s.credential_refs {
+                    let key = format!("{}:{}", cr.mount_point, cr.credential_path);
+                    if seen.insert(key) {
+                        result.push(cr.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.mount_point.cmp(&b.mount_point));
+        result
+    };
+
+    Some(StorageSection {
+        fstab_entries,
+        mount_points,
+        lvm_info,
+        var_directories,
+        credential_refs,
+    })
+}
+
+/// Merge scheduled task sections from multiple hosts.
+pub fn merge_scheduled_sections(
+    sections: Vec<Option<ScheduledTaskSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<ScheduledTaskSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let cron_jobs = merge_items(
+        collect_items(&sections, |s| &s.cron_jobs),
+        total_hosts,
+        hostnames,
+    );
+    let systemd_timers = merge_items(
+        collect_items(&sections, |s| &s.systemd_timers),
+        total_hosts,
+        hostnames,
+    );
+    let at_jobs = merge_items(
+        collect_items(&sections, |s| &s.at_jobs),
+        total_hosts,
+        hostnames,
+    );
+    let generated_timer_units = merge_items(
+        collect_items(&sections, |s| &s.generated_timer_units),
+        total_hosts,
+        hostnames,
+    );
+
+    Some(ScheduledTaskSection {
+        cron_jobs,
+        systemd_timers,
+        at_jobs,
+        generated_timer_units,
+    })
+}
+
+/// Merge SELinux sections from multiple hosts.
+pub fn merge_selinux_sections(
+    sections: Vec<Option<SelinuxSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<SelinuxSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let port_labels = merge_items(
+        collect_items(&sections, |s| &s.port_labels),
+        total_hosts,
+        hostnames,
+    );
+
+    let custom_modules = dedup_strings(collect_string_lists(&sections, |s| &s.custom_modules));
+    let fcontext_rules = dedup_strings(collect_string_lists(&sections, |s| &s.fcontext_rules));
+
+    // Dedup boolean_overrides by JSON equality
+    let boolean_overrides = dedup_json_values(
+        sections
+            .iter()
+            .filter_map(|s| s.as_ref().map(|s| s.boolean_overrides.clone()))
+            .collect(),
+    );
+
+    // Dedup audit_rules (CarryForwardFile) by path
+    let audit_rules = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for rule in &s.audit_rules {
+                    if seen.insert(rule.path.clone()) {
+                        result.push(rule.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.path.cmp(&b.path));
+        result
+    };
+
+    // Dedup pam_configs (CarryForwardFile) by path
+    let pam_configs = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for cfg in &s.pam_configs {
+                    if seen.insert(cfg.path.clone()) {
+                        result.push(cfg.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.path.cmp(&b.path));
+        result
+    };
+
+    // Most-prevalent scalar fields from first host
+    let mode = first_host_scalar(&sections, hostnames, |s| &s.mode);
+    let fips_mode = first_host_bool(&sections, hostnames, |s| s.fips_mode);
+
+    Some(SelinuxSection {
+        mode,
+        custom_modules,
+        boolean_overrides,
+        fcontext_rules,
+        audit_rules,
+        fips_mode,
+        pam_configs,
+        port_labels,
+    })
+}
+
+/// Merge kernel/boot sections from multiple hosts.
+pub fn merge_kernelboot_sections(
+    sections: Vec<Option<KernelBootSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<KernelBootSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let sysctl_overrides = merge_items(
+        collect_items(&sections, |s| &s.sysctl_overrides),
+        total_hosts,
+        hostnames,
+    );
+    let loaded_modules = merge_items(
+        collect_items(&sections, |s| &s.loaded_modules),
+        total_hosts,
+        hostnames,
+    );
+    let non_default_modules = merge_items(
+        collect_items(&sections, |s| &s.non_default_modules),
+        total_hosts,
+        hostnames,
+    );
+
+    // Dedup ConfigSnippets by path
+    let modules_load_d = dedup_config_snippets(&sections, |s| &s.modules_load_d);
+    let modprobe_d = dedup_config_snippets(&sections, |s| &s.modprobe_d);
+    let dracut_conf = dedup_config_snippets(&sections, |s| &s.dracut_conf);
+    let tuned_custom_profiles = dedup_config_snippets(&sections, |s| &s.tuned_custom_profiles);
+
+    // Dedup alternatives by name
+    let alternatives = {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for section in &sections {
+            if let Some(s) = section {
+                for alt in &s.alternatives {
+                    if seen.insert(alt.name.clone()) {
+                        result.push(alt.clone());
+                    }
+                }
+            }
+        }
+        result.sort_by(|a, b| a.name.cmp(&b.name));
+        result
+    };
+
+    // Most-prevalent scalars from first host
+    let cmdline = first_host_scalar(&sections, hostnames, |s| &s.cmdline);
+    let grub_defaults = first_host_scalar(&sections, hostnames, |s| &s.grub_defaults);
+    let tuned_active = first_host_scalar(&sections, hostnames, |s| &s.tuned_active);
+    let locale = first_host_option(&sections, hostnames, |s| &s.locale);
+    let timezone = first_host_option(&sections, hostnames, |s| &s.timezone);
+
+    Some(KernelBootSection {
+        cmdline,
+        grub_defaults,
+        sysctl_overrides,
+        modules_load_d,
+        modprobe_d,
+        dracut_conf,
+        loaded_modules,
+        non_default_modules,
+        tuned_active,
+        tuned_custom_profiles,
+        locale,
+        timezone,
+        alternatives,
+    })
+}
+
+/// Helper: dedup ConfigSnippet lists by path.
+fn dedup_config_snippets<S, F>(
+    sections: &[Option<S>],
+    extractor: F,
+) -> Vec<crate::types::kernelboot::ConfigSnippet>
+where
+    F: Fn(&S) -> &Vec<crate::types::kernelboot::ConfigSnippet>,
+{
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    for section in sections {
+        if let Some(s) = section {
+            for snippet in extractor(s) {
+                if seen.insert(snippet.path.clone()) {
+                    result.push(snippet.clone());
+                }
+            }
+        }
+    }
+    result.sort_by(|a, b| a.path.cmp(&b.path));
+    result
+}
+
+/// Merge non-RPM software sections from multiple hosts.
+pub fn merge_nonrpm_sections(
+    sections: Vec<Option<NonRpmSoftwareSection>>,
+    total_hosts: usize,
+    hostnames: &[String],
+) -> Option<NonRpmSoftwareSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let items = merge_items(
+        collect_items(&sections, |s| &s.items),
+        total_hosts,
+        hostnames,
+    );
+
+    // env_files are ConfigFileEntry — merge with variants
+    let env_files = merge_items(
+        collect_items(&sections, |s| &s.env_files),
+        total_hosts,
+        hostnames,
+    );
+
+    Some(NonRpmSoftwareSection { items, env_files })
+}
+
+/// Merge users/groups sections from multiple hosts.
+///
+/// Users and groups are `Vec<serde_json::Value>` — deduplicated by the
+/// `"name"` field extracted from each JSON object. For users, group
+/// membership lists are merged (union). For groups, member lists are
+/// merged (union).
+pub fn merge_usersgroups_sections(
+    sections: Vec<Option<UserGroupSection>>,
+    _total_hosts: usize,
+    _hostnames: &[String],
+) -> Option<UserGroupSection> {
+    if sections.iter().all(|s| s.is_none()) {
+        return None;
+    }
+
+    let users = merge_json_by_name(
+        sections.iter().filter_map(|s| s.as_ref().map(|s| &s.users)).collect(),
+        &["groups", "secondary_groups"],
+    );
+    let groups = merge_json_by_name(
+        sections.iter().filter_map(|s| s.as_ref().map(|s| &s.groups)).collect(),
+        &["members"],
+    );
+
+    let sudoers_rules = dedup_strings(collect_string_lists(&sections, |s| &s.sudoers_rules));
+    let passwd_entries = dedup_strings(collect_string_lists(&sections, |s| &s.passwd_entries));
+    let shadow_entries = dedup_strings(collect_string_lists(&sections, |s| &s.shadow_entries));
+    let group_entries = dedup_strings(collect_string_lists(&sections, |s| &s.group_entries));
+    let gshadow_entries = dedup_strings(collect_string_lists(&sections, |s| &s.gshadow_entries));
+    let subuid_entries = dedup_strings(collect_string_lists(&sections, |s| &s.subuid_entries));
+    let subgid_entries = dedup_strings(collect_string_lists(&sections, |s| &s.subgid_entries));
+
+    // Dedup ssh_authorized_keys_refs by JSON equality
+    let ssh_authorized_keys_refs = dedup_json_values(
+        sections
+            .iter()
+            .filter_map(|s| s.as_ref().map(|s| s.ssh_authorized_keys_refs.clone()))
+            .collect(),
+    );
+
+    Some(UserGroupSection {
+        users,
+        groups,
+        sudoers_rules,
+        ssh_authorized_keys_refs,
+        passwd_entries,
+        shadow_entries,
+        group_entries,
+        gshadow_entries,
+        subuid_entries,
+        subgid_entries,
+    })
+}
+
+/// Merge JSON objects by their `"name"` field, union-merging array fields.
+fn merge_json_by_name(
+    all_lists: Vec<&Vec<serde_json::Value>>,
+    union_array_fields: &[&str],
+) -> Vec<serde_json::Value> {
+    let mut by_name: HashMap<String, serde_json::Value> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+
+    for list in all_lists {
+        for item in list {
+            let name = item.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if let Some(existing) = by_name.get_mut(&name) {
+                // Union array fields
+                for field in union_array_fields {
+                    if let (Some(existing_arr), Some(new_arr)) = (
+                        existing.get(*field).and_then(|v| v.as_array()).cloned(),
+                        item.get(*field).and_then(|v| v.as_array()),
+                    ) {
+                        let mut merged = existing_arr;
+                        for val in new_arr {
+                            if !merged.contains(val) {
+                                merged.push(val.clone());
+                            }
+                        }
+                        merged.sort_by(|a, b| {
+                            let sa = serde_json::to_string(a).unwrap_or_default();
+                            let sb = serde_json::to_string(b).unwrap_or_default();
+                            sa.cmp(&sb)
+                        });
+                        if let Some(obj) = existing.as_object_mut() {
+                            obj.insert(field.to_string(), serde_json::Value::Array(merged));
+                        }
+                    }
+                }
+            } else {
+                order.push(name.clone());
+                by_name.insert(name, item.clone());
+            }
+        }
+    }
+
+    order.sort();
+    order.iter().filter_map(|name| by_name.remove(name)).collect()
 }
