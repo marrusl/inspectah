@@ -82,9 +82,7 @@ pub struct FleetInitArgs {
 pub fn run_fleet(args: &FleetArgs) -> Result<()> {
     match &args.command {
         FleetSubcommand::Aggregate(agg) => run_aggregate(agg),
-        FleetSubcommand::Init(_init) => {
-            bail!("fleet init is not yet implemented (coming in a future release)")
-        }
+        FleetSubcommand::Init(init) => run_init(init),
     }
 }
 
@@ -274,6 +272,217 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
     eprintln!("Output: {}", tarball_path.display());
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Init implementation
+// ---------------------------------------------------------------------------
+
+/// Metadata extracted from a tarball for manifest generation.
+struct TarballMetadata {
+    path: PathBuf,
+    hostname: String,
+    target_image: Option<String>,
+}
+
+fn run_init(args: &FleetInitArgs) -> Result<()> {
+    // --- Step 1: Verify directory exists ---
+    if !args.directory.is_dir() {
+        bail!("{} is not a directory", args.directory.display());
+    }
+
+    // --- Step 2: Scan directory for tarballs ---
+    let tarball_paths = list_tarballs_in_dir(&args.directory)?;
+
+    if tarball_paths.is_empty() {
+        bail!("no .tar.gz files found in {}", args.directory.display());
+    }
+
+    // --- Step 3: Extract metadata from each tarball ---
+    let mut metadata_list: Vec<TarballMetadata> = Vec::new();
+    let mut failed: Vec<(PathBuf, String)> = Vec::new();
+
+    for path in &tarball_paths {
+        match extract_tarball_metadata(path) {
+            Ok(meta) => metadata_list.push(meta),
+            Err(e) => {
+                failed.push((path.clone(), format!("{e:#}")));
+                eprintln!("warning: skipping {}: {e:#}", path.display());
+            }
+        }
+    }
+
+    if metadata_list.is_empty() {
+        bail!(
+            "no valid snapshots found ({} file(s) could not be parsed)",
+            failed.len()
+        );
+    }
+
+    // --- Step 4: Determine output path ---
+    let output_path = args.output.clone().unwrap_or_else(|| PathBuf::from("fleet.toml"));
+
+    // --- Step 5: Check for existing file ---
+    if output_path.exists() && !args.overwrite {
+        bail!(
+            "{} already exists (use --overwrite to replace)",
+            output_path.display()
+        );
+    }
+
+    // --- Step 6: Detect baseline conflicts ---
+    let mut image_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for meta in &metadata_list {
+        if let Some(img) = &meta.target_image {
+            *image_counts.entry(img.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let baseline = if image_counts.is_empty() {
+        None
+    } else {
+        // Pick the most common image
+        let (most_common, _count) = image_counts
+            .iter()
+            .max_by_key(|(_, count)| *count)
+            .unwrap();
+
+        // Warn if there are conflicts
+        if image_counts.len() > 1 {
+            let dist: Vec<String> = image_counts
+                .iter()
+                .map(|(img, count)| format!("{img} ({count})"))
+                .collect();
+            eprintln!(
+                "warning: baseline conflict: selected {} from [{}]",
+                most_common,
+                dist.join(", ")
+            );
+        }
+
+        Some(most_common.clone())
+    };
+
+    // --- Step 7: Generate relative paths for manifest ---
+    let manifest_parent = output_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .canonicalize()
+        .context("failed to resolve manifest parent directory")?;
+
+    let mut sources: Vec<PathBuf> = Vec::new();
+    for meta in &metadata_list {
+        let abs_path = meta.path.canonicalize()
+            .with_context(|| format!("failed to resolve {}", meta.path.display()))?;
+
+        // Use pathdiff to create a relative path from manifest dir to tarball
+        let rel_path = pathdiff::diff_paths(&abs_path, &manifest_parent)
+            .unwrap_or_else(|| abs_path.clone());
+
+        sources.push(rel_path);
+    }
+
+    // --- Step 8: Generate TOML manifest ---
+    let label = args.directory
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("fleet");
+
+    let toml = generate_manifest_toml(label, baseline.as_deref(), &sources);
+
+    // --- Step 9: Write manifest file ---
+    if let Some(parent) = output_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)
+                .context("failed to create output directory")?;
+        }
+    }
+
+    std::fs::write(&output_path, &toml)
+        .with_context(|| format!("failed to write {}", output_path.display()))?;
+
+    // --- Step 10: Output summary ---
+    eprintln!(
+        "Wrote {} ({} sources{})",
+        output_path.display(),
+        sources.len(),
+        baseline.as_ref().map_or(String::new(), |b| format!(", baseline: {b}"))
+    );
+
+    Ok(())
+}
+
+/// Extract minimal metadata (hostname, target_image) from a tarball.
+fn extract_tarball_metadata(tarball_path: &Path) -> Result<TarballMetadata> {
+    let file = std::fs::File::open(tarball_path)
+        .with_context(|| format!("failed to open {}", tarball_path.display()))?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut archive = tar::Archive::new(gz);
+
+    for entry_result in archive.entries().context("failed to read tarball entries")? {
+        let mut entry = entry_result.context("failed to read tarball entry")?;
+        let path = entry.path().context("invalid entry path")?;
+
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map_or(false, |n| n == "inspection-snapshot.json")
+        {
+            let mut json = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut json)
+                .context("failed to read inspection-snapshot.json")?;
+
+            // Parse just the fields we need
+            let v: serde_json::Value = serde_json::from_str(&json)
+                .context("failed to parse JSON")?;
+
+            let hostname = v
+                .get("meta")
+                .and_then(|m| m.get("hostname"))
+                .and_then(|h| h.as_str())
+                .ok_or_else(|| anyhow::anyhow!("missing meta.hostname"))?
+                .to_string();
+
+            let target_image = v
+                .get("meta")
+                .and_then(|m| m.get("target_image"))
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+
+            return Ok(TarballMetadata {
+                path: tarball_path.to_path_buf(),
+                hostname,
+                target_image,
+            });
+        }
+    }
+
+    bail!("no inspection-snapshot.json found in {}", tarball_path.display())
+}
+
+/// Generate a TOML manifest string with comments.
+fn generate_manifest_toml(label: &str, baseline: Option<&str>, sources: &[PathBuf]) -> String {
+    let mut toml = String::new();
+
+    toml.push_str("# inspectah fleet manifest\n");
+    toml.push_str("# Edit label and baseline as needed. Sources are relative to this file.\n\n");
+
+    toml.push_str(&format!("label = \"{label}\"\n"));
+
+    if let Some(b) = baseline {
+        toml.push_str(&format!("baseline = \"{b}\"\n"));
+    } else {
+        toml.push_str("# baseline = \"registry.redhat.io/rhel9/rhel-bootc:9.6\"\n");
+    }
+
+    toml.push_str("\nsources = [\n");
+    for source in sources {
+        let path_str = source.display().to_string();
+        toml.push_str(&format!("  \"{path_str}\",\n"));
+    }
+    toml.push_str("]\n");
+
+    toml
 }
 
 // ---------------------------------------------------------------------------
