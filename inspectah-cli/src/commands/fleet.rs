@@ -676,8 +676,11 @@ fn write_variant_file(
         .collect::<String>();
     let hash_prefix = hash_hex.chars().take(8).collect::<String>();
 
-    // Create subdirectory matching the item path structure
-    let item_parent = Path::new(item_path).parent().unwrap_or(Path::new(""));
+    // Create subdirectory matching the item path structure.
+    // Strip leading '/' so that joining never escapes the render tree
+    // (Path::join replaces the base when the rhs is absolute).
+    let sanitized_path = item_path.trim_start_matches('/');
+    let item_parent = Path::new(sanitized_path).parent().unwrap_or(Path::new(""));
     let target_dir = variants_dir.join(item_parent);
     std::fs::create_dir_all(&target_dir)?;
 
@@ -793,4 +796,47 @@ fn format_validation_errors(errors: &[FleetValidationError]) -> anyhow::Error {
         .collect();
 
     anyhow::anyhow!("fleet validation failed:\n  {}", msgs.join("\n  "))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_variant_file_stays_under_render_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let variants_dir = dir.path().join("fleet").join("variants");
+
+        write_variant_file(
+            &variants_dir,
+            "/etc/httpd/conf/httpd.conf",
+            "conf",
+            "ServerRoot /etc/httpd",
+        )
+        .unwrap();
+
+        // Must land under fleet/variants/etc/httpd/conf/
+        let expected_parent = variants_dir.join("etc/httpd/conf");
+        assert!(
+            expected_parent.exists(),
+            "variant dir should be under render tree, not at host /etc/httpd/conf"
+        );
+
+        let entries: Vec<_> = std::fs::read_dir(&expected_parent).unwrap().collect();
+        assert_eq!(entries.len(), 1, "exactly one variant file expected");
+    }
+
+    #[test]
+    fn test_variant_file_relative_path_works() {
+        let dir = tempfile::tempdir().unwrap();
+        let variants_dir = dir.path().join("fleet").join("variants");
+
+        write_variant_file(&variants_dir, "etc/foo.conf", "conf", "key=value").unwrap();
+
+        let expected_parent = variants_dir.join("etc");
+        assert!(
+            expected_parent.exists(),
+            "relative path should resolve under variants_dir"
+        );
+    }
 }
