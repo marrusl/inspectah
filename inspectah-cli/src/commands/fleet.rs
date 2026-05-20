@@ -431,9 +431,9 @@ fn extract_tarball_metadata(tarball_path: &Path) -> Result<TarballMetadata> {
                 serde_json::from_str(&json).context("failed to parse JSON")?;
 
             let target_image = v
-                .get("meta")
-                .and_then(|m| m.get("target_image"))
-                .and_then(|t| t.as_str())
+                .get("target_image")
+                .and_then(|t| t.get("image_ref"))
+                .and_then(|r| r.as_str())
                 .map(|s| s.to_string());
 
             return Ok(TarballMetadata {
@@ -837,6 +837,138 @@ mod tests {
         assert!(
             expected_parent.exists(),
             "relative path should resolve under variants_dir"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Fleet init metadata extraction regression tests
+    // -----------------------------------------------------------------------
+
+    /// Build a .tar.gz containing a single `inspection-snapshot.json` with
+    /// the given JSON value. Returns the path to the tarball.
+    fn make_test_tarball(dir: &Path, name: &str, json: &serde_json::Value) -> PathBuf {
+        let tarball_path = dir.join(name);
+        let file = std::fs::File::create(&tarball_path).unwrap();
+        let gz = flate2::write::GzEncoder::new(file, flate2::Compression::fast());
+        let mut builder = tar::Builder::new(gz);
+
+        let json_bytes = serde_json::to_vec(json).unwrap();
+        let mut header = tar::Header::new_gnu();
+        header.set_size(json_bytes.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+
+        builder
+            .append_data(
+                &mut header,
+                "host-a/inspection-snapshot.json",
+                &json_bytes[..],
+            )
+            .unwrap();
+        builder.finish().unwrap();
+
+        tarball_path
+    }
+
+    #[test]
+    fn test_extract_metadata_reads_top_level_target_image() {
+        // Build a snapshot JSON that mirrors real InspectionSnapshot
+        // serialization: target_image is a top-level struct with image_ref,
+        // NOT inside the meta HashMap.
+        let snapshot_json = serde_json::json!({
+            "schema_version": 17,
+            "meta": {
+                "hostname": "host-a.example.com"
+            },
+            "target_image": {
+                "image_ref": "registry.redhat.io/rhel9/rhel-bootc:9.6",
+                "strategy": "BootcStatus"
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = make_test_tarball(dir.path(), "host-a.tar.gz", &snapshot_json);
+
+        let meta = extract_tarball_metadata(&tarball).unwrap();
+
+        assert_eq!(
+            meta.target_image.as_deref(),
+            Some("registry.redhat.io/rhel9/rhel-bootc:9.6"),
+            "should read target_image.image_ref from top-level, not meta"
+        );
+    }
+
+    #[test]
+    fn test_extract_metadata_ignores_meta_target_image() {
+        // If target_image only exists inside meta (old/wrong shape),
+        // extraction should return None — not silently read the wrong path.
+        let snapshot_json = serde_json::json!({
+            "schema_version": 17,
+            "meta": {
+                "hostname": "host-b.example.com",
+                "target_image": "registry.redhat.io/rhel9/rhel-bootc:9.4"
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let tarball = make_test_tarball(dir.path(), "host-b.tar.gz", &snapshot_json);
+
+        let meta = extract_tarball_metadata(&tarball).unwrap();
+
+        assert_eq!(
+            meta.target_image, None,
+            "should NOT read target_image from meta HashMap"
+        );
+    }
+
+    #[test]
+    fn test_baseline_conflict_selects_most_common() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let common_image = "registry.redhat.io/rhel9/rhel-bootc:9.6";
+        let outlier_image = "registry.redhat.io/rhel9/rhel-bootc:9.4";
+
+        // Two tarballs with the same baseline
+        let json_common = serde_json::json!({
+            "schema_version": 17,
+            "meta": {"hostname": "host-1"},
+            "target_image": {"image_ref": common_image, "strategy": "BootcStatus"}
+        });
+        // One tarball with a different baseline
+        let json_outlier = serde_json::json!({
+            "schema_version": 17,
+            "meta": {"hostname": "host-3"},
+            "target_image": {"image_ref": outlier_image, "strategy": "BootcStatus"}
+        });
+
+        let t1 = make_test_tarball(dir.path(), "host-1.tar.gz", &json_common);
+        let t2 = make_test_tarball(dir.path(), "host-2.tar.gz", &json_common);
+        let t3 = make_test_tarball(dir.path(), "host-3.tar.gz", &json_outlier);
+
+        // Extract metadata from all three
+        let meta_list: Vec<TarballMetadata> = [t1, t2, t3]
+            .iter()
+            .map(|p| extract_tarball_metadata(p).unwrap())
+            .collect();
+
+        // Replicate the conflict-resolution logic from run_init
+        let mut image_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for meta in &meta_list {
+            if let Some(img) = &meta.target_image {
+                *image_counts.entry(img.clone()).or_insert(0) += 1;
+            }
+        }
+
+        assert_eq!(image_counts.len(), 2, "should detect two distinct baselines");
+        assert_eq!(image_counts[common_image], 2);
+        assert_eq!(image_counts[outlier_image], 1);
+
+        // Most-common wins
+        let (winner, _) = image_counts.iter().max_by_key(|(_, c)| *c).unwrap();
+        assert_eq!(
+            winner, common_image,
+            "conflict resolution should pick the most common baseline"
         );
     }
 }
