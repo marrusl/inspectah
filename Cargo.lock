@@ -204,6 +204,7 @@ dependencies = [
  "iana-time-zone",
  "js-sys",
  "num-traits",
+ "serde",
  "wasm-bindgen",
  "windows-link",
 ]
@@ -863,9 +864,11 @@ dependencies = [
 name = "inspectah-core"
 version = "0.8.0-alpha.3"
 dependencies = [
+ "chrono",
  "insta",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 
