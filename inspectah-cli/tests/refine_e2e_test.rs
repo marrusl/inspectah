@@ -1,16 +1,33 @@
 /// Create a minimal test tarball with a FullyRedacted snapshot.
 fn create_test_tarball(dir: &std::path::Path) -> std::path::PathBuf {
     let snap = serde_json::json!({
-        "schema_version": 14,
+        "schema_version": 16,
         "rpm": {
             "packages_added": [
                 {
                     "name": "httpd",
                     "arch": "x86_64",
                     "state": "added",
-                    "include": true
+                    "include": true,
+                    "source_repo": "appstream"
                 }
-            ]
+            ],
+            "base_image_only": [],
+            "rpm_va": [],
+            "repo_files": [],
+            "gpg_keys": [],
+            "dnf_history_removed": [],
+            "version_changes": [],
+            "module_streams": [],
+            "version_locks": [],
+            "module_stream_conflicts": [],
+            "multiarch_packages": [],
+            "duplicate_packages": [],
+            "repo_providing_packages": [],
+            "ostree_overrides": [],
+            "ostree_removals": [],
+            "file_ownership": [],
+            "no_baseline": true
         },
         "config": {
             "files": [
