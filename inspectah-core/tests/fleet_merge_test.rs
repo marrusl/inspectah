@@ -1263,8 +1263,7 @@ fn test_merge_network_resolv_provenance_most_prevalent() {
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
-    let result =
-        merge_network_sections(vec![Some(s1), Some(s2), Some(s3)], 3, &hostnames).unwrap();
+    let result = merge_network_sections(vec![Some(s1), Some(s2), Some(s3)], 3, &hostnames).unwrap();
 
     assert_eq!(result.resolv_provenance, "systemd-resolved");
 }
@@ -1503,10 +1502,7 @@ fn test_merge_selinux_most_prevalent_tie_break() {
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
     let result = merge_selinux_sections(
-        vec![
-            Some(make("permissive")),
-            Some(make("enforcing")),
-        ],
+        vec![Some(make("permissive")), Some(make("enforcing"))],
         2,
         &hostnames,
     )
@@ -1527,11 +1523,7 @@ fn test_merge_selinux_fips_mode_most_prevalent_true() {
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
     let result = merge_selinux_sections(
-        vec![
-            Some(make(false)),
-            Some(make(true)),
-            Some(make(true)),
-        ],
+        vec![Some(make(false)), Some(make(true)), Some(make(true))],
         3,
         &hostnames,
     )
@@ -1841,8 +1833,13 @@ fn test_merge_rpm_sections_baseline_from_winning_host_not_first() {
     let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into(), "host-c".into()];
 
     // Baseline host is index 1 (host-b), NOT index 0 (host-a)
-    let result =
-        merge_rpm_sections(vec![Some(s_a), Some(s_b), Some(s_c)], 3, &hostnames, Some(1)).unwrap();
+    let result = merge_rpm_sections(
+        vec![Some(s_a), Some(s_b), Some(s_c)],
+        3,
+        &hostnames,
+        Some(1),
+    )
+    .unwrap();
 
     // RPM section must use host-b's baseline data, not host-a's
     assert_eq!(result.base_image, Some("quay.io/rhel:9.4".into()));

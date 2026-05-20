@@ -658,8 +658,7 @@ mod tests {
         s1.meta
             .insert("scan_tool".into(), serde_json::json!("inspectah"));
         let mut s2 = valid_snap("host-b");
-        s2.meta
-            .insert("env".into(), serde_json::json!("staging"));
+        s2.meta.insert("env".into(), serde_json::json!("staging"));
 
         let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
         // First-writer-wins for hostname: host-a sorts before host-b
@@ -671,10 +670,7 @@ mod tests {
             merged.meta.get("scan_tool"),
             Some(&serde_json::json!("inspectah")),
         );
-        assert_eq!(
-            merged.meta.get("env"),
-            Some(&serde_json::json!("staging")),
-        );
+        assert_eq!(merged.meta.get("env"), Some(&serde_json::json!("staging")),);
     }
 
     #[test]
@@ -727,10 +723,12 @@ mod tests {
         let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
         // 2 from s1 + 1 unique from s2 = 3 (the duplicate is dropped)
         assert_eq!(merged.warnings.len(), 3);
-        assert!(merged
-            .warnings
-            .iter()
-            .any(|w| w.inspector == "network" && w.message == "no DNS configured"));
+        assert!(
+            merged
+                .warnings
+                .iter()
+                .any(|w| w.inspector == "network" && w.message == "no DNS configured")
+        );
     }
 
     #[test]
@@ -805,15 +803,19 @@ mod tests {
         let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
         // Redactions: 1 from s1 + 1 unique from s2 = 2
         assert_eq!(merged.redactions.len(), 2);
-        assert!(merged
-            .redactions
-            .iter()
-            .any(|r| r.path == "/etc/ssh/ssh_host_rsa_key"));
+        assert!(
+            merged
+                .redactions
+                .iter()
+                .any(|r| r.path == "/etc/ssh/ssh_host_rsa_key")
+        );
         // Hints: 1 from s1 + 1 unique from s2 = 2
         assert_eq!(merged.redaction_hints.len(), 2);
-        assert!(merged
-            .redaction_hints
-            .iter()
-            .any(|h| h.path == "/etc/ssh/ssh_host_rsa_key"));
+        assert!(
+            merged
+                .redaction_hints
+                .iter()
+                .any(|h| h.path == "/etc/ssh/ssh_host_rsa_key")
+        );
     }
 }

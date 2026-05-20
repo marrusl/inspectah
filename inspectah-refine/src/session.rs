@@ -598,12 +598,13 @@ impl RefineSession {
                             .users
                             .iter_mut()
                             .find(|u| u.get("name").and_then(|v| v.as_str()) == Some(username))
-                        && let Some(m) = user.as_object_mut() {
-                            m.insert(
-                                "containerfile_strategy".to_string(),
-                                serde_json::to_value(strategy).unwrap(),
-                            );
-                        }
+                        && let Some(m) = user.as_object_mut()
+                    {
+                        m.insert(
+                            "containerfile_strategy".to_string(),
+                            serde_json::to_value(strategy).unwrap(),
+                        );
+                    }
                 }
                 RefinementOp::UserPassword(pw_op) => {
                     match pw_op {

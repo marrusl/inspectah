@@ -966,7 +966,11 @@ mod tests {
             }
         }
 
-        assert_eq!(image_counts.len(), 2, "should detect two distinct baselines");
+        assert_eq!(
+            image_counts.len(),
+            2,
+            "should detect two distinct baselines"
+        );
         assert_eq!(image_counts[common_image], 2);
         assert_eq!(image_counts[outlier_image], 1);
 
@@ -1064,8 +1068,8 @@ mod tests {
 
         // Verify it's valid JSON
         let content = std::fs::read_to_string(&expected).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content)
-            .expect("output should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("output should be valid JSON");
         assert!(parsed.is_object(), "parsed JSON should be an object");
     }
 
@@ -1094,8 +1098,8 @@ mod tests {
         );
 
         let content = std::fs::read_to_string(&out_file).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content)
-            .expect("output should be valid JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("output should be valid JSON");
         assert!(parsed.is_object(), "parsed JSON should be an object");
     }
 }

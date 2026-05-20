@@ -99,10 +99,8 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
 
     // --- Hard error: architecture mismatch ---
     {
-        let architectures: HashSet<String> = snapshots
-            .iter()
-            .filter_map(extract_architecture)
-            .collect();
+        let architectures: HashSet<String> =
+            snapshots.iter().filter_map(extract_architecture).collect();
         if architectures.len() > 1 {
             let mut sorted: Vec<String> = architectures.into_iter().collect();
             sorted.sort();
@@ -364,19 +362,13 @@ mod tests {
 
     #[test]
     fn test_extract_architecture_aarch64() {
-        let snap = snap_with_arch_packages(&[
-            ("kernel", "aarch64"),
-            ("glibc", "aarch64"),
-        ]);
+        let snap = snap_with_arch_packages(&[("kernel", "aarch64"), ("glibc", "aarch64")]);
         assert_eq!(extract_architecture(&snap), Some("aarch64".to_string()));
     }
 
     #[test]
     fn test_extract_architecture_noarch_only() {
-        let snap = snap_with_arch_packages(&[
-            ("tzdata", "noarch"),
-            ("ca-certificates", "noarch"),
-        ]);
+        let snap = snap_with_arch_packages(&[("tzdata", "noarch"), ("ca-certificates", "noarch")]);
         assert_eq!(extract_architecture(&snap), None);
     }
 

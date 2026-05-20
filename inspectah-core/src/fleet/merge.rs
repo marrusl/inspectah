@@ -625,29 +625,6 @@ where
         .collect()
 }
 
-/// Pick a scalar value from the first host (sorted by hostname).
-/// Returns `None` if no section has a non-empty value.
-fn first_host_scalar<S, F>(sections: &[Option<S>], hostnames: &[String], extractor: F) -> String
-where
-    F: Fn(&S) -> &str,
-{
-    // Build (hostname, value) pairs and sort by hostname for determinism.
-    let mut pairs: Vec<(&str, &str)> = Vec::new();
-    for (idx, section) in sections.iter().enumerate() {
-        if let Some(s) = section {
-            let val = extractor(s);
-            if !val.is_empty() {
-                pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), val));
-            }
-        }
-    }
-    pairs.sort_by_key(|(h, _)| *h);
-    pairs
-        .first()
-        .map(|(_, v)| v.to_string())
-        .unwrap_or_default()
-}
-
 /// Pick an optional scalar value from the first host (sorted by hostname).
 fn first_host_option<S, T, F>(
     sections: &[Option<S>],
@@ -668,24 +645,6 @@ where
     }
     pairs.sort_by_key(|(h, _)| *h);
     pairs.first().map(|(_, v)| (*v).clone())
-}
-
-/// Pick a bool from the first host (sorted by hostname).
-fn first_host_bool<S, F>(sections: &[Option<S>], hostnames: &[String], extractor: F) -> bool
-where
-    F: Fn(&S) -> bool,
-{
-    let mut pairs: Vec<(&str, bool)> = Vec::new();
-    for (idx, section) in sections.iter().enumerate() {
-        if let Some(s) = section {
-            pairs.push((
-                hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""),
-                extractor(s),
-            ));
-        }
-    }
-    pairs.sort_by_key(|(h, _)| *h);
-    pairs.first().map(|(_, v)| *v).unwrap_or(false)
 }
 
 /// Pick the most-prevalent non-empty string value across hosts.
@@ -712,10 +671,7 @@ where
     }
     // Stable: highest count first; ties preserve insertion order (first-seen)
     counts.sort_by(|(_, a), (_, b)| b.cmp(a));
-    counts
-        .first()
-        .map(|(v, _)| v.clone())
-        .unwrap_or_default()
+    counts.first().map(|(v, _)| v.clone()).unwrap_or_default()
 }
 
 /// Pick the most-prevalent bool value across hosts.
@@ -780,7 +736,7 @@ where
     sections
         .get(baseline_idx)
         .and_then(|s| s.as_ref())
-        .map(|s| extractor(s))
+        .map(extractor)
         .unwrap_or(false)
 }
 
@@ -904,19 +860,24 @@ pub fn merge_rpm_sections(
     // Baseline-bearing fields: source from the winning baseline host (not first-sorted).
     // This ensures RPM section baseline data is consistent with the top-level
     // baseline selection in the orchestrator.
-    let (baseline_package_names, baseline_module_streams, base_image, no_baseline, baseline_suppressed) =
-        if let Some(idx) = baseline_host_idx {
-            (
-                baseline_host_option(&sections, idx, |s| &s.baseline_package_names),
-                baseline_host_option(&sections, idx, |s| &s.baseline_module_streams),
-                baseline_host_option(&sections, idx, |s| &s.base_image),
-                baseline_host_bool(&sections, idx, |s| s.no_baseline),
-                baseline_host_option(&sections, idx, |s| &s.baseline_suppressed),
-            )
-        } else {
-            // No baseline selected — use defaults
-            (None, None, None, false, None)
-        };
+    let (
+        baseline_package_names,
+        baseline_module_streams,
+        base_image,
+        no_baseline,
+        baseline_suppressed,
+    ) = if let Some(idx) = baseline_host_idx {
+        (
+            baseline_host_option(&sections, idx, |s| &s.baseline_package_names),
+            baseline_host_option(&sections, idx, |s| &s.baseline_module_streams),
+            baseline_host_option(&sections, idx, |s| &s.base_image),
+            baseline_host_bool(&sections, idx, |s| s.no_baseline),
+            baseline_host_option(&sections, idx, |s| &s.baseline_suppressed),
+        )
+    } else {
+        // No baseline selected — use defaults
+        (None, None, None, false, None)
+    };
     let leaf_dep_tree = {
         let mut pairs: Vec<(&str, &serde_json::Value)> = Vec::new();
         for (idx, section) in sections.iter().enumerate() {
