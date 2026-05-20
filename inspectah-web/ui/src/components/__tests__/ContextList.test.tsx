@@ -78,4 +78,70 @@ describe("ContextList", () => {
     const items = screen.getAllByRole("listitem");
     expect(items).toHaveLength(2);
   });
+
+  it("renders subsections after main items", () => {
+    const section: ContextSection = {
+      id: "services",
+      display_name: "Services",
+      items: [
+        {
+          id: "firewalld.service",
+          title: "firewalld.service",
+          subtitle: "enabled (diverges from preset: disable)",
+          detail: null,
+          searchable_text: "firewalld",
+        },
+      ],
+      subsections: [
+        {
+          id: "service_advisories",
+          display_name: "Service Advisories",
+          items: [
+            {
+              id: "custom-app.service",
+              title: "custom-app.service",
+              subtitle: "package excluded - may still be present as a dependency",
+              detail: null,
+              searchable_text: "custom-app",
+            },
+          ],
+        },
+      ],
+    };
+
+    render(<ContextList section={section} />);
+
+    expect(screen.getByText("firewalld.service")).toBeInTheDocument();
+    expect(screen.getByText("Service Advisories")).toBeInTheDocument();
+    expect(screen.getByText("custom-app.service")).toBeInTheDocument();
+  });
+
+  it("does not show empty state when only subsections exist", () => {
+    const section: ContextSection = {
+      id: "services",
+      display_name: "Services",
+      items: [],
+      subsections: [
+        {
+          id: "service_warnings",
+          display_name: "Service Warnings",
+          items: [
+            {
+              id: "linked.service",
+              title: "linked.service",
+              subtitle: "linked (warning)",
+              detail: "unit linked.service has state 'linked' - linked unit requires manual handling",
+              searchable_text: "linked warning",
+            },
+          ],
+        },
+      ],
+    };
+
+    render(<ContextList section={section} />);
+
+    expect(screen.queryByText(/No Services data in this snapshot/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Service Warnings")).toBeInTheDocument();
+    expect(screen.getByText("linked.service")).toBeInTheDocument();
+  });
 });
