@@ -255,9 +255,9 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
         let provenance = if let Some(meta) = fleet_meta
             && meta.baseline_provisional
         {
-            "auto-detected"
+            "provisional"
         } else {
-            "explicit"
+            "unanimous"
         };
         eprintln!("Baseline ({}): {}", provenance, target_image.image_ref);
     }
@@ -1004,10 +1004,12 @@ mod tests {
 
     #[test]
     fn test_fleet_init_baseline_tie_break_is_deterministic() {
-        // Regression test for nondeterminism bug: when two images have equal
-        // prevalence (1 host each), the baseline selection must use lexicographic
-        // image ref comparison instead of nondeterministic HashMap iteration order.
+        // Command-boundary regression test: when two images have equal
+        // prevalence (1 host each), the generated fleet.toml must contain
+        // the lexicographically earlier image ref as the baseline.
         let dir = tempfile::tempdir().unwrap();
+        let tarballs_dir = dir.path().join("tarballs");
+        std::fs::create_dir_all(&tarballs_dir).unwrap();
 
         // Two images, each appearing exactly once (tie).
         // Lexicographically: "alpha:1.0" < "beta:1.0"
@@ -1025,42 +1027,27 @@ mod tests {
             "target_image": {"image_ref": beta_image, "strategy": "BootcStatus"}
         });
 
-        let t_alpha = make_test_tarball(dir.path(), "host-alpha.tar.gz", &json_alpha);
-        let t_beta = make_test_tarball(dir.path(), "host-beta.tar.gz", &json_beta);
+        make_test_tarball(&tarballs_dir, "host-alpha.tar.gz", &json_alpha);
+        make_test_tarball(&tarballs_dir, "host-beta.tar.gz", &json_beta);
 
-        // Extract metadata
-        let meta_list: Vec<TarballMetadata> = [t_alpha, t_beta]
-            .iter()
-            .map(|p| extract_tarball_metadata(p).unwrap())
-            .collect();
+        // Run the full init flow via run_init
+        let output_path = dir.path().join("fleet.toml");
+        let args = FleetInitArgs {
+            directory: tarballs_dir,
+            output: Some(output_path.clone()),
+            overwrite: false,
+        };
 
-        // Replicate the conflict-resolution logic
-        let mut image_counts: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for meta in &meta_list {
-            if let Some(img) = &meta.target_image {
-                *image_counts.entry(img.clone()).or_insert(0) += 1;
-            }
-        }
+        run_init(&args).expect("fleet init should succeed");
 
-        assert_eq!(
-            image_counts.len(),
-            2,
-            "should detect two distinct baselines"
-        );
-        assert_eq!(image_counts[alpha_image], 1);
-        assert_eq!(image_counts[beta_image], 1);
+        // Read and verify the generated manifest
+        let toml_content =
+            std::fs::read_to_string(&output_path).expect("fleet.toml should exist after init");
 
-        // Deterministic tie-break: sort by count (descending) then image ref (ascending)
-        let mut sorted_images: Vec<(String, usize)> = image_counts.into_iter().collect();
-        sorted_images.sort_by(|(ref_a, count_a), (ref_b, count_b)| {
-            count_b.cmp(count_a).then_with(|| ref_a.cmp(ref_b))
-        });
-        let (winner, _) = &sorted_images[0];
-
-        assert_eq!(
-            winner, alpha_image,
-            "tie-break should select lexicographically earlier image ref (alpha < beta)"
+        assert!(
+            toml_content.contains(&format!("baseline = \"{alpha_image}\"")),
+            "tie-break should select lexicographically earlier image ref (alpha < beta), got:\n{}",
+            toml_content
         );
     }
 

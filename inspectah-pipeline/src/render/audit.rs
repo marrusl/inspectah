@@ -25,9 +25,9 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         lines.push(format!(
             "- **Fleet baseline:** {}",
             if meta.baseline_provisional {
-                "Provisional (auto-detected from fleet)"
+                "Provisional (multiple target images detected)"
             } else {
-                "Explicit (via manifest or --baseline)"
+                "Unanimous (all hosts match)"
             }
         ));
 
@@ -51,49 +51,49 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
             }
         }
 
-        // Count variant conflicts across all sections
-        let mut conflict_count = 0usize;
+        // Count unique paths with variant conflicts across all sections.
+        // A path like /etc/foo.conf may have both a Selected and an Alternative
+        // entry — that's 1 conflicted path, not 2 entries.
+        let mut conflict_paths: std::collections::HashSet<&str> = std::collections::HashSet::new();
 
         if let Some(config) = &snap.config {
-            conflict_count += config
-                .files
-                .iter()
-                .filter(|f| {
-                    f.variant_selection == VariantSelection::Selected
-                        || f.variant_selection == VariantSelection::Alternative
-                })
-                .count();
+            for f in &config.files {
+                if f.variant_selection == VariantSelection::Selected
+                    || f.variant_selection == VariantSelection::Alternative
+                {
+                    conflict_paths.insert(&f.path);
+                }
+            }
         }
 
         if let Some(services) = &snap.services {
-            conflict_count += services
-                .drop_ins
-                .iter()
-                .filter(|d| {
-                    d.variant_selection == VariantSelection::Selected
-                        || d.variant_selection == VariantSelection::Alternative
-                })
-                .count();
+            for d in &services.drop_ins {
+                if d.variant_selection == VariantSelection::Selected
+                    || d.variant_selection == VariantSelection::Alternative
+                {
+                    conflict_paths.insert(&d.path);
+                }
+            }
         }
 
         if let Some(containers) = &snap.containers {
-            conflict_count += containers
-                .quadlet_units
-                .iter()
-                .filter(|q| {
-                    q.variant_selection == VariantSelection::Selected
-                        || q.variant_selection == VariantSelection::Alternative
-                })
-                .count();
-            conflict_count += containers
-                .compose_files
-                .iter()
-                .filter(|c| {
-                    c.variant_selection == VariantSelection::Selected
-                        || c.variant_selection == VariantSelection::Alternative
-                })
-                .count();
+            for q in &containers.quadlet_units {
+                if q.variant_selection == VariantSelection::Selected
+                    || q.variant_selection == VariantSelection::Alternative
+                {
+                    conflict_paths.insert(&q.path);
+                }
+            }
+            for c in &containers.compose_files {
+                if c.variant_selection == VariantSelection::Selected
+                    || c.variant_selection == VariantSelection::Alternative
+                {
+                    conflict_paths.insert(&c.path);
+                }
+            }
         }
+
+        let conflict_count = conflict_paths.len();
 
         if conflict_count > 0 {
             lines.push(String::new());
@@ -778,7 +778,9 @@ mod tests {
         assert!(report.contains("## Fleet Aggregate Summary"));
         assert!(report.contains("**Label:** web-servers"));
         assert!(report.contains("**Host count:** 3"));
-        assert!(report.contains("**Fleet baseline:** Provisional (auto-detected from fleet)"));
+        assert!(
+            report.contains("**Fleet baseline:** Provisional (multiple target images detected)")
+        );
         assert!(report.contains("### Hosts"));
         assert!(report.contains("- host1"));
         assert!(report.contains("- host2"));
@@ -835,7 +837,7 @@ mod tests {
 
         let report = render_audit(&snap);
 
-        assert!(report.contains("**Fleet baseline:** Explicit (via manifest or --baseline)"));
+        assert!(report.contains("**Fleet baseline:** Unanimous (all hosts match)"));
         assert!(report.contains("**Variant conflicts:** 2 path(s)"));
     }
 
