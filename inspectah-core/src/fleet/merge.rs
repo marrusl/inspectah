@@ -433,7 +433,7 @@ impl FleetMergeable for FstabEntry {
 /// sub-grouped by content hash (see [`merge_with_variants`]).
 ///
 /// The returned list is sorted by identity key for deterministic output.
-pub fn merge_items<T: FleetMergeable>(
+pub fn merge_items<T: FleetMergeable + serde::Serialize>(
     items: Vec<(usize, T)>,
     total_hosts: usize,
     hostnames: &[String],
@@ -460,8 +460,27 @@ pub fn merge_items<T: FleetMergeable>(
         if has_variants {
             result.extend(merge_with_variants(group, total_hosts, hostnames));
         } else {
+            // Find the most-prevalent payload within same-identity items.
+            // Items share identity_key but may differ in non-key fields
+            // (e.g., same package name+arch but different versions).
+            let mut payload_counts: Vec<(String, usize, usize)> = Vec::new();
+            for (pos, (_, item)) in group.iter().enumerate() {
+                let mut normalized = item.clone();
+                *normalized.fleet_mut() = None;
+                normalized.set_include(true);
+                let key = serde_json::to_string(&normalized).unwrap_or_default();
+                if let Some(entry) = payload_counts.iter_mut().find(|(k, _, _)| k == &key) {
+                    entry.1 += 1;
+                } else {
+                    payload_counts.push((key, 1, pos));
+                }
+            }
+            // Most prevalent wins; tie-break by first-seen (= first by hostname)
+            payload_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.2.cmp(&b.2)));
+            let winner_idx = payload_counts[0].2;
+
             let count = hosts.len() as i32;
-            let mut representative = group[0].1.clone();
+            let mut representative = group[winner_idx].1.clone();
             *representative.fleet_mut() = Some(FleetPrevalence {
                 count,
                 total: total_hosts as i32,

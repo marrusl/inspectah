@@ -1874,3 +1874,112 @@ fn test_merge_rpm_sections_no_baseline_gives_defaults() {
     assert!(!result.no_baseline);
     assert_eq!(result.baseline_suppressed, None);
 }
+
+// ===========================================================================
+// Regression: non-variant merge_items picks most-prevalent payload, not first
+// ===========================================================================
+
+#[test]
+fn test_merge_items_representative_is_most_prevalent_payload() {
+    // httpd.x86_64 on 3 hosts: host-a has version "1.0", host-b and host-c
+    // have version "2.0". The merged representative must carry "2.0" (majority),
+    // not "1.0" (first by hostname sort order).
+    let items: Vec<(usize, PackageEntry)> = vec![
+        (
+            0,
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "1.0".into(),
+                ..Default::default()
+            },
+        ),
+        (
+            1,
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "2.0".into(),
+                ..Default::default()
+            },
+        ),
+        (
+            2,
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "2.0".into(),
+                ..Default::default()
+            },
+        ),
+    ];
+    let hostnames: Vec<String> = vec!["host-a".into(), "host-b".into(), "host-c".into()];
+    let merged = merge_items(items, 3, &hostnames);
+    assert_eq!(merged.len(), 1);
+    // Majority version wins — NOT first host
+    assert_eq!(merged[0].version, "2.0");
+    // All 3 hosts contributed this identity key
+    let fleet = merged[0].fleet.as_ref().unwrap();
+    assert_eq!(fleet.count, 3);
+    assert_eq!(fleet.total, 3);
+    assert_eq!(fleet.hosts, vec!["host-a", "host-b", "host-c"]);
+    assert!(merged[0].include);
+}
+
+#[test]
+fn test_merge_items_representative_tie_break_first_seen() {
+    // httpd.x86_64 on 4 hosts: 2 have version "1.0", 2 have version "2.0".
+    // Tie-break: first-seen by sorted hostname order wins. host-a (index 0)
+    // has "1.0", so "1.0" should win the tie.
+    let items: Vec<(usize, PackageEntry)> = vec![
+        (
+            0,
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "1.0".into(),
+                ..Default::default()
+            },
+        ),
+        (
+            1,
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "2.0".into(),
+                ..Default::default()
+            },
+        ),
+        (
+            2,
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "1.0".into(),
+                ..Default::default()
+            },
+        ),
+        (
+            3,
+            PackageEntry {
+                name: "httpd".into(),
+                arch: "x86_64".into(),
+                version: "2.0".into(),
+                ..Default::default()
+            },
+        ),
+    ];
+    let hostnames: Vec<String> = vec![
+        "host-a".into(),
+        "host-b".into(),
+        "host-c".into(),
+        "host-d".into(),
+    ];
+    let merged = merge_items(items, 4, &hostnames);
+    assert_eq!(merged.len(), 1);
+    // Tie: 2x "1.0" vs 2x "2.0". First-seen (host-a, index 0) has "1.0".
+    assert_eq!(merged[0].version, "1.0");
+    let fleet = merged[0].fleet.as_ref().unwrap();
+    assert_eq!(fleet.count, 4);
+    assert_eq!(fleet.total, 4);
+}
