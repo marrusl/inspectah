@@ -378,6 +378,10 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         .with_context(|| format!("failed to create tarball at {}", tarball_path.display()))?;
 
     eprintln!("Output written to {}", tarball_path.display());
+    eprintln!(
+        "To view and edit results, run: inspectah refine {}",
+        tarball_path.display()
+    );
     Ok(())
 }
 
