@@ -223,7 +223,7 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
 // ---------------------------------------------------------------------------
 
 /// Extract hostname from snapshot metadata. Falls back to "<unknown>".
-fn extract_hostname(snap: &InspectionSnapshot) -> String {
+pub fn extract_hostname(snap: &InspectionSnapshot) -> String {
     extract_meta_string(snap, "hostname").unwrap_or_else(|| "<unknown>".to_string())
 }
 
