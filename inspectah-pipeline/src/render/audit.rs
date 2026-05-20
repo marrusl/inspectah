@@ -23,11 +23,11 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
         lines.push(format!("- **Label:** {}", meta.label));
         lines.push(format!("- **Host count:** {}", meta.host_count));
         lines.push(format!(
-            "- **Baseline selection:** {}",
+            "- **Fleet baseline:** {}",
             if meta.baseline_provisional {
-                "Provisional"
+                "Provisional (auto-detected from fleet)"
             } else {
-                "Explicit"
+                "Explicit (via manifest or --baseline)"
             }
         ));
 
@@ -778,7 +778,7 @@ mod tests {
         assert!(report.contains("## Fleet Aggregate Summary"));
         assert!(report.contains("**Label:** web-servers"));
         assert!(report.contains("**Host count:** 3"));
-        assert!(report.contains("**Baseline selection:** Provisional"));
+        assert!(report.contains("**Fleet baseline:** Provisional (auto-detected from fleet)"));
         assert!(report.contains("### Hosts"));
         assert!(report.contains("- host1"));
         assert!(report.contains("- host2"));
@@ -835,7 +835,7 @@ mod tests {
 
         let report = render_audit(&snap);
 
-        assert!(report.contains("**Baseline selection:** Explicit"));
+        assert!(report.contains("**Fleet baseline:** Explicit (via manifest or --baseline)"));
         assert!(report.contains("**Variant conflicts:** 2 path(s)"));
     }
 

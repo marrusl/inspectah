@@ -249,6 +249,17 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
         .map_or(0, |s| s.state_changes.len());
 
     eprintln!("Fleet: {label} ({host_count} hosts)");
+
+    // Report baseline provenance
+    if let Some(target_image) = &merged.target_image {
+        let provenance = if let Some(meta) = fleet_meta && meta.baseline_provisional {
+            "auto-detected"
+        } else {
+            "explicit"
+        };
+        eprintln!("Baseline ({}): {}", provenance, target_image.image_ref);
+    }
+
     eprintln!("Merged: {pkg_count} packages, {config_count} config files, {svc_count} services");
 
     if args.verbose
@@ -714,11 +725,12 @@ fn prepend_containerfile_header(
 
     // Build header
     let mut header = String::new();
-    header.push_str("# Fleet Aggregate Containerfile\n");
+    header.push_str("# DRAFT — Fleet Aggregate Containerfile\n");
+    header.push_str("# Requires human review before use\n");
 
     if let Some(fleet_meta) = &merged.fleet_meta {
         header.push_str(&format!(
-            "# Generated from {} hosts\n",
+            "# Merged from {} hosts\n",
             fleet_meta.host_count
         ));
     }
@@ -732,7 +744,8 @@ fn prepend_containerfile_header(
     if let Some(fleet_meta) = &merged.fleet_meta
         && fleet_meta.baseline_provisional
     {
-        header.push_str("# NOTE: Baseline selection is provisional (multiple images detected)\n");
+        header.push_str("# NOTE: Baseline selection is provisional — multiple target images were\n");
+        header.push_str("#        detected across hosts. Verify the selected baseline is correct.\n");
     }
 
     header.push('\n');
