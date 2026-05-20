@@ -252,7 +252,9 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
 
     // Report baseline provenance
     if let Some(target_image) = &merged.target_image {
-        let provenance = if let Some(meta) = fleet_meta && meta.baseline_provisional {
+        let provenance = if let Some(meta) = fleet_meta
+            && meta.baseline_provisional
+        {
             "auto-detected"
         } else {
             "explicit"
@@ -735,10 +737,7 @@ fn prepend_containerfile_header(
     header.push_str("# Requires human review before use\n");
 
     if let Some(fleet_meta) = &merged.fleet_meta {
-        header.push_str(&format!(
-            "# Merged from {} hosts\n",
-            fleet_meta.host_count
-        ));
+        header.push_str(&format!("# Merged from {} hosts\n", fleet_meta.host_count));
     }
 
     // Baseline image reference
@@ -750,8 +749,10 @@ fn prepend_containerfile_header(
     if let Some(fleet_meta) = &merged.fleet_meta
         && fleet_meta.baseline_provisional
     {
-        header.push_str("# NOTE: Baseline selection is provisional — multiple target images were\n");
-        header.push_str("#        detected across hosts. Verify the selected baseline is correct.\n");
+        header
+            .push_str("# NOTE: Baseline selection is provisional — multiple target images were\n");
+        header
+            .push_str("#        detected across hosts. Verify the selected baseline is correct.\n");
     }
 
     header.push('\n');
