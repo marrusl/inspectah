@@ -112,6 +112,61 @@ pub fn merge_snapshots(
     // os_release from first host (already sorted by hostname)
     merged.os_release = sorted_snapshots.first().and_then(|s| s.os_release.clone());
 
+    // system_type: use first host (all should match per validation)
+    merged.system_type = sorted_snapshots
+        .first()
+        .map(|s| s.system_type.clone())
+        .unwrap_or_default();
+
+    // meta: union all host meta keys (first-writer-wins), then stamp fleet provenance
+    let mut merged_meta = std::collections::HashMap::new();
+    for snap in &sorted_snapshots {
+        for (k, v) in &snap.meta {
+            merged_meta.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+    }
+    merged_meta.insert(
+        "fleet_source".into(),
+        serde_json::Value::String("aggregate".into()),
+    );
+    merged.meta = merged_meta;
+
+    // warnings: union all, dedup by (inspector, message)
+    let mut merged_warnings: Vec<crate::types::warnings::Warning> = Vec::new();
+    for snap in &sorted_snapshots {
+        for w in &snap.warnings {
+            let already = merged_warnings
+                .iter()
+                .any(|existing| existing.inspector == w.inspector && existing.message == w.message);
+            if !already {
+                merged_warnings.push(w.clone());
+            }
+        }
+    }
+    merged.warnings = merged_warnings;
+
+    // redactions: union all, dedup by PartialEq
+    let mut merged_redactions: Vec<crate::types::redaction::RedactionFinding> = Vec::new();
+    for snap in &sorted_snapshots {
+        for r in &snap.redactions {
+            if !merged_redactions.iter().any(|existing| existing == r) {
+                merged_redactions.push(r.clone());
+            }
+        }
+    }
+    merged.redactions = merged_redactions;
+
+    // redaction_hints: union all, dedup by PartialEq
+    let mut merged_hints: Vec<crate::types::redaction::RedactionHint> = Vec::new();
+    for snap in &sorted_snapshots {
+        for h in &snap.redaction_hints {
+            if !merged_hints.iter().any(|existing| existing == h) {
+                merged_hints.push(h.clone());
+            }
+        }
+    }
+    merged.redaction_hints = merged_hints;
+
     // Merge each section via adapters
     merged.rpm = merge_rpm_sections(rpm_sections, total, &hostnames);
     merged.config = merge_config_sections(config_sections, total, &hostnames);
@@ -550,5 +605,196 @@ mod tests {
             }
             other => panic!("expected Partial, got {:?}", other),
         }
+    }
+
+    /// Build a minimal snapshot that passes fleet validation.
+    /// Has os_release set (required to avoid EmptySnapshot error).
+    fn valid_snap(hostname: &str) -> InspectionSnapshot {
+        let mut s = InspectionSnapshot::new();
+        s.meta
+            .insert("hostname".into(), serde_json::json!(hostname));
+        s.os_release = Some(crate::types::os::OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+        s
+    }
+
+    #[test]
+    fn test_merge_stamps_fleet_source_in_meta() {
+        let s1 = valid_snap("host-a");
+        let s2 = valid_snap("host-b");
+
+        let (merged, _warnings) =
+            merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        assert_eq!(
+            merged.meta.get("fleet_source"),
+            Some(&serde_json::json!("aggregate")),
+        );
+    }
+
+    #[test]
+    fn test_merge_preserves_input_meta_keys() {
+        let mut s1 = valid_snap("host-a");
+        s1.meta
+            .insert("scan_tool".into(), serde_json::json!("inspectah"));
+        let mut s2 = valid_snap("host-b");
+        s2.meta
+            .insert("env".into(), serde_json::json!("staging"));
+
+        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        // First-writer-wins for hostname: host-a sorts before host-b
+        assert_eq!(
+            merged.meta.get("hostname"),
+            Some(&serde_json::json!("host-a")),
+        );
+        assert_eq!(
+            merged.meta.get("scan_tool"),
+            Some(&serde_json::json!("inspectah")),
+        );
+        assert_eq!(
+            merged.meta.get("env"),
+            Some(&serde_json::json!("staging")),
+        );
+    }
+
+    #[test]
+    fn test_merge_carries_system_type() {
+        use crate::types::os::SystemType;
+
+        let mut s1 = valid_snap("host-a");
+        s1.system_type = SystemType::PackageMode;
+        let mut s2 = valid_snap("host-b");
+        s2.system_type = SystemType::PackageMode;
+
+        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        assert_eq!(merged.system_type, SystemType::PackageMode);
+    }
+
+    #[test]
+    fn test_merge_unions_warnings_with_dedup() {
+        use crate::types::warnings::Warning;
+
+        let mut s1 = valid_snap("host-a");
+        s1.warnings = vec![
+            Warning {
+                inspector: "rpm".into(),
+                message: "3 packages from unreachable repos".into(),
+                ..Default::default()
+            },
+            Warning {
+                inspector: "config".into(),
+                message: "large config detected".into(),
+                ..Default::default()
+            },
+        ];
+
+        let mut s2 = valid_snap("host-b");
+        s2.warnings = vec![
+            // Duplicate of s1's first warning
+            Warning {
+                inspector: "rpm".into(),
+                message: "3 packages from unreachable repos".into(),
+                ..Default::default()
+            },
+            // Unique warning
+            Warning {
+                inspector: "network".into(),
+                message: "no DNS configured".into(),
+                ..Default::default()
+            },
+        ];
+
+        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        // 2 from s1 + 1 unique from s2 = 3 (the duplicate is dropped)
+        assert_eq!(merged.warnings.len(), 3);
+        assert!(merged
+            .warnings
+            .iter()
+            .any(|w| w.inspector == "network" && w.message == "no DNS configured"));
+    }
+
+    #[test]
+    fn test_merge_unions_redactions() {
+        use crate::types::redaction::{
+            DetectionMethod, RedactionFinding, RedactionHint, RedactionKind,
+        };
+
+        let mut s1 = valid_snap("host-a");
+        s1.redactions = vec![RedactionFinding {
+            path: "/etc/shadow".into(),
+            source: "file".into(),
+            kind: RedactionKind::Excluded,
+            pattern: "shadow_hash".into(),
+            remediation: "regenerate".into(),
+            line: None,
+            replacement: None,
+            detection_method: DetectionMethod::Pattern,
+            confidence: None,
+            finding_kind: None,
+        }];
+        s1.redaction_hints = vec![RedactionHint {
+            path: "/etc/shadow".into(),
+            reason: "password hashes".into(),
+            ..Default::default()
+        }];
+
+        let mut s2 = valid_snap("host-b");
+        s2.redactions = vec![
+            // Duplicate
+            RedactionFinding {
+                path: "/etc/shadow".into(),
+                source: "file".into(),
+                kind: RedactionKind::Excluded,
+                pattern: "shadow_hash".into(),
+                remediation: "regenerate".into(),
+                line: None,
+                replacement: None,
+                detection_method: DetectionMethod::Pattern,
+                confidence: None,
+                finding_kind: None,
+            },
+            // Unique
+            RedactionFinding {
+                path: "/etc/ssh/ssh_host_rsa_key".into(),
+                source: "file".into(),
+                kind: RedactionKind::Flagged,
+                pattern: "private_key".into(),
+                remediation: "rotate key".into(),
+                line: None,
+                replacement: None,
+                detection_method: DetectionMethod::PathBased,
+                confidence: None,
+                finding_kind: None,
+            },
+        ];
+        s2.redaction_hints = vec![
+            // Duplicate
+            RedactionHint {
+                path: "/etc/shadow".into(),
+                reason: "password hashes".into(),
+                ..Default::default()
+            },
+            // Unique
+            RedactionHint {
+                path: "/etc/ssh/ssh_host_rsa_key".into(),
+                reason: "private key".into(),
+                ..Default::default()
+            },
+        ];
+
+        let (merged, _) = merge_snapshots(vec![s1, s2], None).expect("merge should succeed");
+        // Redactions: 1 from s1 + 1 unique from s2 = 2
+        assert_eq!(merged.redactions.len(), 2);
+        assert!(merged
+            .redactions
+            .iter()
+            .any(|r| r.path == "/etc/ssh/ssh_host_rsa_key"));
+        // Hints: 1 from s1 + 1 unique from s2 = 2
+        assert_eq!(merged.redaction_hints.len(), 2);
+        assert!(merged
+            .redaction_hints
+            .iter()
+            .any(|h| h.path == "/etc/ssh/ssh_host_rsa_key"));
     }
 }
