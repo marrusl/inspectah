@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::fleet::{FleetPrevalence, VariantSelection};
 use serde::{Deserialize, Serialize};
 
 /// Durable systemd unit states that represent administrator intent.
@@ -103,9 +103,7 @@ pub struct SystemdDropIn {
     #[serde(default)]
     pub include: bool,
     #[serde(default)]
-    pub tie: bool,
-    #[serde(default)]
-    pub tie_winner: bool,
+    pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
 }
 

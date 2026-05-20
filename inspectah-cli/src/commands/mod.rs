@@ -1,3 +1,4 @@
+pub mod fleet;
 pub mod pull_progress;
 pub mod refine;
 pub mod scan;

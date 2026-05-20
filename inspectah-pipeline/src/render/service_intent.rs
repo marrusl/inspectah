@@ -215,7 +215,11 @@ fn classify_service_presence(
     let pkg_name = match &sc.owning_package {
         Some(name) => name,
         // Tier 1: unknown owner — always emit conservatively
-        None => return PresenceDecision::Emit { advisory_reasons: None },
+        None => {
+            return PresenceDecision::Emit {
+                advisory_reasons: None,
+            };
+        }
     };
 
     // Check all entries with this package name — duplicates may differ in
@@ -233,7 +237,9 @@ fn classify_service_presence(
             .iter()
             .any(|pkg| pkg.include && is_package_installable(pkg));
         if any_installable {
-            return PresenceDecision::Emit { advisory_reasons: None };
+            return PresenceDecision::Emit {
+                advisory_reasons: None,
+            };
         }
 
         // Tier 3: if ANY entry is included but not installable → PackageUnreachable
@@ -263,17 +269,16 @@ fn classify_service_presence(
     // Check if the package is in the effective target set (baseline or included-added)
     if target_packages.contains(pkg_name) {
         // Tier 5: baseline package — emit clean
-        return PresenceDecision::Emit { advisory_reasons: None };
+        return PresenceDecision::Emit {
+            advisory_reasons: None,
+        };
     }
 
     // Package not found anywhere
     if baseline_unavailable {
         // Tier 6: can't prove absence without baseline
         PresenceDecision::Emit {
-            advisory_reasons: Some((
-                pkg_name.clone(),
-                vec![AdvisoryReason::BaselineUnavailable],
-            )),
+            advisory_reasons: Some((pkg_name.clone(), vec![AdvisoryReason::BaselineUnavailable])),
         }
     } else {
         // Tier 7: baseline available and package not in it — proven absent
@@ -300,7 +305,7 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
                 lines: Vec::new(),
                 omissions: Vec::new(),
                 advisories: Vec::new(),
-            }
+            };
         }
     };
 
@@ -312,9 +317,8 @@ pub fn render_service_intent(snap: &InspectionSnapshot) -> ServiceRenderPlan {
     };
 
     let target_packages = effective_target_packages(rpm);
-    let baseline_unavailable = rpm.no_baseline
-        || rpm.baseline_package_names.is_none()
-        || snap.no_baseline;
+    let baseline_unavailable =
+        rpm.no_baseline || rpm.baseline_package_names.is_none() || snap.no_baseline;
 
     let included_changes: Vec<_> = services
         .state_changes

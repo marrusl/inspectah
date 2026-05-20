@@ -312,7 +312,7 @@ pub async fn apply_op(
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(&build_view_response(&session)).unwrap(),
+        serde_json::to_value(build_view_response(&session)).unwrap(),
     ))
 }
 
@@ -329,7 +329,7 @@ pub async fn undo(
     let mut session = state.session.lock().unwrap();
     session.undo().map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(&build_view_response(&session)).unwrap(),
+        serde_json::to_value(build_view_response(&session)).unwrap(),
     ))
 }
 
@@ -346,7 +346,7 @@ pub async fn redo(
     let mut session = state.session.lock().unwrap();
     session.redo().map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(&build_view_response(&session)).unwrap(),
+        serde_json::to_value(build_view_response(&session)).unwrap(),
     ))
 }
 
@@ -454,11 +454,9 @@ pub async fn user_strategy(
         "skip" => UserContainerfileStrategy::Skip,
         "useradd" => UserContainerfileStrategy::Useradd,
         other => {
-            return Err(AppError(
-                inspectah_refine::types::RefineError::BadRequest(format!(
-                    "unknown strategy: {other} (expected \"skip\" or \"useradd\")"
-                )),
-            ));
+            return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                format!("unknown strategy: {other} (expected \"skip\" or \"useradd\")"),
+            )));
         }
     };
     let op = RefinementOp::UserStrategy {
@@ -468,7 +466,7 @@ pub async fn user_strategy(
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(&build_view_response(&session)).unwrap(),
+        serde_json::to_value(build_view_response(&session)).unwrap(),
     ))
 }
 
@@ -491,32 +489,30 @@ pub async fn user_password(
             let session = state.session.lock().unwrap();
             let snap = session.snapshot();
             if !snap.preserved_credentials {
-                return Err(AppError(
-                    inspectah_refine::types::RefineError::BadRequest(
-                        "cannot preserve password: snapshot does not contain preserved credentials"
-                            .into(),
-                    ),
-                ));
+                return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                    "cannot preserve password: snapshot does not contain preserved credentials"
+                        .into(),
+                )));
             }
             let has_hash = snap
                 .users_groups
                 .as_ref()
                 .and_then(|ug| {
-                    ug.users.iter().find(|u| {
-                        u.get("name").and_then(|v| v.as_str()) == Some(&req.username)
-                    })
+                    ug.users
+                        .iter()
+                        .find(|u| u.get("name").and_then(|v| v.as_str()) == Some(&req.username))
                 })
                 .and_then(|u| u.get("password_hash"))
                 .and_then(|v| v.as_str())
                 .map(|s| !s.is_empty())
                 .unwrap_or(false);
             if !has_hash {
-                return Err(AppError(
-                    inspectah_refine::types::RefineError::BadRequest(format!(
+                return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                    format!(
                         "cannot preserve password for \"{}\": user has no password hash",
                         req.username
-                    )),
-                ));
+                    ),
+                )));
             }
             drop(session); // release lock before re-acquiring below
             UserPasswordOp::Preserve {
@@ -528,19 +524,15 @@ pub async fn user_password(
             // crypt(3) format ($6$, $5$, or $y$).
             let hash = req.hash.as_deref().unwrap_or("");
             if hash.is_empty() {
-                return Err(AppError(
-                    inspectah_refine::types::RefineError::BadRequest(
-                        "password choice \"new\" requires a non-empty \"hash\" field".into(),
-                    ),
-                ));
+                return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                    "password choice \"new\" requires a non-empty \"hash\" field".into(),
+                )));
             }
             if !hash.starts_with("$6$") && !hash.starts_with("$5$") && !hash.starts_with("$y$") {
-                return Err(AppError(
-                    inspectah_refine::types::RefineError::BadRequest(
-                        "invalid hash format: must start with $6$, $5$, or $y$ (crypt(3) format)"
-                            .into(),
-                    ),
-                ));
+                return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                    "invalid hash format: must start with $6$, $5$, or $y$ (crypt(3) format)"
+                        .into(),
+                )));
             }
             UserPasswordOp::New {
                 username: req.username,
@@ -548,18 +540,18 @@ pub async fn user_password(
             }
         }
         other => {
-            return Err(AppError(
-                inspectah_refine::types::RefineError::BadRequest(format!(
+            return Err(AppError(inspectah_refine::types::RefineError::BadRequest(
+                format!(
                     "unknown password choice: {other} (expected \"none\", \"preserve\", or \"new\")"
-                )),
-            ));
+                ),
+            )));
         }
     };
     let op = RefinementOp::UserPassword(pw_op);
     let mut session = state.session.lock().unwrap();
     session.apply(op).map_err(AppError)?;
     Ok(Json(
-        serde_json::to_value(&build_view_response(&session)).unwrap(),
+        serde_json::to_value(build_view_response(&session)).unwrap(),
     ))
 }
 
@@ -604,16 +596,14 @@ fn redact_sensitive_content(content: &str) -> String {
 
     // Redact crypt(3) hashes: $6$..., $5$..., $y$... patterns.
     // Matches the full hash from the $ prefix through the hash characters.
-    let crypt_re =
-        Regex::new(r#"\$(?:6|5|y)\$[^\s'""]+"#).expect("crypt regex");
+    let crypt_re = Regex::new(r#"\$(?:6|5|y)\$[^\s'""]+"#).expect("crypt regex");
     let result = crypt_re.replace_all(content, "<REDACTED>");
 
     // Redact SSH key base64 blobs, keeping the key type prefix.
     // Matches: ssh-rsa AAAA..., ssh-ed25519 AAAA..., ecdsa-sha2-nistp256 AAAA..., etc.
-    let ssh_re = Regex::new(
-        r#"((?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp(?:256|384|521))\s+)\S+"#,
-    )
-    .expect("ssh regex");
+    let ssh_re =
+        Regex::new(r#"((?:ssh-(?:rsa|ed25519|dss)|ecdsa-sha2-nistp(?:256|384|521))\s+)\S+"#)
+            .expect("ssh regex");
     let result = ssh_re.replace_all(&result, "${1}<REDACTED>");
 
     result.into_owned()
@@ -878,10 +868,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 .default_state
                 .map(|d| d.to_string())
                 .unwrap_or_else(|| "none".to_string());
-            let mut search = format!(
-                "{} {} {} {}",
-                sc.unit, state_str, default_str, action_str
-            );
+            let mut search = format!("{} {} {} {}", sc.unit, state_str, default_str, action_str);
             if let Some(pkg) = &sc.owning_package {
                 search.push(' ');
                 search.push_str(pkg);
@@ -968,7 +955,10 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 .map(|o| ContextItem {
                     id: format!("omitted-{}", o.unit),
                     title: o.unit.clone(),
-                    subtitle: Some(format!("package '{}' not in target image", o.owning_package)),
+                    subtitle: Some(format!(
+                        "package '{}' not in target image",
+                        o.owning_package
+                    )),
                     detail: None,
                     searchable_text: format!("{} omitted {}", o.unit, o.owning_package),
                 })
@@ -1060,10 +1050,7 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
 }
 
 /// Map a (current_state, default_state) pair to a human-readable subtitle.
-fn typed_service_subtitle(
-    current: ServiceUnitState,
-    default: Option<PresetDefault>,
-) -> String {
+fn typed_service_subtitle(current: ServiceUnitState, default: Option<PresetDefault>) -> String {
     match (current, default) {
         (ServiceUnitState::Enabled, Some(PresetDefault::Disable)) => {
             "enabled (diverges from preset: disable)".to_string()
@@ -2474,9 +2461,7 @@ mod tests {
                 path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
                 content: "[Service]\nTimeoutStartSec=90".into(),
                 include: true,
-                tie: false,
-                tie_winner: false,
-                fleet: None,
+                ..Default::default()
             }],
             preset_matched_units: vec!["sshd.service".into()],
         });
@@ -2751,13 +2736,21 @@ mod tests {
 
         let section = normalize_services(&snap);
 
-        let firewalld = section.items.iter().find(|i| i.id == "firewalld.service").unwrap();
+        let firewalld = section
+            .items
+            .iter()
+            .find(|i| i.id == "firewalld.service")
+            .unwrap();
         assert_eq!(
             firewalld.subtitle.as_deref(),
             Some("enabled (diverges from preset: disable)")
         );
 
-        let cups = section.items.iter().find(|i| i.id == "cups.service").unwrap();
+        let cups = section
+            .items
+            .iter()
+            .find(|i| i.id == "cups.service")
+            .unwrap();
         assert_eq!(cups.subtitle.as_deref(), Some("masked (no preset rule)"));
     }
 
@@ -2804,7 +2797,9 @@ mod tests {
         });
         snap.warnings.push(Warning {
             inspector: "services".into(),
-            message: "unit linked.service has state 'linked' - linked unit requires manual handling".into(),
+            message:
+                "unit linked.service has state 'linked' - linked unit requires manual handling"
+                    .into(),
             severity: Some(WarningSeverity::Warning),
             extra: std::collections::HashMap::from([
                 ("unit".into(), serde_json::json!("linked.service")),
@@ -2813,14 +2808,46 @@ mod tests {
         });
 
         let section = normalize_services(&snap);
-        let omitted = section.subsections.iter().find(|s| s.id == "omitted_services").unwrap();
-        let advisories = section.subsections.iter().find(|s| s.id == "service_advisories").unwrap();
-        let warnings = section.subsections.iter().find(|s| s.id == "service_warnings").unwrap();
+        let omitted = section
+            .subsections
+            .iter()
+            .find(|s| s.id == "omitted_services")
+            .unwrap();
+        let advisories = section
+            .subsections
+            .iter()
+            .find(|s| s.id == "service_advisories")
+            .unwrap();
+        let warnings = section
+            .subsections
+            .iter()
+            .find(|s| s.id == "service_warnings")
+            .unwrap();
 
-        assert!(omitted.items.iter().any(|item| item.id == "omitted-sssd-kcm.service"));
-        assert!(advisories.items.iter().any(|item| item.id == "advisory-custom-app.service"));
-        assert!(warnings.items.iter().any(|item| item.id == "warning-linked.service"));
-        assert!(section.items.iter().any(|item| item.id == "custom-app.service"));
+        assert!(
+            omitted
+                .items
+                .iter()
+                .any(|item| item.id == "omitted-sssd-kcm.service")
+        );
+        assert!(
+            advisories
+                .items
+                .iter()
+                .any(|item| item.id == "advisory-custom-app.service")
+        );
+        assert!(
+            warnings
+                .items
+                .iter()
+                .any(|item| item.id == "warning-linked.service")
+        );
+        assert!(
+            section
+                .items
+                .iter()
+                .any(|item| item.id == "custom-app.service")
+        );
     }
 
     #[test]
@@ -2854,7 +2881,10 @@ mod tests {
 
         // Must NOT appear in the main items list.
         assert!(
-            !section.items.iter().any(|item| item.title == "sssd-kcm.service"),
+            !section
+                .items
+                .iter()
+                .any(|item| item.title == "sssd-kcm.service"),
             "omitted service should not appear in main items"
         );
 
@@ -2865,7 +2895,10 @@ mod tests {
             .find(|s| s.id == "omitted_services")
             .expect("omitted_services subsection should exist");
         assert!(
-            omitted.items.iter().any(|item| item.id == "omitted-sssd-kcm.service"),
+            omitted
+                .items
+                .iter()
+                .any(|item| item.id == "omitted-sssd-kcm.service"),
             "omitted service should be in omitted subsection with prefixed id"
         );
     }

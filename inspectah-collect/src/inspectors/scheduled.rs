@@ -511,10 +511,10 @@ fn dow_numeric() -> HashMap<&'static str, &'static str> {
 /// Normalises a single cron name/number to its canonical form.
 fn normalise_cron_token(token: &str, kind: &str) -> String {
     let low = token.to_lowercase();
-    if kind == "month" {
-        if let Some(v) = month_names().get(low.as_str()) {
-            return v.to_string();
-        }
+    if kind == "month"
+        && let Some(v) = month_names().get(low.as_str())
+    {
+        return v.to_string();
     }
     if kind == "dow" {
         if let Some(v) = dow_names_to_systemd().get(low.as_str()) {
@@ -551,23 +551,23 @@ fn cron_field_to_calendar(field: &str, kind: &str) -> String {
     }
 
     // Range+step: 1-10/2 -> 1..10/2
-    if field.contains('-') && field.contains('/') {
-        if let Some((range_part, step)) = field.split_once('/') {
-            if let Some((lo_raw, hi_raw)) = range_part.split_once('-') {
-                let lo = normalise_cron_token(lo_raw.trim(), kind);
-                let hi = normalise_cron_token(hi_raw.trim(), kind);
-                return format!("{lo}..{hi}/{step}");
-            }
-        }
+    if field.contains('-')
+        && field.contains('/')
+        && let Some((range_part, step)) = field.split_once('/')
+        && let Some((lo_raw, hi_raw)) = range_part.split_once('-')
+    {
+        let lo = normalise_cron_token(lo_raw.trim(), kind);
+        let hi = normalise_cron_token(hi_raw.trim(), kind);
+        return format!("{lo}..{hi}/{step}");
     }
 
     // Ranges: 1-5 -> 1..5
-    if field.contains('-') {
-        if let Some((lo_raw, hi_raw)) = field.split_once('-') {
-            let lo = normalise_cron_token(lo_raw.trim(), kind);
-            let hi = normalise_cron_token(hi_raw.trim(), kind);
-            return format!("{lo}..{hi}");
-        }
+    if field.contains('-')
+        && let Some((lo_raw, hi_raw)) = field.split_once('-')
+    {
+        let lo = normalise_cron_token(lo_raw.trim(), kind);
+        let hi = normalise_cron_token(hi_raw.trim(), kind);
+        return format!("{lo}..{hi}");
     }
 
     // Lists: 1,3,5
@@ -586,10 +586,11 @@ fn cron_field_to_calendar(field: &str, kind: &str) -> String {
     }
 
     // Plain digit: zero-pad for minute/hour
-    if is_digits(field) && (kind == "minute" || kind == "hour") {
-        if let Ok(n) = field.parse::<u32>() {
-            return format!("{n:02}");
-        }
+    if is_digits(field)
+        && (kind == "minute" || kind == "hour")
+        && let Ok(n) = field.parse::<u32>()
+    {
+        return format!("{n:02}");
     }
 
     field.to_string()
@@ -854,12 +855,12 @@ fn parse_at_job(content: &str, rel_path: &str) -> AtJob {
         let stripped = line.trim();
 
         // Extract uid from "# atrun uid=NNNN"
-        if stripped.starts_with("# atrun uid=") {
-            if let Some(uid_part) = stripped.strip_prefix("# atrun uid=") {
-                let uid = uid_part.split_whitespace().next().unwrap_or("");
-                if !uid.is_empty() {
-                    user = format!("uid={uid}");
-                }
+        if stripped.starts_with("# atrun uid=")
+            && let Some(uid_part) = stripped.strip_prefix("# atrun uid=")
+        {
+            let uid = uid_part.split_whitespace().next().unwrap_or("");
+            if !uid.is_empty() {
+                user = format!("uid={uid}");
             }
         }
 

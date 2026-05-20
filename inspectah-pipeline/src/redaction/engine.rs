@@ -318,12 +318,12 @@ fn redact_mount_options(options: &str, registry: &mut CounterRegistry) -> String
 /// Returns `None` if no keyword can be extracted.
 fn extract_hint_keyword(reason: &str) -> Option<String> {
     // Pattern 1: "sensitive parameter: <keyword>"
-    if let Some(rest) = reason.strip_suffix('"').or(Some(reason)) {
-        if let Some(idx) = rest.find("parameter: ") {
-            let kw = rest[idx + "parameter: ".len()..].trim().trim_matches('"');
-            if !kw.is_empty() {
-                return Some(kw.to_string());
-            }
+    if let Some(rest) = reason.strip_suffix('"').or(Some(reason))
+        && let Some(idx) = rest.find("parameter: ")
+    {
+        let kw = rest[idx + "parameter: ".len()..].trim().trim_matches('"');
+        if !kw.is_empty() {
+            return Some(kw.to_string());
         }
     }
 
@@ -998,16 +998,14 @@ pub fn redact(snapshot: &mut InspectionSnapshot, _opts: &RedactOptions) {
     // server access patterns and should be handled as sensitive data.
     if let Some(ref mut users) = snapshot.users_groups {
         for user in &mut users.users {
-            if user.get("ssh_keys").is_some() {
-                if !snapshot.preserved_ssh_keys {
-                    // Strip SSH keys when not explicitly preserved
-                    if let Some(user_obj) = user.as_object_mut() {
-                        user_obj.remove("ssh_keys");
-                    }
+            if user.get("ssh_keys").is_some() && !snapshot.preserved_ssh_keys {
+                // Strip SSH keys when not explicitly preserved
+                if let Some(user_obj) = user.as_object_mut() {
+                    user_obj.remove("ssh_keys");
                 }
-                // When preserved_ssh_keys is true, keys are intentionally
-                // retained and pass through unchanged.
             }
+            // When preserved_ssh_keys is true, keys are intentionally
+            // retained and pass through unchanged.
         }
     }
 
@@ -1878,9 +1876,7 @@ mod tests {
         snap.sensitive_snapshot = true;
         snap.preserved_credentials = true;
         snap.users_groups = Some(UserGroupSection {
-            shadow_entries: vec![
-                "root:!!:19000:0:99999:7:::".to_string(),
-            ],
+            shadow_entries: vec!["root:!!:19000:0:99999:7:::".to_string()],
             ..Default::default()
         });
         redact(&mut snap, &RedactOptions::default());

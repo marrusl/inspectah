@@ -71,8 +71,7 @@ fn test_legacy_go_v13_services_section_requires_rescan() {
     let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
     let err = serde_json::from_str::<ServiceSection>(golden).unwrap_err();
     assert!(
-        err.to_string().contains("current_state")
-            || err.to_string().contains("unknown variant"),
+        err.to_string().contains("current_state") || err.to_string().contains("unknown variant"),
         "legacy services payload should fail typed deserialization, got: {err}"
     );
 }
@@ -910,7 +909,7 @@ fn test_full_snapshot_serde_all_sections_present() {
 
     // Build the snapshot as a Value tree
     let mut snap_value = serde_json::json!({
-        "schema_version": 16,
+        "schema_version": 17,
         "meta": {},
         "os_release": null,
         "system_type": "package-mode",

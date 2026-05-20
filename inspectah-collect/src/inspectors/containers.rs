@@ -504,19 +504,19 @@ fn extract_compose_images(content: &str) -> ComposeParseResult {
         }
 
         // Inside a service -- look for image:.
-        if !current_service.is_empty() && indent > service_indent as usize {
-            if let Some(caps) = image_re.captures(trimmed) {
-                if let Some(img_match) = caps.get(1) {
-                    let img = img_match
-                        .as_str()
-                        .trim()
-                        .trim_matches(|c| c == '\'' || c == '"');
-                    results.push(ComposeService {
-                        service: current_service.clone(),
-                        image: img.to_string(),
-                    });
-                }
-            }
+        if !current_service.is_empty()
+            && indent > service_indent as usize
+            && let Some(caps) = image_re.captures(trimmed)
+            && let Some(img_match) = caps.get(1)
+        {
+            let img = img_match
+                .as_str()
+                .trim()
+                .trim_matches(|c| c == '\'' || c == '"');
+            results.push(ComposeService {
+                service: current_service.clone(),
+                image: img.to_string(),
+            });
         }
     }
     ComposeParseResult {
@@ -757,10 +757,10 @@ fn parse_podman_ps(data: &[serde_json::Value]) -> Vec<RunningContainer> {
 /// each key in order.
 fn string_field(val: &serde_json::Value, keys: &[&str]) -> String {
     for key in keys {
-        if let Some(s) = val.get(key).and_then(|v| v.as_str()) {
-            if !s.is_empty() {
-                return s.to_string();
-            }
+        if let Some(s) = val.get(key).and_then(|v| v.as_str())
+            && !s.is_empty()
+        {
+            return s.to_string();
         }
     }
     String::new()

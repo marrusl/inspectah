@@ -762,8 +762,14 @@ fn test_owning_package_batch_query_populates_state_changes() {
         other => panic!("expected Services section, got {other:?}"),
     };
 
-    assert_eq!(section.state_changes[0].owning_package.as_deref(), Some("httpd"));
-    assert_eq!(section.state_changes[1].owning_package.as_deref(), Some("firewalld"));
+    assert_eq!(
+        section.state_changes[0].owning_package.as_deref(),
+        Some("httpd")
+    );
+    assert_eq!(
+        section.state_changes[1].owning_package.as_deref(),
+        Some("firewalld")
+    );
 }
 
 #[test]
@@ -882,8 +888,14 @@ fn test_owning_package_batch_failure_falls_back_to_individual_queries() {
         other => panic!("expected Services section, got {other:?}"),
     };
 
-    assert_eq!(section.state_changes[0].owning_package.as_deref(), Some("httpd"));
-    assert_eq!(section.state_changes[1].owning_package.as_deref(), Some("firewalld"));
+    assert_eq!(
+        section.state_changes[0].owning_package.as_deref(),
+        Some("httpd")
+    );
+    assert_eq!(
+        section.state_changes[1].owning_package.as_deref(),
+        Some("firewalld")
+    );
 }
 
 #[test]

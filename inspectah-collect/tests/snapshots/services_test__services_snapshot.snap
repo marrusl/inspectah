@@ -43,8 +43,7 @@ expression: section
       "path": "/etc/systemd/system/httpd.service.d/override.conf",
       "content": "[Service]\nEnvironment=LANG=C\nLimitNOFILE=65535\n",
       "include": true,
-      "tie": false,
-      "tie_winner": false,
+      "variant_selection": "Only",
       "fleet": null
     }
   ],

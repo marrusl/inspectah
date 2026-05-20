@@ -16,6 +16,8 @@ enum Commands {
     Scan(commands::scan::ScanArgs),
     /// Interactively refine scan output and re-render
     Refine(commands::refine::RefineArgs),
+    /// Aggregate and manage fleet-wide migration snapshots
+    Fleet(commands::fleet::FleetArgs),
     /// Print version, commit, and build date
     Version,
 }
@@ -26,6 +28,7 @@ fn main() {
     let result = match cli.command {
         Commands::Scan(args) => commands::scan::run_scan(&args),
         Commands::Refine(args) => commands::refine::run_refine(&args),
+        Commands::Fleet(args) => commands::fleet::run_fleet(&args),
         Commands::Version => {
             commands::version::print_version();
             Ok(())

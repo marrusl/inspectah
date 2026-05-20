@@ -1013,8 +1013,10 @@ mod tests {
         let result = compute_config_attention(&snap);
         let config_attention = &result[0].attention;
         assert!(
-            config_attention.iter().any(|a| a.level == AttentionLevel::NeedsReview
-                && matches!(a.reason, AttentionReason::Custom(_))),
+            config_attention
+                .iter()
+                .any(|a| a.level == AttentionLevel::NeedsReview
+                    && matches!(a.reason, AttentionReason::Custom(_))),
             "SensitiveRetained with unresolved hints must surface NeedsReview"
         );
     }

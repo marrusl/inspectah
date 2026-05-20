@@ -1168,7 +1168,9 @@ async fn sections_include_service_subsections() {
     let sections = json.as_array().unwrap();
     let svc = sections.iter().find(|s| s["id"] == "services").unwrap();
 
-    let subsections = svc["subsections"].as_array().expect("subsections must be array");
+    let subsections = svc["subsections"]
+        .as_array()
+        .expect("subsections must be array");
     // At minimum, omissions and warnings should be present from the fixture.
     // Advisory subsection is validated in the handler unit test (before
     // RefineSession normalization can reclassify package include flags).
@@ -1184,11 +1186,19 @@ async fn sections_include_service_subsections() {
     // Verify subsection items have the right shape
     for sub in subsections {
         assert!(sub.get("id").is_some(), "subsection must have id");
-        assert!(sub.get("display_name").is_some(), "subsection must have display_name");
-        let sub_items = sub["items"].as_array().expect("subsection items must be array");
+        assert!(
+            sub.get("display_name").is_some(),
+            "subsection must have display_name"
+        );
+        let sub_items = sub["items"]
+            .as_array()
+            .expect("subsection items must be array");
         for item in sub_items {
             assert!(item.get("id").is_some(), "subsection item must have id");
-            assert!(item.get("title").is_some(), "subsection item must have title");
+            assert!(
+                item.get("title").is_some(),
+                "subsection item must have title"
+            );
         }
     }
 }

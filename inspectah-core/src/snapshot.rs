@@ -20,7 +20,8 @@ use std::collections::HashMap;
 /// v15 -> v16: services contract migrated to typed enums (ServiceUnitState,
 /// PresetDefault). Legacy service payloads with stringly typed fields must
 /// be re-scanned — they will fail deserialization by design.
-pub const SCHEMA_VERSION: u32 = 16;
+/// v16 -> v17: added fleet_meta field for fleet snapshot metadata.
+pub const SCHEMA_VERSION: u32 = 17;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -76,6 +77,9 @@ pub struct InspectionSnapshot {
     /// True if SSH authorized keys were preserved by operator choice.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub preserved_ssh_keys: bool,
+    /// Fleet snapshot metadata. None for single-host snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_meta: Option<crate::types::fleet::FleetSnapshotMeta>,
 }
 
 impl InspectionSnapshot {
@@ -90,11 +94,87 @@ impl InspectionSnapshot {
     const MIN_SCHEMA: u32 = 12;
 
     pub fn load(json: &str) -> Result<Self, SnapshotError> {
-        let snap: Self = serde_json::from_str(json)?;
+        let mut raw: serde_json::Value = serde_json::from_str(json)?;
+        patch_legacy_tie_fields(&mut raw);
+        let snap: Self = serde_json::from_value(raw)?;
         if snap.schema_version < Self::MIN_SCHEMA || snap.schema_version > SCHEMA_VERSION {
             return Err(SnapshotError::UnsupportedVersion(snap.schema_version));
         }
         Ok(snap)
+    }
+}
+
+/// Pre-patch legacy `tie`/`tie_winner` bool pairs to `variant_selection` enum
+/// values on raw JSON before typed deserialization. This handles old snapshots
+/// that predate the VariantSelection schema change.
+///
+/// Conversion:
+/// - `tie_winner: true` → `"variant_selection": "Selected"` (tie is always true when tie_winner is)
+/// - `tie: true, tie_winner: false` → `"variant_selection": "Alternative"`
+/// - neither set / both false → leave absent (serde default produces `Only`)
+fn patch_legacy_tie_fields(root: &mut serde_json::Value) {
+    // Patch arrays of items within a section object
+    fn patch_array(items: &mut [serde_json::Value]) {
+        for item in items.iter_mut() {
+            if let Some(obj) = item.as_object_mut() {
+                let tie = obj.get("tie").and_then(|v| v.as_bool()).unwrap_or(false);
+                let tie_winner = obj
+                    .get("tie_winner")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                if tie_winner {
+                    obj.insert(
+                        "variant_selection".to_string(),
+                        serde_json::Value::String("Selected".to_string()),
+                    );
+                } else if tie {
+                    obj.insert(
+                        "variant_selection".to_string(),
+                        serde_json::Value::String("Alternative".to_string()),
+                    );
+                }
+                // else: neither set → default Only via serde
+
+                obj.remove("tie");
+                obj.remove("tie_winner");
+            }
+        }
+    }
+
+    let root_obj = match root.as_object_mut() {
+        Some(obj) => obj,
+        None => return,
+    };
+
+    // Config section: $.config.files[]
+    if let Some(config) = root_obj.get_mut("config")
+        && let Some(files) = config.get_mut("files").and_then(|v| v.as_array_mut())
+    {
+        patch_array(files);
+    }
+
+    // Services section: $.services.drop_ins[]
+    if let Some(services) = root_obj.get_mut("services")
+        && let Some(drop_ins) = services.get_mut("drop_ins").and_then(|v| v.as_array_mut())
+    {
+        patch_array(drop_ins);
+    }
+
+    // Containers section: $.containers.quadlet_units[] and $.containers.compose_files[]
+    if let Some(containers) = root_obj.get_mut("containers") {
+        if let Some(quadlets) = containers
+            .get_mut("quadlet_units")
+            .and_then(|v| v.as_array_mut())
+        {
+            patch_array(quadlets);
+        }
+        if let Some(compose) = containers
+            .get_mut("compose_files")
+            .and_then(|v| v.as_array_mut())
+        {
+            patch_array(compose);
+        }
     }
 }
 
@@ -352,6 +432,150 @@ mod tests {
     }
 
     #[test]
+    fn test_legacy_tie_fields_patched_to_variant_selection() {
+        use crate::types::fleet::VariantSelection;
+
+        // Snapshot with legacy tie/tie_winner on config files
+        let json = r#"{
+            "schema_version": 14,
+            "meta": {},
+            "system_type": "package-mode",
+            "config": {
+                "files": [
+                    {
+                        "path": "/etc/foo.conf",
+                        "kind": "unowned",
+                        "category": "other",
+                        "content": "",
+                        "include": true,
+                        "tie": true,
+                        "tie_winner": true,
+                        "fleet": null
+                    },
+                    {
+                        "path": "/etc/bar.conf",
+                        "kind": "unowned",
+                        "category": "other",
+                        "content": "",
+                        "include": true,
+                        "tie": true,
+                        "tie_winner": false,
+                        "fleet": null
+                    },
+                    {
+                        "path": "/etc/baz.conf",
+                        "kind": "unowned",
+                        "category": "other",
+                        "content": "",
+                        "include": true,
+                        "tie": false,
+                        "tie_winner": false,
+                        "fleet": null
+                    }
+                ]
+            },
+            "preflight": {"status": "ok"},
+            "warnings": [],
+            "redactions": []
+        }"#;
+
+        let snap = InspectionSnapshot::load(json).unwrap();
+        let files = &snap.config.unwrap().files;
+
+        assert_eq!(files[0].variant_selection, VariantSelection::Selected);
+        assert_eq!(files[1].variant_selection, VariantSelection::Alternative);
+        assert_eq!(files[2].variant_selection, VariantSelection::Only);
+    }
+
+    #[test]
+    fn test_legacy_tie_fields_patched_on_drop_ins() {
+        use crate::types::fleet::VariantSelection;
+
+        let json = r#"{
+            "schema_version": 14,
+            "meta": {},
+            "system_type": "package-mode",
+            "services": {
+                "state_changes": [],
+                "enabled_units": [],
+                "disabled_units": [],
+                "drop_ins": [
+                    {
+                        "unit": "sshd.service",
+                        "path": "/etc/systemd/system/sshd.service.d/override.conf",
+                        "content": "[Service]\nTimeoutStartSec=90",
+                        "include": true,
+                        "tie": true,
+                        "tie_winner": true,
+                        "fleet": null
+                    }
+                ],
+                "preset_matched_units": []
+            },
+            "preflight": {"status": "ok"},
+            "warnings": [],
+            "redactions": []
+        }"#;
+
+        let snap = InspectionSnapshot::load(json).unwrap();
+        let drop_ins = &snap.services.unwrap().drop_ins;
+
+        assert_eq!(drop_ins[0].variant_selection, VariantSelection::Selected);
+    }
+
+    #[test]
+    fn test_legacy_tie_fields_patched_on_quadlets_and_compose() {
+        use crate::types::fleet::VariantSelection;
+
+        let json = r#"{
+            "schema_version": 14,
+            "meta": {},
+            "system_type": "package-mode",
+            "containers": {
+                "quadlet_units": [
+                    {
+                        "path": "/etc/containers/systemd/app.container",
+                        "name": "app.container",
+                        "content": "",
+                        "image": "quay.io/app:latest",
+                        "include": true,
+                        "tie": true,
+                        "tie_winner": false,
+                        "fleet": null
+                    }
+                ],
+                "compose_files": [
+                    {
+                        "path": "/opt/compose/docker-compose.yml",
+                        "images": [],
+                        "include": true,
+                        "tie": true,
+                        "tie_winner": true,
+                        "fleet": null
+                    }
+                ],
+                "running_containers": [],
+                "flatpak_apps": []
+            },
+            "preflight": {"status": "ok"},
+            "warnings": [],
+            "redactions": []
+        }"#;
+
+        let snap = InspectionSnapshot::load(json).unwrap();
+        let containers = snap.containers.unwrap();
+
+        assert_eq!(
+            containers.quadlet_units[0].variant_selection,
+            VariantSelection::Alternative
+        );
+        assert_eq!(
+            containers.compose_files[0].variant_selection,
+            VariantSelection::Selected
+        );
+    }
+
+    #[test]
     fn test_v14_migration_sets_no_baseline() {
         // Pre-Phase-6 snapshot: schema_version 14, no baseline fields
         let json = r#"{
@@ -374,5 +598,30 @@ mod tests {
 
         assert_eq!(snap.schema_version, SCHEMA_VERSION);
         assert!(snap.no_baseline); // Migration explicitly sets this to true
+    }
+
+    #[test]
+    fn test_snapshot_with_fleet_meta_roundtrip() {
+        use std::collections::BTreeMap;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.fleet_meta = Some(crate::types::fleet::FleetSnapshotMeta {
+            label: "web-tier".into(),
+            host_count: 25,
+            hostnames: vec!["web-01".into(), "web-02".into()],
+            merged_at: "2026-05-20T15:30:00Z".into(),
+            baseline_provisional: true,
+            section_host_counts: BTreeMap::from([("rpm".into(), 25usize), ("config".into(), 23)]),
+        });
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(snap.fleet_meta, parsed.fleet_meta);
+    }
+
+    #[test]
+    fn test_snapshot_without_fleet_meta_omits_field() {
+        let snap = InspectionSnapshot::new();
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(!json.contains("fleet_meta"));
     }
 }

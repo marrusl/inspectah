@@ -25,7 +25,7 @@ pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError
     patch_missing_includes(&mut value);
 
     // Serialize patched Value back to string and use InspectionSnapshot::load()
-    // which enforces MIN_SCHEMA..=SCHEMA_VERSION (12..=14).
+    // which enforces MIN_SCHEMA..=SCHEMA_VERSION (currently 12..=17).
     let patched_json =
         serde_json::to_string(&value).map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
     let mut snap = InspectionSnapshot::load(&patched_json)
@@ -50,10 +50,10 @@ fn patch_missing_includes(value: &mut Value) {
 fn patch_array_includes(parent: &mut Value, array_key: &str) {
     if let Some(Value::Array(entries)) = parent.get_mut(array_key) {
         for entry in entries {
-            if let Value::Object(map) = entry {
-                if !map.contains_key("include") {
-                    map.insert("include".into(), Value::Bool(true));
-                }
+            if let Value::Object(map) = entry
+                && !map.contains_key("include")
+            {
+                map.insert("include".into(), Value::Bool(true));
             }
         }
     }

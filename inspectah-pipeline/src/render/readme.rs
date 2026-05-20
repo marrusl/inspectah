@@ -111,10 +111,10 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
         svc_enabled + svc_disabled
     ));
 
-    if let Some(nrs) = &snap.non_rpm_software {
-        if !nrs.items.is_empty() {
-            lines.push(format!("| Non-RPM software items | {} |", nrs.items.len()));
-        }
+    if let Some(nrs) = &snap.non_rpm_software
+        && !nrs.items.is_empty()
+    {
+        lines.push(format!("| Non-RPM software items | {} |", nrs.items.len()));
     }
 
     if let Some(containers) = &snap.containers {
@@ -165,10 +165,10 @@ pub fn render_readme(snap: &InspectionSnapshot) -> String {
     if is_centos {
         install_flags.push("--target-no-signature-verification");
     }
-    if let Some(sel) = &snap.selinux {
-        if sel.mode == "enforcing" {
-            install_flags.push("--enforce-container-sigpolicy");
-        }
+    if let Some(sel) = &snap.selinux
+        && sel.mode == "enforcing"
+    {
+        install_flags.push("--enforce-container-sigpolicy");
     }
     if install_flags.is_empty() {
         lines.push("bootc install to-disk /dev/sdX".into());

@@ -215,11 +215,11 @@ fn handle_result(
     match handle.join() {
         Ok(Ok(output)) => {
             // Extract RpmState from RPM inspector output before routing
-            if inspector.id() == InspectorId::Rpm {
-                if let SectionData::Rpm(ref rpm) = output.section {
-                    extract_rpm_state(rpm, rpm_state);
-                    rpm_extracted = true;
-                }
+            if inspector.id() == InspectorId::Rpm
+                && let SectionData::Rpm(ref rpm) = output.section
+            {
+                extract_rpm_state(rpm, rpm_state);
+                rpm_extracted = true;
             }
             route_section(snapshot, output.section);
             snapshot.warnings.extend(output.warnings);
@@ -238,11 +238,11 @@ fn handle_result(
         })) => {
             // Extract RpmState from degraded RPM output too — partial
             // data is still valid for Wave 2 classification.
-            if inspector.id() == InspectorId::Rpm {
-                if let SectionData::Rpm(ref rpm) = partial.section {
-                    extract_rpm_state(rpm, rpm_state);
-                    rpm_extracted = true;
-                }
+            if inspector.id() == InspectorId::Rpm
+                && let SectionData::Rpm(ref rpm) = partial.section
+            {
+                extract_rpm_state(rpm, rpm_state);
+                rpm_extracted = true;
             }
             route_section(snapshot, partial.section);
             snapshot.warnings.extend(partial.warnings);
@@ -325,10 +325,10 @@ fn extract_rpm_state(rpm: &inspectah_core::types::rpm::RpmSection, state: &mut R
     // rpm -Va output has paths but not package names; cross-reference
     // against the ownership index to fill in the owning package.
     for va in &mut state.verification_results {
-        if va.package.is_none() {
-            if let Some(&pkg_name) = path_to_name.get(va.path.as_str()) {
-                va.package = Some(pkg_name.to_string());
-            }
+        if va.package.is_none()
+            && let Some(&pkg_name) = path_to_name.get(va.path.as_str())
+        {
+            va.package = Some(pkg_name.to_string());
         }
     }
 }

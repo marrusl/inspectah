@@ -203,10 +203,10 @@ fn match_unowned_glob(pattern: &str, path: &str) -> bool {
     }
 
     // For patterns like "/etc/dir/*", match any path under /etc/dir/
-    if let Some(prefix) = pattern.strip_suffix('*') {
-        if path.starts_with(prefix) {
-            return true;
-        }
+    if let Some(prefix) = pattern.strip_suffix('*')
+        && path.starts_with(prefix)
+    {
+        return true;
     }
 
     // Segment-by-segment matching for intermediate wildcards

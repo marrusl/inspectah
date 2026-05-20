@@ -44,6 +44,15 @@ Any difference NOT listed here fails CI.
 - Disposition: permanent
 - Approval: approved-by-spec
 
+### tie/tie_winner replaced by variant_selection on drop_ins (schema-breaking change)
+- Go: `"tie": false, "tie_winner": false`
+- Rust: `"variant_selection": "Only"` (no tie/tie_winner fields)
+- Path: `$.services.drop_ins[*].tie`
+- Path: `$.services.drop_ins[*].tie_winner`
+- Path: `$.services.drop_ins[*].variant_selection`
+- Reason: Same schema change as config files. Legacy fields patched at load time.
+- Disposition: permanent — Rust-era schema improvement
+
 ### fleet on drop_ins (Rust-only nullable field)
 - Go: field absent (Go golden has empty `drop_ins: []` on the real host)
 - Rust: `"fleet": null`
@@ -318,6 +327,15 @@ Any difference NOT listed here fails CI.
 - Disposition: permanent — Rust-era enhancement
 
 ## Config Section
+
+### tie/tie_winner replaced by variant_selection (schema-breaking change)
+- Go: `"tie": false, "tie_winner": false`
+- Rust: `"variant_selection": "Only"` (no tie/tie_winner fields)
+- Path: `$.files[*].tie`
+- Path: `$.files[*].tie_winner`
+- Path: `$.files[*].variant_selection`
+- Reason: Schema-breaking change. Two bools (4 states, only 3 valid) replaced by VariantSelection enum (Only, Selected, Alternative). Legacy tie/tie_winner fields are patched at load time.
+- Disposition: permanent — Rust-era schema improvement
 
 ### fleet on config files (Rust-only nullable field)
 - Go: field absent

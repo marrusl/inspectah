@@ -106,12 +106,13 @@ fn parse_dnf_repo_lines(
 ) {
     for line in stdout.lines() {
         let line = line.trim();
-        if let Some((name, repo)) = line.split_once(' ') {
-            if name_set.contains(name) && !should_skip_repo(repo) {
-                repo_map
-                    .entry(name.to_string())
-                    .or_insert_with(|| repo.to_string());
-            }
+        if let Some((name, repo)) = line.split_once(' ')
+            && name_set.contains(name)
+            && !should_skip_repo(repo)
+        {
+            repo_map
+                .entry(name.to_string())
+                .or_insert_with(|| repo.to_string());
         }
     }
 }
@@ -141,14 +142,14 @@ fn try_rpm_source_repo(
                 if let Some((_, val)) = stripped.split_once(':') {
                     cur_name = val.trim().to_string();
                 }
-            } else if line.starts_with("From repo") || line.starts_with("Repository") {
-                if let Some((_, val)) = line.split_once(':') {
-                    let repo = val.trim();
-                    if !cur_name.is_empty() && !should_skip_repo(repo) {
-                        repo_map
-                            .entry(cur_name.clone())
-                            .or_insert_with(|| repo.to_string());
-                    }
+            } else if (line.starts_with("From repo") || line.starts_with("Repository"))
+                && let Some((_, val)) = line.split_once(':')
+            {
+                let repo = val.trim();
+                if !cur_name.is_empty() && !should_skip_repo(repo) {
+                    repo_map
+                        .entry(cur_name.clone())
+                        .or_insert_with(|| repo.to_string());
                 }
             }
         }

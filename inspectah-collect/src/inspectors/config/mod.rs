@@ -450,44 +450,43 @@ fn run_ostree_config(
     let mut tier1_paths: HashSet<String> = HashSet::new();
 
     // Tier 1: /usr/etc -> /etc diff
-    if exec.read_dir(Path::new(usr_etc)).is_ok() || exec.file_exists(Path::new(usr_etc)) {
-        if let Ok(files) = walk_etc_recursive(exec, usr_etc) {
-            for rel_path in files {
-                let basename = rel_path.rsplit('/').next().unwrap_or(&rel_path);
-                if volatile_names.contains(basename) {
-                    continue;
-                }
+    if (exec.read_dir(Path::new(usr_etc)).is_ok() || exec.file_exists(Path::new(usr_etc)))
+        && let Ok(files) = walk_etc_recursive(exec, usr_etc)
+    {
+        for rel_path in files {
+            let basename = rel_path.rsplit('/').next().unwrap_or(&rel_path);
+            if volatile_names.contains(basename) {
+                continue;
+            }
 
-                let etc_path = format!("{etc}/{rel_path}");
-                tier1_paths.insert(etc_path.clone());
+            let etc_path = format!("{etc}/{rel_path}");
+            tier1_paths.insert(etc_path.clone());
 
-                if !exec.file_exists(Path::new(&etc_path)) {
-                    continue; // Only in /usr/etc — normal ostree behavior
-                }
+            if !exec.file_exists(Path::new(&etc_path)) {
+                continue; // Only in /usr/etc — normal ostree behavior
+            }
 
-                let display_path = format!("etc/{rel_path}");
+            let display_path = format!("etc/{rel_path}");
 
-                // Content comparison
-                let usr_content = match exec.read_file(Path::new(&format!("{usr_etc}/{rel_path}")))
-                {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                let etc_content = match exec.read_file(Path::new(&etc_path)) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
+            // Content comparison
+            let usr_content = match exec.read_file(Path::new(&format!("{usr_etc}/{rel_path}"))) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let etc_content = match exec.read_file(Path::new(&etc_path)) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-                if usr_content != etc_content {
-                    section.files.push(ConfigFileEntry {
-                        path: display_path,
-                        kind: ConfigFileKind::RpmOwnedModified,
-                        category: classify_config_path(&format!("/etc/{rel_path}")),
-                        content: etc_content,
-                        diff_against_rpm: None, // Phase 3
-                        ..Default::default()
-                    });
-                }
+            if usr_content != etc_content {
+                section.files.push(ConfigFileEntry {
+                    path: display_path,
+                    kind: ConfigFileKind::RpmOwnedModified,
+                    category: classify_config_path(&format!("/etc/{rel_path}")),
+                    content: etc_content,
+                    diff_against_rpm: None, // Phase 3
+                    ..Default::default()
+                });
             }
         }
     }

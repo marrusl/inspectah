@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::fleet::FleetPrevalence;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfigSnippet {
     #[serde(default)]
@@ -20,6 +22,7 @@ pub struct SysctlOverride {
     pub source: String,
     #[serde(default)]
     pub include: bool,
+    pub fleet: Option<FleetPrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +35,7 @@ pub struct KernelModule {
     pub used_by: String,
     #[serde(default)]
     pub include: bool,
+    pub fleet: Option<FleetPrevalence>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,6 +91,7 @@ mod tests {
                 default: "0".to_string(),
                 source: "/etc/sysctl.d/99-custom.conf".to_string(),
                 include: true,
+                fleet: None,
             }],
             modules_load_d: vec![],
             modprobe_d: vec![],

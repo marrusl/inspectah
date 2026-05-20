@@ -469,41 +469,37 @@ impl RefineSession {
         for op in &self.ops[..self.cursor] {
             match op {
                 RefinementOp::ExcludePackage(target) => {
-                    if let Some(ref mut rpm) = snap.rpm {
-                        if let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
-                        {
-                            pkg.include = false;
-                        }
+                    if let Some(ref mut rpm) = snap.rpm
+                        && let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
+                    {
+                        pkg.include = false;
                     }
                 }
                 RefinementOp::IncludePackage(target) => {
-                    if let Some(ref mut rpm) = snap.rpm {
-                        if let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
-                        {
-                            pkg.include = true;
-                        }
+                    if let Some(ref mut rpm) = snap.rpm
+                        && let Some(pkg) = rpm.packages_added.iter_mut().find(|e| target.matches(e))
+                    {
+                        pkg.include = true;
                     }
                 }
                 RefinementOp::ExcludeConfig { path } => {
-                    if let Some(ref mut config) = snap.config {
-                        if let Some(entry) = config
+                    if let Some(ref mut config) = snap.config
+                        && let Some(entry) = config
                             .files
                             .iter_mut()
                             .find(|e| e.path == path.to_string_lossy())
-                        {
-                            entry.include = false;
-                        }
+                    {
+                        entry.include = false;
                     }
                 }
                 RefinementOp::IncludeConfig { path } => {
-                    if let Some(ref mut config) = snap.config {
-                        if let Some(entry) = config
+                    if let Some(ref mut config) = snap.config
+                        && let Some(entry) = config
                             .files
                             .iter_mut()
                             .find(|e| e.path == path.to_string_lossy())
-                        {
-                            entry.include = true;
-                        }
+                    {
+                        entry.include = true;
                     }
                 }
                 RefinementOp::ExcludeRepo { section_id } => {
@@ -530,12 +526,11 @@ impl RefineSession {
                                     .iter()
                                     .filter(|(_, paths)| paths.contains(file_path))
                                     .all(|(sid, _)| excluded_sections.contains(sid));
-                                if all_sections_excluded {
-                                    if let Some(rf) =
+                                if all_sections_excluded
+                                    && let Some(rf) =
                                         rpm.repo_files.iter_mut().find(|r| r.path == *file_path)
-                                    {
-                                        rf.include = false;
-                                    }
+                                {
+                                    rf.include = false;
                                 }
                             }
                         }
@@ -551,12 +546,11 @@ impl RefineSession {
                                     let all_excluded = referencing_sections
                                         .iter()
                                         .all(|sid| excluded_sections.contains(sid));
-                                    if all_excluded {
-                                        if let Some(k) =
+                                    if all_excluded
+                                        && let Some(k) =
                                             rpm.gpg_keys.iter_mut().find(|g| g.path == *key_path)
-                                        {
-                                            k.include = false;
-                                        }
+                                    {
+                                        k.include = false;
                                     }
                                 }
                             }
@@ -599,55 +593,44 @@ impl RefineSession {
                     }
                 }
                 RefinementOp::UserStrategy { username, strategy } => {
-                    if let Some(ref mut ug) = snap.users_groups {
-                        if let Some(user) = ug.users.iter_mut().find(|u| {
-                            u.get("name").and_then(|v| v.as_str()) == Some(username)
-                        }) {
-                            user.as_object_mut().map(|m| {
-                                m.insert(
-                                    "containerfile_strategy".to_string(),
-                                    serde_json::to_value(strategy).unwrap(),
-                                );
-                            });
-                        }
+                    if let Some(ref mut ug) = snap.users_groups
+                        && let Some(user) = ug
+                            .users
+                            .iter_mut()
+                            .find(|u| u.get("name").and_then(|v| v.as_str()) == Some(username))
+                        && let Some(m) = user.as_object_mut()
+                    {
+                        m.insert(
+                            "containerfile_strategy".to_string(),
+                            serde_json::to_value(strategy).unwrap(),
+                        );
                     }
                 }
                 RefinementOp::UserPassword(pw_op) => {
                     match pw_op {
                         UserPasswordOp::New { username, hash } => {
-                            if let Some(ref mut ug) = snap.users_groups {
-                                if let Some(user) = ug.users.iter_mut().find(|u| {
+                            if let Some(ref mut ug) = snap.users_groups
+                                && let Some(user) = ug.users.iter_mut().find(|u| {
                                     u.get("name").and_then(|v| v.as_str()) == Some(username)
-                                }) {
-                                    if let Some(m) = user.as_object_mut() {
-                                        m.insert(
-                                            "password_choice".to_string(),
-                                            serde_json::json!("new"),
-                                        );
-                                        if let Some(h) = hash {
-                                            m.insert(
-                                                "password_hash".to_string(),
-                                                serde_json::json!(h),
-                                            );
-                                        }
-                                    }
+                                })
+                                && let Some(m) = user.as_object_mut()
+                            {
+                                m.insert("password_choice".to_string(), serde_json::json!("new"));
+                                if let Some(h) = hash {
+                                    m.insert("password_hash".to_string(), serde_json::json!(h));
                                 }
                             }
                         }
                         UserPasswordOp::None { username } => {
-                            if let Some(ref mut ug) = snap.users_groups {
-                                if let Some(user) = ug.users.iter_mut().find(|u| {
+                            if let Some(ref mut ug) = snap.users_groups
+                                && let Some(user) = ug.users.iter_mut().find(|u| {
                                     u.get("name").and_then(|v| v.as_str()) == Some(username)
-                                }) {
-                                    if let Some(m) = user.as_object_mut() {
-                                        m.insert(
-                                            "password_choice".to_string(),
-                                            serde_json::json!("none"),
-                                        );
-                                        // CLEAR password_hash
-                                        m.remove("password_hash");
-                                    }
-                                }
+                                })
+                                && let Some(m) = user.as_object_mut()
+                            {
+                                m.insert("password_choice".to_string(), serde_json::json!("none"));
+                                // CLEAR password_hash
+                                m.remove("password_hash");
                             }
                         }
                         UserPasswordOp::Preserve { username } => {
@@ -666,26 +649,22 @@ impl RefineSession {
                                 .and_then(|v| v.as_str())
                                 .map(|s| s.to_string());
 
-                            if let Some(ref mut ug) = snap.users_groups {
-                                if let Some(user) = ug.users.iter_mut().find(|u| {
+                            if let Some(ref mut ug) = snap.users_groups
+                                && let Some(user) = ug.users.iter_mut().find(|u| {
                                     u.get("name").and_then(|v| v.as_str()) == Some(username)
-                                }) {
-                                    if let Some(m) = user.as_object_mut() {
-                                        m.insert(
-                                            "password_choice".to_string(),
-                                            serde_json::json!("preserve"),
-                                        );
-                                        match original_hash {
-                                            Some(h) => {
-                                                m.insert(
-                                                    "password_hash".to_string(),
-                                                    serde_json::json!(h),
-                                                );
-                                            }
-                                            None => {
-                                                m.remove("password_hash");
-                                            }
-                                        }
+                                })
+                                && let Some(m) = user.as_object_mut()
+                            {
+                                m.insert(
+                                    "password_choice".to_string(),
+                                    serde_json::json!("preserve"),
+                                );
+                                match original_hash {
+                                    Some(h) => {
+                                        m.insert("password_hash".to_string(), serde_json::json!(h));
+                                    }
+                                    None => {
+                                        m.remove("password_hash");
                                     }
                                 }
                             }

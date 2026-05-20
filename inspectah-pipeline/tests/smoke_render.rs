@@ -95,6 +95,7 @@ fn snapshot_with_kernelboot() -> InspectionSnapshot {
             default: "0".into(),
             source: "/etc/sysctl.d/99-custom.conf".into(),
             include: true,
+            fleet: None,
         }],
         modules_load_d: vec![ConfigSnippet {
             path: "etc/modules-load.d/br_netfilter.conf".into(),

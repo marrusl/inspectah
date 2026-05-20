@@ -317,11 +317,12 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
     if snapshot.sensitive_snapshot && !args.acknowledge_sensitive {
         eprintln!("Error: Snapshot contains sensitive data (password hashes or SSH keys).");
         eprintln!("       To export, re-run with --acknowledge-sensitive");
-        eprintln!("       Preserved credentials: {}", snapshot.preserved_credentials);
-        eprintln!("       Preserved SSH keys: {}", snapshot.preserved_ssh_keys);
-        anyhow::bail!(
-            "Cannot export sensitive snapshot without --acknowledge-sensitive flag"
+        eprintln!(
+            "       Preserved credentials: {}",
+            snapshot.preserved_credentials
         );
+        eprintln!("       Preserved SSH keys: {}", snapshot.preserved_ssh_keys);
+        anyhow::bail!("Cannot export sensitive snapshot without --acknowledge-sensitive flag");
     }
 
     // If --inspect-only, write JSON and exit
@@ -368,10 +369,10 @@ pub fn run_scan(args: &ScanArgs) -> Result<()> {
         None => PathBuf::from(&tarball_name),
     };
 
-    if let Some(parent) = tarball_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).context("failed to create output directory")?;
-        }
+    if let Some(parent) = tarball_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).context("failed to create output directory")?;
     }
 
     create_tarball(render_dir.path(), &tarball_path, &stamp)

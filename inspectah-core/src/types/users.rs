@@ -2,29 +2,21 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum UserContainerfileStrategy {
+    #[default]
     Skip,
     Useradd,
 }
 
-impl Default for UserContainerfileStrategy {
-    fn default() -> Self {
-        Self::Skip
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum UserPasswordChoice {
+    #[default]
     None,
     Preserve,
     New,
-}
-
-impl Default for UserPasswordChoice {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -75,7 +67,10 @@ mod tests {
 
     #[test]
     fn user_decision_enum_defaults() {
-        assert_eq!(UserContainerfileStrategy::default(), UserContainerfileStrategy::Skip);
+        assert_eq!(
+            UserContainerfileStrategy::default(),
+            UserContainerfileStrategy::Skip
+        );
         assert_eq!(UserPasswordChoice::default(), UserPasswordChoice::None);
     }
 
