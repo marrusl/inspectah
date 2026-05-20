@@ -1,5 +1,13 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VariantSelection {
+    #[default]
+    Only,
+    Selected,
+    Alternative,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FleetPrevalence {
     #[serde(default)]
@@ -40,5 +48,20 @@ mod tests {
     fn test_fleet_prevalence_null_deserialize() {
         let val: Option<FleetPrevalence> = serde_json::from_str("null").unwrap();
         assert!(val.is_none());
+    }
+
+    #[test]
+    fn test_variant_selection_default() {
+        let vs = VariantSelection::default();
+        assert_eq!(vs, VariantSelection::Only);
+    }
+
+    #[test]
+    fn test_variant_selection_serde_roundtrip() {
+        for variant in [VariantSelection::Only, VariantSelection::Selected, VariantSelection::Alternative] {
+            let json = serde_json::to_string(&variant).unwrap();
+            let parsed: VariantSelection = serde_json::from_str(&json).unwrap();
+            assert_eq!(variant, parsed);
+        }
     }
 }
