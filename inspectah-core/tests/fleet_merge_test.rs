@@ -1246,6 +1246,47 @@ fn test_merge_network_sections_dedup_proxy_by_source() {
     assert_eq!(result.ip_routes.len(), 2);
 }
 
+#[test]
+fn test_merge_network_resolv_provenance_most_prevalent() {
+    // 3 hosts: 2 have "systemd-resolved", 1 has "NetworkManager".
+    // Most-prevalent should win even though "NetworkManager" sorts first.
+    let s1 = NetworkSection {
+        resolv_provenance: "NetworkManager".into(),
+        ..Default::default()
+    };
+    let s2 = NetworkSection {
+        resolv_provenance: "systemd-resolved".into(),
+        ..Default::default()
+    };
+    let s3 = NetworkSection {
+        resolv_provenance: "systemd-resolved".into(),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let result =
+        merge_network_sections(vec![Some(s1), Some(s2), Some(s3)], 3, &hostnames).unwrap();
+
+    assert_eq!(result.resolv_provenance, "systemd-resolved");
+}
+
+#[test]
+fn test_merge_network_resolv_provenance_tie_break() {
+    // 2 hosts with different values — tie broken by first-seen
+    let s1 = NetworkSection {
+        resolv_provenance: "NetworkManager".into(),
+        ..Default::default()
+    };
+    let s2 = NetworkSection {
+        resolv_provenance: "systemd-resolved".into(),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_network_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Tie: first-seen wins (h1's value)
+    assert_eq!(result.resolv_provenance, "NetworkManager");
+}
+
 // ===========================================================================
 // Section adapter: Storage
 // ===========================================================================
@@ -1423,8 +1464,80 @@ fn test_merge_selinux_sections_dedup_and_merge() {
     // CarryForwardFile deduped by path
     assert_eq!(result.audit_rules.len(), 1);
 
-    // Scalar from first host
+    // Most-prevalent scalar (both hosts agree here)
     assert_eq!(result.mode, "enforcing");
+}
+
+#[test]
+fn test_merge_selinux_most_prevalent_mode() {
+    // 3 hosts: 2 enforcing, 1 permissive — enforcing wins by prevalence
+    let make = |mode: &str, fips: bool| SelinuxSection {
+        mode: mode.into(),
+        fips_mode: fips,
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let result = merge_selinux_sections(
+        vec![
+            Some(make("permissive", true)),
+            Some(make("enforcing", false)),
+            Some(make("enforcing", false)),
+        ],
+        3,
+        &hostnames,
+    )
+    .unwrap();
+
+    // enforcing is most prevalent (2 of 3)
+    assert_eq!(result.mode, "enforcing");
+    // false is most prevalent for fips_mode (2 of 3)
+    assert!(!result.fips_mode);
+}
+
+#[test]
+fn test_merge_selinux_most_prevalent_tie_break() {
+    // 2 hosts with different modes — tie broken by first-seen (first in sorted order)
+    let make = |mode: &str| SelinuxSection {
+        mode: mode.into(),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_selinux_sections(
+        vec![
+            Some(make("permissive")),
+            Some(make("enforcing")),
+        ],
+        2,
+        &hostnames,
+    )
+    .unwrap();
+
+    // Tie: first-seen wins. Sections are pre-sorted by hostname, so h1's
+    // value ("permissive") is first-seen.
+    assert_eq!(result.mode, "permissive");
+}
+
+#[test]
+fn test_merge_selinux_fips_mode_most_prevalent_true() {
+    // 3 hosts: 2 true, 1 false — true wins
+    let make = |fips: bool| SelinuxSection {
+        mode: "enforcing".into(),
+        fips_mode: fips,
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let result = merge_selinux_sections(
+        vec![
+            Some(make(false)),
+            Some(make(true)),
+            Some(make(true)),
+        ],
+        3,
+        &hostnames,
+    )
+    .unwrap();
+
+    assert!(result.fips_mode);
 }
 
 // ===========================================================================
@@ -1505,8 +1618,69 @@ fn test_merge_kernelboot_sections_modules_and_snippets() {
     // alternatives deduped by name
     assert_eq!(result.alternatives.len(), 1);
 
-    // Scalar from first host
+    // Most-prevalent scalar (both hosts agree here)
     assert_eq!(result.cmdline, "root=/dev/sda1 console=ttyS0");
+}
+
+#[test]
+fn test_merge_kernelboot_most_prevalent_scalars() {
+    // 3 hosts: 2 share cmdline/grub_defaults/tuned_active, 1 differs.
+    // Most-prevalent value should win even though the differing host sorts first.
+    let s_minority = KernelBootSection {
+        cmdline: "root=/dev/sda1 quiet".into(),
+        grub_defaults: "GRUB_TIMEOUT=3".into(),
+        tuned_active: "balanced".into(),
+        locale: Some("en_US.UTF-8".into()),
+        ..Default::default()
+    };
+    let s_majority1 = KernelBootSection {
+        cmdline: "root=/dev/sda1 console=ttyS0".into(),
+        grub_defaults: "GRUB_TIMEOUT=5".into(),
+        tuned_active: "throughput-performance".into(),
+        locale: Some("de_DE.UTF-8".into()),
+        ..Default::default()
+    };
+    let s_majority2 = KernelBootSection {
+        cmdline: "root=/dev/sda1 console=ttyS0".into(),
+        grub_defaults: "GRUB_TIMEOUT=5".into(),
+        tuned_active: "throughput-performance".into(),
+        locale: Some("fr_FR.UTF-8".into()),
+        ..Default::default()
+    };
+    // h1 sorts first but is minority; h2 and h3 are majority
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into(), "h3".into()];
+    let result = merge_kernelboot_sections(
+        vec![Some(s_minority), Some(s_majority1), Some(s_majority2)],
+        3,
+        &hostnames,
+    )
+    .unwrap();
+
+    // Most-prevalent wins (2 of 3)
+    assert_eq!(result.cmdline, "root=/dev/sda1 console=ttyS0");
+    assert_eq!(result.grub_defaults, "GRUB_TIMEOUT=5");
+    assert_eq!(result.tuned_active, "throughput-performance");
+
+    // locale uses first-host (h1), NOT most-prevalent
+    assert_eq!(result.locale, Some("en_US.UTF-8".into()));
+}
+
+#[test]
+fn test_merge_kernelboot_scalar_tie_break() {
+    // 2 hosts with different cmdlines — tie broken by first-seen
+    let s1 = KernelBootSection {
+        cmdline: "root=/dev/sda1 quiet".into(),
+        ..Default::default()
+    };
+    let s2 = KernelBootSection {
+        cmdline: "root=/dev/sda1 console=ttyS0".into(),
+        ..Default::default()
+    };
+    let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];
+    let result = merge_kernelboot_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
+
+    // Tie: first-seen wins (h1's value)
+    assert_eq!(result.cmdline, "root=/dev/sda1 quiet");
 }
 
 // ===========================================================================

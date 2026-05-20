@@ -688,6 +688,56 @@ where
     pairs.first().map(|(_, v)| *v).unwrap_or(false)
 }
 
+/// Pick the most-prevalent non-empty string value across hosts.
+///
+/// Counts occurrences of each distinct value. Returns the value with the
+/// highest count. Tie-break: first seen (which is first by sorted hostname
+/// since sections are pre-sorted). Returns empty string if no section has
+/// a non-empty value.
+fn most_prevalent_scalar<S, F>(sections: &[Option<S>], extractor: F) -> String
+where
+    F: Fn(&S) -> &str,
+{
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    for section in sections.iter().flatten() {
+        let val = extractor(section);
+        if val.is_empty() {
+            continue;
+        }
+        if let Some(entry) = counts.iter_mut().find(|(v, _)| v == val) {
+            entry.1 += 1;
+        } else {
+            counts.push((val.to_string(), 1));
+        }
+    }
+    // Stable: highest count first; ties preserve insertion order (first-seen)
+    counts.sort_by(|(_, a), (_, b)| b.cmp(a));
+    counts
+        .first()
+        .map(|(v, _)| v.clone())
+        .unwrap_or_default()
+}
+
+/// Pick the most-prevalent bool value across hosts.
+///
+/// Counts `true` vs `false` occurrences. Returns the value with the higher
+/// count. Tie-break: `false` wins (conservative default).
+fn most_prevalent_bool<S, F>(sections: &[Option<S>], extractor: F) -> bool
+where
+    F: Fn(&S) -> bool,
+{
+    let mut true_count: usize = 0;
+    let mut false_count: usize = 0;
+    for section in sections.iter().flatten() {
+        if extractor(section) {
+            true_count += 1;
+        } else {
+            false_count += 1;
+        }
+    }
+    true_count > false_count
+}
+
 // ===========================================================================
 // Section adapters
 // ===========================================================================
@@ -1102,8 +1152,8 @@ pub fn merge_network_sections(
         result
     };
 
-    // Most-prevalent for resolv_provenance (first host sorted by hostname)
-    let resolv_provenance = first_host_scalar(&sections, hostnames, |s| &s.resolv_provenance);
+    // Most-prevalent value for resolv_provenance
+    let resolv_provenance = most_prevalent_scalar(&sections, |s| &s.resolv_provenance);
 
     Some(NetworkSection {
         connections,
@@ -1305,9 +1355,9 @@ pub fn merge_selinux_sections(
         result
     };
 
-    // Most-prevalent scalar fields from first host
-    let mode = first_host_scalar(&sections, hostnames, |s| &s.mode);
-    let fips_mode = first_host_bool(&sections, hostnames, |s| s.fips_mode);
+    // Most-prevalent scalar fields
+    let mode = most_prevalent_scalar(&sections, |s| &s.mode);
+    let fips_mode = most_prevalent_bool(&sections, |s| s.fips_mode);
 
     Some(SelinuxSection {
         mode,
@@ -1368,10 +1418,11 @@ pub fn merge_kernelboot_sections(
         result
     };
 
-    // Most-prevalent scalars from first host
-    let cmdline = first_host_scalar(&sections, hostnames, |s| &s.cmdline);
-    let grub_defaults = first_host_scalar(&sections, hostnames, |s| &s.grub_defaults);
-    let tuned_active = first_host_scalar(&sections, hostnames, |s| &s.tuned_active);
+    // Most-prevalent scalars
+    let cmdline = most_prevalent_scalar(&sections, |s| &s.cmdline);
+    let grub_defaults = most_prevalent_scalar(&sections, |s| &s.grub_defaults);
+    let tuned_active = most_prevalent_scalar(&sections, |s| &s.tuned_active);
+    // locale/timezone: pass through from first host sorted by hostname (per spec)
     let locale = first_host_option(&sections, hostnames, |s| &s.locale);
     let timezone = first_host_option(&sections, hostnames, |s| &s.timezone);
 
