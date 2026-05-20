@@ -267,14 +267,14 @@ fn parse_zone_xml(text: &str) -> Option<ZoneParseResult> {
             },
         };
         let tag = &remaining[start..tag_end];
-        if let Some(port) = extract_attr(tag, "port") {
-            if !port.is_empty() {
-                let proto = extract_attr(tag, "protocol").unwrap_or_default();
-                if proto.is_empty() {
-                    ports.push(port);
-                } else {
-                    ports.push(format!("{port}/{proto}"));
-                }
+        if let Some(port) = extract_attr(tag, "port")
+            && !port.is_empty()
+        {
+            let proto = extract_attr(tag, "protocol").unwrap_or_default();
+            if proto.is_empty() {
+                ports.push(port);
+            } else {
+                ports.push(format!("{port}/{proto}"));
             }
         }
         remaining = &remaining[tag_end..];
@@ -569,10 +569,10 @@ fn parse_ip_rules(text: &str) -> Vec<String> {
         .filter(|l| !l.is_empty())
         .filter(|l| {
             let parts: Vec<&str> = l.split_whitespace().collect();
-            if let Some(idx) = parts.iter().position(|&p| p == "lookup") {
-                if let Some(table) = parts.get(idx + 1) {
-                    return !DEFAULT_RULE_TABLES.contains(table);
-                }
+            if let Some(idx) = parts.iter().position(|&p| p == "lookup")
+                && let Some(table) = parts.get(idx + 1)
+            {
+                return !DEFAULT_RULE_TABLES.contains(table);
             }
             true
         })

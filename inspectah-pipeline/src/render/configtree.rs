@@ -115,14 +115,14 @@ fn safe_write_file(dest: &Path, content: &str) {
         return;
     }
 
-    if let Some(parent) = dest.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
-            eprintln!(
-                "inspectah: warning: skipping config file write -- parent path conflict: {}",
-                dest.display()
-            );
-            return;
-        }
+    if let Some(parent) = dest.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        eprintln!(
+            "inspectah: warning: skipping config file write -- parent path conflict: {}",
+            dest.display()
+        );
+        return;
     }
 
     let _ = std::fs::write(dest, content);
@@ -279,44 +279,44 @@ pub fn write_config_tree(
     }
 
     // Timer units (generated and local)
-    if let Some(ref st) = snap.scheduled_tasks {
-        if !st.generated_timer_units.is_empty() || !st.systemd_timers.is_empty() {
-            let systemd_dir = config_dir.join("etc/systemd/system");
-            let _ = std::fs::create_dir_all(&systemd_dir);
+    if let Some(ref st) = snap.scheduled_tasks
+        && (!st.generated_timer_units.is_empty() || !st.systemd_timers.is_empty())
+    {
+        let systemd_dir = config_dir.join("etc/systemd/system");
+        let _ = std::fs::create_dir_all(&systemd_dir);
 
-            for u in &st.generated_timer_units {
-                if !u.include {
-                    continue;
-                }
-                // @reboot entries have empty timer_content — only write a
-                // .timer file when there is actual timer content to emit.
-                if !u.timer_content.is_empty() {
-                    let _ = std::fs::write(
-                        systemd_dir.join(format!("{}.timer", u.name)),
-                        &u.timer_content,
-                    );
-                }
-                if !u.service_content.is_empty() {
-                    let _ = std::fs::write(
-                        systemd_dir.join(format!("{}.service", u.name)),
-                        &u.service_content,
-                    );
-                }
+        for u in &st.generated_timer_units {
+            if !u.include {
+                continue;
             }
-            for t in &st.systemd_timers {
-                if t.source == "local" {
-                    if !t.name.is_empty() && !t.timer_content.is_empty() {
-                        let _ = std::fs::write(
-                            systemd_dir.join(format!("{}.timer", t.name)),
-                            &t.timer_content,
-                        );
-                    }
-                    if !t.name.is_empty() && !t.service_content.is_empty() {
-                        let _ = std::fs::write(
-                            systemd_dir.join(format!("{}.service", t.name)),
-                            &t.service_content,
-                        );
-                    }
+            // @reboot entries have empty timer_content — only write a
+            // .timer file when there is actual timer content to emit.
+            if !u.timer_content.is_empty() {
+                let _ = std::fs::write(
+                    systemd_dir.join(format!("{}.timer", u.name)),
+                    &u.timer_content,
+                );
+            }
+            if !u.service_content.is_empty() {
+                let _ = std::fs::write(
+                    systemd_dir.join(format!("{}.service", u.name)),
+                    &u.service_content,
+                );
+            }
+        }
+        for t in &st.systemd_timers {
+            if t.source == "local" {
+                if !t.name.is_empty() && !t.timer_content.is_empty() {
+                    let _ = std::fs::write(
+                        systemd_dir.join(format!("{}.timer", t.name)),
+                        &t.timer_content,
+                    );
+                }
+                if !t.name.is_empty() && !t.service_content.is_empty() {
+                    let _ = std::fs::write(
+                        systemd_dir.join(format!("{}.service", t.name)),
+                        &t.service_content,
+                    );
                 }
             }
         }

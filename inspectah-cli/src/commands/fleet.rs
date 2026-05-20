@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 use inspectah_core::fleet::manifest::FleetManifest;
@@ -127,11 +127,7 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
 
     // Report unparseable files as warnings
     for uf in &unparseable {
-        eprintln!(
-            "warning: skipping {}: {}",
-            uf.path.display(),
-            uf.reason
-        );
+        eprintln!("warning: skipping {}: {}", uf.path.display(), uf.reason);
     }
 
     if hosts.is_empty() {
@@ -142,10 +138,7 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
     }
 
     // --- Step 3: Merge snapshots ---
-    let snapshots: Vec<InspectionSnapshot> = hosts
-        .into_iter()
-        .map(|h| h.snapshot)
-        .collect();
+    let snapshots: Vec<InspectionSnapshot> = hosts.into_iter().map(|h| h.snapshot).collect();
 
     let (merged, warnings) = merge_snapshots(snapshots, manifest.as_ref())
         .map_err(|errors| format_validation_errors(&errors))?;
@@ -179,16 +172,15 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
 
     // --- Step 5: JSON-only output mode ---
     if args.json_only {
-        let json = serde_json::to_string_pretty(&merged)
-            .context("failed to serialize merged snapshot")?;
+        let json =
+            serde_json::to_string_pretty(&merged).context("failed to serialize merged snapshot")?;
 
         match &args.output_file {
             Some(path) => {
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent)
-                            .context("failed to create output directory")?;
-                    }
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent).context("failed to create output directory")?;
                 }
                 std::fs::write(path, &json)
                     .with_context(|| format!("failed to write {}", path.display()))?;
@@ -205,8 +197,7 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
     let render_dir = tempfile::tempdir().context("failed to create temp directory")?;
 
     let render_context = RenderContext { target: None };
-    render::render_all(&merged, &render_context, render_dir.path())
-        .context("render failed")?;
+    render::render_all(&merged, &render_context, render_dir.path()).context("render failed")?;
 
     // Write schema placeholder (same as scan.rs)
     let schema_dir = render_dir.path().join("schema");
@@ -232,10 +223,10 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
         PathBuf::from(&tarball_name)
     };
 
-    if let Some(parent) = tarball_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).context("failed to create output directory")?;
-        }
+    if let Some(parent) = tarball_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).context("failed to create output directory")?;
     }
 
     create_tarball(render_dir.path(), &tarball_path, &stamp)
@@ -244,14 +235,8 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
     // --- Step 8: Output summary ---
     let fleet_meta = merged.fleet_meta.as_ref();
     let host_count = fleet_meta.map_or(0, |m| m.host_count);
-    let pkg_count = merged
-        .rpm
-        .as_ref()
-        .map_or(0, |r| r.packages_added.len());
-    let config_count = merged
-        .config
-        .as_ref()
-        .map_or(0, |c| c.files.len());
+    let pkg_count = merged.rpm.as_ref().map_or(0, |r| r.packages_added.len());
+    let config_count = merged.config.as_ref().map_or(0, |c| c.files.len());
     let svc_count = merged
         .services
         .as_ref()
@@ -260,17 +245,17 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
     eprintln!("Fleet: {label} ({host_count} hosts)");
     eprintln!("Merged: {pkg_count} packages, {config_count} config files, {svc_count} services");
 
-    if args.verbose {
-        if let Some(meta) = fleet_meta {
-            eprintln!("Hosts:");
-            for hostname in &meta.hostnames {
-                eprintln!("  - {hostname}");
-            }
-            if !meta.section_host_counts.is_empty() {
-                eprintln!("Section coverage:");
-                for (section, count) in &meta.section_host_counts {
-                    eprintln!("  {section}: {count}/{host_count} hosts");
-                }
+    if args.verbose
+        && let Some(meta) = fleet_meta
+    {
+        eprintln!("Hosts:");
+        for hostname in &meta.hostnames {
+            eprintln!("  - {hostname}");
+        }
+        if !meta.section_host_counts.is_empty() {
+            eprintln!("Section coverage:");
+            for (section, count) in &meta.section_host_counts {
+                eprintln!("  {section}: {count}/{host_count} hosts");
             }
         }
     }
@@ -287,7 +272,6 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
 /// Metadata extracted from a tarball for manifest generation.
 struct TarballMetadata {
     path: PathBuf,
-    hostname: String,
     target_image: Option<String>,
 }
 
@@ -326,7 +310,10 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
     }
 
     // --- Step 4: Determine output path ---
-    let output_path = args.output.clone().unwrap_or_else(|| PathBuf::from("fleet.toml"));
+    let output_path = args
+        .output
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("fleet.toml"));
 
     // --- Step 5: Check for existing file ---
     if output_path.exists() && !args.overwrite {
@@ -337,7 +324,8 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
     }
 
     // --- Step 6: Detect baseline conflicts ---
-    let mut image_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut image_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for meta in &metadata_list {
         if let Some(img) = &meta.target_image {
             *image_counts.entry(img.clone()).or_insert(0) += 1;
@@ -348,10 +336,7 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
         None
     } else {
         // Pick the most common image
-        let (most_common, _count) = image_counts
-            .iter()
-            .max_by_key(|(_, count)| *count)
-            .unwrap();
+        let (most_common, _count) = image_counts.iter().max_by_key(|(_, count)| *count).unwrap();
 
         // Warn if there are conflicts
         if image_counts.len() > 1 {
@@ -378,18 +363,21 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
 
     let mut sources: Vec<PathBuf> = Vec::new();
     for meta in &metadata_list {
-        let abs_path = meta.path.canonicalize()
+        let abs_path = meta
+            .path
+            .canonicalize()
             .with_context(|| format!("failed to resolve {}", meta.path.display()))?;
 
         // Use pathdiff to create a relative path from manifest dir to tarball
-        let rel_path = pathdiff::diff_paths(&abs_path, &manifest_parent)
-            .unwrap_or_else(|| abs_path.clone());
+        let rel_path =
+            pathdiff::diff_paths(&abs_path, &manifest_parent).unwrap_or_else(|| abs_path.clone());
 
         sources.push(rel_path);
     }
 
     // --- Step 8: Generate TOML manifest ---
-    let label = args.directory
+    let label = args
+        .directory
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("fleet");
@@ -397,11 +385,10 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
     let toml = generate_manifest_toml(label, baseline.as_deref(), &sources);
 
     // --- Step 9: Write manifest file ---
-    if let Some(parent) = output_path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .context("failed to create output directory")?;
-        }
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).context("failed to create output directory")?;
     }
 
     std::fs::write(&output_path, &toml)
@@ -412,7 +399,9 @@ fn run_init(args: &FleetInitArgs) -> Result<()> {
         "Wrote {} ({} sources{})",
         output_path.display(),
         sources.len(),
-        baseline.as_ref().map_or(String::new(), |b| format!(", baseline: {b}"))
+        baseline
+            .as_ref()
+            .map_or(String::new(), |b| format!(", baseline: {b}"))
     );
 
     Ok(())
@@ -425,29 +414,21 @@ fn extract_tarball_metadata(tarball_path: &Path) -> Result<TarballMetadata> {
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
 
-    for entry_result in archive.entries().context("failed to read tarball entries")? {
+    for entry_result in archive
+        .entries()
+        .context("failed to read tarball entries")?
+    {
         let mut entry = entry_result.context("failed to read tarball entry")?;
         let path = entry.path().context("invalid entry path")?;
 
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map_or(false, |n| n == "inspection-snapshot.json")
-        {
+        if path.file_name().and_then(|n| n.to_str()) == Some("inspection-snapshot.json") {
             let mut json = String::new();
             std::io::Read::read_to_string(&mut entry, &mut json)
                 .context("failed to read inspection-snapshot.json")?;
 
             // Parse just the fields we need
-            let v: serde_json::Value = serde_json::from_str(&json)
-                .context("failed to parse JSON")?;
-
-            let hostname = v
-                .get("meta")
-                .and_then(|m| m.get("hostname"))
-                .and_then(|h| h.as_str())
-                .ok_or_else(|| anyhow::anyhow!("missing meta.hostname"))?
-                .to_string();
+            let v: serde_json::Value =
+                serde_json::from_str(&json).context("failed to parse JSON")?;
 
             let target_image = v
                 .get("meta")
@@ -457,13 +438,15 @@ fn extract_tarball_metadata(tarball_path: &Path) -> Result<TarballMetadata> {
 
             return Ok(TarballMetadata {
                 path: tarball_path.to_path_buf(),
-                hostname,
                 target_image,
             });
         }
     }
 
-    bail!("no inspection-snapshot.json found in {}", tarball_path.display())
+    bail!(
+        "no inspection-snapshot.json found in {}",
+        tarball_path.display()
+    )
 }
 
 /// Generate a TOML manifest string with comments.
@@ -507,18 +490,19 @@ fn resolve_inputs(
 
     // Mode 1: Manifest-driven
     if let Some(manifest_path) = &args.manifest {
-        let mut manifest = FleetManifest::load(manifest_path)
-            .map_err(|e| anyhow::anyhow!("failed to load manifest from {}: {e}", manifest_path.display()))?;
+        let mut manifest = FleetManifest::load(manifest_path).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to load manifest from {}: {e}",
+                manifest_path.display()
+            )
+        })?;
 
         // CLI --baseline overrides manifest baseline
         if let Some(baseline) = &args.baseline {
             manifest.baseline = Some(baseline.clone());
         }
 
-        let label = manifest
-            .label
-            .clone()
-            .unwrap_or_else(|| "fleet".into());
+        let label = manifest.label.clone().unwrap_or_else(|| "fleet".into());
         let paths = manifest.sources.clone();
 
         return Ok((paths, label, Some(manifest)));
@@ -575,12 +559,11 @@ fn list_tarballs_in_dir(dir: &Path) -> Result<Vec<PathBuf>> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".tar.gz") {
-                    tarballs.push(path);
-                }
-            }
+        if path.is_file()
+            && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && name.ends_with(".tar.gz")
+        {
+            tarballs.push(path);
         }
     }
 
@@ -598,16 +581,15 @@ fn load_snapshot_from_tarball(tarball_path: &Path) -> Result<InspectionSnapshot>
     let gz = flate2::read::GzDecoder::new(file);
     let mut archive = tar::Archive::new(gz);
 
-    for entry_result in archive.entries().context("failed to read tarball entries")? {
+    for entry_result in archive
+        .entries()
+        .context("failed to read tarball entries")?
+    {
         let mut entry = entry_result.context("failed to read tarball entry")?;
         let path = entry.path().context("invalid entry path")?;
 
         // Match inspection-snapshot.json at any prefix depth
-        if path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map_or(false, |n| n == "inspection-snapshot.json")
-        {
+        if path.file_name().and_then(|n| n.to_str()) == Some("inspection-snapshot.json") {
             let mut json = String::new();
             std::io::Read::read_to_string(&mut entry, &mut json)
                 .context("failed to read inspection-snapshot.json from tarball")?;
@@ -688,15 +670,14 @@ fn write_variant_file(
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     let hash = hasher.finalize();
-    let hash_hex = hash.iter()
+    let hash_hex = hash
+        .iter()
         .map(|b| format!("{:02x}", b))
         .collect::<String>();
     let hash_prefix = hash_hex.chars().take(8).collect::<String>();
 
     // Create subdirectory matching the item path structure
-    let item_parent = Path::new(item_path)
-        .parent()
-        .unwrap_or(Path::new(""));
+    let item_parent = Path::new(item_path).parent().unwrap_or(Path::new(""));
     let target_dir = variants_dir.join(item_parent);
     std::fs::create_dir_all(&target_dir)?;
 
@@ -719,15 +700,18 @@ fn prepend_containerfile_header(
     let containerfile_path = render_dir.join("Containerfile");
 
     // Read existing Containerfile
-    let existing_content = std::fs::read_to_string(&containerfile_path)
-        .context("failed to read Containerfile")?;
+    let existing_content =
+        std::fs::read_to_string(&containerfile_path).context("failed to read Containerfile")?;
 
     // Build header
     let mut header = String::new();
     header.push_str("# Fleet Aggregate Containerfile\n");
 
     if let Some(fleet_meta) = &merged.fleet_meta {
-        header.push_str(&format!("# Generated from {} hosts\n", fleet_meta.host_count));
+        header.push_str(&format!(
+            "# Generated from {} hosts\n",
+            fleet_meta.host_count
+        ));
     }
 
     // Baseline image reference
@@ -736,10 +720,10 @@ fn prepend_containerfile_header(
     }
 
     // Provisionality note
-    if let Some(fleet_meta) = &merged.fleet_meta {
-        if fleet_meta.baseline_provisional {
-            header.push_str("# NOTE: Baseline selection is provisional (multiple images detected)\n");
-        }
+    if let Some(fleet_meta) = &merged.fleet_meta
+        && fleet_meta.baseline_provisional
+    {
+        header.push_str("# NOTE: Baseline selection is provisional (multiple images detected)\n");
     }
 
     header.push('\n');
@@ -791,28 +775,19 @@ fn format_validation_errors(errors: &[FleetValidationError]) -> anyhow::Error {
                 format!("too few snapshots: {count} (need at least 2)")
             }
             FleetValidationError::SchemaVersionMismatch { versions } => {
-                format!(
-                    "schema version mismatch: {:?}",
-                    versions
-                )
+                format!("schema version mismatch: {:?}", versions)
             }
             FleetValidationError::DuplicateHostname { hostname } => {
                 format!("duplicate hostname: {hostname}")
             }
             FleetValidationError::ArchitectureMismatch { architectures } => {
-                format!(
-                    "architecture mismatch: {}",
-                    architectures.join(", ")
-                )
+                format!("architecture mismatch: {}", architectures.join(", "))
             }
             FleetValidationError::EmptySnapshot { hostname } => {
                 format!("empty snapshot: {hostname}")
             }
             FleetValidationError::OsMajorVersionMismatch { versions } => {
-                format!(
-                    "OS major version mismatch: {}",
-                    versions.join(", ")
-                )
+                format!("OS major version mismatch: {}", versions.join(", "))
             }
         })
         .collect();

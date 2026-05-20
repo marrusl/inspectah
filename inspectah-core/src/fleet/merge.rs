@@ -34,9 +34,7 @@ pub trait FleetMergeable: Clone {
 // RPM types
 // ---------------------------------------------------------------------------
 
-use crate::types::rpm::{
-    EnabledModuleStream, PackageEntry, RepoFile, VersionLockEntry,
-};
+use crate::types::rpm::{EnabledModuleStream, PackageEntry, RepoFile, VersionLockEntry};
 
 impl FleetMergeable for PackageEntry {
     fn identity_key(&self) -> Cow<'_, str> {
@@ -447,7 +445,7 @@ pub fn merge_items<T: FleetMergeable>(
     }
 
     let mut result: Vec<T> = Vec::new();
-    for (_key, group) in &mut groups {
+    for group in groups.values_mut() {
         group.sort_by_key(|(idx, _)| *idx);
 
         let mut hosts: Vec<String> = group
@@ -644,21 +642,28 @@ where
         }
     }
     pairs.sort_by_key(|(h, _)| *h);
-    pairs.first().map(|(_, v)| v.to_string()).unwrap_or_default()
+    pairs
+        .first()
+        .map(|(_, v)| v.to_string())
+        .unwrap_or_default()
 }
 
 /// Pick an optional scalar value from the first host (sorted by hostname).
-fn first_host_option<S, T, F>(sections: &[Option<S>], hostnames: &[String], extractor: F) -> Option<T>
+fn first_host_option<S, T, F>(
+    sections: &[Option<S>],
+    hostnames: &[String],
+    extractor: F,
+) -> Option<T>
 where
     T: Clone,
     F: Fn(&S) -> &Option<T>,
 {
     let mut pairs: Vec<(&str, &T)> = Vec::new();
     for (idx, section) in sections.iter().enumerate() {
-        if let Some(s) = section {
-            if let Some(val) = extractor(s) {
-                pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), val));
-            }
+        if let Some(s) = section
+            && let Some(val) = extractor(s)
+        {
+            pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), val));
         }
     }
     pairs.sort_by_key(|(h, _)| *h);
@@ -673,7 +678,10 @@ where
     let mut pairs: Vec<(&str, bool)> = Vec::new();
     for (idx, section) in sections.iter().enumerate() {
         if let Some(s) = section {
-            pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), extractor(s)));
+            pairs.push((
+                hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""),
+                extractor(s),
+            ));
         }
     }
     pairs.sort_by_key(|(h, _)| *h);
@@ -738,24 +746,29 @@ pub fn merge_rpm_sections(
     );
 
     // Dedup string lists
-    let dnf_history_removed = dedup_strings(collect_string_lists(&sections, |s| &s.dnf_history_removed));
-    let module_stream_conflicts = dedup_strings(collect_string_lists(&sections, |s| &s.module_stream_conflicts));
-    let multiarch_packages = dedup_strings(collect_string_lists(&sections, |s| &s.multiarch_packages));
-    let duplicate_packages = dedup_strings(collect_string_lists(&sections, |s| &s.duplicate_packages));
-    let repo_providing_packages = dedup_strings(collect_string_lists(&sections, |s| &s.repo_providing_packages));
+    let dnf_history_removed =
+        dedup_strings(collect_string_lists(&sections, |s| &s.dnf_history_removed));
+    let module_stream_conflicts = dedup_strings(collect_string_lists(&sections, |s| {
+        &s.module_stream_conflicts
+    }));
+    let multiarch_packages =
+        dedup_strings(collect_string_lists(&sections, |s| &s.multiarch_packages));
+    let duplicate_packages =
+        dedup_strings(collect_string_lists(&sections, |s| &s.duplicate_packages));
+    let repo_providing_packages = dedup_strings(collect_string_lists(&sections, |s| {
+        &s.repo_providing_packages
+    }));
     let ostree_removals = dedup_strings(collect_string_lists(&sections, |s| &s.ostree_removals));
 
     // Dedup version_changes by name.arch
     let version_changes = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for vc in &s.version_changes {
-                    let key = format!("{}.{}", vc.name, vc.arch);
-                    if seen.insert(key) {
-                        result.push(vc.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for vc in &s.version_changes {
+                let key = format!("{}.{}", vc.name, vc.arch);
+                if seen.insert(key) {
+                    result.push(vc.clone());
                 }
             }
         }
@@ -771,12 +784,10 @@ pub fn merge_rpm_sections(
     let ostree_overrides = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for oo in &s.ostree_overrides {
-                    if seen.insert(oo.name.clone()) {
-                        result.push(oo.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for oo in &s.ostree_overrides {
+                if seen.insert(oo.name.clone()) {
+                    result.push(oo.clone());
                 }
             }
         }
@@ -788,12 +799,10 @@ pub fn merge_rpm_sections(
     let rpm_va = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for entry in &s.rpm_va {
-                    if seen.insert(entry.path.clone()) {
-                        result.push(entry.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for entry in &s.rpm_va {
+                if seen.insert(entry.path.clone()) {
+                    result.push(entry.clone());
                 }
             }
         }
@@ -804,34 +813,41 @@ pub fn merge_rpm_sections(
     // Pass-through from first host (sorted by hostname): scalar/optional fields
     let leaf_packages = first_host_option(&sections, hostnames, |s| &s.leaf_packages);
     let auto_packages = first_host_option(&sections, hostnames, |s| &s.auto_packages);
-    let baseline_package_names = first_host_option(&sections, hostnames, |s| &s.baseline_package_names);
-    let baseline_module_streams = first_host_option(&sections, hostnames, |s| &s.baseline_module_streams);
-    let versionlock_command_output = first_host_option(&sections, hostnames, |s| &s.versionlock_command_output);
+    let baseline_package_names =
+        first_host_option(&sections, hostnames, |s| &s.baseline_package_names);
+    let baseline_module_streams =
+        first_host_option(&sections, hostnames, |s| &s.baseline_module_streams);
+    let versionlock_command_output =
+        first_host_option(&sections, hostnames, |s| &s.versionlock_command_output);
     let base_image = first_host_option(&sections, hostnames, |s| &s.base_image);
     let no_baseline = first_host_bool(&sections, hostnames, |s| s.no_baseline);
     let baseline_suppressed = first_host_option(&sections, hostnames, |s| &s.baseline_suppressed);
     let leaf_dep_tree = {
         let mut pairs: Vec<(&str, &serde_json::Value)> = Vec::new();
         for (idx, section) in sections.iter().enumerate() {
-            if let Some(s) = section {
-                if !s.leaf_dep_tree.is_null() {
-                    pairs.push((hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""), &s.leaf_dep_tree));
-                }
+            if let Some(s) = section
+                && !s.leaf_dep_tree.is_null()
+            {
+                pairs.push((
+                    hostnames.get(idx).map(|s| s.as_str()).unwrap_or(""),
+                    &s.leaf_dep_tree,
+                ));
             }
         }
         pairs.sort_by_key(|(h, _)| *h);
-        pairs.first().map(|(_, v)| (*v).clone()).unwrap_or(serde_json::Value::Null)
+        pairs
+            .first()
+            .map(|(_, v)| (*v).clone())
+            .unwrap_or(serde_json::Value::Null)
     };
     // file_ownership: dedup by package_name
     let file_ownership = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for entry in &s.file_ownership {
-                    if seen.insert(entry.package_name.clone()) {
-                        result.push(entry.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for entry in &s.file_ownership {
+                if seen.insert(entry.package_name.clone()) {
+                    result.push(entry.clone());
                 }
             }
         }
@@ -909,7 +925,8 @@ pub fn merge_service_sections(
     );
     let enabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.enabled_units));
     let disabled_units = dedup_strings(collect_string_lists(&sections, |s| &s.disabled_units));
-    let preset_matched_units = dedup_strings(collect_string_lists(&sections, |s| &s.preset_matched_units));
+    let preset_matched_units =
+        dedup_strings(collect_string_lists(&sections, |s| &s.preset_matched_units));
 
     Some(ServiceSection {
         state_changes,
@@ -948,12 +965,10 @@ pub fn merge_container_sections(
     let flatpak_apps = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for app in &s.flatpak_apps {
-                    if seen.insert(app.app_id.clone()) {
-                        result.push(app.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for app in &s.flatpak_apps {
+                if seen.insert(app.app_id.clone()) {
+                    result.push(app.clone());
                 }
             }
         }
@@ -994,16 +1009,14 @@ pub fn merge_network_sections(
     let firewall_direct_rules = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for rule in &s.firewall_direct_rules {
-                    let key = format!(
-                        "{}:{}:{}:{}:{}",
-                        rule.ipv, rule.table, rule.chain, rule.priority, rule.args
-                    );
-                    if seen.insert(key) {
-                        result.push(rule.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for rule in &s.firewall_direct_rules {
+                let key = format!(
+                    "{}:{}:{}:{}:{}",
+                    rule.ipv, rule.table, rule.chain, rule.priority, rule.args
+                );
+                if seen.insert(key) {
+                    result.push(rule.clone());
                 }
             }
         }
@@ -1014,12 +1027,10 @@ pub fn merge_network_sections(
     let static_routes = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for route in &s.static_routes {
-                    if seen.insert(route.path.clone()) {
-                        result.push(route.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for route in &s.static_routes {
+                if seen.insert(route.path.clone()) {
+                    result.push(route.clone());
                 }
             }
         }
@@ -1035,12 +1046,10 @@ pub fn merge_network_sections(
     let proxy = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for entry in &s.proxy {
-                    if seen.insert(entry.source.clone()) {
-                        result.push(entry.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for entry in &s.proxy {
+                if seen.insert(entry.source.clone()) {
+                    result.push(entry.clone());
                 }
             }
         }
@@ -1084,12 +1093,10 @@ pub fn merge_storage_sections(
     let mount_points = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for mp in &s.mount_points {
-                    if seen.insert(mp.target.clone()) {
-                        result.push(mp.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for mp in &s.mount_points {
+                if seen.insert(mp.target.clone()) {
+                    result.push(mp.clone());
                 }
             }
         }
@@ -1101,13 +1108,11 @@ pub fn merge_storage_sections(
     let lvm_info = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for vol in &s.lvm_info {
-                    let key = format!("{}/{}", vol.vg_name, vol.lv_name);
-                    if seen.insert(key) {
-                        result.push(vol.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for vol in &s.lvm_info {
+                let key = format!("{}/{}", vol.vg_name, vol.lv_name);
+                if seen.insert(key) {
+                    result.push(vol.clone());
                 }
             }
         }
@@ -1123,12 +1128,10 @@ pub fn merge_storage_sections(
     let var_directories = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for dir in &s.var_directories {
-                    if seen.insert(dir.path.clone()) {
-                        result.push(dir.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for dir in &s.var_directories {
+                if seen.insert(dir.path.clone()) {
+                    result.push(dir.clone());
                 }
             }
         }
@@ -1140,13 +1143,11 @@ pub fn merge_storage_sections(
     let credential_refs = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for cr in &s.credential_refs {
-                    let key = format!("{}:{}", cr.mount_point, cr.credential_path);
-                    if seen.insert(key) {
-                        result.push(cr.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for cr in &s.credential_refs {
+                let key = format!("{}:{}", cr.mount_point, cr.credential_path);
+                if seen.insert(key) {
+                    result.push(cr.clone());
                 }
             }
         }
@@ -1233,12 +1234,10 @@ pub fn merge_selinux_sections(
     let audit_rules = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for rule in &s.audit_rules {
-                    if seen.insert(rule.path.clone()) {
-                        result.push(rule.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for rule in &s.audit_rules {
+                if seen.insert(rule.path.clone()) {
+                    result.push(rule.clone());
                 }
             }
         }
@@ -1250,12 +1249,10 @@ pub fn merge_selinux_sections(
     let pam_configs = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for cfg in &s.pam_configs {
-                    if seen.insert(cfg.path.clone()) {
-                        result.push(cfg.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for cfg in &s.pam_configs {
+                if seen.insert(cfg.path.clone()) {
+                    result.push(cfg.clone());
                 }
             }
         }
@@ -1315,12 +1312,10 @@ pub fn merge_kernelboot_sections(
     let alternatives = {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
-        for section in &sections {
-            if let Some(s) = section {
-                for alt in &s.alternatives {
-                    if seen.insert(alt.name.clone()) {
-                        result.push(alt.clone());
-                    }
+        for s in sections.iter().flatten() {
+            for alt in &s.alternatives {
+                if seen.insert(alt.name.clone()) {
+                    result.push(alt.clone());
                 }
             }
         }
@@ -1362,12 +1357,10 @@ where
 {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
-    for section in sections {
-        if let Some(s) = section {
-            for snippet in extractor(s) {
-                if seen.insert(snippet.path.clone()) {
-                    result.push(snippet.clone());
-                }
+    for s in sections.iter().flatten() {
+        for snippet in extractor(s) {
+            if seen.insert(snippet.path.clone()) {
+                result.push(snippet.clone());
             }
         }
     }
@@ -1417,11 +1410,17 @@ pub fn merge_usersgroups_sections(
     }
 
     let users = merge_json_by_name(
-        sections.iter().filter_map(|s| s.as_ref().map(|s| &s.users)).collect(),
+        sections
+            .iter()
+            .filter_map(|s| s.as_ref().map(|s| &s.users))
+            .collect(),
         &["groups", "secondary_groups"],
     );
     let groups = merge_json_by_name(
-        sections.iter().filter_map(|s| s.as_ref().map(|s| &s.groups)).collect(),
+        sections
+            .iter()
+            .filter_map(|s| s.as_ref().map(|s| &s.groups))
+            .collect(),
         &["members"],
     );
 
@@ -1465,7 +1464,8 @@ fn merge_json_by_name(
 
     for list in all_lists {
         for item in list {
-            let name = item.get("name")
+            let name = item
+                .get("name")
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -1501,5 +1501,8 @@ fn merge_json_by_name(
     }
 
     order.sort();
-    order.iter().filter_map(|name| by_name.remove(name)).collect()
+    order
+        .iter()
+        .filter_map(|name| by_name.remove(name))
+        .collect()
 }

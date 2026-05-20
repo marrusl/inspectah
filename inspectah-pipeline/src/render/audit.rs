@@ -238,90 +238,90 @@ pub fn render_audit(snap: &InspectionSnapshot) -> String {
     }
 
     // Config files
-    if let Some(config) = &snap.config {
-        if !config.files.is_empty() {
-            lines.push("## Configuration Files".into());
+    if let Some(config) = &snap.config
+        && !config.files.is_empty()
+    {
+        lines.push("## Configuration Files".into());
+        lines.push(String::new());
+
+        let modified: usize = config
+            .files
+            .iter()
+            .filter(|f| f.include && f.kind == ConfigFileKind::RpmOwnedModified)
+            .count();
+        let unowned: usize = config
+            .files
+            .iter()
+            .filter(|f| f.include && f.kind == ConfigFileKind::Unowned)
+            .count();
+
+        if modified > 0 {
+            lines.push(format!("### Modified RPM-Owned Files ({modified})"));
             lines.push(String::new());
-
-            let modified: usize = config
-                .files
-                .iter()
-                .filter(|f| f.include && f.kind == ConfigFileKind::RpmOwnedModified)
-                .count();
-            let unowned: usize = config
-                .files
-                .iter()
-                .filter(|f| f.include && f.kind == ConfigFileKind::Unowned)
-                .count();
-
-            if modified > 0 {
-                lines.push(format!("### Modified RPM-Owned Files ({modified})"));
+            for f in &config.files {
+                if !f.include || f.kind != ConfigFileKind::RpmOwnedModified {
+                    continue;
+                }
+                lines.push(format!("#### `{}`", f.path));
                 lines.push(String::new());
-                for f in &config.files {
-                    if !f.include || f.kind != ConfigFileKind::RpmOwnedModified {
-                        continue;
-                    }
-                    lines.push(format!("#### `{}`", f.path));
+                if let Some(ref diff) = f.diff_against_rpm
+                    && !diff.is_empty()
+                {
+                    lines.push("```diff".into());
+                    lines.push(diff.clone());
+                    lines.push("```".into());
                     lines.push(String::new());
-                    if let Some(ref diff) = f.diff_against_rpm {
-                        if !diff.is_empty() {
-                            lines.push("```diff".into());
-                            lines.push(diff.clone());
-                            lines.push("```".into());
-                            lines.push(String::new());
-                        }
-                    }
                 }
             }
+        }
 
-            if unowned > 0 {
-                lines.push(format!("### Unowned Config Files ({unowned})"));
-                lines.push(String::new());
-                for f in &config.files {
-                    if !f.include || f.kind != ConfigFileKind::Unowned {
-                        continue;
-                    }
-                    let category = serde_json::to_string(&f.category)
-                        .unwrap_or_default()
-                        .trim_matches('"')
-                        .to_string();
-                    lines.push(format!("- `{}` ({})", f.path, category));
+        if unowned > 0 {
+            lines.push(format!("### Unowned Config Files ({unowned})"));
+            lines.push(String::new());
+            for f in &config.files {
+                if !f.include || f.kind != ConfigFileKind::Unowned {
+                    continue;
                 }
-                lines.push(String::new());
+                let category = serde_json::to_string(&f.category)
+                    .unwrap_or_default()
+                    .trim_matches('"')
+                    .to_string();
+                lines.push(format!("- `{}` ({})", f.path, category));
             }
+            lines.push(String::new());
         }
     }
 
     // Services
-    if let Some(services) = &snap.services {
-        if !services.state_changes.is_empty() {
-            lines.push("## Service State Changes".into());
-            lines.push(String::new());
-            lines.push("| Unit | Current | Default | Action |".into());
-            lines.push("|------|---------|---------|--------|".into());
-            for sc in &services.state_changes {
-                let state_str = match sc.current_state {
-                    inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
-                    inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
-                    inspectah_core::types::services::ServiceUnitState::Masked => "masked",
-                };
-                let default_str = match sc.default_state {
-                    Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
-                    Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
-                    None => "unknown",
-                };
-                let action_str = match sc.implied_action() {
-                    inspectah_core::types::services::ServiceAction::Enable => "enable",
-                    inspectah_core::types::services::ServiceAction::Disable => "disable",
-                    inspectah_core::types::services::ServiceAction::Mask => "mask",
-                };
-                lines.push(format!(
-                    "| {} | {} | {} | {} |",
-                    sc.unit, state_str, default_str, action_str
-                ));
-            }
-            lines.push(String::new());
+    if let Some(services) = &snap.services
+        && !services.state_changes.is_empty()
+    {
+        lines.push("## Service State Changes".into());
+        lines.push(String::new());
+        lines.push("| Unit | Current | Default | Action |".into());
+        lines.push("|------|---------|---------|--------|".into());
+        for sc in &services.state_changes {
+            let state_str = match sc.current_state {
+                inspectah_core::types::services::ServiceUnitState::Enabled => "enabled",
+                inspectah_core::types::services::ServiceUnitState::Disabled => "disabled",
+                inspectah_core::types::services::ServiceUnitState::Masked => "masked",
+            };
+            let default_str = match sc.default_state {
+                Some(inspectah_core::types::services::PresetDefault::Enable) => "enable",
+                Some(inspectah_core::types::services::PresetDefault::Disable) => "disable",
+                None => "unknown",
+            };
+            let action_str = match sc.implied_action() {
+                inspectah_core::types::services::ServiceAction::Enable => "enable",
+                inspectah_core::types::services::ServiceAction::Disable => "disable",
+                inspectah_core::types::services::ServiceAction::Mask => "mask",
+            };
+            lines.push(format!(
+                "| {} | {} | {} | {} |",
+                sc.unit, state_str, default_str, action_str
+            ));
         }
+        lines.push(String::new());
     }
 
     // Storage

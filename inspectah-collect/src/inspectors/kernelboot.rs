@@ -271,17 +271,17 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
     // Three-way diff: only report where file value != runtime value
     let mut overrides = Vec::new();
     for (key, (file_val, source)) in &file_values {
-        if let Some(runtime_val) = runtime_values.get(key.as_str()) {
-            if file_val != runtime_val {
-                overrides.push(SysctlOverride {
-                    key: key.clone(),
-                    runtime: runtime_val.to_string(),
-                    default: file_val.clone(),
-                    source: source.clone(),
-                    include: true,
-                    fleet: None,
-                });
-            }
+        if let Some(runtime_val) = runtime_values.get(key.as_str())
+            && file_val != runtime_val
+        {
+            overrides.push(SysctlOverride {
+                key: key.clone(),
+                runtime: runtime_val.to_string(),
+                default: file_val.clone(),
+                source: source.clone(),
+                include: true,
+                fleet: None,
+            });
         }
     }
 

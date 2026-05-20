@@ -27,20 +27,38 @@ impl std::fmt::Display for PackageTarget {
 pub enum RefinementOp {
     ExcludePackage(PackageTarget),
     IncludePackage(PackageTarget),
-    ExcludeConfig { path: PathBuf },
-    IncludeConfig { path: PathBuf },
-    ExcludeRepo { section_id: String },
-    IncludeRepo { section_id: String },
-    UserStrategy { username: String, strategy: UserContainerfileStrategy },
+    ExcludeConfig {
+        path: PathBuf,
+    },
+    IncludeConfig {
+        path: PathBuf,
+    },
+    ExcludeRepo {
+        section_id: String,
+    },
+    IncludeRepo {
+        section_id: String,
+    },
+    UserStrategy {
+        username: String,
+        strategy: UserContainerfileStrategy,
+    },
     UserPassword(UserPasswordOp),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "choice")]
 pub enum UserPasswordOp {
-    New { username: String, hash: Option<String> },
-    None { username: String },
-    Preserve { username: String },
+    New {
+        username: String,
+        hash: Option<String>,
+    },
+    None {
+        username: String,
+    },
+    Preserve {
+        username: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

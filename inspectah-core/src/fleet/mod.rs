@@ -12,11 +12,11 @@ use crate::types::fleet::FleetSnapshotMeta;
 use self::manifest::FleetManifest;
 use self::merge::{
     merge_config_sections, merge_container_sections, merge_kernelboot_sections,
-    merge_network_sections, merge_nonrpm_sections, merge_rpm_sections,
-    merge_scheduled_sections, merge_selinux_sections, merge_service_sections,
-    merge_storage_sections, merge_usersgroups_sections,
+    merge_network_sections, merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections,
+    merge_selinux_sections, merge_service_sections, merge_storage_sections,
+    merge_usersgroups_sections,
 };
-use self::validate::{extract_hostname, FleetValidationError, FleetWarning};
+use self::validate::{FleetValidationError, FleetWarning, extract_hostname};
 
 /// Merge multiple host snapshots into a single fleet-aggregate snapshot.
 ///
@@ -43,14 +43,12 @@ pub fn merge_snapshots(
         .collect();
     indexed.sort_by(|(a, _), (b, _)| a.cmp(b));
     let hostnames: Vec<String> = indexed.iter().map(|(h, _)| h.clone()).collect();
-    let sorted_snapshots: Vec<InspectionSnapshot> =
-        indexed.into_iter().map(|(_, s)| s).collect();
+    let sorted_snapshots: Vec<InspectionSnapshot> = indexed.into_iter().map(|(_, s)| s).collect();
 
     let section_host_counts = compute_section_host_counts(&sorted_snapshots);
 
     // Snapshot-level field merging
-    let (target_image, baseline_provisional) =
-        select_target_image(&sorted_snapshots, manifest);
+    let (target_image, baseline_provisional) = select_target_image(&sorted_snapshots, manifest);
     let baseline = select_baseline(&sorted_snapshots, &target_image);
     let completeness = merge_completeness(&sorted_snapshots);
 
@@ -66,12 +64,13 @@ pub fn merge_snapshots(
     };
 
     // Extract section Option vecs for adapters (consumed by value)
-    let rpm_sections: Vec<Option<_>> =
-        sorted_snapshots.iter().map(|s| s.rpm.clone()).collect();
+    let rpm_sections: Vec<Option<_>> = sorted_snapshots.iter().map(|s| s.rpm.clone()).collect();
     let config_sections: Vec<Option<_>> =
         sorted_snapshots.iter().map(|s| s.config.clone()).collect();
-    let service_sections: Vec<Option<_>> =
-        sorted_snapshots.iter().map(|s| s.services.clone()).collect();
+    let service_sections: Vec<Option<_>> = sorted_snapshots
+        .iter()
+        .map(|s| s.services.clone())
+        .collect();
     let network_sections: Vec<Option<_>> =
         sorted_snapshots.iter().map(|s| s.network.clone()).collect();
     let storage_sections: Vec<Option<_>> =
@@ -80,18 +79,24 @@ pub fn merge_snapshots(
         .iter()
         .map(|s| s.scheduled_tasks.clone())
         .collect();
-    let container_sections: Vec<Option<_>> =
-        sorted_snapshots.iter().map(|s| s.containers.clone()).collect();
+    let container_sections: Vec<Option<_>> = sorted_snapshots
+        .iter()
+        .map(|s| s.containers.clone())
+        .collect();
     let nonrpm_sections: Vec<Option<_>> = sorted_snapshots
         .iter()
         .map(|s| s.non_rpm_software.clone())
         .collect();
-    let kernelboot_sections: Vec<Option<_>> =
-        sorted_snapshots.iter().map(|s| s.kernel_boot.clone()).collect();
+    let kernelboot_sections: Vec<Option<_>> = sorted_snapshots
+        .iter()
+        .map(|s| s.kernel_boot.clone())
+        .collect();
     let selinux_sections: Vec<Option<_>> =
         sorted_snapshots.iter().map(|s| s.selinux.clone()).collect();
-    let usergroup_sections: Vec<Option<_>> =
-        sorted_snapshots.iter().map(|s| s.users_groups.clone()).collect();
+    let usergroup_sections: Vec<Option<_>> = sorted_snapshots
+        .iter()
+        .map(|s| s.users_groups.clone())
+        .collect();
 
     let mut merged = InspectionSnapshot::new();
     merged.schema_version = SCHEMA_VERSION;
@@ -105,9 +110,7 @@ pub fn merge_snapshots(
     merged.preserved_credentials = sorted_snapshots.iter().any(|s| s.preserved_credentials);
     merged.preserved_ssh_keys = sorted_snapshots.iter().any(|s| s.preserved_ssh_keys);
     // os_release from first host (already sorted by hostname)
-    merged.os_release = sorted_snapshots
-        .first()
-        .and_then(|s| s.os_release.clone());
+    merged.os_release = sorted_snapshots.first().and_then(|s| s.os_release.clone());
 
     // Merge each section via adapters
     merged.rpm = merge_rpm_sections(rpm_sections, total, &hostnames);
@@ -125,11 +128,13 @@ pub fn merge_snapshots(
     Ok((merged, validation.warnings))
 }
 
+type SectionChecker = (&'static str, fn(&InspectionSnapshot) -> bool);
+
 /// Count how many hosts have each section present.
 fn compute_section_host_counts(snapshots: &[InspectionSnapshot]) -> BTreeMap<String, usize> {
     let mut counts = BTreeMap::new();
 
-    let section_checkers: &[(&str, fn(&InspectionSnapshot) -> bool)] = &[
+    let section_checkers: &[SectionChecker] = &[
         ("rpm", |s| s.rpm.is_some()),
         ("config", |s| s.config.is_some()),
         ("services", |s| s.services.is_some()),
@@ -167,16 +172,16 @@ fn select_target_image(
     manifest: Option<&FleetManifest>,
 ) -> (Option<TargetImageIdentity>, bool) {
     // Manifest override takes precedence
-    if let Some(m) = manifest {
-        if let Some(ref override_ref) = m.baseline {
-            return (
-                Some(TargetImageIdentity {
-                    image_ref: override_ref.clone(),
-                    strategy: ResolutionStrategy::CliOverride,
-                }),
-                false, // explicit override is not provisional
-            );
-        }
+    if let Some(m) = manifest
+        && let Some(ref override_ref) = m.baseline
+    {
+        return (
+            Some(TargetImageIdentity {
+                image_ref: override_ref.clone(),
+                strategy: ResolutionStrategy::CliOverride,
+            }),
+            false, // explicit override is not provisional
+        );
     }
 
     // Collect target images with counts
@@ -299,11 +304,7 @@ fn merge_completeness(snapshots: &[InspectionSnapshot]) -> Completeness {
             .iter()
             .filter(|s| matches!(s.completeness, Completeness::Incomplete { .. }))
             .count();
-        let merged_reason = format!(
-            "{} host(s) incomplete: {}",
-            host_count,
-            reasons.join("; ")
-        );
+        let merged_reason = format!("{} host(s) incomplete: {}", host_count, reasons.join("; "));
         Completeness::Incomplete {
             failed_sections: all_failed,
             degraded_sections: all_degraded,
@@ -314,11 +315,7 @@ fn merge_completeness(snapshots: &[InspectionSnapshot]) -> Completeness {
             .iter()
             .filter(|s| matches!(s.completeness, Completeness::Partial { .. }))
             .count();
-        let merged_reason = format!(
-            "{} host(s) partial: {}",
-            host_count,
-            reasons.join("; ")
-        );
+        let merged_reason = format!("{} host(s) partial: {}", host_count, reasons.join("; "));
         Completeness::Partial {
             degraded_sections: all_degraded,
             reason: merged_reason,

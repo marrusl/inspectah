@@ -611,10 +611,7 @@ mod tests {
             hostnames: vec!["web-01".into(), "web-02".into()],
             merged_at: "2026-05-20T15:30:00Z".into(),
             baseline_provisional: true,
-            section_host_counts: BTreeMap::from([
-                ("rpm".into(), 25usize),
-                ("config".into(), 23),
-            ]),
+            section_host_counts: BTreeMap::from([("rpm".into(), 25usize), ("config".into(), 23)]),
         });
         let json = serde_json::to_string(&snap).unwrap();
         let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();

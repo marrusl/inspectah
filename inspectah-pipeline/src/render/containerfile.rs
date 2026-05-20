@@ -184,12 +184,11 @@ pub fn base_image_from_snapshot(snap: &InspectionSnapshot) -> Option<String> {
         return Some(ti.image_ref.clone());
     }
     // Backward compat: Go-generated snapshots with rpm.base_image
-    if let Some(rpm) = &snap.rpm {
-        if let Some(ref base) = rpm.base_image {
-            if !base.is_empty() {
-                return Some(base.clone());
-            }
-        }
+    if let Some(rpm) = &snap.rpm
+        && let Some(ref base) = rpm.base_image
+        && !base.is_empty()
+    {
+        return Some(base.clone());
     }
     None
 }
@@ -2244,11 +2243,7 @@ mod tests {
         };
         let mut snap = InspectionSnapshot::new();
         snap.rpm = Some(RpmSection {
-            baseline_package_names: Some(vec![
-                "httpd".into(),
-                "cups".into(),
-                "avahi".into(),
-            ]),
+            baseline_package_names: Some(vec!["httpd".into(), "cups".into(), "avahi".into()]),
             packages_added: vec![],
             no_baseline: false,
             ..Default::default()

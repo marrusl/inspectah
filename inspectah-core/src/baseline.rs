@@ -304,13 +304,13 @@ pub fn resolve_base_image(
     cli_override: Option<&str>,
 ) -> Result<BaseImageResolution, ResolutionError> {
     // 1. CLI override
-    if let Some(override_ref) = cli_override {
-        if !override_ref.is_empty() {
-            return Ok(BaseImageResolution {
-                image_ref: override_ref.to_string(),
-                strategy: ResolutionStrategy::CliOverride,
-            });
-        }
+    if let Some(override_ref) = cli_override
+        && !override_ref.is_empty()
+    {
+        return Ok(BaseImageResolution {
+            image_ref: override_ref.to_string(),
+            strategy: ResolutionStrategy::CliOverride,
+        });
     }
 
     // 2. UBlue metadata
@@ -319,27 +319,28 @@ pub fn resolve_base_image(
     }
 
     // 3. bootc status
-    if let Some(bref) = bootc_status_ref {
-        if !bref.is_empty() {
-            return Ok(BaseImageResolution {
-                image_ref: bref.to_string(),
-                strategy: ResolutionStrategy::BootcStatus,
-            });
-        }
+    if let Some(bref) = bootc_status_ref
+        && !bref.is_empty()
+    {
+        return Ok(BaseImageResolution {
+            image_ref: bref.to_string(),
+            strategy: ResolutionStrategy::BootcStatus,
+        });
     }
 
     // 4. Fedora Atomic desktop
-    if os_release.id == "fedora" && !os_release.variant_id.is_empty() {
-        if FEDORA_ATOMIC_DESKTOP_VARIANTS.contains(&os_release.variant_id.as_str()) {
-            let image_ref = format!(
-                "quay.io/fedora-ostree-desktops/{}:{}",
-                os_release.variant_id, os_release.version_id
-            );
-            return Ok(BaseImageResolution {
-                image_ref,
-                strategy: ResolutionStrategy::FedoraAtomicDesktop,
-            });
-        }
+    if os_release.id == "fedora"
+        && !os_release.variant_id.is_empty()
+        && FEDORA_ATOMIC_DESKTOP_VARIANTS.contains(&os_release.variant_id.as_str())
+    {
+        let image_ref = format!(
+            "quay.io/fedora-ostree-desktops/{}:{}",
+            os_release.variant_id, os_release.version_id
+        );
+        return Ok(BaseImageResolution {
+            image_ref,
+            strategy: ResolutionStrategy::FedoraAtomicDesktop,
+        });
     }
 
     // 5. os-release mapping with version clamping
@@ -349,31 +350,31 @@ pub fn resolve_base_image(
 /// Resolve a UBlue metadata struct to a base image reference.
 fn resolve_ublue(ub: &UblueMetadata) -> Result<BaseImageResolution, ResolutionError> {
     // Path A: image-ref present
-    if let Some(ref raw_ref) = ub.image_ref {
-        if !raw_ref.is_empty() {
-            let stripped = strip_transport_prefix(raw_ref);
-            if ref_has_tag(stripped) {
-                // Already tagged — use as-is
-                return Ok(BaseImageResolution {
-                    image_ref: stripped.to_string(),
-                    strategy: ResolutionStrategy::UniversalBlue,
-                });
-            }
-            // Tagless — need image-tag to combine
-            if let Some(ref tag) = ub.image_tag {
-                if !tag.is_empty() {
-                    return Ok(BaseImageResolution {
-                        image_ref: format!("{}:{}", stripped, tag),
-                        strategy: ResolutionStrategy::UniversalBlue,
-                    });
-                }
-            }
-            // Tagless ref without image-tag → fail closed
-            return Err(ResolutionError::MalformedUblueMetadata {
-                path: UBLUE_METADATA_PATH.to_string(),
-                reason: "image-ref has no tag and no image-tag field".to_string(),
+    if let Some(ref raw_ref) = ub.image_ref
+        && !raw_ref.is_empty()
+    {
+        let stripped = strip_transport_prefix(raw_ref);
+        if ref_has_tag(stripped) {
+            // Already tagged — use as-is
+            return Ok(BaseImageResolution {
+                image_ref: stripped.to_string(),
+                strategy: ResolutionStrategy::UniversalBlue,
             });
         }
+        // Tagless — need image-tag to combine
+        if let Some(ref tag) = ub.image_tag
+            && !tag.is_empty()
+        {
+            return Ok(BaseImageResolution {
+                image_ref: format!("{}:{}", stripped, tag),
+                strategy: ResolutionStrategy::UniversalBlue,
+            });
+        }
+        // Tagless ref without image-tag → fail closed
+        return Err(ResolutionError::MalformedUblueMetadata {
+            path: UBLUE_METADATA_PATH.to_string(),
+            reason: "image-ref has no tag and no image-tag field".to_string(),
+        });
     }
 
     // Path B: no image-ref — synthesize from vendor/name/tag

@@ -5,10 +5,7 @@ use inspectah_core::types::users::UserGroupSection;
 use inspectah_pipeline::render::users;
 
 /// Build a test snapshot with the given users and groups.
-fn snap_with(
-    users: Vec<serde_json::Value>,
-    groups: Vec<serde_json::Value>,
-) -> InspectionSnapshot {
+fn snap_with(users: Vec<serde_json::Value>, groups: Vec<serde_json::Value>) -> InspectionSnapshot {
     let mut snap = InspectionSnapshot::new();
     snap.users_groups = Some(UserGroupSection {
         users,
@@ -171,10 +168,7 @@ fn containerfile_useradd_with_groups_and_ssh() {
     // Ordering: groupadd before useradd
     let groupadd_pos = output.find("RUN groupadd").unwrap();
     let useradd_pos = output.find("RUN useradd -m").unwrap();
-    assert!(
-        groupadd_pos < useradd_pos,
-        "groupadd must precede useradd"
-    );
+    assert!(groupadd_pos < useradd_pos, "groupadd must precede useradd");
 }
 
 #[test]

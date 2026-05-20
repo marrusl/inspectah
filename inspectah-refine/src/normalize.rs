@@ -50,10 +50,10 @@ fn patch_missing_includes(value: &mut Value) {
 fn patch_array_includes(parent: &mut Value, array_key: &str) {
     if let Some(Value::Array(entries)) = parent.get_mut(array_key) {
         for entry in entries {
-            if let Value::Object(map) = entry {
-                if !map.contains_key("include") {
-                    map.insert("include".into(), Value::Bool(true));
-                }
+            if let Value::Object(map) = entry
+                && !map.contains_key("include")
+            {
+                map.insert("include".into(), Value::Bool(true));
             }
         }
     }

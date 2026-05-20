@@ -349,9 +349,8 @@ pub fn render_containerfile_users(snap: &InspectionSnapshot) -> Vec<String> {
         lines.push(
             "# WARNING: Embedding password hashes in a Containerfile is a security risk.".into(),
         );
-        lines.push(
-            "# Consider using a secrets manager or deploy-time provisioning instead.".into(),
-        );
+        lines
+            .push("# Consider using a secrets manager or deploy-time provisioning instead.".into());
         let mut chpasswd_entries: Vec<String> = Vec::new();
         for u in &pw_users {
             let name = str_field(u, "name");
@@ -442,7 +441,10 @@ mod tests {
     use inspectah_core::types::users::UserGroupSection;
 
     /// Build a test snapshot with the given users and groups.
-    fn snap_with(users: Vec<serde_json::Value>, groups: Vec<serde_json::Value>) -> InspectionSnapshot {
+    fn snap_with(
+        users: Vec<serde_json::Value>,
+        groups: Vec<serde_json::Value>,
+    ) -> InspectionSnapshot {
         let mut snap = InspectionSnapshot::new();
         snap.users_groups = Some(UserGroupSection {
             users,
@@ -494,9 +496,18 @@ mod tests {
         assert!(ks.contains("--gid=1010"), "group gid missing");
         assert!(ks.contains("--uid=1001"), "user uid missing");
         assert!(ks.contains("--gid=1001"), "user gid missing");
-        assert!(ks.contains("--groups=wheel,docker"), "supplementary groups missing");
-        assert!(ks.contains("--iscrypted --password="), "password flag missing");
-        assert!(ks.contains("sshkey --username=alice"), "sshkey line missing");
+        assert!(
+            ks.contains("--groups=wheel,docker"),
+            "supplementary groups missing"
+        );
+        assert!(
+            ks.contains("--iscrypted --password="),
+            "password flag missing"
+        );
+        assert!(
+            ks.contains("sshkey --username=alice"),
+            "sshkey line missing"
+        );
     }
 
     #[test]
@@ -512,7 +523,10 @@ mod tests {
         });
         let ks = render_kickstart(&snap);
         assert!(ks.contains("--shell=/bin/bash"), "missing --shell: {ks}");
-        assert!(ks.contains("--homedir=/home/alice"), "missing --homedir: {ks}");
+        assert!(
+            ks.contains("--homedir=/home/alice"),
+            "missing --homedir: {ks}"
+        );
     }
 
     #[test]
@@ -528,8 +542,14 @@ mod tests {
         let snap = snap_with(vec![test_user()], vec![test_group()]);
         let toml = render_blueprint_toml(&snap);
 
-        assert!(toml.contains("[[customizations.group]]"), "group block missing");
-        assert!(toml.contains("[[customizations.user]]"), "user block missing");
+        assert!(
+            toml.contains("[[customizations.group]]"),
+            "group block missing"
+        );
+        assert!(
+            toml.contains("[[customizations.user]]"),
+            "user block missing"
+        );
         assert!(toml.contains("name = \"docker\""), "group name missing");
         assert!(toml.contains("gid = 1010"), "group gid missing");
         assert!(toml.contains("name = \"alice\""), "user name missing");
@@ -554,7 +574,10 @@ mod tests {
         let snap = snap_with(vec![user], vec![]);
         let toml = render_blueprint_toml(&snap);
 
-        assert!(toml.contains("key = \"ssh-rsa KEY1 bob@a\""), "first key missing");
+        assert!(
+            toml.contains("key = \"ssh-rsa KEY1 bob@a\""),
+            "first key missing"
+        );
         assert!(
             toml.contains("# NOTE: 2 additional SSH key(s)"),
             "multi-key comment missing"
@@ -576,17 +599,35 @@ mod tests {
         let output = lines.join("\n");
 
         // Groups come first
-        assert!(output.contains("RUN groupadd -g 1010 docker"), "groupadd missing");
+        assert!(
+            output.contains("RUN groupadd -g 1010 docker"),
+            "groupadd missing"
+        );
         // useradd with flags
-        assert!(output.contains("RUN useradd -m -u 1001 -g 1001 -G wheel,docker"), "useradd missing");
+        assert!(
+            output.contains("RUN useradd -m -u 1001 -g 1001 -G wheel,docker"),
+            "useradd missing"
+        );
         // Password warning
-        assert!(output.contains("WARNING: Embedding password hashes"), "password warning missing");
+        assert!(
+            output.contains("WARNING: Embedding password hashes"),
+            "password warning missing"
+        );
         // chpasswd
         assert!(output.contains("chpasswd -e"), "chpasswd missing");
         // SSH staging
-        assert!(output.contains("install -d -m 700"), "ssh dir install missing");
-        assert!(output.contains("COPY users/home/alice/.ssh/authorized_keys"), "COPY ssh missing");
-        assert!(output.contains("chown alice:1001"), "chown with gid missing");
+        assert!(
+            output.contains("install -d -m 700"),
+            "ssh dir install missing"
+        );
+        assert!(
+            output.contains("COPY users/home/alice/.ssh/authorized_keys"),
+            "COPY ssh missing"
+        );
+        assert!(
+            output.contains("chown alice:1001"),
+            "chown with gid missing"
+        );
 
         // Order: groupadd before useradd
         let groupadd_pos = output.find("RUN groupadd").unwrap();
@@ -609,7 +650,10 @@ mod tests {
         });
         let cf = render_containerfile_users(&snap);
         let output = cf.join("\n");
-        assert!(output.contains("-m"), "useradd must include -m to create home dir: {output}");
+        assert!(
+            output.contains("-m"),
+            "useradd must include -m to create home dir: {output}"
+        );
         assert!(output.contains("useradd"), "must contain useradd: {output}");
     }
 
@@ -698,6 +742,9 @@ mod tests {
         stage_ssh_keys(&snap, dir.path()).unwrap();
 
         let key_file = dir.path().join("users/home/nokeys/.ssh/authorized_keys");
-        assert!(!key_file.exists(), "should not create file for user without keys");
+        assert!(
+            !key_file.exists(),
+            "should not create file for user without keys"
+        );
     }
 }

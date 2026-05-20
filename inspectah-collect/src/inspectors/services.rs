@@ -71,11 +71,7 @@ fn parse_unit_state(unit: &str, raw_state: &str) -> ParsedUnitState {
             "unit file is invalid or unreadable",
         )),
         // Future-proof catch-all for unrecognized states.
-        other => ParsedUnitState::Warn(service_warning(
-            unit,
-            other,
-            "unrecognized systemd state",
-        )),
+        other => ParsedUnitState::Warn(service_warning(unit, other, "unrecognized systemd state")),
     }
 }
 
@@ -131,7 +127,7 @@ fn populate_owning_packages(exec: &dyn Executor, state_changes: &mut [ServiceSta
     let batch_lines: Vec<&str> = result.stdout.lines().collect();
 
     if result.success() && batch_lines.len() == state_changes.len() {
-        for (sc, owner) in state_changes.iter_mut().zip(batch_lines.into_iter()) {
+        for (sc, owner) in state_changes.iter_mut().zip(batch_lines) {
             let trimmed = owner.trim();
             if !trimmed.is_empty() && !trimmed.contains(' ') {
                 sc.owning_package = Some(trimmed.to_string());
@@ -153,7 +149,10 @@ fn query_owning_package(exec: &dyn Executor, unit: &str) -> Option<String> {
         format!("/usr/lib/systemd/system/{unit}"),
         format!("/etc/systemd/system/{unit}"),
     ] {
-        let result = exec.run("rpm", &["-qf", "--queryformat", OWNING_PACKAGE_QUERY, &path]);
+        let result = exec.run(
+            "rpm",
+            &["-qf", "--queryformat", OWNING_PACKAGE_QUERY, &path],
+        );
         if result.success() {
             let pkg = result
                 .stdout

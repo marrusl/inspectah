@@ -95,9 +95,11 @@ fn test_merge_rejects_single_snapshot() {
     let result = merge_snapshots(vec![s1], None);
     assert!(result.is_err());
     let errors = result.unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { .. }))
+    );
 }
 
 #[test]
@@ -110,9 +112,11 @@ fn test_merge_rejects_schema_mismatch() {
     let result = merge_snapshots(vec![s1, s2], None);
     assert!(result.is_err());
     let errors = result.unwrap_err();
-    assert!(errors
-        .iter()
-        .any(|e| matches!(e, FleetValidationError::SchemaVersionMismatch { .. })));
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::SchemaVersionMismatch { .. }))
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -132,9 +136,11 @@ fn test_merge_selects_most_common_target_image() {
     assert_eq!(ti.strategy, ResolutionStrategy::OsRelease);
 
     // Should have a BaselineConflict warning
-    assert!(warnings
-        .iter()
-        .any(|w| matches!(w, FleetWarning::BaselineConflict { .. })));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| matches!(w, FleetWarning::BaselineConflict { .. }))
+    );
 
     // baseline_provisional should be true since there were conflicts
     assert!(merged.fleet_meta.as_ref().unwrap().baseline_provisional);
@@ -291,10 +297,12 @@ fn test_merge_sensitive_flags_or_semantics() {
 #[test]
 fn test_merge_clears_redaction_state() {
     let mut s1 = make_snap("host-a");
-    s1.redaction_state = Some(inspectah_core::types::redaction::RedactionState::FullyRedacted {
-        redacted_by: "inspectah 0.8.0".into(),
-        config_hash: "abc123".into(),
-    });
+    s1.redaction_state = Some(
+        inspectah_core::types::redaction::RedactionState::FullyRedacted {
+            redacted_by: "inspectah 0.8.0".into(),
+            config_hash: "abc123".into(),
+        },
+    );
     let s2 = make_snap("host-b");
 
     let (merged, _) = merge_snapshots(vec![s1, s2], None).unwrap();
@@ -421,14 +429,18 @@ fn test_merge_config_variants_flow_through() {
 
     let config = merged.config.unwrap();
     assert_eq!(config.files.len(), 2);
-    assert!(config
-        .files
-        .iter()
-        .any(|f| f.variant_selection == VariantSelection::Selected));
-    assert!(config
-        .files
-        .iter()
-        .any(|f| f.variant_selection == VariantSelection::Alternative));
+    assert!(
+        config
+            .files
+            .iter()
+            .any(|f| f.variant_selection == VariantSelection::Selected)
+    );
+    assert!(
+        config
+            .files
+            .iter()
+            .any(|f| f.variant_selection == VariantSelection::Alternative)
+    );
 }
 
 // ---------------------------------------------------------------------------

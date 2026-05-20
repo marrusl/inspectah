@@ -171,10 +171,10 @@ fn read_policy_type(exec: &dyn Executor) -> String {
 
     for line in content.lines() {
         let trimmed = line.trim();
-        if let Some(val) = trimmed.strip_prefix("SELINUXTYPE=") {
-            if !val.is_empty() {
-                return val.to_string();
-            }
+        if let Some(val) = trimmed.strip_prefix("SELINUXTYPE=")
+            && !val.is_empty()
+        {
+            return val.to_string();
         }
     }
 

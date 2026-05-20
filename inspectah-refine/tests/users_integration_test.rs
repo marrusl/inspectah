@@ -204,8 +204,7 @@ fn full_pipeline_users_groups_materialization() {
         .expect("re-imported snapshot must contain alice");
 
     assert_eq!(
-        user.get("containerfile_strategy")
-            .and_then(|v| v.as_str()),
+        user.get("containerfile_strategy").and_then(|v| v.as_str()),
         Some("useradd"),
         "re-imported snapshot must preserve containerfile_strategy=useradd"
     );
@@ -295,10 +294,12 @@ fn collector_shaped_snapshot_preserves_trust_cues() {
 
     // All trust-cue fields must survive projection
     assert_eq!(user["classification"], "interactive");
-    assert!(user["classification_rationale"]
-        .as_str()
-        .unwrap()
-        .contains("bash shell"));
+    assert!(
+        user["classification_rationale"]
+            .as_str()
+            .unwrap()
+            .contains("bash shell")
+    );
     assert_eq!(user["has_sudo"], true);
     assert_eq!(user["has_subuid"], true);
     assert_eq!(user["ssh_key_count"], 1);
@@ -334,10 +335,7 @@ fn refine_time_sensitivity_upgrades_redaction_state() {
         .unwrap();
 
     let projected = session.snapshot_projected();
-    assert!(
-        projected.sensitive_snapshot,
-        "projected must be sensitive"
-    );
+    assert!(projected.sensitive_snapshot, "projected must be sensitive");
     assert!(
         matches!(
             projected.redaction_state,

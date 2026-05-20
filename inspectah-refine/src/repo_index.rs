@@ -159,19 +159,18 @@ fn parse_repo_sections(content: &str) -> Vec<RepoSection> {
         }
 
         // gpgkey directive (only meaningful inside a section).
-        if current_id.is_some() {
-            if let Some(value) = trimmed
+        if current_id.is_some()
+            && let Some(value) = trimmed
                 .strip_prefix("gpgkey=")
                 .or_else(|| trimmed.strip_prefix("gpgkey ="))
-            {
-                // Values can be comma- or whitespace-separated.
-                for part in value.split(|c: char| c == ',' || c.is_ascii_whitespace()) {
-                    let part = part.trim();
-                    if let Some(path) = part.strip_prefix("file://") {
-                        if !path.is_empty() {
-                            current_keys.push(path.to_string());
-                        }
-                    }
+        {
+            // Values can be comma- or whitespace-separated.
+            for part in value.split(|c: char| c == ',' || c.is_ascii_whitespace()) {
+                let part = part.trim();
+                if let Some(path) = part.strip_prefix("file://")
+                    && !path.is_empty()
+                {
+                    current_keys.push(path.to_string());
                 }
             }
         }

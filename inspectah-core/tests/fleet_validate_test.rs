@@ -1,6 +1,4 @@
-use inspectah_core::fleet::validate::{
-    validate_snapshots, FleetValidationError, FleetWarning,
-};
+use inspectah_core::fleet::validate::{FleetValidationError, FleetWarning, validate_snapshots};
 use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::os::{OsRelease, SystemType};
 
@@ -41,20 +39,24 @@ fn make_snap_with_arch(hostname: &str, arch: &str) -> InspectionSnapshot {
 #[test]
 fn test_too_few_snapshots_zero() {
     let result = validate_snapshots(&[]);
-    assert!(result
-        .errors
-        .iter()
-        .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { count: 0 })));
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { count: 0 }))
+    );
 }
 
 #[test]
 fn test_too_few_snapshots_one() {
     let snap = make_snap("host-1", "9.4");
     let result = validate_snapshots(&[snap]);
-    assert!(result
-        .errors
-        .iter()
-        .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { count: 1 })));
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::TooFewSnapshots { count: 1 }))
+    );
 }
 
 #[test]
@@ -170,9 +172,10 @@ fn test_os_major_version_match_ok() {
     let b = make_snap("host-2", "9.5");
     let result = validate_snapshots(&[a, b]);
     assert!(
-        !result.errors.iter().any(
-            |e| matches!(e, FleetValidationError::OsMajorVersionMismatch { .. })
-        ),
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::OsMajorVersionMismatch { .. })),
         "same major version should not trigger error"
     );
 }
@@ -374,7 +377,10 @@ fn test_valid_fleet_passes_cleanly() {
     let result = validate_snapshots(&[a, b]);
     assert!(result.is_ok(), "valid fleet should have no errors");
     // MinorVersionSpread should not fire since both are 9.4
-    assert!(result.warnings.is_empty(), "valid fleet should have no warnings");
+    assert!(
+        result.warnings.is_empty(),
+        "valid fleet should have no warnings"
+    );
 }
 
 #[test]
@@ -393,19 +399,28 @@ fn test_multiple_errors_reported() {
         serde_json::Value::String("aarch64".to_string()),
     );
     let result = validate_snapshots(&[a, b]);
-    assert!(result.errors.len() >= 3, "should report schema, hostname, and architecture errors");
-    assert!(result
-        .errors
-        .iter()
-        .any(|e| matches!(e, FleetValidationError::SchemaVersionMismatch { .. })));
-    assert!(result
-        .errors
-        .iter()
-        .any(|e| matches!(e, FleetValidationError::DuplicateHostname { .. })));
-    assert!(result
-        .errors
-        .iter()
-        .any(|e| matches!(e, FleetValidationError::ArchitectureMismatch { .. })));
+    assert!(
+        result.errors.len() >= 3,
+        "should report schema, hostname, and architecture errors"
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::SchemaVersionMismatch { .. }))
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::DuplicateHostname { .. }))
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| matches!(e, FleetValidationError::ArchitectureMismatch { .. }))
+    );
 }
 
 #[test]

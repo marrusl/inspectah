@@ -594,7 +594,11 @@ fn collect_ssh_keys(exec: &dyn Executor, section: &mut UserGroupSection, preserv
             .collect();
 
         let key_count = key_lines.len();
-        let username = user.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let username = user
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         ssh_data.push((username, key_count, auth_keys_path, key_lines));
     }
@@ -620,10 +624,7 @@ fn collect_ssh_keys(exec: &dyn Executor, section: &mut UserGroupSection, preserv
                             .iter()
                             .map(|k| serde_json::Value::String(k.clone()))
                             .collect();
-                        map.insert(
-                            "ssh_keys".to_string(),
-                            serde_json::Value::Array(keys_json),
-                        );
+                        map.insert("ssh_keys".to_string(), serde_json::Value::Array(keys_json));
                     }
                 }
                 break;
@@ -696,9 +697,7 @@ fn enrich_sudo_flags(section: &mut UserGroupSection) {
         // Extract the first word of each rule — typically the user/group spec.
         let first_word = rule.split_whitespace().next().unwrap_or("");
         // Skip include directives and group specs (%group).
-        if first_word.starts_with('#')
-            || first_word.starts_with('@')
-            || first_word.starts_with('%')
+        if first_word.starts_with('#') || first_word.starts_with('@') || first_word.starts_with('%')
         {
             continue;
         }
@@ -728,10 +727,7 @@ fn enrich_sudo_flags(section: &mut UserGroupSection) {
                 })
                 .unwrap_or(false);
         if let serde_json::Value::Object(map) = user {
-            map.insert(
-                "has_sudo".to_string(),
-                serde_json::Value::Bool(has_sudo),
-            );
+            map.insert("has_sudo".to_string(), serde_json::Value::Bool(has_sudo));
         }
     }
 }
@@ -794,14 +790,11 @@ fn build_classification_rationale(user: &serde_json::Value) -> String {
     }
 
     // Supplementary groups.
-    if let Some(groups) = user.get("supplementary_groups").and_then(|v| v.as_array()) {
-        if !groups.is_empty() {
-            let names: Vec<&str> = groups
-                .iter()
-                .filter_map(|g| g.as_str())
-                .collect();
-            parts.push(format!("groups={}", names.join("+")));
-        }
+    if let Some(groups) = user.get("supplementary_groups").and_then(|v| v.as_array())
+        && !groups.is_empty()
+    {
+        let names: Vec<&str> = groups.iter().filter_map(|g| g.as_str()).collect();
+        parts.push(format!("groups={}", names.join("+")));
     }
 
     parts.join(", ")
@@ -1810,10 +1803,7 @@ devs:x:1002:alice,bob
         let alice_groups = section.users[0]["supplementary_groups"]
             .as_array()
             .expect("alice supplementary_groups");
-        let alice_names: Vec<&str> = alice_groups
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
+        let alice_names: Vec<&str> = alice_groups.iter().filter_map(|v| v.as_str()).collect();
         assert!(
             alice_names.contains(&"wheel"),
             "alice should be in wheel: {alice_names:?}"
@@ -1831,10 +1821,7 @@ devs:x:1002:alice,bob
         let bob_groups = section.users[1]["supplementary_groups"]
             .as_array()
             .expect("bob supplementary_groups");
-        let bob_names: Vec<&str> = bob_groups
-            .iter()
-            .filter_map(|v| v.as_str())
-            .collect();
+        let bob_names: Vec<&str> = bob_groups.iter().filter_map(|v| v.as_str()).collect();
         assert!(
             bob_names.contains(&"docker"),
             "bob should be in docker: {bob_names:?}"
@@ -1946,22 +1933,10 @@ devs:x:1002:alice,bob
                 "/etc/passwd",
                 "alice:x:1000:1000:Alice:/home/alice:/bin/bash\n",
             )
-            .with_file(
-                "/etc/shadow",
-                "alice:$6$salt$hash:19700:0:99999:7:::\n",
-            )
-            .with_file(
-                "/etc/group",
-                "root:x:0:\nwheel:x:10:alice\nalice:x:1000:\n",
-            )
-            .with_file(
-                "/etc/subuid",
-                "alice:100000:65536\n",
-            )
-            .with_file(
-                "/etc/sudoers",
-                "%wheel ALL=(ALL) ALL\n",
-            )
+            .with_file("/etc/shadow", "alice:$6$salt$hash:19700:0:99999:7:::\n")
+            .with_file("/etc/group", "root:x:0:\nwheel:x:10:alice\nalice:x:1000:\n")
+            .with_file("/etc/subuid", "alice:100000:65536\n")
+            .with_file("/etc/sudoers", "%wheel ALL=(ALL) ALL\n")
             .with_file(
                 "/home/alice/.ssh/authorized_keys",
                 "ssh-rsa AAAAB3... alice@laptop\n",
@@ -1995,10 +1970,7 @@ devs:x:1002:alice,bob
             let groups = alice["supplementary_groups"]
                 .as_array()
                 .expect("supplementary_groups");
-            let group_names: Vec<&str> = groups
-                .iter()
-                .filter_map(|v| v.as_str())
-                .collect();
+            let group_names: Vec<&str> = groups.iter().filter_map(|v| v.as_str()).collect();
             assert!(
                 group_names.contains(&"wheel"),
                 "should include system group wheel: {group_names:?}"

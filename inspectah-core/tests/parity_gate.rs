@@ -71,8 +71,7 @@ fn test_legacy_go_v13_services_section_requires_rescan() {
     let golden = include_str!("../../testdata/golden/go-v13-services-section.json");
     let err = serde_json::from_str::<ServiceSection>(golden).unwrap_err();
     assert!(
-        err.to_string().contains("current_state")
-            || err.to_string().contains("unknown variant"),
+        err.to_string().contains("current_state") || err.to_string().contains("unknown variant"),
         "legacy services payload should fail typed deserialization, got: {err}"
     );
 }

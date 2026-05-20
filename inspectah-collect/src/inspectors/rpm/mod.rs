@@ -268,7 +268,7 @@ impl Inspector for RpmInspector {
         let baseline_suppressed: Option<Vec<String>> = ctx.baseline_data.map(|bl| {
             let mut suppressed: Vec<String> = packages_added
                 .iter()
-                .map(|pkg| canonical_package_id(pkg))
+                .map(canonical_package_id)
                 .filter(|id| bl.packages.contains_key(id))
                 .collect();
             suppressed.sort();
@@ -545,10 +545,10 @@ fn parse_dnf_deps(
         if dep.is_empty() || dep == package_id {
             continue;
         }
-        if added_ids.contains(dep) {
-            if let Some(deps) = depends_on.get_mut(package_id) {
-                deps.insert(dep.to_string());
-            }
+        if added_ids.contains(dep)
+            && let Some(deps) = depends_on.get_mut(package_id)
+        {
+            deps.insert(dep.to_string());
         }
     }
 }
@@ -1692,11 +1692,17 @@ tzdata\t/usr/share/zoneinfo/UTC
             .as_ref()
             .expect("baseline_package_names should be Some");
 
-        assert!(baseline_names.contains(&"firewalld".to_string()),
-                "baseline_package_names should contain plain name 'firewalld'");
-        assert!(baseline_names.contains(&"systemd".to_string()),
-                "baseline_package_names should contain plain name 'systemd'");
-        assert!(!baseline_names.iter().any(|name| name.contains('.')),
-                "baseline_package_names should not contain any names with arch suffix (name.arch)");
+        assert!(
+            baseline_names.contains(&"firewalld".to_string()),
+            "baseline_package_names should contain plain name 'firewalld'"
+        );
+        assert!(
+            baseline_names.contains(&"systemd".to_string()),
+            "baseline_package_names should contain plain name 'systemd'"
+        );
+        assert!(
+            !baseline_names.iter().any(|name| name.contains('.')),
+            "baseline_package_names should not contain any names with arch suffix (name.arch)"
+        );
     }
 }

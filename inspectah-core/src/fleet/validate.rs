@@ -19,13 +19,19 @@ pub enum FleetValidationError {
 /// Warnings that allow aggregation but signal potential issues.
 #[derive(Debug, Clone, PartialEq)]
 pub enum FleetWarning {
-    StaleScanDates { spread_description: String },
+    StaleScanDates {
+        spread_description: String,
+    },
     BaselineConflict {
         distribution: Vec<(String, usize)>,
         selected: String,
     },
-    MinorVersionSpread { versions: Vec<String> },
-    SystemTypeMismatch { types: Vec<String> },
+    MinorVersionSpread {
+        versions: Vec<String>,
+    },
+    SystemTypeMismatch {
+        types: Vec<String>,
+    },
 }
 
 /// Result of fleet pre-merge validation.
@@ -84,11 +90,9 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
         }
         for (hostname, count) in &seen {
             if *count > 1 {
-                result
-                    .errors
-                    .push(FleetValidationError::DuplicateHostname {
-                        hostname: hostname.clone(),
-                    });
+                result.errors.push(FleetValidationError::DuplicateHostname {
+                    hostname: hostname.clone(),
+                });
             }
         }
     }
@@ -114,16 +118,14 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
     {
         let major_versions: HashSet<String> = snapshots
             .iter()
-            .filter_map(|s| extract_os_major_version(s))
+            .filter_map(extract_os_major_version)
             .collect();
         if major_versions.len() > 1 {
             let mut sorted: Vec<String> = major_versions.into_iter().collect();
             sorted.sort();
             result
                 .errors
-                .push(FleetValidationError::OsMajorVersionMismatch {
-                    versions: sorted,
-                });
+                .push(FleetValidationError::OsMajorVersionMismatch { versions: sorted });
         }
     }
 
@@ -150,9 +152,9 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
         if minor_versions.len() > 1 {
             let mut sorted: Vec<String> = minor_versions.into_iter().collect();
             sorted.sort();
-            result.warnings.push(FleetWarning::MinorVersionSpread {
-                versions: sorted,
-            });
+            result
+                .warnings
+                .push(FleetWarning::MinorVersionSpread { versions: sorted });
         }
     }
 
@@ -165,9 +167,9 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
         if types.len() > 1 {
             let mut sorted: Vec<String> = types.into_iter().collect();
             sorted.sort();
-            result.warnings.push(FleetWarning::SystemTypeMismatch {
-                types: sorted,
-            });
+            result
+                .warnings
+                .push(FleetWarning::SystemTypeMismatch { types: sorted });
         }
     }
 
@@ -194,23 +196,16 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
     {
         let timestamps: Vec<&str> = snapshots
             .iter()
-            .filter_map(|s| {
-                s.meta
-                    .get("timestamp")
-                    .and_then(|v| v.as_str())
-            })
+            .filter_map(|s| s.meta.get("timestamp").and_then(|v| v.as_str()))
             .collect();
         if timestamps.len() >= 2 {
             // Simple lexicographic comparison works for ISO-8601 date strings
-            if let (Some(min), Some(max)) = (timestamps.iter().min(), timestamps.iter().max()) {
-                if min != max {
-                    result.warnings.push(FleetWarning::StaleScanDates {
-                        spread_description: format!(
-                            "Scan dates range from {} to {}",
-                            min, max
-                        ),
-                    });
-                }
+            if let (Some(min), Some(max)) = (timestamps.iter().min(), timestamps.iter().max())
+                && min != max
+            {
+                result.warnings.push(FleetWarning::StaleScanDates {
+                    spread_description: format!("Scan dates range from {} to {}", min, max),
+                });
             }
         }
     }
@@ -229,7 +224,10 @@ pub fn extract_hostname(snap: &InspectionSnapshot) -> String {
 
 /// Extract a string value from the snapshot's meta HashMap.
 fn extract_meta_string(snap: &InspectionSnapshot, key: &str) -> Option<String> {
-    snap.meta.get(key).and_then(|v| v.as_str()).map(String::from)
+    snap.meta
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(String::from)
 }
 
 /// Extract the OS major version from os_release.version_id (e.g., "9" from "9.4").

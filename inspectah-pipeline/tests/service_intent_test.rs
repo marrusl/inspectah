@@ -4,7 +4,7 @@ use inspectah_core::types::services::{
     PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState,
 };
 use inspectah_pipeline::render::service_intent::{
-    effective_target_packages, is_package_installable, render_service_intent, AdvisoryReason,
+    AdvisoryReason, effective_target_packages, is_package_installable, render_service_intent,
 };
 
 // ---------------------------------------------------------------------------
@@ -129,12 +129,16 @@ fn test_service_render_plan_omits_proven_absent_service() {
 
     // Omission comment IS in lines — user sees what was excluded
     assert!(
-        plan.lines.iter().any(|line| line.contains("# Omitted: sssd-kcm.service")),
+        plan.lines
+            .iter()
+            .any(|line| line.contains("# Omitted: sssd-kcm.service")),
         "omission comment must appear in output lines"
     );
     // No systemctl command references the omitted unit
     assert!(
-        plan.lines.iter().all(|line| !line.contains("systemctl") || !line.contains("sssd-kcm.service")),
+        plan.lines
+            .iter()
+            .all(|line| !line.contains("systemctl") || !line.contains("sssd-kcm.service")),
         "omitted service must not appear in systemctl commands"
     );
     assert_eq!(plan.omissions.len(), 1);
@@ -175,11 +179,17 @@ fn test_service_render_plan_stacks_package_excluded_and_baseline_unavailable() {
 
     let plan = render_service_intent(&snap);
 
-    assert!(plan.omissions.is_empty(), "advisory service must not be omitted");
+    assert!(
+        plan.omissions.is_empty(),
+        "advisory service must not be omitted"
+    );
     assert_eq!(plan.advisories.len(), 1);
     assert_eq!(
         plan.advisories[0].reasons,
-        vec![AdvisoryReason::PackageExcluded, AdvisoryReason::BaselineUnavailable]
+        vec![
+            AdvisoryReason::PackageExcluded,
+            AdvisoryReason::BaselineUnavailable
+        ]
     );
     // Service must still be emitted
     assert!(
@@ -260,8 +270,14 @@ fn test_service_render_plan_keeps_unknown_owner_conservative() {
 
     let plan = render_service_intent(&snap);
 
-    assert!(plan.omissions.is_empty(), "unknown owner must not be omitted");
-    assert!(plan.advisories.is_empty(), "unknown owner must not get advisory");
+    assert!(
+        plan.omissions.is_empty(),
+        "unknown owner must not be omitted"
+    );
+    assert!(
+        plan.advisories.is_empty(),
+        "unknown owner must not get advisory"
+    );
     assert!(
         plan.lines.iter().any(|l| l.contains("mystery.service")),
         "unknown owner must be emitted"
@@ -304,17 +320,25 @@ fn test_service_render_plan_suppresses_before_config_tree_deferral() {
     let plan = render_service_intent(&snap);
 
     // Must be omitted, NOT deferred
-    assert_eq!(plan.omissions.len(), 1, "proven-absent must be omitted even with timer");
+    assert_eq!(
+        plan.omissions.len(),
+        1,
+        "proven-absent must be omitted even with timer"
+    );
     assert_eq!(plan.omissions[0].unit, "absent-timer.service");
     // Omission comment IS in lines
     assert!(
-        plan.lines.iter().any(|l| l.contains("# Omitted: absent-timer.service")),
+        plan.lines
+            .iter()
+            .any(|l| l.contains("# Omitted: absent-timer.service")),
         "omission comment must appear in output lines"
     );
     // But no systemctl or deferred line references it
     assert!(
         plan.lines.iter().all(|l| {
-            if l.starts_with("# Omitted:") { return true; }
+            if l.starts_with("# Omitted:") {
+                return true;
+            }
             !l.contains("absent-timer")
         }),
         "omitted service must not appear in systemctl or deferred lines"
@@ -362,8 +386,14 @@ fn test_service_render_plan_proven_present_emits_clean() {
 
     let plan = render_service_intent(&snap);
 
-    assert!(plan.omissions.is_empty(), "proven-present must not be omitted");
-    assert!(plan.advisories.is_empty(), "proven-present must not get advisory");
+    assert!(
+        plan.omissions.is_empty(),
+        "proven-present must not be omitted"
+    );
+    assert!(
+        plan.advisories.is_empty(),
+        "proven-present must not get advisory"
+    );
     assert!(
         plan.lines.iter().any(|l| l.contains("firewalld.service")),
         "baseline service must be emitted"
@@ -400,7 +430,10 @@ fn test_service_render_plan_pure_baseline_unavailable_advisory() {
 
     let plan = render_service_intent(&snap);
 
-    assert!(plan.omissions.is_empty(), "can't prove absence without baseline");
+    assert!(
+        plan.omissions.is_empty(),
+        "can't prove absence without baseline"
+    );
     assert_eq!(plan.advisories.len(), 1);
     assert_eq!(
         plan.advisories[0].reasons,
@@ -455,12 +488,16 @@ fn test_service_render_plan_advisory_survives_config_tree_deferral() {
     );
     // Service is deferred, not in systemctl lines
     assert!(
-        plan.lines.iter().all(|l| !l.contains("systemctl") || !l.contains("advisory-timer")),
+        plan.lines
+            .iter()
+            .all(|l| !l.contains("systemctl") || !l.contains("advisory-timer")),
         "deferred service should not be in systemctl lines"
     );
     // But it should appear in the deferred comment
     assert!(
-        plan.lines.iter().any(|l| l.contains("deferred") && l.contains("advisory-timer")),
+        plan.lines
+            .iter()
+            .any(|l| l.contains("deferred") && l.contains("advisory-timer")),
         "deferred service should appear in deferred comment"
     );
 }
@@ -505,7 +542,11 @@ fn test_service_render_plan_stacked_advisory_verifies_multi_reason() {
     assert_eq!(advisory.owning_package, "stacked-pkg");
     assert_eq!(advisory.reasons.len(), 2);
     assert!(advisory.reasons.contains(&AdvisoryReason::PackageExcluded));
-    assert!(advisory.reasons.contains(&AdvisoryReason::BaselineUnavailable));
+    assert!(
+        advisory
+            .reasons
+            .contains(&AdvisoryReason::BaselineUnavailable)
+    );
     assert!(
         plan.lines.iter().any(|l| l.contains("stacked-pkg.service")),
         "stacked-advisory service must be emitted"
@@ -546,8 +587,14 @@ fn test_service_render_plan_present_package_deferred_to_config_tree() {
 
     let plan = render_service_intent(&snap);
 
-    assert!(plan.omissions.is_empty(), "present package must not be omitted");
-    assert!(plan.advisories.is_empty(), "present package must not get advisory");
+    assert!(
+        plan.omissions.is_empty(),
+        "present package must not be omitted"
+    );
+    assert!(
+        plan.advisories.is_empty(),
+        "present package must not get advisory"
+    );
     // Should be deferred, not in systemctl enable
     assert!(
         plan.lines

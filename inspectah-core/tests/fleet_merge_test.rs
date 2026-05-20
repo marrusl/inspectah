@@ -1,9 +1,8 @@
 use inspectah_core::fleet::merge::{
-    dedup_json_values, dedup_strings, merge_config_sections, merge_container_sections,
-    merge_items, merge_kernelboot_sections, merge_network_sections, merge_nonrpm_sections,
-    merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
+    FleetMergeable, dedup_json_values, dedup_strings, merge_config_sections,
+    merge_container_sections, merge_items, merge_kernelboot_sections, merge_network_sections,
+    merge_nonrpm_sections, merge_rpm_sections, merge_scheduled_sections, merge_selinux_sections,
     merge_service_sections, merge_storage_sections, merge_usersgroups_sections,
-    FleetMergeable,
 };
 use inspectah_core::types::config::{ConfigFileEntry, ConfigSection};
 use inspectah_core::types::containers::{ComposeFile, ContainerSection, FlatpakApp, QuadletUnit};
@@ -16,10 +15,14 @@ use inspectah_core::types::nonrpm::{NonRpmItem, NonRpmSoftwareSection};
 use inspectah_core::types::rpm::{
     EnabledModuleStream, PackageEntry, RepoFile, RpmSection, VersionChange, VersionLockEntry,
 };
-use inspectah_core::types::scheduled::{AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer};
+use inspectah_core::types::scheduled::{
+    AtJob, CronJob, GeneratedTimerUnit, ScheduledTaskSection, SystemdTimer,
+};
 use inspectah_core::types::selinux::{CarryForwardFile, SelinuxPortLabel, SelinuxSection};
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn};
-use inspectah_core::types::storage::{FstabEntry, StorageSection, MountPoint};
+use inspectah_core::types::services::{
+    ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+};
+use inspectah_core::types::storage::{FstabEntry, MountPoint, StorageSection};
 use inspectah_core::types::users::UserGroupSection;
 
 // ---------------------------------------------------------------------------
@@ -745,18 +748,24 @@ fn test_merge_items_mixed_paths_with_variants() {
     // /etc/a.conf: 1 item (Only), /etc/b.conf: 2 items (Selected + Alternative)
     assert_eq!(merged.len(), 3);
 
-    let a_items: Vec<&ConfigFileEntry> = merged.iter().filter(|e| e.path == "/etc/a.conf").collect();
+    let a_items: Vec<&ConfigFileEntry> =
+        merged.iter().filter(|e| e.path == "/etc/a.conf").collect();
     assert_eq!(a_items.len(), 1);
     assert_eq!(a_items[0].variant_selection, VariantSelection::Only);
 
-    let b_items: Vec<&ConfigFileEntry> = merged.iter().filter(|e| e.path == "/etc/b.conf").collect();
+    let b_items: Vec<&ConfigFileEntry> =
+        merged.iter().filter(|e| e.path == "/etc/b.conf").collect();
     assert_eq!(b_items.len(), 2);
-    assert!(b_items
-        .iter()
-        .any(|e| e.variant_selection == VariantSelection::Selected));
-    assert!(b_items
-        .iter()
-        .any(|e| e.variant_selection == VariantSelection::Alternative));
+    assert!(
+        b_items
+            .iter()
+            .any(|e| e.variant_selection == VariantSelection::Selected)
+    );
+    assert!(
+        b_items
+            .iter()
+            .any(|e| e.variant_selection == VariantSelection::Alternative)
+    );
 }
 
 #[test]
@@ -877,10 +886,7 @@ fn test_fstab_entry_set_include_uses_option() {
 
 #[test]
 fn test_dedup_strings_merges_and_sorts() {
-    let lists = vec![
-        vec!["c".into(), "a".into()],
-        vec!["b".into(), "a".into()],
-    ];
+    let lists = vec![vec!["c".into(), "a".into()], vec!["b".into(), "a".into()]];
     let result = dedup_strings(lists);
     assert_eq!(result, vec!["a", "b", "c"]);
 }
@@ -951,9 +957,17 @@ fn test_merge_rpm_sections_packages_merged() {
     let result = merge_rpm_sections(vec![Some(s1), Some(s2)], 2, &hostnames).unwrap();
 
     assert_eq!(result.packages_added.len(), 2);
-    let httpd = result.packages_added.iter().find(|p| p.name == "httpd").unwrap();
+    let httpd = result
+        .packages_added
+        .iter()
+        .find(|p| p.name == "httpd")
+        .unwrap();
     assert_eq!(httpd.fleet.as_ref().unwrap().count, 2);
-    let nginx = result.packages_added.iter().find(|p| p.name == "nginx").unwrap();
+    let nginx = result
+        .packages_added
+        .iter()
+        .find(|p| p.name == "nginx")
+        .unwrap();
     assert_eq!(nginx.fleet.as_ref().unwrap().count, 1);
 }
 
@@ -1018,7 +1032,10 @@ fn test_merge_rpm_sections_passthrough_scalars() {
     let result = merge_rpm_sections(vec![Some(s1)], 1, &hostnames).unwrap();
 
     assert!(result.no_baseline);
-    assert_eq!(result.base_image, Some("registry.example.com/image:latest".into()));
+    assert_eq!(
+        result.base_image,
+        Some("registry.example.com/image:latest".into())
+    );
     assert_eq!(result.leaf_packages, Some(vec!["httpd.x86_64".into()]));
 }
 
@@ -1053,8 +1070,18 @@ fn test_merge_config_sections_files_with_variants() {
 
     // Two variants of the same path
     assert_eq!(result.files.len(), 2);
-    assert!(result.files.iter().any(|f| f.variant_selection == VariantSelection::Selected));
-    assert!(result.files.iter().any(|f| f.variant_selection == VariantSelection::Alternative));
+    assert!(
+        result
+            .files
+            .iter()
+            .any(|f| f.variant_selection == VariantSelection::Selected)
+    );
+    assert!(
+        result
+            .files
+            .iter()
+            .any(|f| f.variant_selection == VariantSelection::Alternative)
+    );
 }
 
 // ===========================================================================
@@ -1100,9 +1127,15 @@ fn test_merge_service_sections_dedup_units() {
     assert_eq!(result.state_changes[0].fleet.as_ref().unwrap().count, 2);
 
     // String lists deduped and sorted
-    assert_eq!(result.enabled_units, vec!["crond.service", "httpd.service", "sshd.service"]);
+    assert_eq!(
+        result.enabled_units,
+        vec!["crond.service", "httpd.service", "sshd.service"]
+    );
     assert_eq!(result.disabled_units, vec!["firewalld.service"]);
-    assert_eq!(result.preset_matched_units, vec!["chronyd.service", "sshd.service"]);
+    assert_eq!(
+        result.preset_matched_units,
+        vec!["chronyd.service", "sshd.service"]
+    );
 }
 
 // ===========================================================================
@@ -1167,7 +1200,12 @@ fn test_merge_container_sections_quadlets_with_variants() {
 
     // Two variants
     assert_eq!(result.quadlet_units.len(), 2);
-    assert!(result.quadlet_units.iter().any(|q| q.variant_selection == VariantSelection::Selected));
+    assert!(
+        result
+            .quadlet_units
+            .iter()
+            .any(|q| q.variant_selection == VariantSelection::Selected)
+    );
 }
 
 // ===========================================================================
@@ -1195,7 +1233,10 @@ fn test_merge_network_sections_dedup_proxy_by_source() {
             source: "/etc/profile.d/proxy.sh".into(),
             line: "HTTP_PROXY=http://proxy:8080".into(),
         }],
-        ip_routes: vec!["10.0.0.0/8 via 192.168.1.1".into(), "172.16.0.0/12 via 192.168.1.1".into()],
+        ip_routes: vec![
+            "10.0.0.0/8 via 192.168.1.1".into(),
+            "172.16.0.0/12 via 192.168.1.1".into(),
+        ],
         ..Default::default()
     };
     let hostnames: Vec<String> = vec!["h1".into(), "h2".into()];

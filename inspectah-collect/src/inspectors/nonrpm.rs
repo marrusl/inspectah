@@ -218,12 +218,11 @@ fn classify_binary(exec: &dyn Executor, path: &str) -> Option<BinaryClassificati
 
     let mut shared_libs = Vec::new();
     for line in dynamic_output.lines() {
-        if line.contains("(NEEDED)") {
-            if let Some(start) = line.find('[') {
-                if let Some(end) = line[start..].find(']') {
-                    shared_libs.push(line[start + 1..start + end].to_string());
-                }
-            }
+        if line.contains("(NEEDED)")
+            && let Some(start) = line.find('[')
+            && let Some(end) = line[start..].find(']')
+        {
+            shared_libs.push(line[start + 1..start + end].to_string());
         }
     }
 
@@ -255,16 +254,16 @@ fn extract_version(exec: &dyn Executor, path: &str) -> String {
 fn extract_version_from_text(text: &str) -> String {
     for line in text.lines() {
         // Try version=1.2.3 or version: 1.2.3 pattern first.
-        if line.to_lowercase().contains("version") {
-            if let Some(v) = extract_semver(line) {
-                return v;
-            }
+        if line.to_lowercase().contains("version")
+            && let Some(v) = extract_semver(line)
+        {
+            return v;
         }
         // Try go1.21.5 pattern.
-        if let Some(pos) = line.find("go") {
-            if let Some(v) = extract_semver(&line[pos + 2..]) {
-                return v;
-            }
+        if let Some(pos) = line.find("go")
+            && let Some(v) = extract_semver(&line[pos + 2..])
+        {
+            return v;
         }
     }
     String::new()
@@ -286,13 +285,13 @@ fn extract_semver(text: &str) -> Option<String> {
                 dots += 1;
             }
             _ => {
-                if let Some(s) = start {
-                    if dots >= 1 {
-                        let candidate = &text[s..i];
-                        let candidate = candidate.trim_end_matches('.');
-                        if candidate.contains('.') {
-                            return Some(candidate.to_string());
-                        }
+                if let Some(s) = start
+                    && dots >= 1
+                {
+                    let candidate = &text[s..i];
+                    let candidate = candidate.trim_end_matches('.');
+                    if candidate.contains('.') {
+                        return Some(candidate.to_string());
                     }
                 }
                 start = None;
@@ -301,13 +300,13 @@ fn extract_semver(text: &str) -> Option<String> {
         }
     }
     // Check tail.
-    if let Some(s) = start {
-        if dots >= 1 {
-            let candidate = &text[s..];
-            let candidate = candidate.trim_end_matches('.');
-            if candidate.contains('.') {
-                return Some(candidate.to_string());
-            }
+    if let Some(s) = start
+        && dots >= 1
+    {
+        let candidate = &text[s..];
+        let candidate = candidate.trim_end_matches('.');
+        if candidate.contains('.') {
+            return Some(candidate.to_string());
         }
     }
     None
@@ -362,22 +361,20 @@ fn walk_for_elf_binaries(
         // Try to classify as ELF binary.
         let rel_path = child.trim_start_matches('/').to_string();
 
-        if has_readelf {
-            if let Some(bc) = classify_binary(exec, &child) {
-                let version = extract_version(exec, &child);
-                section.items.push(NonRpmItem {
-                    path: rel_path,
-                    name: entry.clone(),
-                    method: format!("readelf ({})", bc.lang),
-                    confidence: "high".to_string(),
-                    lang: bc.lang,
-                    r#static: bc.is_static,
-                    shared_libs: bc.shared_libs,
-                    version,
-                    ..Default::default()
-                });
-                continue;
-            }
+        if has_readelf && let Some(bc) = classify_binary(exec, &child) {
+            let version = extract_version(exec, &child);
+            section.items.push(NonRpmItem {
+                path: rel_path,
+                name: entry.clone(),
+                method: format!("readelf ({})", bc.lang),
+                confidence: "high".to_string(),
+                lang: bc.lang,
+                r#static: bc.is_static,
+                shared_libs: bc.shared_libs,
+                version,
+                ..Default::default()
+            });
+            continue;
         }
 
         // Fall back to `file` command for ELF detection.
@@ -895,14 +892,15 @@ fn find_git_configs(
             // Flag if remote URL contains embedded credentials.
             if remote_url.contains('@') && remote_url.contains("://") {
                 // Pattern: https://user:pass@host/...
-                if let Some(proto_rest) = remote_url.split("://").nth(1) {
-                    if proto_rest.contains('@') && proto_rest.contains(':') {
-                        redaction_hints.push(RedactionHint {
-                            path: format!("{}/config", rel_path),
-                            reason: "git remote URL may contain embedded credentials".to_string(),
-                            confidence: Some(Confidence::Medium),
-                        });
-                    }
+                if let Some(proto_rest) = remote_url.split("://").nth(1)
+                    && proto_rest.contains('@')
+                    && proto_rest.contains(':')
+                {
+                    redaction_hints.push(RedactionHint {
+                        path: format!("{}/config", rel_path),
+                        reason: "git remote URL may contain embedded credentials".to_string(),
+                        confidence: Some(Confidence::Medium),
+                    });
                 }
             }
 

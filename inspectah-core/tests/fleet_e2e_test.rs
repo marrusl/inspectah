@@ -178,7 +178,11 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
         .iter()
         .filter(|f| f.path == "/etc/app.conf" && f.content == "version=1")
         .collect();
-    assert_eq!(v1_entries.len(), 1, "majority variant collapsed to one entry");
+    assert_eq!(
+        v1_entries.len(),
+        1,
+        "majority variant collapsed to one entry"
+    );
     assert_eq!(
         v1_entries[0].variant_selection,
         VariantSelection::Selected,
@@ -224,9 +228,12 @@ fn test_e2e_three_hosts_shared_packages_config_variants() {
     assert!(!meta.baseline_provisional);
 
     // No hard warnings expected for same-version, same-arch fleet
-    let has_arch_warning = warnings
-        .iter()
-        .any(|w| matches!(w, inspectah_core::fleet::validate::FleetWarning::SystemTypeMismatch { .. }));
+    let has_arch_warning = warnings.iter().any(|w| {
+        matches!(
+            w,
+            inspectah_core::fleet::validate::FleetWarning::SystemTypeMismatch { .. }
+        )
+    });
     assert!(!has_arch_warning);
 }
 
@@ -335,7 +342,10 @@ fn test_e2e_missing_section_uses_global_denominator() {
         .unwrap();
     let fleet = httpd.fleet.as_ref().unwrap();
     assert_eq!(fleet.count, 2, "httpd present on 2 hosts");
-    assert_eq!(fleet.total, 3, "total should be global fleet size, not section count");
+    assert_eq!(
+        fleet.total, 3,
+        "total should be global fleet size, not section count"
+    );
 
     // Config prevalence also uses total=3
     let config = merged.config.unwrap();
@@ -416,16 +426,16 @@ fn test_e2e_baseline_provisional_when_multiple_target_images() {
     // The selected target image should be the most common one (9.4, 2 hosts)
     let target = merged.target_image.as_ref().unwrap();
     assert_eq!(
-        target.image_ref,
-        "registry.redhat.io/rhel9/rhel-bootc:9.4",
+        target.image_ref, "registry.redhat.io/rhel9/rhel-bootc:9.4",
         "most common target image should win"
     );
 
     // Should have a BaselineConflict warning
     assert!(
-        warnings
-            .iter()
-            .any(|w| matches!(w, inspectah_core::fleet::validate::FleetWarning::BaselineConflict { .. })),
+        warnings.iter().any(|w| matches!(
+            w,
+            inspectah_core::fleet::validate::FleetWarning::BaselineConflict { .. }
+        )),
         "conflicting baselines should produce a warning"
     );
 }
@@ -481,13 +491,11 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
 
     // Forward order
     let (s1a, s2a, s3a) = build_fleet();
-    let (merged_fwd, warnings_fwd) =
-        merge_snapshots(vec![s1a, s2a, s3a], None).unwrap();
+    let (merged_fwd, warnings_fwd) = merge_snapshots(vec![s1a, s2a, s3a], None).unwrap();
 
     // Reversed order
     let (s1b, s2b, s3b) = build_fleet();
-    let (merged_rev, warnings_rev) =
-        merge_snapshots(vec![s3b, s2b, s1b], None).unwrap();
+    let (merged_rev, warnings_rev) = merge_snapshots(vec![s3b, s2b, s1b], None).unwrap();
 
     // Compare fleet_meta (except merged_at timestamp)
     let meta_fwd = merged_fwd.fleet_meta.as_ref().unwrap();
@@ -495,14 +503,8 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
     assert_eq!(meta_fwd.host_count, meta_rev.host_count);
     assert_eq!(meta_fwd.hostnames, meta_rev.hostnames);
     assert_eq!(meta_fwd.label, meta_rev.label);
-    assert_eq!(
-        meta_fwd.baseline_provisional,
-        meta_rev.baseline_provisional
-    );
-    assert_eq!(
-        meta_fwd.section_host_counts,
-        meta_rev.section_host_counts
-    );
+    assert_eq!(meta_fwd.baseline_provisional, meta_rev.baseline_provisional);
+    assert_eq!(meta_fwd.section_host_counts, meta_rev.section_host_counts);
 
     // Compare RPM sections — same packages, same prevalence
     let rpm_fwd = merged_fwd.rpm.as_ref().unwrap();
@@ -584,11 +586,7 @@ fn test_e2e_deterministic_output_regardless_of_input_order() {
     );
 
     // Warnings should match (order-independent comparison)
-    assert_eq!(
-        warnings_fwd.len(),
-        warnings_rev.len(),
-        "same warning count"
-    );
+    assert_eq!(warnings_fwd.len(), warnings_rev.len(), "same warning count");
 }
 
 // ===========================================================================
@@ -618,7 +616,10 @@ fn test_e2e_merged_snapshot_serialization_roundtrip() {
     // RPM prevalence survives roundtrip
     let orig_rpm = merged.rpm.as_ref().unwrap();
     let parsed_rpm = parsed.rpm.as_ref().unwrap();
-    assert_eq!(orig_rpm.packages_added.len(), parsed_rpm.packages_added.len());
+    assert_eq!(
+        orig_rpm.packages_added.len(),
+        parsed_rpm.packages_added.len()
+    );
     for pkg in &orig_rpm.packages_added {
         let found = parsed_rpm
             .packages_added
@@ -655,7 +656,10 @@ fn test_e2e_heterogeneous_section_coverage() {
     with_rpms(&mut s1, &["httpd", "curl"]);
     with_configs(
         &mut s1,
-        &[("/etc/httpd.conf", "v1"), ("/etc/sysctl.conf", "net.ipv4.ip_forward=1")],
+        &[
+            ("/etc/httpd.conf", "v1"),
+            ("/etc/sysctl.conf", "net.ipv4.ip_forward=1"),
+        ],
     );
     with_services(&mut s1, &["httpd.service"]);
 
@@ -664,10 +668,7 @@ fn test_e2e_heterogeneous_section_coverage() {
     with_services(&mut s2, &["httpd.service", "crond.service"]);
 
     let mut s3 = make_rich_snap("host-c", "9.4");
-    with_configs(
-        &mut s3,
-        &[("/etc/sysctl.conf", "net.ipv4.ip_forward=1")],
-    );
+    with_configs(&mut s3, &[("/etc/sysctl.conf", "net.ipv4.ip_forward=1")]);
     // Need at least one section, config provides it
 
     let (merged, _) = merge_snapshots(vec![s1, s2, s3], None).unwrap();
@@ -680,11 +681,19 @@ fn test_e2e_heterogeneous_section_coverage() {
 
     // RPM: httpd on 2 hosts (a,b), curl on 1 (a only)
     let rpm = merged.rpm.unwrap();
-    let httpd = rpm.packages_added.iter().find(|p| p.name == "httpd").unwrap();
+    let httpd = rpm
+        .packages_added
+        .iter()
+        .find(|p| p.name == "httpd")
+        .unwrap();
     assert_eq!(httpd.fleet.as_ref().unwrap().count, 2);
     assert_eq!(httpd.fleet.as_ref().unwrap().total, 3);
 
-    let curl = rpm.packages_added.iter().find(|p| p.name == "curl").unwrap();
+    let curl = rpm
+        .packages_added
+        .iter()
+        .find(|p| p.name == "curl")
+        .unwrap();
     assert_eq!(curl.fleet.as_ref().unwrap().count, 1);
     assert_eq!(curl.fleet.as_ref().unwrap().total, 3);
 
@@ -695,16 +704,28 @@ fn test_e2e_heterogeneous_section_coverage() {
         .iter()
         .filter(|f| f.path == "/etc/sysctl.conf")
         .collect();
-    assert_eq!(sysctl.len(), 1, "identical configs should merge to one entry");
+    assert_eq!(
+        sysctl.len(),
+        1,
+        "identical configs should merge to one entry"
+    );
     assert_eq!(sysctl[0].fleet.as_ref().unwrap().count, 2);
 
     // Services: httpd on 2 hosts, crond on 1
     let services = merged.services.unwrap();
-    let httpd_svc = services.state_changes.iter().find(|s| s.unit == "httpd.service").unwrap();
+    let httpd_svc = services
+        .state_changes
+        .iter()
+        .find(|s| s.unit == "httpd.service")
+        .unwrap();
     assert_eq!(httpd_svc.fleet.as_ref().unwrap().count, 2);
     assert_eq!(httpd_svc.fleet.as_ref().unwrap().total, 3);
 
-    let crond = services.state_changes.iter().find(|s| s.unit == "crond.service").unwrap();
+    let crond = services
+        .state_changes
+        .iter()
+        .find(|s| s.unit == "crond.service")
+        .unwrap();
     assert_eq!(crond.fleet.as_ref().unwrap().count, 1);
     assert_eq!(crond.fleet.as_ref().unwrap().total, 3);
 }
@@ -732,7 +753,10 @@ fn test_e2e_validation_empty_snapshot_rejected() {
     with_rpms(&mut s2, &["httpd"]);
 
     let result = merge_snapshots(vec![s1, s2], None);
-    assert!(result.is_err(), "empty snapshot should cause validation error");
+    assert!(
+        result.is_err(),
+        "empty snapshot should cause validation error"
+    );
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| matches!(
         e,

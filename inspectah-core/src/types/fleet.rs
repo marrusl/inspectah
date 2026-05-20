@@ -72,7 +72,11 @@ mod tests {
 
     #[test]
     fn test_variant_selection_serde_roundtrip() {
-        for variant in [VariantSelection::Only, VariantSelection::Selected, VariantSelection::Alternative] {
+        for variant in [
+            VariantSelection::Only,
+            VariantSelection::Selected,
+            VariantSelection::Alternative,
+        ] {
             let json = serde_json::to_string(&variant).unwrap();
             let parsed: VariantSelection = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, parsed);
@@ -87,10 +91,7 @@ mod tests {
             hostnames: vec!["host-a".into(), "host-b".into()],
             merged_at: "2026-05-20T12:00:00Z".into(),
             baseline_provisional: true,
-            section_host_counts: BTreeMap::from([
-                ("config".into(), 48usize),
-                ("rpm".into(), 50),
-            ]),
+            section_host_counts: BTreeMap::from([("config".into(), 48usize), ("rpm".into(), 50)]),
         };
         let json = serde_json::to_string(&meta).unwrap();
         let parsed: FleetSnapshotMeta = serde_json::from_str(&json).unwrap();
