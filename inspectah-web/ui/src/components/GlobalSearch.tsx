@@ -130,6 +130,19 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
               itemId: ci.id,
             });
           }
+          // Index subsection items so they are searchable too.
+          if (section.subsections) {
+            for (const sub of section.subsections) {
+              for (const ci of sub.items) {
+                results.push({
+                  sectionId: section.id,
+                  sectionLabel: label,
+                  title: ci.title,
+                  itemId: ci.id,
+                });
+              }
+            }
+          }
         }
       }
 
@@ -157,6 +170,13 @@ export const GlobalSearch = forwardRef<GlobalSearchHandle, GlobalSearchProps>(
         for (const section of contextSections) {
           for (const ci of section.items) {
             map.set(ci.id, ci.searchable_text.toLowerCase());
+          }
+          if (section.subsections) {
+            for (const sub of section.subsections) {
+              for (const ci of sub.items) {
+                map.set(ci.id, ci.searchable_text.toLowerCase());
+              }
+            }
           }
         }
       }
