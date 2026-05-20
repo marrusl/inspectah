@@ -15,9 +15,12 @@ use inspectah_core::types::os::OsRelease;
 use inspectah_core::types::rpm::{PackageEntry, PackageState, RpmSection};
 use inspectah_core::types::scheduled::{CronJob, ScheduledTaskSection, SystemdTimer};
 use inspectah_core::types::selinux::SelinuxSection;
-use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
+use inspectah_core::types::services::{
+    PresetDefault, ServiceSection, ServiceStateChange, ServiceUnitState, SystemdDropIn,
+};
 use inspectah_core::types::storage::{FstabEntry, StorageSection};
 use inspectah_core::types::users::UserGroupSection;
+use inspectah_core::types::warnings::{Warning, WarningSeverity};
 use inspectah_refine::session::RefineSession;
 use inspectah_web::handlers::{AppState, normalize_for_context};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -1097,6 +1100,97 @@ async fn health_pretty_name_fallback_to_name() {
     assert_eq!(host["os_name"], "Fedora Linux", "should fall back to name");
     assert_eq!(host["os_version"], "41");
     assert_eq!(host["os_id"], "fedora");
+}
+
+// --- Service subsection tests ------------------------------------------------
+
+fn service_subsection_state() -> Arc<AppState> {
+    let mut snap = InspectionSnapshot::new();
+    snap.rpm = Some(RpmSection {
+        baseline_package_names: Some(vec!["firewalld".into()]),
+        packages_added: vec![PackageEntry {
+            name: "custom-app".into(),
+            arch: "x86_64".into(),
+            state: PackageState::Added,
+            include: false,
+            source_repo: "appstream".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    snap.services = Some(ServiceSection {
+        state_changes: vec![
+            ServiceStateChange {
+                unit: "custom-app.service".into(),
+                current_state: ServiceUnitState::Enabled,
+                default_state: Some(PresetDefault::Disable),
+                include: true,
+                owning_package: Some("custom-app".into()),
+                fleet: None,
+                attention_reason: None,
+            },
+            ServiceStateChange {
+                unit: "sssd-kcm.service".into(),
+                current_state: ServiceUnitState::Disabled,
+                default_state: Some(PresetDefault::Enable),
+                include: true,
+                owning_package: Some("sssd".into()),
+                fleet: None,
+                attention_reason: None,
+            },
+        ],
+        enabled_units: vec![],
+        disabled_units: vec![],
+        drop_ins: vec![],
+        preset_matched_units: vec![],
+    });
+    snap.warnings.push(Warning {
+        inspector: "services".into(),
+        message: "unit linked.service has state 'linked'".into(),
+        severity: Some(WarningSeverity::Warning),
+        extra: std::collections::HashMap::from([
+            ("unit".into(), serde_json::json!("linked.service")),
+            ("raw_state".into(), serde_json::json!("linked")),
+        ]),
+    });
+    Arc::new(AppState {
+        session: Arc::new(Mutex::new(RefineSession::new(snap))),
+        sections_cache: OnceLock::new(),
+    })
+}
+
+#[tokio::test]
+async fn sections_include_service_subsections() {
+    let app = app(service_subsection_state());
+    let (status, json) = get_json(&app, "/api/snapshot/sections").await;
+    assert_eq!(status, StatusCode::OK);
+
+    let sections = json.as_array().unwrap();
+    let svc = sections.iter().find(|s| s["id"] == "services").unwrap();
+
+    let subsections = svc["subsections"].as_array().expect("subsections must be array");
+    // At minimum, omissions and warnings should be present from the fixture.
+    // Advisory subsection is validated in the handler unit test (before
+    // RefineSession normalization can reclassify package include flags).
+    assert!(
+        subsections.iter().any(|s| s["id"] == "omitted_services"),
+        "omitted_services subsection must be present"
+    );
+    assert!(
+        subsections.iter().any(|s| s["id"] == "service_warnings"),
+        "service_warnings subsection must be present"
+    );
+
+    // Verify subsection items have the right shape
+    for sub in subsections {
+        assert!(sub.get("id").is_some(), "subsection must have id");
+        assert!(sub.get("display_name").is_some(), "subsection must have display_name");
+        let sub_items = sub["items"].as_array().expect("subsection items must be array");
+        for item in sub_items {
+            assert!(item.get("id").is_some(), "subsection item must have id");
+            assert!(item.get("title").is_some(), "subsection item must have title");
+        }
+    }
 }
 
 // --- Embedded asset resolution tests -----------------------------------------
