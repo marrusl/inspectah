@@ -25,6 +25,12 @@ pub fn normalize(value: &mut Value) {
         map.remove("redaction_state");
         map.remove("completeness");
 
+        // Strip legacy tie/tie_winner bools (Go) and variant_selection enum (Rust).
+        // Schema-breaking change: these fields diverge by design between Go and Rust.
+        map.remove("tie");
+        map.remove("tie_winner");
+        map.remove("variant_selection");
+
         for (_, v) in map.iter_mut() {
             normalize(v);
         }

@@ -682,9 +682,7 @@ fn collect_drop_ins(exec: &dyn Executor) -> (Vec<SystemdDropIn>, Vec<RedactionHi
                 path: path_str,
                 content,
                 include: true,
-                tie: false,
-                tie_winner: false,
-                fleet: None,
+                ..Default::default()
             });
         }
     }

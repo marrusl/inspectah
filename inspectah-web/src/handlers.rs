@@ -2474,9 +2474,7 @@ mod tests {
                 path: "/etc/systemd/system/sshd.service.d/override.conf".into(),
                 content: "[Service]\nTimeoutStartSec=90".into(),
                 include: true,
-                tie: false,
-                tie_winner: false,
-                fleet: None,
+                ..Default::default()
             }],
             preset_matched_units: vec!["sshd.service".into()],
         });

@@ -1,4 +1,4 @@
-use super::fleet::FleetPrevalence;
+use super::fleet::{FleetPrevalence, VariantSelection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -28,9 +28,7 @@ pub struct QuadletUnit {
     #[serde(default)]
     pub include: bool,
     #[serde(default)]
-    pub tie: bool,
-    #[serde(default)]
-    pub tie_winner: bool,
+    pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ports: Vec<String>,
@@ -57,9 +55,7 @@ pub struct ComposeFile {
     #[serde(default)]
     pub include: bool,
     #[serde(default)]
-    pub tie: bool,
-    #[serde(default)]
-    pub tie_winner: bool,
+    pub variant_selection: VariantSelection,
     pub fleet: Option<FleetPrevalence>,
 }
 
