@@ -101,7 +101,7 @@ pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> FleetValidationRe
     {
         let architectures: HashSet<String> = snapshots
             .iter()
-            .filter_map(|s| extract_meta_string(s, "architecture"))
+            .filter_map(extract_architecture)
             .collect();
         if architectures.len() > 1 {
             let mut sorted: Vec<String> = architectures.into_iter().collect();
@@ -230,6 +230,28 @@ fn extract_meta_string(snap: &InspectionSnapshot, key: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// Infer the host hardware architecture from RPM package arch fields.
+///
+/// Looks at `packages_added` for the dominant hardware architecture,
+/// filtering out `noarch` and sub-architectures like `i686` that appear
+/// alongside a primary arch. Returns None if the RPM section is missing
+/// or contains no packages with a hardware architecture.
+fn extract_architecture(snap: &InspectionSnapshot) -> Option<String> {
+    let rpm = snap.rpm.as_ref()?;
+    let mut arch_counts: HashMap<String, usize> = HashMap::new();
+    for pkg in &rpm.packages_added {
+        if pkg.arch.is_empty() || pkg.arch == "noarch" {
+            continue;
+        }
+        *arch_counts.entry(pkg.arch.clone()).or_insert(0) += 1;
+    }
+    // Return the most frequent hardware architecture
+    arch_counts
+        .into_iter()
+        .max_by_key(|(_, count)| *count)
+        .map(|(arch, _)| arch)
+}
+
 /// Extract the OS major version from os_release.version_id (e.g., "9" from "9.4").
 fn extract_os_major_version(snap: &InspectionSnapshot) -> Option<String> {
     snap.os_release.as_ref().and_then(|r| {
@@ -308,5 +330,163 @@ mod tests {
         let mut snap = InspectionSnapshot::new();
         snap.rpm = Some(crate::types::rpm::RpmSection::default());
         assert!(!is_empty_snapshot(&snap));
+    }
+
+    // --- Architecture extraction tests ---
+
+    fn make_pkg(name: &str, arch: &str) -> crate::types::rpm::PackageEntry {
+        crate::types::rpm::PackageEntry {
+            name: name.into(),
+            arch: arch.into(),
+            include: true,
+            ..Default::default()
+        }
+    }
+
+    fn snap_with_arch_packages(arches: &[(&str, &str)]) -> InspectionSnapshot {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(crate::types::rpm::RpmSection {
+            packages_added: arches.iter().map(|(n, a)| make_pkg(n, a)).collect(),
+            ..Default::default()
+        });
+        snap
+    }
+
+    #[test]
+    fn test_extract_architecture_from_rpm() {
+        let snap = snap_with_arch_packages(&[
+            ("kernel", "x86_64"),
+            ("glibc", "x86_64"),
+            ("tzdata", "noarch"),
+        ]);
+        assert_eq!(extract_architecture(&snap), Some("x86_64".to_string()));
+    }
+
+    #[test]
+    fn test_extract_architecture_aarch64() {
+        let snap = snap_with_arch_packages(&[
+            ("kernel", "aarch64"),
+            ("glibc", "aarch64"),
+        ]);
+        assert_eq!(extract_architecture(&snap), Some("aarch64".to_string()));
+    }
+
+    #[test]
+    fn test_extract_architecture_noarch_only() {
+        let snap = snap_with_arch_packages(&[
+            ("tzdata", "noarch"),
+            ("ca-certificates", "noarch"),
+        ]);
+        assert_eq!(extract_architecture(&snap), None);
+    }
+
+    #[test]
+    fn test_extract_architecture_no_rpm_section() {
+        let snap = InspectionSnapshot::new();
+        assert_eq!(extract_architecture(&snap), None);
+    }
+
+    #[test]
+    fn test_extract_architecture_empty_packages() {
+        let mut snap = InspectionSnapshot::new();
+        snap.rpm = Some(crate::types::rpm::RpmSection::default());
+        assert_eq!(extract_architecture(&snap), None);
+    }
+
+    #[test]
+    fn test_mixed_architecture_validation_fires() {
+        let mut snap1 = snap_with_arch_packages(&[("kernel", "x86_64")]);
+        snap1.meta.insert(
+            "hostname".into(),
+            serde_json::Value::String("web-01".into()),
+        );
+        snap1.os_release = Some(crate::types::os::OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+
+        let mut snap2 = snap_with_arch_packages(&[("kernel", "aarch64")]);
+        snap2.meta.insert(
+            "hostname".into(),
+            serde_json::Value::String("web-02".into()),
+        );
+        snap2.os_release = Some(crate::types::os::OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+
+        let result = validate_snapshots(&[snap1, snap2]);
+        let arch_errors: Vec<_> = result
+            .errors
+            .iter()
+            .filter(|e| matches!(e, FleetValidationError::ArchitectureMismatch { .. }))
+            .collect();
+        assert_eq!(arch_errors.len(), 1);
+        if let FleetValidationError::ArchitectureMismatch { architectures } = &arch_errors[0] {
+            assert_eq!(architectures, &["aarch64", "x86_64"]);
+        }
+    }
+
+    #[test]
+    fn test_same_architecture_no_error() {
+        let mut snap1 = snap_with_arch_packages(&[("kernel", "x86_64"), ("glibc", "x86_64")]);
+        snap1.meta.insert(
+            "hostname".into(),
+            serde_json::Value::String("web-01".into()),
+        );
+        snap1.os_release = Some(crate::types::os::OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+
+        let mut snap2 = snap_with_arch_packages(&[("httpd", "x86_64"), ("glibc", "x86_64")]);
+        snap2.meta.insert(
+            "hostname".into(),
+            serde_json::Value::String("web-02".into()),
+        );
+        snap2.os_release = Some(crate::types::os::OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+
+        let result = validate_snapshots(&[snap1, snap2]);
+        let arch_errors: Vec<_> = result
+            .errors
+            .iter()
+            .filter(|e| matches!(e, FleetValidationError::ArchitectureMismatch { .. }))
+            .collect();
+        assert!(arch_errors.is_empty());
+    }
+
+    #[test]
+    fn test_missing_rpm_section_skips_arch_check() {
+        // One snapshot has RPM data, the other doesn't — should not fire mismatch
+        let mut snap1 = snap_with_arch_packages(&[("kernel", "x86_64")]);
+        snap1.meta.insert(
+            "hostname".into(),
+            serde_json::Value::String("web-01".into()),
+        );
+        snap1.os_release = Some(crate::types::os::OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+
+        let mut snap2 = InspectionSnapshot::new();
+        snap2.meta.insert(
+            "hostname".into(),
+            serde_json::Value::String("web-02".into()),
+        );
+        snap2.os_release = Some(crate::types::os::OsRelease {
+            version_id: "9.4".into(),
+            ..Default::default()
+        });
+
+        let result = validate_snapshots(&[snap1, snap2]);
+        let arch_errors: Vec<_> = result
+            .errors
+            .iter()
+            .filter(|e| matches!(e, FleetValidationError::ArchitectureMismatch { .. }))
+            .collect();
+        assert!(arch_errors.is_empty());
     }
 }

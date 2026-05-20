@@ -24,11 +24,18 @@ fn make_snap(hostname: &str, version_id: &str) -> InspectionSnapshot {
 }
 
 fn make_snap_with_arch(hostname: &str, arch: &str) -> InspectionSnapshot {
+    use inspectah_core::types::rpm::{PackageEntry, RpmSection};
     let mut snap = make_snap(hostname, "9.4");
-    snap.meta.insert(
-        "architecture".to_string(),
-        serde_json::Value::String(arch.to_string()),
-    );
+    // Architecture is inferred from RPM package arch fields
+    snap.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "kernel".into(),
+            arch: arch.into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
     snap
 }
 
@@ -385,19 +392,31 @@ fn test_valid_fleet_passes_cleanly() {
 
 #[test]
 fn test_multiple_errors_reported() {
+    use inspectah_core::types::rpm::{PackageEntry, RpmSection};
     // Schema mismatch + duplicate hostname + architecture mismatch
     let mut a = make_snap("web-01", "9.4");
     let mut b = make_snap("web-01", "8.9");
     a.schema_version = 14;
     b.schema_version = 15;
-    a.meta.insert(
-        "architecture".to_string(),
-        serde_json::Value::String("x86_64".to_string()),
-    );
-    b.meta.insert(
-        "architecture".to_string(),
-        serde_json::Value::String("aarch64".to_string()),
-    );
+    // Architecture is inferred from RPM package arch fields
+    a.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "kernel".into(),
+            arch: "x86_64".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    b.rpm = Some(RpmSection {
+        packages_added: vec![PackageEntry {
+            name: "kernel".into(),
+            arch: "aarch64".into(),
+            include: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
     let result = validate_snapshots(&[a, b]);
     assert!(
         result.errors.len() >= 3,
