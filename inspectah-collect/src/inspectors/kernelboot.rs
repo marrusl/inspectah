@@ -227,6 +227,7 @@ fn parse_lsmod(stdout: &str) -> Vec<KernelModule> {
                 size: parts[1].to_string(),
                 used_by,
                 include: true,
+                fleet: None,
             });
         }
     }
@@ -278,6 +279,7 @@ fn collect_sysctl_overrides(exec: &dyn Executor) -> Result<Vec<SysctlOverride>, 
                     default: file_val.clone(),
                     source: source.clone(),
                     include: true,
+                    fleet: None,
                 });
             }
         }
