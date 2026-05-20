@@ -20,7 +20,8 @@ use std::collections::HashMap;
 /// v15 -> v16: services contract migrated to typed enums (ServiceUnitState,
 /// PresetDefault). Legacy service payloads with stringly typed fields must
 /// be re-scanned — they will fail deserialization by design.
-pub const SCHEMA_VERSION: u32 = 16;
+/// v16 -> v17: added fleet_meta field for fleet snapshot metadata.
+pub const SCHEMA_VERSION: u32 = 17;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InspectionSnapshot {
@@ -76,6 +77,9 @@ pub struct InspectionSnapshot {
     /// True if SSH authorized keys were preserved by operator choice.
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub preserved_ssh_keys: bool,
+    /// Fleet snapshot metadata. None for single-host snapshots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fleet_meta: Option<crate::types::fleet::FleetSnapshotMeta>,
 }
 
 impl InspectionSnapshot {
@@ -594,5 +598,33 @@ mod tests {
 
         assert_eq!(snap.schema_version, SCHEMA_VERSION);
         assert!(snap.no_baseline); // Migration explicitly sets this to true
+    }
+
+    #[test]
+    fn test_snapshot_with_fleet_meta_roundtrip() {
+        use std::collections::BTreeMap;
+
+        let mut snap = InspectionSnapshot::new();
+        snap.fleet_meta = Some(crate::types::fleet::FleetSnapshotMeta {
+            label: "web-tier".into(),
+            host_count: 25,
+            hostnames: vec!["web-01".into(), "web-02".into()],
+            merged_at: "2026-05-20T15:30:00Z".into(),
+            baseline_provisional: true,
+            section_host_counts: BTreeMap::from([
+                ("rpm".into(), 25usize),
+                ("config".into(), 23),
+            ]),
+        });
+        let json = serde_json::to_string(&snap).unwrap();
+        let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(snap.fleet_meta, parsed.fleet_meta);
+    }
+
+    #[test]
+    fn test_snapshot_without_fleet_meta_omits_field() {
+        let snap = InspectionSnapshot::new();
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(!json.contains("fleet_meta"));
     }
 }

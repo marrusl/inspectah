@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VariantSelection {
@@ -28,9 +29,22 @@ pub struct FleetMeta {
     pub min_prevalence: i32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FleetSnapshotMeta {
+    pub label: String,
+    pub host_count: usize,
+    pub hostnames: Vec<String>,
+    pub merged_at: String,
+    #[serde(default)]
+    pub baseline_provisional: bool,
+    #[serde(default)]
+    pub section_host_counts: BTreeMap<String, usize>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn test_fleet_prevalence_roundtrip() {
@@ -63,5 +77,23 @@ mod tests {
             let parsed: VariantSelection = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, parsed);
         }
+    }
+
+    #[test]
+    fn test_fleet_snapshot_meta_roundtrip() {
+        let meta = FleetSnapshotMeta {
+            label: "web-servers".into(),
+            host_count: 50,
+            hostnames: vec!["host-a".into(), "host-b".into()],
+            merged_at: "2026-05-20T12:00:00Z".into(),
+            baseline_provisional: true,
+            section_host_counts: BTreeMap::from([
+                ("config".into(), 48usize),
+                ("rpm".into(), 50),
+            ]),
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        let parsed: FleetSnapshotMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(meta, parsed);
     }
 }

@@ -910,7 +910,7 @@ fn test_full_snapshot_serde_all_sections_present() {
 
     // Build the snapshot as a Value tree
     let mut snap_value = serde_json::json!({
-        "schema_version": 16,
+        "schema_version": 17,
         "meta": {},
         "os_release": null,
         "system_type": "package-mode",

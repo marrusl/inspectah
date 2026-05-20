@@ -25,7 +25,7 @@ pub fn load_for_refine(raw_json: &str) -> Result<InspectionSnapshot, RefineError
     patch_missing_includes(&mut value);
 
     // Serialize patched Value back to string and use InspectionSnapshot::load()
-    // which enforces MIN_SCHEMA..=SCHEMA_VERSION (12..=14).
+    // which enforces MIN_SCHEMA..=SCHEMA_VERSION (currently 12..=17).
     let patched_json =
         serde_json::to_string(&value).map_err(|e| RefineError::SnapshotLoad(e.to_string()))?;
     let mut snap = InspectionSnapshot::load(&patched_json)
