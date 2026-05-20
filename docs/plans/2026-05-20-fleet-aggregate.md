@@ -4,13 +4,15 @@
 
 **Goal:** Implement the `inspectah fleet` and `inspectah fleet init` commands that aggregate N single-host tarballs into a fleet tarball with prevalence metadata.
 
-**Architecture:** Hybrid merge engine (generic `FleetMergeable` trait + thin per-section adapters) in `inspectah-core`. CLI commands in `inspectah-cli`. Fleet tarball inherits the scan tarball contract, adding `fleet/variants/` for content variant storage. The `VariantSelection` enum replaces `tie`/`tie_winner` bools. `FleetSnapshotMeta` on `InspectionSnapshot` carries fleet-level metadata.
+**Architecture:** Hybrid merge engine (generic `FleetMergeable` trait + thin per-section adapters) in `inspectah-core`. CLI commands in `inspectah-cli`. Fleet tarball inherits the scan tarball contract, adding `fleet/variants/` for content variant storage. The `VariantSelection` enum replaces `tie`/`tie_winner` bools on variant-capable types. `FleetSnapshotMeta` on `InspectionSnapshot` carries fleet-level metadata.
 
-**Tech Stack:** Rust (2024 edition), serde, clap derive, toml, sha2, insta (snapshot tests), tar + flate2 (tarball packaging).
+**Tech Stack:** Rust (2024 edition), serde, clap derive, toml, sha2, chrono, insta (snapshot tests), tar + flate2 (tarball packaging).
 
 **Spec:** `docs/specs/proposed/2026-05-19-fleet-aggregate-spec.md`
 
 **Repo:** `/Users/mrussell/Work/bootc-migration/inspectah/` (branch: `rust`)
+
+**Cargo PATH:** `export PATH="$HOME/.rustup/toolchains/stable-aarch64-apple-darwin/bin:$PATH"`
 
 ---
 
@@ -21,7 +23,7 @@
 | File | Responsibility |
 |------|---------------|
 | `inspectah-core/src/fleet/mod.rs` | `merge_snapshots()` orchestrator, public API |
-| `inspectah-core/src/fleet/merge.rs` | Generic merge function + section adapters |
+| `inspectah-core/src/fleet/merge.rs` | `FleetMergeable` trait, generic merge function, section adapters |
 | `inspectah-core/src/fleet/validate.rs` | Pre-merge validation (hard errors + warnings) |
 | `inspectah-core/src/fleet/manifest.rs` | TOML manifest parsing (`FleetManifest`) |
 | `inspectah-core/tests/fleet_merge_test.rs` | Integration tests for merge engine |
@@ -33,17 +35,68 @@
 | File | Changes |
 |------|---------|
 | `inspectah-core/src/types/fleet.rs` | Add `VariantSelection` enum, `FleetSnapshotMeta` struct |
-| `inspectah-core/src/types/config.rs` | Replace `tie`/`tie_winner` with `variant_selection: VariantSelection` |
-| `inspectah-core/src/types/services.rs` | Replace `tie`/`tie_winner` on `SystemdDropIn` |
-| `inspectah-core/src/types/containers.rs` | Replace `tie`/`tie_winner` on `QuadletUnit`, `ComposeFile` |
-| `inspectah-core/src/types/rpm.rs` | Replace `tie`/`tie_winner` on `RepoFile` |
+| `inspectah-core/src/types/config.rs` | Replace `tie`/`tie_winner` with `variant_selection: VariantSelection` on `ConfigFileEntry` |
+| `inspectah-core/src/types/services.rs` | Replace `tie`/`tie_winner` with `variant_selection` on `SystemdDropIn` |
+| `inspectah-core/src/types/containers.rs` | Replace `tie`/`tie_winner` with `variant_selection` on `QuadletUnit` and `ComposeFile` |
 | `inspectah-core/src/types/kernelboot.rs` | Add `fleet` field to `KernelModule`, `SysctlOverride` |
-| `inspectah-core/src/types/nonrpm.rs` | Add `fleet` field to `NonRpmItem` |
-| `inspectah-core/src/snapshot.rs` | Add `fleet_meta` field, bump `SCHEMA_VERSION`, add migration |
+| `inspectah-core/src/snapshot.rs` | Add `fleet_meta` field, bump `SCHEMA_VERSION` |
 | `inspectah-core/src/lib.rs` | Register `fleet` module |
-| `inspectah-core/Cargo.toml` | Add `sha2`, `toml` dependencies |
+| `inspectah-core/Cargo.toml` | Add `sha2`, `toml`, `chrono` dependencies |
 | `inspectah-cli/src/commands/mod.rs` | Register `fleet` subcommand |
-| `inspectah-cli/src/main.rs` | Wire fleet command |
+| `inspectah-cli/src/main.rs` | Wire `Commands::Fleet` variant |
+| `inspectah-pipeline/src/render/audit.rs` | Fleet summary section in audit report |
+
+### Types NOT modified (already correct)
+
+| File | Note |
+|------|------|
+| `inspectah-core/src/types/rpm.rs` | `RepoFile` has NO `tie`/`tie_winner` — not a variant type. `EnabledModuleStream` and `VersionLockEntry` already have `fleet`/`include`. |
+| `inspectah-core/src/types/nonrpm.rs` | `NonRpmItem` already has `fleet: Option<FleetPrevalence>` and `content: String`. No changes needed. |
+
+---
+
+## Live Type Reference
+
+Types that implement `FleetMergeable` (have both `fleet` and `include`):
+
+| Type | Identity Key | Has Variants | Variant Source |
+|------|-------------|-------------|----------------|
+| `PackageEntry` | `name.arch` | No | — |
+| `RepoFile` | `path` | No (no tie/tie_winner) | — |
+| `ConfigFileEntry` | `path` | Yes | `content` field |
+| `ServiceStateChange` | `unit` | No | — |
+| `SystemdDropIn` | `path` | Yes | `content` field |
+| `QuadletUnit` | `path` | Yes | `content` field |
+| `ComposeFile` | `path` | Yes | hash of serialized `images` (no `content` field) |
+| `EnabledModuleStream` | `module_name:stream` | No | — |
+| `VersionLockEntry` | `name.arch` | No | — |
+| `SelinuxPortLabel` | `protocol:port` | No | — |
+| `FirewallZone` | `path` | No (has content but no tie/tie_winner) | — |
+| `CronJob` | `path` | No | — |
+| `NMConnection` | `path` | No | Note: `include` is `Option<bool>`, needs special handling |
+| `NonRpmItem` | `name` | No (variant support deferred) | — |
+| `KernelModule` | `name` | No | **Needs `fleet` field added** |
+| `SysctlOverride` | `key` | No | **Needs `fleet` field added** |
+
+Types handled by section adapters (no `fleet`/`include`):
+
+| Type | Section | Strategy |
+|------|---------|----------|
+| `VersionChange` | `rpm` | Dedup by `name.arch` |
+| `RpmVaEntry` | `rpm` | Dedup by identity |
+| `FstabEntry` | `storage` | Dedup by identity |
+| `MountPoint` | `storage` | Dedup by `target` |
+| `LvmVolume` | `storage` | Dedup by identity |
+| `VarDirectory` | `storage` | Dedup by identity |
+| `CredentialRef` | `storage` | Dedup by identity |
+| `SystemdTimer` | `scheduled_tasks` | Dedup by identity |
+| `AtJob` | `scheduled_tasks` | Dedup by identity |
+| `GeneratedTimerUnit` | `scheduled_tasks` | Dedup by `unit_name` |
+| `ProxyEntry` | `network` | Dedup by `source` |
+| `FirewallDirectRule` | `network` | Dedup by identity |
+| `StaticRouteFile` | `network` | Dedup by identity |
+| `CarryForwardFile` | `selinux` | Dedup by `path` |
+| `UserGroupSection` | `users_groups` | JSON-level dedup (users/groups are `Vec<serde_json::Value>`) |
 
 ---
 
@@ -51,9 +104,6 @@
 
 **Files:**
 - Modify: `inspectah-core/src/types/fleet.rs`
-- Test: inline `#[cfg(test)]` module
-
-This adds the `VariantSelection` enum alongside the existing `FleetPrevalence` and `FleetMeta` types. No migration yet — just the new type.
 
 - [ ] **Step 1: Write failing test for VariantSelection serde roundtrip**
 
@@ -74,13 +124,6 @@ fn test_variant_selection_serde_roundtrip() {
         assert_eq!(variant, parsed);
     }
 }
-
-#[test]
-fn test_variant_selection_copy() {
-    let a = VariantSelection::Selected;
-    let b = a; // Copy
-    assert_eq!(a, b);
-}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -90,7 +133,7 @@ Expected: FAIL — `VariantSelection` not defined
 
 - [ ] **Step 3: Implement VariantSelection enum**
 
-Add to `inspectah-core/src/types/fleet.rs` before the existing `FleetPrevalence`:
+Add to `inspectah-core/src/types/fleet.rs` before `FleetPrevalence`:
 
 ```rust
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,10 +145,9 @@ pub enum VariantSelection {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [ ] **Step 4: Run tests, verify PASS**
 
 Run: `cargo test -p inspectah-core -- test_variant_selection`
-Expected: PASS (3 tests)
 
 - [ ] **Step 5: Commit**
 
@@ -122,14 +164,14 @@ git commit -m "feat(core): add VariantSelection enum for fleet content variants"
 - Modify: `inspectah-core/src/types/config.rs` (ConfigFileEntry)
 - Modify: `inspectah-core/src/types/services.rs` (SystemdDropIn)
 - Modify: `inspectah-core/src/types/containers.rs` (QuadletUnit, ComposeFile)
-- Modify: `inspectah-core/src/types/rpm.rs` (RepoFile)
-- Modify: `inspectah-core/src/snapshot.rs` (schema migration)
 
-This is a schema-breaking change. Replace `tie: bool` + `tie_winner: bool` with `variant_selection: VariantSelection` on all content-variant types. Add schema migration for backward compat.
+**NOT modified:** `inspectah-core/src/types/rpm.rs` — `RepoFile` does not have `tie`/`tie_winner`.
 
-- [ ] **Step 1: Search for all tie/tie_winner usage across the codebase**
+This is a schema-breaking change per spec. The approach: replace the fields, update all consumers, update golden/fixture files. No serde-alias backward compat — the spec explicitly says "schema-breaking change without regard to Go compatibility."
 
-Run: `grep -rn 'tie_winner\|\.tie\b' --include='*.rs' | grep -v target/ | grep -v test`
+- [ ] **Step 1: Find all tie/tie_winner usage across the codebase**
+
+Run: `rg -n 'tie_winner|\.tie\b' --type rust | rg -v 'target/'`
 
 Document every file that reads or writes `tie`/`tie_winner`. These all need updating.
 
@@ -148,59 +190,60 @@ with:
     pub variant_selection: VariantSelection,
 ```
 
-Add the import: `use super::fleet::VariantSelection;`
+Add: `use super::fleet::VariantSelection;`
 
-- [ ] **Step 3: Replace fields on SystemdDropIn, QuadletUnit, ComposeFile, RepoFile**
+- [ ] **Step 3: Replace fields on SystemdDropIn**
 
-Same replacement on each struct. Each file needs the `VariantSelection` import.
+In `inspectah-core/src/types/services.rs`, same replacement on `SystemdDropIn`. Add the import.
 
-- `inspectah-core/src/types/services.rs` — `SystemdDropIn`
-- `inspectah-core/src/types/containers.rs` — `QuadletUnit`, `ComposeFile`
-- `inspectah-core/src/types/rpm.rs` — `RepoFile`
+- [ ] **Step 4: Replace fields on QuadletUnit and ComposeFile**
 
-- [ ] **Step 4: Add schema migration in snapshot.rs**
+In `inspectah-core/src/types/containers.rs`, same replacement on both structs. Add the import.
 
-In the `migrate()` function in `inspectah-core/src/snapshot.rs`, add migration logic for the previous schema version that maps `tie`/`tie_winner` to `VariantSelection`. Since this is a JSON-level migration (the old format has bool fields, the new format has an enum field), handle it in the raw JSON patching step or via a serde migration path.
+- [ ] **Step 5: Fix all compilation errors across workspace**
 
-The migration maps:
-- `tie_winner: true` → `"variant_selection": "Selected"`
-- `tie: true, tie_winner: false` → `"variant_selection": "Alternative"`
-- neither set → `"variant_selection": "Only"` (default)
+Run: `cargo build --workspace 2>&1`
 
-- [ ] **Step 5: Fix all compilation errors**
-
-Run: `cargo build -p inspectah-core 2>&1 | head -50`
-
-Fix every reference to `.tie` or `.tie_winner` across all crates. These will be in:
-- `inspectah-pipeline/src/render/` (Containerfile renderer, config tree)
-- `inspectah-refine/src/` (session.rs, handlers)
-- `inspectah-web/src/` (handlers.rs)
-- Tests throughout
-
-Replace patterns:
+Replace patterns everywhere:
 - `entry.tie_winner` → `entry.variant_selection == VariantSelection::Selected`
 - `entry.tie && !entry.tie_winner` → `entry.variant_selection == VariantSelection::Alternative`
 - `entry.tie = true; entry.tie_winner = true;` → `entry.variant_selection = VariantSelection::Selected;`
 - `entry.tie = true; entry.tie_winner = false;` → `entry.variant_selection = VariantSelection::Alternative;`
 
-- [ ] **Step 6: Run full test suite**
+Key files to check: `inspectah-pipeline/src/render/containerfile.rs`, `inspectah-pipeline/src/render/configtree.rs`, `inspectah-refine/src/session.rs`, `inspectah-web/src/handlers.rs`, and tests throughout.
+
+- [ ] **Step 6: Update snapshot migration in `inspectah-core/src/snapshot.rs`**
+
+The current `migrate()` function runs on `&mut InspectionSnapshot` post-deserialization. Since the old JSON has `"tie": true, "tie_winner": true` and the new struct has `"variant_selection": "Selected"`, deserialization of old snapshots will produce `variant_selection: Only` (the default) and silently drop the old bool fields.
+
+Add a raw-JSON pre-patch in `InspectionSnapshot::load()` — the same pattern `inspectah-refine/src/normalize.rs::patch_missing_includes()` uses. Walk the raw `serde_json::Value` before typed deserialization and convert:
+- `tie_winner: true` → insert `"variant_selection": "Selected"`, remove `tie`/`tie_winner`
+- `tie: true, tie_winner: false` → insert `"variant_selection": "Alternative"`, remove `tie`/`tie_winner`
+- neither → leave as-is (serde default produces `Only`)
+
+Apply this patch to config files, drop-ins, quadlet units, and compose files.
+
+- [ ] **Step 7: Update golden files and snapshot test fixtures**
+
+Run: `cargo insta test --workspace` and review changes.
+
+Update any JSON fixtures in `tests/` or `testdata/` that contain `"tie"` or `"tie_winner"` fields.
+
+- [ ] **Step 8: Run full workspace tests**
 
 Run: `cargo test --workspace`
-Expected: PASS (all existing tests should work with the new field)
+Expected: PASS
 
-- [ ] **Step 7: Update golden files / snapshot tests if needed**
-
-Run: `cargo insta review` if any snapshot tests have changed output.
-
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add -A
+git add inspectah-core/ inspectah-pipeline/ inspectah-refine/ inspectah-web/
 git commit -m "refactor(core): replace tie/tie_winner bools with VariantSelection enum
 
-Schema-breaking change. Eliminates invalid state combinations
-(4 bool states → 3 enum variants). Migration maps legacy
-tie/tie_winner JSON to VariantSelection values."
+Schema-breaking change. Adds raw-JSON pre-patch in load() to
+migrate old tie/tie_winner bools to VariantSelection values.
+Eliminates invalid state combinations (4 bool states to 3 enum
+variants)."
 ```
 
 ---
@@ -210,13 +253,22 @@ tie/tie_winner JSON to VariantSelection values."
 **Files:**
 - Modify: `inspectah-core/src/types/fleet.rs`
 - Modify: `inspectah-core/src/snapshot.rs`
-- Modify: `inspectah-core/Cargo.toml` (add `toml` dependency if not present)
+- Modify: `inspectah-core/Cargo.toml`
 
-- [ ] **Step 1: Write failing test for FleetSnapshotMeta serde roundtrip**
+- [ ] **Step 1: Add `chrono` dependency**
 
-Add to `inspectah-core/src/types/fleet.rs` tests:
+Add to `inspectah-core/Cargo.toml` under `[dependencies]`:
+```toml
+chrono = { version = "0.4", features = ["serde"] }
+```
+
+- [ ] **Step 2: Write failing test for FleetSnapshotMeta**
+
+In `inspectah-core/src/types/fleet.rs` tests:
 
 ```rust
+use std::collections::BTreeMap;
+
 #[test]
 fn test_fleet_snapshot_meta_roundtrip() {
     let meta = FleetSnapshotMeta {
@@ -226,7 +278,7 @@ fn test_fleet_snapshot_meta_roundtrip() {
         merged_at: "2026-05-20T12:00:00Z".into(),
         baseline_provisional: true,
         section_host_counts: BTreeMap::from([
-            ("config".into(), 48),
+            ("config".into(), 48usize),
             ("rpm".into(), 50),
         ]),
     };
@@ -236,9 +288,7 @@ fn test_fleet_snapshot_meta_roundtrip() {
 }
 ```
 
-- [ ] **Step 2: Implement FleetSnapshotMeta**
-
-Add to `inspectah-core/src/types/fleet.rs`:
+- [ ] **Step 3: Implement FleetSnapshotMeta**
 
 ```rust
 use std::collections::BTreeMap;
@@ -256,11 +306,6 @@ pub struct FleetSnapshotMeta {
 }
 ```
 
-- [ ] **Step 3: Run FleetSnapshotMeta test**
-
-Run: `cargo test -p inspectah-core -- test_fleet_snapshot_meta`
-Expected: PASS
-
 - [ ] **Step 4: Add fleet_meta to InspectionSnapshot**
 
 In `inspectah-core/src/snapshot.rs`, add to the struct:
@@ -270,24 +315,19 @@ In `inspectah-core/src/snapshot.rs`, add to the struct:
 pub fleet_meta: Option<crate::types::fleet::FleetSnapshotMeta>,
 ```
 
-Bump `SCHEMA_VERSION` by 1.
+Bump `SCHEMA_VERSION` (currently 16 → 17).
 
-Update the `InspectionSnapshot::new()` constructor to include `fleet_meta: None`.
+Update `InspectionSnapshot::new()` to include `fleet_meta: None`.
 
-- [ ] **Step 5: Write test for fleet_meta on snapshot**
+Update the schema version range in `load()` (the `MIN_SCHEMA..=SCHEMA_VERSION` gate).
+
+- [ ] **Step 5: Write snapshot roundtrip tests**
 
 ```rust
 #[test]
 fn test_snapshot_with_fleet_meta_roundtrip() {
     let mut snap = InspectionSnapshot::new();
-    snap.fleet_meta = Some(FleetSnapshotMeta {
-        label: "test".into(),
-        host_count: 5,
-        hostnames: vec!["a".into(), "b".into()],
-        merged_at: "2026-05-20T00:00:00Z".into(),
-        baseline_provisional: false,
-        section_host_counts: BTreeMap::new(),
-    });
+    snap.fleet_meta = Some(FleetSnapshotMeta { /* ... */ });
     let json = serde_json::to_string(&snap).unwrap();
     let parsed: InspectionSnapshot = serde_json::from_str(&json).unwrap();
     assert_eq!(snap.fleet_meta, parsed.fleet_meta);
@@ -301,68 +341,58 @@ fn test_snapshot_without_fleet_meta_omits_field() {
 }
 ```
 
-- [ ] **Step 6: Run tests, fix any schema version gate issues**
+- [ ] **Step 6: Run workspace tests, fix schema version gates**
 
 Run: `cargo test --workspace`
 
-The schema version bump may break `load_for_refine()` if it has a hardcoded version range. Update `MIN_SCHEMA` or the range check as needed.
+The schema version bump may break `load_for_refine()` if its version range is hardcoded. Update accordingly. Also check `inspectah-core/tests/parity_gate.rs`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add inspectah-core/src/types/fleet.rs inspectah-core/src/snapshot.rs
+git add inspectah-core/src/types/fleet.rs inspectah-core/src/snapshot.rs inspectah-core/Cargo.toml
 git commit -m "feat(core): add FleetSnapshotMeta and fleet_meta field on InspectionSnapshot
 
-Bumps SCHEMA_VERSION. fleet_meta is None on single-host snapshots
-and omitted from serialized JSON via skip_serializing_if."
+Bumps SCHEMA_VERSION to 17. fleet_meta is None on single-host
+snapshots and omitted from serialized JSON."
 ```
 
 ---
 
-## Task 4: Add fleet field to types that don't have it
+## Task 4: Add fleet field to types that need it
 
 **Files:**
 - Modify: `inspectah-core/src/types/kernelboot.rs`
-- Modify: `inspectah-core/src/types/nonrpm.rs`
 
-Add `pub fleet: Option<FleetPrevalence>` to `KernelModule`, `SysctlOverride`, and `NonRpmItem`. These types currently have `include: bool` but no fleet tracking.
+Only two types need fleet added. `NonRpmItem` already has `fleet: Option<FleetPrevalence>`.
 
 - [ ] **Step 1: Add fleet field to KernelModule and SysctlOverride**
 
-In `inspectah-core/src/types/kernelboot.rs`:
-
+In `inspectah-core/src/types/kernelboot.rs`, add import:
 ```rust
 use super::fleet::FleetPrevalence;
 ```
 
-Add to both `KernelModule` and `SysctlOverride`:
+Add to `KernelModule`:
 ```rust
     pub fleet: Option<FleetPrevalence>,
 ```
 
-- [ ] **Step 2: Add fleet field to NonRpmItem**
-
-In `inspectah-core/src/types/nonrpm.rs`:
-
-```rust
-use super::fleet::FleetPrevalence;
-```
-
-Add to `NonRpmItem`:
+Add to `SysctlOverride`:
 ```rust
     pub fleet: Option<FleetPrevalence>,
 ```
 
-- [ ] **Step 3: Run workspace tests**
+- [ ] **Step 2: Run workspace tests**
 
 Run: `cargo test --workspace`
-Expected: PASS (new fields are `Option` with serde default)
+Expected: PASS (new `Option` fields default to `None` via serde)
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add inspectah-core/src/types/kernelboot.rs inspectah-core/src/types/nonrpm.rs
-git commit -m "feat(core): add fleet prevalence field to KernelModule, SysctlOverride, NonRpmItem"
+git add inspectah-core/src/types/kernelboot.rs
+git commit -m "feat(core): add fleet prevalence field to KernelModule and SysctlOverride"
 ```
 
 ---
@@ -373,14 +403,17 @@ git commit -m "feat(core): add fleet prevalence field to KernelModule, SysctlOve
 - Create: `inspectah-core/src/fleet/mod.rs`
 - Create: `inspectah-core/src/fleet/merge.rs`
 - Modify: `inspectah-core/src/lib.rs`
+- Modify: `inspectah-core/Cargo.toml` (add `sha2`)
 - Test: `inspectah-core/tests/fleet_merge_test.rs`
 
-Define the `FleetMergeable` trait and implement it for all prevalence-tracked types from the coverage table.
+- [ ] **Step 1: Add sha2 dependency and create fleet module**
 
-- [ ] **Step 1: Create fleet module skeleton**
+Add to `inspectah-core/Cargo.toml`:
+```toml
+sha2 = "0.10"
+```
 
 Create `inspectah-core/src/fleet/mod.rs`:
-
 ```rust
 pub mod merge;
 ```
@@ -390,7 +423,9 @@ Register in `inspectah-core/src/lib.rs`:
 pub mod fleet;
 ```
 
-Create `inspectah-core/src/fleet/merge.rs` with the trait:
+- [ ] **Step 2: Define the FleetMergeable trait**
+
+Create `inspectah-core/src/fleet/merge.rs`:
 
 ```rust
 use std::borrow::Cow;
@@ -405,7 +440,7 @@ pub trait FleetMergeable: Clone {
 }
 ```
 
-- [ ] **Step 2: Write failing test for PackageEntry identity key**
+- [ ] **Step 3: Write failing test for PackageEntry**
 
 Create `inspectah-core/tests/fleet_merge_test.rs`:
 
@@ -424,13 +459,12 @@ fn test_package_entry_identity_key_is_name_dot_arch() {
 }
 ```
 
-- [ ] **Step 3: Implement FleetMergeable for PackageEntry**
+- [ ] **Step 4: Implement FleetMergeable for all prevalence-tracked types**
 
-In `inspectah-core/src/fleet/merge.rs`:
+Implement per the Live Type Reference table above. Key implementations:
 
 ```rust
-use crate::types::rpm::PackageEntry;
-
+// PackageEntry: identity = name.arch, no variants
 impl FleetMergeable for PackageEntry {
     fn identity_key(&self) -> Cow<'_, str> {
         Cow::Owned(format!("{}.{}", self.name, self.arch))
@@ -438,69 +472,123 @@ impl FleetMergeable for PackageEntry {
     fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
     fn set_include(&mut self, val: bool) { self.include = val; }
 }
+
+// ConfigFileEntry: identity = path, variants via content hash
+impl FleetMergeable for ConfigFileEntry {
+    fn identity_key(&self) -> Cow<'_, str> { Cow::Borrowed(&self.path) }
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
+    fn set_include(&mut self, val: bool) { self.include = val; }
+    fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
+        Some(&mut self.variant_selection)
+    }
+    fn content_variant_key(&self) -> Option<Cow<'_, str>> {
+        use sha2::{Sha256, Digest};
+        Some(Cow::Owned(format!("{:x}", Sha256::digest(self.content.as_bytes()))))
+    }
+}
+
+// ComposeFile: identity = path, variants via serialized images hash
+// NOTE: ComposeFile has NO content field — variant key hashes serialized images
+impl FleetMergeable for ComposeFile {
+    fn identity_key(&self) -> Cow<'_, str> { Cow::Borrowed(&self.path) }
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
+    fn set_include(&mut self, val: bool) { self.include = val; }
+    fn variant_selection_mut(&mut self) -> Option<&mut VariantSelection> {
+        Some(&mut self.variant_selection)
+    }
+    fn content_variant_key(&self) -> Option<Cow<'_, str>> {
+        use sha2::{Sha256, Digest};
+        let serialized = serde_json::to_string(&self.images).unwrap_or_default();
+        Some(Cow::Owned(format!("{:x}", Sha256::digest(serialized.as_bytes()))))
+    }
+}
+
+// ServiceStateChange: identity = unit, no variants
+// NOTE: current_state is ServiceUnitState enum, default_state is Option<PresetDefault>
+impl FleetMergeable for ServiceStateChange {
+    fn identity_key(&self) -> Cow<'_, str> { Cow::Borrowed(&self.unit) }
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
+    fn set_include(&mut self, val: bool) { self.include = val; }
+}
+
+// EnabledModuleStream: identity = module_name:stream
+impl FleetMergeable for EnabledModuleStream {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("{}:{}", self.module_name, self.stream))
+    }
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
+    fn set_include(&mut self, val: bool) { self.include = val; }
+}
+
+// VersionLockEntry: identity = name.arch
+impl FleetMergeable for VersionLockEntry {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("{}.{}", self.name, self.arch))
+    }
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
+    fn set_include(&mut self, val: bool) { self.include = val; }
+}
+
+// SelinuxPortLabel: identity = protocol:port
+impl FleetMergeable for SelinuxPortLabel {
+    fn identity_key(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("{}:{}", self.protocol, self.port))
+    }
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
+    fn set_include(&mut self, val: bool) { self.include = val; }
+}
+
+// NMConnection: identity = path
+// NOTE: include is Option<bool>, not bool — needs special set_include
+impl FleetMergeable for NMConnection {
+    fn identity_key(&self) -> Cow<'_, str> { Cow::Borrowed(&self.path) }
+    fn fleet_mut(&mut self) -> &mut Option<FleetPrevalence> { &mut self.fleet }
+    fn set_include(&mut self, val: bool) { self.include = Some(val); }
+}
 ```
 
-- [ ] **Step 4: Run test**
+Also implement for: `RepoFile` (identity: `path`), `SystemdDropIn` (identity: `path`, has variants), `QuadletUnit` (identity: `path`, has variants), `FirewallZone` (identity: `path`), `CronJob` (identity: `path`), `KernelModule` (identity: `name`), `SysctlOverride` (identity: `key`), `NonRpmItem` (identity: `name`).
 
-Run: `cargo test -p inspectah-core --test fleet_merge_test`
-Expected: PASS
-
-- [ ] **Step 5: Implement FleetMergeable for all remaining prevalence-tracked types**
-
-Implement for each type per the coverage table. Identity keys:
-
-| Type | Identity key expression |
-|------|----------------------|
-| `PackageEntry` | `format!("{}.{}", self.name, self.arch)` |
-| `RepoFile` | `Cow::Borrowed(&self.path)` |
-| `ConfigFileEntry` | `Cow::Borrowed(&self.path)` |
-| `ServiceStateChange` | `Cow::Borrowed(&self.unit)` |
-| `SystemdDropIn` | `Cow::Borrowed(&self.path)` |
-| `QuadletUnit` | `Cow::Borrowed(&self.path)` |
-| `ComposeFile` | `Cow::Borrowed(&self.path)` |
-| `SelinuxPortLabel` | `format!("{}:{}", self.protocol, self.port)` |
-| `KernelModule` | `Cow::Borrowed(&self.name)` |
-| `SysctlOverride` | `Cow::Borrowed(&self.key)` |
-| `NonRpmItem` | `Cow::Borrowed(&self.name)` |
-
-For types with content variants (RepoFile, ConfigFileEntry, SystemdDropIn, QuadletUnit, ComposeFile), also implement `content_variant_key()` returning a SHA-256 hash of the `content` field, and `variant_selection_mut()` returning `Some(&mut self.variant_selection)`.
-
-Use `sha2` crate for the content hash. Add `sha2 = "0.10"` to `inspectah-core/Cargo.toml`.
-
-- [ ] **Step 6: Write tests for variant-capable types**
+- [ ] **Step 5: Write tests for variant-capable types**
 
 ```rust
 #[test]
-fn test_config_file_entry_has_content_variant_key() {
+fn test_config_file_has_variant_key() {
     let entry = ConfigFileEntry {
         path: "/etc/foo.conf".into(),
-        content: "setting=value".into(),
+        content: "val".into(),
         ..Default::default()
     };
-    let key = entry.content_variant_key();
-    assert!(key.is_some());
-    // Same content → same key
-    let entry2 = ConfigFileEntry {
-        path: "/etc/foo.conf".into(),
-        content: "setting=value".into(),
-        ..Default::default()
-    };
-    assert_eq!(key, entry2.content_variant_key());
+    assert!(entry.content_variant_key().is_some());
 }
 
 #[test]
-fn test_package_entry_has_no_content_variant_key() {
-    let pkg = PackageEntry::default();
-    assert!(pkg.content_variant_key().is_none());
+fn test_compose_file_variant_key_uses_images() {
+    let cf = ComposeFile {
+        path: "/opt/app/docker-compose.yml".into(),
+        images: vec![],
+        ..Default::default()
+    };
+    assert!(cf.content_variant_key().is_some());
+}
+
+#[test]
+fn test_package_entry_has_no_variant_key() {
+    assert!(PackageEntry::default().content_variant_key().is_none());
+}
+
+#[test]
+fn test_repo_file_has_no_variant_key() {
+    assert!(RepoFile::default().content_variant_key().is_none());
 }
 ```
 
-- [ ] **Step 7: Run all fleet tests**
+- [ ] **Step 6: Run tests**
 
 Run: `cargo test -p inspectah-core --test fleet_merge_test`
 Expected: PASS
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add inspectah-core/src/fleet/ inspectah-core/src/lib.rs inspectah-core/Cargo.toml inspectah-core/tests/fleet_merge_test.rs
@@ -515,35 +603,29 @@ git commit -m "feat(core): FleetMergeable trait with impls for all prevalence-tr
 - Modify: `inspectah-core/src/fleet/merge.rs`
 - Test: `inspectah-core/tests/fleet_merge_test.rs`
 
-The core merge function: takes items from N snapshots, groups by identity, computes prevalence, handles variants.
-
 - [ ] **Step 1: Write failing test for basic prevalence merge**
 
 ```rust
 #[test]
-fn test_merge_items_prevalence_two_hosts_same_package() {
+fn test_merge_items_two_hosts_same_package() {
     let items: Vec<(usize, PackageEntry)> = vec![
-        (0, PackageEntry { name: "httpd".into(), arch: "x86_64".into(), include: false, ..Default::default() }),
-        (1, PackageEntry { name: "httpd".into(), arch: "x86_64".into(), include: false, ..Default::default() }),
+        (0, PackageEntry { name: "httpd".into(), arch: "x86_64".into(), ..Default::default() }),
+        (1, PackageEntry { name: "httpd".into(), arch: "x86_64".into(), ..Default::default() }),
     ];
     let hostnames = vec!["host-a".to_string(), "host-b".to_string()];
     let merged = merge_items(items, 2, &hostnames);
     assert_eq!(merged.len(), 1);
-    let pkg = &merged[0];
-    let fleet = pkg.fleet.as_ref().unwrap();
+    let fleet = merged[0].fleet.as_ref().unwrap();
     assert_eq!(fleet.count, 2);
     assert_eq!(fleet.total, 2);
-    assert!(pkg.include); // always true after aggregate
+    assert_eq!(fleet.hosts, vec!["host-a", "host-b"]); // sorted
+    assert!(merged[0].include);
 }
 ```
 
-- [ ] **Step 2: Implement `merge_items<T: FleetMergeable>`**
-
-In `inspectah-core/src/fleet/merge.rs`:
+- [ ] **Step 2: Implement merge_items**
 
 ```rust
-use std::collections::HashMap;
-
 pub fn merge_items<T: FleetMergeable>(
     items: Vec<(usize, T)>,
     total_hosts: usize,
@@ -557,46 +639,39 @@ pub fn merge_items<T: FleetMergeable>(
 
     let mut result: Vec<T> = Vec::new();
     for (_key, group) in &mut groups {
-        // Sort group entries by host_idx for determinism
         group.sort_by_key(|(idx, _)| *idx);
 
-        let hosts: Vec<String> = group.iter()
+        let mut hosts: Vec<String> = group.iter()
             .map(|(idx, _)| hostnames[*idx].clone())
             .collect();
+        hosts.sort();
+        hosts.dedup();
         let count = hosts.len() as i32;
 
-        // Check if this type has content variants
         let has_variants = group[0].1.content_variant_key().is_some();
 
         if has_variants {
             result.extend(merge_with_variants(group, total_hosts, &hosts));
         } else {
-            // Take the most-prevalent representative (first by host order)
             let mut representative = group[0].1.clone();
             *representative.fleet_mut() = Some(FleetPrevalence {
                 count,
                 total: total_hosts as i32,
-                hosts: {
-                    let mut h = hosts;
-                    h.sort();
-                    h
-                },
+                hosts,
             });
             representative.set_include(true);
             result.push(representative);
         }
     }
 
-    // Sort by identity key for deterministic output
     result.sort_by(|a, b| a.identity_key().cmp(&b.identity_key()));
     result
 }
 ```
 
-- [ ] **Step 3: Run test**
+Note: host dedup is important — the same host index can appear multiple times if a snapshot has duplicate items within a section.
 
-Run: `cargo test -p inspectah-core --test fleet_merge_test -- test_merge_items_prevalence`
-Expected: PASS
+- [ ] **Step 3: Run test, verify PASS**
 
 - [ ] **Step 4: Write failing test for variant merge**
 
@@ -610,39 +685,66 @@ fn test_merge_items_variant_selection() {
     ];
     let hostnames = vec!["h1".into(), "h2".into(), "h3".into()];
     let merged = merge_items(items, 3, &hostnames);
-
-    // Two variants: version_a (2 hosts) and version_b (1 host)
     assert_eq!(merged.len(), 2);
     let selected = merged.iter().find(|e| e.variant_selection == VariantSelection::Selected).unwrap();
-    let alternative = merged.iter().find(|e| e.variant_selection == VariantSelection::Alternative).unwrap();
-
-    assert_eq!(selected.content, "version_a"); // most prevalent
-    assert_eq!(alternative.content, "version_b");
+    let alt = merged.iter().find(|e| e.variant_selection == VariantSelection::Alternative).unwrap();
+    assert_eq!(selected.content, "version_a");
     assert_eq!(selected.fleet.as_ref().unwrap().count, 2);
-    assert_eq!(alternative.fleet.as_ref().unwrap().count, 1);
+    assert_eq!(alt.content, "version_b");
+    assert_eq!(alt.fleet.as_ref().unwrap().count, 1);
+}
+
+#[test]
+fn test_merge_items_single_variant_is_only() {
+    let items: Vec<(usize, ConfigFileEntry)> = vec![
+        (0, ConfigFileEntry { path: "/etc/foo.conf".into(), content: "same".into(), ..Default::default() }),
+        (1, ConfigFileEntry { path: "/etc/foo.conf".into(), content: "same".into(), ..Default::default() }),
+    ];
+    let hostnames = vec!["h1".into(), "h2".into()];
+    let merged = merge_items(items, 2, &hostnames);
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].variant_selection, VariantSelection::Only);
 }
 ```
 
-- [ ] **Step 5: Implement `merge_with_variants`**
+- [ ] **Step 5: Implement merge_with_variants**
 
-This is the content-variant merge path. Group by identity key, then subgroup by content hash. Most prevalent subgroup's representative becomes `Selected`, others become `Alternative`. Ties broken by lexicographic content hash.
+Key behavior: subgroup by content hash. If only one subgroup exists → `Only` (not `Selected`). If multiple → most-prevalent is `Selected`, rest are `Alternative`. Ties broken by lexicographic content hash.
 
 ```rust
 fn merge_with_variants<T: FleetMergeable>(
     group: &mut [(usize, T)],
     total_hosts: usize,
-    all_hosts: &[String],
+    all_hosts_sorted: &[String],
 ) -> Vec<T> {
     use sha2::{Sha256, Digest};
 
-    // Subgroup by content hash
     let mut subgroups: HashMap<String, Vec<(usize, &T)>> = HashMap::new();
     for (idx, item) in group.iter() {
         let hash = item.content_variant_key().unwrap().into_owned();
         subgroups.entry(hash).or_default().push((*idx, item));
     }
 
-    // Find the winner: most hosts, tie-break by hash
+    // Single content version across all hosts → Only, not Selected
+    if subgroups.len() == 1 {
+        let (_, subgroup) = subgroups.into_iter().next().unwrap();
+        let mut item = subgroup[0].1.clone();
+        let mut hosts: Vec<String> = subgroup.iter()
+            .map(|(idx, _)| all_hosts_sorted[*idx].clone())
+            .collect();
+        hosts.sort();
+        hosts.dedup();
+        *item.fleet_mut() = Some(FleetPrevalence {
+            count: hosts.len() as i32,
+            total: total_hosts as i32,
+            hosts,
+        });
+        item.set_include(true);
+        // variant_selection stays Only (default)
+        return vec![item];
+    }
+
+    // Multiple content versions — rank by prevalence, tie-break by hash
     let mut ranked: Vec<(String, Vec<(usize, &T)>)> = subgroups.into_iter().collect();
     ranked.sort_by(|(hash_a, hosts_a), (hash_b, hosts_b)| {
         hosts_b.len().cmp(&hosts_a.len())
@@ -650,67 +752,39 @@ fn merge_with_variants<T: FleetMergeable>(
     });
 
     let mut result = Vec::new();
-    for (i, (content_hash, subgroup)) in ranked.iter().enumerate() {
-        let hosts: Vec<String> = subgroup.iter()
-            .map(|(idx, _)| all_hosts[*idx].clone())
+    for (i, (_hash, subgroup)) in ranked.iter().enumerate() {
+        let mut hosts: Vec<String> = subgroup.iter()
+            .map(|(idx, _)| all_hosts_sorted[*idx].clone())
             .collect();
+        hosts.sort();
+        hosts.dedup();
 
         let mut item = subgroup[0].1.clone();
         *item.fleet_mut() = Some(FleetPrevalence {
             count: hosts.len() as i32,
             total: total_hosts as i32,
-            hosts: { let mut h = hosts; h.sort(); h },
+            hosts,
         });
         item.set_include(true);
-
         if let Some(vs) = item.variant_selection_mut() {
             *vs = if i == 0 { VariantSelection::Selected } else { VariantSelection::Alternative };
         }
-
         result.push(item);
     }
-
     result
 }
 ```
 
-- [ ] **Step 6: Run variant test**
+- [ ] **Step 6: Write deterministic tie-break test**
 
-Run: `cargo test -p inspectah-core --test fleet_merge_test -- test_merge_items_variant`
-Expected: PASS
+Test that reversing input order produces the same Selected winner.
 
-- [ ] **Step 7: Write test for deterministic tie-breaking**
-
-```rust
-#[test]
-fn test_merge_items_variant_tie_breaks_by_hash() {
-    // Two content variants with equal host count — winner determined by hash
-    let items: Vec<(usize, ConfigFileEntry)> = vec![
-        (0, ConfigFileEntry { path: "/etc/foo.conf".into(), content: "aaa".into(), ..Default::default() }),
-        (1, ConfigFileEntry { path: "/etc/foo.conf".into(), content: "zzz".into(), ..Default::default() }),
-    ];
-    let hostnames = vec!["h1".into(), "h2".into()];
-    let merged = merge_items(items.clone(), 2, &hostnames);
-
-    let selected = merged.iter().find(|e| e.variant_selection == VariantSelection::Selected).unwrap();
-    // Run again with reversed input order — should pick the same winner
-    let items_rev: Vec<(usize, ConfigFileEntry)> = vec![
-        (0, ConfigFileEntry { path: "/etc/foo.conf".into(), content: "zzz".into(), ..Default::default() }),
-        (1, ConfigFileEntry { path: "/etc/foo.conf".into(), content: "aaa".into(), ..Default::default() }),
-    ];
-    let merged_rev = merge_items(items_rev, 2, &hostnames);
-    let selected_rev = merged_rev.iter().find(|e| e.variant_selection == VariantSelection::Selected).unwrap();
-
-    assert_eq!(selected.content, selected_rev.content);
-}
-```
-
-- [ ] **Step 8: Run all merge tests**
+- [ ] **Step 7: Run all merge tests**
 
 Run: `cargo test -p inspectah-core --test fleet_merge_test`
 Expected: PASS
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add inspectah-core/src/fleet/merge.rs inspectah-core/tests/fleet_merge_test.rs
@@ -726,98 +800,29 @@ git commit -m "feat(core): generic fleet merge function with prevalence and vari
 - Modify: `inspectah-core/src/fleet/mod.rs`
 - Modify: `inspectah-core/Cargo.toml`
 
-- [ ] **Step 1: Add `toml` dependency**
+- [ ] **Step 1: Add toml dependency**
 
-Add to `inspectah-core/Cargo.toml` under `[dependencies]`:
+Add to `inspectah-core/Cargo.toml`:
 ```toml
 toml = "0.8"
 ```
 
-- [ ] **Step 2: Write failing test for manifest parsing**
+- [ ] **Step 2: Write tests and implement FleetManifest**
 
-In `inspectah-core/src/fleet/manifest.rs`:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_basic_manifest() {
-        let toml = r#"
-            label = "web-servers"
-            baseline = "registry.redhat.io/rhel9/rhel-bootc:9.6"
-            sources = ["host1.tar.gz", "host2.tar.gz"]
-        "#;
-        let manifest = FleetManifest::parse(toml).unwrap();
-        assert_eq!(manifest.label.as_deref(), Some("web-servers"));
-        assert_eq!(manifest.baseline.as_deref(), Some("registry.redhat.io/rhel9/rhel-bootc:9.6"));
-        assert_eq!(manifest.sources.len(), 2);
-    }
-
-    #[test]
-    fn test_parse_minimal_manifest() {
-        let toml = r#"sources = ["host1.tar.gz"]"#;
-        let manifest = FleetManifest::parse(toml).unwrap();
-        assert!(manifest.label.is_none());
-        assert!(manifest.baseline.is_none());
-        assert_eq!(manifest.sources.len(), 1);
-    }
-
-    #[test]
-    fn test_parse_empty_sources_is_error() {
-        let toml = r#"sources = []"#;
-        assert!(FleetManifest::parse(toml).is_err());
-    }
-}
-```
-
-- [ ] **Step 3: Implement FleetManifest**
+See original plan Task 7 — the manifest struct and tests are correct as written. The type is:
 
 ```rust
-use serde::Deserialize;
-use std::path::{Path, PathBuf};
-
 #[derive(Debug, Clone, Deserialize)]
 pub struct FleetManifest {
     pub label: Option<String>,
     pub baseline: Option<String>,
     pub sources: Vec<PathBuf>,
 }
-
-impl FleetManifest {
-    pub fn parse(toml_str: &str) -> Result<Self, String> {
-        let manifest: Self = toml::from_str(toml_str)
-            .map_err(|e| format!("invalid fleet manifest: {e}"))?;
-        if manifest.sources.is_empty() {
-            return Err("manifest has no sources".into());
-        }
-        Ok(manifest)
-    }
-
-    pub fn load(path: &Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read manifest {}: {e}", path.display()))?;
-        let mut manifest = Self::parse(&content)?;
-        // Resolve sources relative to manifest parent dir
-        if let Some(parent) = path.parent() {
-            manifest.sources = manifest.sources.iter()
-                .map(|s| parent.join(s))
-                .collect();
-        }
-        Ok(manifest)
-    }
-}
 ```
 
-- [ ] **Step 4: Register module and run tests**
+With `parse()` and `load()` methods. `load()` resolves `sources` paths relative to the manifest file's parent directory.
 
-Add `pub mod manifest;` to `inspectah-core/src/fleet/mod.rs`.
-
-Run: `cargo test -p inspectah-core -- test_parse`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Register module, run tests, commit**
 
 ```bash
 git add inspectah-core/src/fleet/manifest.rs inspectah-core/src/fleet/mod.rs inspectah-core/Cargo.toml
@@ -833,83 +838,39 @@ git commit -m "feat(core): FleetManifest TOML parsing with path resolution"
 - Modify: `inspectah-core/src/fleet/mod.rs`
 - Test: `inspectah-core/tests/fleet_validate_test.rs`
 
-Implement all hard-error and warning checks from the spec's Validation section. Validation runs as a separate pass before merge, collecting all errors/warnings together.
+**Important seam note:** `validate_snapshots()` takes `&[InspectionSnapshot]` — already-parsed snapshots. It CANNOT detect unparseable files because those never become snapshots. The `UnparseableFile` warning is emitted by the CLI layer during tarball loading (Task 11), not by core validation.
 
 - [ ] **Step 1: Define error and warning types**
 
-In `inspectah-core/src/fleet/validate.rs`:
-
 ```rust
-use crate::snapshot::InspectionSnapshot;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum FleetValidationError {
+    TooFewSnapshots { count: usize },
     SchemaVersionMismatch { versions: Vec<u32> },
     DuplicateHostname { hostname: String },
     ArchitectureMismatch { architectures: Vec<String> },
     EmptySnapshot { hostname: String },
     OsMajorVersionMismatch { versions: Vec<String> },
-    TooFewSnapshots { count: usize },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FleetWarning {
-    StaleScanDates { oldest: String, newest: String, days_apart: u64 },
-    UnparseableFile { path: String, error: String },
-    BaselineConflict { distribution: Vec<(String, usize)> },
+    StaleScanDates { spread_description: String },
+    BaselineConflict { distribution: Vec<(String, usize)>, selected: String },
     MinorVersionSpread { versions: Vec<String> },
     SystemTypeMismatch { types: Vec<String> },
 }
-
-pub struct ValidationResult {
-    pub errors: Vec<FleetValidationError>,
-    pub warnings: Vec<FleetWarning>,
-}
-
-pub fn validate_snapshots(snapshots: &[InspectionSnapshot]) -> ValidationResult {
-    let mut errors = Vec::new();
-    let mut warnings = Vec::new();
-    // ... implement each check
-    ValidationResult { errors, warnings }
-}
 ```
 
-- [ ] **Step 2: Write tests for each hard error**
+Note: `StaleScanDates` uses a description string rather than parsed timestamps because the Rust collector may not populate `meta["timestamp"]`. The implementer should check what metadata keys are available on real snapshots and adapt. Tarball file modification times are a fallback.
 
-Create `inspectah-core/tests/fleet_validate_test.rs` with tests for:
-- Schema version mismatch across snapshots
-- Duplicate hostnames
-- Architecture mismatch (derive arch from packages or os_release)
-- Empty/zero-package snapshot
-- OS major version mismatch (RHEL 8 + RHEL 9)
-- Minimum 2 snapshots
+- [ ] **Step 2: Write tests for each hard error and warning**
 
-- [ ] **Step 3: Implement each validation check**
+Tests should construct `InspectionSnapshot` instances with the relevant fields set and verify validation catches the problems.
 
-Each check iterates the snapshot list and collects violations:
-- **Schema version:** compare `schema_version` across all inputs
-- **Duplicate hostname:** extract from `meta["hostname"]`, check for duplicates
-- **Architecture:** derive from os_release or package arches, check uniformity
-- **Empty snapshot:** check `rpm.is_none()` or `rpm.packages_added.is_empty()`
-- **OS major version:** parse from `os_release.version_id`, compare major component
+For hostname extraction: check `meta.get("hostname")`. If unavailable, derive from tarball filename (CLI layer responsibility, passed to validation as a separate hostname list).
 
-- [ ] **Step 4: Write tests for each warning**
-
-Test stale scan dates (>30 days apart), baseline conflicts (different `target_image` values), minor version spread, system type mismatch.
-
-- [ ] **Step 5: Implement warning checks**
-
-- **Stale scans:** compare `meta["scan_date"]` across inputs
-- **Baseline conflicts:** compare `target_image` across inputs
-- **Minor version:** parse minor from version_id, check spread
-- **System type:** compare `system_type` across inputs
-
-- [ ] **Step 6: Run all validation tests**
-
-Run: `cargo test -p inspectah-core --test fleet_validate_test`
-Expected: PASS
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 3: Implement validation, run tests, commit**
 
 ```bash
 git add inspectah-core/src/fleet/validate.rs inspectah-core/tests/fleet_validate_test.rs inspectah-core/src/fleet/mod.rs
@@ -924,9 +885,9 @@ git commit -m "feat(core): fleet pre-merge validation with hard errors and warni
 - Modify: `inspectah-core/src/fleet/merge.rs`
 - Test: `inspectah-core/tests/fleet_merge_test.rs`
 
-Implement thin adapter functions for each snapshot section. These extract fields, call `merge_items`, handle non-prevalence fields (string list dedup, pass-through), and reassemble section structs.
+Thin adapter functions per section. Each extracts fields, calls `merge_items` for prevalence-tracked types, and handles non-prevalence types with dedup helpers.
 
-- [ ] **Step 1: Implement dedup helper for string lists**
+- [ ] **Step 1: Implement dedup helpers**
 
 ```rust
 pub(crate) fn dedup_strings(lists: Vec<Vec<String>>) -> Vec<String> {
@@ -944,63 +905,43 @@ pub(crate) fn dedup_strings(lists: Vec<Vec<String>>) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 2: Implement most-prevalent-value helper**
+- [ ] **Step 2: Implement RPM section adapter**
 
-```rust
-pub(crate) fn most_prevalent_value<T: Clone + Eq + std::hash::Hash + Ord>(values: &[T]) -> T {
-    let mut counts: HashMap<&T, usize> = HashMap::new();
-    for v in values {
-        *counts.entry(v).or_default() += 1;
-    }
-    let max_count = counts.values().max().copied().unwrap_or(0);
-    let mut candidates: Vec<&&T> = counts.iter()
-        .filter(|(_, &c)| c == max_count)
-        .map(|(v, _)| v)
-        .collect();
-    candidates.sort();
-    (**candidates[0]).clone()
-}
-```
+Handles: `packages_added`, `base_image_only` (merge via `merge_items`), `repo_files`, `gpg_keys` (merge via `merge_items` — no variants, RepoFile has no tie/tie_winner), `module_streams` (merge via `merge_items`), `version_locks` (merge via `merge_items`), `dnf_history_removed` / `module_stream_conflicts` / `multiarch_packages` / `duplicate_packages` (dedup strings), `version_changes` (dedup by `name.arch`).
 
-- [ ] **Step 3: Implement RPM section adapter**
+Pass-through fields from selected baseline: `baseline_package_names`, `baseline_suppressed`, `no_baseline`, `base_image`. These are derived from the merged `target_image` selection (handled in Task 10's orchestrator, not here).
 
-The RPM adapter is the most complex — it handles PackageEntry, RepoFile, ModuleStream, VersionChange, and several pass-through fields. Write the adapter as a private function that takes `Vec<Option<RpmSection>>` + host count + hostnames and returns `Option<RpmSection>`.
+Pass-through from most-prevalent host: `leaf_packages`, `auto_packages`, `leaf_dep_tree`, `baseline_module_streams`, `versionlock_command_output`, `rpm_va`, `ostree_overrides`, `ostree_removals`, `repo_providing_packages`, `file_ownership`.
 
-Key considerations:
-- `baseline_package_names`: derive from the selected baseline only (the host whose target_image matches the merged target_image)
-- `packages_added` and `base_image_only`: merge via `merge_items`
-- `dnf_history_removed`: `dedup_strings`
-- `version_changes`: dedup by `name.arch`, keep most common direction
-- `leaf_packages` / `auto_packages` / `leaf_dep_tree`: pass through from the most prevalent host (these are per-host derived data; fleet recalculation is Spec 2)
+- [ ] **Step 3: Implement remaining section adapters**
 
-- [ ] **Step 4: Write tests for RPM adapter**
+Each adapter takes `Vec<Option<SectionType>>` (one per host, `None` if host didn't have that section) + host count + hostnames, returns `Option<SectionType>`.
 
-Test with 3 host snapshots having overlapping packages, some shared configs, and different versions.
+**Config:** merge `files` via `merge_items` (has variants). Pass through section-level fields.
 
-- [ ] **Step 5: Implement remaining section adapters**
+**Services:** merge `state_changes` via `merge_items` (no variants — typed enum fields: `current_state: ServiceUnitState`, `default_state: Option<PresetDefault>`), merge `drop_ins` via `merge_items` (has variants), dedup `enabled_units`/`disabled_units`.
 
-Each adapter follows the same pattern:
-- Config section: merge `files` (with variants), pass through section-level fields
-- Services section: merge `state_changes` and `drop_ins` (variants), dedup `enabled_units`/`disabled_units`
-- Network section: dedup `firewall_zones` by name, `nmconn_profiles` by filename, `proxy_entries` by env_var
-- Storage section: dedup `mounts` by mountpoint, iscsi/nfs by identity
-- Containers section: merge `quadlet_units` and `compose_files` (variants), skip `running_containers`
-- SELinux section: merge `port_labels`, dedup string lists, most-prevalent for mode/fips_mode
-- KernelBoot section: merge `sysctl_overrides` and `kernel_modules`, dedup snippets
-- ScheduledTasks section: dedup by name/unit_name
-- NonRpm section: merge `items` by name
-- UsersGroups section: dedup users by name, groups by name, union membership lists
+**Containers:** merge `quadlet_units` (has variants), `compose_files` (has variants — variant key hashes serialized `images`, not a content field). Skip `running_containers` (runtime state, not config).
 
-- [ ] **Step 6: Write at least one test per adapter**
+**Network:** merge `firewall_zones` via `merge_items` (no variants despite having content — no tie/tie_winner), merge `nm_connections` via `merge_items` (note: `include` is `Option<bool>`), dedup `proxy_entries` by `source`, dedup `direct_rules`/`static_routes` by identity.
 
-Verify correct prevalence calculation, deduplication, and deterministic ordering for each section type.
+**Storage:** Dedup `fstab_entries` by identity, `mount_points` by `target`, `lvm_info`/`var_directories`/`credential_refs` by identity. No types have fleet/include.
 
-- [ ] **Step 7: Run all tests**
+**Scheduled Tasks:** merge `cron_jobs` via `merge_items`, dedup `systemd_timers`/`at_jobs` by identity, dedup `generated_timer_units` by `unit_name`.
 
-Run: `cargo test -p inspectah-core --test fleet_merge_test`
-Expected: PASS
+**SELinux:** merge `port_labels` via `merge_items`, dedup `custom_modules`/`fcontext_rules` (string lists), dedup `boolean_overrides` (JSON equality), dedup `audit_rules`/`pam_configs` (`CarryForwardFile`) by `path`. Most-prevalent for `mode`/`fips_mode`.
 
-- [ ] **Step 8: Commit**
+**KernelBoot:** merge `kernel_modules`/`sysctl_overrides` via `merge_items`, dedup `modules_load_d`/`modprobe_d` (`ConfigSnippet`) by `path`, dedup `alternatives` by `name`. Most-prevalent for `cmdline`/`grub_defaults`.
+
+**NonRpm:** merge `items` via `merge_items` (no variants despite having content — deferred per spec), merge `env_files` (these are `ConfigFileEntry` — has variants).
+
+**UsersGroups:** JSON-level dedup. `users` and `groups` are `Vec<serde_json::Value>`. Extract `"name"` from each JSON object, dedup by name, union membership lists. Dedup `sudoers_rules`, `passwd_entries`, `shadow_entries`, `group_entries`, `gshadow_entries`, `subuid_entries`, `subgid_entries` as string lists. Dedup `ssh_authorized_keys_refs` by JSON equality.
+
+- [ ] **Step 4: Write at least one test per adapter**
+
+Focus on: correct prevalence calculation, deterministic ordering, string list dedup, variant handling where applicable.
+
+- [ ] **Step 5: Run tests, commit**
 
 ```bash
 git add inspectah-core/src/fleet/merge.rs inspectah-core/tests/fleet_merge_test.rs
@@ -1015,49 +956,13 @@ git commit -m "feat(core): fleet section adapters for all round-1 sections"
 - Modify: `inspectah-core/src/fleet/mod.rs`
 - Test: `inspectah-core/tests/fleet_merge_test.rs`
 
-The top-level function that validates, merges all sections, populates snapshot-level fields, and returns the merged result.
-
-- [ ] **Step 1: Write failing integration test**
-
-```rust
-#[test]
-fn test_merge_snapshots_basic() {
-    let snap1 = make_test_snapshot("host-a", vec![
-        ("httpd", "x86_64", "2.4.51"),
-        ("openssl", "x86_64", "3.0.7"),
-    ]);
-    let snap2 = make_test_snapshot("host-b", vec![
-        ("httpd", "x86_64", "2.4.51"),
-        ("vim", "x86_64", "9.0"),
-    ]);
-    let (merged, warnings) = merge_snapshots(vec![snap1, snap2], None).unwrap();
-
-    assert!(merged.fleet_meta.is_some());
-    let meta = merged.fleet_meta.as_ref().unwrap();
-    assert_eq!(meta.host_count, 2);
-    assert_eq!(meta.hostnames, vec!["host-a", "host-b"]);
-
-    let rpm = merged.rpm.as_ref().unwrap();
-    assert_eq!(rpm.packages_added.len(), 3); // httpd, openssl, vim
-    let httpd = rpm.packages_added.iter().find(|p| p.name == "httpd").unwrap();
-    assert_eq!(httpd.fleet.as_ref().unwrap().count, 2); // on both hosts
-    let vim = rpm.packages_added.iter().find(|p| p.name == "vim").unwrap();
-    assert_eq!(vim.fleet.as_ref().unwrap().count, 1); // on one host
-}
-```
-
-Write a `make_test_snapshot` helper that builds an `InspectionSnapshot` with the given hostname and packages.
-
-- [ ] **Step 2: Implement merge_snapshots()**
-
-In `inspectah-core/src/fleet/mod.rs`:
+- [ ] **Step 1: Implement merge_snapshots()**
 
 ```rust
 pub fn merge_snapshots(
     snapshots: Vec<InspectionSnapshot>,
     manifest: Option<&FleetManifest>,
 ) -> Result<(InspectionSnapshot, Vec<FleetWarning>), Vec<FleetValidationError>> {
-    // 1. Validate
     let validation = validate::validate_snapshots(&snapshots);
     if !validation.errors.is_empty() {
         return Err(validation.errors);
@@ -1065,55 +970,71 @@ pub fn merge_snapshots(
 
     let total = snapshots.len();
     let hostnames = extract_sorted_hostnames(&snapshots);
+    let section_host_counts = compute_section_host_counts(&snapshots);
 
-    // 2. Merge each section via adapters
-    // ... call each section adapter
+    // Merge each section
+    let rpm = merge::merge_rpm_section(/* ... */);
+    let config = merge::merge_config_section(/* ... */);
+    // ... all sections
 
-    // 3. Populate snapshot-level fields per spec
-    // target_image, baseline, completeness, etc.
+    // Snapshot-level field merging per spec
+    let target_image = select_target_image(&snapshots, manifest);
+    let baseline = select_baseline(&snapshots, &target_image);
+    let completeness = merge_completeness(&snapshots);
 
-    // 4. Build FleetSnapshotMeta
     let fleet_meta = FleetSnapshotMeta {
-        label: derive_label(manifest, /* context */),
+        label: manifest.and_then(|m| m.label.clone())
+            .unwrap_or_else(|| "fleet".into()),
         host_count: total,
         hostnames: hostnames.clone(),
         merged_at: chrono::Utc::now().to_rfc3339(),
-        baseline_provisional: /* ... */,
-        section_host_counts: compute_section_host_counts(&snapshots),
+        baseline_provisional: /* true if baseline was auto-selected from conflicts */,
+        section_host_counts,
     };
 
-    // 5. Assemble merged snapshot
     let mut merged = InspectionSnapshot::new();
+    merged.schema_version = SCHEMA_VERSION;
     merged.fleet_meta = Some(fleet_meta);
-    // ... set all fields
+    merged.target_image = target_image;
+    merged.baseline = baseline;
+    merged.no_baseline = merged.baseline.is_none();
+    merged.completeness = completeness;
+    merged.redaction_state = None;
+    merged.sensitive_snapshot = snapshots.iter().any(|s| s.sensitive_snapshot);
+    merged.preserved_credentials = snapshots.iter().any(|s| s.preserved_credentials);
+    merged.preserved_ssh_keys = snapshots.iter().any(|s| s.preserved_ssh_keys);
+    merged.os_release = snapshots.iter()
+        .min_by_key(|s| extract_hostname(s))
+        .and_then(|s| s.os_release.clone());
+    // ... set all section fields, warnings, etc.
 
     Ok((merged, validation.warnings))
 }
 ```
 
-- [ ] **Step 3: Implement snapshot-level field merging**
+- [ ] **Step 2: Implement `select_target_image`**
 
-Per the spec's Existing Snapshot-Level Fields table:
-- `target_image`: manifest baseline override, else most-common autodetected
-- `baseline`: from the host matching selected target_image
-- `no_baseline`: true if baseline is None after merge
-- `completeness`: conservative merge of the Completeness enum
-- `redaction_state`: None
-- `sensitive_snapshot` / `preserved_credentials` / `preserved_ssh_keys`: OR across inputs
-- `os_release`: from first host (sorted by hostname)
-- `warnings`: deduplicated union + fleet-specific warnings
-- `preflight`: default
+When manifest provides a baseline override, construct `TargetImageIdentity` with `strategy: ResolutionStrategy::CliOverride` and the override ref as `image_ref`. Otherwise, find the most-common `target_image` across inputs. Ties broken by lexicographic `image_ref`.
 
-- [ ] **Step 4: Write tests for snapshot-level field merging**
+- [ ] **Step 3: Implement `select_baseline`**
 
-Test target_image selection, baseline truth, completeness merge (Complete + Partial → Partial), sensitive flag OR semantics.
+Find the input whose `target_image` matches the selected one. Use the first match sorted by hostname. Copy its `baseline` data. Derive `baseline_package_names` and `baseline_suppressed` from this selected baseline only.
 
-- [ ] **Step 5: Run all tests**
+- [ ] **Step 4: Implement `merge_completeness`**
 
-Run: `cargo test -p inspectah-core --test fleet_merge_test`
-Expected: PASS
+```rust
+fn merge_completeness(snapshots: &[InspectionSnapshot]) -> Completeness {
+    // If all Complete → Complete
+    // If any Incomplete → Incomplete (union failed + degraded sections)
+    // If any Partial → Partial (union degraded sections)
+}
+```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Write integration tests**
+
+Test basic merge, snapshot-level field selection, completeness merge, baseline provisionality.
+
+- [ ] **Step 6: Run tests, commit**
 
 ```bash
 git add inspectah-core/src/fleet/mod.rs inspectah-core/tests/fleet_merge_test.rs
@@ -1128,22 +1049,35 @@ git commit -m "feat(core): merge_snapshots() orchestrator with snapshot-level fi
 - Create: `inspectah-cli/src/commands/fleet.rs`
 - Modify: `inspectah-cli/src/commands/mod.rs`
 - Modify: `inspectah-cli/src/main.rs`
-- Modify: `inspectah-cli/Cargo.toml`
 
-Implement the `inspectah fleet` command with all input modes and flags.
+The current CLI uses a flat `Commands` enum in `main.rs`:
+```rust
+enum Commands {
+    Scan(ScanArgs),
+    Refine(RefineArgs),
+    Version,
+}
+```
 
-- [ ] **Step 1: Define the clap subcommand**
+Fleet needs a top-level `Fleet` variant with its own subcommands:
 
-Create `inspectah-cli/src/commands/fleet.rs` with the clap derive structs:
+- [ ] **Step 1: Define the Fleet subcommand tree**
+
+In `inspectah-cli/src/commands/fleet.rs`:
 
 ```rust
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
+#[derive(Debug, Args)]
+pub struct FleetArgs {
+    #[command(subcommand)]
+    pub command: FleetSubcommand,
+}
+
 #[derive(Debug, Subcommand)]
-pub enum FleetCommands {
+pub enum FleetSubcommand {
     /// Aggregate host tarballs into a fleet tarball
-    #[command(name = "fleet")]
     Aggregate(FleetAggregateArgs),
     /// Generate a fleet manifest from a directory of tarballs
     Init(FleetInitArgs),
@@ -1152,114 +1086,109 @@ pub enum FleetCommands {
 #[derive(Debug, Args)]
 pub struct FleetAggregateArgs {
     /// Input tarballs or directory
-    #[arg(required_unless_present = "manifest")]
     pub inputs: Vec<PathBuf>,
-
-    /// TOML manifest file
-    #[arg(long, conflicts_with = "inputs")]
+    #[arg(long)]
     pub manifest: Option<PathBuf>,
-
-    /// Baseline image override
     #[arg(long)]
     pub baseline: Option<String>,
-
-    /// Write output to this directory
     #[arg(long)]
     pub output_dir: Option<PathBuf>,
-
-    /// Explicit output tarball name
     #[arg(long)]
     pub output_file: Option<PathBuf>,
-
-    /// Emit merged snapshot JSON only
     #[arg(long)]
     pub json_only: bool,
-
-    /// Promote warnings to errors
     #[arg(long)]
     pub strict: bool,
-
-    /// Verbose output
     #[arg(long, short)]
     pub verbose: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct FleetInitArgs {
-    /// Directory of tarballs to scan
     pub directory: PathBuf,
-
-    /// Output file path (default: fleet.toml in current directory)
     #[arg(long)]
     pub output: Option<PathBuf>,
-
-    /// Overwrite existing fleet.toml
     #[arg(long)]
     pub overwrite: bool,
 }
 ```
 
-- [ ] **Step 2: Implement input resolution**
+- [ ] **Step 2: Register in command tree**
 
-Write the logic that resolves input modes:
-- Single directory arg → load all `.tar.gz` files from it
-- Multiple file args → use as-is
-- `--manifest` → parse TOML and resolve paths
+In `inspectah-cli/src/commands/mod.rs`:
+```rust
+pub mod fleet;
+```
 
-- [ ] **Step 3: Implement --strict flag behavior**
+In `inspectah-cli/src/main.rs`, add to `Commands`:
+```rust
+Fleet(commands::fleet::FleetArgs),
+```
 
-In the aggregate handler, after calling `merge_snapshots()`, check if `--strict` is set. If so, treat any returned warnings as errors:
+And in the match:
+```rust
+Commands::Fleet(args) => commands::fleet::run_fleet(args),
+```
+
+- [ ] **Step 3: Implement input resolution**
+
+In the aggregate handler, resolve inputs:
+- If `--manifest` is set and `inputs` is non-empty → error
+- If `--manifest` is set → parse manifest, resolve paths
+- If single input is a directory → list `.tar.gz` files in it, label defaults to dir name
+- If multiple inputs → use as tarball paths, label defaults to `"fleet"`
+
+During tarball loading, collect `UnparseableFile` warnings for files that fail to load — these are CLI-layer warnings, not core validation warnings.
+
+- [ ] **Step 4: Implement --strict promotion**
+
+After `merge_snapshots()` returns, merge CLI-layer warnings (unparseable files) with core warnings. If `--strict`, treat any warning as an error:
 
 ```rust
-let (merged, warnings) = merge_snapshots(snapshots, manifest.as_ref())
-    .map_err(|errors| /* format validation errors */)?;
-
-if args.strict && !warnings.is_empty() {
-    // Format warnings as errors and exit non-zero
-    for w in &warnings {
+let all_warnings = [loader_warnings, merge_warnings].concat();
+if args.strict && !all_warnings.is_empty() {
+    for w in &all_warnings {
         eprintln!("error (--strict): {w}");
     }
-    anyhow::bail!("{} warning(s) promoted to errors by --strict", warnings.len());
+    anyhow::bail!("{} warning(s) promoted to errors by --strict", all_warnings.len());
 }
 ```
 
-- [ ] **Step 4: Implement the aggregate command handler**
+- [ ] **Step 5: Implement render + tarball packaging**
 
-Wire together: input resolution → tarball loading → snapshot extraction → `merge_snapshots()` → `--strict` check → render → package tarball.
+Follow the scan command's pattern:
+1. Save `inspection-snapshot.json` to temp dir
+2. Call `render_all()` with the merged snapshot
+3. Write `fleet/variants/` (Task 13)
+4. Prepend Containerfile header (Task 13)
+5. Package into `.tar.gz`
 
-Follow the existing scan command's pattern for calling `render_all()` and `tarball::create_tarball()`.
+- [ ] **Step 6: Implement output formatting**
 
-After `render_all()`, add fleet-specific steps:
-- Prepend draft header to Containerfile
-- Write `fleet/variants/` for any Alternative content variants
+Default (to stderr):
+```
+Fleet: {label} ({N} hosts)
+Merged: {pkg_count} packages, {config_count} config files, {svc_count} services
+Output: {tarball_path}
+```
 
-- [ ] **Step 4: Implement output formatting**
+Warnings above summary. `--json-only`: JSON to stdout or file per behavior table (warnings to stderr always). `--verbose`: add per-host counts.
 
-Per spec:
-- Default: 3 lines (Fleet label + hosts, Merged counts, Output path)
-- Warnings above summary on stderr
-- `--json-only`: JSON to stdout (suppress summary), or to file
-- `--verbose`: per-host counts, full prevalence breakdown
+- [ ] **Step 7: Build and verify CLI help**
 
-- [ ] **Step 5: Register the fleet subcommand**
+Run:
+```bash
+cargo build -p inspectah-cli
+./target/debug/inspectah fleet --help
+./target/debug/inspectah fleet aggregate --help
+./target/debug/inspectah fleet init --help
+```
 
-In `inspectah-cli/src/commands/mod.rs`, add `pub mod fleet;` and register in the CLI enum.
-
-In `inspectah-cli/src/main.rs`, wire the fleet commands.
-
-- [ ] **Step 6: Build and verify CLI help**
-
-Run: `cargo build -p inspectah-cli && ./target/debug/inspectah fleet --help`
-Expected: shows fleet command with all flags
-
-Run: `./target/debug/inspectah fleet init --help`
-Expected: shows fleet init command
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add inspectah-cli/src/commands/fleet.rs inspectah-cli/src/commands/mod.rs inspectah-cli/src/main.rs inspectah-cli/Cargo.toml
-git commit -m "feat(cli): inspectah fleet command with all input modes and flags"
+git add inspectah-cli/src/commands/fleet.rs inspectah-cli/src/commands/mod.rs inspectah-cli/src/main.rs
+git commit -m "feat(cli): inspectah fleet command with aggregate and init subcommands"
 ```
 
 ---
@@ -1268,62 +1197,30 @@ git commit -m "feat(cli): inspectah fleet command with all input modes and flags
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/fleet.rs`
+- Modify: `inspectah-cli/Cargo.toml` (add `pathdiff`)
 
-Implement `inspectah fleet init <directory>` — scans tarballs and generates a commented `fleet.toml`.
+- [ ] **Step 1: Add pathdiff dependency**
 
-- [ ] **Step 1: Implement tarball scanning**
-
-Scan the directory for `.tar.gz` files, extract each snapshot's hostname and target_image from the embedded `inspection-snapshot.json`.
-
-Reuse `inspectah-refine`'s tarball extraction code or the pipeline's tarball reading — check what's available. The key function: open tarball → find `inspection-snapshot.json` → parse just the metadata fields (hostname, target_image).
-
-- [ ] **Step 2: Implement manifest generation**
-
-Generate commented TOML:
-
-```rust
-fn generate_manifest_toml(
-    label: &str,
-    baseline: Option<&str>,
-    sources: &[PathBuf],
-    manifest_dir: &Path,
-) -> String {
-    let mut lines = vec![
-        "# inspectah fleet manifest".to_string(),
-        "# Edit label and baseline as needed. Sources are relative to this file.".to_string(),
-        String::new(),
-        format!("label = \"{}\"", label),
-    ];
-    if let Some(bl) = baseline {
-        lines.push(format!("baseline = \"{}\"", bl));
-    } else {
-        lines.push("# baseline = \"registry.redhat.io/rhel9/rhel-bootc:9.6\"".to_string());
-    }
-    lines.push(String::new());
-    lines.push("sources = [".to_string());
-    for source in sources {
-        let relative = pathdiff::diff_paths(source, manifest_dir)
-            .unwrap_or_else(|| source.clone());
-        lines.push(format!("  \"{}\",", relative.display()));
-    }
-    lines.push("]".to_string());
-    lines.join("\n") + "\n"
-}
+Add to `inspectah-cli/Cargo.toml`:
+```toml
+pathdiff = "0.2"
 ```
 
-Add `pathdiff = "0.2"` to `inspectah-cli/Cargo.toml` if not already present.
+- [ ] **Step 2: Implement tarball scanning**
 
-- [ ] **Step 3: Implement the init command handler**
+Scan directory for `.tar.gz` files. For each, extract `inspection-snapshot.json`, parse just `meta` (hostname) and `target_image` fields. Use `inspectah-refine`'s tarball extraction helpers or re-implement minimally.
 
-- Check output path (default: `./fleet.toml`)
-- Refuse if exists unless `--overwrite`
-- Scan directory, extract metadata, report baseline conflicts on stderr
-- Write manifest file
-- Print summary on stderr
+- [ ] **Step 3: Implement manifest generation**
 
-- [ ] **Step 4: Test manually with a directory of test tarballs**
+Generate commented TOML with source paths relative to the manifest file's parent directory using `pathdiff::diff_paths()`.
 
-If test tarballs exist in the repo, use those. Otherwise create a minimal test fixture.
+- [ ] **Step 4: Implement init command handler**
+
+- Default output: `fleet.toml` in cwd
+- Refuse if exists (unless `--overwrite`)
+- `--output` overrides path
+- Baseline conflicts on stderr, most-common image written
+- Summary on stderr: `wrote fleet.toml (N sources, baseline: ...)`
 
 - [ ] **Step 5: Commit**
 
@@ -1334,152 +1231,54 @@ git commit -m "feat(cli): inspectah fleet init command for manifest generation"
 
 ---
 
-## Task 13: Fleet-Aware Audit Report
-
-**Files:**
-- Modify: `inspectah-pipeline/src/render/audit.rs`
-
-The spec requires the audit report to include a fleet summary section when `fleet_meta` is present. The base audit content comes from `render_all()` — this task adds fleet-specific augmentation.
-
-- [ ] **Step 1: Check current audit renderer for fleet_meta awareness**
-
-Run: `grep -n 'fleet_meta\|fleet' inspectah-pipeline/src/render/audit.rs`
-
-If the audit renderer already checks for fleet data, extend it. If not, add a conditional section.
-
-- [ ] **Step 2: Add fleet summary section to audit renderer**
-
-When `snap.fleet_meta.is_some()`, prepend or append a fleet summary section:
-
-```rust
-if let Some(ref meta) = snap.fleet_meta {
-    lines.push("## Fleet Aggregate Summary".into());
-    lines.push(format!("- **Hosts:** {} ({})", meta.host_count,
-        meta.hostnames.join(", ")));
-    if meta.baseline_provisional {
-        lines.push("- **Baseline:** auto-selected (provisional — confirm in refine)".into());
-    }
-    // Section coverage
-    lines.push("- **Section coverage:**".into());
-    for (section, count) in &meta.section_host_counts {
-        lines.push(format!("  - {section}: {count}/{} hosts reported", meta.host_count));
-    }
-    lines.push(String::new());
-}
-```
-
-- [ ] **Step 3: Run audit renderer tests**
-
-Run: `cargo test -p inspectah-pipeline -- audit`
-Expected: PASS (new code is additive, existing tests shouldn't break)
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add inspectah-pipeline/src/render/audit.rs
-git commit -m "feat(render): fleet summary section in audit report"
-```
-
----
-
-## Task 14: Fleet Variant File Writing + Containerfile Header
+## Task 13: Fleet Variant Files + Containerfile Header
 
 **Files:**
 - Modify: `inspectah-cli/src/commands/fleet.rs`
 
-After `render_all()` produces the standard scan artifacts, the fleet command adds two things:
-1. `fleet/variants/` directory with non-selected content variants
-2. Draft header prepended to the Containerfile
-
 - [ ] **Step 1: Implement variant file extraction**
 
-```rust
-fn write_fleet_variants(
-    snap: &InspectionSnapshot,
-    output_dir: &Path,
-) -> Result<(), anyhow::Error> {
-    use sha2::{Sha256, Digest};
+Walk all variant-capable sections in the merged snapshot. For each item with `VariantSelection::Alternative`, write its content to `fleet/variants/{path}/{8-char-sha256-hash}.{ext}`.
 
-    let variants_dir = output_dir.join("fleet").join("variants");
-
-    // Walk all content-variant sections: config files, drop-ins, quadlets, compose, repo files
-    // For each item with VariantSelection::Alternative, write content to
-    // fleet/variants/{path}/{8-char-hash}.{ext}
-
-    if let Some(config) = &snap.config {
-        for entry in &config.files {
-            if entry.variant_selection == VariantSelection::Alternative {
-                let hash = format!("{:x}", Sha256::digest(entry.content.as_bytes()));
-                let short_hash = &hash[..8];
-                let variant_dir = variants_dir.join(
-                    entry.path.trim_start_matches('/'));
-                std::fs::create_dir_all(&variant_dir)?;
-                let ext = Path::new(&entry.path)
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("conf");
-                std::fs::write(
-                    variant_dir.join(format!("{short_hash}.{ext}")),
-                    &entry.content,
-                )?;
-            }
-        }
-    }
-
-    // Repeat for services.drop_ins, containers.quadlet_units,
-    // containers.compose_files, rpm.repo_files
-
-    Ok(())
-}
-```
+For `ComposeFile` (no `content` field), serialize `images` to JSON and write that as the variant file.
 
 - [ ] **Step 2: Implement Containerfile header prepending**
 
-```rust
-fn prepend_fleet_header(
-    output_dir: &Path,
-    meta: &FleetSnapshotMeta,
-    target_image: Option<&str>,
-) -> Result<(), anyhow::Error> {
-    let cf_path = output_dir.join("Containerfile");
-    let existing = std::fs::read_to_string(&cf_path)?;
+Read the rendered Containerfile, prepend the draft header (with provisionality note when `baseline_provisional` is true), write back.
 
-    let mut header = format!(
-        "# Fleet aggregate: {} ({} hosts)\n\
-         # This is a draft — review before use\n",
-        meta.label, meta.host_count
-    );
-    if let Some(img) = target_image {
-        let provisional = if meta.baseline_provisional { " (auto-selected, provisional)" } else { "" };
-        header.push_str(&format!("# Baseline: {img}{provisional}\n"));
-    }
+- [ ] **Step 3: Wire into aggregate handler between render_all() and tarball packaging**
 
-    std::fs::write(&cf_path, format!("{header}{existing}"))?;
-    Ok(())
-}
-```
-
-- [ ] **Step 3: Wire into the aggregate command handler**
-
-After `render_all()` and before `create_tarball()`:
-1. Call `write_fleet_variants()`
-2. Call `prepend_fleet_header()`
-
-- [ ] **Step 4: Test end-to-end with test fixtures**
-
-Create a minimal integration test or manual test that:
-1. Creates two test snapshots with config file variants
-2. Runs fleet aggregate
-3. Verifies the output tarball contains `fleet/variants/`
-4. Verifies the Containerfile has the draft header
-
-- [ ] **Step 5: Run `cargo clippy -- -W clippy::all` and fix warnings**
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add inspectah-cli/src/commands/fleet.rs
 git commit -m "feat(cli): fleet variant file writing and Containerfile draft header"
+```
+
+---
+
+## Task 14: Fleet-Aware Audit Report
+
+**Files:**
+- Modify: `inspectah-pipeline/src/render/audit.rs`
+
+- [ ] **Step 1: Add fleet summary section to audit renderer**
+
+When `snap.fleet_meta.is_some()`, add a "Fleet Aggregate Summary" section:
+- Host count and hostname list
+- Baseline selection method and provisionality
+- Section coverage from `section_host_counts`
+- Variant conflicts (count of paths with multiple content versions)
+
+- [ ] **Step 2: Run audit tests**
+
+Run: `cargo test -p inspectah-pipeline -- audit`
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add inspectah-pipeline/src/render/audit.rs
+git commit -m "feat(render): fleet summary section in audit report"
 ```
 
 ---
@@ -1489,44 +1288,19 @@ git commit -m "feat(cli): fleet variant file writing and Containerfile draft hea
 **Files:**
 - Create: `inspectah-core/tests/fleet_e2e_test.rs`
 
-Write integration tests that exercise the full merge pipeline with realistic snapshot data.
+- [ ] **Step 1: Build rich test snapshot helpers**
 
-- [ ] **Step 1: Write test helpers for building rich test snapshots**
+Create helpers that build `InspectionSnapshot` with multiple populated sections.
 
-Build helpers that create `InspectionSnapshot` with multiple sections populated: RPM packages, config files (with variants), services, selinux ports, etc.
+- [ ] **Step 2: Write e2e tests**
 
-- [ ] **Step 2: Write e2e test: 3 hosts, shared packages, config variants**
+- 3 hosts, shared packages, config variants → correct prevalence, variant selection, fleet_meta
+- Validation hard errors (mixed arch, duplicate hostname, OS major mismatch)
+- Missing sections use global denominator
+- Baseline selection with provisionality
+- Deterministic output (reversed input order → same result except `merged_at`)
 
-Test that:
-- Packages appearing on all 3 hosts get count=3, total=3
-- Packages on 1 host get count=1, total=3
-- Config file with 2 variants: most-prevalent becomes Selected
-- `fleet_meta` has correct host_count, hostnames (sorted), section_host_counts
-- All items have `include: true`
-- Output is deterministic (run twice with different input order, compare)
-
-- [ ] **Step 3: Write e2e test: validation hard errors**
-
-Test that `merge_snapshots` returns `Err` for:
-- Mixed architectures
-- Duplicate hostnames
-- OS major version mismatch
-- Empty snapshot
-
-- [ ] **Step 4: Write e2e test: missing sections use global denominator**
-
-Test with 3 hosts where only 2 have a config section. Verify config items have `total=3` (global), not `total=2` (per-section).
-
-- [ ] **Step 5: Write e2e test: baseline selection**
-
-Test with 3 hosts, 2 sharing one target_image and 1 with a different one. Verify the most-common target_image is selected and `baseline_provisional` is true.
-
-- [ ] **Step 6: Run all tests**
-
-Run: `cargo test --workspace`
-Expected: PASS
-
-- [ ] **Step 7: Commit**
+- [ ] **Step 3: Run, commit**
 
 ```bash
 git add inspectah-core/tests/fleet_e2e_test.rs
@@ -1535,40 +1309,32 @@ git commit -m "test(core): fleet aggregate end-to-end integration tests"
 
 ---
 
-## Task 16: Final Cleanup and Workspace Verification
+## Task 16: Final Cleanup
 
-- [ ] **Step 1: Run clippy across workspace**
+- [ ] **Step 1: Run clippy**
 
 Run: `cargo clippy --workspace -- -W clippy::all`
 Expected: zero warnings
 
-- [ ] **Step 2: Run fmt check**
+- [ ] **Step 2: Run fmt**
 
 Run: `cargo fmt --all --check`
-Expected: no formatting issues
 
 - [ ] **Step 3: Run full test suite**
 
 Run: `cargo test --workspace`
-Expected: all tests pass
 
-- [ ] **Step 4: Verify the binary works**
+- [ ] **Step 4: Verify CLI**
 
-Build: `cargo build -p inspectah-cli`
-
-Test `--help`:
 ```bash
+cargo build -p inspectah-cli
 ./target/debug/inspectah fleet --help
 ./target/debug/inspectah fleet init --help
 ```
 
-- [ ] **Step 5: Update SCHEMA_VERSION in any snapshot test golden files**
-
-If parity tests or golden files reference the old schema version, update them.
-
-- [ ] **Step 6: Commit any remaining cleanup**
+- [ ] **Step 5: Commit any remaining cleanup**
 
 ```bash
-git add -A
-git commit -m "chore: fleet aggregate final cleanup and workspace verification"
+git add inspectah-core/ inspectah-cli/ inspectah-pipeline/
+git commit -m "chore: fleet aggregate final cleanup"
 ```
