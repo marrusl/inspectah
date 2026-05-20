@@ -53,7 +53,7 @@ pub struct FleetAggregateArgs {
     #[arg(long)]
     pub output_file: Option<PathBuf>,
 
-    /// Write JSON snapshot to stdout (or --output-file) instead of tarball
+    /// Write JSON snapshot instead of tarball (to stdout, --output-file, or --output-dir)
     #[arg(long)]
     pub json_only: bool,
 
@@ -104,6 +104,11 @@ struct UnparseableFile {
 }
 
 fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
+    // --- Flag validation ---
+    if args.output_file.is_some() && args.output_dir.is_some() {
+        bail!("--output-file and --output-dir are mutually exclusive");
+    }
+
     // --- Step 1: Resolve inputs ---
     let (tarball_paths, label, manifest) = resolve_inputs(args)?;
 
@@ -175,20 +180,21 @@ fn run_aggregate(args: &FleetAggregateArgs) -> Result<()> {
         let json =
             serde_json::to_string_pretty(&merged).context("failed to serialize merged snapshot")?;
 
-        match &args.output_file {
-            Some(path) => {
-                if let Some(parent) = path.parent()
-                    && !parent.as_os_str().is_empty()
-                {
-                    std::fs::create_dir_all(parent).context("failed to create output directory")?;
-                }
-                std::fs::write(path, &json)
-                    .with_context(|| format!("failed to write {}", path.display()))?;
-                eprintln!("Snapshot written to {}", path.display());
+        if let Some(path) = &args.output_file {
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent).context("failed to create output directory")?;
             }
-            None => {
-                println!("{json}");
-            }
+            std::fs::write(path, &json)
+                .with_context(|| format!("failed to write {}", path.display()))?;
+            eprintln!("Snapshot written to {}", path.display());
+        } else if let Some(dir) = &args.output_dir {
+            std::fs::create_dir_all(dir).context("failed to create output directory")?;
+            let path = dir.join("inspection-snapshot.json");
+            std::fs::write(&path, &json)
+                .with_context(|| format!("failed to write {}", path.display()))?;
+            eprintln!("Snapshot written to {}", path.display());
+        } else {
+            println!("{json}");
         }
         return Ok(());
     }
@@ -970,5 +976,126 @@ mod tests {
             winner, common_image,
             "conflict resolution should pick the most common baseline"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // --json-only output matrix regression tests
+    // -----------------------------------------------------------------------
+
+    /// Helper: build FleetAggregateArgs with specific output flags.
+    fn make_aggregate_args(
+        output_file: Option<PathBuf>,
+        output_dir: Option<PathBuf>,
+        json_only: bool,
+    ) -> FleetAggregateArgs {
+        FleetAggregateArgs {
+            inputs: vec![],
+            manifest: None,
+            baseline: None,
+            output_dir,
+            output_file,
+            json_only,
+            strict: false,
+            verbose: false,
+        }
+    }
+
+    #[test]
+    fn test_output_file_and_output_dir_conflict() {
+        let args = make_aggregate_args(
+            Some(PathBuf::from("/tmp/out.tar.gz")),
+            Some(PathBuf::from("/tmp/outdir")),
+            false,
+        );
+        let result = run_aggregate(&args);
+        assert!(result.is_err(), "should reject conflicting output flags");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("mutually exclusive"),
+            "error should mention mutual exclusivity, got: {msg}"
+        );
+    }
+
+    /// Build two valid fleet-ready tarballs in `dir`. Each snapshot has
+    /// an `os_release` section so it passes the non-empty check, and uses
+    /// distinct hostnames to avoid the duplicate-hostname error.
+    fn make_fleet_pair(dir: &Path) -> (PathBuf, PathBuf) {
+        let json_a = serde_json::json!({
+            "schema_version": 17,
+            "meta": {"hostname": "host-a.example.com"},
+            "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+            "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
+        });
+        let json_b = serde_json::json!({
+            "schema_version": 17,
+            "meta": {"hostname": "host-b.example.com"},
+            "os_release": {"name": "RHEL", "version_id": "9.6", "id": "rhel"},
+            "target_image": {"image_ref": "registry.example.com/img:1", "strategy": "bootc-status"}
+        });
+        let a = make_test_tarball(dir, "host-a.tar.gz", &json_a);
+        let b = make_test_tarball(dir, "host-b.tar.gz", &json_b);
+        (a, b)
+    }
+
+    #[test]
+    fn test_json_only_with_output_dir_writes_to_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let (t1, t2) = make_fleet_pair(dir.path());
+
+        let out_dir = dir.path().join("json-output");
+        let args = FleetAggregateArgs {
+            inputs: vec![t1, t2],
+            manifest: None,
+            baseline: None,
+            output_dir: Some(out_dir.clone()),
+            output_file: None,
+            json_only: true,
+            strict: false,
+            verbose: false,
+        };
+
+        run_aggregate(&args).expect("--json-only --output-dir should succeed");
+
+        let expected = out_dir.join("inspection-snapshot.json");
+        assert!(
+            expected.exists(),
+            "should write inspection-snapshot.json to output dir"
+        );
+
+        // Verify it's valid JSON
+        let content = std::fs::read_to_string(&expected).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content)
+            .expect("output should be valid JSON");
+        assert!(parsed.is_object(), "parsed JSON should be an object");
+    }
+
+    #[test]
+    fn test_json_only_with_output_file_writes_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let (t1, t2) = make_fleet_pair(dir.path());
+
+        let out_file = dir.path().join("custom-output.json");
+        let args = FleetAggregateArgs {
+            inputs: vec![t1, t2],
+            manifest: None,
+            baseline: None,
+            output_dir: None,
+            output_file: Some(out_file.clone()),
+            json_only: true,
+            strict: false,
+            verbose: false,
+        };
+
+        run_aggregate(&args).expect("--json-only --output-file should succeed");
+
+        assert!(
+            out_file.exists(),
+            "should write to the specified output file"
+        );
+
+        let content = std::fs::read_to_string(&out_file).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&content)
+            .expect("output should be valid JSON");
+        assert!(parsed.is_object(), "parsed JSON should be an object");
     }
 }
