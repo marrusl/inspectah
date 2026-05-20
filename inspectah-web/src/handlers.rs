@@ -5,7 +5,9 @@ use inspectah_core::snapshot::InspectionSnapshot;
 use inspectah_core::types::completeness::Completeness;
 use inspectah_core::types::config::ConfigFileKind;
 use inspectah_core::types::rpm::{VersionChange, VersionChangeDirection};
+use inspectah_core::types::services::{PresetDefault, ServiceUnitState};
 use inspectah_core::types::users::UserContainerfileStrategy;
+use inspectah_pipeline::render::service_intent::{AdvisoryReason, render_service_intent};
 use inspectah_refine::baseline_summary::BaselineSummary;
 use inspectah_refine::repo_index::{DISTRO_REPOS, RepoIndex};
 use inspectah_refine::session::RefineSession;
@@ -32,8 +34,17 @@ pub struct ContextSection {
     pub id: String,
     pub display_name: String,
     pub items: Vec<ContextItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subsections: Vec<ContextSubsection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub empty_reason: Option<String>,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct ContextSubsection {
+    pub id: String,
+    pub display_name: String,
+    pub items: Vec<ContextItem>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -43,6 +54,17 @@ pub struct ContextItem {
     pub subtitle: Option<String>,
     pub detail: Option<String>,
     pub searchable_text: String,
+}
+
+/// Create a `ContextSection` with empty subsections.
+fn context_section(id: &str, display_name: &str, items: Vec<ContextItem>) -> ContextSection {
+    ContextSection {
+        id: id.to_string(),
+        display_name: display_name.to_string(),
+        items,
+        subsections: Vec::new(),
+        empty_reason: None,
+    }
 }
 
 // -- Repo group + view response DTOs --------------------------------------
@@ -720,6 +742,7 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
                 id: "version_changes".to_string(),
                 display_name: "Version Changes".to_string(),
                 items: Vec::new(),
+                subsections: Vec::new(),
                 empty_reason: Some("data_unavailable".to_string()),
             };
         }
@@ -736,6 +759,7 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
             id: "version_changes".to_string(),
             display_name: "Version Changes".to_string(),
             items: Vec::new(),
+            subsections: Vec::new(),
             empty_reason: Some(reason.to_string()),
         };
     }
@@ -783,14 +807,19 @@ fn normalize_version_changes(snap: &InspectionSnapshot) -> ContextSection {
         id: "version_changes".to_string(),
         display_name: "Version Changes".to_string(),
         items,
+        subsections: Vec::new(),
         empty_reason: None,
     }
 }
 
 fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
     let mut items = Vec::new();
+    let mut subsections = Vec::new();
 
     if let Some(svc) = &snap.services {
+        // Consume the renderer's authoritative decisions.
+        let render_plan = render_service_intent(snap);
+
         let matched_set: std::collections::HashSet<&str> = svc
             .preset_matched_units
             .iter()
@@ -827,17 +856,14 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
             }
         }
 
-        // 1. Divergence items (from state_changes)
+        // 1. Divergence items (from state_changes) — typed subtitles
         for sc in &svc.state_changes {
             let dropin_detail = dropin_by_unit
                 .get(sc.unit.as_str())
                 .map(|contents| contents.join("\n---\n"));
             let state_str = sc.current_state.to_string();
             let action_str = sc.implied_action().to_string();
-            let subtitle = match sc.default_state {
-                Some(d) => format!("{} (diverges from preset: {})", state_str, d),
-                None => format!("{} (no preset rule)", state_str),
-            };
+            let subtitle = typed_service_subtitle(sc.current_state, sc.default_state);
             let default_str = sc
                 .default_state
                 .map(|d| d.to_string())
@@ -921,13 +947,129 @@ fn normalize_services(snap: &InspectionSnapshot) -> ContextSection {
                 searchable_text: format!("{} drop-in", d.unit),
             });
         }
+
+        // -- Subsections from renderer output ---------------------------------
+
+        // Omitted services (package proven absent)
+        if !render_plan.omissions.is_empty() {
+            let omission_items: Vec<ContextItem> = render_plan
+                .omissions
+                .iter()
+                .map(|o| ContextItem {
+                    id: o.unit.clone(),
+                    title: o.unit.clone(),
+                    subtitle: Some(format!("package '{}' not in target image", o.owning_package)),
+                    detail: None,
+                    searchable_text: format!("{} omitted {}", o.unit, o.owning_package),
+                })
+                .collect();
+            subsections.push(ContextSubsection {
+                id: "omitted_services".to_string(),
+                display_name: "Omitted Services".to_string(),
+                items: omission_items,
+            });
+        }
+
+        // Service advisories (presence uncertain)
+        if !render_plan.advisories.is_empty() {
+            let advisory_items: Vec<ContextItem> = render_plan
+                .advisories
+                .iter()
+                .map(|a| {
+                    let reasons_str: Vec<&str> = a
+                        .reasons
+                        .iter()
+                        .map(|r| match r {
+                            AdvisoryReason::PackageExcluded => "package excluded",
+                            AdvisoryReason::PackageUnreachable => "package unreachable",
+                            AdvisoryReason::BaselineUnavailable => "baseline unavailable",
+                        })
+                        .collect();
+                    ContextItem {
+                        id: a.unit.clone(),
+                        title: a.unit.clone(),
+                        subtitle: Some(format!(
+                            "package '{}': {}",
+                            a.owning_package,
+                            reasons_str.join("; ")
+                        )),
+                        detail: None,
+                        searchable_text: format!(
+                            "{} advisory {} {}",
+                            a.unit,
+                            a.owning_package,
+                            reasons_str.join(" ")
+                        ),
+                    }
+                })
+                .collect();
+            subsections.push(ContextSubsection {
+                id: "service_advisories".to_string(),
+                display_name: "Service Advisories".to_string(),
+                items: advisory_items,
+            });
+        }
+
+        // Service warnings (from collector)
+        let warning_items: Vec<ContextItem> = snap
+            .warnings
+            .iter()
+            .filter(|w| w.inspector == "services")
+            .map(|w| {
+                let unit_id = w
+                    .extra
+                    .get("unit")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                ContextItem {
+                    id: unit_id.clone(),
+                    title: unit_id,
+                    subtitle: Some(w.message.clone()),
+                    detail: None,
+                    searchable_text: format!("warning {}", w.message),
+                }
+            })
+            .collect();
+        if !warning_items.is_empty() {
+            subsections.push(ContextSubsection {
+                id: "service_warnings".to_string(),
+                display_name: "Service Warnings".to_string(),
+                items: warning_items,
+            });
+        }
     }
 
     ContextSection {
         id: "services".to_string(),
         display_name: "Services".to_string(),
         items,
+        subsections,
         empty_reason: None,
+    }
+}
+
+/// Map a (current_state, default_state) pair to a human-readable subtitle.
+fn typed_service_subtitle(
+    current: ServiceUnitState,
+    default: Option<PresetDefault>,
+) -> String {
+    match (current, default) {
+        (ServiceUnitState::Enabled, Some(PresetDefault::Disable)) => {
+            "enabled (diverges from preset: disable)".to_string()
+        }
+        (ServiceUnitState::Disabled, Some(PresetDefault::Enable)) => {
+            "disabled (diverges from preset: enable)".to_string()
+        }
+        (ServiceUnitState::Masked, Some(PresetDefault::Enable)) => {
+            "masked (preset default: enable)".to_string()
+        }
+        (ServiceUnitState::Masked, Some(PresetDefault::Disable)) => {
+            "masked (preset default: disable)".to_string()
+        }
+        (ServiceUnitState::Masked, None) => "masked (no preset rule)".to_string(),
+        (state, Some(d)) => format!("{} (diverges from preset: {})", state, d),
+        (state, None) => format!("{} (no preset rule)", state),
     }
 }
 
@@ -1039,12 +1181,7 @@ fn normalize_containers(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
-        id: "containers".to_string(),
-        display_name: "Containers".to_string(),
-        items,
-        empty_reason: None,
-    }
+    context_section("containers", "Containers", items)
 }
 
 fn normalize_network(snap: &InspectionSnapshot) -> ContextSection {
@@ -1177,12 +1314,7 @@ fn normalize_network(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
-        id: "network".to_string(),
-        display_name: "Network".to_string(),
-        items,
-        empty_reason: None,
-    }
+    context_section("network", "Network", items)
 }
 
 fn normalize_storage(snap: &InspectionSnapshot) -> ContextSection {
@@ -1249,12 +1381,7 @@ fn normalize_storage(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
-        id: "storage".to_string(),
-        display_name: "Storage".to_string(),
-        items,
-        empty_reason: None,
-    }
+    context_section("storage", "Storage", items)
 }
 
 fn normalize_scheduled_tasks(snap: &InspectionSnapshot) -> ContextSection {
@@ -1340,12 +1467,7 @@ fn normalize_scheduled_tasks(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
-        id: "scheduled_tasks".to_string(),
-        display_name: "Scheduled Tasks".to_string(),
-        items,
-        empty_reason: None,
-    }
+    context_section("scheduled_tasks", "Scheduled Tasks", items)
 }
 
 fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
@@ -1411,12 +1533,7 @@ fn normalize_non_rpm_software(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
-        id: "non_rpm_software".to_string(),
-        display_name: "Non-RPM Software".to_string(),
-        items,
-        empty_reason: None,
-    }
+    context_section("non_rpm_software", "Non-RPM Software", items)
 }
 
 fn normalize_kernel_boot(snap: &InspectionSnapshot) -> ContextSection {
@@ -1581,12 +1698,7 @@ fn normalize_kernel_boot(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
-        id: "kernel_boot".to_string(),
-        display_name: "Kernel & Boot".to_string(),
-        items,
-        empty_reason: None,
-    }
+    context_section("kernel_boot", "Kernel & Boot", items)
 }
 
 fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
@@ -1703,12 +1815,7 @@ fn normalize_selinux(snap: &InspectionSnapshot) -> ContextSection {
         }
     }
 
-    ContextSection {
-        id: "selinux".to_string(),
-        display_name: "Security & Access Control".to_string(),
-        items,
-        empty_reason: None,
-    }
+    context_section("selinux", "Security & Access Control", items)
 }
 
 #[cfg(test)]
@@ -1725,6 +1832,7 @@ mod tests {
     };
     use inspectah_core::types::selinux::SelinuxSection;
     use inspectah_core::types::services::{ServiceSection, ServiceStateChange, SystemdDropIn};
+    use inspectah_core::types::warnings::{Warning, WarningSeverity};
 
     fn empty_snapshot() -> InspectionSnapshot {
         InspectionSnapshot::new()
@@ -2599,5 +2707,109 @@ mod tests {
             Some("data_unavailable"),
             "no rpm section should give data_unavailable reason"
         );
+    }
+
+    #[test]
+    fn test_normalize_services_uses_typed_subtitles() {
+        let mut snap = empty_snapshot();
+        snap.services = Some(ServiceSection {
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "firewalld.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: Some("firewalld".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+                ServiceStateChange {
+                    unit: "cups.service".into(),
+                    current_state: ServiceUnitState::Masked,
+                    default_state: None,
+                    include: true,
+                    owning_package: Some("cups".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+            ],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+
+        let section = normalize_services(&snap);
+
+        let firewalld = section.items.iter().find(|i| i.id == "firewalld.service").unwrap();
+        assert_eq!(
+            firewalld.subtitle.as_deref(),
+            Some("enabled (diverges from preset: disable)")
+        );
+
+        let cups = section.items.iter().find(|i| i.id == "cups.service").unwrap();
+        assert_eq!(cups.subtitle.as_deref(), Some("masked (no preset rule)"));
+    }
+
+    #[test]
+    fn test_normalize_services_adds_omitted_advisory_and_warning_subsections() {
+        let mut snap = empty_snapshot();
+        snap.rpm = Some(RpmSection {
+            baseline_package_names: Some(vec!["firewalld".into()]),
+            packages_added: vec![PackageEntry {
+                name: "custom-app".into(),
+                arch: "x86_64".into(),
+                state: PackageState::Added,
+                include: false,
+                source_repo: "appstream".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        snap.services = Some(ServiceSection {
+            state_changes: vec![
+                ServiceStateChange {
+                    unit: "custom-app.service".into(),
+                    current_state: ServiceUnitState::Enabled,
+                    default_state: Some(PresetDefault::Disable),
+                    include: true,
+                    owning_package: Some("custom-app".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+                ServiceStateChange {
+                    unit: "sssd-kcm.service".into(),
+                    current_state: ServiceUnitState::Disabled,
+                    default_state: Some(PresetDefault::Enable),
+                    include: true,
+                    owning_package: Some("sssd".into()),
+                    fleet: None,
+                    attention_reason: None,
+                },
+            ],
+            enabled_units: vec![],
+            disabled_units: vec![],
+            drop_ins: vec![],
+            preset_matched_units: vec![],
+        });
+        snap.warnings.push(Warning {
+            inspector: "services".into(),
+            message: "unit linked.service has state 'linked' - linked unit requires manual handling".into(),
+            severity: Some(WarningSeverity::Warning),
+            extra: std::collections::HashMap::from([
+                ("unit".into(), serde_json::json!("linked.service")),
+                ("raw_state".into(), serde_json::json!("linked")),
+            ]),
+        });
+
+        let section = normalize_services(&snap);
+        let omitted = section.subsections.iter().find(|s| s.id == "omitted_services").unwrap();
+        let advisories = section.subsections.iter().find(|s| s.id == "service_advisories").unwrap();
+        let warnings = section.subsections.iter().find(|s| s.id == "service_warnings").unwrap();
+
+        assert!(omitted.items.iter().any(|item| item.id == "sssd-kcm.service"));
+        assert!(advisories.items.iter().any(|item| item.id == "custom-app.service"));
+        assert!(warnings.items.iter().any(|item| item.id == "linked.service"));
+        assert!(section.items.iter().any(|item| item.id == "custom-app.service"));
     }
 }
