@@ -146,7 +146,7 @@ pub enum UserPasswordOp {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AttentionLevel {
     NeedsReview,
@@ -261,6 +261,38 @@ pub struct FleetContext {
 pub enum RefineMode {
     SingleHost,
     Fleet(FleetContext),
+}
+
+/// Fleet-aware attention score combining zone placement, attention level,
+/// and raw prevalence count. Ord sorts by zone first (Divergent < Consensus),
+/// then attention (NeedsReview < Informational < Routine), then prevalence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FleetAttention {
+    pub zone: PrevalenceZone,
+    pub attention: AttentionLevel,
+    pub prevalence: u32,
+}
+
+impl Ord for FleetAttention {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.zone
+            .cmp(&other.zone)
+            .then(self.attention.cmp(&other.attention))
+            .then(self.prevalence.cmp(&other.prevalence))
+    }
+}
+
+impl PartialOrd for FleetAttention {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Attention score that works for both single-host and fleet modes.
+#[derive(Debug, Clone)]
+pub enum AttentionScore {
+    SingleHost(AttentionLevel),
+    Fleet(FleetAttention),
 }
 
 #[derive(Debug, thiserror::Error)]
